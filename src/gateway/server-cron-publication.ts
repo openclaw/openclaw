@@ -19,13 +19,15 @@ export function createGatewayCronPublisher(params: {
     // Retargeting can remove a reader from the detailed event's new audience.
     params.broadcast("cron.inventory.changed", undefined, { dropIfSlow: true });
     const cron = params.getCron();
-    const boundKeys = new Set(
+    const boundKeys = new Set<string>(
       [previous, next].flatMap((job) =>
         job
-          ? resolveCronJobBoundSessionKeys(job, {
-              cfg: getRuntimeConfig(),
-              defaultAgentId: cron.getDefaultAgentId(),
-            })
+          ? [
+              ...resolveCronJobBoundSessionKeys(job, {
+                cfg: getRuntimeConfig(),
+                defaultAgentId: cron.getDefaultAgentId(),
+              }),
+            ]
           : [],
       ),
     );

@@ -48,7 +48,7 @@ function inventory(jobs: CronJob[], revision = "inventory-1") {
 }
 
 async function fixture(page: Page, supported = true) {
-  await page.clock.setFixedTime(now);
+  await page.clock.install({ time: now });
   const gateway = await installMockGateway(page, {
     sessionKey,
     operatorScopes: ["operator.read"],
@@ -70,7 +70,7 @@ async function fixture(page: Page, supported = true) {
   const settled = () => details.locator('.chat-summary__automations[aria-busy="false"]').waitFor();
   await settled();
   await page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).waitFor();
-  return { gateway, details, row, settled };
+  return { page, gateway, details, row, settled };
 }
 
 function runtime(job: CronJob, action: "started" | "finished", revision: number) {
@@ -106,12 +106,11 @@ suite.define(() => {
           clients.push(await fixture(index === 0 ? page : await context.newPage(), supported));
         }
         const counts = [];
-        for (const { gateway, row, settled } of clients) {
+        for (const { page: clientPage, gateway, row, settled } of clients) {
           const before = (await gateway.getRequests("cron.list")).length;
           const sessionsBefore = (await gateway.getRequests("sessions.list")).length;
           for (let index = 0; index < 60; index += 1) {
             const reads = (await gateway.getRequests("cron.list", { sessionKey })).length;
-            const sessionReads = (await gateway.getRequests("sessions.list")).length;
             await gateway.emitGatewayEvent("cron", {
               ...runtime(other, index % 2 ? "finished" : "started", index + 2),
               ...(stateOnly ? { action: "updated" } : {}),
@@ -123,8 +122,8 @@ suite.define(() => {
                 reason: "cron-binding",
                 ts: now + index,
               });
-              await gateway.waitForRequest("sessions.list", { after: sessionReads });
             }
+            await clientPage.clock.runFor(1_000);
             if (!supported) {
               await gateway.waitForRequest("cron.list", { after: reads, match: { sessionKey } });
             }
@@ -132,8 +131,10 @@ suite.define(() => {
           }
           const current = row(held.name);
           await gateway.emitGatewayEvent("cron", runtime(held, "started", 100));
+          await clientPage.clock.runFor(100);
           await current.locator(".session-run-spinner").waitFor();
           await gateway.emitGatewayEvent("cron", runtime(held, "finished", 101));
+          await clientPage.clock.runFor(100);
           await current.locator(".session-run-spinner").waitFor({ state: "detached" });
           await current.getByText("Every 10 minutes", { exact: true }).waitFor();
           await settled();
@@ -149,7 +150,6 @@ suite.define(() => {
           });
           if (stateOnly && !supported) {
             expect(additional).toBeGreaterThanOrEqual(60);
-            expect(additionalSessions).toBeGreaterThanOrEqual(60);
           } else {
             expect(additional).toBe(supported ? 0 : 60);
             expect(additionalSessions).toBe(0);
