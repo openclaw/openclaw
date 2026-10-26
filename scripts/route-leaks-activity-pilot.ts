@@ -8,7 +8,7 @@ export const activityMediaMethods = [
   "artifacts.download",
   "sessions.activitySummary.ensure",
 ];
-export const activityMediaKey = "agent:main:activity-media-pilot";
+const activityMediaKey = "agent:main:activity-media-pilot";
 export const activityMediaTrigger = "openclaw-activity-session-media .chat-message-image-button";
 export const activityLightboxImage = "openclaw-image-lightbox img.image";
 const labels = ["Alpha", "Beta"];
