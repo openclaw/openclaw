@@ -1,5 +1,6 @@
 // Codex composed native hook relay retention regression.
 import path from "node:path";
+import { setImmediate as nextTask } from "node:timers/promises";
 import {
   invokeNativeHookRelay,
   nativeHookRelayTesting,
@@ -45,8 +46,16 @@ import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
-function invokeRelay(relayId: string, rawPayload: JsonObject) {
-  return invokeNativeHookRelay({ provider: "codex", relayId, event: "pre_tool_use", rawPayload });
+function invokeRelay(
+  relayId: string,
+  rawPayload: JsonObject,
+  signal?: AbortSignal,
+  generation?: string,
+) {
+  return invokeNativeHookRelay(
+    { provider: "codex", relayId, event: "pre_tool_use", rawPayload, generation },
+    signal,
+  );
 }
 
 function childTool(agentId: string, command?: string): JsonObject {
@@ -276,18 +285,14 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       toolName = "multi_agent_v1send_input",
       signal?: AbortSignal,
     ) =>
-      invokeNativeHookRelay(
+      invokeRelay(
+        relay.relayId,
         {
-          provider: "codex",
-          relayId: relay.relayId,
-          event: "pre_tool_use",
-          rawPayload: {
-            session_id: "parent-thread",
-            turn_id: turnId,
-            tool_use_id: callId,
-            tool_name: toolName,
-            tool_input: { target, message: "Continue" },
-          },
+          session_id: "parent-thread",
+          turn_id: turnId,
+          tool_use_id: callId,
+          tool_name: toolName,
+          tool_input: { target, message: "Continue" },
         },
         signal,
       );
@@ -470,19 +475,11 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
     const relay = createRelay("admission-cancellation", host.hostCapabilities, source.signal);
     const pending: Promise<unknown>[] = [];
     const invoke = (child: string, signal?: AbortSignal) => {
-      const invocation = invokeNativeHookRelay(
-        {
-          provider: "codex",
-          relayId: relay.relayId,
-          generation: relay.generation,
-          event: "pre_tool_use",
-          rawPayload: {
-            agent_id: child,
-            tool_name: "Bash",
-            tool_input: { command: "echo fixture" },
-          },
-        },
+      const invocation = invokeRelay(
+        relay.relayId,
+        childTool(child, "echo fixture"),
         signal,
+        relay.generation,
       );
       void invocation.catch(() => undefined);
       pending.push(invocation);
@@ -590,9 +587,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         ]);
         if (bindBeforeClaim) {
           deferredTurnStart.resolve(undefined);
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
+          await nextTask();
         }
         const startRequest = harness.requests.find((request) => request.method === "thread/start");
         relayId = extractRelayIdFromThreadRequest(startRequest?.params);
@@ -680,9 +675,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
 
         // The app-server response intentionally exposes only protocol content; the internal
         // terminate marker schedules the turn release on the next macrotask.
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTask();
         await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
         const result = await run;
         expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, promptError: null });

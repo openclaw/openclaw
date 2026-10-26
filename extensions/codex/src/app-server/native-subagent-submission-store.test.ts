@@ -660,27 +660,24 @@ describe("native subagent submission receipts in the binding store", () => {
     expect(reopened.read(logicalIdentity)).toEqual(binding);
   });
 
-  it.each(["missing", "retired", "generation", "actor", "thread", "connection", "lifecycle"])(
+  it.each([
+    ["missing", {}],
+    ["retired", {}],
+    ["generation", { sessionId: "replacement-session" }],
+    ["actor", { sessionId: "unrelated-session" }],
+    ["thread", { parentThreadId: "replacement-thread" }],
+    ["connection", { connectionFingerprint: "f".repeat(64) }],
+    ["lifecycle", { lifecycleRevision: "replacement-revision" }],
+  ] satisfies [string, Partial<CodexNativeSubagentHistoryOwner>][])(
     "rejects receipt reads and writes for a %s owner without changing the binding",
-    async (scenario) => {
+    async (scenario, overrides) => {
       const { state, store, owner } = await fixture(receipt);
-      let caller = identity;
-      let actor: CodexNativeSubagentHistoryOwner = owner;
+      const caller = scenario === "generation" ? { ...identity, ...overrides } : identity;
+      const actor = { ...owner, ...overrides };
       if (scenario === "missing") {
         state.delete(key);
       } else if (scenario === "retired") {
         await store.retireSessionGeneration(identity);
-      } else if (scenario === "generation") {
-        caller = { ...identity, sessionId: "replacement-session" };
-        actor = { ...owner, sessionId: caller.sessionId };
-      } else if (scenario === "actor") {
-        actor = { ...owner, sessionId: "unrelated-session" };
-      } else if (scenario === "thread") {
-        actor = { ...owner, parentThreadId: "replacement-thread" };
-      } else if (scenario === "connection") {
-        actor = { ...owner, connectionFingerprint: "f".repeat(64) };
-      } else {
-        actor = { ...owner, lifecycleRevision: "replacement-revision" };
       }
       const before = state.lookup(key);
       expect(await store.readNativeSubagentSubmissions(caller, actor)).toEqual([]);

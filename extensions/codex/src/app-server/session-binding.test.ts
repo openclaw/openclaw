@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -32,17 +30,15 @@ function createBindingFixture() {
   return { state, values, store: createBindingStore(state) };
 }
 
-const stateDirs: string[] = [];
 const sessionFixtures: Awaited<ReturnType<typeof createOpenClawTestState>>[] = [];
 async function createSessionFixture(prefix: string) {
   const fixture = await createOpenClawTestState({ prefix, layout: "state-only", applyEnv: false });
   sessionFixtures.push(fixture);
   return { root: fixture.stateDir, storePath: path.join(fixture.stateDir, "sessions.json") };
 }
-function createSqliteFixture(namespace: string, rejectNew = false) {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-binding-state-"));
-  stateDirs.push(stateDir);
-  const state = sqliteState(namespace, stateDir, rejectNew);
+async function createSqliteFixture(namespace: string, rejectNew = false) {
+  const { root } = await createSessionFixture(`codex-${namespace}-`);
+  const state = sqliteState(namespace, root, rejectNew);
   return { state, store: createBindingStore(state) };
 }
 
@@ -83,19 +79,21 @@ function thread(threadId: string, fields: Partial<ThreadBinding> = {}): ThreadBi
   return { threadId, cwd: "/repo", ...fields };
 }
 
+const retiredRow = (sessionId: string) => ({
+  version: 1,
+  state: "cleared",
+  retired: true,
+  sessionId,
+});
+
 function nativeBinding(threadId: string, supervision: boolean): ThreadBinding {
-  return thread(threadId, {
+  return {
+    ...(supervision
+      ? supervisionBinding(threadId, { supervisionSourceThreadId: "native-source" })
+      : thread(threadId)),
     model: "gpt-5.6-luna",
     modelProvider: "openai",
-    ...(supervision
-      ? {
-          connectionScope: "supervision" as const,
-          supervisionSourceThreadId: "native-source",
-          conversationSourceTransferComplete: true as const,
-          preserveNativeModel: true as const,
-        }
-      : {}),
-  });
+  };
 }
 
 function reclaim(
@@ -170,27 +168,10 @@ function expectReclaim(
   });
 }
 
-async function expectPolicyRoundTrip(
-  policy: NonNullable<ThreadBinding["pluginAppPolicyContext"]>,
-  cwd: string,
-  updatedAt?: string,
-) {
-  const { store } = createBindingFixture();
-  const identity = makeSessionIdentity("session-policy");
-  const binding = { threadId: "thread-policy", cwd, pluginAppPolicyContext: policy };
-  await setBinding(store, identity, binding);
-  expect(store.read(identity)).toMatchObject({ pluginAppPolicyContext: policy });
-  const imported = await importStoredBinding({ schemaVersion: 2, ...binding, updatedAt });
-  expect(imported?.binding.pluginAppPolicyContext).toEqual(policy);
-}
-
 afterEach(async () => {
   vi.useRealTimers();
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
-  for (const stateDir of stateDirs.splice(0)) {
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  }
   for (const fixture of sessionFixtures.splice(0)) {
     await fixture.cleanup();
   }
@@ -404,11 +385,17 @@ describe("Codex app-server binding store", () => {
       pluginAppIds: { "security-review@company-tools": ["github"] },
     };
 
-    await expectPolicyRoundTrip(
-      pluginAppPolicyContext,
-      "/repo/company",
-      "2026-01-01T00:00:00.000Z",
-    );
+    const { store } = createBindingFixture();
+    const identity = makeSessionIdentity("session-policy");
+    const binding = thread("thread-policy", { cwd: "/repo/company", pluginAppPolicyContext });
+    await setBinding(store, identity, binding);
+    expect(store.read(identity)).toMatchObject({ pluginAppPolicyContext });
+    const imported = await importStoredBinding({
+      schemaVersion: 2,
+      ...binding,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(imported?.binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
   it("retains restricted creation attestation and readable legacy rows after SQLite reopen", async () => {
@@ -434,7 +421,7 @@ describe("Codex app-server binding store", () => {
   });
 
   it("retains cleared legacy conversation provenance after normal tombstones expire", async () => {
-    const { state, store } = createSqliteFixture("app-server-thread-bindings-clear-test");
+    const { state, store } = await createSqliteFixture("app-server-thread-bindings-clear-test");
     const normal = { kind: "conversation" as const, bindingId: "normal" };
     const legacy = { kind: "conversation" as const, bindingId: "legacy-source" };
     for (const identity of [normal, legacy]) {
@@ -606,7 +593,7 @@ describe("Codex app-server binding store", () => {
   });
 
   it("expires physical-session retirement fences but retains stable-key fences", async () => {
-    const { state, store } = createSqliteFixture(
+    const { state, store } = await createSqliteFixture(
       "app-server-thread-bindings-retirement-test",
       true,
     );
@@ -616,28 +603,18 @@ describe("Codex app-server binding store", () => {
       sessionId: "stable-session",
       sessionKey: "agent:main:telegram:chat-1",
     };
+    const retired = { state: "cleared", retired: true };
     for (const identity of [physical, stable]) {
       await setBinding(store, identity, thread(`thread-${identity.sessionId}`));
       await expect(store.retireSessionGeneration(identity)).resolves.toBe("applied");
+      expect(state.lookup(storeKey(identity))).toMatchObject(retired);
     }
-
-    expect(state.lookup(storeKey(physical))).toMatchObject({
-      state: "cleared",
-      retired: true,
-    });
-    expect(state.lookup(storeKey(stable))).toMatchObject({
-      state: "cleared",
-      retired: true,
-    });
 
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 2 * 60_000);
 
     expect(state.lookup(storeKey(physical))).toBeUndefined();
-    expect(state.lookup(storeKey(stable))).toMatchObject({
-      state: "cleared",
-      retired: true,
-    });
+    expect(state.lookup(storeKey(stable))).toMatchObject(retired);
   });
 
   it.each(["active", "cleared", "retired"] as const)(
@@ -649,12 +626,7 @@ describe("Codex app-server binding store", () => {
         await expect(store.mutate(previous, { kind: "clear" })).resolves.toBe(true);
         await expectSet(store, current, false, "thread-new", "/new", true);
       } else if (state === "retired") {
-        const retired = {
-          version: 1,
-          state: "cleared",
-          retired: true,
-          sessionId: previous.sessionId,
-        };
+        const retired = retiredRow(previous.sessionId);
         await expect(store.retireSessionGeneration(previous)).resolves.toBe("applied");
         await expect(store.mutate(previous, { kind: "clear" })).resolves.toBe(true);
         expect(values.get(storeKey(previous))).toEqual(retired);
@@ -715,12 +687,7 @@ describe("Codex app-server binding store", () => {
     await setBinding(store, identity, thread("thread-before-reset"));
     await store.retireSessionGeneration(identity);
     await expect(store.resetSessionGeneration(identity)).resolves.toBe("conflict");
-    expect(values.get(storeKey(identity))).toEqual({
-      version: 1,
-      state: "cleared",
-      retired: true,
-      sessionId: identity.sessionId,
-    });
+    expect(values.get(storeKey(identity))).toEqual(retiredRow(identity.sessionId));
     await expectSet(store, identity, false, "thread-unverified", "/new");
     await expect(reclaim(store, identity, storePath)).resolves.toBe(true);
     await expectSet(store, identity, true, "thread-after-reset", "/repo");
@@ -728,18 +695,8 @@ describe("Codex app-server binding store", () => {
 
   it("hashes stable session keys and keeps agent ownership distinct", () => {
     const sessionKey = "agent:main:telegram:private-peer@example.com";
-    const first = storeKey({
-      kind: "session",
-      agentId: "first",
-      sessionId: "session-1",
-      sessionKey,
-    });
-    const second = storeKey({
-      kind: "session",
-      agentId: "second",
-      sessionId: "session-2",
-      sessionKey,
-    });
+    const first = storeKey({ ...makeSessionIdentity("session-1", "first"), sessionKey });
+    const second = storeKey({ ...makeSessionIdentity("session-2", "second"), sessionKey });
 
     expect(first).toMatch(/^session-key:first:[A-Za-z0-9_-]{43}$/u);
     expect(first).not.toContain("private-peer");
