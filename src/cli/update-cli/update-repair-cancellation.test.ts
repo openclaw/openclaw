@@ -16,6 +16,7 @@ import {
   writePrivateUpdateHandoffChildGuard,
 } from "../../../test/helpers/private-update-handoff-store.js";
 import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
+import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as census from "../../infra/openclaw-process-census.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
@@ -374,5 +375,79 @@ unix(
       ),
     });
     await expect(admit("after-earlier-gateway-repair")).resolves.toBe("admitted");
+  },
+);
+
+unix("a live owner in an earlier macOS Gateway's store keeps admission fenced", async () => {
+  const earlier = path.join(path.dirname(path.dirname(f.databasePath)), "gateway-tmp");
+  fs.mkdirSync(earlier, { mode: 0o700 });
+  const databasePath = path.join(earlier, "managed-update-handoffs.sqlite");
+  vi.spyOn(
+    legacyHandoffStore,
+    "resolveLegacyGatewayManagedUpdateLeaseDatabasePath",
+  ).mockReturnValue(databasePath);
+  // This live process stands in for an earlier Gateway still running its update.
+  const store = await handoffLease.prepareManagedHandoffLeaseStore({
+    databasePath,
+    serviceManagerEnv: resolveServiceManagerEnv(),
+  });
+  const held = store.acquire(fs.realpathSync(f.install), "earlier-gateway", { kind: "update" });
+  assert(held.kind === "acquired", "Expected the earlier Gateway lease");
+
+  await expect(admit("blocked-by-live-earlier-owner")).rejects.toThrow(
+    `Another update executor owns this installation in an earlier Gateway's handoff store (${databasePath})`,
+  );
+  expect(store.release(held.lease)).toBe(true);
+  await expect(admit("after-earlier-owner-release")).resolves.toBe("admitted");
+  // Admission releases its fence; the earlier store keeps no row for this installation.
+  expect(store.read(fs.realpathSync(f.install))).toMatchObject({ kind: "absent" });
+});
+
+unix(
+  "an earlier Gateway's original-updater custody fences admission after its owners die",
+  async () => {
+    const earlier = path.join(path.dirname(path.dirname(f.databasePath)), "gateway-tmp");
+    fs.mkdirSync(earlier, { mode: 0o700 });
+    const databasePath = path.join(earlier, "managed-update-handoffs.sqlite");
+    vi.spyOn(
+      legacyHandoffStore,
+      "resolveLegacyGatewayManagedUpdateLeaseDatabasePath",
+    ).mockReturnValue(databasePath);
+    await handoffLease.prepareManagedHandoffLeaseStore({
+      databasePath,
+      serviceManagerEnv: resolveServiceManagerEnv(),
+    });
+    // Original custody waits for its explicit settlement; process death never reclaims it.
+    const exitedProcess = () => ({
+      pid: Number(
+        spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], {
+          encoding: "utf8",
+        }).stdout,
+      ),
+      startIdentity: "1",
+    });
+    const payload = {
+      version: 2,
+      helper: exitedProcess(),
+      executor: exitedProcess(),
+      action: { kind: "update", mutationProtocol: "original-cancellation-v1" },
+    };
+    createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
+      executeSqliteQuerySync(
+        db,
+        leaseQueries(db)
+          .insertInto("managed_update_handoffs")
+          .values({
+            install_root: fs.realpathSync(f.install),
+            owner: "earlier-original-updater",
+            payload_json: JSON.stringify(payload),
+            updated_at: Date.now() - 60 * 60_000,
+          }),
+      ),
+    );
+
+    await expect(admit("blocked-by-earlier-original")).rejects.toThrow(
+      `Another update executor owns this installation in an earlier Gateway's handoff store (${databasePath})`,
+    );
   },
 );

@@ -1,10 +1,11 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { resolveServiceTmpDir } from "../daemon/service-tmp-dir.js";
 import {
-  createManagedHandoffLeaseStore,
+  prepareManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
 } from "./update-managed-service-handoff-lease.js";
 
@@ -21,29 +22,33 @@ export function resolveLegacyGatewayManagedUpdateLeaseDatabasePath(): string | u
     : undefined;
 }
 
-/** Live or cancelled custody in an earlier Gateway's store fences admission until repaired. */
-export function readLegacyGatewayCustodyRefusal(
+/**
+ * Hold the installation in an earlier Gateway's store while admission proceeds, so
+ * that store's own owner decides whether its custody has settled. Release after
+ * the shared store has admitted or refused this update.
+ */
+export async function fenceLegacyGatewayCustody(
   key: string,
   databasePath: string | undefined,
-): string | undefined {
+): Promise<{ refusal: string } | { release: () => void }> {
   if (!databasePath || !fs.existsSync(databasePath)) {
-    return undefined;
+    return { release: () => {} };
   }
-  const store = createManagedHandoffLeaseStore({
+  const store = await prepareManagedHandoffLeaseStore({
     databasePath,
     serviceManagerEnv: resolveServiceManagerEnv(),
   });
-  const found = store.read(key);
-  // Only owners proven gone release it; new writers never select this store again.
-  const held =
-    found.kind === "unreadable" ||
-    store.hasUnsettledChildren(key) ||
-    (found.kind === "current" &&
-      (found.lease.version === 4 ||
-        [found.lease.helper, found.lease.executor].some((owner) =>
-          store.isProcessIdentityCurrent(owner),
-        )));
-  return held
-    ? `Another update executor owns this installation in an earlier Gateway's handoff store (${databasePath}). If that update has exited, run ${formatCliCommand("openclaw update repair")} to settle it.`
-    : undefined;
+  const acquired = store.acquire(key, randomUUID(), { kind: "update" });
+  if (acquired.kind !== "acquired") {
+    return {
+      refusal: `Another update executor owns this installation in an earlier Gateway's handoff store (${databasePath}). If that update has exited, run ${formatCliCommand("openclaw update repair")} to settle it.`,
+    };
+  }
+  return {
+    release: () => {
+      if (!store.release(acquired.lease)) {
+        throw new Error(`Could not release the earlier Gateway handoff fence in ${databasePath}.`);
+      }
+    },
+  };
 }

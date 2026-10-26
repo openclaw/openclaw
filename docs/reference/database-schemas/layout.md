@@ -526,9 +526,10 @@ The macOS Gateway LaunchAgent runs with its state's `tmp` as `TMPDIR`. For that
 managed `TMPDIR`, OpenClaw uses the operating system's per-user temporary directory
 (`getconf DARWIN_USER_TEMP_DIR`) instead, the directory terminal commands already
 use, so the Gateway, terminals, and every profile share one database. Any other
-explicit `TMPDIR` is still honored. Custody that an earlier Gateway left in the
-database under its state's `tmp` still fences update admission while its owners
-are live or it is cancelled custody; `openclaw update repair` settles it there.
+explicit `TMPDIR` is still honored. Update admission also takes the installation
+in the database an earlier Gateway kept under its state's `tmp`, so that store's
+existing rules still decide when its custody has settled; `openclaw update repair`
+settles cancelled custody there.
 The update history above remains in the profile's shared state database.
 
 First creation exclusively creates a private file with one filesystem link.

@@ -12,7 +12,7 @@ import {
   type ManagedHandoffParent,
 } from "../../infra/update-managed-service-handoff-lease.js";
 import {
-  readLegacyGatewayCustodyRefusal,
+  fenceLegacyGatewayCustody,
   resolveLegacyGatewayManagedUpdateLeaseDatabasePath,
 } from "../../infra/update-managed-service-handoff-legacy-store.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
@@ -358,24 +358,33 @@ export async function withUpdateCommandExecutor<T>(
             managedHandoff = true;
           } else {
             // An earlier macOS Gateway's store still fences its unsettled custody.
-            const legacyRefusal = readLegacyGatewayCustodyRefusal(
+            const legacyFence = await fenceLegacyGatewayCustody(
               key,
               resolveLegacyGatewayManagedUpdateLeaseDatabasePath(),
             );
-            if (legacyRefusal) {
-              throw new UpdateCommandRecoveryPendingError(legacyRefusal);
+            if ("refusal" in legacyFence) {
+              throw new UpdateCommandRecoveryPendingError(legacyFence.refusal);
             }
             const admissionStore = store;
-            const acquired = requireUpdateCommandAcquisition(
-              store.acquire(key, randomUUID(), { kind: "update" }),
-              () => {
-                const retained = admissionStore.read(key);
-                // Only explicit repair settles a cancelled original after its updater exits.
-                return retained.kind === "current" && retained.lease.version === 4
-                  ? `Another update executor owns this installation. It retains cancelled update custody (owner ${retained.lease.owner}, lease version 4, last activity ${new Date(retained.lease.updatedAt).toISOString()}). If that update has exited, run ${formatCliCommand("openclaw update repair")} to settle it.`
-                  : "Another update executor owns this installation.";
-              },
-            );
+            let acquired: ReturnType<typeof requireUpdateCommandAcquisition>;
+            try {
+              activation.assertCurrent();
+              if (!active) {
+                throw new UpdateCommandRecoveryPendingError("Update executor admission is closed.");
+              }
+              acquired = requireUpdateCommandAcquisition(
+                store.acquire(key, randomUUID(), { kind: "update" }),
+                () => {
+                  const retained = admissionStore.read(key);
+                  // Only explicit repair settles a cancelled original after its updater exits.
+                  return retained.kind === "current" && retained.lease.version === 4
+                    ? `Another update executor owns this installation. It retains cancelled update custody (owner ${retained.lease.owner}, lease version 4, last activity ${new Date(retained.lease.updatedAt).toISOString()}). If that update has exited, run ${formatCliCommand("openclaw update repair")} to settle it.`
+                    : "Another update executor owns this installation.";
+                },
+              );
+            } finally {
+              legacyFence.release();
+            }
             lease = acquired.lease;
             if (acquired.originalDatabaseIdentity) {
               existingIdentity = acquired.originalDatabaseIdentity;
