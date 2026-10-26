@@ -19,13 +19,16 @@ export function registerSystemEventAdmissionCases({
   ) => ReturnType<typeof runPreparedReply>;
   requireRunReplyAgentCall: () => Parameters<typeof runReplyAgent>[0];
 }): void {
-  it("keeps delivery-owned restart occurrences queued through production reply admission", async () => {
+  async function useRealDrain() {
     const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
       "./session-system-events.js",
     );
     vi.mocked(drainFormattedSystemEvents).mockImplementationOnce(
       actualSystemEvents.drainFormattedSystemEvents,
     );
+  }
+  it("keeps delivery-owned restart occurrences queued through production reply admission", async () => {
+    await useRealDrain();
     const sessionKey = "agent:main:restart-admission-proof";
     enqueueSystemEvent("Restart continuation retained for delivery", {
       sessionKey,
@@ -37,12 +40,9 @@ export function registerSystemEventAdmissionCases({
     enqueueSystemEvent("Notification arrived after capture", { sessionKey });
     try {
       await runPrepared({ agentId: "main", sessionKey });
-      expect(requireRunReplyAgentCall().followupRun.currentInboundContext?.text).not.toContain(
-        "Restart continuation retained for delivery",
-      );
-      expect(requireRunReplyAgentCall().followupRun.currentInboundContext?.text).toContain(
-        "Notification arrived after capture",
-      );
+      const text = requireRunReplyAgentCall().followupRun.currentInboundContext?.text;
+      expect(text).not.toContain("Restart continuation retained for delivery");
+      expect(text).toContain("Notification arrived after capture");
       expect(peekSystemEventEntries(sessionKey)).toEqual(captured);
     } finally {
       claim?.release();
@@ -50,24 +50,18 @@ export function registerSystemEventAdmissionCases({
   });
 
   it("admits only system events visible to the prepared agent", async () => {
-    const actualSystemEvents = await vi.importActual<typeof import("./session-system-events.js")>(
-      "./session-system-events.js",
-    );
-    vi.mocked(drainFormattedSystemEvents).mockImplementationOnce(
-      actualSystemEvents.drainFormattedSystemEvents,
-    );
-    enqueueSystemEvent(
+    await useRealDrain();
+    const alphaEvents = [
       "Reminder: review heartbeat poll results",
-      withSystemEventOwner({ sessionKey: "global" }, "alpha"),
-    );
-    enqueueSystemEvent(
-      "Beta hook finished",
-      withSystemEventOwner({ sessionKey: "global" }, "beta"),
-    );
-    enqueueSystemEvent(
       "Cron: investigate heartbeat wake failures",
-      withSystemEventOwner({ sessionKey: "global" }, "alpha"),
-    );
+    ];
+    for (const [text, owner] of [
+      [alphaEvents[0]!, "alpha"],
+      ["Beta hook finished", "beta"],
+      [alphaEvents[1]!, "alpha"],
+    ] as const) {
+      enqueueSystemEvent(text, withSystemEventOwner({ sessionKey: "global" }, owner));
+    }
 
     await runPrepared({
       agentId: "alpha",
@@ -81,10 +75,7 @@ export function registerSystemEventAdmissionCases({
     const call = requireRunReplyAgentCall();
     const context = call.followupRun.currentInboundContext;
     expect(call.followupRun.prompt).toBe("[User sent media without caption]");
-    for (const event of [
-      "Reminder: review heartbeat poll results",
-      "Cron: investigate heartbeat wake failures",
-    ]) {
+    for (const event of alphaEvents) {
       expect(context?.text).toContain(event);
       expect(context?.fragments).toContainEqual({
         kind: "conversation-data",

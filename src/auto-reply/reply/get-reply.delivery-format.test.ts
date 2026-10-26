@@ -48,13 +48,13 @@ afterEach(async () => {
   resetPluginRuntimeStateForTest();
 });
 
-async function setup(label: string) {
-  state = await createOpenClawTestState({ label, env: { OPENCLAW_TEST_FAST: "0" } });
-  const storePath = path.join(state.root, "sessions.json");
+it("gives a Telegram reply on the rich account its contract once", async () => {
+  state = await createOpenClawTestState({
+    label: "reply-delivery-format",
+    env: { OPENCLAW_TEST_FAST: "0" },
+  });
   const cfg = withFullRuntimeReplyConfig({
-    agents: {
-      defaults: createReplyAgentDefaults(state.workspaceDir),
-    },
+    agents: { defaults: createReplyAgentDefaults(state.workspaceDir) },
     channels: {
       telegram: {
         allowFrom: ["*"],
@@ -62,7 +62,7 @@ async function setup(label: string) {
       },
     },
     plugins: { enabled: false },
-    session: { store: storePath },
+    session: { store: path.join(state.root, "sessions.json") },
   } as OpenClawConfig);
   await state.writeConfig(cfg);
   const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
@@ -74,17 +74,6 @@ async function setup(label: string) {
       agentMeta: { sessionId: p.sessionId, provider: "mock-openai", model: "gpt-5.6-luna" },
     },
   }));
-  const lastPrompt = () => runAgent.mock.calls.at(-1)?.[0].extraSystemPrompt ?? "";
-  return { cfg, lastPrompt };
-}
-
-function expectContractOnce(prompt: string, markup: string) {
-  expect(prompt.split("### Delivery Format")).toHaveLength(2);
-  expect(prompt).toContain(`"text_markup": "${markup}"`);
-}
-
-it("gives a Telegram reply on the rich account its contract once", async () => {
-  const { cfg, lastPrompt } = await setup("reply-delivery-format");
   await getReplyFromConfig(
     finalizeInboundContext({
       Body: "Post the status table",
@@ -99,5 +88,7 @@ it("gives a Telegram reply on the rich account its contract once", async () => {
     undefined,
     cfg,
   );
-  expectContractOnce(lastPrompt(), "markdown_telegram_rich");
+  const prompt = runAgent.mock.calls.at(-1)?.[0].extraSystemPrompt ?? "";
+  expect(prompt.split("### Delivery Format")).toHaveLength(2);
+  expect(prompt).toContain('"text_markup": "markdown_telegram_rich"');
 });

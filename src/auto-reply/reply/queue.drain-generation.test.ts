@@ -32,27 +32,17 @@ it.each(["followup", "collect"] as const)(
     const stale = createEmptyPluginRegistry();
     const current = createEmptyPluginRegistry();
     const retiredHook = predecessor.wrap(() => "retired");
-    stale.providers.push({
-      pluginId: "queue-generation-fixture",
-      source: "synthetic",
-      provider: {
-        id: "queue-generation-fixture",
-        label: "Fixture",
-        auth: [],
-        formatApiKey: retiredHook,
-      },
-    });
     const currentHook = vi.fn(() => "current provider reply");
-    current.providers.push({
-      pluginId: "queue-generation-fixture",
-      source: "synthetic",
-      provider: {
-        id: "queue-generation-fixture",
-        label: "Fixture",
-        auth: [],
-        formatApiKey: currentHook,
-      },
-    });
+    for (const [registry, formatApiKey] of [
+      [stale, retiredHook],
+      [current, currentHook],
+    ] as const) {
+      registry.providers.push({
+        pluginId: "queue-generation-fixture",
+        source: "synthetic",
+        provider: { id: "queue-generation-fixture", label: "Fixture", auth: [], formatApiKey },
+      });
+    }
     const queued = createQueueTestRun({ prompt: "accepted before reload" });
     const delivered: Array<{ prompt: string; reply: string | undefined }> = [];
     try {
@@ -88,9 +78,12 @@ it.each(["followup", "collect"] as const)(
       released.resolve();
       await queued.controllerInput!.settlement.promise;
       await claim.settlement.promise;
-      expect(delivered).toHaveLength(1);
-      expect(delivered[0]?.prompt).toContain("accepted before reload");
-      expect(delivered[0]?.reply).toBe("current provider reply");
+      expect(delivered).toEqual([
+        {
+          prompt: expect.stringContaining("accepted before reload"),
+          reply: "current provider reply",
+        },
+      ]);
       expect(currentHook).toHaveBeenCalledOnce();
       expect(getExistingFollowupQueue(key)).toBeUndefined();
     } finally {
