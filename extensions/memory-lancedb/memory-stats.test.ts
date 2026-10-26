@@ -26,7 +26,6 @@ afterAll(() => sdkHook.deregister());
 
 const readStats = (dbPath: string) => readMemoryStats({ dbPath }, "main");
 const transport = vi.hoisted(() => ({
-  moduleUrl: "",
   tsconfigPath: undefined as string | undefined,
   onOutput: undefined as ((chunk: Buffer) => void) | undefined,
   controller: new AbortController(),
@@ -41,7 +40,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
       assert(typeof options !== "number", "Expected the stats reader's process options");
       const script = `
         import { runMemoryStatsReader } from ${JSON.stringify(new URL("./memory-stats-reader.ts", import.meta.url).href)};
-        const { loadLanceDbModule } = await import(${JSON.stringify(transport.moduleUrl)});
+        const { loadLanceDbModule } = await import(${JSON.stringify(fixtureModuleUrl)});
         await runMemoryStatsReader(loadLanceDbModule);
       `;
       const entryIndex = argv.findIndex((argument) => argument.endsWith("memory-stats.worker.ts"));
@@ -64,19 +63,30 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
 
 // Only the native dependency is fake; the stats command and child lifecycle remain real.
 const fixtureModuleUrl = `data:text/javascript,${encodeURIComponent(`
-import { writeSync } from "node:fs";
+import { readdirSync, readFileSync, writeSync } from "node:fs";
+import { join } from "node:path";
 function hold() {
   writeSync(2, "ready:" + process.pid + "\\n");
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
 }
 export async function connect(dbPath, options) {
-  const mode = new URL(dbPath).hostname;
+  const mode = dbPath.startsWith("fixture:") ? new URL(dbPath).hostname : "lease";
+  function assertChildLease() {
+    if (mode !== "lease") return;
+    const directory = join(dbPath, ".openclaw-custody");
+    const leases = readdirSync(directory).filter((name) => name.startsWith("use-"));
+    if (leases.length !== 1) throw new Error("missing child lease");
+    const lease = JSON.parse(readFileSync(join(directory, leases[0]), "utf8"));
+    if (lease.pid !== process.pid) throw new Error("lease is not child-owned");
+  }
   if (mode === "connect-stall") hold();
   return {
     tableNames: async () => mode === "empty" ? [] : ["memories"],
     openTable: async () => ({
       schema: async () => ({ fields: mode === "legacy" ? [] : [{ name: "agentId" }] }),
       countRows: async (predicate) => {
+        assertChildLease();
+        if (mode === "lease") return 3;
         if (mode === "count-stall") hold();
         if (mode === "failed") throw new Error("fixture database unavailable");
         if (mode === "legacy") throw new Error("unknown column agentId");
@@ -84,19 +94,16 @@ export async function connect(dbPath, options) {
         if (options.storageOptions?.fixture !== "stdin-only") throw new Error("missing storage options");
         return 7;
       },
-      close() {},
+      close: assertChildLease,
     }),
     createEmptyTable() { throw new Error("stats must never create a table"); },
-    close() {},
+    close: assertChildLease,
   };
 }
 export async function loadLanceDbModule() { return { connect }; }
 `)}`;
 
-transport.moduleUrl = fixtureModuleUrl;
-
 afterEach(async () => {
-  transport.moduleUrl = fixtureModuleUrl;
   transport.tsconfigPath = undefined;
   transport.controller.abort();
   await Promise.allSettled(transport.pending);
@@ -186,31 +193,6 @@ it("keeps the table lease in the stats child until its native read closes", asyn
       ]),
   );
   await fs.writeFile(transport.tsconfigPath, JSON.stringify({ compilerOptions: { paths } }));
-  transport.moduleUrl = `data:text/javascript,${encodeURIComponent(`
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-function assertChildLease(dbPath) {
-  const directory = join(dbPath, ".openclaw-custody");
-  const leases = readdirSync(directory).filter((name) => name.startsWith("use-"));
-  if (leases.length !== 1) throw new Error("missing child lease");
-  const lease = JSON.parse(readFileSync(join(directory, leases[0]), "utf8"));
-  if (lease.pid !== process.pid) throw new Error("lease is not child-owned");
-}
-export async function loadLanceDbModule() {
-  return { connect: async (dbPath) => ({
-    tableNames: async () => ["memories"],
-    openTable: async () => ({
-      schema: async () => ({ fields: [{ name: "agentId" }] }),
-      countRows: async () => {
-        assertChildLease(dbPath);
-        return 3;
-      },
-      close() { assertChildLease(dbPath); },
-    }),
-    close() { assertChildLease(dbPath); },
-  }) };
-}
-`)}`;
   await expect(readStats(getDbPath())).resolves.toBe(3);
   await expect(fs.readdir(path.join(getDbPath(), ".openclaw-custody"))).resolves.toEqual([]);
 });

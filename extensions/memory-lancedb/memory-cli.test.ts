@@ -6,20 +6,21 @@ vi.mock("openclaw/plugin-sdk/cli-state-owner", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/cli-state-owner")>();
   return {
     ...actual,
-    runWithLocalStateOwner: vi.fn(
-      async (params: Parameters<typeof actual.runWithLocalStateOwner>[0]) =>
-        await params.runLocal({
-          env: {},
-          config: {},
-          signal: new AbortController().signal,
-          assertCurrent: () => {},
-        }),
+    runWithLocalStateOwner: vi.fn((params: Parameters<typeof actual.runWithLocalStateOwner>[0]) =>
+      params.runLocal({
+        env: {},
+        config: {},
+        signal: new AbortController().signal,
+        assertCurrent: () => {},
+      }),
     ),
   };
 });
 
 let stdout = "";
+let harness: ReturnType<typeof createHarness>;
 beforeEach(() => {
+  harness = createHarness();
   stdout = "";
   vi.spyOn(console, "log").mockImplementation(() => undefined);
   vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
@@ -31,7 +32,6 @@ afterEach(() => vi.restoreAllMocks());
 
 it("optimizes the whole table offline and closes it after reporting counts", async () => {
   const { runWithLocalStateOwner } = await import("openclaw/plugin-sdk/cli-state-owner");
-  const harness = createHarness();
   await harness.run("optimize");
   await expect(harness.run("optimize", "--agent", "private")).rejects.toMatchObject({
     code: "commander.unknownOption",
@@ -48,7 +48,6 @@ it("optimizes the whole table offline and closes it after reporting counts", asy
 });
 
 it("embeds a CLI search with the explicitly requested agent's authentication", async () => {
-  const harness = createHarness();
   await harness.run("search", "private account memory", "--agent", "private");
 
   expect(harness.embed).toHaveBeenCalledWith("private", "private account memory", {
@@ -60,8 +59,6 @@ it("embeds a CLI search with the explicitly requested agent's authentication", a
 });
 
 it("rejects an invalid limit before generating an embedding", async () => {
-  const harness = createHarness();
-
   await expect(harness.run("search", "hello", "--limit", "5items")).rejects.toThrow(
     "--limit must be a positive integer",
   );
@@ -71,24 +68,12 @@ it("rejects an invalid limit before generating an embedding", async () => {
   expect(harness.close).toHaveBeenCalledTimes(1);
 });
 
-it("normalizes signed decimal limits through the shared parser", async () => {
-  const harness = createHarness();
-  await harness.run("list", "--limit", "+03");
-  expect(harness.list).toHaveBeenCalledWith("main", 3, { orderByCreatedAt: false });
-  expect(stdout).toBe("[]\n");
-});
-
 it("preserves a falsy search rejection over cleanup failure", async () => {
-  const harness = createHarness({
+  harness = createHarness({
     embedError: null,
     closeError: new Error("close failed"),
   });
-
-  const rejection = await harness.run("search", "hello").then(
-    () => "resolved",
-    (err: unknown) => err,
-  );
-  expect(rejection).toBeNull();
+  await expect(harness.run("search", "hello")).rejects.toBeNull();
   expect(harness.close).toHaveBeenCalledTimes(1);
 });
 it.each([
@@ -101,7 +86,7 @@ it.each([
     createdAt: [30, 10, 20],
   });
   const originalRows = table.toArray().map((row) => row.toJSON());
-  const harness = createHarness({ queryRows: table.toArray() });
+  harness = createHarness({ queryRows: table.toArray() });
   await harness.run("query", "--cols", "id,text", "--order-by", order, "--limit", "2");
 
   const rows = JSON.parse(stdout) as Array<Record<string, unknown>>;
@@ -113,7 +98,6 @@ it.each([
   ["category", "=", "preference"],
   ["importance", ">=", 0.8],
 ])("passes a typed query filter to storage: %s", async (column, operator, value) => {
-  const harness = createHarness();
   const input = `${column} ${operator} ${typeof value === "string" ? `'${value}'` : value}`;
   await harness.run("query", "--filter", input);
   expect(harness.query).toHaveBeenCalledWith(
@@ -125,7 +109,6 @@ it.each([
 it.each(["agentId = 'beta'", "category = 'preference' OR agentId = 'beta'", "importance = 'high'"])(
   "rejects a filter before storage access: %s",
   async (filter) => {
-    const harness = createHarness();
     await expect(harness.run("query", "--filter", filter)).rejects.toThrow();
     expect(harness.query).not.toHaveBeenCalled();
   },

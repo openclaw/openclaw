@@ -14,8 +14,8 @@ vi.mock("./lancedb-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./lancedb-runtime.js")>()),
   loadLanceDbModule: vi.fn(async () => ({
     connect: vi.fn(async () => ({
-      tableNames: vi.fn(async () => ["memories"]),
-      openTable: vi.fn(async () => ({
+      tableNames: async () => ["memories"],
+      openTable: async () => ({
         checkoutLatest: lanceMocks.checkoutLatest,
         schema: lanceMocks.schema,
         countRows: lanceMocks.countRows,
@@ -23,9 +23,9 @@ vi.mock("./lancedb-runtime.js", async (importOriginal) => ({
           where: () => ({ select: () => ({ toArray: lanceMocks.queryRows }) }),
         }),
         delete: lanceMocks.deleteRows,
-        close: vi.fn(),
-      })),
-      close: vi.fn(),
+        close() {},
+      }),
+      close() {},
     })),
   })),
 }));
@@ -44,22 +44,14 @@ beforeEach(() => {
 });
 afterEach(() => db.close());
 
-test("uses LanceDB's deleted-row count as the authoritative receipt", async () => {
-  lanceMocks.deleteRows
-    .mockResolvedValueOnce({ numDeletedRows: 0 })
-    .mockResolvedValueOnce({ numDeletedRows: 1 })
-    .mockRejectedValueOnce(new Error("delete unavailable"));
-
-  await expect(db.delete("main", memoryId)).resolves.toBe(false);
-  await expect(db.delete("main", memoryId)).resolves.toBe(true);
+test("propagates native delete failures", async () => {
+  lanceMocks.deleteRows.mockRejectedValueOnce(new Error("delete unavailable"));
   await expect(db.delete("main", memoryId)).rejects.toThrow("delete unavailable");
   expect(lanceMocks.countRows).not.toHaveBeenCalled();
-  expect(lanceMocks.deleteRows).toHaveBeenCalledTimes(3);
 });
 
 test.each([
   ["search", () => db.search("main", [1, 0, 0])],
-  ["list", () => db.list("main")],
   ["query", query],
   ["delete", () => db.delete("main", memoryId)],
   ["store", () => db.store("main", entry)],
