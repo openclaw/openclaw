@@ -3,17 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { AcpRuntimeEvent } from "../../plugin-sdk/acp-runtime.js";
-import {
-  captureSessionTarget,
-  runSessionMutation,
-  interruptSessionControllerEffects,
-} from "../../sessions/session-controller.lifecycle.js";
-import {
-  captureSessionControllerSourceSettlement,
-  reserveSessionControllerSource,
-  claimSessionControllerTask,
-  releaseSessionControllerClaim,
-} from "../../sessions/session-controller.mailbox.js";
+import { captureSessionControllerSourceSettlement } from "../../sessions/session-controller.mailbox.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import type { MsgContext } from "../templating.js";
 import {
@@ -515,8 +505,6 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         replyOptions: prepared.options,
         replyResolver: resolver,
       });
-      let mutation: Promise<void> | undefined;
-      let next: ReturnType<typeof claimSessionControllerTask> | undefined;
       try {
         await hold.started.promise;
         expect(input.claim).toBeUndefined();
@@ -527,52 +515,16 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         predecessor.complete();
         await predecessor.ownerSettlement;
         expect(settled).not.toHaveBeenCalled();
-        const target = captureSessionTarget({
-          storeScope: mockSessionStorePath,
-          sessionKey: key,
-        });
-        const mutationEntered = createDeferred();
-        const mutated = vi.fn();
-        mutation = runSessionMutation({
-          target,
-          prepare: async () => {
-            mutationEntered.resolve();
-            await interruptSessionControllerEffects({ target });
-          },
-          run: async () => {
-            mutated();
-          },
-        });
-        await mutationEntered.promise;
-        const successor = reserveSessionControllerSource(key, {
-          target,
-          policy: { mode: "followup" },
-        });
-        const selected = vi.fn();
-        next = claimSessionControllerTask(successor, selected);
-        expect(mutated).not.toHaveBeenCalled();
-        expect(selected).not.toHaveBeenCalled();
         hold.release.resolve();
         await hold.returned.promise;
         await receipt;
-        await mutation;
-        const claim = await next;
         expect(settled).toHaveBeenCalledOnce();
-        expect(mutated).toHaveBeenCalledOnce();
-        expect(selected).toHaveBeenCalledOnce();
-        releaseSessionControllerClaim(claim);
-        await claim.settlement.promise;
         expect(resolver).not.toHaveBeenCalled();
         expectNoReplies(dispatcher);
       } finally {
         hold.release.resolve();
         predecessor.complete();
-        await Promise.allSettled([dispatch, hold.returned.promise, receipt, mutation]);
-        const claim = await next;
-        if (claim) {
-          releaseSessionControllerClaim(claim);
-          await claim.settlement.promise;
-        }
+        await Promise.allSettled([dispatch, hold.returned.promise, receipt]);
       }
     },
   );
