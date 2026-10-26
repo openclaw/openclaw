@@ -30,6 +30,7 @@ import {
 import {
   setupSessionCreateHandlerTestHarness,
   chatSendOwner,
+  sessionCreateRuntimeClient,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
 import * as sessionStoreWorker from "./session-utils-store-worker.js";
@@ -288,16 +289,7 @@ test("sessions.create commits no session after delegated authority closes", asyn
     { agentId: "main", key: sessionKey },
     {
       context,
-      client: {
-        connect: { scopes: ["operator.write"] },
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "main",
-            sessionKey: "agent:main:main",
-          },
-        },
-      } as never,
+      client: sessionCreateRuntimeClient(["operator.write"]) as never,
     },
   );
 
@@ -428,16 +420,7 @@ test("sessions.create starts no initial turn when authority closes after session
         context: {
           validateAgentRuntimeApprovalAuthority: () => authorityCurrent,
         },
-        client: {
-          connect: { scopes: ["operator.write"] },
-          internal: {
-            agentRuntimeIdentity: {
-              kind: "agentRuntime",
-              agentId: "main",
-              sessionKey: "agent:main:main",
-            },
-          },
-        } as never,
+        client: sessionCreateRuntimeClient(["operator.write"]) as never,
       },
     );
 
@@ -489,16 +472,7 @@ test("sessions.create removes a provisioned worktree when authority closes befor
         context: {
           validateAgentRuntimeApprovalAuthority: () => authorityCurrent,
         },
-        client: {
-          connect: { scopes: ["operator.admin"] },
-          internal: {
-            agentRuntimeIdentity: {
-              kind: "agentRuntime",
-              agentId: "main",
-              sessionKey: "agent:main:main",
-            },
-          },
-        } as never,
+        client: sessionCreateRuntimeClient(["operator.admin"]) as never,
       },
     );
 
