@@ -10,6 +10,8 @@ import { buildEmbeddedAttemptToolRunContext } from "../../agents/embedded-agent-
 import { resolveOpenClawPluginToolsForOptions } from "../../agents/openclaw-plugin-tools.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { bindPluginRuntimeArtifactSelection } from "../../plugins/plugin-runtime-artifact-binding.js";
+import { resolvePluginRuntimeArtifactSelection } from "../../plugins/plugin-runtime-artifact-selection.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { setPluginRuntimeLoadContext } from "../../plugins/runtime/load-context.js";
@@ -61,13 +63,24 @@ function registerIdentityProbe(params: {
   effect: () => void;
 }) {
   const builder = createTestPluginRegistry();
+  const artifact = {
+    source: "/tmp/identity-probe/index.js",
+    rootDir: "/tmp/identity-probe",
+    origin: "bundled" as const,
+  };
   const record = createPluginRecord({
     id: "identity-probe",
+    ...artifact,
     contracts: { tools: ["identity_probe"] },
+  });
+  bindPluginRuntimeArtifactSelection(record, {
+    ...artifact,
+    preferBuiltPluginArtifacts: false,
+    runtimeEntry: resolvePluginRuntimeArtifactSelection({ ...artifact, entryKind: "runtime" }),
   });
   builder.registry.plugins.push(record);
   const metadataSnapshot = createPluginMetadataSnapshotFixture({
-    plugins: [{ id: record.id, contracts: record.contracts }],
+    plugins: [{ id: record.id, ...artifact, contracts: record.contracts }],
   });
   setPluginRuntimeLoadContext(builder.registry, {
     rawConfig: identityProbeConfig,
@@ -80,7 +93,10 @@ function registerIdentityProbe(params: {
     manifestRegistry: metadataSnapshot.manifestRegistry,
     metadataSnapshot,
   });
-  const api = builder.createApi(record, { config: {}, registrationMode: "full" });
+  const api = builder.createApi(record, {
+    config: identityProbeConfig,
+    registrationMode: "full",
+  });
   api.registerTool(
     {
       contextVersion: 2,
