@@ -88,6 +88,7 @@ export async function prepareClaudeCliSkillsPlugin(params: {
   const tempDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-claude-skills-"),
   );
+  const cleanup = () => fs.rm(tempDir, { recursive: true, force: true });
   const pluginDir = path.join(tempDir, OPENCLAW_CLAUDE_PLUGIN_NAME);
   const manifestDir = path.join(pluginDir, ".claude-plugin");
   const skillsDir = path.join(pluginDir, "skills");
@@ -126,19 +127,17 @@ export async function prepareClaudeCliSkillsPlugin(params: {
     }
 
     if (linkedSkillCount === 0) {
-      await fs.rm(tempDir, { recursive: true, force: true });
+      await cleanup();
       return { args: [], cleanup: async () => {} };
     }
 
     return {
       args: ["--plugin-dir", pluginDir],
       pluginDir,
-      cleanup: async () => {
-        await fs.rm(tempDir, { recursive: true, force: true });
-      },
+      cleanup,
     };
   } catch (error) {
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    await cleanup().catch(() => undefined);
     throw error;
   }
 }
