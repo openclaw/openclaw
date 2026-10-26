@@ -227,8 +227,7 @@ function createBoardDocument(
         observesSession,
       };
       if (observesSession && sessions && session.agentId) {
-        // The shared row owner retains event ordering and creator changes across descriptor reads.
-        reconcile?.(described?.session ?? undefined, undefined, { resultAgentId: session.agentId });
+        // Archived descriptors need an observer even when the primary roster excludes them.
         nextBinding.observation = sessions.observeRow(
           { key: session.sessionKey, agentId: session.agentId },
           (row) => {
@@ -250,6 +249,7 @@ function createBoardDocument(
             },
           },
         );
+        reconcile?.(described?.session ?? undefined, undefined, { resultAgentId: session.agentId });
       }
       const capabilities = providerCapabilities(current, nextBinding.observation);
       const lease = acquireBoardProviderForSession(

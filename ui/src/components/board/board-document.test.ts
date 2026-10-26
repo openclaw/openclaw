@@ -325,12 +325,13 @@ it("retains failed Remove feedback after automatic unchanged dashboard reconcili
 });
 
 it.each([
-  { scope: "operator.sessions.read", sharingRole: "owner", canMutate: false },
-  { scope: "operator.sessions.write", sharingRole: "viewer", canMutate: false },
-  { scope: "operator.sessions.write", sharingRole: "owner", canMutate: true },
+  { scope: "operator.sessions.read", sharingRole: "owner", archived: false, canMutate: false },
+  { scope: "operator.sessions.write", sharingRole: "viewer", archived: false, canMutate: false },
+  { scope: "operator.sessions.write", sharingRole: "owner", archived: false, canMutate: true },
+  { scope: "operator.sessions.write", sharingRole: "owner", archived: true, canMutate: true },
 ] as const)(
-  "renders focused documents with $scope as $sharingRole",
-  async ({ scope, sharingRole, canMutate }) => {
+  "renders focused documents with $scope as $sharingRole (archived=$archived)",
+  async ({ scope, sharingRole, archived, canMutate }) => {
     let board = widgetSnapshot();
     let row: GatewaySessionRow = {
       key: preparedSession.sessionKey,
@@ -339,6 +340,7 @@ it.each([
       kind: "direct",
       updatedAt: 1,
       sharingRole,
+      archived,
     };
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.describe") {
