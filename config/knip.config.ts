@@ -243,6 +243,9 @@ const repositoryScriptEntries = [
   "scripts/perf/mention-inbox-measure.ts!",
   // scripts/perf/README.md invokes this main-thread stall measurement CLI by path.
   "scripts/perf/main-thread-stall-measure.mjs!",
+  // Cold-load diagnostics invoked directly as documented in their headers.
+  "scripts/perf/gateway-main-heap-preload.mjs!",
+  "scripts/perf/headless-tools-cold-import.mjs!",
   // scripts/perf/README.md invokes these measurement commands by path.
   "scripts/perf/cron-delivery-gateway-entry.ts!",
   "scripts/perf/plugin-policy-read-measure.mjs!",
