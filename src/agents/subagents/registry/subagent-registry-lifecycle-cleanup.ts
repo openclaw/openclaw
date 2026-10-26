@@ -1,4 +1,4 @@
-import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import {
   isSystemEventStoreCurrent,
@@ -266,7 +266,7 @@ export function scheduleResumeSubagentRun(
         }
       });
   }, delayMs);
-  timer.unref?.();
+  timer.unref();
   context.scheduledResumeTimers.set(runtimeKey, timer);
 }
 
@@ -274,7 +274,7 @@ export function runDetachedCleanupAttempt(
   context: SubagentLifecycleCleanupContext,
   entry: SubagentRunRecord,
   { cleanupGeneration, stateContext }: SubagentCleanupAttempt,
-  run: () => Promise<void>,
+  run: (releasePreparation: () => void) => Promise<void>,
 ): void {
   const params = context.options;
   const runId = entry.runId;
@@ -302,7 +302,7 @@ export function runDetachedCleanupAttempt(
   // Completion outlives the spawning attempt; inherited lock owners would
   // reject requester transcript writes after that attempt is disposed.
   runWithoutOwnedSessionTranscriptWrites(() => {
-    const execute = async () => {
+    const execute = async (releasePreparation: () => void) => {
       try {
         await commitSubagentLifecycleMutation(context, {
           entry,
@@ -317,7 +317,7 @@ export function runDetachedCleanupAttempt(
         });
         startCommitted = true;
         releaseReservation();
-        await run();
+        await run(releasePreparation);
         context.cleanupFailureCounts.delete(identity);
       } catch (err) {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);

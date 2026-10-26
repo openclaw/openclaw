@@ -333,8 +333,19 @@ describe("GitHub publication branch history", () => {
   it.each(["failed", "wrong-ref", "fetch", "ancestry"] as const)(
     "leaves the workspace untouched when remote %s observation is unknown",
     async (fault) => {
-      const remoteCommit = await f.commit("remote object");
-      await f.git("push", f.remote, `${remoteCommit}:refs/heads/${BRANCH}`);
+      await f.git("push", f.remote, "HEAD:refs/heads/main");
+      // A locally created commit would let publication skip the remote fetch.
+      const remoteCommit = await f.git(
+        "-C",
+        f.remote,
+        "commit-tree",
+        await f.head("HEAD^{tree}"),
+        "-m",
+        "remote object",
+      );
+      await f.git("-C", f.remote, "update-ref", `refs/heads/${BRANCH}`, remoteCommit);
+      await expect(f.git("cat-file", "-e", `${remoteCommit}^{commit}`)).rejects.toThrow();
+      let faultInjected = false;
       interceptCommand((argv) => {
         const targeted =
           fault === "failed" || fault === "wrong-ref"
@@ -343,6 +354,7 @@ describe("GitHub publication branch history", () => {
               ? argv.includes("fetch") && argv.at(-1) === remoteCommit
               : argv.includes("--is-ancestor") && argv.at(-2) === remoteCommit;
         if (targeted) {
+          faultInjected = true;
           return fault === "wrong-ref"
             ? commandResult(`${remoteCommit}\trefs/heads/other\n`)
             : commandResult("", fault === "ancestry" ? 128 : 1);
@@ -350,6 +362,7 @@ describe("GitHub publication branch history", () => {
         return undefined;
       });
       await f.rejected(`unknown-${fault}`, "unavailable", "verify");
+      expect(faultInjected).toBe(true);
     },
   );
 });

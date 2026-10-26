@@ -55,7 +55,6 @@ extensions/feishu/src/outbound.test.ts
 extensions/feishu/src/outbound.ts
 extensions/feishu/src/reply-dispatcher.test.ts
 extensions/feishu/src/reply-dispatcher.ts
-extensions/feishu/src/streaming-card.test.ts
 extensions/google-meet/index.test.ts
 extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts
@@ -74,7 +73,6 @@ extensions/memory-core/doctor-contract-api.test.ts
 extensions/memory-core/src/cli.test.ts
 extensions/memory-core/src/dreaming-phases.test.ts
 extensions/memory-core/src/dreaming-phases.ts
-extensions/memory-core/src/memory/index.test.ts
 extensions/memory-core/src/memory/manager-embedding-ops.ts
 extensions/memory-core/src/rem-evidence.ts
 extensions/memory-core/src/short-term-promotion.test.ts
@@ -134,7 +132,6 @@ extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
 extensions/telegram/src/webhook.test.ts
 extensions/tlon/src/monitor/index.ts
-extensions/voice-call/src/webhook.test.ts
 extensions/voice-call/src/webhook.ts
 extensions/voice-call/src/webhook/realtime-handler.test.ts
 extensions/voice-call/src/webhook/realtime-handler.ts
@@ -143,7 +140,6 @@ extensions/whatsapp/src/connection-controller.ts
 extensions/workboard/src/store-core.ts
 extensions/workboard/src/store-normalizers.ts
 extensions/workboard/src/store.test.ts
-extensions/xai/realtime-voice-provider.test.ts
 extensions/zalo/src/monitor.ts
 extensions/zalouser/src/monitor.ts
 extensions/zalouser/src/zalo-js.ts
@@ -155,12 +151,10 @@ packages/ai/src/providers/openai-responses-shared.test.ts
 packages/ai/src/transports/anthropic-transport-stream.test.ts
 packages/gateway-client/src/client.ts
 packages/markdown-core/src/ir.ts
-packages/memory-host-sdk/src/host/session-files.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts
-src/agents/agent-hooks/compaction-safeguard.test.ts
 src/agents/agent-hooks/compaction-safeguard.ts
 src/agents/agent-tools.before-tool-call.e2e.test.ts
 src/agents/agent-tools.before-tool-call.integration.e2e.test.ts
@@ -171,7 +165,6 @@ src/agents/auth-profiles/store.ts
 src/agents/bash-tools.exec-host-gateway.test.ts
 src/agents/bash-tools.exec-host-gateway.ts
 src/agents/bash-tools.exec-host-node.test.ts
-src/agents/bash-tools.exec-runtime.ts
 src/agents/btw.test.ts
 src/agents/cli-runner.reliability.test.ts
 src/agents/cli-runner.spawn.test.ts
@@ -179,7 +172,6 @@ src/agents/cli-runner/execute.supervisor-capture.test.ts
 src/agents/cli-runner/prepare.test.ts
 src/agents/cli-runner/prepare.ts
 src/agents/command/attempt-execution.cli.test.ts
-src/agents/command/attempt-execution.ts
 src/agents/embedded-agent-runner-extraparams.test.ts
 src/agents/embedded-agent-runner.cache.live.test.ts
 src/agents/embedded-agent-runner/compact.hooks.harness.ts
@@ -187,8 +179,6 @@ src/agents/embedded-agent-runner/compact.hooks.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
 src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/runs.ts
-src/agents/embedded-agent-runner/thinking.test.ts
-src/agents/embedded-agent-runner/tool-result-truncation.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.ts
 src/agents/embedded-agent-subscribe.handlers.tools.test.ts
 src/agents/harness/native-hook-relay.test.ts
@@ -198,23 +188,19 @@ src/agents/model-auth-availability.ts
 src/agents/model-fallback.test.ts
 src/agents/model-selection-shared.ts
 src/agents/models.profiles.live.test.ts
-src/agents/openclaw-tools.session-status.test.ts
 src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
 src/agents/sessions/model-registry.ts
 src/agents/subagents/announce/subagent-announce-delivery.test.ts
-src/agents/subagents/announce/subagent-announce.format.e2e.test.ts
 src/agents/subagents/registry/subagent-control.test.ts
 src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
 src/agents/subagents/registry/subagent-registry.test.ts
-src/agents/subagents/spawn/acp-spawn.test.ts
 src/agents/system-prompt.ts
 src/agents/tool-search.test.ts
 src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-tool.test.ts
 src/agents/tools/message-tool.test.ts
 src/agents/tools/sessions-spawn-tool.test.ts
-src/agents/tools/sessions.test.ts
 src/agents/tools/web-fetch.ts
 src/agents/workspace.ts
 src/agents/worktrees/service.ts
@@ -238,7 +224,6 @@ src/auto-reply/reply/queue.collect.test.ts
 src/auto-reply/reply/reply-run-registry.test.ts
 src/auto-reply/reply/session.test.ts
 src/auto-reply/reply/session.ts
-src/channels/plugins/outbound/interactive.test.ts
 src/channels/plugins/setup-wizard-helpers.ts
 src/channels/streaming.ts
 src/cli/capability-cli.test.ts
@@ -260,10 +245,8 @@ src/commands/agent-via-gateway.ts
 src/commands/agent.test.ts
 src/commands/doctor-auth-flat-profiles.test.ts
 src/commands/doctor-auth-flat-profiles.ts
-src/commands/doctor-legacy-config.migrations.test.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
-src/commands/doctor/repair-sequencing.test.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
@@ -281,8 +264,6 @@ src/config/sessions/session-accessor.test.ts
 src/config/sessions/transcript.test.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
 src/cron/isolated-agent/run.test-harness.ts
-src/daemon/launchd.test.ts
-src/daemon/schtasks.startup-fallback.test.ts
 src/daemon/systemd.test.ts
 src/flows/channel-setup.ts
 src/flows/doctor-core-checks.ts
@@ -357,7 +338,6 @@ src/infra/npm-managed-root.ts
 src/infra/outbound/deliver.test.ts
 src/infra/outbound/delivery-queue-recovery.ts
 src/infra/outbound/delivery-queue.recovery.test.ts
-src/infra/outbound/targets.test.ts
 src/infra/restart.ts
 src/infra/state-migrations.doctor.ts
 src/infra/state-migrations.session-store.ts
@@ -375,13 +355,11 @@ src/media/web-media.ts
 src/node-host/invoke-system-run.test.ts
 src/node-host/invoke-system-run.ts
 src/plugin-sdk/core.ts
-src/plugin-sdk/test-helpers/provider-runtime-contract.ts
 src/plugins/channel-plugin-ids.test.ts
 src/plugins/clawhub.ts
 src/plugins/commands.test.ts
 src/plugins/contracts/host-hooks.contract.test.ts
 src/plugins/contracts/tts-contract-suites.ts
-src/plugins/discovery.test.ts
 src/plugins/discovery.ts
 src/plugins/hook-types.ts
 src/plugins/hooks.ts
@@ -403,11 +381,9 @@ src/plugins/tools.optional.test.ts
 src/plugins/uninstall.test.ts
 src/plugins/update.test.ts
 src/secrets/configure.ts
-src/secrets/runtime-state.test.ts
 src/secrets/runtime-state.ts
 src/security/audit-extra.sync.ts
 src/security/audit.ts
-src/shared/json-schema-defaults.ts
 src/skills/lifecycle/clawhub.test.ts
 src/snapshot/local-repository.test.ts
 src/snapshot/local-repository.ts

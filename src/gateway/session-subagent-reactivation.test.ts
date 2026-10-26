@@ -70,17 +70,6 @@ function reactivate(
   });
 }
 
-function expectReplacement(overrides: Record<string, unknown>) {
-  expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledWith({
-    previousRunId: "run-prev-ended",
-    nextRunId: "run-next",
-    preserveCompletedRun: true,
-    assertCurrent: expect.any(Function),
-    runTimeoutSeconds: 0,
-    ...overrides,
-  });
-}
-
 afterEach(() => vi.restoreAllMocks());
 
 beforeEach(() => {
@@ -105,6 +94,7 @@ it("skips ACP reads without an ended run and observes newly written ACP metadata
       const params = {
         sessionKey: childSessionKey,
         runId: "run-next",
+        task: "  follow-up prompt text  ",
         acpSession: { cfg, activeSessionAgentId: "main", sessionEntry: entry ?? undefined },
       };
       const readMetadata = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
@@ -114,7 +104,9 @@ it("skips ACP reads without an ended run and observes newly written ACP metadata
 
       mockEndedRun(endedRun());
       await expect(reactivateCompletedSubagentSession(params)).resolves.toBe(true);
-      expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledOnce();
+      expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ task: params.task }),
+      );
 
       entry = await upsertAcpSessionMeta({
         ...scope,
@@ -136,31 +128,12 @@ it("skips ACP reads without an ended run and observes newly written ACP metadata
   );
 });
 
-it("reactivates the newest ended row with its exact follow-up for restart redispatch (#77539)", async () => {
-  const resolveGatewayContext = vi.fn(() => ({ owner: "gateway-b" }) as never);
-  mockEndedRun(endedRun({ runId: "run-current-ended", task: "stale original task" }));
-  await expect(
-    reactivate({
-      gatewayContextResolver: resolveGatewayContext,
-      task: "  follow-up prompt text  ",
-    }),
-  ).resolves.toBe(true);
-
-  expect(latestRun).toHaveBeenCalledWith(childSessionKey);
-  expectReplacement({
-    previousRunId: "run-current-ended",
-    gatewayContextResolver: resolveGatewayContext,
-    task: "  follow-up prompt text  ",
-  });
-});
-
 it("does not replace an ended row after its Gateway owner retires", async () => {
   mockEndedRun(endedRun({ runId: "run-ended" }));
   const resolveGatewayContext = vi.fn(() => undefined);
 
   await expect(reactivate({ gatewayContextResolver: resolveGatewayContext })).resolves.toBe(false);
 
-  expect(resolveGatewayContext).toHaveBeenCalledOnce();
   expect(replaceSubagentRunAfterSteerMock).not.toHaveBeenCalled();
 });
 

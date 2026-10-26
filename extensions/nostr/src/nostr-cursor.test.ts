@@ -40,15 +40,46 @@ describe("Nostr durable cursor", () => {
     expect(cursor.markBackfillComplete()).toBe(1_100);
   });
 
-  it("serializes a safety rewind after an older in-flight progress write", async () => {
-    const highStarted = createDeferred<void>();
-    const highGate = createDeferred<void>();
-    const write = vi.fn(async (cursor: number) => {
-      if (cursor === 2_000) {
-        highStarted.resolve();
-        await highGate.promise;
+  it.each(["pending", "in-flight"])(
+    "serializes a safety rewind after an older %s progress write",
+    async (progressState) => {
+      const highStarted = createDeferred<void>();
+      const highGate = createDeferred<void>();
+      const write = vi.fn(async (cursor: number) => {
+        if (cursor === 2_000) {
+          highStarted.resolve();
+          await highGate.promise;
+        }
+      });
+      const writer = createNostrCursorStateWriter({
+        initialCursor: 1_000,
+        minimumCursor: 1_000,
+        debounceMs: 60_000,
+        write,
+      });
+
+      writer.schedule(2_000);
+      const highWrite = writer.flush();
+      if (progressState === "in-flight") {
+        await withTimeout(highStarted.promise, 1_000, {
+          message: "Nostr progress write did not start",
+        });
       }
-    });
+      const rewind = writer.persistNow(1_050);
+      const stricterRewind = writer.persistNow(1_020);
+      await withTimeout(highStarted.promise, 1_000, {
+        message: "Nostr progress write did not start",
+      });
+      expect(write).toHaveBeenCalledWith(2_000);
+      highGate.resolve();
+      await Promise.all([highWrite, rewind, stricterRewind]);
+
+      expect(write.mock.calls.map(([cursor]) => cursor)).toEqual([2_000, 1_020]);
+    },
+  );
+
+  it("persists a cursor queued while an idle flush is settling", async () => {
+    const write = vi.fn<(cursor: number) => Promise<void>>().mockResolvedValue(undefined);
     const writer = createNostrCursorStateWriter({
       initialCursor: 1_000,
       minimumCursor: 1_000,
@@ -56,18 +87,11 @@ describe("Nostr durable cursor", () => {
       write,
     });
 
-    writer.schedule(2_000);
-    const highWrite = writer.flush();
-    await withTimeout(highStarted.promise, 1_000, {
-      message: "Nostr progress write did not start",
-    });
-    expect(write).toHaveBeenCalledWith(2_000);
-    const rewind = writer.persistNow(1_050);
-    const stricterRewind = writer.persistNow(1_020);
-    highGate.resolve();
-    await Promise.all([highWrite, rewind, stricterRewind]);
+    const idle = writer.flush();
+    const persist = writer.persistNow(1_020);
+    await Promise.all([idle, persist]);
 
-    expect(write.mock.calls.map(([cursor]) => cursor)).toEqual([2_000, 1_020]);
+    expect(write.mock.calls.map(([cursor]) => cursor)).toEqual([1_020]);
   });
 
   it("keeps retrying a failed safety write until it is durable", async () => {

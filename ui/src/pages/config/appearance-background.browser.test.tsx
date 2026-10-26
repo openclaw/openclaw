@@ -285,7 +285,9 @@ it("passes live preferences to the shared renderer without enabling disabled pla
   await preview.updateComplete;
   expect(preview.preferenceOverride).toMatchObject({ ...disabledPlacement, visibility: 0.8 });
   expect(range.getAttribute("aria-valuetext")).toBe("80%");
-  expect(preview.querySelector(".session-background__image")).not.toBeNull();
+  await waitForSolid(() => {
+    expect(preview.querySelector(".session-background__image")).not.toBeNull();
+  });
   patchSettings({
     background: {
       ...DEFAULT_BACKGROUND_PREFERENCE,

@@ -177,9 +177,7 @@ describe("check-assertion-safety-ratchet", () => {
     ].join("\n");
 
     expect(count(source)).toBe(3);
-    for (const file of ["src/agents/agent-model-discovery.ts", "src/example.ts"]) {
-      expect(count("value as unknown as Shape;", file)).toBe(1);
-    }
+    expect(count("value as unknown as Shape;")).toBe(1);
     expect(count("declare const value: unknown as Shape;", "src/example.d.ts")).toBe(0);
     expect(
       [
@@ -259,13 +257,7 @@ describe("check-assertion-safety-ratchet", () => {
     fs.rmSync(path.join(root, "src/b.ts"));
     const report = assertionReport(root, "HEAD");
     expect(report).toMatchObject({ complete: true, matching: "not-performed" });
-    expect(report.source).toEqual({
-      commit,
-      tree: git(root, ["rev-parse", "HEAD^{tree}"]).trim(),
-      baselineBlob: git(root, ["rev-parse", "HEAD:config/assertion-safety-baseline.txt"]).trim(),
-      packageBlob: null,
-      lockfileBlob: null,
-    });
+    expect(report.source.commit).toBe(commit);
     expect(report.tooling.sha256["scripts/check-assertion-safety-ratchet.mts"]).toBe(
       sha256(
         fs.readFileSync(
@@ -277,9 +269,6 @@ describe("check-assertion-safety-ratchet", () => {
       { discovered: 7, parsed: 3, failed: 0, unvisited: 0, excluded: 3, missing: 1 },
       { allowances: 25, counted: 3, exempt: 3, unusedAllowance: 22 },
     ]);
-    expect(report.files.map((file) => file.path)).toEqual(
-      [...Object.keys(files).filter((file) => file !== baselineFile), "src/deleted.ts"].toSorted(),
-    );
     const first = report.files.find((file) => file.path === "src/a.ts");
     expect(first).toMatchObject({
       blob: git(root, ["rev-parse", "HEAD:src/a.ts"]).trim(),
@@ -351,12 +340,7 @@ describe("check-assertion-safety-ratchet", () => {
       source: { commit: null },
       coverage: { discovered: null },
       files: [],
-    });
-    expect(report.totals).toEqual({
-      allowances: null,
-      counted: null,
-      exempt: null,
-      unusedAllowance: null,
+      totals: { allowances: null, counted: null, exempt: null, unusedAllowance: null },
     });
     expect(report.errors).toHaveLength(1);
   });

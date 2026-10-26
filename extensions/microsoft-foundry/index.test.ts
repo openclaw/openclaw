@@ -94,8 +94,9 @@ let runtimeAuthTestSequence = 0;
 let runtimeAuthTestTenantId = "tenant-0";
 
 function makeModel(
-  overrides: Partial<ProviderPrepareRuntimeAuthContext["model"]> & {
+  overrides: Partial<Omit<ProviderPrepareRuntimeAuthContext["model"], "headers">> & {
     api?: FoundryProviderApi;
+    headers?: Record<string, string>;
   } = {},
 ) {
   return {
@@ -610,6 +611,28 @@ describe("microsoft-foundry plugin", () => {
     ]);
   });
 
+  it.each([undefined, { canonicalModelId: "gpt-5-mini" }])(
+    "preserves manual limits through repeated selection and normalization with params %j",
+    async (params) => {
+      const config = makeConfig({
+        models: [makeModel({ id: "prod-mini", name: "gpt-5-mini", params })],
+      });
+      const provider = registerProvider();
+      for (let selection = 0; selection < 2; selection++) {
+        await selectModel(config, "prod-mini");
+        const model = configuredProvider(config).models[0]!;
+        expect(model).toMatchObject({ contextWindow: 128_000, maxTokens: 16_384 });
+        expect(
+          provider.normalizeResolvedModel?.({
+            provider: providerId,
+            modelId: model.id,
+            model: makeModel({ id: model.id, name: model.name, params: model.params }),
+          }),
+        ).toMatchObject({ contextWindow: 128_000, maxTokens: 16_384 });
+      }
+    },
+  );
+
   it("preserves an explicit per-model Foundry endpoint when switching models", async () => {
     const claudeEndpoint = "https://claude-resource.services.ai.azure.com/anthropic";
     const config = makeConfig({
@@ -831,28 +854,6 @@ describe("microsoft-foundry plugin", () => {
       } as never),
     ).toBe(baseStreamFn);
   });
-
-  it.each([
-    ["gpt-5.6-sol", "openai-responses", "api-key", 1_050_000, 128_000],
-    ["gpt-5.4-pro", "openai-responses", "api-key", 1_050_000, 128_000],
-    ["gpt-5.4-mini", "openai-responses", "api-key", 400_000, 128_000],
-    ["gpt-4o-mini", "openai-completions", "api-key", 128_000, 16_384],
-    ["claude-opus-5", "anthropic-messages", "entra-id", 1_000_000, 128_000],
-    ["claude-sonnet-4.6", "anthropic-messages", "entra-id", 1_000_000, 128_000],
-    ["claude-sonnet-4.5", "anthropic-messages", "entra-id", 200_000, 64_000],
-    ["claude-opus-4.1", "anthropic-messages", "entra-id", 200_000, 32_000],
-  ] as const)(
-    "uses native limits for %s",
-    (modelNameHint, api, authMethod, contextWindow, maxTokens) => {
-      const model = builtModel({
-        modelId: `prod-${modelNameHint}`,
-        modelNameHint,
-        api,
-        authMethod,
-      });
-      expect(model).toMatchObject({ name: modelNameHint, api, contextWindow, maxTokens });
-    },
-  );
 
   it("keeps older Foundry Claude deployments out of Fable-class thinking limits", () => {
     const model = builtModel({

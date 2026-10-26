@@ -385,63 +385,59 @@ export function readGatewayRestartHandoffSync(
  * malformed rows are removed while the immediate transaction still owns the write lock.
  */
 export function consumeGatewayRestartHandoffSync(opts: {
-  env?: NodeJS.ProcessEnv;
   expectedPid: number;
 }): GatewayRestartHandoffConsumeResult {
   const expectedPid = asPositiveSafeInteger(opts.expectedPid) ?? null;
   if (expectedPid === null) {
     throw new Error("expectedPid must be a positive safe integer");
   }
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const now = Date.now();
-      const stateDb = getNodeSqliteKysely<GatewayRestartHandoffDatabase>(db);
-      const row = selectGatewayRestartHandoffRowSync(db);
-      if (!row) {
-        return {
-          status: "none",
-          reason: "missing",
-        };
-      }
-
-      const removeCurrent = () => {
-        executeSqliteQuerySync(
-          db,
-          stateDb
-            .deleteFrom("gateway_restart_handoff")
-            .where("handoff_key", "=", GATEWAY_SUPERVISOR_RESTART_HANDOFF_KEY),
-        );
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    const now = Date.now();
+    const stateDb = getNodeSqliteKysely<GatewayRestartHandoffDatabase>(db);
+    const row = selectGatewayRestartHandoffRowSync(db);
+    if (!row) {
+      return {
+        status: "none",
+        reason: "missing",
       };
-      const handoff = normalizeGatewayRestartHandoffRow(row);
-      if (!handoff || now < handoff.createdAt) {
-        removeCurrent();
-        return {
-          status: "rejected",
-          reason: "invalid",
-        };
-      }
-      if (now >= handoff.expiresAt) {
-        removeCurrent();
-        return {
-          status: "rejected",
-          reason: "expired",
-          handoffPid: handoff.pid,
-        };
-      }
-      if (handoff.pid !== expectedPid) {
-        return {
-          status: "rejected",
-          reason: "pid-mismatch",
-          handoffPid: handoff.pid,
-        };
-      }
+    }
 
+    const removeCurrent = () => {
+      executeSqliteQuerySync(
+        db,
+        stateDb
+          .deleteFrom("gateway_restart_handoff")
+          .where("handoff_key", "=", GATEWAY_SUPERVISOR_RESTART_HANDOFF_KEY),
+      );
+    };
+    const handoff = normalizeGatewayRestartHandoffRow(row);
+    if (!handoff || now < handoff.createdAt) {
       removeCurrent();
       return {
-        status: "accepted",
-        handoff,
+        status: "rejected",
+        reason: "invalid",
       };
-    },
-    { env: opts.env ?? process.env },
-  );
+    }
+    if (now >= handoff.expiresAt) {
+      removeCurrent();
+      return {
+        status: "rejected",
+        reason: "expired",
+        handoffPid: handoff.pid,
+      };
+    }
+    if (handoff.pid !== expectedPid) {
+      return {
+        status: "rejected",
+        reason: "pid-mismatch",
+        handoffPid: handoff.pid,
+      };
+    }
+
+    removeCurrent();
+    return {
+      status: "accepted",
+      handoff,
+    };
+  });
 }

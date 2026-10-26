@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { MACOS_APP_INSTALL_OWNER_MARKER } from "../../commands/test-runtime-config-helpers.js";
 import { resolvePinnedDaemonRuntimePath } from "../../daemon/runtime-paths.js";
 import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
 
@@ -130,12 +131,7 @@ it.each(["node", "bun"])(
     vi.stubGlobal("process", { ...process, platform: "linux" });
     await fs.writeFile(
       path.join(f.serviceRoot, "openclaw-install-owner.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        owner: "macos-app",
-        displayName: "OpenClaw.app",
-        updateHint: "Update OpenClaw.app to update this Gateway.",
-      }),
+      MACOS_APP_INSTALL_OWNER_MARKER,
     );
 
     await expect(

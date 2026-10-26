@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createWebSearchProviderContractFields,
@@ -7,11 +6,6 @@ import {
 
 const CREDENTIAL_PATH = "plugins.entries.deepseek.config.webSearch.apiKey";
 const loadRuntime = createLazyRuntimeModule(() => import("./web-search-provider.runtime.js"));
-
-function getModelCredential(config?: OpenClawConfig) {
-  const value = config?.models?.providers?.deepseek?.apiKey;
-  return value === undefined ? undefined : { path: "models.providers.deepseek.apiKey", value };
-}
 
 export function createDeepSeekWebSearchProvider(): WebSearchProviderPlugin {
   return {
@@ -32,7 +26,10 @@ export function createDeepSeekWebSearchProvider(): WebSearchProviderPlugin {
       configuredCredential: { pluginId: "deepseek" },
       selectionPluginId: "deepseek",
     }),
-    getConfiguredCredentialFallback: getModelCredential,
+    getConfiguredCredentialFallback: (config) => {
+      const value = config?.models?.providers?.deepseek?.apiKey;
+      return value === undefined ? undefined : { path: "models.providers.deepseek.apiKey", value };
+    },
     createTool: (ctx) => ({
       description:
         "Search the web using DeepSeek. Returns titles, URLs, and model-oriented summaries. Queries support site:, -site:, lang:, after:, before:, and quoted phrases; maximum 128 Unicode characters.",

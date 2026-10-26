@@ -747,6 +747,7 @@ describe("dispatch Stop before provider allocation", () => {
           expect(destroy).toHaveBeenCalledExactlyOnceWith({
             leaseId: "lease:environment-prior-exclusive",
             profile: { region: "test" },
+            signal: expect.any(AbortSignal),
           });
           expect(settled).toBe(false);
           exclusiveEntered.release.resolve();
@@ -765,7 +766,15 @@ describe("dispatch Stop before provider allocation", () => {
           expect(settled).toBe(false);
           expect(
             destroy.mock.calls.filter(([lease]) => lease.leaseId === environment.leaseId),
-          ).toEqual([[{ leaseId: environment.leaseId, profile: { region: "test" } }]]);
+          ).toEqual([
+            [
+              {
+                leaseId: environment.leaseId,
+                profile: { region: "test" },
+                signal: expect.any(AbortSignal),
+              },
+            ],
+          ]);
           const interruption = startSessionControllerInterruption(sessionIdentity());
           const admissionReleased = vi.fn();
           void interruption.released.then(admissionReleased);

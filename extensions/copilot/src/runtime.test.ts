@@ -1,4 +1,3 @@
-import { resolve } from "node:path";
 import type { CopilotClient, CopilotClientOptions } from "@github/copilot-sdk";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -44,11 +43,9 @@ function setup(idleTtlMs?: number, stop?: (client: FakeClient) => Promise<Error[
   const stops: number[] = [];
   const ctorCalls: CopilotClientOptions[] = [];
   const instances: FakeClient[] = [];
-  let nextId = 0;
-
   const fake = async (clientOptions: CopilotClientOptions) => {
     ctorCalls.push(clientOptions);
-    const id = ++nextId;
+    const id = ctorCalls.length;
     const client: FakeClient = makeClient(
       id,
       vi.fn(async () => {
@@ -131,7 +128,7 @@ describe("createCopilotClientPool", () => {
     await pool.dispose();
   });
 
-  it("preserves an absolute Windows drive root as the SDK base directory", async () => {
+  it("normalizes Windows drive roots, case and trailing separators for the SDK and pool key", async () => {
     vi.resetModules();
     vi.doMock("node:path", async (importOriginal) => {
       const path = await importOriginal<typeof import("node:path")>();
@@ -146,6 +143,20 @@ describe("createCopilotClientPool", () => {
       const handle = await pool.acquire(makeKey(), makeOptions({ copilotHome: "C:\\" }));
       expect(handle.key.copilotHome).toBe("c:\\");
       expect(sdk.ctorCalls[0]?.baseDirectory).toBe("c:\\");
+      const first = await pool.acquire(
+        makeKey(),
+        makeOptions({ copilotHome: "C:/Users/Tester/CopilotHome/" }),
+      );
+      const second = await pool.acquire(
+        makeKey(),
+        makeOptions({ copilotHome: "c:/users/tester/copilothome" }),
+      );
+      expect(first.client).toBe(second.client);
+      expect([first.key.copilotHome, second.key.copilotHome]).toEqual([
+        "c:\\users\\tester\\copilothome",
+        "c:\\users\\tester\\copilothome",
+      ]);
+      expect(sdk.ctorCalls[1]?.baseDirectory).toBe("c:\\users\\tester\\copilothome");
       await pool.dispose();
     } finally {
       Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
@@ -366,29 +377,5 @@ describe("createCopilotClientPool", () => {
     const errors = await pool.dispose();
 
     expect(errors.map((error) => error.message)).toEqual(["stop-string"]);
-  });
-
-  it("treats Windows copilotHome paths as case-insensitive when keying the pool", async () => {
-    const originalPlatform = process.platform;
-    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-
-    try {
-      const { sdk, acquire } = setup();
-      const firstHome = "C:/Users/Tester/CopilotHome/";
-      const secondHome = "c:/users/tester/copilothome";
-
-      const first = await acquire({ copilotHome: firstHome }, { copilotHome: firstHome });
-      const second = await acquire({ copilotHome: secondHome }, { copilotHome: secondHome });
-
-      const normalizedHome = resolve(firstHome).toLowerCase();
-      expect(first.client).toBe(second.client);
-      expect([first.key.copilotHome, second.key.copilotHome]).toEqual([
-        normalizedHome,
-        normalizedHome,
-      ]);
-      expect(String(sdk.ctorCalls[0]?.baseDirectory)).toBe(normalizedHome);
-    } finally {
-      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
-    }
   });
 });

@@ -53,10 +53,25 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 29      | Client private identities, token caches, and native socket credentials move to a separately versioned local store                                                                                                                                                                                                                              | Unreleased          |
 | 30      | Ordinary automation execution and delivery policies; metadata-only downgrade fence                                                                                                                                                                                                                                                             | Unreleased          |
 | 31      | Local workspace baselines stored by path with subtree digests and recoverable checkpoint deltas                                                                                                                                                                                                                                                | Unreleased          |
+| 32      | Native PostgreSQL index ordering for non-null keys; metadata-only SQLite advance ([#183015](https://github.com/openclaw/openclaw/pull/183015))                                                                                                                                                                                                 | Unreleased          |
+| 33      | Native PostgreSQL ordering for predicate-proven non-null partial-index keys; metadata-only SQLite advance ([#183443](https://github.com/openclaw/openclaw/pull/183443))                                                                                                                                                                        | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schemas 32 and 33
+
+Schema 32 gives non-null PostgreSQL index keys native null ordering. Schema 33
+extends that rule to direct keys whose partial-index predicate proves they are
+non-null. The migrations rebuild only changed indexes on tables already present;
+they do not create unused feature fragments or rewrite retained rows. SQLite
+advances metadata only.
+
+With writers stopped, `openclaw doctor --fix` takes the existing exact backup and
+applies consecutive migrations. Direct PostgreSQL Gateway startup refuses older
+schemas. Rollback requires the verified pre-upgrade backup and matching build.
+See the [ordering migration contract](/reference/database-schemas/storage-changes#postgresql-index-ordering-migrations).
 
 ### State schema 31
 

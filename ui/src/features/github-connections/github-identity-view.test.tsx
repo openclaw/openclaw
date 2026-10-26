@@ -7,6 +7,7 @@ import { mountRouterOutlet, settleRouterOutlet } from "../../app/router-outlet.t
 import { createGitHubIdentityView } from "../../lib/reactive/domain-github-identity.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   authorizationCode,
@@ -39,16 +40,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  if (clipboardDescriptor) {
-    Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
-  } else {
-    Reflect.deleteProperty(navigator, "clipboard");
-  }
-  if (execCommandDescriptor) {
-    Object.defineProperty(document, "execCommand", execCommandDescriptor);
-  } else {
-    Reflect.deleteProperty(document, "execCommand");
-  }
+  restorePropertyDescriptor(navigator, "clipboard", clipboardDescriptor);
+  restorePropertyDescriptor(document, "execCommand", execCommandDescriptor);
 });
 
 describe("GitHub identity view", () => {

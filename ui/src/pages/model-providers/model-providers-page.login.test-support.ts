@@ -8,7 +8,28 @@ import {
   createHarness,
   type ModelProvidersPageTestElement,
   startSelectedLogin,
+  waitForProviders,
 } from "./model-providers-page.test-support.tsx";
+
+export function museCodeCapability(): NonNullable<
+  ModelAuthStatusResult["providerCapabilities"]
+>[number] {
+  return {
+    provider: "meta",
+    apiKeySupported: true,
+    quickApiKeySetup: true,
+    loginOptions: [
+      {
+        id: "meta/muse-code",
+        brandId: "meta",
+        label: "Muse Code",
+        kind: "device-code",
+        featured: true,
+        requiresSetup: true,
+      },
+    ],
+  };
+}
 
 export function loginHarness(
   options: {
@@ -92,7 +113,7 @@ async function clickEnabled(page: ModelProvidersPageTestElement, selector: strin
 }
 
 export async function openPicker(page: ModelProvidersPageTestElement) {
-  await waitForSolid(() => expect(page.view.props.updatedAt).toEqual(expect.any(Number)));
+  await waitForProviders(page);
   await clickEnabled(page, "[data-models-connect]");
 }
 

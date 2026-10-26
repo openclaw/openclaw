@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
 import {
   createSessionSqliteMigrationRun,
   type SessionSqliteMigrationMove,
@@ -10,6 +9,7 @@ import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-reade
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as recovery from "./doctor-session-sqlite-recovery-inventory.js";
 import { settleDuplicateSessionSqliteArchives } from "./doctor-session-sqlite-retirement.js";
+import { retainedHistoryMove } from "./doctor-session-sqlite.recovery-fixtures.test-support.js";
 
 it("keeps the first matching artifact when copies precede or follow the original", async () => {
   await withDuplicateArchives(3, async ({ artifacts, settle }) => {
@@ -108,18 +108,7 @@ async function withDuplicateArchives(
     for (let index = 0; index <= count; index++) {
       const archivePath = path.join(archives, `duplicate.jsonl.imported-${index}`);
       fs.writeFileSync(archivePath, "retained original bytes\n");
-      const move: SessionSqliteMigrationMove = {
-        kind: "unreferenced-jsonl",
-        sourcePath: path.join(sessions, "duplicate.jsonl"),
-        archivePath,
-        artifact: {
-          identity: readMigrationArtifactIdentity(archivePath),
-          classification: "protected",
-          reason: "unreferenced-history",
-          dependencies: [],
-          disposal: { state: "retained" },
-        },
-      };
+      const move = retainedHistoryMove(path.join(sessions, "duplicate.jsonl"), archivePath);
       target.plannedMoves.push(move);
       target.completedMoves.push(structuredClone(move));
       references.set(archivePath, [

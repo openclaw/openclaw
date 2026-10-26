@@ -1,6 +1,6 @@
 import { wrapPromptDataBlock } from "openclaw/plugin-sdk/qa-runtime";
 import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { nestedToolActivityFixture } from "../test/nested-tool-activity-fixture.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { findSubagentHandoffReply } from "./subagent-handoff-reply.js";
@@ -22,7 +22,6 @@ function forRequester<Args extends unknown[], Result>(run: (...args: Args) => Re
 function messageEvent(id: string, parentId: string, message: unknown) {
   return { type: "message", id, parentId, message };
 }
-afterEach(() => vi.useRealTimers());
 
 async function runHandoff({
   fault,
@@ -53,7 +52,8 @@ async function runHandoff({
   const secondResult = hasFault("answer only in second child");
   const delivered =
     secondResult || hasFault("answer only in task") ? "A different result" : childReply;
-  const childResult = (text: string) => wrapPromptDataBlock({ label: "Child result", text });
+  const childResult = (text: string) =>
+    wrapPromptDataBlock({ label: "Child result", text, encoding: "verbatim" });
   const settlement = [
     wrapPromptDataBlock({ label: "1. Child task", text: "qa-sidecar" }),
     "status: ok",
@@ -128,11 +128,11 @@ async function runHandoff({
   });
 }
 
-// The yielded requester sees prompt-data's escaped spelling, not a decoded copy.
+// The yielded requester sees the child's own characters, so a faithful quote matches.
 it.each([
   ["qa-sidecar", "qa-sidecar"],
-  ["Verified 2 < 3.\nEvidence:\nCheck passed.", "Verified 2 &lt; 3.\nEvidence:\nCheck passed."],
-  ["column A\tcolumn B\r\n2 < 3", "column Acolumn B\n2 &lt; 3"],
+  ["Verified 2 < 3.\nEvidence:\nCheck passed.", "Verified 2 < 3.\nEvidence:\nCheck passed."],
+  ["column A\tcolumn B\r\n2 < 3", "column A\tcolumn B\n2 < 3"],
   ["literal &lt; stays &lt;", "literal &lt; stays &lt;"],
 ])(
   "credits the child's settled result in the requester's visible reply: %s",
@@ -140,6 +140,12 @@ it.each([
     expect((await runHandoff({ childReply, deliveredReply })).status).toBe("pass");
   },
 );
+it("does not credit a reply that HTML-escaped the child's result", async () => {
+  await expect(
+    runHandoff({ childReply: "Verified 2 < 3.", deliveredReply: "Verified 2 &lt; 3." }),
+  ).rejects.toThrow("no matching delivered reply");
+});
+
 it.each([
   ["forbidden", "did not return an accepted child"],
   ...["another run", "child failed", "child yielded", "silent terminal after progress"].map(
@@ -166,19 +172,14 @@ it.each([
   ["waitForAgentHistory", "observes the child's result in the requester's reply"],
 ])("reports which observation expired at %s", async (wait, name) => {
   const details = "timed out after 360000ms";
-  vi.useFakeTimers();
-  // Let the preceding observations succeed, then expire only the selected wait.
-  const pending = runHandoff({
+  const result = await runHandoff({
     api: {
       runScenario: runQaSuiteScenarioSteps,
-      [wait]: () =>
-        new Promise<never>((_resolve, reject) => {
-          setTimeout(() => reject(new Error(details)), 360_000);
-        }),
+      [wait]: async () => {
+        throw new Error(details);
+      },
     },
   });
-  await vi.advanceTimersByTimeAsync(360_000);
-  const result = await pending;
   expect(result.status).toBe("fail");
   expect(result.steps.at(-1)).toMatchObject({ name, status: "fail", details });
 });

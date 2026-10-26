@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createIcaclsResetCommand, formatIcaclsResetCommand } from "@openclaw/fs-safe/advanced";
 import { modeBits } from "@openclaw/fs-safe/permissions";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { listAgentIds, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -11,7 +12,6 @@ import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/p
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runExec } from "../process/exec.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../routing/session-key.js";
-import { createIcaclsResetCommand, formatIcaclsResetCommand } from "./windows-acl.js";
 
 type SecurityFixAction = {
   path: string;
@@ -19,16 +19,6 @@ type SecurityFixAction = {
   skipped?: string;
   error?: string;
 } & ({ kind: "chmod"; mode: number } | { kind: "icacls"; command: string });
-
-type SecurityFixResult = {
-  ok: boolean;
-  stateDir: string;
-  configPath: string;
-  configWritten: boolean;
-  changes: string[];
-  actions: SecurityFixAction[];
-  errors: string[];
-};
 
 type SecurityPermissionTarget = {
   path: string;
@@ -134,10 +124,7 @@ async function applySecurityFixConfigMutations(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   channelPlugins?: ChannelPlugin[];
-}): Promise<{
-  cfg: OpenClawConfig;
-  changes: string[];
-}> {
+}) {
   let nextCfg = params.cfg;
   const channelChanges: string[] = [];
   const collectPlugins = async (): Promise<ChannelPlugin[]> => {
@@ -244,7 +231,7 @@ export async function fixSecurityFootguns(opts?: {
   stateDir?: string;
   configPath?: string;
   channelPlugins?: ChannelPlugin[];
-}): Promise<SecurityFixResult> {
+}) {
   const env = opts?.env ?? process.env;
   const stateDir = opts?.stateDir ?? resolveStateDir(env);
   const configPath = opts?.configPath ?? resolveConfigPath(env, stateDir);

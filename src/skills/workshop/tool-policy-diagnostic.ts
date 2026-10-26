@@ -12,6 +12,7 @@ import type { ToolPolicyFilterEvent } from "../../agents/tool-policy-pipeline.js
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../../config/types.tools.js";
+import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveSkillWorkshopToolConstructionBlock } from "./tool-availability.js";
 
@@ -133,11 +134,6 @@ function describeExclusion(params: {
   };
 }
 
-type SkillWorkshopToolPolicyAvailability = {
-  available: boolean;
-  exclusion?: ToolPolicyFilterEvent;
-};
-
 const skillWorkshopPolicyProbe = {
   name: SKILL_WORKSHOP_TOOL_NAME,
   label: SKILL_WORKSHOP_TOOL_NAME,
@@ -146,11 +142,43 @@ const skillWorkshopPolicyProbe = {
   execute: async () => ({ content: [], details: {} }),
 } as AnyAgentTool;
 
+// A stand-in for one plugin tool, carrying the owner metadata that plugin-ID and
+// group:plugins policy entries match, so policy can be checked without constructing it.
+function pluginPolicyProbe(name: string, pluginId: string): AnyAgentTool {
+  const probe: AnyAgentTool = {
+    ...skillWorkshopPolicyProbe,
+    name,
+    label: name,
+    description: "Policy availability check.",
+  };
+  setPluginToolMeta(probe, { pluginId, optional: false });
+  return probe;
+}
+
+/**
+ * Returns which of one plugin's `toolNames` the final tool-policy composition keeps,
+ * including name, glob, profile, plugin-ID and group:plugins entries.
+ */
+export function resolveAllowedPluginToolNames(params: {
+  config: OpenClawConfig;
+  conversationCapabilityProfile: ResolvedConversationCapabilityProfile;
+  pluginId: string;
+  toolNames: readonly string[];
+}): Set<string> {
+  const tools = applyFinalEffectiveToolPolicy({
+    bundledTools: params.toolNames.map((name) => pluginPolicyProbe(name, params.pluginId)),
+    config: params.config,
+    conversationCapabilityProfile: params.conversationCapabilityProfile,
+    warn: () => {},
+  });
+  return new Set(tools.map((tool) => tool.name));
+}
+
 /** Applies the real final tool-policy composition used by agent sessions and /learn. */
 export function resolveSkillWorkshopToolPolicyAvailability(params: {
   config: OpenClawConfig;
   conversationCapabilityProfile: ResolvedConversationCapabilityProfile;
-}): SkillWorkshopToolPolicyAvailability {
+}) {
   let exclusion: ToolPolicyFilterEvent | undefined;
   const tools = applyFinalEffectiveToolPolicy({
     bundledTools: [skillWorkshopPolicyProbe],

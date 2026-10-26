@@ -17,7 +17,10 @@ import {
   readCodexNativeSubagentRunId,
   type NativeSubagentAssignment,
 } from "./native-subagent-assignment.js";
-import { captureNativeCancellationSelection } from "./native-subagent-cancellation-selection.js";
+import {
+  captureNativeCancellationChildren,
+  captureNativeCancellationSelection,
+} from "./native-subagent-cancellation-selection.js";
 import { waitForNativeCancellationWork } from "./native-subagent-cancellation-wait.js";
 import {
   CodexNativeSubagentCloseOwner,
@@ -536,13 +539,10 @@ class Monitor {
   ): Promise<T> {
     params.assertCurrent();
     params.assertBindingCurrent?.();
-    const parent = this.parentStates.get(params.parentThreadId);
-    if (!parent) {
-      return run(async () => ({ killed: 0, cancelledRequesters: [] }));
-    }
     const { matchesOwner, matches, states } = captureNativeCancellationSelection(
-      parent,
+      this.parentStates.get(params.parentThreadId),
       this.parentStates.values(),
+      this.childStates.values(),
       params,
     );
     const assertCustodyCurrent = () => {
@@ -596,12 +596,11 @@ class Monitor {
             ),
           ),
         );
-        const selected = [...this.childStates.values()].filter(
-          (child) =>
-            child.historyOwner?.sessionId === params.sessionId &&
-            child.historyOwner?.lifecycleRevision === params.lifecycleRevision &&
-            states.some((state) => state.parentThreadId === child.parentThreadId) &&
-            params.acceptsRequest(child.requestCustody),
+        const { matches: matchesChild, selected } = captureNativeCancellationChildren(
+          this.childStates.values(),
+          states,
+          params,
+          matchesOwner,
         );
         const owners = new Set(
           states.flatMap((state) => [
@@ -663,8 +662,7 @@ class Monitor {
                 child.requesterTurnRunId !== requesterTurnRunId ||
                 child.requestCustody !== requestCustody ||
                 !params.acceptsRequest(requestCustody) ||
-                child.historyOwner?.sessionId !== params.sessionId ||
-                child.historyOwner?.lifecycleRevision !== params.lifecycleRevision ||
+                !matchesChild(child) ||
                 (child.completionCustody && !child.completionCustody.isCurrent())
               ) {
                 throw new Error("Codex descendant assignment changed before cancellation");
@@ -749,8 +747,7 @@ class Monitor {
             if (
               child.requesterTurnRunId !== requesterTurnRunId ||
               child.requestCustody !== requestCustody ||
-              child.historyOwner?.sessionId !== params.sessionId ||
-              child.historyOwner?.lifecycleRevision !== params.lifecycleRevision
+              !matchesChild(child)
             ) {
               throw new Error("Codex descendant requester changed during settlement");
             }

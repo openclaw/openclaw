@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
@@ -7,6 +8,8 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
+import { board } from "./chat-layout-fixtures.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -16,12 +19,7 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKey = "agent:main:dashboard";
-const boardSnapshot = {
-  sessionKey,
-  revision: 1,
-  tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-  widgets: [],
-};
+const boardSnapshot = board(sessionKey);
 
 suite.define(() => {
   it("uses Panels for the main Dashboard conversation without replacing its content", async () => {
@@ -64,36 +62,32 @@ suite.define(() => {
               boardPresentation: "split",
             },
           ],
-          historyMessages: Array.from({ length: 20 }, (_, index) => ({
-            role: index % 2 ? "assistant" : "user",
-            content: [
-              {
-                type: "text",
-                text:
-                  index % 2
-                    ? `Check ${index}: the release verification passed. The package and installation checks are complete. Keep the remaining documentation work visible in the dashboard.`
-                    : `Review release item ${index}. Keep the draft and dashboard note while I compare the results.`,
-              },
-            ],
-            timestamp: 1700000000000 + index,
-          })),
-          featureMethods: ["board.get", "chat.metadata", "chat.startup"],
+          historyMessages: Array.from({ length: 20 }, (_, index) =>
+            chatMessage(
+              index % 2 ? "assistant" : "user",
+              index % 2
+                ? `Check ${index}: the release verification passed. The package and installation checks are complete. Keep the remaining documentation work visible in the dashboard.`
+                : `Review release item ${index}. Keep the draft and dashboard note while I compare the results.`,
+              { timestamp: 1700000000000 + index },
+            ),
+          ),
+          featureMethods: [
+            "board.get",
+            "chat.metadata",
+            "chat.startup",
+            "sessions.companion.state",
+          ],
           methodResponses: {
             "board.get": {
               ...boardSnapshot,
               widgets: [
-                {
+                createBoardWidget({
                   name: "status",
-                  tabId: "main",
                   title: "Release overview",
-                  contentKind: "html",
                   sizeW: 12,
                   sizeH: 6,
-                  position: 0,
-                  grantState: "none",
-                  revision: 1,
                   frameUrl: widgetUrl,
-                },
+                }),
               ],
             },
           },
@@ -237,7 +231,12 @@ suite.define(() => {
               boardPresentation: "split",
             },
           ],
-          featureMethods: ["board.get", "chat.metadata", "chat.startup"],
+          featureMethods: [
+            "board.get",
+            "chat.metadata",
+            "chat.startup",
+            "sessions.companion.state",
+          ],
           methodResponses: {
             "board.get": boardSnapshot,
             "sessions.companion.state": {

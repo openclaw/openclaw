@@ -1222,4 +1222,25 @@ class RoomChatCommandOutboxTest {
       assertEquals(ChatOutboxStatus.Queued, byId.getValue(tail.id).status)
       assertEquals(30L, byId.getValue(other.id).createdAtMs)
     }
+
+  @Test
+  fun singleAttachmentBytesLoadForAQueuedRowPreview() =
+    runTest {
+      val photo = ByteArray(OUTBOX_ATTACHMENT_CHUNK_BYTES + 321) { (it % 251).toByte() }
+      val voice = byteArrayOf(7, 8, 9)
+      val queued =
+        store.enqueueQueued(
+          text = "See attached.",
+          nowMs = 1L,
+          attachments =
+            listOf(
+              payload(photo, fileName = "photo.jpg"),
+              payload(voice, fileName = "voice-note.m4a", type = "audio", mimeType = "audio/mp4", durationMs = 5_000L),
+            ),
+        )
+
+      val photoId = queued.attachments.first { it.type == "image" }.id
+      assertTrue(photo.contentEquals(store.loadAttachmentBytes(photoId)))
+      assertNull(store.loadAttachmentBytes("missing-attachment"))
+    }
 }

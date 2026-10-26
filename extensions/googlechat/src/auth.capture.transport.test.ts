@@ -1,10 +1,10 @@
-import { once } from "node:events";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { captureHttpExchange, type CaptureEventRecord } from "openclaw/plugin-sdk/proxy-capture";
 import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/runtime-fetch";
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 
 const fixture = vi.hoisted(() => ({
   url: "",
@@ -106,12 +106,8 @@ it.each(["auth-overflow", "cert-error", "auth-complete"] as const)(
     const { OAuth2Client } = await loadGoogleAuthRuntime();
     const verifyJwt = vi.spyOn(OAuth2Client.prototype, "verifySignedJwtWithCertsAsync");
     try {
-      await once(server.listen(0, "127.0.0.1"), "listening");
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Expected owned TCP listener");
-      }
-      fixture.url = `http://127.0.0.1:${address.port}/response`;
+      const port = await listenOnLoopback(server);
+      fixture.url = `http://127.0.0.1:${port}/response`;
       const transport = await getGoogleAuthTransport();
       const deadline = new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => reject(new Error("Google Chat cleanup did not settle")), 1_000);

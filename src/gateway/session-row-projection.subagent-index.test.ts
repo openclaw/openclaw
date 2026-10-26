@@ -9,7 +9,6 @@ import {
   getSubagentSessionListReadSnapshotIdentity,
   prepareSubagentSessionListReadCache,
 } from "../agents/subagents/registry/subagent-registry-state.js";
-import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
@@ -31,6 +30,7 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import {
   createTestProjection,
   holdForeground,
+  holdSubagentExecution,
   watchRowFacts as observeRowFacts,
 } from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -80,9 +80,7 @@ it("settles a registry revision after persisting an already absent run", async (
       expect(projection.needsMaterialization).toBe(false);
       expect(
         projection.snapshot({ agentId: target.agentId, key: target.sessionKey }).row,
-      ).toMatchObject({
-        sessionId: "registry-revision",
-      });
+      ).toMatchObject({ sessionId: "registry-revision" });
     } finally {
       projection.dispose();
       releaseForeground();
@@ -280,7 +278,7 @@ it.each([
       for (const key of [child, parent, nextParent]) {
         writeRow(key, archived && key === child ? { archivedAt: 1 } : {});
       }
-      const run: SubagentRunRecord = {
+      const run = createSubagentRunRecord({
         runId: "run",
         childSessionKey: child,
         requesterSessionKey: parent,
@@ -290,12 +288,12 @@ it.each([
         collect: true,
         requesterDisplayKey: "parent",
         task: "Synthetic task",
-        cleanup: "keep",
         createdAt: 1,
         execution: { status: "running", startedAt: 1 },
         completion: { required: false },
         delivery: { status: "not_required" },
-      };
+      });
+      using _ = holdSubagentExecution(run.runId, child);
       subagentRuns.set(run.runId, run);
       if (archived) {
         persistRegistryFixture(subagentRuns);
@@ -323,7 +321,8 @@ it.each([
             swarmRequesterSessionKey: nextParent,
           };
           subagentRuns.set(run.runId, replacement);
-          expect(snapshot()?.controlOwnerSessionKey).toBe(archived ? undefined : parent);
+          // Control reflects the current executor immediately; navigation waits for publication.
+          expect(snapshot()?.controlOwnerSessionKey).toBe(archived ? undefined : nextParent);
           if (publication === "broad-ownership") {
             publishSubagentRunChanges();
           } else {

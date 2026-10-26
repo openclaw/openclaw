@@ -10,16 +10,6 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 
-type AgentRestartRecoveryChannelContext = {
-  channel: string;
-  currentChannelId: string;
-  currentThreadTs?: string;
-  requesterAccountId?: string;
-  requesterSenderId?: string;
-  sameChannelThreadRequired: boolean;
-  sourceTurnId: string;
-};
-
 /** Reconstructs source policy, presentation, and delivery facts from one exact recovery claim. */
 export function resolveAgentRestartRecoveryContext(params: {
   isRestartRecoveryResumeRun: boolean;
@@ -32,7 +22,15 @@ export function resolveAgentRestartRecoveryContext(params: {
 }):
   | {
       messageChannel: string;
-      channel?: AgentRestartRecoveryChannelContext;
+      channel?: {
+        channel: string;
+        currentChannelId: string;
+        currentThreadTs?: string;
+        requesterAccountId?: string;
+        requesterSenderId?: string;
+        sameChannelThreadRequired: boolean;
+        sourceTurnId: string;
+      };
       pinnedWidgetAuthoring?: true;
     }
   | undefined {

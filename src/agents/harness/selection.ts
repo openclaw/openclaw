@@ -1,3 +1,4 @@
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { prepareActiveNodeContext } from "../../infra/active-node-context.js";
@@ -170,6 +171,8 @@ export async function runAgentHarnessSettledTurnFinalization(
       {
         ...internalParams,
         operation: "settled-tool-finalization",
+        // This tool-free projection must not replace the conversation's cache or history baseline.
+        promptCacheKey: `finalization:${sha256HexPrefixCore(params.runId, 32)}`,
         abortSignal: modelExecution
           ? params.abortSignal
             ? AbortSignal.any([params.abortSignal, modelExecution.signal])
@@ -224,7 +227,24 @@ export async function runAgentHarnessAttempt(
           }),
           harness: nativeSessionRuntime.harness,
         }
-      : selectPreparedAgentHarness(params);
+      : selectAgentHarnessDecision({
+          provider: params.provider,
+          modelId: params.modelId,
+          modelProvider: {
+            api: params.model.api,
+            baseUrl: params.model.baseUrl,
+            ...resolveAgentHarnessPreparedRouteSupport(params.runtimePlan?.auth),
+            preparedAuth: resolveAgentHarnessPreparedAuthSupport({
+              plan: params.runtimePlan?.auth,
+            }),
+          },
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          agentHarnessId: params.agentHarnessId,
+          agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
+          preparedModelProvider: params.runtimePlan?.auth !== undefined,
+        });
   const harness = selection.harness;
   // Capture this registration before any awaited preparation; IDs and dispatch methods
   // do not establish that an external sink understands separate question permission.
@@ -489,27 +509,6 @@ function assertHarnessModelPolicySupport(harness: AgentHarness, params: Embedded
     );
   }
   return authority;
-}
-
-function selectPreparedAgentHarness(
-  params: EmbeddedRunAttemptParams,
-): AgentHarnessSelectionDecision {
-  return selectAgentHarnessDecision({
-    provider: params.provider,
-    modelId: params.modelId,
-    modelProvider: {
-      api: params.model.api,
-      baseUrl: params.model.baseUrl,
-      ...resolveAgentHarnessPreparedRouteSupport(params.runtimePlan?.auth),
-      preparedAuth: resolveAgentHarnessPreparedAuthSupport({ plan: params.runtimePlan?.auth }),
-    },
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    agentHarnessId: params.agentHarnessId,
-    agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
-    preparedModelProvider: params.runtimePlan?.auth !== undefined,
-  });
 }
 
 async function runAgentHarnessOperation<T>(

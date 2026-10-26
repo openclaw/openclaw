@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../src/config/sessions/session-accessor.ts";
 import { GatewayClient } from "../../../src/gateway/client.ts";
@@ -31,8 +31,11 @@ import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.t
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
+import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
+import { recordTaskPrDiagnostics } from "./task-pull-requests.diagnostics.test-support.ts";
 
 const parentKey = "agent:main:task-pr-parent";
 const selectedKey = "agent:main:release-planning";
@@ -42,6 +45,7 @@ const repository = "openclaw/openclaw";
 const branch = "proof/coordination-no-published-pr";
 const execFileAsync = promisify(execFile);
 const live = process.env.OPENCLAW_TASK_PR_LIVE_GITHUB === "1";
+const foregroundReadinessTimeoutMs = 30_000;
 const suite = createControlUiE2eSuite({
   name: "Delegated task PRs through a real Gateway",
   startServerBeforeBrowser: true,
@@ -184,6 +188,11 @@ suite.define(() => {
     };
     gitOperationChannel.subscribe(recordGitOperation);
     test.onTestFinished(() => gitOperationChannel.unsubscribe(recordGitOperation));
+    const diagnostics = recordTaskPrDiagnostics([
+      parentKey,
+      ...numbers.map((_, index) => "agent:main:subagent:task-pr-child-" + index),
+    ]);
+    test.onTestFinished(diagnostics.stop);
     await suite.runScenario(test, {
       retainedState: () => state?.root,
       async run() {
@@ -195,14 +204,7 @@ suite.define(() => {
             GITHUB_TOKEN: undefined,
             OPENCLAW_GATEWAY_PASSWORD: undefined,
             OPENCLAW_GATEWAY_TOKEN: undefined,
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
-            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-            VITEST: "1",
+            ...deviceGatewayEnv,
           },
         });
         const port = await getFreePort();
@@ -295,27 +297,8 @@ suite.define(() => {
             sidecarStartup: "defer",
           });
         gateway = await start();
-        proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: {
-              "/": {
-                target: "http://127.0.0.1:" + port,
-                ws: true,
-                headers: {
-                  "x-forwarded-for": "192.0.2.10",
-                  "x-forwarded-proto": "http",
-                  "x-forwarded-user": viewerEmail,
-                },
-              },
-            },
-          },
+        proxy = await createGatewayProxy(state.workspaceDir, {
+          "/": gatewayProxyRoute(port, viewerEmail),
         });
         await proxy.listen();
         const proxyUrl = proxy.resolvedUrls?.local[0];
@@ -327,6 +310,7 @@ suite.define(() => {
         // Browser WebSocket traffic is never replaced: only external GitHub HTTP is fixture-backed.
         for (const stage of ["initial", "restarted"] as const) {
           const stageStartedAt = performance.now();
+          diagnostics.beginStage();
           for (const operation of gitOperations) {
             operation.count = operation.errors = operation.elapsedMs = 0;
           }
@@ -357,9 +341,12 @@ suite.define(() => {
               let foregroundAcknowledged = false;
               let foregroundRejected = false;
               page.on("websocket", (socket) => {
+                const trace = diagnostics.socket();
+                socket.on("close", trace.close);
                 const pending = new Map<string, Subscription>();
                 socket.on("framesent", ({ payload }) => {
                   const frame: unknown = JSON.parse(String(payload));
+                  trace.sent(frame);
                   if (
                     !isRecord(frame) ||
                     frame.type !== "req" ||
@@ -384,6 +371,7 @@ suite.define(() => {
                 });
                 socket.on("framereceived", ({ payload }) => {
                   const frame: unknown = JSON.parse(String(payload));
+                  trace.received(frame);
                   if (isRecord(frame) && frame.type === "res" && typeof frame.id === "string") {
                     const subscription = pending.get(frame.id);
                     if (subscription) {
@@ -415,6 +403,7 @@ suite.define(() => {
                 .locator("openclaw-gateway-url-confirmation")
                 .getByRole("button", { name: "Switch to " + browserGatewayUrl.host, exact: true })
                 .click();
+              await waitForControlUiRoute(page, { routeId: "chat" });
               const row = page.locator(
                 '.sidebar-recent-session[data-session-key="' + parentKey + '"]',
               );
@@ -426,7 +415,7 @@ suite.define(() => {
                   return;
                 }
                 await row.locator(".sidebar-recent-session__link").focus();
-                await card.waitFor();
+                await card.waitFor({ timeout: foregroundReadinessTimeoutMs });
                 // The earlier passive receipt snapshot is already ready.
                 await expect
                   .poll(() => latestSubscription)
@@ -447,7 +436,9 @@ suite.define(() => {
                 await activate();
                 await expect.poll(() => snapshots.at(-1)?.taskPullRequestCount).toBe(3);
                 await expect
-                  .poll(() => snapshots.at(-1)?.taskPullRequests)
+                  .poll(() => snapshots.at(-1)?.taskPullRequests, {
+                    timeout: foregroundReadinessTimeoutMs,
+                  })
                   .toEqual(
                     expect.arrayContaining(
                       numbers.map((number, index) =>
@@ -482,6 +473,7 @@ suite.define(() => {
                   ).toBe(1);
                 }
               } catch (error) {
+                diagnostics.capture(page, stage);
                 const hydratedCount = (snapshot: Record<string, unknown> | undefined) =>
                   Array.isArray(snapshot?.taskPullRequests)
                     ? snapshot.taskPullRequests.filter(
@@ -636,14 +628,7 @@ suite.define(() => {
             GITHUB_TOKEN: undefined,
             OPENCLAW_GATEWAY_PASSWORD: undefined,
             OPENCLAW_GATEWAY_TOKEN: undefined,
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
-            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-            VITEST: "1",
+            ...deviceGatewayEnv,
           },
         });
         const ownerEmail = "task-authority-owner@example.test";
@@ -797,26 +782,13 @@ suite.define(() => {
           sidecarStartup: "defer",
         });
         const route = (email: string) => ({
-          target: origin,
-          ws: true,
+          ...gatewayProxyRoute(port, email),
           rewrite: () => "/",
-          headers: {
-            "x-forwarded-for": "192.0.2.10",
-            "x-forwarded-proto": "http",
-            "x-forwarded-user": email,
-          },
         });
-        proxy = await createServer({
-          configFile: false,
-          envFile: false,
-          root: state.workspaceDir,
-          appType: "custom",
-          logLevel: "error",
-          server: {
-            host: "127.0.0.1",
-            port: 0,
-            proxy: { "/owner": route(ownerEmail), "/a": route(aEmail), "/b": route(bEmail) },
-          },
+        proxy = await createGatewayProxy(state.workspaceDir, {
+          "/owner": route(ownerEmail),
+          "/a": route(aEmail),
+          "/b": route(bEmail),
         });
         await proxy.listen();
         const address = proxy.resolvedUrls?.local[0];

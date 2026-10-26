@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { parseDurationMs } from "../cli/parse-duration.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import {
   readDefaultProactiveJobReceiptInDatabase,
@@ -31,37 +30,11 @@ import {
   isHeartbeatTaskCronJob,
   MIGRATED_HEARTBEAT_TASK_DESCRIPTION,
 } from "./doctor-heartbeat-task-identity.js";
-import { analyzeLegacyHeartbeatTasks, type LegacyHeartbeatTask } from "./heartbeat-task-legacy.js";
-
-type ValidatedHeartbeatTask = {
-  task: LegacyHeartbeatTask;
-  intervalMs: number;
-  occurrenceIndex: number;
-};
-
-export function validateHeartbeatTasks(
-  tasks: readonly LegacyHeartbeatTask[],
-  declaredEntryCount: number,
-): ValidatedHeartbeatTask[] {
-  if (tasks.length === 0) {
-    throw new Error("tasks: block has no complete name/interval/prompt entries");
-  }
-  if (tasks.length !== declaredEntryCount) {
-    throw new Error("tasks: block contains an incomplete name/interval/prompt entry");
-  }
-  const occurrenceCounts = new Map<string, number>();
-  const validated: ValidatedHeartbeatTask[] = [];
-  for (const task of tasks) {
-    const intervalMs = parseDurationMs(task.interval, { defaultUnit: "m" });
-    if (intervalMs <= 0) {
-      throw new Error(`task ${JSON.stringify(task.name)} interval must be greater than zero`);
-    }
-    const occurrenceIndex = occurrenceCounts.get(task.name) ?? 0;
-    occurrenceCounts.set(task.name, occurrenceIndex + 1);
-    validated.push({ task, intervalMs, occurrenceIndex });
-  }
-  return validated;
-}
+import {
+  analyzeLegacyHeartbeatTasks,
+  validateHeartbeatTasks,
+  type LegacyHeartbeatTask,
+} from "./heartbeat-task-legacy.js";
 
 type TaskJobInput = {
   agentId: string;
@@ -191,7 +164,7 @@ export function planHeartbeatTaskMigration(params: {
     );
   }
   const document = analyzeLegacyHeartbeatTasks(scratch.content);
-  const tasks = validateHeartbeatTasks(document.tasks, document.taskEntryCount);
+  const tasks = validateHeartbeatTasks(document);
   const jobs: TaskJobPlan[] = [];
   for (const { task, intervalMs, occurrenceIndex } of tasks) {
     const declarationKey = heartbeatTaskDeclarationKey(agentId, task.name, occurrenceIndex);

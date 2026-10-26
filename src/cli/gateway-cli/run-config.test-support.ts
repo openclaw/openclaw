@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import * as runtimeSnapshotModule from "../../config/runtime-snapshot.js";
 import type {
   ConfigFileSnapshot,
@@ -69,18 +70,9 @@ export function completeGatewayRunSnapshot(
   overrides: Partial<ConfigFileSnapshot> = {},
 ) {
   return {
-    path: "/tmp/openclaw.json",
-    exists: true,
-    valid: true,
+    ...createTestConfigSnapshot(config),
     parsed: config,
     raw: JSON.stringify(config),
-    runtimeConfig: config,
-    resolved: config,
-    sourceConfig: config,
-    config,
-    issues: [],
-    legacyIssues: [],
-    warnings: [],
     ...overrides,
   } satisfies ConfigFileSnapshot;
 }

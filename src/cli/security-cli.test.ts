@@ -38,13 +38,11 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
-vi.mock("../security/audit.js", () => ({
-  runSecurityAuditCore: (opts: unknown) => mocks.runSecurityAuditCore(opts),
-}));
+// mock-isolation: Command fixtures supply audit results without inspecting the host or live services.
+vi.mock("../security/audit.js", () => ({ runSecurityAuditCore: mocks.runSecurityAuditCore }));
 
-vi.mock("../security/fix.js", () => ({
-  fixSecurityFootguns: () => mocks.fixSecurityFootguns(),
-}));
+// mock-isolation: Command fixtures supply fix receipts without changing host permissions or files.
+vi.mock("../security/fix.js", () => ({ fixSecurityFootguns: mocks.fixSecurityFootguns }));
 
 // mock-isolation: Audit fixtures resolve secrets locally without connecting to a live Gateway.
 vi.mock("./command-secret-gateway.js", () => ({
@@ -61,21 +59,27 @@ function run(...args: string[]) {
   return program.parseAsync(["security", "audit", ...args], { from: "user" });
 }
 
-function lastSecretResolverOptions(): Record<string, unknown> | undefined {
-  return resolveCommandSecretRefsViaGateway.mock.lastCall?.[0];
-}
-
-function lastSecurityAuditOptions(): Record<string, unknown> | undefined {
-  return runSecurityAuditCore.mock.lastCall?.[0];
-}
+const resolverOptions = (): Record<string, unknown> | undefined =>
+  resolveCommandSecretRefsViaGateway.mock.lastCall?.[0];
+const auditOptions = (): Record<string, unknown> | undefined =>
+  runSecurityAuditCore.mock.lastCall?.[0];
+const auditReport = (critical = 0, warn = 0, info = 0) => ({
+  ts: 0,
+  summary: { critical, warn, info },
+  findings: [],
+});
 
 describe("security CLI", () => {
   beforeEach(() => {
     runtimeLogs.length = 0;
-    loadConfig.mockReset();
-    runSecurityAuditCore.mockReset();
-    fixSecurityFootguns.mockReset();
-    resolveCommandSecretRefsViaGateway.mockReset();
+    for (const mock of [
+      loadConfig,
+      runSecurityAuditCore,
+      fixSecurityFootguns,
+      resolveCommandSecretRefsViaGateway,
+    ]) {
+      mock.mockReset();
+    }
     getSecurityAuditCommandSecretTargetIds.mockClear();
     fixSecurityFootguns.mockResolvedValue({ changes: [], actions: [], errors: [] });
     const config = { gateway: { mode: "local" } };
@@ -83,14 +87,8 @@ describe("security CLI", () => {
     resolveCommandSecretRefsViaGateway.mockResolvedValue({
       resolvedConfig: config,
       diagnostics: [],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: false,
     });
-    runSecurityAuditCore.mockResolvedValue({
-      ts: 0,
-      summary: { critical: 0, warn: 0, info: 0 },
-      findings: [],
-    });
+    runSecurityAuditCore.mockResolvedValue(auditReport());
   });
 
   it("runs audit with read-only SecretRef resolution and prints JSON diagnostics", async () => {
@@ -112,23 +110,19 @@ describe("security CLI", () => {
     resolveCommandSecretRefsViaGateway.mockResolvedValue({
       resolvedConfig,
       diagnostics: [diagnostic],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: false,
     });
 
     await run("--json");
 
-    const resolverOptions = lastSecretResolverOptions();
-    expect(resolverOptions?.config).toBe(sourceConfig);
-    expect(resolverOptions).toMatchObject({
+    expect(resolverOptions()?.config).toBe(sourceConfig);
+    expect(resolverOptions()).toMatchObject({
       commandName: "security audit",
       mode: "read_only_status",
       targetIds: expect.any(Set),
     });
-    const auditOptions = lastSecurityAuditOptions();
-    expect(auditOptions?.config).toBe(resolvedConfig);
-    expect(auditOptions?.sourceConfig).toBe(sourceConfig);
-    expect(auditOptions).toMatchObject({
+    expect(auditOptions()?.config).toBe(resolvedConfig);
+    expect(auditOptions()?.sourceConfig).toBe(sourceConfig);
+    expect(auditOptions()).toMatchObject({
       deep: false,
       includeFilesystem: true,
     });
@@ -137,20 +131,13 @@ describe("security CLI", () => {
   });
 
   it("prints the audit counts in the human summary", async () => {
-    runSecurityAuditCore.mockResolvedValueOnce({
-      ts: 0,
-      summary: { critical: 2, warn: 3, info: 5 },
-      findings: [],
-    });
-    const richSpy = vi.spyOn(terminalTheme, "isRich").mockReturnValue(false);
-    try {
-      await run();
-      expect(runtimeLogs).toEqual([
-        expect.stringContaining("\nSummary: 2 critical · 3 warn · 5 info\n"),
-      ]);
-    } finally {
-      richSpy.mockRestore();
-    }
+    runSecurityAuditCore.mockResolvedValueOnce(auditReport(2, 3, 5));
+    using _ = vi.spyOn(terminalTheme, "isRich").mockReturnValue(false);
+
+    await run();
+    expect(runtimeLogs).toEqual([
+      expect.stringContaining("\nSummary: 2 critical · 3 warn · 5 info\n"),
+    ]);
   });
 
   it("reports an unexpected fixer failure instead of emitting a successful JSON audit", async () => {
@@ -163,7 +150,6 @@ describe("security CLI", () => {
 
   it.each([
     [["--token", "explicit-token"], { token: "explicit-token" }, undefined],
-    [["--password", "explicit-password"], { password: "explicit-password" }, undefined],
     [
       ["--auth", "password", "--password", "explicit-password"],
       { password: "explicit-password" },
@@ -179,8 +165,8 @@ describe("security CLI", () => {
     async (argv, deepProbeAuth, auditGatewayAuthOverride) => {
       await run("--deep", ...argv, "--json");
 
-      expect(lastSecretResolverOptions()?.mode).toBe("read_only_status");
-      expect(lastSecurityAuditOptions()).toEqual(
+      expect(resolverOptions()?.mode).toBe("read_only_status");
+      expect(auditOptions()).toEqual(
         expect.objectContaining({ deep: true, deepProbeAuth, auditGatewayAuthOverride }),
       );
     },

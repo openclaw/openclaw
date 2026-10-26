@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { getCanonicalUserPreferences } from "../state/user-preferences.js";
 import { prepareControlUiBootstrapPreferences } from "./control-ui-bootstrap-preferences.js";
+import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 
 // mock-isolation: the projection uses synthetic preferences without a Gateway/SQLite owner.
 vi.mock("../state/user-preferences.js", () => ({
@@ -39,13 +40,10 @@ it("includes only the viewer's presentation data and redacts MCP credentials", a
   };
   const bootstrap = await prepareControlUiBootstrapPreferences(config, {
     operatorScopes: ["operator.admin"],
-    authenticatedUserProfile: {
-      profileId: "synthetic-viewer",
-      displayName: null,
+    authenticatedUserProfile: dispatchProfile("synthetic-viewer", {
       avatarRevision: "",
-      hasAvatar: false,
       updatedAt: 0,
-    },
+    }),
   });
   expect(bootstrap).toMatchObject({
     profileId: "synthetic-viewer",

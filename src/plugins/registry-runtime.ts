@@ -1,7 +1,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createPluginBlobStore,
@@ -320,7 +320,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                   batch,
                   options,
                   selectedRegistry,
-                  getRuntimeConfig(),
+                  readRuntimeConfig(),
                   record.id,
                   () => {
                     assertRuntimeCurrent();
@@ -339,7 +339,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 await import("../decisions/runtime.js");
               assertRuntimeCurrent();
               const selectedRegistry = currentDecisionRegistry(capturedRegistry);
-              const config = getRuntimeConfig();
+              const config = readRuntimeConfig();
               const result = await withPluginRuntimeRegistryScope(selectedRegistry, () =>
                 evaluateDecisionV2Operation(
                   batch,
@@ -398,6 +398,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               runWithCurrentPluginScope(() => gateway.openPluginPanel(params)),
             readSessionFacts: (params) =>
               runWithCurrentPluginScope(() => gateway.readSessionFacts(params)),
+            appendAgentMessage: (params) =>
+              runWithCurrentPluginScope(() => gateway.appendAgentMessage(params)),
             withSessionFacts: (select, run) =>
               runWithCurrentPluginScope(() =>
                 gateway.withSessionFacts(select, (snapshot) => {

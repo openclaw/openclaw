@@ -12,6 +12,7 @@ import {
   resolvePreparedSessionEntryResetFreshness,
   resolveSessionEntryResetFreshness,
 } from "../../config/sessions/entry-freshness.js";
+import type { SessionGoalOperation } from "../../config/sessions/goals-operations.types.js";
 import type { SessionLifecycleTimestamps } from "../../config/sessions/lifecycle.types.js";
 import {
   hasRestartRecoveryTerminalRun,
@@ -51,7 +52,7 @@ import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { resolveAgentSessionWorkStartError } from "../agent-turn/agent-handler-helpers.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import type { GatewayRecoveryRuntime } from "../server-instance-runtime.types.js";
-import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-state.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-projection.js";
 import {
   captureGatewayScopeMatcher,
   captureRpcSourceScopeMatcher,
@@ -67,6 +68,7 @@ const log = createSubsystemLogger("gateway/restart-recovery");
 
 type RestartSafeChatRequest = {
   fingerprint: string;
+  goalReplacement?: true;
 };
 
 type RestartSafeChatAdmission = {
@@ -123,17 +125,21 @@ async function fingerprintRestartSafeChatRequest(params: {
 }
 
 export async function createRestartSafeChatRequest(params: {
-  goalRequestFingerprint?: string;
+  goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
   eligible: boolean;
   message: string;
   mentions?: readonly HumanMention[];
   senderIsOwner: boolean;
   cfg: OpenClawConfig;
 }): Promise<RestartSafeChatRequest | undefined> {
-  if (params.goalRequestFingerprint) {
+  const goal = params.goalOperation;
+  if (goal) {
     // Goal admission owns literal intent; slash-looking objectives are not commands.
     // Its receipt fingerprints attachments, routing, and every immutable run option.
-    return { fingerprint: params.goalRequestFingerprint };
+    return {
+      fingerprint: goal.requestFingerprint,
+      ...(goal.action === "resume" && goal.preserveBudget ? { goalReplacement: true } : {}),
+    };
   }
   if (!params.eligible || hasRestartUnsafeMessageSemantics(params.message, params.cfg)) {
     return undefined;
@@ -271,6 +277,7 @@ export function resolveDurableChatClaim(
 }
 
 export function isDirectChatGoalSession(params: {
+  allowAborted?: boolean;
   entry?: SessionEntry;
   acpMeta: SessionEntry["acp"] | null;
   requestedSessionId?: string;
@@ -280,7 +287,7 @@ export function isDirectChatGoalSession(params: {
   return Boolean(
     entry?.sessionId &&
     params.sessionKey !== "global" &&
-    entry.abortedLastRun !== true &&
+    (entry.abortedLastRun !== true || params.allowAborted === true) &&
     entry.archivedAt === undefined &&
     entry.initializationPending !== true &&
     entry.pendingFinalDelivery === undefined &&
@@ -401,7 +408,7 @@ export function resolveRestartSafeChatAdmission(
   if (
     !request ||
     !entry ||
-    !isDirectChatGoalSession({ ...params, entry }) ||
+    !isDirectChatGoalSession({ ...params, entry, allowAborted: request.goalReplacement }) ||
     (entry.agentHarnessId !== undefined && entry.agentHarnessId !== OPENCLAW_AGENT_RUNTIME_ID)
   ) {
     return undefined;

@@ -5,6 +5,7 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
+import { McpAppView } from "../../components/mcp-app-view-lazy.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import {
@@ -41,7 +42,10 @@ beforeEach(async () => {
   await i18n.setLocale("en");
 });
 
-function mountApps(discovered: Promise<void>) {
+function mountApps(
+  discovered: Promise<void>,
+  options: { selectedId?: string; sessionKey?: string } = {},
+) {
   const [search, setSearch] = createSignal("");
   const { gateway, publish } = createApplicationGateway();
   const request = createGatewayRequestMock(async () => {
@@ -67,26 +71,31 @@ function mountApps(discovered: Promise<void>) {
     ...gateway.snapshot,
     client: createTestGatewayClient(request),
     phase: "connected",
-    sessionKey: "agent:main:one",
+    sessionKey: options.sessionKey ?? "agent:main:one",
     hello: gatewayHelloForMethods(["mcp.app.discover"]),
   });
   // The fixture supplies the discovery, navigation and selection capabilities used here.
   const context = {
     gateway,
     navigate: vi.fn(),
-    agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
+    agentSelection: {
+      state: { selectedId: options.selectedId ?? "main" },
+      subscribe: () => () => {},
+    },
     sessions: { describe: async () => ({ session: { key: "agent:main:one" } }) },
   } as unknown as ApplicationContext;
   const mounted = mountSolid(() => <AppsPage appSearch={search()} />, {
     wrapper: createSolidApplicationContextProvider(context).wrapper,
   });
-  return { ...mounted, setSearch };
+  return { ...mounted, setSearch, request };
 }
 
-it("loads conversation alongside discovery, retries errors, and retires a closed route", async () => {
+it("loads app view and conversation alongside discovery, retries errors, and retires a closed route", async () => {
   const first = createDeferred();
   const retry = createDeferred();
   const discovered = createDeferred();
+  const appView = createDeferred<typeof import("../../components/mcp-app-view.tsx")>();
+  const preload = vi.spyOn(McpAppView, "preload").mockReturnValue(appView.promise);
   const started = vi.fn();
   function mockLoad(pending: Promise<void>) {
     // mock-isolation: Hold or reject the actual lazy region import at its external boundary.
@@ -101,11 +110,19 @@ it("loads conversation alongside discovery, retries errors, and retires a closed
   const { container, setSearch } = mounted;
   await waitForSolid(() => expect(container.querySelector(".apps-page")).not.toBeNull());
   expect(started).not.toHaveBeenCalled();
+  expect(preload).not.toHaveBeenCalled();
 
   setSearch("?server=parts&tool=library");
   await waitForSolid(() => expect(started).toHaveBeenCalledOnce());
+  expect(preload).toHaveBeenCalledOnce();
   expect(container.querySelector('[role="status"]')?.textContent).toContain("Loading");
   expect(container.querySelector("openclaw-chat-pane")).toBeNull();
+  appView.reject(new Error("App view preload failed"));
+  await expect(appView.promise).rejects.toThrow("App view preload failed");
+  await waitForSolid(() => {
+    expect(container.querySelector('[role="status"]')?.textContent).toContain("Loading");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
   first.reject(new Error("Conversation download failed"));
   await waitForSolid(() =>
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
@@ -144,8 +161,32 @@ it("loads conversation alongside discovery, retries errors, and retires a closed
   expect(container.querySelector('[role="alert"]')).toBeNull();
 });
 
+it("discovers the session's agent while selection is switching", async () => {
+  const discovered = createDeferred();
+  const mounted = mountApps(discovered.promise, {
+    selectedId: "claude",
+    sessionKey: "agent:main:main",
+  });
+  mounted.setSearch("?server=parts&tool=library");
+
+  await waitForSolid(() => expect(mounted.request).toHaveBeenCalledOnce());
+  expect(mounted.request).toHaveBeenCalledWith("mcp.app.discover", {
+    sessionKey: "agent:main:main",
+    agentId: "main",
+  });
+  discovered.resolve();
+  await waitForSolid(() =>
+    expect(mounted.container.querySelector("openclaw-chat-pane")?.mcpAppLaunch).toMatchObject({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      serverName: "parts",
+    }),
+  );
+});
+
 afterEach(() => {
   cleanupSolid();
+  vi.restoreAllMocks();
   vi.doUnmock("./apps-conversation.tsx");
 });
 

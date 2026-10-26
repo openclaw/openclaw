@@ -51,6 +51,9 @@ consumes the shared deadline, so it cannot extend the update's overall budget.
 These checks belong to the installed updater; a candidate cannot change an
 older updater's already-running readiness wait.
 
+On Windows, Doctor restoration uses the same cold-start readiness allowance as
+Gateway start and restart, including when Doctor runs as part of update repair.
+
 Before replacing the same installation, the updater observes the incumbent Gateway once. Failed
 readiness produces a warning and prevents automatic rollback from restarting it;
 the updater does not wait for the incumbent to recover before replacing it.
@@ -196,6 +199,13 @@ retries one transient timeout with a recorded warning. A second timeout names
 the stalled check and leaves the original Gateway running; ownership refusals
 are never retried. The installed updater owns this sequence, so a candidate
 cannot change an older updater's stop behavior during its first update.
+
+During finalization, an explicit update timeout includes Doctor preparation,
+maintenance admission, and the fresh Doctor process. Nested service inspection
+and stop attempts receive only the remaining allowance. An expired allowance
+prevents new effects; an already admitted stop still settles and retains the
+existing restoration path. This requires the running updater to contain the fix;
+a new candidate cannot change an older updater’s parent deadline.
 
 Unavailable service inspection produces a recorded `managed-service` warning,
 including the manual restart action. A stale, uninspectable service record cannot

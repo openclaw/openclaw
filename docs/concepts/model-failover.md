@@ -70,6 +70,11 @@ Anthropic streaming errors retain their structured error type, so rate limits,
 overload, and authentication failures follow the same recovery policy even when
 the provider's message is generic.
 
+Local worker deadlines and capacity refusals stop model fallback because another
+provider cannot repair local saturation. Capacity errors ask you to check for
+completed work before trying again. Genuine provider HTTP errors keep the normal
+fallback policy.
+
 Local transcript write conflicts do not retry the model, rotate accounts, or
 trigger model fallback. The transcript owner rereads the current revision and
 retries an eligible append once. A repeated conflict is reported as a local
@@ -114,7 +119,7 @@ policy. OpenClaw does not retry them with thinking disabled.
   </Step>
 </Steps>
 
-Fallback execution is turn-local. The reply runner persists only fallback notice state so `/status` and transition notices can distinguish the selected model from the model that answered. It does not persist the fallback as the next turn's model selection.
+Fallback execution does not change the session's selected model. Most fallbacks apply only to the current turn; eligible rate-limit fallbacks can stay first for later turns through in-memory [session stickiness](#rate-limit-fallback-stickiness). The reply runner persists only fallback notice state so `/status` and transition notices can distinguish the selected model from the model that answered. It does not persist the fallback as the next turn's model selection.
 
 A fallback that only relays a completed task result cannot start new delegated work.
 A verified requester continuation after its child tasks settle is different: on
@@ -144,41 +149,38 @@ reason `agent_run_terminal_timeout` or `idle_timeout_circuit_breaker`. These are
 terminal stops, not provider failures or requests to try another model. The
 existing run deadline and cost limits still apply.
 
+Fallback requests reuse the original user turn and its attachments exactly once.
+Fresh plugin context for the fallback model is added separately, preserving the
+user turn and the prompt prefix already sent to the primary model.
+
 ## Automatic cyber-policy escalation
 
-The embedded OpenClaw runtime retries one replay-safe OpenAI cyber-policy refusal on Daybreak
-Blue. This includes normal embedded turns using the ChatGPT-authenticated OpenAI Responses
-transport, not only Codex plugin sessions. That transport projects OpenAI's structured cyber-policy
-error into the refusal metadata used by this policy, from every terminal path it can arrive on: a
-non-OK HTTP body, a streamed `error` event, and a `response.failed` event. Generic refusal text
-without a structured cyber category remains terminal.
+A structured OpenAI cyber-policy refusal can trigger one **Access configuration retry**:
+OpenClaw keeps the same model, provider, runtime, account, effort, and speed, and retries
+with `access_programs: { cyber: "daybreak_blue" }`. This is not model failover and does
+not require a different model or a nonempty model fallback list. An exact model pin
+therefore remains in force.
 
-This policy route is turn-local: it does not change the selected session model and it does not send
-ordinary provider failures to Daybreak. Codex-backed sessions keep their separate plugin-owned
-policy described in [Codex harness runtime behavior](/plugins/codex-harness/runtime-behavior#automatic-daybreak-escalation).
+The default `cyberFailover.mode: "auto"` applies only to a replay-safe refusal from the
+current attempt. Generic refusal text, other policy categories, cancellation, and
+attempts with committed side effects do not qualify. The selected account must advertise
+Blue for this model and runtime on its current route; an unknown or missing grant does
+not authorize a request. A turn already using Blue or Red is never retried or downgraded.
+Model names and retiring aliases are not evidence of entitlement.
 
-The default target is `openai/gpt-daybreak-blue-latest`. The retry runs only when all of these are
-true:
+The embedded Responses transport recognizes structured cyber refusals from HTTP error
+bodies, streamed `error` events, and `response.failed` events. Native Codex uses its
+[plugin-owned retry](/plugins/codex-harness/runtime-behavior#automatic-daybreak-escalation)
+and validates the same account's native capabilities before `turn/start`.
 
-- the selected embedded attempt reports `provider_refusal` with provider `openai` and category
-  `cyber`;
-- the attempt's replay metadata proves that no tool or delivery side effect would be repeated;
-- the target differs from the model that was refused;
-- the selection is not strict; and
-- the feature is enabled.
+The retry is turn-local and does not save a new session model or Access setting. If it
+fails without committing work, the original refusal is preserved. If the retry commits
+work or is cancelled, its own result and receipts are retained. Recorded terminal stops
+and unclassified errors are not swallowed. An authorization denial temporarily suppresses
+further Blue attempts for that session/model/account without cooling down ordinary
+Standard requests.
 
-A strict selection stays strict. A locked model selection reaches the runner as an explicit empty
-fallback list, and this policy honors that the same way ordinary fallback does: the refusal remains
-terminal until the operator unlocks the selection.
-
-If the Daybreak attempt fails without committing work, OpenClaw preserves the original provider
-refusal instead of trying unrelated configured fallbacks. If the retry already executed a tool or
-delivered output before failing, its own result is kept instead, because its replay verdict,
-delivery evidence, and terminal receipt describe what actually ran. If the retry throws anything
-other than an ordinary failover-class error, that exception propagates unchanged: a recorded
-terminal stop prohibits replay, and an unclassified throw is how the fallback runner reports an
-attempt that already committed work. An authorization failure cools down that target for the
-current session before another cyber refusal checks it again.
+To disable automatic Access escalation:
 
 ```json5
 {
@@ -186,8 +188,7 @@ current session before another cyber refusal checks it again.
     defaults: {
       embeddedAgent: {
         cyberFailover: {
-          mode: "auto", // or "off"
-          model: "openai/gpt-daybreak-blue-latest",
+          mode: "off", // "auto" is the default
           cooloffMs: 600000,
         },
       },
@@ -196,8 +197,11 @@ current session before another cyber refusal checks it again.
 }
 ```
 
-General model fallback ordering is unchanged. A non-cyber refusal, a Codex/native-harness result,
-or any replay-unsafe attempt remains terminal under the existing refusal policy.
+The retired `cyberFailover.model` setting is removed by `openclaw doctor --fix`,
+which preserves `mode` and `cooloffMs`. Ordinary configured cross-model fallback remains
+separate and unchanged. The Blue/Red model aliases retire on October 28, 2026; choose an
+actual available model and let Access select the program rather than inventing an alias
+successor.
 
 ## Selection source policy
 
@@ -206,7 +210,7 @@ The selection source controls whether the fallback chain is allowed:
 - **Configured default**: `agents.defaults.model.primary` uses `agents.defaults.model.fallbacks`.
 - **Native agent primary**: `agents.entries.*.model` is strict unless that agent's model object includes its own `fallbacks`. Use `fallbacks: []` to make the strict behavior explicit, or a non-empty list to opt that agent into model fallback.
 - **ACP agent primary**: for `runtime.type: "acp"`, the agent primary selects its external harness model. Native OpenClaw calls inherit the primary and fallbacks from `agents.defaults.model`; an explicit agent `model.fallbacks` replaces the native fallback list, including `[]` to disable it. Explicit native session and subagent selections retain their normal precedence and strictness. This does not add fallback to commands such as `/btw` that run only their selected model.
-- **Runtime fallback**: the fallback candidate applies only to the current turn. The next turn starts from the selected primary again. OpenClaw still recognizes `modelOverrideSource: "auto"` entries stored by v2026.4.26 through v2026.6.0. It checks their configured origin every 5 minutes, and clears them once the origin recovers. Automatic clearing shipped in v2026.6.1. `/new`, `/reset`, and `sessions.reset` also clear those entries.
+- **Runtime fallback**: the next turn normally starts from the selected primary again. Eligible rate-limit fallbacks temporarily stay first through session stickiness without changing that selection. OpenClaw still recognizes `modelOverrideSource: "auto"` entries stored by v2026.4.26 through v2026.6.0. It checks their configured origin every 5 minutes, and clears them once the origin recovers. Automatic clearing shipped in v2026.6.1. `/new`, `/reset`, and `sessions.reset` also clear those entries.
 - **Configured or inherited child selection**: a child can store an automatic selection whose provider/model match its own recorded origin. Ordinary replies preserve that selection; it is not legacy fallback residue.
 - **User session override**: selecting a specific model with `/model`, the model picker, `session_status(model=...)`, or `sessions.patch` writes `modelOverrideSource: "user"`. This is an exact session selection. If the selected provider/model fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated configured fallback.
 - **Explicit configured default**: choosing **Default** through the same surfaces writes `modelOverrideSource: "default"` without storing a provider/model override. This prevents a child session from inheriting a parent model pin while preserving the configured default's normal fallback policy.
@@ -381,6 +385,12 @@ State is stored in the per-agent SQLite auth state under `usageStats`:
 }
 ```
 
+### Rate-limit fallback stickiness
+
+Switching models mid-session discards the provider prompt cache, so bouncing between the selected model and its fallback on every turn re-sends the whole prompt uncached each time. After a normal agent turn falls back because the selected model hit a rate limit, that session's next turns try the successful fallback first. Each successful use extends a 10-minute idle window, up to a 30-minute cap from the first fallback; after that, turns start from the selected model again. The selected model stays next in the chain, so a failing fallback still reaches it within the same turn.
+
+This preference is per session and in memory. Restarting, a fallback failure, changing the selected model, or removing the fallback from the allowed chain clears it. It never applies to strict selections with no fallbacks, turns whose model a `before_model_resolve` hook rerouted, or other sessions, and it adds no auth-profile cooldown. Compaction and other internal model calls keep turn-local fallback. Sticky turns are still fallback turns: `/status` shows the active fallback, and completion reports on them follow the fallback delegation rule above.
+
 ## Auth failure skip cache
 
 By default, every new turn keeps the existing fallback retry behavior. OpenClaw retries each configured fallback candidate again. This includes non-primary candidates that recently failed with `auth` or `auth_permanent`.
@@ -436,11 +446,11 @@ Provider-busy signals such as `ModelNotReadyException` land in the overloaded bu
 
 `agents.defaults.timeoutSeconds` and run-specific model timeouts apply to each model candidate attempt. When an attempt times out, the next configured fallback receives its own full budget, so total elapsed time can exceed the setting. Progress does not renew an attempt's budget. User cancellation stops the entire fallback chain, and an independent outer deadline, such as the cron scheduler's deadline, still applies. See [Agent timeouts](/concepts/agent-loop#timeouts).
 
-The failover controller owns OpenClaw's transient recovery budget. Rate limits receive up to **10 total attempts per consecutive outage** before auth-profile rotation or model fallback. A rate limit with provider timing waits exactly that long, even beyond the 30-second backoff cap. Without provider timing, it uses jittered exponential waits capped at 30 seconds. For other transient failures, provider `retry-after` and `retry-after-ms` hints remain minimum waits. Other transient failures retain eight retries and a 90-second window for consecutive outages. A completed successful model response resets that window, the retry count, and backoff; partial output and tool activity alone do not. Existing per-attempt timeouts and any independent outer deadline remain authoritative. Once that budget or window is exhausted, recovery proceeds to eligible auth-profile rotation, configured model fallback, or a visible error. Continuations preserve the transcript instead of replaying the original user request. Recovery and any fallback winner remain turn-local.
+The failover controller owns OpenClaw's transient recovery budget. Rate limits receive up to **16 total attempts (15 retries) per consecutive outage** before auth-profile rotation or model fallback. Backoff starts around one second, grows exponentially with jitter, and caps at 60 seconds for rate limits and 30 seconds for other transient failures. Provider timing sets the minimum wait; a longer provider floor is still honored, subject to `retry.provider.maxRetryDelayMs`. Other transient failures retain eight retries and a 90-second window for consecutive outages. A completed successful model response resets that window, the retry count, and backoff; partial output and tool activity alone do not. Existing per-attempt timeouts and any independent outer deadline remain authoritative. Once that budget or window is exhausted, recovery proceeds to eligible auth-profile rotation, configured model fallback, or a visible error. Continuations preserve the transcript instead of replaying the original user request. Recovery remains turn-local; an eligible rate-limit fallback winner can stay first through session stickiness.
 
-The existing session setting `retry.provider.maxRetries` overrides OpenClaw's continuation retry count for the embedded runtime and participating local Codex, Copilot, and Muse runs. `0` disables these retries, and rate limits remain capped at 10 total attempts per consecutive outage. An omitted setting preserves the harness's existing retry count or OpenClaw's default. Remote/container execution and harnesses without an admitted local settings scope keep their existing budgets. This is not an `openclaw.json` key; it does not change native request retries, delays, or timeouts. The embedded-only `retry.provider.maxRetryDelayMs` and `timeoutMs` settings keep their existing scope. Native harnesses may finish their own request retries before OpenClaw starts continuation recovery. The reply runner does not add another whole-turn replay loop, and a zero retry count still permits tool-free finalization of completed work. See [Retry policy](/concepts/retry) for settings precedence, pacing, and exclusions.
+The existing session setting `retry.provider.maxRetries` overrides OpenClaw's continuation retry count for the embedded runtime and participating local Codex, Copilot, and Muse runs. `0` disables these retries, and rate limits remain capped at 16 total attempts (15 retries) per consecutive outage. An omitted setting preserves the harness's existing retry count or OpenClaw's default. Remote/container execution and harnesses without an admitted local settings scope keep their existing budgets. This is not an `openclaw.json` key; it does not change native request retries, delays, or timeouts. The embedded-only `retry.provider.maxRetryDelayMs` and `timeoutMs` settings keep their existing scope. Native harnesses may finish their own request retries before OpenClaw starts continuation recovery. The reply runner does not add another whole-turn replay loop, and a zero retry count still permits tool-free finalization of completed work. See [Retry policy](/concepts/retry) for settings precedence, pacing, and exclusions.
 
-While waiting, the Control UI shows one transient **Retrying… n/10** indicator for rate limits. Retried failures do not become persisted assistant messages. Terminal failure retains one error. History hides recovered empty or reasoning-only errors without rewriting stored transcripts.
+While waiting, the Control UI shows one transient **Retrying… n/16** indicator for rate limits. Retried failures do not become persisted assistant messages. Terminal failure retains one error. History hides recovered empty or reasoning-only errors without rewriting stored transcripts.
 
 Visible failure messages preserve the provider's HTTP status independently of retry classification. A provider HTTP 500 remains a server error in the final reply, and recovery classifies it as `server_error` rather than grouping it with timeout-shaped failures. Raw provider response details stay out of that reply.
 
@@ -456,7 +466,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
 
 <AccordionGroup>
   <Accordion title="Rules">
-    - The requested model is always first.
+    - The requested model is first unless rate-limit session stickiness temporarily tries a fallback ahead of it.
     - Explicit configured fallbacks are deduplicated but not filtered by the model allowlist. They are treated as explicit operator intent.
     - If the current run is already on a configured fallback in the same provider family, OpenClaw keeps using the full configured chain.
     - When no explicit fallback override is supplied, configured fallbacks are tried before the configured primary even if the requested model uses a different provider.
@@ -553,7 +563,7 @@ Live model switching follows these rules:
 - Only explicit user-driven model changes mark a pending live switch. That includes `/model`, `session_status(model=...)`, and `sessions.patch`.
 - System-driven model changes such as fallback rotation, heartbeat overrides, or compaction never mark a pending live switch on their own.
 - User-driven model overrides are treated as exact selections for fallback policy. An unreachable selected provider therefore surfaces as a failure, instead of being masked by `agents.defaults.model.fallbacks`.
-- Runtime fallback candidates remain turn-local. The next turn starts from the current selected model, including a manual selection that arrived during the previous run.
+- Runtime fallback candidates do not change the selected model. The next turn starts from the current selection unless rate-limit session stickiness temporarily tries a fallback first. A manual selection that arrived during the previous run takes precedence.
 - Previously stored auto fallback overrides remain supported: OpenClaw periodically checks their configured origin and clears the override when it recovers. `/new`, `/reset`, and `sessions.reset` clear auto-sourced overrides immediately.
 - Outside group and channel conversations, user replies announce fallback transitions and fallback-cleared recovery once per state change. Repeated turns with the same selected/active pair do not repeat the notice. Group and channel conversations retain the same fallback state and lifecycle events without posting it.
 - `/status` shows the selected model and, when fallback state differs, the active fallback model and reason.

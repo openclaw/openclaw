@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AssistantMessage, Model, StreamFn } from "@openclaw/llm-core";
+import type { AssistantMessage, Model, ModelRequestHeaders, StreamFn } from "@openclaw/llm-core";
 import OpenAI, { AzureOpenAI } from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
@@ -75,6 +75,7 @@ import {
 } from "./openai-responses-stream-errors.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
+import { RESPONSES_BOOKKEEPING_TIMEOUT_MS } from "./openai-responses-stream-slots-internal.js";
 import { createRecoverableResponsesWebSocketStream } from "./openai-responses-websocket-recovery.js";
 import {
   combineWebSocketTimeoutSignal,
@@ -113,7 +114,7 @@ import { redactIdentifier } from "./transport-utils.js";
 export function createOpenAIResponsesClient(
   model: Model,
   apiKey: string,
-  defaultHeaders: Record<string, string>,
+  defaultHeaders: ModelRequestHeaders,
   fetchOverride?: typeof globalThis.fetch,
 ) {
   return new OpenAI({
@@ -214,7 +215,8 @@ function createResponsesTransportExecutor(config: {
             stream: config.streamRequest,
             lifecycle: requestLifecycle,
             // The SDK replaces the fetch signal; retain the watchdog caller signal.
-            onSseComment: () => notifyLlmRequestActivity(options?.signal, false),
+            onSseComment: () =>
+              notifyLlmRequestActivity(options?.signal, false, RESPONSES_BOOKKEEPING_TIMEOUT_MS),
           }) ?? buildGuardedModelFetch(model),
           options?.onResponse,
           model,
@@ -687,7 +689,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
 function createAzureOpenAIClient(
   model: Model,
   apiKey: string,
-  defaultHeaders: Record<string, string>,
+  defaultHeaders: ModelRequestHeaders,
   fetchOverride?: typeof globalThis.fetch,
 ) {
   const baseURL = model.baseUrl.replace(/\/+$/, "");

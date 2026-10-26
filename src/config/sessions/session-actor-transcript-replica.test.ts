@@ -11,17 +11,16 @@ import {
   seedSessionActorTranscriptContext as seed,
 } from "./session-actor-transcript-replica.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 type Bounded = Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
 const limits = { maxBytes: 4096, maxEvents: 8 };
 const sessionKey = "agent:main:test";
-const message = (id: string, parentId: string | null, role: string) => ({
-  type: "message",
-  id,
-  parentId,
-  timestamp: "2026-10-12T00:00:00.000Z",
-  message: { role, content: [{ type: "text", text: id }] },
-});
+const message = (id: string, parentId: string | null, role: string) =>
+  timedMessageEvent(id, parentId, "2026-10-12T00:00:00.000Z", {
+    role,
+    content: [{ type: "text", text: id }],
+  });
 
 function fixture() {
   const rows: SessionActorTranscriptRow[] = [
@@ -112,38 +111,6 @@ function append(
 }
 
 describe("actor transcript context replica", () => {
-  it("retains a cold bounded result only for its exact version and limits", () => {
-    const { hot, prepared } = fixture();
-    delete prepared.residentRows;
-    prepared.snapshot.truncated = true;
-    const retained = seed(undefined, hot, prepared, limits);
-    const result = readContext(retained, hot, limits);
-    expect(result).toEqual(prepared);
-    result?.snapshot.events.splice(0);
-    expect(readContext(retained, hot, limits)).toEqual(prepared);
-    expect(readContext(retained, hot, { ...limits, maxEvents: 7 })).toBeUndefined();
-    const changed = structuredClone(hot);
-    changed.transcript.version.updatedAt = 99;
-    expect(readContext(retained, changed, limits)).toBeUndefined();
-  });
-
-  it("retains only the bounded window when a worker read cannot seed a complete path", () => {
-    const { hot, prepared } = fixture();
-    prepared.snapshot.truncated = true;
-    delete prepared.snapshot.completeActivePath;
-    prepared.transcript = { anchors: [] };
-    const expected = structuredClone(prepared.snapshot);
-    const retained = seed(undefined, hot, prepared, limits);
-    prepared.snapshot.events.length = 0;
-    const read = readContext(retained, hot, limits);
-    expect(read).toEqual({ kind: "bounded", snapshot: expected });
-    read?.snapshot.events.splice(0);
-    expect(readContext(retained, hot, limits)).toEqual({
-      kind: "bounded",
-      snapshot: expected,
-    });
-  });
-
   it("advances a complete linear path using the receipt's stored byte sizes", () => {
     const { hot, prepared } = fixture();
     const retained = seed(undefined, hot, prepared, limits);
@@ -217,21 +184,51 @@ describe("actor transcript context replica", () => {
     expect(next?.tail).toEqual({ events: [], coveredAfterSeq: 3 });
   });
 
-  it("detaches the retained path from seed input and returned payload mutations", () => {
-    const { hot, prepared } = fixture();
-    const retained = seed(undefined, hot, prepared, limits);
-    const first = prepared.snapshot.events[1];
-    assert(isRecord(first), "Expected a message fixture");
-    first.id = "mutated-input";
-    const read = readContext(retained, hot, limits);
-    expect(read?.snapshot.events[1]).toEqual(message("user", null, "user"));
-    const returned = read?.snapshot.events[1];
-    assert(isRecord(returned), "Expected a retained message");
-    returned.id = "mutated-output";
-    expect(readContext(retained, hot, limits)?.snapshot.events[1]).toEqual(
-      message("user", null, "user"),
-    );
-  });
+  it.each(["complete", "window", "exact"])(
+    "isolates %s context payloads and navigation",
+    (mode) => {
+      const { hot, prepared } = fixture();
+      if (mode !== "complete") {
+        prepared.snapshot.truncated = true;
+        delete prepared.snapshot.completeActivePath;
+      }
+      if (mode === "exact") {
+        delete prepared.residentRows;
+      }
+      prepared.transcript = { anchors: [] };
+      const expected = { kind: "bounded", snapshot: structuredClone(prepared.snapshot) };
+      const retained = seed(undefined, hot, prepared, limits);
+      const first = prepared.snapshot.events[1];
+      assert(isRecord(first) && isRecord(first.message), "Expected a message fixture");
+      first.id = "mutated-input";
+      first.message.role = "mutated-input";
+      prepared.snapshot.events.length = 0;
+      prepared.snapshot.parents.clear();
+      const read = readContext(retained, hot, limits);
+      if (mode !== "complete") {
+        expect(read).toEqual(expected);
+      }
+      expect(read?.snapshot.events[1]).toEqual(message("user", null, "user"));
+      expect(read?.snapshot.parents.get("reply")).toBe("user");
+      const returned = read?.snapshot.events[1];
+      assert(isRecord(returned) && isRecord(returned.message), "Expected a retained message");
+      returned.id = "mutated-output";
+      returned.message.role = "mutated-output";
+      read?.snapshot.events.splice(0);
+      read?.snapshot.parents.clear();
+      if (mode !== "complete") {
+        expect(readContext(retained, hot, limits)).toEqual(expected);
+      }
+      expect(readContext(retained, hot, limits)?.snapshot.events[1]).toEqual(
+        message("user", null, "user"),
+      );
+      expect(readContext(retained, hot, limits)?.snapshot.parents.get("reply")).toBe("user");
+      expect(readContext(retained, hot, { ...limits, maxEvents: 7 })).toBeUndefined();
+      const changed = structuredClone(hot);
+      changed.transcript.version.updatedAt = 99;
+      expect(readContext(retained, changed, limits)).toBeUndefined();
+    },
+  );
 
   it.each([
     "missing receipt",

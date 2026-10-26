@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { appendSessionTranscriptReport } from "../config/sessions/session-accessor.js";
 import type { CustomMessageReportAppend } from "../config/sessions/session-accessor.sqlite-transcript-reports.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "../config/sessions/session-transcript-writer-claim-error.js";
-import { recordGatewaySessionRunFailure, resolveSessionRunError } from "./session-run-error.js";
+import { resolveSessionRunError } from "./session-run-error-format.js";
+import { recordGatewaySessionRunFailure } from "./session-run-error.js";
 
 // mock-isolation: Capture run-failure notices without opening a real session store.
 vi.mock("../config/sessions/session-accessor.js", () => ({

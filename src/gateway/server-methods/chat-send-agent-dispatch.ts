@@ -113,9 +113,8 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     persistBestEffort: persistGatewayUserTurnTranscriptBestEffort,
     recorder: userTurnRecorder,
   } = userTurn;
-  const { beginCapturedMessageInjection, preAckReplyContextPromise, replyContextFieldsPromise } =
-    injection;
-  let { messageInjectionAttempt } = injection;
+  const { beginCapturedMessageInjection, replyContextFieldsPromise } = injection;
+  let messageInjectionAttempt: Awaited<ReturnType<typeof beginCapturedMessageInjection>>;
 
   const titleTurn = createDeferredCore();
 
@@ -168,16 +167,18 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     armOperatorRunCancellation: admission.armOperatorRunCancellation,
     retireOperatorRunCancellation: admission.retireOperatorRunCancellation,
   });
-  const injectionDisposition = createChatSendInjectionDisposition(
-    injection.messageInjectionDisposition,
-    {
-      controllerInput: admission.sourceRef.input,
-      operatorAuthority: admission.operatorAuthority,
-      turnAdoptionLifecycle: queuedFollowup.lifecycle,
-      userTurnTranscriptRecorder: userTurnRecorder,
-    },
-  );
+  const injectionDisposition = createChatSendInjectionDisposition({
+    controllerInput: admission.sourceRef.input,
+    operatorAuthority: admission.operatorAuthority,
+    turnAdoptionLifecycle: queuedFollowup.lifecycle,
+    userTurnTranscriptRecorder: userTurnRecorder,
+  });
   let acceptedMessageInjection = false;
+  const dispatchDisposition = {
+    isSteered: () => acceptedMessageInjection || queuedFollowup.isSteered(),
+    isEnqueued: queuedFollowup.isEnqueued,
+    isTerminal: queuedFollowup.isTerminal,
+  };
   const dispatchErrorLifecycle = createChatSendDispatchErrorLifecycle({
     admission,
     hasObservedSideEffects: () =>
@@ -213,7 +214,19 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
   const dispatchAdmission = {
     run: <T>(operation: () => Promise<T>) =>
       gatewayWorkAdmission.run(async () => {
+        // Durable input custody owns the ACK. Steering may wait behind an older
+        // queued turn, so only detached dispatch joins that ordered admission.
+        phase?.mark("replyContext");
+        if (replyContextFieldsPromise) {
+          applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
+        }
+        phase?.mark("runAdmission");
+        messageInjectionAttempt = await withCurrentUserTurnInput(
+          userTurnRecorder,
+          beginCapturedMessageInjection,
+        );
         acceptedMessageInjection = await settleChatSendMessageInjection(messageInjectionAttempt);
+        messageInjectionAttempt = await injectionDisposition.observe(messageInjectionAttempt);
         return await (acceptedMessageInjection
           ? operation()
           : withCurrentUserTurnInput(userTurnRecorder, operation));
@@ -264,21 +277,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
             workspacePreparation.assertCurrent();
           }
           const assertWorkspaceRunOwnership = workspacePreparation?.assertCurrent;
-          phase?.mark("replyContext");
-          if (
-            replyContextFieldsPromise &&
-            !preAckReplyContextPromise &&
-            !injectionDisposition.isRefused()
-          ) {
-            const replyContextFields = await replyContextFieldsPromise;
-            assertWorkspaceRunOwnership?.();
-            applyChatSendReplyContextFields(ctx, replyContextFields);
-            messageInjectionAttempt = await withCurrentUserTurnInput(
-              userTurnRecorder,
-              beginCapturedMessageInjection,
-            );
-          }
-          messageInjectionAttempt = await injectionDisposition.observe(messageInjectionAttempt);
           if (messageInjectionAttempt) {
             const injected = await finalizeAcceptedChatSendMessageInjection({
               attempt: messageInjectionAttempt,
@@ -500,7 +498,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
       ),
     )
     .then(async (dispatchResult) => {
-      diagnostics.finish(queuedFollowup);
+      diagnostics.finish(dispatchDisposition);
       await dispatchErrorLifecycle.settleRefusal(dispatchResult.collaborativeSteeringRefused);
       if (dispatchResult.deferredToActiveRun === "followup" && queuedFollowup.isEnqueued()) {
         const notices = replyDispatch.deliveredReplies
@@ -662,7 +660,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
       );
     })
     .catch((error: unknown) => {
-      diagnostics.finish(queuedFollowup);
+      diagnostics.finish(dispatchDisposition);
       return dispatchErrorLifecycle.handleError(error);
     });
   // Runtime completion must not retire the source before media and reply persistence settle.

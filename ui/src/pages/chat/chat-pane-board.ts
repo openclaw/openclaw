@@ -9,7 +9,7 @@ import {
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-options.ts";
 import { t } from "../../i18n/index.ts";
-import { BOARD_GRID_COLUMNS } from "../../lib/board/grid.ts";
+import { BOARD_GRID_COLUMNS } from "../../lib/board/grid-constants.ts";
 import {
   acquireBoardProviderForSession,
   boardProviderCacheKey,
@@ -27,7 +27,7 @@ import {
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import { resolveSessionPreferredFace } from "../../lib/sessions/route-navigation.ts";
 import {
   buildAgentMainSessionKey,

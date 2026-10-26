@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -98,7 +98,9 @@ it.each(
           deltaText: text,
           message: { role: "assistant", content: [{ type: "text", text }] },
         });
-        expect(state).toMatchObject({ chatRunId: "predecessor-live-run", chatStream: text });
+        await vi.waitFor(() =>
+          expect(state).toMatchObject({ chatRunId: "predecessor-live-run", chatStream: text }),
+        );
         expect(getChatSessionProjection(state).entries).toEqual([]);
       } else if (transcript === "optimistic-only") {
         reduceChatSessionProjection(state, {

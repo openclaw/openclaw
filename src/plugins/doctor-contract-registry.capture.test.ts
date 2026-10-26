@@ -6,8 +6,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { collectPluginDoctorStateMigrationPlans } from "../infra/state-migrations.plugin-doctor.js";
 import { listPluginDoctorStateMigrationEntries } from "./doctor-contract-registry.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { writeTree } from "./plugin-generation-capture.test-support.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());

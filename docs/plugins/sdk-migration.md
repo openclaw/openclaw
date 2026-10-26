@@ -18,6 +18,47 @@ guide](/plugins/sdk-migration/sqlite-async). The final compatibility day is
 a Plugin SDK major version. The tables cover every affected member and its
 awaited or prepared replacement.
 
+## Memory flush model selection
+
+Remove `model` from plans returned by `flushPlanResolver` or
+`providerFlushPlanResolver`. `MemoryFlushPlan`, `MemoryFlushFilePlanDraft`, and
+`MemoryFlushToolsPlan` no longer expose a model override. Existing JavaScript
+plans that still return `model` have that field ignored. All memory flushes
+use the active session model and its normal fallback chain.
+
+This intentional removal gives the session ownership of model selection.
+To keep memory extraction local, select a local session model and local
+fallbacks. Doctor removes the corresponding retired
+`agents.defaults.compaction.memoryFlush.model` setting with a warning; see
+[Config migrations](/gateway/doctor/config-migrations#memory-flush-model-selection).
+
+## Prompt hook history is read-only
+
+`before_prompt_build` and `agent_turn_prepare` now share frozen transcript payload
+leaves instead of making mutable deep copies of the entire history. Plugins that
+mutated nested message content in these hooks now get a `TypeError` in strict
+mode; return the hook result instead. For example, replace a history edit intended
+to add instructions with an explicit contribution:
+
+```ts
+api.on("before_prompt_build", () => ({
+  prependContext: "Use the project's documented conventions for this turn.",
+}));
+```
+
+Both hooks accept `prependContext` and `appendContext`. Ordinary
+`before_prompt_build` also accepts `systemPrompt`, `prependSystemContext`,
+`appendSystemContext`, and `toolsAllow`; authorized enrichment only consumes the
+context contributions. None of these fields rewrites stored history.
+
+Message arrays and envelopes remain fresh per dispatch, so array edits and
+whole-field assignments remain isolated from core history and later dispatches.
+Handlers in the same dispatch still share those edits in priority order. Do not
+rely on nested values being mutable, even when a particular harness supplies
+non-owned values that are cloned. If a plugin needs a mutable working copy for
+its own computation, explicitly clone that data inside the plugin. Return only
+the supported contribution fields. See [Prompt and session hooks](/plugins/hooks/prompt-and-session).
+
 ## MCP result compatibility window
 
 OpenClaw's session and node MCP clients use the split MCP SDK v2 packages while
@@ -275,6 +316,14 @@ deprecation warning, and are scheduled for removal in the first January 2027 sta
 runtime callers use the awaited reads. The execution owner still checks current
 approval policy immediately before command execution using committed in-process
 policy publications; that final check does not query SQLite.
+
+The SDK's `readExecApprovalsSnapshotAsync` returns a private mutable snapshot for
+edit-then-save callers. The deprecated synchronous readers likewise retain private
+mutable results through their compatibility window. `loadExecApprovalsReadOnlyAsync`
+shares frozen policy on cached reads: treat its file and nested grants as read-only,
+and use `structuredClone(file)` before preparing an edit. Internal execution reads
+still reuse frozen owner snapshots. Retaining any snapshot does not retain execution
+authority: pending updates and revocations still fail closed at the final execution check.
 
 ### Session reset freshness
 

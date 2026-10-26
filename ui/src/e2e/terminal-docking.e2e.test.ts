@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -23,6 +22,7 @@ const inputSession = (request: { params?: unknown }) =>
   (request.params as { sessionId: string }).sessionId;
 const lastInputSession = async (gateway: Awaited<ReturnType<typeof installMockGateway>>) =>
   inputSession((await gateway.getRequests("terminal.input")).at(-1)!);
+// Short native input markers prove routing; longer labels only repeat input and echo work.
 async function typeInTerminal(page: Page, panel: Locator, text: string) {
   await terminalCanvas(panel).click();
   await page.keyboard.type(text);
@@ -71,7 +71,7 @@ suite.define(() => {
         await openChatSidePanelType(pane, "Terminal");
         // Embedded desktop opens on Sessions; choose the already-owned session.
         await embedded.locator(".tp-session.is-current").click();
-        await typeInTerminal(page, embedded, "diagnostic-command\r");
+        await typeInTerminal(page, embedded, "d\r");
         const sessionId = inputSession(await gateway.waitForRequest("terminal.input"));
         await dock(pane, "bottom");
         await terminalCanvas(bottom).waitFor();
@@ -107,11 +107,8 @@ suite.define(() => {
           expect(
             await terminalCanvas(panel).evaluate((element, prior) => element === prior, original),
           ).toBe(true);
-        const digest = async () =>
-          createHash("sha256")
-            .update(await canvas.screenshot({ animations: "disabled" }))
-            .digest("hex");
-        const before = await digest();
+        const pixels = () => canvas.screenshot({ animations: "disabled" });
+        const before = await pixels();
         await dock(bottom, "right");
         await pane.getByText("exited (17)", { exact: true }).waitFor();
         await expectOriginalCanvas(embedded);
@@ -121,7 +118,7 @@ suite.define(() => {
         for (let cycle = 0; cycle < 2; cycle += 1) {
           await dock(pane, "bottom");
           await bottom.getByText("exited (17)", { exact: true }).waitFor();
-          expect(await digest()).toBe(before);
+          expect(await pixels()).toEqual(before);
           expect(await bottom.locator(".tabstrip-tab").count()).toBe(mixed ? 2 : 1);
           await dock(bottom, "right");
           await pane.getByText("exited (17)", { exact: true }).waitFor();
@@ -129,16 +126,16 @@ suite.define(() => {
         }
         if (mixed) {
           await pane.locator(".sidebar-region__right-runtime .tabstrip-tab.is-live").click();
-          await typeInTerminal(page, embedded, "LIVE_WITH_DIAGNOSTICS\r");
+          await typeInTerminal(page, embedded, "l\r");
           const liveId = await lastInputSession(gateway);
           expect(liveId).not.toBe(sessionId);
           await dock(pane, "bottom");
           await bottom.locator('.tabstrip-tab.is-live[aria-selected="true"]').waitFor();
-          await typeInTerminal(page, bottom, "LIVE_STILL_SELECTED\r");
+          await typeInTerminal(page, bottom, "s\r");
           expect(await lastInputSession(gateway)).toBe(liveId);
           await bottom.locator(".tabstrip-tab.is-exited").click();
           await expectOriginalCanvas(bottom);
-          expect(await digest()).toBe(before);
+          expect(await pixels()).toEqual(before);
         }
         const attaches = await gateway.getRequests("terminal.attach");
         expect(attaches.filter((request) => inputSession(request) === sessionId)).toHaveLength(1);
@@ -182,7 +179,7 @@ suite.define(() => {
           await openChatSidePanelType(activePane, "Terminal");
           // Embedded desktop opens on Sessions; choose the already-owned session.
           await embedded.locator(".tp-session.is-current").click();
-          await typeInTerminal(page, embedded, "echo DOCKING_CONTINUITY\r");
+          await typeInTerminal(page, embedded, "i\r");
           const sessionId = inputSession(await gateway.waitForRequest("terminal.input"));
           await selectChat("Other conversation");
           await expect.poll(() => embedded.isVisible()).toBe(false);
@@ -290,14 +287,14 @@ suite.define(() => {
           if (populated) {
             await expect.poll(() => rightTabs(activePane).count()).toBe(3);
           }
-          await typeInTerminal(page, embedded, "ROUND_TRIP_OK\r");
+          await typeInTerminal(page, embedded, "ok\r");
           await expect
             .poll(async () =>
               (await gateway.getRequests("terminal.input"))
                 .map((request) => (request.params as { data: string }).data)
                 .join(""),
             )
-            .toContain("ROUND_TRIP_OK");
+            .toContain("ok\r");
           const inputs = await gateway.getRequests("terminal.input");
           expect(inputs.every((request) => inputSession(request) === sessionId)).toBe(true);
           expect(await gateway.getRequests("terminal.open")).toHaveLength(populated ? 3 : 1);
@@ -313,22 +310,22 @@ suite.define(() => {
             await dock(activePane, "bottom");
             await expect.poll(() => liveTabs(bottom).count()).toBe(3);
             await selectChat("Other conversation");
-            await typeInTerminal(page, bottom, "RETAINED_SOURCE\r");
+            await typeInTerminal(page, bottom, "a\r");
             const retainedId = await lastInputSession(gateway);
             await dock(bottom, "right");
-            await typeInTerminal(page, embedded, "RETAINED_DESTINATION\r");
+            await typeInTerminal(page, embedded, "b\r");
             expect(await lastInputSession(gateway)).toBe(retainedId);
             await rightTabs(activePane).last().click();
-            await typeInTerminal(page, embedded, "DESTINATION_TAB\r");
+            await typeInTerminal(page, embedded, "c\r");
             const destinationId = await lastInputSession(gateway);
             expect(destinationId).not.toBe(sessionId);
             await dock(activePane, "bottom");
             await expect.poll(() => liveTabs(bottom).count()).toBe(3);
-            await typeInTerminal(page, bottom, "BOTTOM_RETURN\r");
+            await typeInTerminal(page, bottom, "d\r");
             expect(await lastInputSession(gateway)).toBe(destinationId);
             await dock(bottom, "right");
             await expect.poll(() => rightTabs(activePane).count()).toBe(3);
-            await typeInTerminal(page, embedded, "RIGHT_RETURN\r");
+            await typeInTerminal(page, embedded, "e\r");
             expect(await lastInputSession(gateway)).toBe(destinationId);
             expect(await gateway.getRequests("terminal.open")).toHaveLength(3);
             expect(await gateway.getRequests("terminal.close")).toHaveLength(0);

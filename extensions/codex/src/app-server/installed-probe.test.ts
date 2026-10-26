@@ -5,19 +5,16 @@ import path from "node:path";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { commandResult } from "../../../test-support/command-result.test-support.js";
 import { probeCodexAppServerHandshake } from "./installed-probe.js";
 
 const fixture = vi.hoisted(() => ({ blockedPath: "" }));
 const originalPlatform = process.platform;
 const portablePlatform = originalPlatform === "darwin" ? "linux" : originalPlatform;
-const missingPreferences = {
-  stdout: "",
+const missingPreferences = commandResult({
   stderr: "Error: Domain 'com.openai.codex' not found.",
   code: 1,
-  signal: null,
-  killed: false,
-  termination: "exit" as const,
-};
+});
 const programData = { ...missingPreferences, stdout: "C:\\ProgramData", stderr: "", code: 0 };
 function mockCommand(result = missingPreferences) {
   return vi.spyOn(processRuntime, "runUtf8CommandWithTimeout").mockResolvedValue(result);

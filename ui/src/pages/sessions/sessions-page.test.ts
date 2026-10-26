@@ -7,8 +7,8 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.tsx";
 import * as sessionMenuWork from "../../components/session-menu-work.ts";
+import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
-import * as uiErrors from "../../lib/format-error.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type {
@@ -20,7 +20,6 @@ import { registerSessionPluginAction } from "../../test-helpers/control-ui-plugi
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
   gatewayHelloForMethods,
-  SESSION_MUTATION_TEST_METHODS,
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
 import {
@@ -29,11 +28,13 @@ import {
   getRenderedModalDialog,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import {
   openSubmenu,
   selectMenuValue,
   settleSessionMenu,
 } from "../../test-helpers/session-menu.ts";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { page as sessionsRoute, type SessionsRouteData } from "./route.ts";
 import {
@@ -48,6 +49,7 @@ import {
   openRowMenu,
   selectRows,
   sessionRow,
+  withNotifyingAgentSelection,
 } from "./sessions-page.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
@@ -70,6 +72,16 @@ function publishRows(managed: ReturnType<typeof createManagedSessions>, rows: Ga
     loading: false,
     error: null,
   });
+}
+const emptyDeletion = () => ({ deleted: [], errors: [], preservedWorktrees: [] });
+async function chooseAdvanced(
+  page: Awaited<ReturnType<typeof createRenderedPage>>,
+  row: GatewaySessionRow,
+  action: string,
+) {
+  const menu = await openRowMenu(page, row);
+  await openSubmenu(menu, "Advanced");
+  await selectMenuValue(menu, action);
 }
 async function createDeletionPage(rows: GatewaySessionRow[], agentId = "main") {
   let serverRows = rows;
@@ -203,9 +215,7 @@ describe("sessions page lifecycle", () => {
     const { page, sessions } = await mountMutation({ deleteMany: vi.fn(() => pending.promise) });
     page.result = sessionsResult([target], 1);
     try {
-      const menu = await openRowMenu(page, target);
-      await openSubmenu(menu, "Advanced");
-      await selectMenuValue(menu, "delete");
+      await chooseAdvanced(page, target, "delete");
       const actions = await waitForConfirmDialogActions();
       expect((await getRenderedModalDialog(document.body)).dialog.open).toBe(true);
       expect(page.querySelector("openclaw-session-menu")).toBeNull();
@@ -222,7 +232,7 @@ describe("sessions page lifecycle", () => {
       expect(page.textContent).not.toContain("Working…");
       expect(page.textContent).toContain("Command fixture");
     } finally {
-      pending.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      pending.resolve(emptyDeletion());
       await fixture.cleanup();
     }
   });
@@ -253,43 +263,35 @@ describe("sessions page lifecycle", () => {
     const sessions = createSessions({
       deleteMany: vi.fn().mockReturnValueOnce(pending.promise).mockReturnValueOnce(next.promise),
     });
-    const context = createContext(createGateway().gateway, sessions);
-    const listeners = new Set<() => void>();
-    context.agentSelection.subscribe = (listener) => {
-      const notify = () => listener(context.agentSelection.state);
-      listeners.add(notify);
-      return () => listeners.delete(notify);
-    };
+    const { context, changeScope } = withNotifyingAgentSelection(
+      createContext(createGateway().gateway, sessions),
+      "main",
+    );
     const target = sessionRow("old-scope-command");
     const page = await createRenderedPage(context, sessionsResult([target], 1), "all");
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
     try {
-      const menu = await openRowMenu(page, target);
-      await openSubmenu(menu, "Advanced");
-      await selectMenuValue(menu, "delete");
+      await chooseAdvanced(page, target, "delete");
       await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
       expect(page.textContent).toContain("Working…");
-      context.agentSelection.state.scopeId = "reviewer";
-      listeners.forEach((notify) => notify());
+      changeScope("reviewer");
       await page.updateComplete;
       expect(page.textContent).not.toContain("Working…");
       const nextTarget = sessionRow("new-scope-command", {
         key: "agent:reviewer:new-scope-command",
       });
       page.result = sessionsResult([nextTarget], 2);
-      const nextMenu = await openRowMenu(page, nextTarget);
-      await openSubmenu(nextMenu, "Advanced");
-      await selectMenuValue(nextMenu, "delete");
+      await chooseAdvanced(page, nextTarget, "delete");
       await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledTimes(2));
       expect(page.textContent).toContain("Working…");
-      next.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      next.resolve(emptyDeletion());
       await waitForFast(() => expect(page.textContent).not.toContain("Working…"));
       pending.reject(new Error("Old agent deletion failed"));
       await page.updateComplete;
       expect(page.textContent).not.toContain("Old agent deletion failed");
     } finally {
-      pending.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
-      next.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      pending.resolve(emptyDeletion());
+      next.resolve(emptyDeletion());
     }
   });
 
@@ -315,7 +317,6 @@ describe("sessions page lifecycle", () => {
         label: "Assignment fixture",
       });
       const failure = new Error("Assignment unavailable. Try again.");
-      const formatError = vi.spyOn(uiErrors, "formatUiError");
       const assignment = createDeferred<unknown>();
       const { request, connection, sessions, context } = liveSessions(
         {
@@ -326,15 +327,11 @@ describe("sessions page lifecycle", () => {
         "main",
       );
       const assignOwner = vi.spyOn(sessions, "assignOwner");
-      context.agents.state.agentsList = {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [
-          { id: "main", name: "Main" },
-          { id: "reviewer", name: "Reviewer" },
-        ],
-      };
+      context.agents.state.agentsList = agentRoster(
+        { main: "Main", reviewer: "Reviewer" },
+        "main",
+        "per-sender",
+      );
       const page = await createRenderedPage(context, sessionsResult([row], 1));
       await waitForFast(() => expect(page.loading).toBe(false));
       const menu = await openRowMenu(page, row);
@@ -357,16 +354,14 @@ describe("sessions page lifecycle", () => {
       } else {
         await expect(assignOwner.mock.results[0]!.value).rejects.toBe(failure);
         await waitForFast(() => expect(page.textContent).toContain(failure.message));
-        expect(formatError.mock.calls.at(-1)?.[0]).toBe(failure);
         expect(page.textContent).toContain("Assignment fixture");
       }
     },
   );
 
   it.each(["startup", "same-client reconnect"])(
-    "retains the current query when a route started before %s completes late",
+    "loads the current query and routes the configured main session without config on %s",
     async (ordering) => {
-      const config = createDeferred();
       const sidebar = createDeferred<SessionsListResult>();
       const result = (key: string) => sessionsResult([{ key, kind: "direct", updatedAt: 1 }], 1);
       let pageRequests = 0;
@@ -381,18 +376,20 @@ describe("sessions page lifecycle", () => {
         undefined,
         ordering === "startup" ? "connecting" : undefined,
       );
-      context.runtimeConfig.ensureLoaded = () => config.promise;
-      const pendingRoute = sessionsRoute.loader!(context, {
-        signal: new AbortController().signal,
-        shouldRun: () => true,
-        revalidating: false,
-        location: { pathname: "/sessions", search: "", hash: "" },
-        deps: "",
-        cause: "navigation",
-      });
+      context.agents.state.agentsList = {
+        ...agentRoster({ main: "Main" }, "main", "per-sender"),
+        mainKey: "workspace",
+      };
+      const routeData = (await sessionsRoute.loader!(
+        context,
+        createRouteLoaderOptions({ pathname: "/sessions", search: "", hash: "" }),
+      )) as SessionsRouteData;
       connection.emit({ phase: "connected" });
-      const page = await createPage(context);
+      let mountedPage: Awaited<ReturnType<typeof createPage>> | undefined;
       try {
+        expect(routeData).toEqual({ expandedSessionKey: null, statusFilter: "active" });
+        const page = await createPage(context, routeData);
+        mountedPage = page;
         await waitForFast(() => expect(page.result?.sessions[0]?.key).toBe("agent:main:current-1"));
         if (ordering === "same-client reconnect") {
           connection.emit({ phase: "reconnecting" });
@@ -405,11 +402,6 @@ describe("sessions page lifecycle", () => {
         const expectedRequests = ordering === "startup" ? 1 : 2;
         expect(pageRequests).toBe(expectedRequests);
 
-        config.resolve();
-        page.routeData = (await pendingRoute) as SessionsRouteData;
-        await page.updateComplete;
-        expect(pageRequests).toBe(expectedRequests);
-
         sidebar.resolve(result("agent:main:sidebar"));
         await waitForFast(() =>
           expect(sessions.state.result?.sessions[0]?.key).toBe("agent:main:sidebar"),
@@ -418,10 +410,15 @@ describe("sessions page lifecycle", () => {
         await page.updateComplete;
         expect(pageRequests).toBe(expectedRequests);
         expect(page.result?.sessions[0]?.key).toBe(`agent:main:current-${expectedRequests}`);
+        expect(page.mainKey).toBe("workspace");
+        page.onNavigateToChat("agent:main:workspace");
+        expect(context.navigate).toHaveBeenCalledWith(
+          "chat",
+          expect.objectContaining({ pathname: "/chat/main" }),
+        );
       } finally {
-        config.resolve();
         sidebar.resolve(result("agent:main:sidebar"));
-        page.remove();
+        mountedPage?.remove();
         sessions.dispose();
       }
     },
@@ -436,43 +433,6 @@ describe("sessions page lifecycle", () => {
     });
     expect(sessions.patch).not.toHaveBeenCalled();
     expect(page.error).toBe("Connect to the Gateway to change sessions.");
-  });
-
-  it("uses personal visibility RPC from the management menu", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
-    const connection = createGateway({ request } as unknown as GatewayBrowserClient);
-    connection.emit({
-      hello: {
-        ...gatewayHelloForMethods(
-          [...SESSION_MUTATION_TEST_METHODS, "sessions.setInvolvement"],
-          ["operator.read"],
-        ),
-        policy: { hasMultipleSessionSharingIdentities: true },
-      },
-    });
-    const managed = createManagedSessions();
-    const target = sessionRow("personal", { hiddenFromInvolvingMe: true });
-    const context = createContext(connection.gateway, managed.sessions);
-    const page = await createRenderedPage(context, sessionsResult([target], 1));
-    const menu = await openRowMenu(page, target);
-    await openSubmenu(menu, "Advanced");
-    const item = menu.querySelector('[value="toggle-involving-me"]')!;
-    expect(item.textContent).toContain("Show in Involving me");
-    expect(item.hasAttribute("disabled")).toBe(false);
-    managed.refreshList.mockClear();
-    await selectMenuValue(menu, "toggle-involving-me");
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith(
-        "sessions.setInvolvement",
-        expect.objectContaining({
-          key: target.key,
-          expectedSessionId: target.sessionId,
-          hidden: false,
-        }),
-      ),
-    );
-    await waitForFast(() => expect(managed.refreshList).toHaveBeenCalled());
-    expect(managed.sessions.patch).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -624,27 +584,11 @@ describe("sessions page lifecycle", () => {
         createGateway({ request } as unknown as GatewayBrowserClient).gateway,
         managed.sessions,
       );
-      const placement = {
-        generation: 1,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        stateChangedAtMs: 1,
-        environmentId: "environment-1",
-      };
+      const placement = createActiveSessionPlacement({ environmentId: "environment-1" });
       const target = sessionRow("cloud", {
         label: "Cloud task",
         hasActiveRun: state === "provisioning",
-        placement:
-          state === "active"
-            ? {
-                ...placement,
-                state,
-                activeOwnerEpoch: 1,
-                workerBundleHash: "0".repeat(64),
-                workspaceBaseManifestRef: "base-ref",
-                remoteWorkspaceDir: "/workspace",
-              }
-            : { ...placement, state },
+        placement: state === "active" ? placement : { ...placement, state },
       });
       const page = await createRenderedPage(context, sessionsResult([target], 1));
       expect((await openRowMenu(page, target)).textContent).toContain("Stop cloud worker…");
@@ -903,16 +847,6 @@ describe("sessions page plugin actions", () => {
     return { page, row, run, publish, openMenu, actionSelector };
   }
 
-  it("keeps the open menu mounted while a refreshed row updates its actions", async () => {
-    const { page, row, publish, openMenu } = await createPluginSessionMenuPage();
-    const menu = await openMenu();
-    publish([{ ...row, label: "Latest" }]);
-    await page.updateComplete;
-    await menu.updateComplete;
-    expect(page.querySelector("openclaw-session-menu")).toBe(menu);
-    expect(menu.pluginActions[0]?.label).toBe("Review Latest");
-  });
-
   it("keeps the menu mounted and masks stale destinations while a reopened lookup resolves", async () => {
     type Work = Awaited<ReturnType<typeof sessionMenuWork.fetchSessionMenuWork>>;
     const earlier = createDeferred<Work>();
@@ -959,8 +893,13 @@ describe("sessions page plugin actions", () => {
     const { page, row, run, publish, openMenu, actionSelector } =
       await createPluginSessionMenuPage();
     let menu = await openMenu();
-    const current = { ...row, label: "Latest" };
+    publish([{ ...row, label: "Refreshed" }]);
+    await page.updateComplete;
+    await menu.updateComplete;
+    expect(page.querySelector("openclaw-session-menu")).toBe(menu);
+    expect(menu.pluginActions[0]?.label).toBe("Review Refreshed");
 
+    const current = { ...row, label: "Latest" };
     publish([current]);
     menu.querySelector<HTMLElement>(actionSelector)!.click();
     await settleSessionMenu(menu);

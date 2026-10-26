@@ -25,6 +25,7 @@ import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "./session-sharing.js";
+import type { SessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 
 /** Creates transport-independent connection, subscription, and run state. */
 export function createGatewayConnectionState(params: {
@@ -50,18 +51,21 @@ export function createGatewayConnectionState(params: {
     }
   };
   const clearConnectionRows = () => {
+    const histories = new Map<object, object>();
     for (const client of clients) {
-      connectionRows.get(client)?.clear("projection");
+      connectionRows.get(client)?.clear("projection", histories);
     }
   };
   const clearAncestors = () => {
+    const histories = new Map<object, object>();
     for (const client of clients) {
-      connectionRows.get(client)?.clearAncestors();
+      connectionRows.get(client)?.clearAncestors(histories);
     }
   };
   const forgetAncestor = (key: string) => {
+    const histories = new Map<object, object>();
     for (const client of clients) {
-      connectionRows.get(client)?.forget(key);
+      connectionRows.get(client)?.forget(key, histories);
     }
   };
   // RPCs survive ordinary disconnects, so connection-owned projections still
@@ -78,7 +82,12 @@ export function createGatewayConnectionState(params: {
     isConnectionActive,
     forgetConnectionAncestors,
   );
-  const eventWebPush = createEventWebPushDelivery(loadRuntimeConfig);
+  // Lifecycle owns viewer declarations; agent-finished pushes fail open until it attaches them.
+  let sessionViewers: SessionViewerPresenceDeclarations | undefined;
+  const eventWebPush = createEventWebPushDelivery(loadRuntimeConfig, {
+    isViewedOnDevice: (deviceId, sessionKey) =>
+      sessionViewers?.isViewedOnDevice(deviceId, sessionKey) === true,
+  });
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
     preparePresenceProjection: (presence) =>
@@ -157,7 +166,6 @@ export function createGatewayConnectionState(params: {
             }
             return references;
           },
-          forgetConnectionAncestors: (client) => connectionRows.get(client)?.clearAncestors(),
           createRunProjector: () =>
             createVisibleActiveSessionRunProjector(
               projection.state.rowContext.projectedAgentRuns,
@@ -225,6 +233,9 @@ export function createGatewayConnectionState(params: {
           clearConnectionRows();
         }
       };
+    },
+    attachSessionViewerPresence(this: void, declarations: SessionViewerPresenceDeclarations) {
+      sessionViewers = declarations;
     },
     clients,
     forgetConnectionAncestors,

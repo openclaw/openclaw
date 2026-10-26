@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
+import { expectCallCount as expectCalls } from "../../test-utils/mock-call-assertions.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 import type { BlockReplyPayload } from "../embedded-agent-payloads.js";
@@ -14,10 +15,12 @@ import {
   mockedBuildEmbeddedRunPayloads as buildPayloads,
   mockedRunEmbeddedAttempt as attempt,
   createOverflowRunParams,
-  resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createFreshRunIntegrationState,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let state: OpenClawTestState;
@@ -53,11 +56,6 @@ const userMessage = (content: string, timestamp = 1) => ({
 const completedItem = { startedCount: 1, completedCount: 1, activeCount: 0 };
 const textPayloads = ({ assistantTexts }: { assistantTexts: string[] }) =>
   assistantTexts.map((text) => ({ text }));
-function expectCalls(count: number, ...mocks: ReturnType<typeof vi.fn>[]) {
-  for (const mock of mocks) {
-    expect(mock).toHaveBeenCalledTimes(count);
-  }
-}
 function delivered(payload: { text: string; mediaUrls?: string[] }, to = "telegram:123") {
   return {
     toolMetas: succeeded("message", "plugins"),
@@ -134,11 +132,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  resetSharedRunIntegrationHarnessMocks();
-  const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-  state = await createOpenClawTestState({ label: "plugin-runtime-refresh" });
-  const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-  setRuntimeConfigSnapshot({});
+  state = await createFreshRunIntegrationState("plugin-runtime-refresh");
 });
 
 afterEach(async () => {

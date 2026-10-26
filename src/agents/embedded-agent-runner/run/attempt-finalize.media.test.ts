@@ -127,4 +127,14 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
     });
     expect(events["model.completed"]?.messagesSnapshot).toEqual([expected]);
   });
+  it.each([false, true])("does not count an unconsumed tool error as delivery (%s)", (answered) => {
+    const events = captureTrajectory({
+      currentAttemptAssistant: answered ? assistant("stop") : undefined,
+      lastToolError: { toolName: "bash", error: "Execution denied.", executionStarted: false },
+    });
+    expect(events["session.ended"]).toMatchObject({
+      status: answered ? "success" : "error",
+      terminalError: answered ? undefined : "non_deliverable_terminal_turn",
+    });
+  });
 });

@@ -35,6 +35,8 @@ export type SpawnSubagentParams = {
   sandbox?: SpawnSubagentSandboxMode;
   context?: SpawnSubagentContextMode;
   lightContext?: boolean;
+  /** The child's rendered prompt omits its model, agent/session identity and workspace path. */
+  blind?: boolean;
   expectsCompletionMessage?: boolean;
   completionTarget?: "parent";
   attachments?: Array<{
@@ -78,6 +80,8 @@ export type SpawnSubagentResult = {
   runId?: string;
   mode?: SpawnSubagentMode;
   taskName?: string;
+  label?: string;
+  groupId?: string;
   expectsCompletionMessage?: boolean;
   completionTarget?: "parent";
   note?: string;

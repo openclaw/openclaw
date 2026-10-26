@@ -14,7 +14,6 @@ const catalog = {
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
-      placeholderWithAttachments: "Add a message or paste more images...",
       preparingModel: "Preparing model...",
       responding: "{name} is responding...",
       sendingMessage: "Sending message...",
@@ -53,6 +52,7 @@ const catalog = {
       addAttachment: "Add attachment",
       attach: "Attach…",
       attachPhoto: "Photo",
+      attachMedia: "Photos & videos",
       attachFileOption: "File",
       menu: {
         back: "Back",
@@ -105,6 +105,10 @@ const catalog = {
         summary: "Session context usage: {used} of {limit} ({pct}%)",
         contextWindow: "Context window",
         promptBudget: "Prompt budget",
+        latestRun: "Latest run",
+        inputShort: "In",
+        outputShort: "Out",
+        costShort: "Cost",
         latestRunTokens: "Latest run tokens",
         estimatedCost: "Est. cost",
         planUsage: "Plan usage",
@@ -112,10 +116,10 @@ const catalog = {
         resets: "Resets {time}",
         usageCredits: "Usage credits",
         budgetValue: "{used} of {limit}",
-        limitFiveHour: "5-hour limit",
+        limitFiveHour: "5-hour",
         limitWeekly: "Weekly",
-        limitDaily: "Daily limit",
-        limitHours: "{hours}-hour limit",
+        limitDaily: "Daily",
+        limitHours: "{hours}-hour",
       },
       takePhoto: "Take photo",
       cameraAccessFailed: "Unable to access the camera.",
@@ -202,10 +206,6 @@ const catalog = {
       initialTurnPending:
         "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
       notSent: "Not sent",
-      deliveryUnconfirmed: "Delivery unconfirmed",
-      checkDelivery: "Check delivery",
-      checkDeliveryHelp:
-        "Delivery is unconfirmed. Check delivery looks for the original message without resending it or starting a worker. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt.",
       retry: "Retry",
       retryQueuedMessage: "Retry queued message",
       discard: "Discard",
@@ -221,12 +221,12 @@ const catalog = {
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
         applyingSettings: "Applying chat settings",
-        blockedByUnconfirmed:
-          "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
+        blockedByReview:
+          "Queue paused. Review or discard the earlier held message in the conversation.",
         runningCommand: "Running command",
         waitingForReconnect: "Waiting for reconnect",
         editing: "Editing",
-        needsReview: "Delivery uncertain",
+        needsReview: "Needs review",
       },
       imageCount: "Image ({count})",
     },
@@ -302,8 +302,6 @@ const catalog = {
       selectionConfirmationFailed: "Voice change unconfirmed.",
     },
     sendErrors: {
-      outboxPayloadCopied:
-        "This queued message was copied from another tab. Check the conversation and retry only if it has not arrived.",
       outboxPayloadCapacity:
         "Browser attachment storage is full. Try a smaller batch or send/discard queued messages to free space. No new message was sent; your input is retained.",
       outboxPayloadUnavailable:
@@ -328,9 +326,6 @@ const catalog = {
     outboxRecoveryGoal: "Includes an unsent goal change",
     outboxRecoveryReply: "Reply to: {text}",
     outboxRecoveryAttachments: "Attachments: {files}",
-    outboxRecoveryUnconfirmedLabel: "may have been sent",
-    outboxRecoveryUnconfirmed:
-      "Delivery unconfirmed. This message may already have been sent. Check the original chat before sending it again.",
     outboxRecoveryAttachmentMissing:
       "An attachment could not be loaded. Review the message and reattach the file before sending.",
     outboxRecoveryDelete: "Delete",

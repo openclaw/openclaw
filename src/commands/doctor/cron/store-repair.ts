@@ -5,10 +5,14 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import type { CronInferenceBinding } from "../../../cron/inference-binding.js";
+import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import { noteCronJobsStoreCommit } from "../../../cron/store.js";
 import { resolveCronJobGrantDefinitionRevision } from "../../../cron/store/job-config-codec.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
-import { inspectCronJobsReadOnly } from "../../../cron/store/read-only.js";
+import {
+  inspectCronJobsReadOnly,
+  readCronJobOwnerRowsReadOnly,
+} from "../../../cron/store/read-only.js";
 import {
   deleteCronJobRowInDatabase,
   loadCronRows,
@@ -29,6 +33,7 @@ import type {
   PluginDoctorCronJob,
 } from "../../../plugins/doctor-contract-module.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { isStatePostgres } from "../../../state/openclaw-state-db-engine.js";
 import { withMaintenanceOpenClawStateDatabaseReadOnly } from "../../../state/openclaw-state-db-readonly-reuse.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
@@ -39,6 +44,9 @@ import { inspectCronOwnerRowsForDoctor, inspectCronRowsForDoctor } from "./store
 type DoctorCronScope = { env: NodeJS.ProcessEnv };
 
 export async function inspectCronJobOwnersForDoctor(scope: DoctorCronScope, storePath: string) {
+  if (isStatePostgres()) {
+    return await readCronJobOwnerRowsReadOnly(storePath, scope.env);
+  }
   return (
     (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
       ({ db }) => inspectCronOwnerRowsForDoctor(db, cronStoreKey(storePath)),
@@ -191,6 +199,15 @@ export async function repairCronInferenceBindingsForDoctor(
           throw new Error(`Cannot migrate cron inference account for ${job.id}.`);
         }
         const next = { ...previous, inferenceBinding: binding };
+        const source = previous.operatorSource;
+        // Offline adoption only restricts inference; keep the original authenticated
+        // source bound to that definition without reviving an already stale capture.
+        if (source?.executionRevision === resolveCronOperatorExecutionRevision(previous)) {
+          next.operatorSource = {
+            ...source,
+            executionRevision: resolveCronOperatorExecutionRevision(next),
+          };
+        }
         const validProjection =
           row.grant_definition_revision === resolveCronJobGrantDefinitionRevision(previous) &&
           row.grant_definition_updated_at === row.updated_at;
@@ -211,7 +228,11 @@ export async function repairCronInferenceBindingsForDoctor(
           getCronStoreKysely(db)
             .updateTable("cron_jobs")
             .set({
-              job_json: JSON.stringify({ ...job.definition, inferenceBinding: binding }),
+              job_json: JSON.stringify({
+                ...job.definition,
+                inferenceBinding: binding,
+                ...(next.operatorSource ? { operatorSource: next.operatorSource } : {}),
+              }),
               ...(validProjection
                 ? { grant_definition_revision: resolveCronJobGrantDefinitionRevision(next) }
                 : {}),

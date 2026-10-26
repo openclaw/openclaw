@@ -11,6 +11,7 @@ import { selectSidebarView } from "../test-helpers/app-sidebar-setup.ts";
 const modules = vi.hoisted(() => ({
   roster: { started: false, ...Promise.withResolvers<void>() },
   pages: { started: false, ...Promise.withResolvers<void>() },
+  online: { started: false, ...Promise.withResolvers<void>() },
 }));
 vi.mock("./sidebar-agent-roster.tsx", async (importOriginal) => {
   modules.roster.started = true;
@@ -20,6 +21,11 @@ vi.mock("./sidebar-agent-roster.tsx", async (importOriginal) => {
 vi.mock("./app-sidebar-pages.tsx", async (importOriginal) => {
   modules.pages.started = true;
   await modules.pages.promise;
+  return importOriginal();
+});
+vi.mock("./app-sidebar-online.tsx", async (importOriginal) => {
+  modules.online.started = true;
+  await modules.online.promise;
   return importOriginal();
 });
 
@@ -37,6 +43,7 @@ it("loads optional sidebar views on selection without replacing the shell or ret
     expect(body).not.toBeNull();
     expect(modules.roster.started).toBe(false);
     expect(modules.pages.started).toBe(false);
+    expect(modules.online.started).toBe(false);
 
     sidebar.sidebarAgentsMode = "roster";
     await vi.waitFor(() => {
@@ -84,8 +91,18 @@ it("loads optional sidebar views on selection without replacing the shell or ret
     );
     expect(document.activeElement).toBe(pageLink);
     expect(body?.querySelector(".sidebar-view-loading")).toBeNull();
+    await selectSidebarView(sidebar, "online");
+    await vi.waitFor(() => {
+      expect(modules.online.started).toBe(true);
+      expect(body?.querySelector('[role="status"][aria-busy="true"]')).not.toBeNull();
+    });
+    expect(sidebar.querySelector(".sidebar-shell")).toBe(shell);
+    expect(sidebar.querySelector(".sidebar-rail")).toBe(rail);
+    modules.online.resolve();
+    await vi.waitFor(() => expect(body?.querySelector(".sidebar-online")).not.toBeNull());
   } finally {
     modules.roster.resolve();
     modules.pages.resolve();
+    modules.online.resolve();
   }
 });

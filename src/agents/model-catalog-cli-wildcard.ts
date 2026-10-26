@@ -50,10 +50,8 @@ export function projectClaudeCliNativeCatalog(
       canonical.push({ ...enriched, provider: "anthropic" });
     }
   }
-  const replaced = new Set(canonical.map((entry) => entry.id));
   const keep = (entry: ModelCatalogEntry) =>
-    entry.provider !== CLAUDE_CLI_RUNTIME_ID &&
-    !(entry.provider === "anthropic" && (nativeOnly || replaced.has(entry.id)));
+    entry.provider !== CLAUDE_CLI_RUNTIME_ID && !(entry.provider === "anthropic" && nativeOnly);
   return {
     ...snapshot,
     entries: [...snapshot.entries.filter(keep), ...(nativeOnly ? canonical : enrichedNativeRows)],

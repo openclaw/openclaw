@@ -516,11 +516,6 @@ export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
     rewriteSlot(params.owner[key], "model", `${params.path}.${key}.model`);
   }
   rewriteSlot(
-    asOptionalRecord(params.owner.compaction)?.memoryFlush,
-    "model",
-    `${params.path}.compaction.memoryFlush.model`,
-  );
-  rewriteSlot(
     asOptionalRecord(asOptionalRecord(params.owner.tools)?.exec)?.reviewer,
     "model",
     `${params.path}.tools.exec.reviewer.model`,

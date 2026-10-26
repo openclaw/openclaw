@@ -13,17 +13,7 @@ import {
   type GatewayChatHistory,
 } from "./gateway-recovery.test-support.js";
 
-type StabilityEvent = {
-  ts?: unknown;
-  type?: unknown;
-  action?: unknown;
-  reason?: unknown;
-  outcome?: unknown;
-  ageMs?: unknown;
-  failureKind?: unknown;
-  queueDepth?: unknown;
-  source?: unknown;
-};
+type StabilityEvent = Partial<Record<"ts" | "type" | "reason" | "ageMs" | "failureKind", unknown>>;
 
 type StabilitySnapshot = {
   lastSeq?: unknown;
@@ -34,14 +24,10 @@ type MockRequestSnapshot = Partial<
   Record<"cursor" | "prompt" | "allInputText" | "model" | "outcome" | "errorCode", unknown>
 >;
 
-type ClassifiedMockRequest = {
-  cursor: unknown;
-  model: unknown;
+type ClassifiedMockRequest = Record<"cursor" | "model" | "outcome" | "errorCode", unknown> & {
   continuation: boolean;
   prompt: "recovery" | "queued" | "other" | "missing";
   stallGuidance: boolean;
-  outcome: unknown;
-  errorCode: unknown;
 };
 
 const RECOVERY_PROMPT =
@@ -183,48 +169,6 @@ async function readClassifiedMockRequests(mockBaseUrl: string): Promise<Classifi
     );
 }
 
-async function readFailureEvidence(params: {
-  gateway: Gateway;
-  mockBaseUrl: string | undefined;
-  sinceSeq: number;
-}): Promise<string> {
-  const events = (await readStability(params.gateway, params.sinceSeq)).events ?? [];
-  const stability = events
-    .filter(
-      (event) =>
-        typeof event.type === "string" &&
-        (event.type.startsWith("session.") ||
-          event.type === "message.queued" ||
-          event.type === "model.call.started" ||
-          event.type === "model.call.error"),
-    )
-    .map(({ type, action, reason, outcome, ageMs, failureKind, queueDepth, source }) => ({
-      type,
-      action,
-      reason,
-      outcome,
-      ageMs,
-      failureKind,
-      queueDepth,
-      source,
-    }));
-  const requests = params.mockBaseUrl
-    ? await readClassifiedMockRequests(params.mockBaseUrl).catch((error: unknown) => [
-        { requestEvidenceError: String(error) },
-      ])
-    : [];
-  const gatewayLogs = params.gateway
-    .logs()
-    .split("\n")
-    .filter((line) =>
-      /followup queue|reply run stale takeover|stuck session recovery|queue: active session|empty response|settled.*final|retrying|stranded|continuation/iu.test(
-        line,
-      ),
-    )
-    .slice(-100);
-  return JSON.stringify({ stability, requests, gatewayLogs });
-}
-
 it(
   "lets the provider deadline settle the failed run before draining one queued followup",
   { timeout: 330_000 },
@@ -318,15 +262,7 @@ it(
       endedAt: expect.any(Number),
     });
 
-    const history = await waitForQueuedReply(gateway, sessionKey).catch(async (error: unknown) => {
-      const evidence = await readFailureEvidence({
-        gateway,
-        mockBaseUrl: harness?.mock?.baseUrl,
-        sinceSeq: baselineSeq,
-      });
-      throw new Error(`${String(error)}; evidence=${evidence}`, { cause: error });
-    });
-    expect(historyContainsQueuedReply(history)).toBe(true);
+    await waitForQueuedReply(gateway, sessionKey);
     // agent.wait returns pending immediately while the queue owns this run,
     // even after its reply is visible. Observe settlement within the same budget.
     const queuedDeadline = Date.now() + 30_000;
@@ -356,10 +292,7 @@ it(
     // one same-model transcript continuation. Its no-details failure exhausts the
     // already-used empty-error budget. This is not diagnostic liveness recovery.
     // Mock outcomes record intent before delay; the diagnostic above proves the timeout.
-    expect(
-      recoveryRequests,
-      await readFailureEvidence({ gateway, mockBaseUrl, sinceSeq: baselineSeq }),
-    ).toEqual([
+    expect(recoveryRequests).toEqual([
       ...Array.from({ length: 4 }, () =>
         expect.objectContaining({
           model: "gpt-5.6-luna",

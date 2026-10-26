@@ -1,5 +1,5 @@
 import { ChildProcess, spawn } from "node:child_process";
-import net from "node:net";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureExtensionRelayDaemonProcess } from "./extension-relay-daemon-spawn.js";
 import { readExtensionRelayToken } from "./extension-relay/relay-auth.js";
@@ -54,27 +54,22 @@ describe("ensureExtensionRelayDaemonProcess", () => {
 
 describe("relay port ownership", () => {
   it("leaves an existing listener alone and spawns only after it closes", async () => {
-    const server = net.createServer();
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-    const address = server.address();
-    const port = typeof address === "object" && address ? address.port : 0;
     vi.mocked(spawn).mockReturnValue(new ChildProcess());
     vi.mocked(readExtensionRelayToken).mockReturnValue("a".repeat(64));
     const params = {
-      cfg: { browser: { profiles: { work: { driver: "extension" as const, cdpPort: port } } } },
-      port,
+      cfg: { browser: { profiles: { work: { driver: "extension" as const, cdpPort: 0 } } } },
+      port: 0,
       entryPath: ENTRY,
     };
-    try {
-      expect(await ensureExtensionRelayDaemonProcess(params)).toBe("running");
-      expect(spawn).not.toHaveBeenCalled();
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
+    await withServer(
+      (_req, res) => res.end(),
+      async (baseUrl) => {
+        params.port = Number(new URL(baseUrl).port);
+        params.cfg.browser.profiles.work.cdpPort = params.port;
+        expect(await ensureExtensionRelayDaemonProcess(params)).toBe("running");
+        expect(spawn).not.toHaveBeenCalled();
+      },
+    );
     expect(await ensureExtensionRelayDaemonProcess(params)).toBe("spawned");
     expect(spawn).toHaveBeenCalledOnce();
   });

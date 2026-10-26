@@ -26,6 +26,8 @@ it.each([
   ["किताब", "किताब"],
   ["कुतुब", "कुतुब"],
   ["कीताब", "कीताब"],
+  [" _Alpha--\u00a0\t!_Beta-- ", "alpha-beta"],
+  [" --\u2028__ ", "page"],
 ])("slugifies %j without collapsing distinct combining marks", (input, expected) => {
   expect(slugifyWikiSegment(input)).toBe(expected);
 });
@@ -132,5 +134,19 @@ it("keeps inline link filtering while parsing CommonMark destinations", () => {
     "syntheses/plan(v2).md",
     "syntheses/plan(v3).md",
     "assets/diagram.png",
+  ]);
+});
+
+it("decodes percent-encoded inline link destinations", () => {
+  const markdown = [
+    "[Notes](../syntheses/plan%20notes.md)",
+    "[Cafe](../syntheses/caf%C3%A9.md#menu)",
+    "[Malformed](../syntheses/100%.md)",
+  ].join("\n\n");
+
+  expect(scanWikiLinkTargets(markdown)).toEqual([
+    "syntheses/plan notes.md",
+    "syntheses/café.md",
+    "syntheses/100%.md",
   ]);
 });

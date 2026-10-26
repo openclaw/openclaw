@@ -84,11 +84,13 @@ does not merge files or create a dossier.
 Missing files or missing qualifying human identity use shared defaults only. A
 human assignment without a profile ID does not fall back to the creator. Display
 labels, channel sender IDs, unknown-source creator IDs, and agent owners cannot
-select a personal file. Internal events and delegated tasks do not automatically
-inherit a personal profile. Subagent bootstrap still contains only its existing
-allowed project instructions. The shared local owner profile represents all
-connections using that identity, not separate people; use per-person sign-in on
-a team Gateway.
+select a personal file. Internal turns continuing the same session use that
+session's selection, including subagent completions, `sessions_send`, goal
+continuation, and cron and restart wakes in that session. Isolated cron sessions
+keep shared defaults only. Subagent sessions still load only their allowed project
+instructions, so delegated tasks never receive a personal `USER.md` file. The shared
+local owner profile represents all connections using that identity, not separate
+people; use per-person sign-in on a team Gateway.
 
 Personal files use the existing guarded reads and memory provenance checks.
 Symlink aliases are not accepted. Each personal file must fit wholly within the
@@ -176,6 +178,32 @@ The snapshot survives session resets and disappears with the child session. Inco
 When a task session has someone to credit, its system prompt lists the exact trailers once. It tells the agent to add them to commits it makes from the session. The Codex runtime receives the same block in its developer instructions. Main keeps stable, identity-free guidance instead; the current request’s verified trailers appear in per-turn runtime context and travel separately to child creation. Changing the requester does not rebuild main’s system or developer instructions. Nothing is added when there is nobody to credit, and incognito sessions never carry credit. For task sessions, the Gateway publication broker applies the same credit directly in its generated commits and pull requests. Direct publication from canonical main has no task contributor snapshot and adds no automatic human credit; publishing from the delegated task session preserves its verified contributor snapshot. When the Gateway exposes an external HTTPS session URL, pull requests end with a link to that exact team session. The trailers are not exported through the process or shell environment. Direct Git commands remain ordinary shell execution. OpenClaw does not replace `git` or install repository hooks. The agent following that system-prompt instruction is therefore the enforcement boundary.
 
 Turning **Git co-author credit** off stops attribution for future runs. Gateway-managed publication also checks contributor identity and consent before each pending commit, push, or pull request write. If eligibility changes during publication, it stops before the next write and asks you to review recorded effects before requesting publication again. It does not rewrite commits that already contain the public trailer.
+
+## Optional OpenClaw pull request attribution
+
+Open **Settings → Profile → Identity** and enable **Add OpenClaw attribution to
+pull requests** to mark new PRs requested from your profile. This preference is
+off by default and is separate from **Git co-author credit**. It does not require
+a verified GitHub account or change commit authorship.
+
+When enabled, new pull request descriptions include this footer:
+
+> 🦞 Made with [OpenClaw](https://openclaw.ai)
+
+The Gateway publisher applies your preference when creating a PR. It does not
+add branding when reviewing, editing, or publishing more changes to an existing
+PR, and it does not restore a footer removed on GitHub. The preference does not
+share a session or add a conversation link; session sharing remains separate.
+
+For one PR without attribution, ask the agent to omit the marker. For managed
+publication, include `<!-- openclaw:attribution=off -->` in that PR’s description.
+Turning the profile preference off affects future PRs, not already published
+ones. Incognito sessions do not automatically add attribution.
+
+For PRs created through ordinary GitHub CLI or shell commands, the agent follows
+attribution instructions rather than a Git hook or wrapper. That path is
+best-effort; the Gateway can apply the footer directly only to its managed
+publication flow.
 
 ## Merging duplicate profiles
 
@@ -272,7 +300,10 @@ Link the sender to their existing profile with `users.linkChannelIdentity`. For
 Slack, use `channelId: "slack"`, the configured account ID, and the exact
 native user ID (for example, `senderId: "U0123456789"`). Direct Socket Mode and
 signature-verified HTTP delivery authenticate that sender; relay delivery does
-not. Discord's verified native senders use the same profile resolution.
+not. Discord's verified native senders use the same profile resolution. X uses
+`channelId: "x"`, the configured account ID, and the immutable API `author_id`;
+its authenticated polling and Activity streams establish the native sender, not
+a matching handle or allowlist entry.
 
 The next verified message turn includes the primary profile ID and current display
 label as host-generated fields in the per-turn conversation info. The system
@@ -287,8 +318,11 @@ agent turn, the `sessions` tool exposes `assign_owner` for these senders;
 settings, reset/delete, and global group controls still require owner authority.
 Operators with `operator.write` also retain the separate archive, restore, and
 stop controls for sessions they created or are assigned to, subject to session access checks.
-When a newly spawned visible session starts agent-owned, the agent can assign it
-to the trusted requester profile and verify the stored owner with `sessions_list`.
+New visible sessions default to the trusted requester when the parent has no
+different human owner; this includes agent-owned and channel-originated parents.
+Without a trusted requester, they remain agent-owned. The agent can assign an
+existing session to the trusted requester profile and verify the stored owner
+with `sessions_list`.
 This changes responsibility, not creator attribution or access. Unlinked or
 asserted senders receive no requester profile: link the verified sender first
 rather than guessing from a name or pasted ID. An owner-authorized agent can use

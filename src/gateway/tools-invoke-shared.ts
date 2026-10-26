@@ -49,7 +49,10 @@ import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
-import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
+import {
+  SessionMutationAuthorizationChangedError,
+  sessionMutationForbiddenError,
+} from "./session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   authorizePreparedSessionMutation,
@@ -353,9 +356,7 @@ async function invokeGatewayToolWithSignal(
     if (!profiles) {
       sessionChecks.push(() => {
         if (getRuntimeConfig().gateway?.roles) {
-          throw new SessionMutationAuthorizationChangedError(
-            errorShape(ErrorCodes.FORBIDDEN, "Session role policy changed; retry the request"),
-          );
+          throw sessionMutationForbiddenError("Session role policy changed; retry the request");
         }
       });
       return () => null;
@@ -666,11 +667,8 @@ export async function invokeGatewayTool(
                 current?.spawnedWorkspaceDir !== entry?.spawnedWorkspaceDir ||
                 current?.spawnedBy !== entry?.spawnedBy
               ) {
-                throw new SessionMutationAuthorizationChangedError(
-                  errorShape(
-                    ErrorCodes.FORBIDDEN,
-                    "Session tool policy changed; retry the request",
-                  ),
+                throw sessionMutationForbiddenError(
+                  "Session tool policy changed; retry the request",
                 );
               }
             };

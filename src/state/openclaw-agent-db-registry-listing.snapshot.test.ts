@@ -8,20 +8,25 @@ import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-d
 
 const mocks = vi.hoisted(() => ({
   assertCurrent: vi.fn<() => void>(),
-  capture: vi.fn<(options: { path?: string; env?: NodeJS.ProcessEnv }) => unknown>(),
-  read: vi.fn<() => Promise<OpenClawAgentDatabaseRegistryReadResult | undefined>>(),
+  capture: vi.fn<(pathname: string) => unknown>(),
+  read: vi.fn<
+    (options: {
+      path?: string;
+      env?: NodeJS.ProcessEnv;
+    }) => Promise<OpenClawAgentDatabaseRegistryReadResult | undefined>
+  >(),
 }));
 // mock-isolation: Exercise snapshot admission with controlled receipts, not a live worker context.
 vi.mock("./openclaw-state-worker-context.js", () => ({
-  captureOpenClawStateWorkerContext: (options: { path?: string; env?: NodeJS.ProcessEnv }) => {
-    mocks.capture(options);
+  captureOpenClawStateReadContext: (pathname: string) => {
+    mocks.capture(pathname);
     return { admission: { assertCurrent: mocks.assertCurrent } };
   },
 }));
 vi.mock("./openclaw-state-db-readonly.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-state-db-readonly.js")>()),
-  executeExistingOpenClawStateRead: async () => {
-    const result = await mocks.read();
+  executeExistingOpenClawStateRead: async (options: { path?: string; env?: NodeJS.ProcessEnv }) => {
+    const result = await mocks.read(options);
     return result === undefined
       ? undefined
       : { ok: true, type: "agentDatabaseRegistry.read", result };
@@ -63,7 +68,7 @@ it("lazily reads in its captured scope and publishes complete rows to the canoni
   const scope = new AsyncLocalStorage<string>();
   const prepared = scope.run("captured", () => prepareRead({ ...options, env }));
   env.OPENCLAW_STATE_DIR = "/fixture/changed";
-  expect(mocks.capture.mock.calls[0]?.[0]).toMatchObject({ env: options.env });
+  expect(mocks.capture.mock.calls[0]?.[0]).toBe(options.path);
   expect(readToken(other)).toBe(token);
   expect(mocks.read).not.toHaveBeenCalled();
   const incompatible = {
@@ -71,7 +76,8 @@ it("lazily reads in its captured scope and publishes complete rows to the canoni
     agentId: "future",
     schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
   };
-  mocks.read.mockImplementationOnce(async () => {
+  mocks.read.mockImplementationOnce(async (source) => {
+    expect(source).toMatchObject({ path: options.path, env: options.env });
     expect(scope.getStore()).toBe("captured");
     return { status: "available", entries: [...entries, incompatible] };
   });

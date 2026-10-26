@@ -1,6 +1,7 @@
+import { toUSVString } from "node:util";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { parseStoredJson } from "./plugin-state-error.js";
-import { readCommittedPluginStateObservationCache } from "./plugin-state-observation-cache.js";
+import { readCommittedPluginStateNamespace } from "./plugin-state-namespace-owner.js";
 import {
   assertPluginStatePublicationSettled,
   pluginStatePublication,
@@ -67,8 +68,8 @@ export async function capturePluginStateNativeBindingFacts(
     });
     // A concurrent receipt wins over the read that was already in flight.
     if (!loaded) {
-      const observed = readCommittedPluginStateObservationCache(identity(), scope);
-      row = observed ? observed.row : observation.row;
+      const observed = readCommittedPluginStateNamespace(identity(), scope);
+      row = observed ? observed.get(toUSVString(key)) : observation.row;
       loaded = true;
     }
     if (!active || !loaded || unavailable) {
@@ -79,9 +80,9 @@ export async function capturePluginStateNativeBindingFacts(
     if (authority) {
       assertPluginStatePublicationSettled(identity(), scope);
     }
-    const cached = readCommittedPluginStateObservationCache(identity(), scope);
+    const cached = readCommittedPluginStateNamespace(identity(), scope);
     if (cached) {
-      row = cached.row;
+      row = cached.get(toUSVString(key));
       loaded = true;
     } else {
       await load();

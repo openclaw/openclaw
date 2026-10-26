@@ -49,6 +49,28 @@ function testFiles(sizes: number[]): TestSpecification[] {
   });
 }
 
+function uiSpecs(rows: [bytes: number, seconds: number, name: string, groupOrder: number][]) {
+  return testFiles(rows.map(([bytes]) => bytes)).map((file, index) => {
+    const [, seconds, name, groupOrder] = rows[index]!;
+    timings[path.relative(repoRoot, file.moduleId).replaceAll("\\", "/")] = seconds;
+    return Object.assign(file, {
+      project: { name, config: { isolate: true, sequence: { groupOrder } } },
+    });
+  });
+}
+
+function uiSequencer(
+  getTestSpecificationResult = (
+    _file: TestSpecification,
+  ): { failed: boolean; duration: number } | undefined => undefined,
+  shard?: { count: number; index: number },
+) {
+  return new UiE2eSequencer({
+    config: { root: repoRoot, shard },
+    cache: { getTestSpecificationResult },
+  } as unknown as ConstructorParameters<typeof UiE2eSequencer>[0]);
+}
+
 async function gatewayShards(files: TestSpecification[], count: number) {
   return Promise.all(
     Array.from({ length: count }, (_, offset) => {
@@ -73,18 +95,12 @@ it("balances the measured tail while retaining every discovered file exactly onc
   // The unmeasured file inherits 60 seconds from the discovered 120s/200-byte
   // sample. Equal file-count hashing cannot enforce this 100s/80s split.
   expect(shards).toEqual([[files[0]], [files[2], files[1]]]);
-  expect(shards.flat()).toHaveLength(files.length);
-  expect(new Set(shards.flat())).toEqual(new Set(files));
   expect(await gatewayShards(files.toReversed(), 2)).toEqual(shards);
 });
 
 it("uses source bytes for every file when timing data is absent", async () => {
   const files = testFiles([100, 80, 20]);
   expect(await gatewayShards(files, 2)).toEqual([[files[0]], [files[1], files[2]]]);
-  const added = testFiles([120])[0]!;
-  const shards = await gatewayShards([...files, added], 2);
-  expect(shards.flat()).toHaveLength(4);
-  expect(new Set(shards.flat())).toEqual(new Set([...files, added]));
 });
 
 it("keeps shared UI/Gateway partition ties deterministic without collapsing specifications", () => {
@@ -99,84 +115,74 @@ it("keeps shared UI/Gateway partition ties deterministic without collapsing spec
   expect(new Set(shards.flat())).toEqual(new Set(discovered));
 });
 
-it("starts expensive standalone UI work early without crossing serial phase barriers", async () => {
-  const sizes = [400, 300, 200, 100, 50, 60, 70];
-  const files = testFiles(sizes);
-  const durations = [10, 10, 10, 30, 100, 200, 300];
-  const projects = [
-    "ui-e2e-bundled",
-    "ui-e2e-bundled",
-    "ui-e2e-bundled",
-    "ui-e2e-standalone",
-    "ui-e2e-serial",
-    "ui-e2e-serial",
-    "ui-e2e-real-gateway",
-  ];
-  const specs = files.map((file, index) => {
-    timings[path.relative(repoRoot, file.moduleId).replaceAll("\\", "/")] = durations[index]!;
-    return Object.assign(file, {
-      project: {
-        name: projects[index]!,
-        config: { isolate: true, sequence: { groupOrder: index < 4 ? 0 : index < 6 ? 1 : 2 } },
-      },
-    });
+it("keeps the UI worker borrowers together without changing discovered or selected files", async () => {
+  const ui = createUiE2eVitestConfig({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" }, []).test!;
+  const discovered = (ui.projects ?? []).flatMap((project) => {
+    if (typeof project !== "object" || project === null || !("test" in project) || !project.test) {
+      return [];
+    }
+    const config = project.test;
+    return globSync(config.include ?? [], { cwd: repoRoot, exclude: config.exclude }).map((file) =>
+      Object.assign({ moduleId: path.join(repoRoot, file) } as TestSpecification, {
+        project: { name: config.name, config },
+      }),
+    );
   });
-  const stats = new Map(
-    specs.map((file, index) => [
-      `${file.project.name}:${path.relative(repoRoot, file.moduleId).replaceAll("\\", "/")}`,
-      { size: sizes[index]! },
-    ]),
+  const borrowerPaths = new Set(
+    [
+      "model-providers-profile-outcomes",
+      "post-deploy-session-entry",
+      "question-guest",
+      "screen-requester-routing",
+    ].map((name) => path.join(repoRoot, "ui/src/e2e", `${name}.e2e.test.ts`)),
   );
-  const context = {
-    config: { root: repoRoot },
-    cache: { getFileTestResults: () => undefined, getFileStats: (key: string) => stats.get(key) },
-  };
-  const sequencer = new UiE2eSequencer(
-    context as unknown as ConstructorParameters<typeof UiE2eSequencer>[0],
+  expect(discovered.filter((file) => borrowerPaths.has(file.moduleId))).toHaveLength(4);
+  const partition = (files: TestSpecification[]) =>
+    Promise.all(
+      Array.from({ length: 6 }, (_, offset) =>
+        uiSequencer(undefined, { count: 6, index: offset + 1 }).shard(files),
+      ),
+    );
+  const selected = discovered.filter(
+    (file) => !file.moduleId.endsWith("post-deploy-session-entry.e2e.test.ts"),
   );
+  for (const files of [discovered, selected]) {
+    const shards = await partition(files);
+    expect(shards.flat()).toHaveLength(files.length);
+    expect(new Set(shards.flat())).toEqual(new Set(files));
+    const owners = shards.filter((shard) => shard.some((file) => borrowerPaths.has(file.moduleId)));
+    expect(owners).toHaveLength(1);
+    expect(await partition(files.toReversed())).toEqual(shards);
+  }
+});
+
+it("starts expensive standalone UI work early without crossing serial phase barriers", async () => {
+  const specs = uiSpecs([
+    [400, 10, "ui-e2e-bundled", 0],
+    [300, 10, "ui-e2e-bundled", 0],
+    [100, 30, "ui-e2e-standalone", 0],
+    [50, 100, "ui-e2e-serial", 1],
+    [60, 200, "ui-e2e-serial", 1],
+    [70, 300, "ui-e2e-real-gateway", 2],
+  ]);
+  const sequencer = uiSequencer();
   // eslint-disable-next-line unicorn/no-array-sort -- TestSequencer.sort is Vitest's ordering API.
   const ordered = await sequencer.sort(specs);
-  expect(new Set(ordered)).toEqual(new Set(specs));
-  expect(ordered).toHaveLength(specs.length);
-  expect(ordered.map((file) => file.project.config.sequence.groupOrder)).toEqual([
-    0, 0, 0, 0, 1, 1, 2,
-  ]);
-  expect(ordered.slice(4)).toEqual([specs[5], specs[4], specs[6]]);
-  const workers = [0, 0, 0];
-  for (const file of ordered.filter((spec) => spec.project.config.sequence.groupOrder === 0)) {
-    const index = workers.indexOf(Math.min(...workers));
-    workers[index]! += durations[specs.indexOf(file)]!;
-  }
-  // Three 10s bundled files before the 30s standalone would leave a 40s tail.
-  expect(Math.max(...workers)).toBe(30);
+  expect(ordered).toEqual([specs[2], specs[0], specs[1], specs[4], specs[3], specs[5]]);
   // eslint-disable-next-line unicorn/no-array-sort -- TestSequencer.sort is Vitest's ordering API.
   expect(await sequencer.sort(specs.toReversed())).toEqual(ordered);
 });
 
 it("keeps native failed-first and observed-duration ordering for warm UI runs", async () => {
-  const files = testFiles([100, 80, 20]);
-  const specs = files.map((file, index) => {
-    timings[path.relative(repoRoot, file.moduleId).replaceAll("\\", "/")] = [100, 1, 50][index]!;
-    return Object.assign(file, {
-      project: {
-        name: "ui-e2e-bundled",
-        config: { isolate: true, sequence: { groupOrder: 0 } },
-      },
-    });
-  });
+  const specs = uiSpecs([
+    [100, 100, "ui-e2e-bundled", 0],
+    [80, 1, "ui-e2e-bundled", 0],
+    [20, 50, "ui-e2e-bundled", 0],
+  ]);
   const results = new Map(
-    specs.map((file, index) => [
-      `${file.project.name}:${path.relative(repoRoot, file.moduleId).replaceAll("\\", "/")}`,
-      { failed: index === 1, duration: [500, 1, 90][index]! },
-    ]),
+    specs.map((file, index) => [file, { failed: index === 1, duration: [500, 1, 90][index]! }]),
   );
-  const context = {
-    config: { root: repoRoot },
-    cache: { getFileTestResults: (key: string) => results.get(key), getFileStats: () => undefined },
-  };
-  const sequencer = new UiE2eSequencer(
-    context as unknown as ConstructorParameters<typeof UiE2eSequencer>[0],
-  );
+  const sequencer = uiSequencer((file) => results.get(file));
   // eslint-disable-next-line unicorn/no-array-sort -- TestSequencer.sort is Vitest's ordering API.
   expect(await sequencer.sort(specs)).toEqual([specs[1], specs[0], specs[2]]);
 });

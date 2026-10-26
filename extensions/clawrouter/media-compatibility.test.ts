@@ -1,5 +1,6 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import {
   describeImageFile,
   transcribeAudioFile,
@@ -31,11 +32,7 @@ describe("ClawRouter configured media compatibility", () => {
         await withServer(
           (req, res) => {
             void (async () => {
-              const chunks: Buffer[] = [];
-              for await (const chunk of req) {
-                chunks.push(Buffer.from(chunk));
-              }
-              const body = Buffer.concat(chunks).toString();
+              const body = (await consumeBuffer(req)).toString();
               requests.push({
                 url: req.url,
                 authorization: req.headers.authorization,

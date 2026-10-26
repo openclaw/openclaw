@@ -6,7 +6,7 @@ import { resolveSandboxHostPort } from "../agents/sandbox-host.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { resolveCanvasNodeCapability } from "../canvas/constants.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import type { DeferredHookWake } from "../cron/service/wake.js";
+import type { DeferredHookWake } from "../cron/wake-contract.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { closeHttpServers } from "../infra/http-server-lifecycle.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
@@ -436,7 +436,7 @@ export async function createGatewayHttpTransport(params: {
       getRuntimeConfig: loadRuntimeConfig,
       handleRequest: getGatewayHttpRequestHandler(httpServer),
       handleUpgrade: controlUiUpgradeHandler,
-      handleSandboxRequest: createSandboxHostHttpRequestHandler(resolvePluginRouteRegistry),
+      handleSandboxRequest: createSandboxHostHttpRequestHandler(),
       signal: requestLifetime
         ? AbortSignal.any([gatewayLifetime, requestLifetime])
         : gatewayLifetime,
@@ -463,7 +463,6 @@ export async function createGatewayHttpTransport(params: {
       const sandboxServers = bindHosts.map(() =>
         createSandboxHostHttpServer(
           params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
-          resolvePluginRouteRegistry,
         ),
       );
       // Register before binding so normal runtime cleanup closes a partially

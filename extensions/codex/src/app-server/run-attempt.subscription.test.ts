@@ -322,7 +322,11 @@ describe("Codex attempt subscription recovery", () => {
                     throw new Error("expired cleanup queued optional retention");
                   });
                 } else if (revoked === "successor") {
-                  resources.state.thread.liveThreadOwnership?.forget();
+                  const thread = resources.state.thread;
+                  if (!thread) {
+                    throw new Error("Expected the adopted thread during monitor setup");
+                  }
+                  thread.liveThreadOwnership?.forget();
                   await claimCodexAppServerLiveThread(harness.client, threadId);
                   hostRevoked = true;
                 } else if (revoked === "closed") {
@@ -399,7 +403,11 @@ describe("Codex attempt subscription recovery", () => {
       ]);
       await run.waitForTurnAccepted();
       const { connection } = resources.prompt.context.runtime;
-      const { threadId } = resources.state.thread;
+      const thread = resources.state.thread;
+      if (!thread) {
+        throw new Error("Expected the adopted thread after startup");
+      }
+      const { threadId } = thread;
       const rowFailure = new Error("row reader release failed");
       const rowWaiting = createDeferred<void>();
       const releaseRow = createDeferred<void>();
@@ -549,6 +557,7 @@ describe("Codex attempt subscription recovery", () => {
       );
       expect(compact).not.toHaveBeenCalled();
       expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
+        "configRequirements/read",
         "config/read",
         "configRequirements/read",
         "thread/read",

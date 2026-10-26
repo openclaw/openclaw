@@ -673,6 +673,23 @@ function setRegisteredHealthChecks(
 }
 
 describe("doctor health contributions", () => {
+  it("shows runtime capabilities in the interactive Doctor flow", async () => {
+    vi.stubGlobal("__openclawStandaloneBuildInfo", {
+      mode: "aot",
+      openclaw: { version: "2026.10.3" },
+      bun: { version: "1.4.4" },
+    });
+    try {
+      await requireDoctorContribution("doctor:runtime-capabilities").run(createDoctorContext());
+      expect(mocks.note).toHaveBeenCalledWith(
+        expect.stringContaining("flavor=aot"),
+        "Runtime capabilities (Doctor process)",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   async function withProcessPlatform<T>(
     platform: NodeJS.Platform,
     run: () => Promise<T>,

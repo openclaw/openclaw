@@ -9,9 +9,9 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { pluginFixtureConfig } from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
-import { writeTree } from "./plugin-generation-capture.test-support.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { drainTimeout } from "./plugin-instance.test-support.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 import { clearActivePluginRegistry } from "./runtime.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);

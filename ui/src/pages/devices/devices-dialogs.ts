@@ -169,7 +169,23 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
       scopes,
     });
     if (outcome) {
-      await showDeviceRotationOutcome(device.name, role, outcome);
+      await (outcome.delivery === "in-band"
+        ? showSecretRevealDialog({
+            title: t("devices.inventory.rotatePromptTitle", { role }),
+            message: t("devices.inventory.rotatePromptBody"),
+            secret: outcome.token,
+            acknowledgeLabel: t("devices.inventory.rotateAcknowledge"),
+            dismissHint: t("devices.inventory.rotateDismissHint"),
+          })
+        : showSecretRevealDialog({
+            // The title names the device; the body reassures about the outcome.
+            title: t("devices.inventory.rotateWithheldTitle", { device: device.name }),
+            status: "success",
+            message: t("devices.inventory.rotateWithheldNext"),
+            callout: t("devices.inventory.rotateWithheldException"),
+            acknowledgeLabel: t("common.close"),
+            note: t("devices.inventory.rotateWithheldNote"),
+          }));
     }
   }
 
@@ -241,28 +257,4 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
     reportRotationOutcome,
     confirmExecApprovalsDiscard,
   };
-}
-
-async function showDeviceRotationOutcome(
-  deviceName: string,
-  role: string,
-  outcome: RotatedDeviceTokenOutcome,
-) {
-  await (outcome.delivery === "in-band"
-    ? showSecretRevealDialog({
-        title: t("devices.inventory.rotatePromptTitle", { role }),
-        message: t("devices.inventory.rotatePromptBody"),
-        secret: outcome.token,
-        acknowledgeLabel: t("devices.inventory.rotateAcknowledge"),
-        dismissHint: t("devices.inventory.rotateDismissHint"),
-      })
-    : showSecretRevealDialog({
-        // The title names the device; the body reassures about the outcome.
-        title: t("devices.inventory.rotateWithheldTitle", { device: deviceName }),
-        status: "success",
-        message: t("devices.inventory.rotateWithheldNext"),
-        callout: t("devices.inventory.rotateWithheldException"),
-        acknowledgeLabel: t("common.close"),
-        note: t("devices.inventory.rotateWithheldNote"),
-      }));
 }

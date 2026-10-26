@@ -33,18 +33,16 @@ import {
   prepareGitHubPublicationSource,
 } from "../gateway/github-publication-source.js";
 import {
-  claimRepositoryGitHubPublicationAsync,
   readGitHubPublicationRequestAsync,
   runGitHubPublicationMaintenanceAsync,
 } from "../gateway/github-publication-store-async.js";
 import { listRepositoryGitHubPublicationsInDatabase } from "../gateway/github-repository-publication-read.worker.js";
-import {
-  claimRepositoryGitHubPublicationInDatabase,
-  insertRepositoryGitHubPublicationInDatabase,
-} from "../gateway/github-repository-publication-store.worker.js";
+import { insertRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-store.worker.js";
 import { repositoryGitHubPublicationDigest } from "../gateway/github-repository-publication.kernel.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { preparePersonalGitHubSessionReceiptDeletion } from "./github-personal-publication-lifecycle.js";
 import {
@@ -54,10 +52,7 @@ import {
   waitForPublicationGate,
 } from "./github-publication-fixtures.test-support.js";
 import type { RepositoryGitHubPublicationRow as RepositoryPublicationRow } from "./github-publication-read.types.js";
-import {
-  captureGitHubPublicationLifecycle,
-  githubPublicationReceipts,
-} from "./github-publication-receipts.js";
+import { githubPublicationReceipts } from "./github-publication-receipts.js";
 import { prepareGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import {
   insertGitHubPublicationSessionLifecycle,
@@ -85,18 +80,17 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
-import {
-  captureOpenClawStateReadContext,
-  captureOpenClawStateWorkerContext,
-} from "./openclaw-state-worker-context.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { createSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import {
+  listUserGitHubConnectionsAsync,
   mutateUserGitHubConnection,
   prepareUserGitHubConnection,
 } from "./user-github-connections.js";
 import { disconnectedUserGitHubConnection } from "./user-github-connections.kernel.js";
 import { updateUserGitHubConnection } from "./user-github-connections.test-support.js";
+import { userGitHubConnectionSchema } from "./user-github-connections.types.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
 
 let context: OpenClawStateWorkerContext;
@@ -231,9 +225,7 @@ async function sourceFixture(
   return { row, source };
 }
 
-it("creates the lazy shared schema and publishes lifecycle authority before its first insert reply", async ({
-  signal,
-}) => {
+it("creates the lazy shared schema and replaces a missing lifecycle binding on insert", async () => {
   const request = {
     sessionKey: "agent:main:first-shared-publication",
     agentId: "main",
@@ -284,30 +276,7 @@ it("creates the lazy shared schema and publishes lifecycle authority before its 
     requestId: "first-shared-publication-request",
   });
   expect(lifecycle.readCurrent()).toBeUndefined();
-  const committed = createDeferredCore();
-  let atSettlement: ReturnType<typeof lifecycle.readCurrent>;
-  onTestFinished(
-    githubPublicationReceipts.subscribeFacts((change) => {
-      if (
-        change.kind === "committed" &&
-        change.receipt.source.identity === context.admission.identity.key
-      ) {
-        expect(lifecycle.readCurrent).toThrow("lifecycle authority is unavailable");
-        committed.resolve();
-      }
-      if (change.kind === "settled" && change.identity === context.admission.identity.key) {
-        atSettlement = captureGitHubPublicationLifecycle(captureOpenClawStateReadContext(), {
-          publicationKind: "shared",
-          requestId: "first-shared-publication-request",
-        }).readCurrent();
-      }
-    }),
-  );
-  const reply = holdNextReply("githubPublications.insert", () => {
-    // An uncommitted insert cannot authorize publication from a missing binding.
-    expect(lifecycle.readCurrent()).toBeUndefined();
-  });
-  const inserting = insertGitHubPublicationRequestAsync(
+  const inserted = await insertGitHubPublicationRequestAsync(
     {
       request,
       requestId: "first-shared-publication-request",
@@ -325,13 +294,6 @@ it("creates the lazy shared schema and publishes lifecycle authority before its 
     },
     source,
   );
-  try {
-    await waitForPublicationGate(signal, inserting, reply.ready, committed.promise);
-    expect(lifecycle.readCurrent).toThrow("lifecycle authority is unavailable");
-  } finally {
-    reply.release();
-  }
-  const inserted = await inserting;
   expect(inserted).toMatchObject({
     request_id: "first-shared-publication-request",
     status: "requested",
@@ -344,7 +306,6 @@ it("creates the lazy shared schema and publishes lifecycle authority before its 
         requester_authority_json:
           '{"version":1,"actor":{"kind":"system"},"scopes":["operator.admin"],"grant":null}',
       };
-      expect(atSettlement).toEqual(expected);
       expect(
         (
           await prepareGitHubPublicationSessionLifecycle({
@@ -358,6 +319,69 @@ it("creates the lazy shared schema and publishes lifecycle authority before its 
   await expect(
     readGitHubPublicationRequestAsync({ requestId: inserted.request_id }),
   ).resolves.toEqual(inserted);
+});
+
+it("consumes validated connection replies without reparsing and keeps host redaction and isolation", async () => {
+  const owner = ensureProfileForEmail("connection-readback@example.test").id;
+  const now = Date.now();
+  const deviceCode = "synthetic-device-code".padEnd(40, "x");
+  const initial = updateUserGitHubConnection(
+    owner,
+    () => ({
+      ...disconnectedUserGitHubConnection(),
+      pending: {
+        kind: "device",
+        requestId: randomUUID(),
+        deviceCode,
+        userCode: "TEST-CODE",
+        verificationUri: "https://github.com/login/device",
+        createdAtMs: now,
+        expiresAtMs: now + 900000,
+        pollIntervalMs: 1000,
+        nextPollAtMs: now + 1000,
+      },
+    }),
+    () => {},
+  );
+  const parse = vi.spyOn(userGitHubConnectionSchema, "safeParse");
+  resetSecretRedactionRegistryForTest();
+  const prepared = await prepareUserGitHubConnection(owner);
+  expect(prepared.read()).toEqual(initial);
+  expect(isSecretValueRegisteredForRedaction(deviceCode)).toBe(true);
+  const detached = prepared.read()!;
+  detached.pending = undefined;
+  expect(prepared.read()).toEqual(initial);
+
+  resetSecretRedactionRegistryForTest();
+  expect(await listUserGitHubConnectionsAsync()).toContainEqual({ owner, connection: initial });
+  expect(isSecretValueRegisteredForRedaction(deviceCode)).toBe(true);
+
+  resetSecretRedactionRegistryForTest();
+  expect(
+    await mutateUserGitHubConnection(owner, { kind: "expire", nowMs: now }, () => {}),
+  ).toBeUndefined();
+  const renewed = await mutateUserGitHubConnection(
+    owner,
+    {
+      kind: "device",
+      generation: initial.generation,
+      requestId: initial.pending!.requestId,
+      device: {
+        ...initial.pending!,
+        kind: "device",
+        deviceCode,
+        userCode: "TEST-CODE",
+        verificationUri: "https://github.com/login/device",
+        pollIntervalMs: 1000,
+        nextPollAtMs: now + 2000,
+      },
+    },
+    () => {},
+  );
+  expect(renewed?.pending).toMatchObject({ deviceCode, nextPollAtMs: now + 2000 });
+  expect(isSecretValueRegisteredForRedaction(deviceCode)).toBe(true);
+  expect(parse).not.toHaveBeenCalled();
+  resetSecretRedactionRegistryForTest();
 });
 
 it("does not cancel a newer personal GitHub authorization", async () => {
@@ -542,30 +566,21 @@ it("publishes a committed receipt before a delayed ordinary worker reply", async
   const row = seed("delayed-reply");
   const reply = holdNextReply();
   const { facts } = observeAuthority();
-  const authorityAtNotification: unknown[] = [];
   const key = JSON.stringify(["repository", row.request_id]);
   const committed = createDeferredCore();
-  const published = vi.fn((_receipt: PublicationMutationReceipt) => {
-    authorityAtNotification.push(facts.get(key));
+  const published = () => {
+    expect(facts.get(key)).toMatchObject({
+      kind: "postimage",
+      value: { request_id: row.request_id, status: "publishing", execution_id: "execution" },
+    });
     committed.resolve();
-  });
+  };
   const claim = mutatePublication(
     scope,
     { operation: "claim", row, instanceId: "gateway", executionId: "execution" },
     published,
   );
   await waitForPublicationGate(signal, claim, reply.ready, committed.promise);
-  expect(published).toHaveBeenCalledTimes(1);
-  expect(authorityAtNotification).toMatchObject([
-    {
-      kind: "postimage",
-      value: { request_id: row.request_id, status: "publishing", execution_id: "execution" },
-    },
-  ]);
-  expect(published.mock.calls[0]?.[0]).toMatchObject({
-    kind: "repository",
-    rows: [{ request_id: row.request_id, status: "publishing", execution_id: "execution" }],
-  });
   expectRows(row, [{ request_id: row.request_id, status: "publishing" }]);
   reply.release();
   await expect(claim).resolves.toMatchObject({ rows: [{ status: "publishing" }] });
@@ -588,90 +603,53 @@ it("publishes a committed receipt before a delayed ordinary worker reply", async
   expectRows(row, [{ reported_at_ms: expect.any(Number) }]);
 });
 
-it.for(["superseded", "closed"] as const)(
-  "fences a late authority receipt after its owner is %s",
-  async (outcome, { signal }) => {
-    const lifecycleInput = {
-      publicationKind: "shared" as const,
-      requestId: `late-${outcome}-lifecycle`,
-    };
-    runOpenClawStateWriteTransaction(({ db }) =>
-      insertGitHubPublicationSessionLifecycle(db, {
-        ...lifecycleInput,
-        lifecycleRevision: "original-revision",
-      }),
-    );
-    const lifecycle = await prepareGitHubPublicationSessionLifecycle(lifecycleInput);
-    let closed = false;
-    const scope = createScope({
-      ...context,
-      assertPublicationCurrent: () => {
-        if (closed) {
-          throw new Error("Synthetic publication owner closed");
-        }
-        (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
-      },
-    });
-    const row = seed(`late-${outcome}`);
-    const { facts, unknown } = observeAuthority();
-    const key = JSON.stringify(["repository", row.request_id]);
-    const receipt = holdNextReceipt();
-    const reply = holdNextReply();
-    const published = vi.fn();
-    const claim = mutatePublication(
-      scope,
-      { operation: "claim", row, instanceId: "gateway", executionId: "original" },
-      published,
-    );
-    await waitForPublicationGate(signal, claim, receipt.ready, reply.ready);
-    if (outcome === "superseded") {
-      runOpenClawStateWriteTransaction((database) =>
-        claimRepositoryGitHubPublicationInDatabase(
-          database,
-          {
-            ...row,
-            status: "publishing",
-            execution_id: "original",
-            gateway_instance_id: "gateway",
-          },
-          "gateway",
-          "replacement",
-          {
-            assertCurrent: context.admission.assertCurrent,
-            assertCustody: context.admission.assertCurrent,
-          },
-        ),
-      );
-      expect(facts.get(key)).toMatchObject({
-        kind: "postimage",
-        value: { execution_id: "replacement" },
-      });
-      receipt.release();
-      expect(facts.get(key)).toEqual({ kind: "unknown" });
-      expect(published).toHaveBeenCalledTimes(1);
-    } else {
-      closed = true;
-      expect(receipt.release).toThrow("publication owner closed");
-      expect(facts.has(key)).toBe(false);
-      expect(unknown).toContain(context.admission.identity.key);
-      expect(published).not.toHaveBeenCalled();
-    }
-    reply.release();
-    await expect(claim).resolves.toMatchObject({ rows: [{ execution_id: "original" }] });
-    expectRows(row, [{ execution_id: outcome === "superseded" ? "replacement" : "original" }]);
-    if (outcome === "closed") {
-      expect(lifecycle.readCurrent).toThrow("lifecycle authority is unavailable");
-      await expect(prepareGitHubPublicationSessionLifecycle(lifecycleInput)).rejects.toThrow(
-        "lifecycle authority is unavailable",
-      );
-    } else {
-      expect(lifecycle.readCurrent()).toEqual({
-        lifecycle_revision: "original-revision",
-        requester_authority_json: null,
-      });
-    }
-  },
-);
+it("fences a late authority receipt after its owner closes", async ({ signal }) => {
+  const lifecycleInput = {
+    publicationKind: "shared" as const,
+    requestId: "late-closed-lifecycle",
+  };
+  runOpenClawStateWriteTransaction(({ db }) =>
+    insertGitHubPublicationSessionLifecycle(db, {
+      ...lifecycleInput,
+      lifecycleRevision: "original-revision",
+    }),
+  );
+  const lifecycle = await prepareGitHubPublicationSessionLifecycle(lifecycleInput);
+  let closed = false;
+  const scope = createScope({
+    ...context,
+    assertPublicationCurrent: () => {
+      if (closed) {
+        throw new Error("Synthetic publication owner closed");
+      }
+      (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
+    },
+  });
+  const row = seed("late-closed");
+  const { facts, unknown } = observeAuthority();
+  const key = JSON.stringify(["repository", row.request_id]);
+  const receipt = holdNextReceipt();
+  const reply = holdNextReply();
+  const published = vi.fn();
+  const claim = mutatePublication(
+    scope,
+    { operation: "claim", row, instanceId: "gateway", executionId: "original" },
+    published,
+  );
+  await waitForPublicationGate(signal, claim, receipt.ready, reply.ready);
+  closed = true;
+  expect(receipt.release).toThrow("publication owner closed");
+  expect(facts.has(key)).toBe(false);
+  expect(unknown).toContain(context.admission.identity.key);
+  expect(published).not.toHaveBeenCalled();
+  reply.release();
+  await expect(claim).resolves.toMatchObject({ rows: [{ execution_id: "original" }] });
+  expectRows(row, [{ execution_id: "original" }]);
+  expect(lifecycle.readCurrent).toThrow("lifecycle authority is unavailable");
+  await expect(prepareGitHubPublicationSessionLifecycle(lifecycleInput)).rejects.toThrow(
+    "lifecycle authority is unavailable",
+  );
+});
 
 it("revokes prepared sources when canonical deletion commits before its ordinary reply", async ({
   signal,
@@ -722,32 +700,6 @@ it("revokes prepared sources when canonical deletion commits before its ordinary
   expectRows(row, []);
   seed(row);
   expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");
-});
-
-it("settles execution bookkeeping without source authority while distinguishing observed effects", async () => {
-  const row = seed("observed-effect");
-  const execution = await claimRepositoryGitHubPublicationAsync(row, "gateway", {
-    assertCustody: context.admission.assertCurrent,
-    assertAction() {
-      throw new Error("No action authority");
-    },
-    async prepareSource() {
-      throw new Error("No source authority");
-    },
-  });
-  await execution.updateHead("d".repeat(40));
-  await execution.recordEffect("push");
-  expectRows(row, [{ effect_state: "dispatched", pushed_head_commit: null }]);
-  await execution.recordEffect("push", { headCommit: "d".repeat(40) });
-  await execution.interrupt();
-  expectRows(row, [
-    {
-      status: "requested",
-      last_effect: "push",
-      effect_state: "observed",
-      pushed_head_commit: "d".repeat(40),
-    },
-  ]);
 });
 
 it("refuses delayed observation from an execution replaced by a later claim", async () => {

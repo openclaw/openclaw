@@ -1,8 +1,11 @@
+import "../styles/sidebar-attention-floating.css";
+import "../styles/session-title-placeholder.css";
 import { getObserver } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, onCleanup, onSettled } from "solid-js";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
+import { i18nRevision } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
@@ -165,7 +168,11 @@ function AppSidebarContent(
   });
   const narrationState = createParkedProjection(
     () => narrationProjection()?.read(),
-    () => props.navigationVisible,
+    () => {
+      projection.revision();
+      // Preserve live narration for reactivation without preparing hidden previews.
+      return props.navigationVisible && owner.sessionsShowPreview;
+    },
   );
   onSettled(() => context.gateway.subscribeEvents((event) => owner.narration?.handleEvent(event)));
   const presentationRevision = createParkedProjection(
@@ -191,9 +198,35 @@ function AppSidebarContent(
     ],
   );
   const observed = new WeakMap<object, object>();
+  const mutationInputs = createMemo(
+    () => {
+      presentationRevision();
+      const gateway = context.gateway.snapshot;
+      return [
+        owner.connected,
+        Boolean(owner.sidebarSnapshot),
+        gateway.phase,
+        gateway.client,
+        gateway.client?.offlineRecoveryRetired,
+        JSON.stringify([gateway.hello?.auth, gateway.hello?.features?.methods]),
+      ];
+    },
+    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
+  );
+  const readSessionMutationAccess: AppSidebarOwner["readSessionMutationAccess"] = (request) => {
+    if (getObserver()) {
+      mutationInputs();
+      i18nRevision();
+    }
+    // Only presentation dependencies are narrowed; actions still read the synchronous owner.
+    return owner.readSessionMutationAccess(request);
+  };
   const observe = <T extends object>(target: T): T => {
     const proxy = new Proxy(target, {
       get(current, key, receiver) {
+        if (current === owner && key === "readSessionMutationAccess") {
+          return readSessionMutationAccess;
+        }
         if (getObserver()) {
           presentationRevision();
         }

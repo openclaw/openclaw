@@ -55,11 +55,13 @@ export function isCliRuntimeProvider(
   provider: string,
   params: { config?: OpenClawConfig } = {},
 ): boolean {
-  const normalized = normalizeProviderId(provider);
-  return listCliRuntimeProviderIds({
-    config: params.config,
-    includeSetupRegistry: params.config !== undefined,
-  }).includes(normalized);
+  return (
+    resolveCliRuntimeCanonicalProvider({
+      runtime: provider,
+      config: params.config,
+      includeSetupRegistry: params.config !== undefined,
+    }) !== undefined
+  );
 }
 
 export function isCliRuntimeAlias(runtime: string | undefined): boolean {
@@ -347,14 +349,17 @@ export function resolveCliRuntimeExecutionProvider(
     modelId?: string;
     authProfileId?: string;
   },
+  configuredRuntimePolicy?: ReturnType<typeof resolveModelRuntimePolicy>,
 ): string | undefined {
   const provider = normalizeProviderId(params.provider);
-  const { policy, matchedProvider } = resolveModelRuntimePolicy({
-    config: params.cfg,
-    provider,
-    modelId: params.modelId,
-    agentId: params.agentId,
-  });
+  const { policy, matchedProvider } =
+    configuredRuntimePolicy ??
+    resolveModelRuntimePolicy({
+      config: params.cfg,
+      provider,
+      modelId: params.modelId,
+      agentId: params.agentId,
+    });
   const runtime = policy?.id?.trim() || undefined;
   if (runtime === "openclaw") {
     return undefined;

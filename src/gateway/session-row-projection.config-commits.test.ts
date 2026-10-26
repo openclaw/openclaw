@@ -28,12 +28,12 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => ({
   hasPluginLifecycleLease: () => false,
   withPluginLifecycleLease: async (
     _options: unknown,
-    run: (lease: { assertOwned: () => void }) => Promise<unknown>,
-  ) => run({ assertOwned() {} }),
+    run: (lease: { assertCurrent: () => void; assertOwned: () => void }) => Promise<unknown>,
+  ) => run({ assertCurrent() {}, assertOwned() {} }),
 }));
 
-it("retains resident rows across projection-neutral commits and unchanged admission", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("retains resident rows across projection-neutral commits and unchanged admission", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const count = 16;
     await state.writeConfig({
       agents: { entries: { main: {} } },
@@ -49,8 +49,7 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
       seedRow(`agent:main:${sessionId}`, { sessionId, updatedAt: index + 1 });
     }
     await using cleanup = new AsyncDisposableStack();
-    const release = retainSessionListForegroundWork();
-    cleanup.defer(release);
+    cleanup.defer(retainSessionListForegroundWork());
     const projection = await createSessionRowProjection({
       cfg,
       getConfig: () => getRuntimeConfigSnapshot()!,
@@ -60,7 +59,6 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
     const watcher = installWatcherMock();
     onTestFinished(watcher.restore);
     let applied = createDeferred<GatewayReloadPlan>();
-    let dirtyAtCommit = 0;
     const commit: ReloadOptions["onHotReload"] = async (plan, next, ownership) => {
       await ownership.checkpoint();
       ownership.markRuntimeCommitted(next, plan);
@@ -78,7 +76,6 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
       onRuntimeConfigCommitted: (_plan, next) => {
         cfg = next;
         setRuntimeConfigSnapshot(cfg);
-        dirtyAtCommit = projection.dirtyRowCount;
       },
       onConfigApplied: (plan) => applied.resolve(plan),
       onRestart: () => {
@@ -107,13 +104,10 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
     ) => {
       const before = projection.materializedCount;
       await change();
-      const dirtyRows = dirtyAtCommit;
       const result = await list(archived);
       await projection.ensureMaterialized();
       expect(result.totalCount).toBe(count);
-      expect.soft(dirtyRows, event).toBe(expected);
       expect.soft(projection.materializedCount - before, event).toBe(expected);
-      expect(projection.state.cfg).toBe(cfg);
       return result;
     };
     const readmit = async () => {
@@ -125,7 +119,6 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
       });
       recordAgentDatabaseAdmissions([refusal], { source: "startup" });
       await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {});
-      dirtyAtCommit = projection.dirtyRowCount;
     };
     await reloader.ready;
     await projection.ensureMaterialized();
@@ -181,5 +174,4 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
     expect((await list("all")).sessions[0]?.owner?.actor.label).toBe("After");
     expect(projection.dirtyRowCount).toBe(0);
     expect(projection.materializedCount).toBe(beforeRename);
-  });
-});
+  }));

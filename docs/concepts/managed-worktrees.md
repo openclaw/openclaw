@@ -90,6 +90,9 @@ See [Workspace access](/gateway/sandboxing/workspace-access#managed-project-work
 for write policy, reconciliation, and conflict recovery. To update an existing
 local sandbox workspace from its selected repository base, use `github_publish`
 action `refresh_base` before tests and Auto Review.
+Publication and base refresh reuse exact commits already stored locally instead
+of fetching them again. Partial clones still fetch missing contents when the
+operation needs those files.
 Only sessions with a writable managed sandbox are offered this action; direct
 host sessions merge the base with git in their workspace before publishing.
 Resolve reported conflicts and repeat it with `conflictsResolved: true` and the
@@ -149,6 +152,8 @@ object lookup can still reach the idle timeout. Registration and other Git
 operations retain their existing execution deadlines.
 
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
+
+If a registered project's checkout is busy, creation releases allocation before waiting for that project. Other repositories can continue reserving and creating workspaces. Once project access is available, creation releases it and retries the reservation with current source, owner, name, and capacity checks. This reservation retry retains the existing 30-second project-access wait budget and remains cancellable.
 
 Source custody inspects managed checkout and Git storage ownership once per operation. Destination protection reuses that inventory while reserving a slot, so ordinary repository creation does not rescan every managed repository under the allocation lease. The inventory ends with the operation; cleanup still checks live dependencies before deleting a checkout.
 
@@ -280,7 +285,20 @@ Git worktree registration, ordinary checkout removal, and source materialization
 
 Background Git maintenance, pack-index repair, and removal snapshots use only locally available objects. They never fetch missing objects from a partial clone's promisor remote; explicit fetching remains responsible for downloading those objects. If a required snapshot object is missing, ordinary removal preserves the checkout and reports the failure. Fetch or repair the missing objects in the source repository, then retry removal.
 
-Local agent shells, including worker-local execution and Codex shells in app-server processes started by OpenClaw on the Gateway host, disable Git's automatic maintenance and legacy auto-GC. Execution adapters append these settings to the effective Git parameters, preserving unrelated author and transport settings. This also covers Git child processes such as promisor fetches and applies to the next run in existing worktrees after an update. Repository configuration and interactive operator shells are unchanged. The Gateway cleanup owner remains responsible for managed-repository maintenance; explicit maintenance commands remain available. Sandboxes, node transports, and externally started app-server peers keep their own policy.
+Local agent shells, including worker-local execution and Codex shells in app-server processes started by OpenClaw on the Gateway host, disable Git's automatic maintenance and legacy auto-GC. Execution adapters append these settings to the effective Git parameters, preserving unrelated author and transport settings. This also covers Git child processes such as promisor fetches and applies to the next run in existing worktrees after an update. The Gateway cleanup owner remains responsible for managed-repository maintenance; explicit maintenance commands remain available. Sandboxes, node transports, and externally started app-server peers keep their own policy.
+
+Gateway-cloned projects also persist `maintenance.auto=false` and `gc.auto=0` in
+the repository's shared local Git configuration. Linked worktrees inherit this
+policy even when a command clears the agent environment. The clone owner applies
+it at creation and reapplies it under the checkout lifecycle lease when reusing
+or refreshing an existing managed project. This lazy adoption needs no Doctor
+migration or immediate repack. Operator-registered repositories keep their own
+configuration. Managed clones additionally set `pack.threads=1` and
+`pack.windowMemory=64m`; the latter limits delta-search memory per thread, not
+total process RSS. The existing hourly cleanup performs bounded pack maintenance
+outside agent commands, as described below.
+
+Internal worktree and publication Git commands also disable automatic maintenance and GC for operator-registered repositories without changing their saved configuration; scheduled maintenance remains owned by `src/agents/worktrees/git-maintenance.ts`.
 
 ## Capacity and disk space
 
@@ -292,7 +310,7 @@ For partial clones, OpenClaw inventories missing objects before estimating check
 
 Empty pack directories skip pack mutation admission; threshold-gated commit-graph and loose-object maintenance still runs. Packs arriving after that inventory are handled by the next maintenance pass.
 
-Pack consolidation keeps promisor and ordinary packs separate. Each pass selects up to 1,024 of each group's smallest eligible packs, with at most 512 MiB of input. Git verifies those pack files and their indexes before any expiry, without traversing refs or fetching missing partial-clone objects. When a group has at least 16 eligible packs, maintenance combines its verified batch (at least two packs) and expires only packs covered by the replacement. Smaller groups only retire redundant copies within the verified batch. Each group runs expiry once because Git rebuilds the repository-wide pack index after deleting packs. Verification and rewriting each have a five-minute subprocess budget; index writing and expiry use the 30-minute maintenance budget. Kept packs, cruft packs, and packs outside the batch remain untouched, including oversized duplicate packs. Backlogs of small packs drain over successive passes; consolidation does not guarantee a fixed pack count for arbitrary repository growth. Consolidation streams through low-priority Git subprocesses, uses one thread per pack process, and also selects idle I/O priority where `ionice` is available. It shares repository mutation ownership with fetch and pack-index repair.
+Pack consolidation keeps promisor and ordinary packs separate. Each group selects up to 1,024 of its smallest eligible packs, capped at 512 MiB of pack data and 32 MiB of index data per pass. Consolidation combines at least two packs only when the smaller inputs together reach the largest selected pack's size. Otherwise it leaves that largest pack untouched and considers the smaller batch. The index budget bounds object metadata even for highly compressed inputs. Git verifies each selected pack and index, then streams all their objects into a replacement without fetching missing partial-clone objects. Inputs retire only after Git publishes the verified replacement. Kept packs, cruft packs, and packs outside the batch remain untouched. This size-based policy lets bounded batches keep converging below 16 packs without repeatedly rewriting a large pack for tiny additions. Maintenance removes optional multi-pack-index lookup metadata, including stale indexes, so Git uses individual pack indexes without a repository-wide rebuild. Verification and rewriting each have a five-minute subprocess budget. Backlogs drain over successive passes; consolidation does not guarantee a fixed pack count for arbitrary repository growth or impose an operating-system RSS limit. Consolidation uses low-priority Git subprocesses, one thread per pack process, and idle I/O priority where `ionice` is available. It shares repository mutation ownership with fetch.
 
 On Linux, maintenance also removes up to 256 abandoned `tmp_pack_*` files per pass once they are older than 24 hours. An isolated native helper must obtain an exclusive Linux file lease, which detects open users across user IDs and blocks new opens through deletion. It rechecks each file's identity, size, and timestamps before unlinking it. A live user, unsupported filesystem lease, or changed file preserves that temporary file. Other platforms retain temporary packs. Installing an update requires no migration or immediate repack; the next ordinary maintenance pass applies these bounds.
 
@@ -321,7 +339,7 @@ The Git worker reuses a bounded set of successful commit-size estimates while it
 
 Creation, restore, orphan cleanup, and snapshot expiry share an allocation owner across repositories and processes using the same state directory. Registered worktree removal holds custody of its own checkout, so an unrelated creation can proceed while background removal runs. Every allocation reserves its estimated pending writes on each volume. If another operation’s reservations leave insufficient space, creation waits for that operation to settle before retrying. Reserved bytes remain accounted for until native work settles, including after cancellation or lease loss. Managed sources stay protected while a creation copies them. Slot admission and orphan cleanup share allocation custody. Template preparation serializes per template while independent checkouts materialize concurrently. A dedicated heartbeat thread renews operation leases, and contention waits are bounded to 30 minutes, allowing a dependency install's 15-minute budget plus checkout and cleanup. Caller cancellation and overall request limits can stop the wait earlier. The separate Git and setup timeouts described above still apply. Costs on the same volume are added together. These checks are conservative estimates, not a disk quota: other OpenClaw state directories, shell commands, deployment tools, and arbitrary setup/build output can still consume space. Reusing an existing valid checkout does not allocate another checkout. Worktrees created directly through Git are outside the managed cleanup lifecycle.
 
-Git inventories and directory-size calculations run on bounded background workers. Branch and checkout-context reads use a dedicated worker, separate from diff and snapshot processing. Session diffs, baseline capture, pull-request statistics, removal snapshots, checkout deletion, and Git maintenance share a limit of two Git subprocesses and run at a lower CPU priority on POSIX systems. Before snapshotting, removal rebuilds the repository's multi-pack index from current pack files, even when broader automatic maintenance is suspended or the old index references a removed pack. This repairs pack lookup without waiting for a full maintenance pass or repacking objects.
+Git inventories and directory-size calculations run on bounded background workers. Branch and checkout-context reads use a dedicated worker, separate from diff and snapshot processing. Session diffs, baseline capture, pull-request statistics, removal snapshots, checkout deletion, and Git maintenance share a limit of two Git subprocesses and run at a lower CPU priority on POSIX systems.
 
 The Gateway keeps ownership of Git subprocesses, cancellation, operation leases, and registry writes. Canceling an operation waits for its subprocesses and temporary-index cleanup to settle before releasing that ownership. A ref mutation still waiting behind another writer can cancel without waiting for that writer; mutations already running finish their cleanup before cancellation returns. Preparation is cancellable. Once destructive checkout deletion starts, it either finishes and records the removed checkout or exhausts its five-minute budget, joins its child processes, and retains the completed snapshot for recovery. The operation lease and removal claim retain finalization authority even if maintenance stops or its configuration changes. Ref cleanup failures preserve the removed record and snapshot for recovery.
 
@@ -675,6 +693,8 @@ unfinished source and recovery for inspection; do not force another removal,
 reset the index, reattach HEAD, or prune the registration.
 
 ## CLI
+
+Human-readable worktree reports escape control characters in displayed values. The records and paths returned by `--json` are unchanged.
 
 Worktree CLI mutations use the authenticated Gateway that owns the selected local
 state directory when one is running. This includes creation, ordinary, lossless

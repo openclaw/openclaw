@@ -5,11 +5,12 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { nativeGatewaysCapability } from "../app/native-gateways.runtime.ts";
 import type { ThemeMode } from "../app/theme.ts";
+import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { requestDebugOverlayToggle } from "../pages/debug/debug-overlay-contract.ts";
-import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-nav-menus.tsx";
+import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-dropdown.tsx";
 import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import {
   COMMAND_VALUE_PREFIX,
@@ -70,6 +71,8 @@ declare module "@solidjs/web" {
     }
   }
 }
+
+registerEnglishCatalog(registerUpdateActionsEnglish);
 
 type SidebarIdentityMenuParams = {
   position: { x: number; bottom: number; width: number; placement?: "right-end" };

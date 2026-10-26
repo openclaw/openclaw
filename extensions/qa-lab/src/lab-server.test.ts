@@ -1,8 +1,9 @@
 import fs, { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { createServer, request as httpRequest } from "node:http";
+import { request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -1172,57 +1173,52 @@ describe("qa-lab server", () => {
 
   it("proxies control-ui paths through /control-ui", async () => {
     const authorizations: Array<string | undefined> = [];
-    const upstream = createServer((req, res) => {
-      authorizations.push(req.headers.authorization);
-      if ((req.url ?? "/") === "/healthz") {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: true, status: "live" }));
-        return;
-      }
-      res.writeHead(200, {
-        "content-type": "text/html; charset=utf-8",
-        "x-frame-options": "DENY",
-        "content-security-policy": "default-src 'self'; frame-ancestors 'none';",
-      });
-      res.end("<!doctype html><title>control-ui</title><h1>Control UI</h1>");
-    });
-    await new Promise<void>((resolve, reject) => {
-      upstream.once("error", reject);
-      upstream.listen(0, "127.0.0.1", () => resolve());
-    });
-    cleanups.push(
-      async () =>
-        await new Promise<void>((resolve, reject) => {
-          upstream.close((error) => (error ? reject(error) : resolve()));
-        }),
+    await withServer(
+      (req, res) => {
+        authorizations.push(req.headers.authorization);
+        if ((req.url ?? "/") === "/healthz") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ok: true, status: "live" }));
+          return;
+        }
+        res.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "x-frame-options": "DENY",
+          "content-security-policy": "default-src 'self'; frame-ancestors 'none';",
+        });
+        res.end("<!doctype html><title>control-ui</title><h1>Control UI</h1>");
+      },
+      async (baseUrl) => {
+        const lab = await startQaLabServer({
+          embeddedGateway: "disabled",
+          advertiseHost: "127.0.0.1",
+          advertisePort: 43124,
+          controlUiProxyTarget: `${baseUrl}/`,
+          controlUiProxyToken: "proxy-token",
+        });
+
+        try {
+          const bootstrap = await readBootstrap(lab.listenUrl);
+          expect(bootstrap.controlUiUrl).toBe("http://127.0.0.1:43124/control-ui/");
+          expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:43124/control-ui/");
+
+          const healthResponse = await fetchWithRetry(`${lab.listenUrl}/control-ui/healthz`);
+          expect(healthResponse.status).toBe(200);
+          expect(await healthResponse.json()).toEqual({ ok: true, status: "live" });
+
+          const rootResponse = await fetchWithRetry(`${lab.listenUrl}/control-ui/`);
+          expect(rootResponse.status).toBe(200);
+          expect(rootResponse.headers.get("x-frame-options")).toBeNull();
+          expect(rootResponse.headers.get("content-security-policy")).toContain(
+            "frame-ancestors 'self'",
+          );
+          expect(await rootResponse.text()).toContain("Control UI");
+          expect(authorizations).toEqual(["Bearer proxy-token", "Bearer proxy-token"]);
+        } finally {
+          await lab.stop();
+        }
+      },
     );
-
-    const address = upstream.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected upstream address");
-    }
-
-    const lab = await startLab({
-      advertiseHost: "127.0.0.1",
-      advertisePort: 43124,
-      controlUiProxyTarget: `http://127.0.0.1:${address.port}/`,
-      controlUiProxyToken: "proxy-token",
-    });
-
-    const bootstrap = await readBootstrap(lab.listenUrl);
-    expect(bootstrap.controlUiUrl).toBe("http://127.0.0.1:43124/control-ui/");
-    expect(bootstrap.controlUiEmbeddedUrl).toBe("http://127.0.0.1:43124/control-ui/");
-
-    const healthResponse = await fetchWithRetry(`${lab.listenUrl}/control-ui/healthz`);
-    expect(healthResponse.status).toBe(200);
-    expect(await healthResponse.json()).toEqual({ ok: true, status: "live" });
-
-    const rootResponse = await fetchWithRetry(`${lab.listenUrl}/control-ui/`);
-    expect(rootResponse.status).toBe(200);
-    expect(rootResponse.headers.get("x-frame-options")).toBeNull();
-    expect(rootResponse.headers.get("content-security-policy")).toContain("frame-ancestors 'self'");
-    expect(await rootResponse.text()).toContain("Control UI");
-    expect(authorizations).toEqual(["Bearer proxy-token", "Bearer proxy-token"]);
   });
 
   it("serves the built QA UI bundle when available", async () => {

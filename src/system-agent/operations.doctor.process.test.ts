@@ -4,10 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  registerSealedRuntimeProcessEntrypoint,
-  resolveRuntimeProcessEntrypointUrl,
-} from "../infra/runtime-process-url.js";
+import * as runtimeProcess from "../infra/runtime-process-url.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { executeSystemAgentOperation as execute } from "./operations-execute.js";
@@ -37,8 +34,10 @@ process.stdout.write(JSON.stringify({ pid: process.pid, cwd: process.cwd(), resp
 process.stderr.write("doctor diagnostic 🦞\\n");
 `,
   );
-  const originalWorker = resolveRuntimeProcessEntrypointUrl("doctor");
-  registerSealedRuntimeProcessEntrypoint("doctor", pathToFileURL(fixture));
+  const resolve = runtimeProcess.resolveRuntimeProcessEntrypointUrl;
+  const doctor = vi
+    .spyOn(runtimeProcess, "resolveRuntimeProcessEntrypointUrl")
+    .mockImplementation((name) => (name === "doctor" ? pathToFileURL(fixture) : resolve(name)));
   const { runtime, lines } = createSystemAgentTestRuntime();
   try {
     await expect(execute({ kind: "doctor" }, runtime)).resolves.toEqual({ applied: false });
@@ -49,7 +48,7 @@ process.stderr.write("doctor diagnostic 🦞\\n");
     expect(report).toMatchObject({ cwd: process.cwd(), response: "host responded 🦞" });
     expect(lines).toContain("doctor diagnostic 🦞");
   } finally {
-    registerSealedRuntimeProcessEntrypoint("doctor", originalWorker);
+    doctor.mockRestore();
     await listener.releaseListener();
     await listener.claim.release();
   }

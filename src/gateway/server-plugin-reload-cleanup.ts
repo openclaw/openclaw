@@ -29,17 +29,18 @@ import type { GatewayPluginReloadStatus } from "./server-plugin-reload-status.ty
 
 const PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS = 60_000;
 
-// Logs/readiness have broader readership than admin inspection: never project owner IDs here.
+// Keep acquisition facts in raw logs; each egress applies its own redaction policy.
 function logRetainedReferences(
   instances: readonly PluginInstanceHandle[],
   phase: "queued" | "timeout",
-  log: Pick<ReturnType<typeof createSubsystemLogger>, "info">,
+  log: Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">,
 ): void {
   const selected = instances
     .slice(0, 8)
-    .map((instance) => instance.retentionSnapshot({ limit: 8, includeOwners: false }));
-  log.info(
-    `Plugin retained references (${phase}): ${JSON.stringify({ instances: selected, omittedInstances: Math.max(0, instances.length - selected.length) })}. Use administrator plugins.inspect runtimeRetention for acquisition owners; a turn awaiting its own retained work cannot drain.`,
+    .map((instance) => instance.retentionSnapshot({ limit: 8 }));
+  log[phase === "timeout" ? "warn" : "info"](
+    `Plugin retained references (${phase}); a turn awaiting its own retained work cannot drain.`,
+    { instances: selected, omittedInstances: Math.max(0, instances.length - selected.length) },
   );
 }
 

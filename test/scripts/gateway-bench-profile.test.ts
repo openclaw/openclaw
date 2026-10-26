@@ -106,6 +106,31 @@ function heapBytesUnder(
   );
 }
 
+it("enables GC tracing without passing unsupported arguments to default Workers", async () => {
+  const { closed, stdout, stderr } = spawnFixture(
+    [
+      "--import",
+      preloadUrl,
+      "--input-type=module",
+      "-e",
+      `
+      const { Worker } = await import("node:worker_threads");
+      const { once } = await import("node:events");
+      const worker = new Worker('import("node:worker_threads").then(({ parentPort }) => parentPort.postMessage("ready"))', { eval: true });
+      await once(worker, "message");
+      await once(worker, "exit");
+      process.disconnect();
+      `,
+    ],
+    undefined,
+    true,
+    { ...process.env, OPENCLAW_BENCH_TRACE_GC: "1" },
+  );
+  expect(await closed, stderr()).toEqual([0, null]);
+  expect(stdout()).toContain('"phase":"identify-stop"');
+  expect(stdout()).toMatch(/gc=|"gc":/u);
+});
+
 it("preserves native trace-flag inheritance and explicit worker baseline preload propagation", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "transcript-worker-preload-"));
   onTestFinished(() => rm(directory, { recursive: true, force: true }));
@@ -931,6 +956,9 @@ it("accounts only the identified main isolate inside the requested heap capture"
     'OPENCLAW_GATEWAY_BENCH_GC {"phase":"diagnostics-stop","pid":42,"profilePath":"soak"}',
     '[42:0xabc:0] 18 ms: GC: {"gc":"mc","promoted":256}',
     'OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-stop","pid":42,"profilePath":"measured"}',
+    'OPENCLAW_GATEWAY_BENCH_GC {"phase":"diagnostics-start","pid":42,"profilePath":"round-1"}',
+    "[42:0xabc] 19 ms: pause=2.0 gc=s promoted=2048",
+    'OPENCLAW_GATEWAY_BENCH_GC {"phase":"diagnostics-stop","pid":42,"profilePath":"round-1"}',
     "[42:0xabc] 20 ms: pause=1.0 gc=s promoted=4096",
     '[42:0xabc:0] 25 ms: GC: {"gc":"s",interleaved shutdown log',
   ].join("\n");
@@ -946,6 +974,11 @@ it("accounts only the identified main isolate inside the requested heap capture"
     promotedBytes: 1024,
     gcCount: 1,
     excludedWorkerGcCount: 2,
+  });
+  expect(readGatewayGcTrace(logPath, "round-1", "diagnostics")).toMatchObject({
+    promotedBytes: 2048,
+    gcCount: 1,
+    excludedWorkerGcCount: 0,
   });
   expect(() => readGatewayGcTrace(logPath, "missing")).toThrow("complete heap capture window");
   for (const malformed of [

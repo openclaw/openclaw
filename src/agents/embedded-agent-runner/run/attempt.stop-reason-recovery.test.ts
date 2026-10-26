@@ -1,12 +1,9 @@
 // Coverage for converting sensitive/unhandled stop reasons into assistant errors.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import {
-  createAssistantMessageEventStream,
-  type Context,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createQueuedAssistantStream } from "../../test-helpers/assistant-event-stream.test-support.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
 
 const anthropicModel = {
@@ -25,26 +22,21 @@ describe("wrapStreamFnHandleSensitiveStopReason", () => {
       if (mode === "throw") {
         throw new Error(errorMessage);
       }
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        stream.push({
+      return createQueuedAssistantStream((push) => {
+        push({
           type: "error",
           reason: "error",
-          error: {
-            role: "assistant",
+          error: makeAgentAssistantMessage({
             content: [],
             api: anthropicModel.api,
             provider: anthropicModel.provider,
             model: anthropicModel.id,
-            usage: createZeroUsageFixture(),
             stopReason: "error",
             errorMessage,
             timestamp: Date.now(),
-          },
+          }),
         });
-        stream.end();
       });
-      return stream;
     };
     const wrapped = wrapStreamFnHandleSensitiveStopReason(baseStreamFn);
     const stream = await Promise.resolve(

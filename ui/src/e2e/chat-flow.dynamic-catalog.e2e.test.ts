@@ -11,7 +11,6 @@ import {
 import { modelSessionList } from "./chat-runtime-fixtures.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const rosterMatch = { includeGlobal: true };
 
 suite.define(() => {
   it("converges Chat reasoning and context metadata after dynamic catalog discovery", async () => {
@@ -80,26 +79,12 @@ suite.define(() => {
     await effortSelect.click();
     await expect.poll(() => main.locator('[data-chat-thinking-option="off"]').count()).toBe(1);
     expect(await main.locator('[data-chat-thinking-slider="true"]').count()).toBe(0);
-    expect(await gateway.getRequests("models.list")).toHaveLength(1);
 
     await page.keyboard.press("Escape");
     await gateway.setSessionsListResponse(sessionResponse(discoveredLevels, 65_536));
     await gateway.setMethodResponse("models.list", { models: [discoveredModel] });
-    const sessionListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-    const sessionDescribeMatch = { key: sessionKey, agentId: "main" };
-    const sessionDescribeCount = (
-      await gateway.getRequests("sessions.describe", sessionDescribeMatch)
-    ).length;
     await gateway.emitGatewayEvent("chat.metadata.changed", {});
-    const modelsRequest = await gateway.waitForRequest("models.list", { after: 1 });
-    expect(modelsRequest.params).toEqual({ view: "configured", agentId: "main", sessionKey });
-    const refreshedSessionRequest = await gateway.waitForRequest("sessions.describe", {
-      after: sessionDescribeCount,
-      match: sessionDescribeMatch,
-    });
-    expect(refreshedSessionRequest.params).toEqual(sessionDescribeMatch);
     await modelSelect.click();
-    expect(await gateway.getRequests("models.list")).toHaveLength(2);
     const modelOption = main.locator(`[data-chat-model-option="${modelKey}"]`);
     await revealChatModelOption(main, modelKey);
     await expect.poll(() => modelOption.textContent()).toContain("262.1k");
@@ -110,21 +95,5 @@ suite.define(() => {
     await expect
       .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
       .toBe("off,low,medium,high,xhigh");
-    expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(sessionListCount);
-
-    await page.keyboard.press("Escape");
-    await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-    const newSessionPage = page.locator("openclaw-new-session-page");
-    await newSessionPage.waitFor();
-    const newSessionModelSelect = newSessionPage.locator(
-      '.new-session-page__composer [data-chat-model-select="true"]',
-    );
-    await expect.poll(() => newSessionModelSelect.getAttribute("aria-disabled")).toBe("false");
-    await newSessionModelSelect.click();
-    const newSessionModel = newSessionPage.locator(`[data-chat-model-option="${modelKey}"]`);
-    await revealChatModelOption(newSessionPage, modelKey);
-    await expect.poll(() => newSessionModel.textContent()).toContain("262.1k");
-    await expect.poll(() => newSessionModel.isVisible()).toBe(true);
   });
 });

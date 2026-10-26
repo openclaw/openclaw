@@ -7,7 +7,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { CliSessionBinding, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { mintMcpLoopbackClientGrant as MintMcpLoopbackClientGrant } from "../../gateway/mcp-grant-store.js";
 import { handleMcpJsonRpc } from "../../gateway/mcp-http.handlers.js";
@@ -18,12 +18,18 @@ import {
 import { buildMcpToolSchema } from "../../gateway/mcp-http.schema.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
+  createClaudeMcpCliBackend,
+  testing as cliBackendsTesting,
+} from "../cli-backends.test-support.js";
+import {
+  createPersistedCompletionHandoff,
   createCliRunnerPrepareFixture,
+  createTestCliSessionBinding,
   createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
+import { resolveCliSessionReuse } from "../cli-session.js";
 import * as subagentSpawn from "../subagents/spawn/subagent-spawn.js";
 import {
   expectReadWriteEditTools,
@@ -41,23 +47,7 @@ const { buildAnthropicCliBackend } = await loadBundledPluginFacade<{
   buildAnthropicCliBackend: () => CliBackendPlugin;
 }>({ pluginId: "anthropic", artifactBasename: "api.js" });
 
-const claudeBackend: CliBackendPlugin & { pluginId: string } = {
-  id: "claude-cli",
-  pluginId: "anthropic",
-  bundleMcp: true,
-  bundleMcpMode: "claude-config-file",
-  nativeToolMode: "selectable",
-  toolAvailabilityEnforcement: "execution-args",
-  resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
-  config: {
-    command: "claude",
-    args: ["--print"],
-    output: "jsonl",
-    jsonlDialect: "claude-stream-json",
-    input: "stdin",
-    sessionMode: "existing",
-  },
-};
+const claudeBackend = createClaudeMcpCliBackend();
 
 /** A completion run whose handoff names a child without persisted lineage. */
 function completionRun(sessionTarget: {
@@ -522,41 +512,175 @@ describe("restricted CLI tool preparation", () => {
     expect(mintGrant).not.toHaveBeenCalled();
   });
 
-  it("keeps the Claude tool and system prefix across ordinary and completion turns", async () => {
-    const nativeBackend = buildAnthropicCliBackend();
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [
+  it.each<{ managedNativeTools: string[] }>([
+    { managedNativeTools: [] },
+    { managedNativeTools: ["Agent", "Workflow"] },
+  ])(
+    "keeps the Claude tool and system prefix across ordinary and completion turns: %j",
+    async ({ managedNativeTools }) => {
+      const nativeBackend = buildAnthropicCliBackend();
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            ...claudeBackend,
+            prepareExecution: nativeBackend.prepareExecution,
+            resolveExecutionArgs: nativeBackend.resolveExecutionArgs,
+            transformSystemPrompt: nativeBackend.transformSystemPrompt,
+            resolveManagedNativeTools: nativeBackend.resolveManagedNativeTools,
+          },
+        ],
+      });
+      const { sessionTarget } = fixture.session;
+      const skillPath = path.join(fixture.session.dir, "SKILL.md");
+      const skillPrompt = `<available_skills><skill><name>cache-fixture</name><description>Check the prefix.</description><location>${skillPath}</location></skill></available_skills>`;
+      fs.writeFileSync(
+        skillPath,
+        "---\nname: cache-fixture\ndescription: Check the prefix.\n---\nRead the current facts.\n",
+      );
+      const nativeSkillsPlugin = vi.fn(async () => ({
+        args: ["--plugin-dir", "/synthetic/native-skills"],
+        cleanup: async () => {},
+      }));
+      setCliRunnerPrepareTestDeps({ prepareClaudeCliSkillsPlugin: nativeSkillsPlugin });
+      const childSessionKey = "agent:main:subagent:cache-prefix";
+      replaceSessionEntrySync(
+        { storePath: sessionTarget.storePath, sessionKey: childSessionKey },
         {
-          ...claudeBackend,
-          prepareExecution: nativeBackend.prepareExecution,
-          resolveExecutionArgs: nativeBackend.resolveExecutionArgs,
-          transformSystemPrompt: nativeBackend.transformSystemPrompt,
+          sessionId: "cache-prefix-child",
+          updatedAt: 1,
+          spawnedBy: sessionTarget.sessionKey,
+          spawnDepth: 1,
+          inheritedToolPolicyVersion: 1,
+          inheritedToolAllow: ["read"],
         },
-      ],
-    });
+      );
+      const base = {
+        sessionKey: sessionTarget.sessionKey,
+        sessionId: sessionTarget.sessionId,
+        provider: "claude-cli",
+        model: "opus",
+        modelHasVision: false,
+        sourceReplyDeliveryMode: "automatic" as const,
+        thinkLevel: "ultra" as const,
+        skillsSnapshot: {
+          prompt: skillPrompt,
+          skills: [{ name: "cache-fixture" }],
+          resolvedSkills: [
+            {
+              name: "cache-fixture",
+              description: "Check the prefix.",
+              filePath: skillPath,
+              baseDir: fixture.session.dir,
+              source: "openclaw-workspace",
+              sourceInfo: {
+                path: skillPath,
+                source: "openclaw-workspace",
+                scope: "project" as const,
+                origin: "top-level" as const,
+                baseDir: fixture.session.dir,
+              },
+              disableModelInvocation: false,
+            },
+          ],
+        },
+        config: {
+          session: { store: sessionTarget.storePath },
+          tools: { allow: ["read"] },
+          plugins: {
+            entries: {
+              anthropic: { config: { managedNativeTools: { default: managedNativeTools } } },
+            },
+          },
+        },
+      };
+      const turns = [];
+      // Ordinary, verified child completion, scheduled, then ordinary again in one session.
+      for (const kind of ["user", "completion", "cron", "user"] as const) {
+        const completion = kind === "completion";
+        const context = await fixture.prepare({
+          ...base,
+          ...(kind === "cron" ? { trigger: "cron" as const } : {}),
+          ...(completion
+            ? createPersistedCompletionHandoff(childSessionKey, "cache-prefix-child", sessionTarget)
+            : {}),
+        });
+        try {
+          expect(context.executionTarget.kind).toBe("plugin");
+          expect(context.promptContext?.appendContext).toBeTruthy();
+          expect(context.systemPrompt).toContain("cache-fixture");
+          // Ultra names kept native delegation tools only when the operator selected them.
+          expect(context.promptContext?.appendContext).toContain("Ultra active for this turn.");
+          expect(context.promptContext?.appendContext?.includes("native `Agent`")).toBe(
+            managedNativeTools.includes("Agent"),
+          );
+          const executionArgs =
+            context.backendResolved.resolveExecutionArgs?.({
+              config: context.params.config,
+              workspaceDir: context.workspaceDir,
+              provider: context.params.provider,
+              modelId: context.modelId,
+              executionMode: "agent",
+              toolAvailability: context.params.cliToolAvailability,
+              hostOwnedTools: context.hostOwnedTools,
+              useResume: completion,
+              baseArgs: context.preparedBackend.backend.args ?? [],
+            }) ?? [];
+          turns.push({
+            availability: context.params.cliToolAvailability,
+            systemPrompt: context.systemPrompt,
+            toolsAllow: mintGrant.mock.lastCall?.[0]?.context.toolsAllow,
+            nativeTools: executionArgs[executionArgs.indexOf("--tools") + 1],
+            allowedTools: executionArgs[executionArgs.indexOf("--allowedTools") + 1],
+            settingSources: executionArgs[executionArgs.indexOf("--setting-sources") + 1],
+            settings: JSON.parse(executionArgs[executionArgs.indexOf("--settings") + 1] ?? "null"),
+            isolationFlags: [
+              "--disable-slash-commands",
+              "--no-chrome",
+              "--strict-mcp-config",
+            ].filter((flag) => executionArgs.includes(flag)),
+          });
+          expect(executionArgs).not.toContain("--plugin-dir");
+        } finally {
+          await context.preparedBackend.cleanup?.();
+        }
+      }
+      expect(turns[0]?.availability).toEqual({ native: managedNativeTools, openClaw: ["read"] });
+      expect(turns[0]?.toolsAllow).toEqual(["read"]);
+      expect(turns[0]?.nativeTools).toBe(managedNativeTools.join(","));
+      expect(turns[0]?.allowedTools).toBe("mcp__openclaw__read");
+      // Selected tools never restore the customizations managed turns exclude.
+      expect(turns[0]?.settingSources).toBe("");
+      expect(turns[0]?.settings).toMatchObject({
+        disableAllHooks: true,
+        enabledPlugins: {},
+        autoMemoryEnabled: false,
+      });
+      expect(turns[0]?.isolationFlags).toEqual([
+        "--disable-slash-commands",
+        "--no-chrome",
+        "--strict-mcp-config",
+      ]);
+      expect(turns).toHaveLength(4);
+      for (const turn of turns.slice(1)) {
+        expect(turn).toEqual(turns[0]);
+      }
+      expect(nativeSkillsPlugin).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the Claude session across Control UI turns and caller-less completion turns", async () => {
     const { sessionTarget } = fixture.session;
-    const skillPath = path.join(fixture.session.dir, "SKILL.md");
-    const skillPrompt = `<available_skills><skill><name>cache-fixture</name><description>Check the prefix.</description><location>${skillPath}</location></skill></available_skills>`;
-    fs.writeFileSync(
-      skillPath,
-      "---\nname: cache-fixture\ndescription: Check the prefix.\n---\nRead the current facts.\n",
-    );
-    const nativeSkillsPlugin = vi.fn(async () => ({
-      args: ["--plugin-dir", "/synthetic/native-skills"],
-      cleanup: async () => {},
-    }));
-    setCliRunnerPrepareTestDeps({ prepareClaudeCliSkillsPlugin: nativeSkillsPlugin });
-    const childSessionKey = "agent:main:subagent:cache-prefix";
+    const childSessionKey = "agent:main:subagent:surface-tools";
     replaceSessionEntrySync(
       { storePath: sessionTarget.storePath, sessionKey: childSessionKey },
       {
-        sessionId: "cache-prefix-child",
+        sessionId: "surface-tools-child",
         updatedAt: 1,
         spawnedBy: sessionTarget.sessionKey,
         spawnDepth: 1,
         inheritedToolPolicyVersion: 1,
-        inheritedToolAllow: ["read"],
+        inheritedToolAllow: ["read", "screen", "show_widget", "suggest_task", "dismiss_task"],
       },
     );
     const base = {
@@ -566,136 +690,108 @@ describe("restricted CLI tool preparation", () => {
       model: "opus",
       modelHasVision: false,
       sourceReplyDeliveryMode: "automatic" as const,
-      skillsSnapshot: {
-        prompt: skillPrompt,
-        skills: [{ name: "cache-fixture" }],
-        resolvedSkills: [
-          {
-            name: "cache-fixture",
-            description: "Check the prefix.",
-            filePath: skillPath,
-            baseDir: fixture.session.dir,
-            source: "openclaw-workspace",
-            sourceInfo: {
-              path: skillPath,
-              source: "openclaw-workspace",
-              scope: "project" as const,
-              origin: "top-level" as const,
-              baseDir: fixture.session.dir,
-            },
-            disableModelInvocation: false,
-          },
-        ],
-      },
       config: {
         session: { store: sessionTarget.storePath },
-        tools: { allow: ["read"] },
+        tools: { allow: ["read", "screen", "show_widget", "suggest_task", "dismiss_task"] },
       },
     };
-    const turns = [];
+    const turns: { binding: CliSessionBinding; names: string[]; systemPrompt: string }[] = [];
     for (const completion of [false, true, false]) {
       const context = await fixture.prepare({
         ...base,
         ...(completion
-          ? {
-              trustedInternalHandoff: {
-                kind: "subagent-completion" as const,
-                sourceSessionKey: childSessionKey,
-                sourceSessionId: "cache-prefix-child",
-                targetSessionKey: sessionTarget.sessionKey,
-                targetSessionId: sessionTarget.sessionId,
-                provider: "claude-cli",
-                model: "opus",
-              },
-              inputProvenance: {
-                kind: "inter_session" as const,
-                sourceTool: "subagent_announce",
-                sourceSessionKey: childSessionKey,
-              },
-            }
-          : {}),
+          ? createPersistedCompletionHandoff(childSessionKey, "surface-tools-child", sessionTarget)
+          : {
+              clientCaps: ["ui-commands", "inline-widgets"],
+              taskSuggestionDeliveryMode: "gateway" as const,
+            }),
       });
       try {
-        expect(context.executionTarget.kind).toBe("plugin");
-        expect(context.promptContext?.appendContext).toBeTruthy();
-        expect(context.systemPrompt).toContain("cache-fixture");
-        const executionArgs =
-          context.backendResolved.resolveExecutionArgs?.({
-            config: context.params.config,
-            workspaceDir: context.workspaceDir,
-            provider: context.params.provider,
-            modelId: context.modelId,
-            executionMode: "agent",
-            toolAvailability: context.params.cliToolAvailability,
-            hostOwnedTools: context.hostOwnedTools,
-            useResume: completion,
-            baseArgs: context.preparedBackend.backend.args ?? [],
-          }) ?? [];
         turns.push({
-          availability: context.params.cliToolAvailability,
+          binding: createTestCliSessionBinding(context, "native-surface-session"),
           systemPrompt: context.systemPrompt,
-          toolsAllow: mintGrant.mock.lastCall?.[0]?.context.toolsAllow,
-          nativeTools: executionArgs[executionArgs.indexOf("--tools") + 1],
-          allowedTools: executionArgs[executionArgs.indexOf("--allowedTools") + 1],
+          names: [...(mintGrant.mock.lastCall?.[0]?.context.toolsAllow ?? [])].toSorted(),
         });
-        expect(executionArgs).not.toContain("--plugin-dir");
       } finally {
         await context.preparedBackend.cleanup?.();
       }
     }
-    expect(turns[0]?.availability).toEqual({ native: [], openClaw: ["read"] });
-    expect(turns[0]?.toolsAllow).toEqual(["read"]);
-    expect(turns[0]?.nativeTools).toBe("");
-    expect(turns[0]?.allowedTools).toBe("mcp__openclaw__read");
-    expect(turns[1]).toEqual(turns[0]);
-    expect(turns[2]).toEqual(turns[0]);
-    expect(nativeSkillsPlugin).not.toHaveBeenCalled();
+    // The fixture really varies the caller surface: only these tools differ.
+    const removed = turns[0]!.names.filter((name) => !turns[1]!.names.includes(name));
+    const added = turns[1]!.names.filter((name) => !turns[0]!.names.includes(name));
+    expect(added).toEqual([]);
+    expect(removed.toSorted()).toEqual(["dismiss_task", "screen", "show_widget", "suggest_task"]);
+    expect(turns[0]!.binding.promptToolNamesHash).toBeTruthy();
+    // The prompt still tracks the surface, so a warm process restarts with the current catalog.
+    expect(turns[1]!.systemPrompt).not.toBe(turns[0]!.systemPrompt);
+    expect(turns[2]!.systemPrompt).toBe(turns[0]!.systemPrompt);
+    // Each later turn resumes the session the previous turn stored instead of starting over.
+    for (const [index, turn] of turns.slice(1).entries()) {
+      const { authEpochVersion, ...current } = turn.binding;
+      expect(
+        resolveCliSessionReuse({
+          ...current,
+          authEpochVersion: authEpochVersion!,
+          binding: turns[index]!.binding,
+        }),
+      ).toMatchObject({ sessionId: "native-surface-session" });
+    }
   });
 
-  it.each([false, true])(
-    "keeps bootstrap file access accurate with mediated write=%s",
-    async (writeAllowed) => {
-      const { dir } = fixture.session;
-      const bootstrapPath = path.join(dir, "BOOTSTRAP.md");
-      const content = "Complete the first-run ritual, then delete this file.";
-      setCliRunnerPrepareTestDeps({
-        isWorkspaceBootstrapPending: async () => true,
-        resolveBootstrapContextForRun: async () => ({
-          bootstrapFiles: [{ name: "BOOTSTRAP.md", path: bootstrapPath, content, missing: false }],
-          contextFiles: [{ path: bootstrapPath, content }],
-        }),
-      });
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            ...claudeBackend,
-            config: { ...claudeBackend.config, systemPromptArg: "--system-prompt" },
-          },
-        ],
-      });
-      const context = await fixture.prepare({
-        provider: "claude-cli",
-        sessionKey: "agent:main:main",
-        trigger: "user",
-        config: {
-          agents: { defaults: { workspace: dir } },
-          tools: { allow: writeAllowed ? ["read", "write"] : ["read"] },
+  it.each<{ writeAllowed: boolean; managedNativeTools: string[] }>([
+    { writeAllowed: false, managedNativeTools: [] },
+    { writeAllowed: true, managedNativeTools: [] },
+    // Orchestration tools grant no file access, so the mediated surface still decides.
+    { writeAllowed: false, managedNativeTools: ["Agent", "Workflow"] },
+  ])("keeps bootstrap file access accurate: %j", async ({ writeAllowed, managedNativeTools }) => {
+    const nativeBackend = buildAnthropicCliBackend();
+    const { dir } = fixture.session;
+    const bootstrapPath = path.join(dir, "BOOTSTRAP.md");
+    const content = "Complete the first-run ritual, then delete this file.";
+    setCliRunnerPrepareTestDeps({
+      isWorkspaceBootstrapPending: async () => true,
+      resolveBootstrapContextForRun: async () => ({
+        bootstrapFiles: [{ name: "BOOTSTRAP.md", path: bootstrapPath, content, missing: false }],
+        contextFiles: [{ path: bootstrapPath, content }],
+      }),
+    });
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          ...claudeBackend,
+          config: { ...claudeBackend.config, systemPromptArg: "--system-prompt" },
+          projectNativeToolAuthority: nativeBackend.projectNativeToolAuthority,
+          resolveManagedNativeTools: nativeBackend.resolveManagedNativeTools,
         },
-      });
-      try {
-        expect(context.params.cliToolAvailability?.native).toEqual([]);
-        expect(context.systemPrompt).toContain(
-          writeAllowed
-            ? "BOOTSTRAP.md below; follow before normal reply."
-            : "this run cannot safely finish full BOOTSTRAP.md",
-        );
-        expect(context.systemPrompt.includes(content)).toBe(writeAllowed);
-      } finally {
-        await context.preparedBackend.cleanup?.();
-      }
-    },
-  );
+      ],
+    });
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      sessionKey: "agent:main:main",
+      trigger: "user",
+      config: {
+        agents: { defaults: { workspace: dir } },
+        tools: { allow: writeAllowed ? ["read", "write"] : ["read"] },
+        plugins: {
+          entries: {
+            anthropic: { config: { managedNativeTools: { default: managedNativeTools } } },
+          },
+        },
+      },
+    });
+    try {
+      expect(context.params.cliToolAvailability?.native).toEqual(managedNativeTools);
+      expect(context.systemPrompt).toContain(
+        writeAllowed
+          ? "BOOTSTRAP.md below; follow before normal reply."
+          : "this run cannot safely finish full BOOTSTRAP.md",
+      );
+      expect(context.systemPrompt.includes(content)).toBe(writeAllowed);
+    } finally {
+      await context.preparedBackend.cleanup?.();
+    }
+  });
 
   it.each([false, undefined])(
     "keeps the CLI catalog stable while gating persisted completion authority with owner=%s",
@@ -762,17 +858,7 @@ describe("restricted CLI tool preparation", () => {
       const context = await fixture.prepare({
         ...run,
         senderIsOwner,
-        cliSessionBinding: {
-          sessionId: "native-parent-session",
-          authEpoch: owner.authEpoch,
-          authEpochVersion: owner.authEpochVersion,
-          extraSystemPromptHash: owner.extraSystemPromptHash,
-          messageToolPolicyHash: owner.messageToolPolicyHash,
-          promptToolNamesHash: owner.promptToolNamesHash,
-          cwdHash: owner.cwdHash,
-          mcpConfigHash: owner.preparedBackend.mcpConfigHash,
-          mcpResumeHash: owner.preparedBackend.mcpResumeHash,
-        },
+        cliSessionBinding: createTestCliSessionBinding(owner, "native-parent-session"),
         trustedInternalHandoff,
         inputProvenance: {
           kind: "inter_session",
@@ -811,12 +897,12 @@ describe("restricted CLI tool preparation", () => {
           [
             "write",
             { path: deniedPath, content: "must not execute" },
-            "write is outside the authority this completion turn carries from its requester. Do not retry write.",
+            "write is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry write.",
           ],
           [
             "gateway",
             { action: "config.get" },
-            "gateway needs the owner's authority, and this turn was not started by the owner. Do not retry gateway.",
+            "gateway is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry gateway.",
           ],
           [
             "intent",

@@ -17,6 +17,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { buildPrAttributionPrompt } from "../../agents/pr-attribution.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import {
   getGatewayToolCallerIdentity,
@@ -26,6 +27,7 @@ import * as gatewayModule from "../../agents/tools/gateway.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import {
   getCronManagementAuthority,
@@ -70,6 +72,7 @@ import {
   baseParams,
   cleanupPreparedReplyFixtures,
   createInboundBody,
+  jsonContext,
   createInboundTurn,
   createPreparedReplyTurn as turn,
   createSessionBody,
@@ -77,6 +80,9 @@ import {
   createProviderSurface,
   createTelegramGroupSession,
   ownerParams,
+  nonReasoningModelState,
+  preparedTarget,
+  resetPreparedReplySessionStore,
 } from "./get-reply-run.test-support.js";
 import { buildGroupIntro, buildSourceConversationContext } from "./groups.js";
 import {
@@ -84,7 +90,6 @@ import {
   buildInboundUserContextPrefix,
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
-import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { getExistingFollowupQueue, clearFollowupQueue } from "./queue/state.js";
@@ -428,17 +433,6 @@ const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
 
 type ReplyRunParams = Parameters<typeof runPreparedReply>[0];
 
-function nonReasoningModelState(): ReplyRunParams["modelState"] {
-  return {
-    ...createModelSelectionStateFixture({ agentCfg: {}, provider: "openai", model: "chat-latest" }),
-    resolveDefaultThinkingLevel: async () => "high",
-    resolveThinkingCatalog: async () => [
-      { provider: "openai", id: "chat-latest", name: "Chat Latest", reasoning: false },
-    ],
-    allowedModelCatalog: [{ provider: "openai", id: "chat-latest", name: "Chat Latest" }],
-  };
-}
-
 async function embeddedRuntime() {
   return vi.mocked(await import("../../agents/embedded-agent.runtime.js"));
 }
@@ -485,15 +479,6 @@ async function prepareActiveQueue(
   return { runtime, operation };
 }
 
-function preparedTarget(sessionId: string) {
-  return captureSessionTarget({
-    storeScope: resolveSessionStorePathCore(undefined, { agentId: "default" }),
-    sessionKey: "session-key",
-    incarnation: sessionId,
-    agentId: "default",
-  });
-}
-
 function runPrepared(overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {}) {
   return runPreparedReply(baseParams(overrides));
 }
@@ -520,9 +505,8 @@ function expectTurnText(call: ReturnType<typeof requireRunReplyAgentCall>, text:
   });
 }
 
-function jsonContext(label: string, value: unknown) {
-  return [label, "```json", JSON.stringify(value, null, 2), "```"].join("\n");
-}
+const PR_ATTRIBUTION_OFF = `PR attribution: ⟦openclaw:ctx⟧
+${buildPrAttributionPrompt(false)}`;
 
 describe("runPreparedReply media-only handling", () => {
   describe.each(["followup", "collect"] as const)("queued owner authority: %s", (mode) => {
@@ -571,6 +555,13 @@ describe("runPreparedReply media-only handling", () => {
         let completedRuns = 0;
         vi.mocked(runReplyAgent).mockImplementationOnce(async ({ followupRun, opts }) => {
           capturedOpts = opts;
+          if (refreshOwner) {
+            // The synthetic queued admission below needs the session a real admission initializes.
+            await replaceSessionEntry(
+              { agentId: "default", sessionKey: key, storePath: resolveSessionStorePathCore() },
+              { sessionId: followupRun.run.sessionId, updatedAt: 1 },
+            );
+          }
           if (kind === "without-source-factory") {
             followupRun.createChannelCronAuthority = undefined;
           }
@@ -958,6 +949,7 @@ describe("runPreparedReply media-only handling", () => {
     preparedReplyMockState.unexpectedCalls.length = 0;
     loadSessionEntryMock.mockReset();
     vi.clearAllMocks();
+    resetPreparedReplySessionStore();
     vi.mocked(buildSourceConversationContext).mockReturnValue("");
     vi.mocked(buildGroupIntro).mockReturnValue("");
     vi.mocked(buildInboundUserContextPrefix).mockReset().mockReturnValue("");
@@ -1041,6 +1033,7 @@ describe("runPreparedReply media-only handling", () => {
   );
 
   it("projects prepared embedded prompt variants without changing CLI session guidance", async () => {
+    vi.mocked(buildInboundMetaSystemPrompt).mockReturnValueOnce("Inbound metadata.");
     vi.mocked(buildSourceConversationContext).mockImplementation(
       ({ sourceReplyDeliveryMode }) => `direct:${sourceReplyDeliveryMode ?? "automatic"}`,
     );
@@ -1050,26 +1043,38 @@ describe("runPreparedReply media-only handling", () => {
         sourceReplyDeliveryModeOrigin: "runtime_default",
       } as NonNullable<Parameters<typeof runPreparedReply>[0]["opts"]> &
         SourceReplyDeliveryRuntimeOptions,
-      ...turn("hello", { ...createProviderSurface("discord"), ChatType: "direct" }),
+      ...turn("hello", {
+        ...createProviderSurface("discord"),
+        ChatType: "direct",
+        GroupSystemPrompt: "Persistent policy.",
+      }),
     });
 
     const call = requireRunReplyAgentCall(-1);
     const followupRun = call.followupRun;
     const run = followupRun.run;
+    const initialTurnContext = { start: 0, text: "Inbound metadata.\n\ndirect:message_tool_only" };
+    const automaticTurnContext = { start: 0, text: "Inbound metadata.\n\ndirect:automatic" };
+    const staticPrompt = "direct:message_tool_only\n\nPersistent policy.";
+    const persistentSuffix = "\n\nPersistent policy.\n\npost-compaction refresh";
     const sourceReplyDeliveryRuntime = readSourceReplyDeliveryRuntime(run);
-    expect(run.extraSystemPrompt).toBe("direct:message_tool_only");
-    expect(run.extraSystemPromptStatic).toBe("direct:message_tool_only");
+    expect(run.extraSystemPrompt).toBe(`${initialTurnContext.text}\n\nPersistent policy.`);
+    expect(run.extraSystemPromptTurnContext).toEqual(initialTurnContext);
+    expect(run.extraSystemPromptStatic).toBe(staticPrompt);
     run.extraSystemPrompt += "\n\npost-compaction refresh";
     sourceReplyDeliveryRuntime?.applyMode(run, "automatic");
-    expect(run.extraSystemPrompt).toBe("direct:message_tool_only\n\npost-compaction refresh");
+    expect(run.extraSystemPrompt).toBe(`${initialTurnContext.text}${persistentSuffix}`);
+    expect(run.extraSystemPromptTurnContext).toEqual(initialTurnContext);
     sourceReplyDeliveryRuntime?.applyPreparedMode(run, "automatic");
     expect(sourceReplyDeliveryRuntime?.currentMode).toBe("automatic");
-    expect(run.extraSystemPrompt).toBe("direct:automatic\n\npost-compaction refresh");
-    expect(run.extraSystemPromptStatic).toBe("direct:message_tool_only");
+    expect(run.extraSystemPrompt).toBe(`${automaticTurnContext.text}${persistentSuffix}`);
+    expect(run.extraSystemPromptTurnContext).toEqual(automaticTurnContext);
+    expect(run.extraSystemPromptStatic).toBe(staticPrompt);
     sourceReplyDeliveryRuntime?.applyPreparedMode(run, "message_tool_only");
-    expect(run.extraSystemPrompt).toBe("direct:message_tool_only\n\npost-compaction refresh");
+    expect(run.extraSystemPrompt).toBe(`${initialTurnContext.text}${persistentSuffix}`);
+    expect(run.extraSystemPromptTurnContext).toEqual(initialTurnContext);
     expect(run.cliSessionBindingFacts).toEqual({
-      extraSystemPromptStatic: "direct:message_tool_only",
+      extraSystemPromptStatic: staticPrompt,
       sourceReplyDeliveryMode: "message_tool_only",
     });
   });
@@ -1138,6 +1143,7 @@ describe("runPreparedReply media-only handling", () => {
     expectTurnText(call, "please answer here");
     expect(call.followupRun.currentInboundContext?.text).toBe(
       [
+        PR_ATTRIBUTION_OFF,
         "Current message:\nchat_id=-100123\ninbound_event_kind: user_request",
         MESSAGE_TOOL_ONLY_DELIVERY_HINT,
       ].join("\n\n"),
@@ -1432,14 +1438,14 @@ describe("runPreparedReply media-only handling", () => {
           suppressedFactIndexes: [1],
         },
       });
-      expect(followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
-        __openclaw: {
-          mediaImageLayout: {
-            slots: [{ kind: "inline", factIndex: 1 }],
-            suppressedFactIndexes: [2],
-          },
-        },
-      });
+      // A failed pre-read skips this run only; the recorded image remains retryable.
+      const recorded = followupRun.userTurnTranscriptRecorder?.message;
+      expect(recorded).toHaveProperty("__openclaw.mediaImageLayout.slots", [
+        { kind: "inline", factIndex: 1 },
+        { kind: "offloaded", factIndex: 2 },
+      ]);
+      expect(recorded).not.toHaveProperty("__openclaw.mediaImageLayout.suppressedFactIndexes");
+      expect(recorded).not.toHaveProperty(["__openclaw", "media", 2, "hydrationSuppressed"]);
     },
   );
 
@@ -2401,7 +2407,9 @@ describe("runPreparedReply media-only handling", () => {
 
     const followupRun = requireRunReplyAgentCall().followupRun;
     const context = followupRun.currentInboundContext;
-    expect(followupRun.prompt).toBe("A new session was started via /new or /reset.");
+    expect(followupRun.prompt).toBe(
+      [PR_ATTRIBUTION_OFF, "A new session was started via /new or /reset."].join("\n\n"),
+    );
     for (const event of [
       "Slack reaction added: :eyes:",
       "Slack message in #claw-test from Alice",
@@ -2438,7 +2446,7 @@ describe("runPreparedReply media-only handling", () => {
       }
       await runPreparedReply(params);
       expect(requireRunReplyAgentCall().followupRun.run.bootstrapUserProfileId).toBe(
-        kind === "session-internal" ? undefined : "carol",
+        kind === "session-internal" ? "alice" : "carol",
       );
     },
   );

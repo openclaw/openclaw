@@ -41,6 +41,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { createDeferredWorkTracker } from "../shared/async-work-scope.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -746,10 +747,7 @@ describe("startGatewayPostAttachRuntime", () => {
         return sidecarsCompleted;
       });
       const lifetime = new AsyncWorkScope();
-      const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
-        const operation = Promise.resolve().then(() => run(lifetime.signal));
-        return lifetime.track(() => operation);
-      };
+      const trackStartupWork = createDeferredWorkTracker(lifetime);
       const release = () => {
         logging.resolve();
         sidecars.resolve();
@@ -838,7 +836,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(updateSignal.aborted).toBe(true);
   });
 
-  it("loads update discovery only after the post-ready barrier", async () => {
+  it("starts update checks after the post-ready barrier without eager install discovery", async () => {
     const events: string[] = [];
     const postReadyWork = createDeferred();
     const started = createDeferred();
@@ -880,8 +878,8 @@ describe("startGatewayPostAttachRuntime", () => {
       postReadyWork.resolve();
       await started.promise;
       expect(updateCheck.start).toHaveBeenCalledTimes(1);
-      expect(updateCheck.initialize).toHaveBeenCalledTimes(1);
-      expect(events).toEqual(["sidecars", "returned", "install-identity", "update-check"]);
+      expect(updateCheck.initialize).not.toHaveBeenCalled();
+      expect(events).toEqual(["sidecars", "returned", "update-check"]);
     } finally {
       postReadyWork.resolve();
       await result.stopGatewayUpdateCheck();
@@ -1191,10 +1189,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const recoveryStarted = createDeferred();
     const events: string[] = [];
     const lifetime = new AsyncWorkScope();
-    const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
-      const operation = Promise.resolve().then(() => run(lifetime.signal));
-      return lifetime.track(() => operation);
-    };
+    const trackStartupWork = createDeferredWorkTracker(lifetime);
     const pluginServices: PluginServicesHandle = {
       reload: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
@@ -1997,10 +1992,7 @@ describe("startGatewayPostAttachRuntime", () => {
     };
     hoisted.hasInternalHookListeners.mockReturnValueOnce(true);
     hoisted.resolveHooksGmailModel.mockReturnValueOnce({ provider: "openai", model: "gpt-5.4" });
-    const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
-      const operation = Promise.resolve().then(() => run(connectionWork.signal));
-      return connectionWork.track(() => operation);
-    };
+    const trackStartupWork = createDeferredWorkTracker(connectionWork);
     const params = createPostAttachParams({
       cfgAtStart: config,
       gatewayPluginConfigAtStart: config,
@@ -2696,10 +2688,7 @@ describe("startGatewayPostAttachRuntime", () => {
       events.push("refresh-completed");
       return null;
     });
-    const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
-      const operation = Promise.resolve().then(() => run(connectionWork.signal));
-      return connectionWork.track(() => operation);
-    };
+    const trackStartupWork = createDeferredWorkTracker(connectionWork);
     const runtime = await trackStartupWork(() =>
       startGatewayPostAttachRuntime(
         createPostAttachParams({
@@ -2771,10 +2760,7 @@ describe("startGatewayPostAttachRuntime", () => {
       hookLoadStarted.resolve();
       await releaseHookLoad.promise;
     }, startupModuleRestorers);
-    const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
-      const operation = Promise.resolve().then(() => run(connectionWork.signal));
-      return connectionWork.track(() => operation);
-    };
+    const trackStartupWork = createDeferredWorkTracker(connectionWork);
     const runtime = await trackStartupWork(() =>
       startGatewayPostAttachRuntime(
         createPostAttachParams({

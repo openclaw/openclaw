@@ -200,6 +200,10 @@ openclaw doctor
 openclaw gateway status --json
 ```
 
+Local `read`, `write`, and `edit` tools accept Git Bash (`/f/...`), Cygwin
+(`/cygdrive/f/...`), and WSL-style (`/mnt/f/...`) drive paths when the Gateway runs
+natively on Windows. These paths resolve to the corresponding Windows drive.
+
 **New workspace** also works with a native Windows Gateway. Install Git for
 Windows and make it available on `PATH`. Each empty workspace starts from a
 separate Git repository initialized without your global Git configuration.
@@ -217,6 +221,12 @@ S4U does not provide Windows network credentials or access to encrypted files;
 installations that need those capabilities can retain an operator-configured
 Password task. Reinstall refreshes its launcher files without replacing its
 account, credentials, action, or triggers.
+
+Agent exec prefers a native PowerShell 7 executable and falls back to Windows
+PowerShell 5.1. Inaccessible Microsoft Store app-execution aliases are skipped:
+they can fail with `spawn EPERM` under S4U while PowerShell is running in another
+logon session. Install PowerShell 7 with the MSI or ZIP distribution if you need
+PowerShell 7 syntax, such as `&&`, in unattended exec commands.
 
 The installer reports the selected startup mode. Node hosts retain per-user
 interactive tasks for desktop access. If the account cannot be identified or
@@ -258,6 +268,9 @@ the service owner's existing recovery to restore the previous definition and
 running policy when ownership can still be verified. During an update, the
 updater retains recovery ownership. If recovery cannot be confirmed, inspect the
 reported Task Scheduler state before retrying.
+
+Scheduler takeover evidence and Startup login-item reprobes use elapsed-time budgets,
+so wall-clock corrections do not extend or prematurely expire those waits.
 
 Publication accepts filesystem timestamp changes when the launcher's identity,
 permissions, and contents still match. Reinstallation reports the retained

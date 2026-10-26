@@ -154,12 +154,12 @@ describe("native inference context", () => {
       ),
     ).toThrow("subagent metadata disagrees");
   });
-  it("forks the retained prepared prefix after parent cleanup under only the new root's authority", () => {
+  it("forks the retained prepared prefix after parent cleanup under only the new root's authority", async () => {
     const parentAuthority = new AbortController();
     const { context, controller, register, prepare, rejects } = fixture(() =>
       parentAuthority.signal.throwIfAborted(),
     );
-    const parent = register("private persona\n\nskills\n\nmemory");
+    const parent = await register("private persona\n\nskills\n\nmemory");
     const expectedInstructions = prepare(request("root", parent.generation)).body.instructions;
     parent.release();
     controller.abort();
@@ -167,7 +167,7 @@ describe("native inference context", () => {
     rejects(request("root", parent.generation), "current admitted");
     let forkActive = true;
     const forkController = new AbortController();
-    const fork = forkContext(context, {
+    const fork = await forkContext(context, {
       signal: forkController.signal,
       assertCurrent: () => {
         if (!forkActive) {
@@ -181,11 +181,11 @@ describe("native inference context", () => {
     parent.release();
     expect(prepare(source).body.instructions).toBe(expectedInstructions);
     rejects(request("fork", parent.generation), "current admitted");
-    expect(() => forkContext(context, { sourceThreadId: "missing", threadId: "another" })).toThrow(
-      "prepared parent",
-    );
+    await expect(
+      forkContext(context, { sourceThreadId: "missing", threadId: "another" }),
+    ).rejects.toThrow("prepared parent");
     context.forget("root");
-    expect(() => forkContext(context, { threadId: "later" })).toThrow("prepared parent");
+    await expect(forkContext(context, { threadId: "later" })).rejects.toThrow("prepared parent");
     expect(prepare(source).body.instructions).toBe(expectedInstructions);
     forkActive = false;
     rejects(source, "fork authority ended");
@@ -195,9 +195,9 @@ describe("native inference context", () => {
     rejects(source, "current admitted");
   });
 
-  it("preserves parent tool declarations but uses native history after a WebSocket continuation", () => {
+  it("preserves parent tool declarations but uses native history after a WebSocket continuation", async () => {
     const { context, register, prepare } = fixture();
-    const parent = register("private");
+    const parent = await register("private");
     const declarations = {
       type: "additional_tools",
       role: "developer",
@@ -213,7 +213,7 @@ describe("native inference context", () => {
       input: [{ type: "function_call_output", call_id: "call", output: "one" }],
     });
     parent.release();
-    const fork = forkContext(context);
+    const fork = await forkContext(context);
     const history = [
       { role: "user", content: "native reconstructed parent task" },
       { role: "assistant", content: "native reconstructed answer" },
@@ -228,12 +228,12 @@ describe("native inference context", () => {
     expect(prepared).not.toHaveProperty("previous_response_id");
   });
 
-  it("falls back to native reconstruction when the global wire-prefix LRU evicts a session", () => {
+  it("falls back to native reconstruction when the global wire-prefix LRU evicts a session", async () => {
     const contexts = [fixture(), fixture(), fixture()] as const;
     const payload = "x".repeat(11 * 1024 * 1024);
-    const prepareParent = (index: 0 | 1 | 2) => {
+    const prepareParent = async (index: 0 | 1 | 2) => {
       const { register, prepare } = contexts[index];
-      const parent = register("private", "parent");
+      const parent = await register("private", "parent");
       prepare({
         ...request("parent", parent.generation),
         input: [{ role: "user", content: payload }],
@@ -242,12 +242,12 @@ describe("native inference context", () => {
     };
     const fork = (index: 0 | 1 | 2) =>
       forkContext(contexts[index].context, { sourceThreadId: "parent" });
-    prepareParent(0);
-    prepareParent(1);
-    fork(0).release();
-    prepareParent(2);
+    await prepareParent(0);
+    await prepareParent(1);
+    (await fork(0)).release();
+    await prepareParent(2);
     for (const index of [0, 1, 2] as const) {
-      const child = fork(index);
+      const child = await fork(index);
       const rebuilt = {
         ...request("fork", child.generation),
         instructions: "rebuilt",
@@ -265,15 +265,15 @@ describe("native inference context", () => {
     }
   });
 
-  it("refreshes and removes parent instructions without rewriting native history or affecting children", () => {
+  it("refreshes and removes parent instructions without rewriting native history or affecting children", async () => {
     const { context, register, prepare, rejects } = fixture();
-    const first = register("persona A");
+    const first = await register("persona A");
     const source = request("root", first.generation);
     const original = structuredClone(source);
     const prepared = prepare(source);
     expect(prepared.body).toEqual({ ...source, instructions: "native base\n\npersona A" });
     expect(source).toEqual(original);
-    const second = register("persona B");
+    const second = await register("persona B");
     first.release();
     expect(prepared.signal?.aborted).toBe(true);
     expect(() => prepared.assertCurrent()).toThrow();
@@ -286,17 +286,17 @@ describe("native inference context", () => {
       subagent_kind: "collab_spawn",
     });
     expect(prepare(child).body).toEqual(child);
-    const removed = register("");
+    const removed = await register("");
     const after = request("root", removed.generation);
     expect(prepare(after).body).toEqual(after);
     context.close();
     rejects(after, "closed");
   });
 
-  it("requires exact physical owner, root identity and admitted generation", () => {
+  it("requires exact physical owner, root identity and admitted generation", async () => {
     const authority = new AbortController();
     const { register, prepare, rejects } = fixture(() => authority.signal.throwIfAborted());
-    const registration = register("private");
+    const registration = await register("private");
     const source = request("root", registration.generation);
     const prepared = prepare(source);
     rejects(request("other", registration.generation), "current admitted");
@@ -318,9 +318,9 @@ describe("native inference context", () => {
     rejects(source, "owner retired");
   });
 
-  it("does not contaminate local compaction, memory, review or unadmitted startup prewarm", () => {
+  it("does not contaminate local compaction, memory, review or unadmitted startup prewarm", async () => {
     const { prepare, register } = fixture();
-    const registration = register("persona B");
+    const registration = await register("persona B");
     const exclusions: JsonObject[] = [
       { request_kind: "compaction" },
       { request_kind: "memory" },
@@ -375,17 +375,17 @@ describe("native inference context", () => {
     );
   });
 
-  it("bounds retained prefixes independently of completed turn registrations", () => {
+  it("bounds retained prefixes independently of completed turn registrations", async () => {
     const { context, controller, register: registerRoot } = fixture();
     const register = (threadId: string) => registerRoot("prepared", threadId);
     for (let index = 0; index < 256; index += 1) {
-      register(`thread-${index}`).release();
+      (await register(`thread-${index}`)).release();
     }
-    expect(() => register("overflow")).toThrow("prepared inference prefix limit");
+    await expect(register("overflow")).rejects.toThrow("prepared inference prefix limit");
     context.forget("thread-0");
-    const replacement = register("replacement");
+    const replacement = await register("replacement");
     replacement.release();
-    const fork = forkContext(context, {
+    const fork = await forkContext(context, {
       sourceThreadId: "replacement",
       threadId: "side",
       signal: controller.signal,
@@ -394,15 +394,15 @@ describe("native inference context", () => {
       "native base\n\nprepared",
     );
     context.close();
-    expect(() =>
+    await expect(
       forkContext(context, { sourceThreadId: "replacement", threadId: "after-close" }),
-    ).toThrow("closed");
+    ).rejects.toThrow("closed");
   });
 
-  it("bounds context and rejects invalid requests or aborted registrations", () => {
+  it("bounds context and rejects invalid requests or aborted registrations", async () => {
     const { controller, register, prepare, rejects } = fixture();
-    expect(() => register("x".repeat(256 * 1024 + 1))).toThrow("limit");
-    const registered = register("private");
+    await expect(register("x".repeat(256 * 1024 + 1))).rejects.toThrow("limit");
+    const registered = await register("private");
     const source = request("root", registered.generation);
     rejects({ ...source, instructions: null }, "instructions");
     rejects({ instructions: "base" }, "metadata");

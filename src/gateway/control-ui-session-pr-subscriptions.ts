@@ -13,10 +13,11 @@ import type {
 } from "./control-ui-contract.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "./control-ui-contract.js";
 import { enqueuePrDelivery, invalidatePrReader } from "./control-ui-session-pr-delivery.js";
+import { recordSessionPrDiagnostic } from "./control-ui-session-pr-diagnostics.js";
 import {
   createControlUiSessionPrPreparedRead,
   addControlUiSessionPrMembership,
-  type PreparedSessionPrState,
+  type WatchedKeyState,
   loadSessionPullRequests,
   pushedSnapshot,
   retainControlUiSessionPrBranchSnapshot,
@@ -36,13 +37,6 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 const CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS = 60_000;
 const CONTROL_UI_SESSION_PR_REFRESH_INTERVAL_MS = 10_000;
 const CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY = 4;
-
-type WatchedKeyState = PreparedSessionPrState & {
-  sessionKeysByConnId: Map<string, Set<string>>;
-  refreshedAt?: number;
-  cancelRefresh?: () => void;
-  delivery?: Promise<void>;
-};
 
 type SubscriptionDeps = {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
@@ -169,10 +163,16 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
 
   const currentWatcher = async (connId: string, sessionKey: string) => {
     const watched = subscriptions.get(connId)?.get(sessionKey);
-    const target =
-      deps.isConnectionActive?.(connId) === false
-        ? undefined
-        : await limitReads(() => watched?.readCurrent());
+    let target: ControlUiSessionPrTarget | undefined;
+    if (watched && deps.isConnectionActive?.(connId) !== false) {
+      try {
+        watched.target.assertCurrent?.();
+        target = watched.target.assertCurrent ? watched.target : undefined;
+      } catch {
+        // Only changed grants need queued preparation; current grants stay synchronous.
+      }
+      target ??= await limitReads(watched.readCurrent);
+    }
     const subscription = subscriptions.get(connId);
     if (scope.isClosing || subscription?.get(sessionKey) !== watched) {
       return undefined;
@@ -200,7 +200,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     }
     if (watched.target.identity === target.identity) {
       watched.target = target;
-      return { watched, target };
+      return target;
     }
     const previous = keyStates.get(watched.target.identity);
     const state = stateForTarget(target, undefined, previous);
@@ -222,7 +222,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
       );
     replacements.add(replacement);
     void replacement.finally(() => replacements.delete(replacement));
-    return { watched, target };
+    return target;
   };
 
   const currentKeyState = async (cacheKey: string) => {
@@ -388,8 +388,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
           if (
             !current ||
             scope.isClosing ||
-            current.watched !== watched ||
-            current.target.identity !== state.target.identity ||
+            current.identity !== state.target.identity ||
             subscriptions.get(connId)?.get(sessionKey) !== watched ||
             deps.isConnectionActive?.(connId) === false ||
             keyStates.get(state.target.identity) !== state ||
@@ -400,10 +399,10 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
           assertSourceCurrent();
           try {
             // The shared cache can carry another viewer's target after preparation yields.
-            current.target.assertCurrent?.();
+            current.assertCurrent?.();
             assertReadAuthority?.();
           } catch {
-            if (current.target.ownGitHubProfileId) {
+            if (current.ownGitHubProfileId) {
               if (state.snapshot === snapshot) {
                 state.snapshot = undefined;
               }
@@ -415,6 +414,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
           const sessions = Object.create(null) as ControlUiSessionPullRequestsChanged["sessions"];
           sessions[sessionKey] = snapshot;
           // A socket callback can replace the session or retire another viewer synchronously.
+          recordSessionPrDiagnostic("broadcast", state.target);
           deps.broadcastToConnIds(
             CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
             { sessions },

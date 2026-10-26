@@ -7,20 +7,37 @@ import type {
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createGatewayDeferredIntents } from "../../app/gateway-store.deferred-intents.ts";
+import * as confirmDialog from "../../components/confirm-dialog.ts";
 import { sessionRequest as mockSessionRequests } from "../../lib/sessions/hydration-family.test-support.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import "../../lib/toast-host.tsx";
+import {
+  gatewayHelloForMethods,
+  SESSION_MUTATION_TEST_METHODS,
+} from "../../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
   createModalDialogTestFixture,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
+import { openSubmenu, selectMenuValue } from "../../test-helpers/session-menu.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   createLiveSessionContext,
+  createContext,
+  createGateway,
+  createManagedSessions,
   createPage,
   createRenderedPage,
+  liveSessions,
+  mountMutation,
+  openRowMenu,
+  selectRows,
+  sessionRow,
 } from "./sessions-page.test-support.ts";
 
 const target: GatewaySessionRow = {
@@ -79,46 +96,159 @@ async function setup(initial = target, selection = false) {
   };
 }
 
+function attachDeferredOwner(fixture: Awaited<ReturnType<typeof setup>>) {
+  const { page, client, gateway } = fixture;
+  Object.assign(client, { recoveryScope: "page-archive", recoveryScopeReady: true });
+  const owner = createGatewayDeferredIntents({
+    snapshot: () => page.context.gateway.snapshot,
+    connectionRevision: () => 0,
+    isStopped: () => false,
+    publish: (patch) => gateway.emit(patch),
+  });
+  Object.assign(page.context.gateway, { defer: owner.defer });
+  onTestFinished(() => owner.discard());
+  return owner;
+}
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
 
 describe("Sessions archive outcome lifetime", () => {
-  it.each(
-    ["rename", "archive", "restore"].flatMap((action) =>
-      [false, true].map((replaced) => ({ action, replaced })),
-    ),
-  )(
-    "settles $action selection only for its session (replaced=$replaced)",
-    async ({ action, replaced }) => {
-      const original = { ...target, archived: action === "restore" };
-      const successor = { ...original, sessionId: "successor-session", label: "Replacement work" };
-      const fixture = await setup(original, true);
+  it.each(["archive", "unarchive", "delete"] as const)(
+    "queues offline page %s without issuing an RPC until reconnect",
+    async (action) => {
+      const initial = { ...target, pinned: false, archived: action === "unarchive" };
+      const fixture = await setup(initial);
+      const { page, gateway, request } = fixture;
+      const owner = attachDeferredOwner(fixture);
+      let serverRow: GatewaySessionRow | null = initial;
+      request.mockImplementation(
+        mockSessionRequests({
+          "sessions.list": () => sessionsResult(serverRow ? [serverRow] : []),
+          "sessions.patch": (params) => {
+            serverRow = { ...initial, ...(params as Partial<GatewaySessionRow>) };
+            return { ...patched, entry: serverRow };
+          },
+          "sessions.delete": () => {
+            serverRow = null;
+            return { ok: true, key: initial.key, deleted: true, archived: [] };
+          },
+        }),
+      );
+      const before = request.mock.calls.length;
+      gateway.emit({ phase: "reconnecting" });
+      if (action === "archive") {
+        await page.archive(initial);
+      } else if (action === "unarchive") {
+        await page.patchSession(initial.key, { archived: false }, undefined, initial.sessionId, {
+          sessionScope: true,
+        });
+      } else {
+        const modal = createModalDialogTestFixture();
+        onTestFinished(() => modal.cleanup());
+        const deletion = modal.track(page.deleteSessionFromMenu(initial));
+        const dialog = await waitForConfirmDialogActions();
+        answerConfirmDialog(dialog, "confirm");
+        await deletion;
+      }
+      expect(page.context.gateway.snapshot.deferredIntentCount).toBe(1);
+      expect(request.mock.calls).toHaveLength(before);
+      if (action === "archive") {
+        await page.forkSession(initial.key);
+        await expect(
+          page.patchSession(initial.key, { model: "unavailable-offline" }),
+        ).resolves.toMatchObject({
+          status: "failed",
+        });
+        expect(request.mock.calls).toHaveLength(before);
+        expect(page.context.gateway.snapshot.deferredIntentCount).toBe(1);
+      }
+      gateway.emit({ phase: "connected" });
+      await owner.flush();
+      const writes = request.mock.calls.filter(
+        ([method]) => method === "sessions.patch" || method === "sessions.delete",
+      );
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.[1]).toMatchObject({
+        key: initial.key,
+        expectedSessionId: initial.sessionId,
+      });
+      expect(serverRow).toEqual(
+        action === "delete" ? null : expect.objectContaining({ archived: action === "archive" }),
+      );
+    },
+  );
+
+  it("restores a personal pin when captured Undo joins other deferred work", async () => {
+    const initial = { ...target, pinned: false };
+    const fixture = await setup(initial);
+    const { page, gateway, pending, patches, undo } = fixture;
+    const owner = attachDeferredOwner(fixture);
+    const beforeArchive = createDeferred();
+    const afterArchive = createDeferred();
+    onTestFinished(() => {
+      beforeArchive.resolve();
+      afterArchive.resolve();
+    });
+    const pin = "session:" + target.key;
+    page.context.navigation.update({ sidebarEntries: [pin] });
+    gateway.emit({ phase: "reconnecting" });
+    owner.defer({ key: "before-archive", run: () => beforeArchive.promise });
+    gateway.emit({ phase: "connected" });
+    const draining = owner.flush();
+    await page.archive(initial);
+    owner.defer({ key: "after-archive", run: () => afterArchive.promise });
+    beforeArchive.resolve();
+    await fixture.started.promise;
+    pending.resolve(patched);
+    await waitForSolid(() => expect(undo()).not.toBeNull());
+    expect(page.context.navigation.snapshot.sidebarEntries).toEqual([]);
+    fixture.request.mockImplementation(
+      mockSessionRequests({
+        "sessions.list": () => sessionsResult([{ ...initial, archived: false }]),
+        "sessions.patch": () => ({
+          ...patched,
+          entry: { sessionId: initial.sessionId!, archived: false },
+        }),
+      }),
+    );
+    undo()!.click();
+    await vi.waitFor(() => expect(page.context.gateway.snapshot.deferredIntentCount).toBe(1));
+    expect(patches()).toHaveLength(1);
+    afterArchive.resolve();
+    await draining;
+    expect(patches()).toHaveLength(2);
+    expect(patches()[1]?.[1]).toMatchObject({
+      archived: false,
+      expectedSessionId: target.sessionId,
+    });
+    expect(page.context.navigation.snapshot.sidebarEntries).toEqual([pin]);
+  });
+
+  it.each([false, true])(
+    "settles a patch selection only for its session (replaced=%s)",
+    async (replaced) => {
+      const successor = { ...target, sessionId: "successor-session", label: "Replacement work" };
+      const fixture = await setup(target, true);
       const { page, pending, started, patches, gateway } = fixture;
       const checkbox = () =>
         page.querySelector<HTMLInputElement>(`input[aria-label="Select session: ${target.key}"]`)!;
       checkbox().click();
       await page.updateComplete;
-      const patch =
-        action === "rename" ? { label: "Renamed work" } : { archived: action === "archive" };
-      const completion = page.patchSession(target.key, patch, undefined, original.sessionId);
-      const response: SessionPatchResult = {
-        ...patched,
-        entry: {
-          sessionId: original.sessionId!,
-          ...(action === "rename"
-            ? { label: "Renamed work" }
-            : { archivedAt: action === "archive" ? 1 : undefined }),
-        },
-      };
+      const completion = page.patchSession(
+        target.key,
+        { archived: true },
+        undefined,
+        target.sessionId,
+      );
       try {
         await started.promise;
-        expect(patches()).toHaveLength(1);
         expect(patches()[0]?.[1]).toMatchObject({
           key: target.key,
-          expectedSessionId: original.sessionId,
-          ...patch,
+          expectedSessionId: target.sessionId,
+          archived: true,
         });
         if (replaced) {
           await fixture.replace(successor);
@@ -127,7 +257,7 @@ describe("Sessions archive outcome lifetime", () => {
           await page.updateComplete;
           expect(page.selectedSessions.get(target.key)?.sessionId).toBe(successor.sessionId);
         }
-        pending.resolve(response);
+        pending.resolve(patched);
         expect(await completion).toBe("completed");
         await page.updateComplete;
         expect(checkbox().checked).toBe(replaced);
@@ -139,7 +269,7 @@ describe("Sessions archive outcome lifetime", () => {
         }
         expect(gateway.setSessionKey).not.toHaveBeenCalled();
       } finally {
-        pending.resolve(response);
+        pending.resolve(patched);
         await completion;
       }
     },
@@ -410,5 +540,135 @@ describe("Sessions page confirmed tree archive outcomes", () => {
     await fixture.toast.updateComplete;
     expect(fixture.batches).toHaveLength(1);
     expect(fixture.gateway.setSessionKey).not.toHaveBeenCalled();
+  });
+});
+
+describe("sessions command outcomes", () => {
+  it.each([false, true])(
+    "returns the original patch failure only in its captured scope (retired: %s)",
+    async (retired) => {
+      const pending = createDeferred<Awaited<ReturnType<SessionCapability["patch"]>>>();
+      const failure = new Error("Patch unavailable. Try again.");
+      const { page, sessions, connection } = await mountMutation({
+        patch: vi.fn(() => pending.promise),
+      });
+      const completion = page.patchSession("agent:main:main", { label: "renamed" });
+      expect(sessions.patch).toHaveBeenCalledOnce();
+      if (retired) {
+        connection.emit({ phase: "reconnecting", client: null });
+      }
+      pending.reject(failure);
+      const outcome = await completion;
+      if (retired) {
+        expect(outcome).toBe("stale");
+        await page.updateComplete;
+        expect(page.error).toBeNull();
+        expect(document.body.textContent).not.toContain(failure.message);
+      } else {
+        expect(typeof outcome === "object" ? outcome.error : undefined).toBe(failure);
+        await waitForFast(() => {
+          const alerts = page.querySelectorAll('[role="alert"]');
+          expect(alerts).toHaveLength(1);
+          expect(alerts[0]?.textContent).toContain(failure.message);
+        });
+      }
+    },
+  );
+
+  it("recovers personal visibility after showing its failure once and refreshing", async () => {
+    const pending = createDeferred<{ ok: boolean }>();
+    const failure = new Error("Personal visibility unavailable. Try again.");
+    let fail = true;
+    const request = vi.fn((method: string) =>
+      method === "sessions.setInvolvement"
+        ? fail
+          ? pending.promise
+          : Promise.resolve({ ok: true })
+        : Promise.resolve({ profiles: [] }),
+    );
+    const connection = createGateway({ request } as unknown as GatewayBrowserClient);
+    connection.emit({
+      hello: {
+        ...gatewayHelloForMethods(
+          [...SESSION_MUTATION_TEST_METHODS, "sessions.setInvolvement"],
+          ["operator.read"],
+        ),
+        policy: { hasMultipleSessionSharingIdentities: true },
+      },
+    });
+    const managed = createManagedSessions();
+    const row = sessionRow("personal-retry", { hiddenFromInvolvingMe: true });
+    const context = createContext(connection.gateway, managed.sessions);
+    const page = await createRenderedPage(context, sessionsResult([row], 1));
+    const menu = await openRowMenu(page, row);
+    await openSubmenu(menu, "Advanced");
+    const item = menu.querySelector('[value="toggle-involving-me"]')!;
+    expect(item.textContent).toContain("Show in Involving me");
+    expect(item.hasAttribute("disabled")).toBe(false);
+    await selectMenuValue(menu, "toggle-involving-me");
+    expect(request).toHaveBeenCalledWith(
+      "sessions.setInvolvement",
+      expect.objectContaining({
+        key: row.key,
+        expectedSessionId: row.sessionId,
+        hidden: false,
+      }),
+    );
+    await waitForFast(() => expect(page.textContent).toContain("Working…"));
+    pending.reject(failure);
+    await waitForFast(() => {
+      const alerts = page.querySelectorAll('[role="alert"]');
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]?.textContent).toContain(failure.message);
+      expect(page.textContent).not.toContain("Working…");
+    });
+
+    const refreshCalls = managed.refreshList.mock.calls.length;
+    page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
+    await waitForFast(() => {
+      expect(managed.refreshList).toHaveBeenCalledTimes(refreshCalls + 1);
+      expect(page.querySelector('[role="alert"]')).toBeNull();
+    });
+    page.onSortChange("key", "asc");
+    await page.updateComplete;
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+    fail = false;
+    const retry = await openRowMenu(page, row);
+    await openSubmenu(retry, "Advanced");
+    await selectMenuValue(retry, "toggle-involving-me");
+    await waitForFast(() => expect(managed.refreshList).toHaveBeenCalledTimes(refreshCalls + 2));
+    expect(managed.sessions.patch).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed roster refresh visible after a successful deletion", async () => {
+    const row = sessionRow("delete-refresh");
+    const failure = new Error("Roster refresh unavailable. Try again.");
+    let deleted = false;
+    let refreshFails = false;
+    const { context } = liveSessions({
+      "sessions.list": () => {
+        if (refreshFails) {
+          throw failure;
+        }
+        return sessionsResult(deleted ? [] : [row], 1);
+      },
+      "sessions.delete": () => {
+        deleted = true;
+        refreshFails = true;
+        return { deleted: true };
+      },
+    });
+    const page = await createRenderedPage(context, sessionsResult([row], 1), "all");
+    await waitForFast(() => expect(page.loading).toBe(false));
+    selectRows(page, row);
+    vi.spyOn(confirmDialog, "showConfirmDialog").mockResolvedValue(true);
+    expect(await page.deleteSelected()).toBe("completed");
+    await waitForFast(() =>
+      expect(page.querySelector('[role="alert"]')?.textContent ?? "").toContain(failure.message),
+    );
+
+    refreshFails = false;
+    page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
+    await waitForFast(() => expect(page.querySelector('[role="alert"]')).toBeNull());
   });
 });

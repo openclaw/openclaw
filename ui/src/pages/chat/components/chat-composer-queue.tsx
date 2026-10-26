@@ -1,4 +1,5 @@
 import { For, createMemo, createUniqueId, onSettled } from "solid-js";
+import "../../../styles/chat/composer-queue-content.css";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
@@ -135,39 +136,6 @@ function mountQueueEditInput(element: HTMLTextAreaElement, value: string): void 
   });
 }
 
-function sendStateLabel(
-  item: ChatQueueItem,
-  offline: boolean,
-  connected: boolean | undefined,
-): string | null {
-  if (
-    offline &&
-    item.sendState !== "failed" &&
-    item.sendState !== "unconfirmed" &&
-    item.sendState !== "held"
-  ) {
-    return t("chat.queue.states.waitingForReconnect");
-  }
-  switch (item.sendState) {
-    case "waiting-model":
-    case "waiting-idle":
-      return null;
-    case "executing-command":
-      return t("chat.queue.states.runningCommand");
-    case "waiting-reconnect":
-      return isChatSendReconnecting(item.sendState, connected)
-        ? t("chat.queue.states.waitingForReconnect")
-        : null;
-    case "unconfirmed":
-    case "held":
-      return t("chat.queue.states.needsReview");
-    case "failed":
-      return t("common.failed");
-    default:
-      return null;
-  }
-}
-
 export function renderChatQueueSolid(props: ChatQueueProps) {
   const visibleQueue = createMemo(() => {
     const items = (props.displayQueue ?? props.queue).filter(
@@ -202,9 +170,8 @@ export function renderChatQueueSolid(props: ChatQueueProps) {
   });
   const globalState = createMemo(() => {
     const head = props.queue.find((item) => item.sendState !== "failed" || item.localCommandName);
-    return (head?.sendState === "unconfirmed" || head?.sendState === "held") &&
-      isQueuedSendInlineState(head)
-      ? { label: t("chat.queue.states.blockedByUnconfirmed"), tone: "warn" }
+    return head?.sendState === "held" && isQueuedSendInlineState(head)
+      ? { label: t("chat.queue.states.blockedByReview"), tone: "warn" }
       : visibleQueue().some((item) => item.sendState === "waiting-model") && !props.offline
         ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
         : null;
@@ -294,21 +261,37 @@ function ChatQueueItem(rowProps: {
     const image = images()?.[0];
     return image ? getChatAttachmentPreviewUrl(image) : null;
   });
-  const failed = () =>
-    item().sendState === "failed" ||
-    item().sendState === "unconfirmed" ||
-    item().sendState === "held";
+  const failed = () => item().sendState === "failed" || item().sendState === "held";
   const reconnecting = () =>
     !item().serverQueued &&
     !failed() &&
     (rowProps.controls.offline === true ||
       isChatSendReconnecting(item().sendState, rowProps.controls.connected));
-  const stateLabel = () =>
-    sendStateLabel(
-      item(),
-      !item().serverQueued && rowProps.controls.offline === true,
-      rowProps.controls.connected,
-    );
+  const stateLabel = (): string | null => {
+    const queueItem: ChatQueueItem = item();
+    const offline: boolean = !item().serverQueued && rowProps.controls.offline === true;
+    const connected: boolean | undefined = rowProps.controls.connected;
+    if (offline && queueItem.sendState !== "failed" && queueItem.sendState !== "held") {
+      return t("chat.queue.states.waitingForReconnect");
+    }
+    switch (queueItem.sendState) {
+      case "waiting-model":
+      case "waiting-idle":
+        return null;
+      case "executing-command":
+        return t("chat.queue.states.runningCommand");
+      case "waiting-reconnect":
+        return isChatSendReconnecting(queueItem.sendState, connected)
+          ? t("chat.queue.states.waitingForReconnect")
+          : null;
+      case "held":
+        return t("chat.queue.states.needsReview");
+      case "failed":
+        return t("common.failed");
+      default:
+        return null;
+    }
+  };
   const steered = () => item().queueMode === "steer" && stateLabel() === null;
   const busy = () => item().sendState === "executing-command";
   const editing = () => edit()?.editingId === item().id;

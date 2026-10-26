@@ -1,6 +1,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { PreparedRepositoryWorkspace } from "../state/session-repository-workspaces.js";
@@ -8,6 +9,42 @@ import type { SessionRepositoryWorkspaceRecord } from "../state/session-reposito
 import * as records from "./session-row-projection-record.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
+import { projectGatewaySessionRunState } from "./session-utils-display.js";
+
+type SessionRunSource = Pick<
+  records.MaterializedRow["materialized"]["source"],
+  "entry" | "parsedKey"
+>;
+const preparedRunProgress = new WeakMap<
+  SessionRunSource,
+  ReturnType<typeof prepareProjectedAgentRunProgressState>
+>();
+
+/** Each immutable materialized source belongs to one key; replacement retires its query. */
+export function projectPreparedSessionRunState(
+  key: string,
+  source: SessionRunSource,
+  now: number,
+  rowContext: Parameters<typeof projectGatewaySessionRunState>[0]["rowContext"],
+) {
+  let projectRunProgress = preparedRunProgress.get(source);
+  if (!projectRunProgress) {
+    projectRunProgress = prepareProjectedAgentRunProgressState({
+      sessionKeys: [key],
+      sessionId: source.entry?.sessionId,
+      agentId: source.parsedKey?.agentId ?? "",
+    });
+    preparedRunProgress.set(source, projectRunProgress);
+  }
+  return projectGatewaySessionRunState({
+    key,
+    entry: source.entry,
+    parsedKey: source.parsedKey,
+    now,
+    rowContext,
+    projectRunProgress,
+  });
+}
 
 export type SessionRowSelectionPreparationOptions = {
   metadataOnly?: boolean;

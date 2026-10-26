@@ -8,7 +8,9 @@ import { access } from "node:fs/promises";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { prepareCommandOwnerAuthority } from "../auto-reply/command-auth.js";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { prepareSessionGenerationFacts } from "../config/sessions/session-delivery-generation.js";
@@ -27,6 +29,7 @@ import {
   type ScheduledExecutionContextResult,
   type ScheduledRequesterRef,
 } from "./execution-context.js";
+import { type ParentResetWatch, watchParentReset } from "./parent-reset-watch.js";
 import {
   failedScheduledExecution,
   type ScheduledExecutionContext,
@@ -34,6 +37,7 @@ import {
   unadmittedScheduledOccurrence,
 } from "./scheduled-occurrence.js";
 import { resolveCronScheduledToolPolicy } from "./scheduled-tool-policy.js";
+import { resolveCronSessionTargetSessionKey } from "./session-target.js";
 import type { CronParentUnavailable, CronStoredJob } from "./types.js";
 
 type OccurrenceAdmissionParams = {
@@ -52,29 +56,64 @@ function ingressFor(boundary: string | undefined): ScheduledAdmissionFacts["ingr
   return boundary === "gateway.hooks.agent" ? "webhook" : "channel-join";
 }
 
+/** A requester's owner status at admission, plus its live recheck for owner-only effects. */
+type RequesterOwnerCheck = Readonly<{ owner: boolean; assertCurrent?: () => void }>;
+
+const NOT_OWNER: RequesterOwnerCheck = { owner: false };
+
+// Owner status from a recheck that reads current config; the recheck throws once it fails.
+function ownerCheck(cfg: OpenClawConfig, isOwner: (current: OpenClawConfig) => boolean) {
+  if (!isOwner(cfg)) {
+    return NOT_OWNER;
+  }
+  return {
+    owner: true,
+    assertCurrent: () => {
+      if (!isOwner(selectLiveRuntimeConfig(cfg))) {
+        throw new Error("The requester that authorized this automation is no longer an owner.");
+      }
+    },
+  };
+}
+
 /** Owner check for requesters the occurrence can verify; operator sources are checked per run. */
 async function checkRequesterOwner(
   cfg: OpenClawConfig,
   requester: Exclude<ScheduledRequesterRef, { kind: "operator-source" }>,
-): Promise<boolean> {
+): Promise<RequesterOwnerCheck> {
   switch (requester.kind) {
     case "channel": {
-      const prepared = await prepareCommandOwnerAuthority(cfg, requester.requester);
-      return prepared.source !== undefined && prepared.isCurrent(cfg);
+      // The stored envelope's version would select the recovery-reference branch; pass
+      // only the native sender identity so configured and linked owners are rechecked.
+      const { channel, accountId, senderId } = requester.requester;
+      const prepared = await prepareCommandOwnerAuthority(cfg, { channel, accountId, senderId });
+      return ownerCheck(
+        cfg,
+        (current) => prepared.source !== undefined && prepared.isCurrent(current),
+      );
     }
-    case "profile":
+    case "profile": {
+      let profileAccess: ReturnType<typeof captureResidentUserProfileAccess>;
       try {
-        captureResidentUserProfileAccess(requester.profileId).assertCurrent();
+        profileAccess = captureResidentUserProfileAccess(requester.profileId);
       } catch {
-        return false;
+        return NOT_OWNER;
       }
       // Named roles describe team operators; only an untiered install or the
       // Gateway owner profile carries owner authority.
-      return !cfg.gateway?.roles || requester.profileId === GATEWAY_OWNER_PROFILE_ID;
+      return ownerCheck(cfg, (current) => {
+        try {
+          profileAccess.assertCurrent();
+        } catch {
+          return false;
+        }
+        return !current.gateway?.roles || requester.profileId === GATEWAY_OWNER_PROFILE_ID;
+      });
+    }
     case "unknown":
-      return false;
+      return NOT_OWNER;
   }
-  return false;
+  return NOT_OWNER;
 }
 
 type ScheduledParentLink = Readonly<{
@@ -99,10 +138,7 @@ export function scheduledParentLinkOf(job: CronStoredJob): ScheduledParentLink |
   return job.sourceConversation;
 }
 
-async function readParentRow(
-  parentSessionKey: string,
-  storePath: string,
-): Promise<NonNullable<ScheduledAdmissionFacts["parentRow"]>> {
+async function readParent(parentSessionKey: string, storePath: string) {
   const entry = await readSessionEntryInWorker({
     sessionKey: parentSessionKey,
     storePath,
@@ -115,7 +151,7 @@ async function readParentRow(
         () => false,
       )
     : false;
-  return parentRowFactsFromEntry(entry, worktreeExists);
+  return { entry, row: parentRowFactsFromEntry(entry, worktreeExists) };
 }
 
 type ParentEntry = Pick<
@@ -127,6 +163,7 @@ type ParentEntry = Pick<
   | "spawnedCwd"
   | "worktree"
   | "sandbox"
+  | "spawnedBy"
 >;
 
 /** Builder facts for a parent session row; shared with the development replay. */
@@ -138,11 +175,17 @@ export function parentRowFactsFromEntry(
     return { missing: true };
   }
   const worktreePath = entry.worktree ? entry.spawnedCwd : undefined;
+  const workspaceDir = resolveIngressWorkspaceOverrideForSessionRun({
+    spawnedBy: entry.spawnedBy,
+    workspaceDir: entry.spawnedWorkspaceDir,
+    cwd: entry.spawnedCwd,
+  });
   return {
     sessionId: entry.sessionId,
     ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
     archived: typeof entry.archivedAt === "number",
-    ...(entry.spawnedWorkspaceDir ? { workspaceDir: entry.spawnedWorkspaceDir } : {}),
+    // The same persisted-binding rule run preparation applies to the parent's row.
+    ...(workspaceDir ? { workspaceDir } : {}),
     ...(entry.spawnedCwd ? { cwd: entry.spawnedCwd } : {}),
     ...(worktreePath ? { worktree: { path: worktreePath, exists: worktreeExists } } : {}),
     sandboxRequired: entry.sandbox === "required",
@@ -160,6 +203,8 @@ export function assembleScheduledAdmissionFacts(
     agentId: string;
     runSessionKey: string;
     toolsAllow?: readonly string[];
+    /** The creator role's sandbox, when the caller read it without the resident profile catalog. */
+    creatorRoleSandbox?: "required" | "none";
   },
   parentRow: ScheduledAdmissionFacts["parentRow"],
   owner: boolean | undefined,
@@ -175,7 +220,8 @@ export function assembleScheduledAdmissionFacts(
     runSessionKey: params.runSessionKey,
     agentMainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId }),
     agentSandboxMode: resolveSandboxConfigForAgent(params.cfg, params.agentId).mode,
-    ...(resolveCreatorSandbox(params.cfg, { actor: params.job.createdActor })
+    ...((params.creatorRoleSandbox ??
+      resolveCreatorSandbox(params.cfg, { actor: params.job.createdActor })) === "required"
       ? { creatorRoleSandbox: "required" as const }
       : {}),
     ...(params.toolsAllow ? { resolvedToolsAllow: params.toolsAllow } : {}),
@@ -199,17 +245,20 @@ export async function admitScheduledOccurrence(
     agentId: params.agentId,
   });
   let parentRow: ScheduledAdmissionFacts["parentRow"];
-  let owner: boolean | undefined;
+  let requesterOwner: RequesterOwnerCheck | undefined;
   let generation: Awaited<ReturnType<typeof prepareSessionGenerationFacts>> | undefined;
   let pause: CronParentUnavailable | undefined;
+  let childParent: ScheduledOccurrence["childParent"];
+  let parentWatch: ParentResetWatch | undefined;
   try {
     if (!("error" in principal) && principal.kind === "parent") {
       const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
         agentId: params.agentId,
       });
-      parentRow = await readParentRow(principal.parent.sessionKey, storePath);
+      const parent = await readParent(principal.parent.sessionKey, storePath);
+      parentRow = parent.row;
       if (principal.requester.kind !== "operator-source") {
-        owner = await checkRequesterOwner(params.cfg, principal.requester);
+        requesterOwner = await checkRequesterOwner(params.cfg, principal.requester);
       }
       const parentState = classifyScheduledParent(principal.parent, parentRow);
       const parentSessionKey = principal.parent.sessionKey;
@@ -228,6 +277,27 @@ export async function admitScheduledOccurrence(
           worktreePath: parentRow.worktree.path,
         };
       }
+      // A child run takes its parent's persisted workspace binding and never runs
+      // looser than its parent; in-session runs keep their own session's binding.
+      const childPlacement =
+        job.sessionTarget !== "main" && !resolveCronSessionTargetSessionKey(job.sessionTarget);
+      if (parentState === "current" && !pause && childPlacement && parent.entry) {
+        const entry = parent.entry;
+        const bindsWorkspace = Boolean(
+          !parentRow.missing && (parentRow.workspaceDir || parentRow.cwd || parentRow.worktree),
+        );
+        childParent = {
+          ...(bindsWorkspace ? { binding: { sessionKey: parentSessionKey, entry } } : {}),
+          ...(entry.sandbox === "required" ? { sandbox: "required" as const } : {}),
+          // Reads the lease at call time: it fails once the parent resets or the occurrence settles.
+          assertCurrent: () => {
+            if (!generation) {
+              throw new Error("Scheduled occurrence has settled");
+            }
+            generation.assertCurrent();
+          },
+        };
+      }
       if (parentState === "current") {
         // A revisionless link holds the generation classification just validated.
         const observedRevision = parentRow.missing ? undefined : parentRow.lifecycleRevision;
@@ -239,8 +309,18 @@ export async function admitScheduledOccurrence(
           lifecycleRevision: principal.parent.lifecycleRevision ?? observedRevision ?? null,
         });
       }
+      // A child working in its parent's workspace must also stop work that never
+      // reaches a tool check, such as a CLI process's native file tools.
+      if (childParent?.binding && generation) {
+        parentWatch = watchParentReset({
+          parentSessionKey: principal.parent.sessionKey,
+          assertCurrent: childParent.assertCurrent,
+        });
+        childParent = { ...childParent, signal: parentWatch.signal };
+      }
     }
   } catch (error) {
+    parentWatch?.stop();
     generation?.release();
     return unadmittedScheduledOccurrence(error instanceof Error ? error.message : String(error));
   }
@@ -250,6 +330,7 @@ export async function admitScheduledOccurrence(
     principal.requester.kind === "operator-source";
   return {
     ...(pause ? { pause } : {}),
+    ...(childParent ? { childParent } : {}),
     mint(run) {
       let result: ScheduledExecutionContextResult;
       try {
@@ -265,13 +346,26 @@ export async function admitScheduledOccurrence(
             toolsAllow: run.toolsAllow,
           },
           parentRow,
-          operatorSourceRequester ? run.operatorAuthorityRestored : owner,
+          operatorSourceRequester ? run.operatorAuthority !== undefined : requesterOwner?.owner,
         );
         result = buildScheduledExecutionContext(job, facts);
       } catch (error) {
         return failedScheduledExecution(error instanceof Error ? error.message : String(error));
       }
       const lease = generation;
+      // A requester-held owner bit is rechecked before owner-only effects. Legacy and
+      // trusted-policy owners have no requester to recheck; non-owners have no
+      // owner-only tools to guard.
+      const operatorAuthority = run.operatorAuthority;
+      const ownerRecheck =
+        result.status !== "ready" ||
+        !result.facts.authority.owner ||
+        result.facts.authority.basis === "legacy" ||
+        result.facts.authority.basis === "trusted-policy"
+          ? undefined
+          : operatorSourceRequester
+            ? operatorAuthority && (() => operatorAuthority.assertCurrent())
+            : requesterOwner?.assertCurrent;
       const assertParentCurrent =
         result.status === "ready" && result.facts.principal.kind === "parent" && lease
           ? () => lease.assertCurrent()
@@ -295,6 +389,16 @@ export async function admitScheduledOccurrence(
               assertAdmitted();
               assertParentCurrent();
             },
+            ...(ownerRecheck
+              ? {
+                  assertOwnerCurrent: () => {
+                    if (released) {
+                      throw new Error("Scheduled occurrence has settled");
+                    }
+                    ownerRecheck();
+                  },
+                }
+              : {}),
           };
           const unbindContext = bindScheduledExecutionContext(admittedRun, context);
           unbind = () => {
@@ -311,6 +415,8 @@ export async function admitScheduledOccurrence(
       };
     },
     release() {
+      parentWatch?.stop();
+      parentWatch = undefined;
       generation?.release();
       generation = undefined;
     },

@@ -113,8 +113,8 @@ export async function reconcileCodexCatalogFiles(
     }
     if (
       row.rolloutPath &&
-      isCodexCatalogRolloutPathCovered(root, row.rolloutPath) &&
       !present.has(codexCatalogRolloutLogicalPath(row.rolloutPath)) &&
+      isCodexCatalogRolloutPathCovered(root, row.rolloutPath) &&
       owner.rows.get(row.threadId) === row
     ) {
       owner.requestNativeRefresh();

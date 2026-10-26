@@ -1,7 +1,11 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { drainPendingDeliveries as drainPluginPendingDeliveries } from "../../plugin-sdk/delivery-queue-runtime.js";
 import {
   type DeliverFn,
@@ -246,10 +250,12 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     expect(deliveryTimes).toEqual([startedAt, startedAt + RECOVERY_REPLAY_SPACING_MS]);
   });
 
-  it("does not re-deliver a stale startup snapshot after reconnect already acked it", async () => {
+  it("does not re-deliver an independent account recovered while another account is blocked", async ({
+    signal,
+  }) => {
     const startupLog = createRecoveryLog();
     const blocker = blockDelivery(({ to }) => to === "+1000");
-    await enqueue(
+    const blockedId = await enqueue(
       {
         channel: "demo-channel-a",
         to: "+1000",
@@ -257,13 +263,24 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       },
       { retryCount: 0, enqueuedAt: 1 },
     );
-    await enqueue({}, { retryCount: 0, enqueuedAt: 2 });
+    const healthyId = await enqueue({}, { retryCount: 0, enqueuedAt: 2 });
+    const healthyRecovered = createDeferred();
+    startupLog.info.mockImplementation((message) => {
+      if (message.includes(`Recovered delivery ${healthyId}`)) {
+        healthyRecovered.resolve();
+      }
+    });
     const startupRecovery = recover(startupLog);
     try {
-      await Promise.race([blocker.entered, startupRecovery]);
-      expect(deliver).toHaveBeenCalledWith(
-        expect.objectContaining({ channel: "demo-channel-a", to: "+1000" }),
+      await withinTest(
+        awaitGateBeforeSettlement(
+          Promise.all([blocker.entered, healthyRecovered.promise]),
+          startupRecovery,
+          "Independent account must settle before blocked startup recovery",
+        ),
+        signal,
       );
+      expect((await pending()).map((entry) => entry.id)).toEqual([blockedId]);
       await drain();
     } finally {
       blocker.release();
@@ -271,7 +288,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     }
     expect(deliver).toHaveBeenCalledTimes(2);
     expect(deliver.mock.calls.filter(([entry]) => entry.to === "+1555")).toHaveLength(1);
-    expectInfo(startupLog, "Recovery skipped for delivery");
+    expect(await pending()).toEqual([]);
   });
   it("recomputes backoff bypass after rereading the claimed entry", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });

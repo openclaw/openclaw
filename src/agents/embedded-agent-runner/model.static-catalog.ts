@@ -66,6 +66,7 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRunt
     contextWindowDefault: row.contextWindowDefault,
     contextTokens: row.contextTokens,
     ...(row.parameterCount !== undefined ? { parameterCount: row.parameterCount } : {}),
+    ...(row.family ? { family: row.family } : {}),
     maxTokens: row.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
     thinkingLevelMap: row.thinkingLevelMap ? { ...row.thinkingLevelMap } : undefined,
     headers: row.headers,
@@ -356,7 +357,8 @@ function resolveBundledProviderStaticCatalogPluginIds(
         : {}),
     }),
   );
-  return activatablePluginIds.filter((pluginId) => bundledPluginIds.has(pluginId)).toSorted();
+  // oxlint-disable-next-line unicorn/no-array-sort -- filter creates a private array.
+  return activatablePluginIds.filter((pluginId) => bundledPluginIds.has(pluginId)).sort();
 }
 
 async function loadBundledProviderStaticCatalogModels(
@@ -514,7 +516,8 @@ export async function loadBundledProviderStaticCatalogContextModels(
       : providerScopedPluginIds;
   const pluginIds = [...new Set(candidatePluginIds)]
     .filter((pluginId) => staticCatalogPluginIds.has(pluginId))
-    .toSorted((left, right) => left.localeCompare(right));
+    // oxlint-disable-next-line unicorn/no-array-sort -- filter creates a private array.
+    .sort((left, right) => left.localeCompare(right));
   if (pluginIds.length === 0) {
     return [];
   }

@@ -2,6 +2,7 @@
 import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { expect, it, vi } from "vitest";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { registerBoardDocumentEnglish } from "../locales/en-board-document.ts";
 import { registerBoardWebsiteEnglish } from "../locales/en-board-website.ts";
 import { registerBoardEnglish } from "../locales/en-board.ts";
 import { registerChatSessionEnglish } from "../locales/en-chat-session.ts";
@@ -12,10 +13,12 @@ import { i18n } from "./translate.ts";
 
 vi.hoisted(() => vi.resetModules());
 
-it("keeps shared session labels eager while lazy renderers extend their retained namespaces", async () => {
+it("registers every session catalog key while preserving shared labels and namespace identities", async () => {
   const restoreI18n = captureI18nStateForTesting();
   const details = en.chat.sessionDetails;
   const diff = en.chat.sessionDiff;
+  const agentUpdate = en.chat.pendingInputs.agentUpdate;
+  const suggestionState = en.chat.sessionSuggestions.state;
   try {
     await i18n.setLocale("en");
     expect(t("chat.sessionDetails.progressOptions")).toBe("Task progress options");
@@ -23,16 +26,29 @@ it("keeps shared session labels eager while lazy renderers extend their retained
     expect(t("chat.activityPills.label")).toBe("chat.activityPills.label");
 
     registerEnglishCatalog(registerChatSessionEnglish);
+    expect(t("chat.savedConversation", { status: "Reconnecting…" })).toBe(
+      "Saved conversation · Reconnecting…",
+    );
+    expect(en).toMatchObject(registerChatSessionEnglish.catalog);
     expect(t("chat.activityPills.label")).toBe("Session activity");
     expect(t("chat.sessionDiff.modeUnified")).toBe("Unified");
     expect(en.chat.sessionDetails).toBe(details);
     expect(en.chat.sessionDiff).toBe(diff);
+    expect(en.chat.pendingInputs.agentUpdate).toBe(agentUpdate);
+    expect(en.chat.sessionSuggestions.state).toBe(suggestionState);
   } finally {
     await restoreI18n();
   }
 });
 
 it.each([
+  {
+    register: registerBoardDocumentEnglish,
+    activeKey: "kindWebsite",
+    activeText: "Webseite",
+    fallbackKey: "kindReport",
+    fallbackText: "Report",
+  },
   {
     register: registerBoardWebsiteEnglish,
     activeKey: "websiteOpen",

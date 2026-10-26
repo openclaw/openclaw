@@ -17,7 +17,7 @@ import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
 export type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
-export type AgentHarnessNativeSubagents = NativeSubagentsSnapshot;
+type AgentHarnessNativeSubagents = NativeSubagentsSnapshot;
 
 /** Private native ownership, not execution authority or credential readiness. */
 export type AgentHarnessSessionRuntimeOwnership = {
@@ -105,6 +105,7 @@ type AgentHarnessAttemptParamsBase = Omit<
   | "admittedRunContext"
   | "disableToolSearch"
   | "sessionReadScopeKey"
+  | "blindPrompt"
   | "assistantErrorTranscript"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
@@ -203,6 +204,8 @@ type AgentHarnessIsolatedCompletionParams = {
   outputTextPolicy?: "strict-visible";
   /** Report inference dispatch through settlement, excluding preparation and cleanup. */
   onRequestComplete?: (durationMs: number) => void;
+  /** Observe the returned assistant before cancellation/output rejection; never grants acceptance. */
+  onResult?: (result: AgentHarnessIsolatedCompletionResult) => void;
   streamParams?: {
     maxTokens?: number;
     temperature?: number;
@@ -229,6 +232,8 @@ export type AgentHarnessIsolatedCompletionParamsV2 = Omit<
   "model" | "auth" | "sourceAuthFingerprint"
 > & {
   authorization: AgentHarnessIsolatedCompletionAuthorization;
+  /** Advisory final-output schema; harnesses without native support may ignore it. */
+  outputSchema?: import("../../shared/json-schema.types.js").JsonSchemaObject;
 };
 export type AgentHarnessIsolatedCompletionResult = {
   /** The single assistant completion. Core rejects tool-shaped or failed results. */

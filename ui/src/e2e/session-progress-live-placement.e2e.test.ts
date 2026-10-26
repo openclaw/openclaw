@@ -1,4 +1,4 @@
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -27,6 +27,7 @@ import {
   openChatSidePanelType,
   restoreChatAsMain,
 } from "./chat-side-panel.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 async function captureProof(page: Page, fileName: string): Promise<void> {
   if (!captureUiProofEnabled) {
@@ -202,9 +203,8 @@ suite.define(() => {
     } finally {
       await page.close();
       if (proofDir && video) {
-        const recordingPath = await video.path();
         await video.saveAs(path.join(proofDir, "task-progress-final-expand-cycle.webm"));
-        await unlink(recordingPath);
+        await video.delete();
       }
       await suite.closeBrowserContext(context);
     }
@@ -220,15 +220,15 @@ suite.define(() => {
     ];
 
     await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { colorScheme: "dark", ...createControlUiE2eContextOptions() },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
-          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "progressCard.get",
+            "sessions.companion.state",
+          ],
           historyMessages: [
             {
               id: "progress-receipt",

@@ -4,7 +4,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as snapshotRevisions from "./list-snapshot-revision.js";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { locked } from "./service/locked.js";
+import { remove } from "./service/ops-mutations.js";
 import { listPage, status } from "./service/ops-read.js";
+import { applyCronRuntimeRowsToState } from "./service/runtime-publication.js";
 import type { CronJob } from "./types.js";
 
 function listState(...jobs: Partial<CronJob>[]) {
@@ -99,6 +101,8 @@ it("shares immutable requested rows until a list revision changes", async () => 
   const visibilityPass = await listPage(state, options, () => false);
   expect(visibilityPass).toMatchObject({ jobs: [], total: 0 });
   const repeated = await listPage(state, options);
+  await expect(remove(state, "missing-job")).resolves.toEqual({ ok: true, removed: false });
+  expect((await listPage(state, options)).jobs[0]).toBe(page.jobs[0]);
   expect(repeated.jobs[0]).toBe(page.jobs[0]);
   expect(await status(state)).toBe(firstStatus);
   expect(repeated.snapshotRevision).toBe(page.snapshotRevision);
@@ -108,9 +112,10 @@ it("shares immutable requested rows until a list revision changes", async () => 
   expect(repeated.jobs).toHaveLength(1);
 
   await locked(state, async () => {
-    jobs[1]!.state.lastStatus = "ok";
-    jobs[1]!.state.nextRunAtMs = 100;
-    jobs[2]!.state.lastStatus = "ok";
+    applyCronRuntimeRowsToState(state, [
+      { ...jobs[1]!, state: { ...jobs[1]!.state, lastStatus: "ok", nextRunAtMs: 100 } },
+      { ...jobs[2]!, state: { ...jobs[2]!.state, lastStatus: "ok" } },
+    ]);
   });
   const changed = await listPage(state, options);
 
@@ -122,6 +127,57 @@ it("shares immutable requested rows until a list revision changes", async () => 
   expect(changedStatus).not.toBe(firstStatus);
   expect(await status(state)).toBe(changedStatus);
   expect(clone).toHaveBeenCalledTimes(2);
+});
+
+it("reuses interleaved list variants while refreshing visibility and mutated rows", async () => {
+  const state = listState(
+    { name: "alpha", agentId: "ops" },
+    { name: "beta", agentId: "main" },
+    { name: "gamma", agentId: "main", enabled: false },
+  );
+  state.schedulerStarted = true;
+  const revision = vi.spyOn(snapshotRevisions, "resolveCronListSnapshotRevision");
+  const options = { includeDisabled: true, sortBy: "name", limit: 1 } as const;
+  const all = await listPage(state, options);
+  const agent = await listPage(state, { ...options, agentId: "main" });
+  expect(all).toMatchObject({ jobs: [{ name: "alpha" }], total: 3 });
+  expect(agent).toMatchObject({ jobs: [{ name: "beta" }], total: 2 });
+
+  const visibleIds = new Set(["job-1", "job-2"]);
+  const visible = (job: CronJob) => visibleIds.has(job.id);
+  expect(await listPage(state, options, visible)).toMatchObject({
+    jobs: [{ name: "alpha" }],
+    total: 2,
+  });
+  visibleIds.delete("job-1");
+  expect(await listPage(state, options, visible)).toMatchObject({
+    jobs: [{ name: "beta" }],
+    total: 1,
+  });
+  expect(revision).toHaveBeenCalledTimes(4);
+  expect(await listPage(state, options)).toMatchObject({
+    jobs: [{ name: "alpha" }],
+    total: 3,
+    snapshotRevision: all.snapshotRevision,
+  });
+  expect(await listPage(state, { ...options, agentId: "main" })).toMatchObject({
+    jobs: [{ name: "beta" }],
+    total: 2,
+    snapshotRevision: agent.snapshotRevision,
+  });
+  expect(revision).toHaveBeenCalledTimes(4);
+
+  await locked(state, async () => {
+    applyCronRuntimeRowsToState(state, [{ ...state.store!.jobs[1]!, name: "delta" }]);
+  });
+  const changedAgent = await listPage(state, { ...options, agentId: "main" });
+  const changedAll = await listPage(state, options);
+  expect(changedAgent).toMatchObject({ jobs: [{ name: "delta" }], total: 2 });
+  expect(changedAgent.snapshotRevision).not.toBe(agent.snapshotRevision);
+  expect(changedAll.snapshotRevision).not.toBe(all.snapshotRevision);
+  expect(agent.jobs[0]?.name).toBe("beta");
+  expect(await listPage(state, { ...options, agentId: "main" })).toEqual(changedAgent);
+  expect(revision).toHaveBeenCalledTimes(6);
 });
 
 it("applies schedule, status, trigger, and cross-field phrase filters before paging", async () => {

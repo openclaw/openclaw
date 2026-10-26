@@ -195,24 +195,32 @@ export function readHiddenGitHubSecretInDatabase(
 
 export function listHiddenGitHubSecretsInDatabase(
   sqlite: EngineConnection,
-  prefix: HiddenGitHubStorePrefix,
+  prefix: HiddenGitHubStorePrefix | undefined,
   now: number,
 ): Array<{ name: string; value: string }> {
-  const kind = hiddenGitHubStoreKindFromPrefix(prefix);
+  const kind = prefix === undefined ? undefined : hiddenGitHubStoreKindFromPrefix(prefix);
   return withMissingSecretStoreFallback(
     () =>
       executeSqliteQuerySync(
         sqlite,
         selectHiddenGitHubSecretRecords(sqlite)
-          .where("name", ">=", `${prefix}-`)
-          .where("name", "<", `${prefix}.`)
+          .where((eb) =>
+            eb.or(
+              (prefix === undefined ? ["github-device", "github-oauth"] : [prefix]).map(
+                (selected) =>
+                  eb.and([eb("name", ">=", `${selected}-`), eb("name", "<", `${selected}.`)]),
+              ),
+            ),
+          )
           .orderBy("name", "asc"),
-      ).rows.flatMap((row) =>
-        classifyHiddenGitHubStoreName(row.name) === kind &&
-        isLiveHiddenGitHubStoreRow(row, kind, now)
+      ).rows.flatMap((row) => {
+        const rowKind = classifyHiddenGitHubStoreName(row.name);
+        return (rowKind === "device" || rowKind === "oauth") &&
+          (kind === undefined || rowKind === kind) &&
+          isLiveHiddenGitHubStoreRow(row, rowKind, now)
           ? [{ name: row.name, value: row.value }]
-          : [],
-      ),
+          : [];
+      }),
     [],
   );
 }

@@ -174,21 +174,31 @@ it("refreshes health from the cron partition currently published by the kernel",
       reads.mock.calls.flatMap(([, command]) =>
         command.type === "automationProactive.jobs" ? [command.input.storePath] : [],
       );
-
-    await kernel.gatewayRequestContext.refreshHealthSnapshot({
-      probe: false,
-      includeSensitive: true,
-    });
-    expect(partitions()).toEqual([previous.storePath]);
-
-    // Hot reload uses this same owner publication; retained request contexts must follow it.
-    kernel.kernel.swapCronState({ ...previous, storePath: secondPartition });
-    try {
-      await kernel.gatewayRequestContext.refreshHealthSnapshot({
+    const { gatewayRequestContext } = kernel;
+    const refresh = () =>
+      gatewayRequestContext.refreshHealthSnapshot({
         probe: false,
         includeSensitive: true,
       });
-      expect(partitions()).toEqual([previous.storePath, secondPartition]);
+    await refresh();
+    expect(partitions()).toEqual([previous.storePath]);
+
+    await previous.cron.start();
+    reads.mockClear();
+    for (let index = 0; index < 2; index += 1) {
+      await refresh();
+    }
+    expect(partitions()).toEqual([]);
+
+    // Hot reload uses this same owner publication; retained request contexts must follow it.
+    kernel.kernel.swapCronState({
+      ...previous,
+      storePath: secondPartition,
+      readHeartbeatSummary: undefined,
+    });
+    try {
+      await refresh();
+      expect(partitions()).toEqual([secondPartition]);
     } finally {
       kernel.kernel.swapCronState(previous);
     }

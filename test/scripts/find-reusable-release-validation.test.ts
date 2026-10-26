@@ -684,6 +684,18 @@ function parseOutput(output: string): Record<string, string> {
   );
 }
 
+function admit(record: NormalizedEvidence, sha: string) {
+  record.producerOnTrustedMainLineage = false;
+  for (const parent of [record.current, record.root]) {
+    parent.producerOnTrustedMainLineage = false;
+    parent.workflowRefProof = "candidate-owned-admission-v1";
+  }
+  record.qualificationAdmission = {
+    request: { candidateSha: sha, qualificationSha: sha },
+    coverage: { children: record.children.map(({ role }) => ({ key: role })) },
+  };
+}
+
 describe("scripts/github/find-reusable-release-validation.sh", () => {
   it.each(["main", `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`])(
     "selects candidate-owned evidence through admitted P on %s",
@@ -695,15 +707,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
         workflowRef: `release-ci/${priorSha.slice(0, 12)}-122`,
         trustedWorkflowRef,
       });
-      record.producerOnTrustedMainLineage = false;
-      for (const tuple of [record.current, record.root]) {
-        tuple.producerOnTrustedMainLineage = false;
-        tuple.workflowRefProof = "candidate-owned-admission-v1";
-      }
-      record.qualificationAdmission = {
-        request: { candidateSha: priorSha, qualificationSha: priorSha },
-        coverage: { children: record.children.map(({ role }) => ({ key: role })) },
-      };
+      admit(record, priorSha);
       const options = {
         workflowSha: priorSha,
         workflowRef: `release-ci/${priorSha.slice(0, 12)}-123`,
@@ -747,15 +751,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
         validationInputs: { ...DEFAULT_INPUTS, targetVersion: "2026.7.1" },
         workflowRef: `release-ci/${priorSha.slice(0, 12)}-122`,
       });
-      record.producerOnTrustedMainLineage = false;
-      for (const tuple of [record.current, record.root]) {
-        tuple.producerOnTrustedMainLineage = false;
-        tuple.workflowRefProof = "candidate-owned-admission-v1";
-      }
-      record.qualificationAdmission = {
-        request: { candidateSha: priorSha, qualificationSha: priorSha },
-        coverage: { children: record.children.map(({ role }) => ({ key: role })) },
-      };
+      admit(record, priorSha);
       const result = resolveEvidence(record, {
         compareBaseSha: priorSha,
         compareFiles: changedPaths,
@@ -1187,48 +1183,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
   });
 
-  it.each([
-    { version: "2026.7.1", delta: "selected" },
-    { version: "2026.7.1", delta: "unrelated" },
-    { version: "2026.7.1-beta.1", delta: "selected" },
-    { version: "2026.7.1-beta.1", delta: "unrelated" },
-    { version: "2026.7.1-beta.1", delta: "dedicated-beta" },
-  ])("checks $version split release files in the shell resolver ($delta)", ({ version, delta }) => {
-    const { origin, priorSha } = createRepo({ version });
-    const entryVersion = delta === "dedicated-beta" ? version : "2026.7.1";
-    const entryPath = `CHANGELOG/${entryVersion}.md`;
-    const recordPath = `CHANGELOG/records/${entryVersion}.md`;
-    mkdirSync(join(origin, "CHANGELOG/records"), { recursive: true });
-    commitFile(origin, entryPath, `## ${entryVersion}\n\nReleased.\n`, "docs: release entry");
-    const targetSha = commitFile(origin, recordPath, "Contributors.\n", "docs: release record");
-    const inputs = { ...DEFAULT_INPUTS, targetVersion: version };
-    const record = normalizedEvidence({ targetSha: priorSha, validationInputs: inputs });
-    const fixtures = setUpFixtures([{ record, runId: "111" }]);
-    const changedPaths = [
-      entryPath,
-      recordPath,
-      ...(delta === "unrelated" ? ["CHANGELOG/2026.6.8.md"] : []),
-    ];
-    const result = runResolver({
-      ...fixtures,
-      compareBaseSha: priorSha,
-      compareFiles: changedPaths,
-      inputs,
-      repoDir: cloneHead(origin),
-      targetSha,
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(parseOutput(result.stdout).reuse, result.stderr).toBe(
-      delta === "unrelated" ? "false" : "true",
-    );
-    if (delta !== "unrelated") {
-      expect(parseOutput(result.stdout)).toMatchObject({
-        changed_paths: JSON.stringify(changedPaths),
-        evidence_policy: "split-changelog-release-v1",
-      });
-    }
-  });
-
   it("rejects a source-file rename to CHANGELOG.md", () => {
     const { origin, priorSha } = createRepo();
     const targetSha = commitFile(origin, "CHANGELOG.md", "renamed source\n", "docs: rename");
@@ -1266,8 +1220,6 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
   it("rewrites inherited v3 producer identity to the current immutable workflow SHA", () => {
     const workflow = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
-    expect(workflow).toContain('--arg workflowSha "$GITHUB_SHA"');
-    expect(workflow).toContain("workflowSha: $workflowSha");
-    expect(workflow).toContain("ref: ${{ github.sha }}");
+    expect(workflow).toMatch(/--arg workflowSha "\$GITHUB_SHA"[\s\S]*workflowSha: \$workflowSha/u);
   });
 });

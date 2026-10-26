@@ -47,6 +47,7 @@ import {
   admitStateSchemaFacts,
   type StateSchemaContentVersionRowReader,
 } from "./openclaw-state-db-schema-version.js";
+import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
 import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
@@ -264,6 +265,8 @@ export function readOpenClawStateReadOnlyLocation<T>(
     // Scope and path policy are authority, not ordinary schema SQL failure.
     const existingSchema = isExistingOpenClawStateSchema(pathname, opened.database.db);
     try {
+      let operationStarted = false;
+      const snapshot = postgresStateReadSnapshot.getStore();
       const read = () =>
         runSqliteReadOperationSync(opened.database.db, () => {
           admitStateSchemaFacts(opened.database.db, pathname);
@@ -274,14 +277,13 @@ export function readOpenClawStateReadOnlyLocation<T>(
             undefined,
             readContentVersionRow,
           );
+          operationStarted = true;
           return operation(opened.database);
         });
-      result = {
-        status: "available",
-        value: isPostgresSqlConnection(opened.database.db)
+      const readTransaction = () =>
+        isPostgresSqlConnection(opened.database.db)
           ? opened.database.db.runTransaction(
               () => {
-                const snapshot = postgresStateReadSnapshot.getStore();
                 if (snapshot?.path === pathname) {
                   // sqlite-allow-raw: PostgreSQL imports the retained worker's MVCC snapshot before any read.
                   opened.database.db.exec(
@@ -293,8 +295,13 @@ export function readOpenClawStateReadOnlyLocation<T>(
               undefined,
               true,
             )
-          : read(),
-      };
+          : read();
+      const value = withPostgresSchemaAdmissionRetry(
+        opened.database.db,
+        readTransaction,
+        () => !operationStarted && snapshot?.path !== pathname,
+      );
+      result = { status: "available", value };
     } catch (error) {
       if (!isPostgresSqlConnection(opened.database.db) && isSqliteCorruptionError(error)) {
         invalidateOpenClawStateRuntimeIntegrity(opened.database.db);

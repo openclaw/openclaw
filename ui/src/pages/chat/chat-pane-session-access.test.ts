@@ -4,6 +4,7 @@ import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -13,16 +14,62 @@ import {
   waitForInputDialog,
 } from "../../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import {
-  createPaneHeaderWorkspaceFixture,
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-  createTestChatPane,
-} from "./chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import { createPaneHeaderWorkspaceFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import {
   openNativeMenu,
   renderPaneHeaderInto,
 } from "./components/chat-pane-header.test-support.ts";
+
+const sessionRow = (overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
+  key: "agent:main:current",
+  kind: "direct",
+  updatedAt: 0,
+  ...overrides,
+});
+const hello = (
+  scope = "operator.write",
+  methods = ["sessions.patch"],
+): NonNullable<ApplicationContext["gateway"]["snapshot"]["hello"]> => ({
+  type: "hello-ok",
+  protocol: 3,
+  auth: { role: "operator", scopes: [scope] },
+  features: { methods },
+});
+function createPatchPane(response: object = {}) {
+  const patch = vi.fn(async () => response);
+  return {
+    patch,
+    ...createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: { patch } as unknown as SessionCapability,
+    }),
+  };
+}
+function renderSharingHeader(
+  pane: ReturnType<typeof createTestChatPane>["pane"],
+  state: ReturnType<typeof createTestChatPane>["state"],
+  connected = false,
+) {
+  const container = document.createElement("div");
+  if (connected) {
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+  }
+  renderPaneHeaderInto(
+    pane.renderPaneHeader(
+      createPaneHeaderWorkspaceFixture(state),
+      sessionRow({ sharingRole: "owner", visibility: "shared" }),
+      false,
+      undefined,
+      false,
+      null,
+    ),
+    container,
+  );
+  return container;
+}
 
 async function createHeaderDraftPane(row: GatewaySessionRow) {
   const fixture = createTestChatPane({
@@ -30,12 +77,7 @@ async function createHeaderDraftPane(row: GatewaySessionRow) {
       request: async (method) => {
         switch (method) {
           case "agents.list":
-            return {
-              defaultId: "main",
-              mainKey: "main",
-              scope: "per-sender",
-              agents: [{ id: "main" }],
-            };
+            return makeBootRoster();
           case "sessions.list":
             return sessionsResult([row], 1);
           case "sessions.describe":
@@ -62,69 +104,42 @@ async function createHeaderDraftPane(row: GatewaySessionRow) {
 }
 
 describe("chat pane session access", () => {
-  it("refuses ordinary session creation for read-only operators", async () => {
-    const sessions = {
-      create: vi.fn(async () => "agent:main:new"),
-    } as unknown as SessionCapability;
-    const client = {} as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions });
-    pane.context.gateway.snapshot.hello = {
-      auth: { role: "operator", scopes: ["operator.read"] },
-      features: { methods: ["sessions.create"] },
-    } as ApplicationContext["gateway"]["snapshot"]["hello"];
+  it.each([
+    {
+      scope: "operator.read",
+      sessionKey: "agent:main:current",
+      required: "operator.sessions.write",
+    },
+    {
+      scope: "operator.write",
+      sessionKey: "agent:main:dashboard:incognito-current",
+      required: "operator.admin",
+    },
+  ])(
+    "refuses creation from $sessionKey without $required",
+    async ({ scope, sessionKey, required }) => {
+      const sessions = {
+        create: vi.fn(async () => "agent:main:new"),
+      } as unknown as SessionCapability;
+      const client = {} as GatewayBrowserClient;
+      const { pane, state } = createTestChatPane({ client, sessions });
+      state.sessionKey = sessionKey;
+      pane.context.gateway.snapshot.hello = hello(scope, ["sessions.create"]);
 
-    await expect(pane.createSession()).resolves.toBe(false);
+      await expect(pane.createSession()).resolves.toBe(false);
 
-    expect(sessions.create).not.toHaveBeenCalled();
-    expect(state.lastError).toContain("operator.sessions.write");
-    expect(state.chatError).toBe(state.lastError);
-  });
-
-  it("requires operator.admin when session creation inherits an incognito parent", async () => {
-    const sessions = {
-      create: vi.fn(async () => "agent:main:new"),
-    } as unknown as SessionCapability;
-    const client = {} as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions });
-    state.sessionKey = "agent:main:dashboard:incognito-current";
-    pane.context.gateway.snapshot.hello = {
-      auth: { role: "operator", scopes: ["operator.write"] },
-      features: { methods: ["sessions.create"] },
-    } as ApplicationContext["gateway"]["snapshot"]["hello"];
-
-    await expect(pane.createSession()).resolves.toBe(false);
-
-    expect(sessions.create).not.toHaveBeenCalled();
-    expect(state.lastError).toContain("operator.admin");
-    expect(state.chatError).toBe(state.lastError);
-  });
+      expect(sessions.create).not.toHaveBeenCalled();
+      expect(state.lastError).toContain(required);
+      expect(state.chatError).toBe(state.lastError);
+    },
+  );
 
   it("refuses header rename when sessions.patch is unavailable or lacks write scope", () => {
-    for (const hello of [
-      {
-        auth: { role: "operator", scopes: ["operator.write"] },
-        features: { methods: ["sessions.create"] },
-      },
-      {
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["sessions.patch"] },
-      },
-    ]) {
-      const patch = vi.fn(async () => ({}));
-      const sessions = { patch } as unknown as SessionCapability;
-      const { pane, state } = createTestChatPane({
-        client: {} as GatewayBrowserClient,
-        sessions,
-      });
-      pane.context.gateway.snapshot.hello =
-        hello as ApplicationContext["gateway"]["snapshot"]["hello"];
-      const session = {
-        key: "agent:main:current",
-        kind: "direct",
-        updatedAt: 0,
-      } satisfies GatewaySessionRow;
+    for (const snapshot of [hello("operator.write", ["sessions.create"]), hello("operator.read")]) {
+      const { pane, state, patch } = createPatchPane();
+      pane.context.gateway.snapshot.hello = snapshot;
 
-      pane.beginHeaderRename(session);
+      pane.beginHeaderRename(sessionRow());
 
       expect(Boolean(pane.headerPresentation.renameSession)).toBe(false);
       expect(state.chatError).toBeTruthy();
@@ -133,68 +148,19 @@ describe("chat pane session access", () => {
   });
 
   it("rechecks header rename access before committing", () => {
-    const patch = vi.fn(async () => ({}));
-    const sessions = { patch } as unknown as SessionCapability;
-    const { pane, state } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions,
-    });
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
+    const { pane, state, patch } = createPatchPane();
 
-    pane.beginHeaderRename(session);
+    pane.beginHeaderRename(sessionRow());
     pane.headerPresentation.renameValue = "Blocked rename";
-    pane.context.gateway.snapshot.hello = {
-      auth: { role: "operator", scopes: ["operator.read"] },
-      features: { methods: ["sessions.patch"] },
-    } as ApplicationContext["gateway"]["snapshot"]["hello"];
+    pane.context.gateway.snapshot.hello = hello("operator.read");
     pane.commitHeaderRename();
 
     expect(state.chatError).toBeTruthy();
     expect(patch).not.toHaveBeenCalled();
   });
 
-  it("cancels header rename when the Gateway source changes for the same session", () => {
-    const patch = vi.fn(async () => ({}));
-    const sessions = createSessionCapabilityFixture({ patch });
-    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions });
-    const hello = {
-      auth: { role: "operator", scopes: ["operator.write"] },
-      features: { methods: ["sessions.patch"] },
-    } as ApplicationContext["gateway"]["snapshot"]["hello"];
-    pane.context.gateway.snapshot.hello = hello;
-    state.hello = hello;
-    const session = {
-      key: state.sessionKey,
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-
-    pane.beginHeaderRename(session);
-    pane.headerPresentation.renameValue = "Replacement Gateway title";
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      client: { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient,
-      phase: "stopped",
-      hello: null,
-      sessionKey: state.sessionKey,
-    });
-    pane.commitHeaderRename();
-
-    expect(Boolean(pane.headerPresentation.renameSession)).toBe(false);
-    expect(patch).not.toHaveBeenCalled();
-  });
-
   it("retains inline rename text through a blip without submitting offline", async () => {
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
+    const session = sessionRow();
     const { pane, patch } = await createHeaderDraftPane(session);
     const connected = { ...pane.context.gateway.snapshot };
     pane.beginHeaderRename(session);
@@ -225,12 +191,7 @@ describe("chat pane session access", () => {
     "keeps header drafts through reconnect and retires them with %s identity",
     async (change) => {
       const modal = createModalDialogTestFixture();
-      const row: GatewaySessionRow = {
-        key: "agent:main:current",
-        sessionId: "current-session",
-        kind: "direct",
-        sharingRole: "owner",
-      };
+      const row = sessionRow({ sessionId: "current-session", sharingRole: "owner" });
       const { pane, patch, groupsPut } = await createHeaderDraftPane(row);
       const connected = {
         ...pane.context.gateway.snapshot,
@@ -293,6 +254,8 @@ describe("chat pane session access", () => {
         await retired;
         expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
         expect(pane.headerPresentation.renameSession).toBeNull();
+        pane.commitHeaderRename();
+        expect(patch).toHaveBeenCalledTimes(1);
       } finally {
         await modal.cleanup();
       }
@@ -303,11 +266,7 @@ describe("chat pane session access", () => {
     "keeps the header group draft after a %s assignment",
     async (outcome) => {
       const modal = createModalDialogTestFixture();
-      const row: GatewaySessionRow = {
-        key: "agent:main:current",
-        sessionId: "current-session",
-        kind: "direct",
-      };
+      const row = sessionRow({ sessionId: "current-session" });
       const { pane, patch } = await createHeaderDraftPane(row);
       patch.mockImplementationOnce(async () => {
         if (outcome === "stale") {
@@ -337,16 +296,8 @@ describe("chat pane session access", () => {
   );
 
   it("refuses archived-session restore without exact sessions.patch access", async () => {
-    const patch = vi.fn(async () => ({}));
-    const sessions = { patch } as unknown as SessionCapability;
-    const { pane, state } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions,
-    });
-    pane.context.gateway.snapshot.hello = {
-      auth: { role: "operator", scopes: ["operator.read"] },
-      features: { methods: ["sessions.patch"] },
-    } as ApplicationContext["gateway"]["snapshot"]["hello"];
+    const { pane, state, patch } = createPatchPane();
+    pane.context.gateway.snapshot.hello = hello("operator.read");
 
     await pane.restoreArchivedSession(state.sessionKey, "session-a");
 
@@ -356,15 +307,8 @@ describe("chat pane session access", () => {
   });
 
   it("restores the exact durable session observed by the composer", async () => {
-    const patch = vi.fn(async () => ({ ok: true }));
-    const { pane, state } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
-    });
-    pane.context.gateway.snapshot.hello = {
-      auth: { role: "operator", scopes: ["operator.write"] },
-      features: { methods: ["sessions.patch"] },
-    } as ApplicationContext["gateway"]["snapshot"]["hello"];
+    const { pane, state, patch } = createPatchPane({ ok: true });
+    pane.context.gateway.snapshot.hello = hello();
     state.sessionsResult = sessionsResult(
       [
         {
@@ -395,26 +339,7 @@ describe("chat pane session access", () => {
     pane.context.gateway.snapshot.hello = {
       auth: { role: "operator", scopes: ["operator.write"] },
     } as ApplicationContext["gateway"]["snapshot"]["hello"];
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-      sharingRole: "owner",
-      visibility: "shared",
-    } satisfies GatewaySessionRow;
-    const container = document.createElement("div");
-
-    renderPaneHeaderInto(
-      pane.renderPaneHeader(
-        createPaneHeaderWorkspaceFixture(state),
-        session,
-        false,
-        undefined,
-        false,
-        null,
-      ),
-      container,
-    );
+    const container = renderSharingHeader(pane, state);
 
     expect(container.querySelector(".chat-pane__sharing-menu")).toBeNull();
   });
@@ -429,28 +354,7 @@ describe("chat pane session access", () => {
       features: { methods: ["session.visibility.set"] },
       policy: { allowedSessionVisibilities: ["shared", "read-only"] },
     } as ApplicationContext["gateway"]["snapshot"]["hello"];
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-      sharingRole: "owner",
-      visibility: "shared",
-    } satisfies GatewaySessionRow;
-    const container = document.createElement("div");
-    document.body.append(container);
-    onTestFinished(() => container.remove());
-
-    renderPaneHeaderInto(
-      pane.renderPaneHeader(
-        createPaneHeaderWorkspaceFixture(state),
-        session,
-        false,
-        undefined,
-        false,
-        null,
-      ),
-      container,
-    );
+    const container = renderSharingHeader(pane, state, true);
 
     await waitForSolid(() =>
       expect(

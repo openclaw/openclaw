@@ -13,7 +13,10 @@ const peer = (processId: number, bundleIdentifier: string): [number, FaceTimeHel
     processStartedAtMs: Date.parse(startedAt) + 900,
   },
 ];
-const peers = new Map([peer(1001, "com.apple.FaceTime"), peer(1002, "com.apple.mobilephone")]);
+const peers = new Map([
+  peer(1001, "com.apple.FaceTime"),
+  peer(1002, "com.apple.FaceTime.FTConversationService"),
+]);
 type RunCommand = PluginRuntime["system"]["runCommandWithTimeout"];
 type CommandResult = Awaited<ReturnType<RunCommand>>;
 function result(code: number, stdout = "", stderr = ""): CommandResult {
@@ -28,7 +31,10 @@ function processFixture(terminating = [...peers.keys()]) {
     const pid = Number(argv[2]);
     if (argv[0] === "/bin/ps") {
       return alive.has(pid)
-        ? result(0, argv[4] === "comm=" ? (pid === 1001 ? "FaceTime" : "Phone") : startedAt)
+        ? result(
+            0,
+            argv[4] === "comm=" ? (pid === 1001 ? "FaceTime" : "FTConversationService") : startedAt,
+          )
         : result(1);
     }
     if (argv[0] !== "/bin/kill" || !argv[1]) {

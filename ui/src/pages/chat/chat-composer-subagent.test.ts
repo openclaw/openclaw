@@ -2,10 +2,12 @@
 import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { disposeQuestionPromptState } from "../../app/question-prompt.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import {
   createComposerContainer,
   disposeComposer,
@@ -14,7 +16,7 @@ import {
 } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
-import { createGatewayBrowserClientFixture, createPaneTestHost } from "./chat-pane.test-support.ts";
+import { createPaneTestHost } from "./chat-pane.test-support.ts";
 import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
 import { disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.tsx";
@@ -289,12 +291,7 @@ it.each([
       createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
     );
     state.sessionKey = "agent:main:setup";
-    context.agents.state.agentsList = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "global",
-      agents: [{ id: "main" }],
-    };
+    context.agents.state.agentsList = makeBootRoster({ scope: "global" });
     state.handleSendChat = vi.fn();
     state.chatMessage = draft;
     state.chatModelCatalogInitialized = true;
@@ -335,12 +332,7 @@ it.each([
       createGatewayBrowserClientFixture({ recoveryScopeReady: true }),
     );
     state.sessionKey = "agent:main:choice";
-    context.agents.state.agentsList = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "global",
-      agents: [{ id: "main" }],
-    };
+    context.agents.state.agentsList = makeBootRoster({ scope: "global" });
     state.sessionsResult = {
       ts: 1,
       path: "",

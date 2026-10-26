@@ -5,7 +5,12 @@
  * Runtime callers import this barrel instead of storage-specific modules.
  */
 export * from "./session-history.js";
+export {
+  listSessionTranscriptInstances,
+  listSessionTranscriptArchivesReadOnly,
+} from "./session-history-read.js";
 export { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
+export { recoverSessionTranscriptProjection } from "./session-transcript-projection-recovery.js";
 export {
   bindSessionPendingInputSources,
   listSessionPendingInputs,
@@ -44,7 +49,6 @@ export type {
   SessionAbortTargetIdentity,
   SessionAbortTargetResult,
   SessionAccessScope,
-  SessionArchivedTranscriptCleanupRule,
   SessionMessageCutMutationParams,
   SessionMessageCutMutationResult,
   SessionBranchListParams,
@@ -256,7 +260,7 @@ export {
   appendTranscriptMessages,
   persistSessionTranscriptTurn,
 } from "./session-accessor.transcript-turn.js";
-export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
+export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
 export { validateSessionTranscriptContextAdmission } from "./session-accessor.sqlite-model-context.js";
 export {
   isSessionTranscriptProjectionUnavailableError,

@@ -1,9 +1,13 @@
-.chat-details:not([hidden]):has(> .chat-details-desktop-body) {
+/* Discrete display transitions keep the closed surface painted during its exit. */
+.chat-details[data-desktop]:has(> .chat-details-desktop-body) {
   --details-surface: var(--card);
-  display: flex;
   flex-direction: column;
   padding: 0;
   overflow: hidden;
+}
+
+.chat-details:not([hidden]):has(> .chat-details-desktop-body) {
+  display: flex;
 }
 
 .chat-details.chat-details--docked:has(> .chat-details-desktop-body) {
@@ -187,6 +191,10 @@
 .chat-details-session[data-details-desktop] > .chat-details__group,
 .chat-details-session[data-details-desktop] > .chat-details-desktop-section,
 .chat-details-session[data-details-desktop]
+  > .chat-details-processes__envelope
+  > .chat-details-processes__motion-content
+  > .chat-details-desktop-section,
+.chat-details-desktop-body__content
   > openclaw-chat-summary-automations
   > :is(.chat-details__group, .chat-details-desktop-section) {
   margin: 0;
@@ -195,7 +203,11 @@
 }
 
 .chat-details-session[data-details-desktop]
-  > :is(.chat-details__group, .chat-details-desktop-section):first-child {
+  > :is(.chat-details__group, .chat-details-desktop-section):first-child,
+.chat-details-session[data-details-desktop]
+  > .chat-details-processes__envelope:first-child
+  > .chat-details-processes__motion-content
+  > .chat-details-desktop-section {
   border-top: 0;
 }
 
@@ -219,12 +231,6 @@
   padding: 0;
 }
 
-.chat-details-desktop-context-summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 /* Composition tokens apply only under the native desktop body, never mobile leaves. */
 .chat-details
   .chat-details-desktop-body
@@ -232,7 +238,6 @@
     .chat-details-people__row,
     .chat-details-people__name,
     .chat-details__row,
-    .chat-details__value,
     .chat-environment__action,
     .chat-summary__automation,
     .chat-summary__automation-title,
@@ -245,12 +250,7 @@
     .chat-pr__branch,
     .chat-pr__repo,
     .session-progress-card__step,
-    .session-progress-card__step-text,
-    .chat-context__row,
-    .chat-context__label,
-    .chat-context__entry,
-    .chat-context__entry > span:first-child,
-    .chat-context__compact
+    .session-progress-card__step-text
   ) {
   font-family: var(--font-body);
   font-size: var(--details-row-font-size);
@@ -276,14 +276,6 @@
     .chat-pr__number,
     .chat-pr__state,
     .chat-pr__stale,
-    .chat-details__context-budget,
-    .chat-details__context-budget strong,
-    .chat-details__stats,
-    .chat-context__tokens,
-    .chat-context__percent,
-    .chat-context__label small,
-    .chat-context__entry > span:last-child,
-    .chat-context__note,
     .chat-details__muted,
     .chat-outputs__status,
     .task-progress-details__count
@@ -300,7 +292,6 @@
   :is(
     .chat-details-desktop-section__heading,
     .chat-details__caption,
-    .chat-summary__automation-pending,
     .task-progress-details__heading,
     .task-progress-details__title
   ) {
@@ -340,9 +331,7 @@
     .chat-details-subagents__row,
     .chat-outputs__row,
     .chat-pr.chat-pr--summary,
-    .session-progress-card__step,
-    .chat-context__row,
-    .chat-context__entry
+    .session-progress-card__step
   ) {
   box-sizing: border-box;
   width: 100%;
@@ -364,8 +353,7 @@
   row-gap: var(--details-row-list-gap);
 }
 
-.chat-details .chat-details-desktop-body .chat-summary__automation-error,
-.chat-details .chat-details-desktop-body .chat-summary__automation-message {
+.chat-details .chat-details-desktop-body .chat-summary__automation-error {
   padding-inline: var(--details-row-padding);
 }
 
@@ -399,14 +387,7 @@
   border-color: var(--details-surface);
 }
 
-.chat-details
-  .chat-details-desktop-body
-  :is(
-    .task-progress-details__count,
-    .chat-details__context-budget strong,
-    .chat-context__tokens,
-    .chat-context__percent
-  ) {
+.chat-details .chat-details-desktop-body .task-progress-details__count {
   color: var(--muted);
 }
 
@@ -443,7 +424,7 @@
 }
 
 .chat-details .chat-details-desktop-body a.chat-details-people__row:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .chat-details
@@ -537,7 +518,6 @@
   font-weight: 500;
 }
 
-.chat-details-desktop-context > .chat-details-desktop-section,
 .chat-details-desktop-environment:not(:first-child) > .chat-details-desktop-section {
   border-top: 1px solid var(--details-separator);
 }

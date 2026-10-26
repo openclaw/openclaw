@@ -281,10 +281,7 @@ it("restores a held custom filename only after its session store configuration s
     workspace: state.path("restored-workspace"),
     agentDir: path.dirname(target.path),
   };
-  await expectCreation(params, {
-    ...duplicate,
-    message: expect.stringContaining("session.store"),
-  });
+  await expectCreation(params, { ...duplicate, message: expect.stringContaining("session.store") });
   expect(await state.readConfig()).toBe(originalConfig);
   await expectMissing(path.join(params.agentDir, "openclaw-agent.sqlite"));
   await state.writeConfig({ ...config, session: { store: target.path } });
@@ -315,10 +312,7 @@ it.each(["missing", "un-authored"] as const)(
     await expectCreation(
       { name: "main", workspace, bootstrapMain: true },
       configState === "missing"
-        ? {
-            ...duplicate,
-            message: expect.stringContaining("held databases"),
-          }
+        ? { ...duplicate, message: expect.stringContaining("held databases") }
         : { status: "existing" },
     );
 
@@ -385,9 +379,7 @@ it.each([
 ])("retains the recovery hold when the preserved database is %s", async (change) => {
   const state = await createState("changed-held-store");
 
-  await state.writeConfig({
-    agents: { entries: { ops: { workspace: state.workspaceDir } } },
-  });
+  await state.writeConfig({ agents: { entries: { ops: { workspace: state.workspaceDir } } } });
   const target = { agentId: "main", path: path.join(state.agentDir(), "openclaw-agent.sqlite") };
   const recovery = await prepareRecoveryHolds(state, target.agentId, [target]);
   const originalConfig = await state.readConfig();
@@ -533,6 +525,10 @@ it.for(["workspace", "workspace-write", "config"] as const)(
       entered.resolve(pausedPhase);
       await resume.promise;
     };
+    if (phase === "workspace-write") {
+      // Bootstrap private state with native ACL inspection before the JS write pause.
+      openOpenClawStateDatabase({ env: state.env });
+    }
     const restoreWorkspacePreparation = installWorkspacePreparationPause(workspace, phase, pause);
     const commit = vi.fn();
     const rollback = vi.fn(async () => await fs.rm(stagedFile));
@@ -831,10 +827,7 @@ it("creates main as an ordinary fresh agent after doctor completes both ownershi
   writeLegacy("agent:main:late", "late-legacy-before-main-reuse", 200);
 
   const blocked = await createAgent({ name: "main", workspace: state.path("workspace-main") });
-  expect(blocked).toMatchObject({
-    status: "error",
-    reason: "legacy-session-migration-required",
-  });
+  expect(blocked).toMatchObject({ status: "error", reason: "legacy-session-migration-required" });
   expect(readSession("agent:main:late", "main", legacyDatabasePath)).toMatchObject({
     sessionId: "late-legacy-before-main-reuse",
   });

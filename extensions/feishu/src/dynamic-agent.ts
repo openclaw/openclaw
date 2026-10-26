@@ -12,10 +12,6 @@ type DynamicAgentMutationResult = {
   created: boolean;
 };
 
-type MaybeCreateDynamicAgentResult = DynamicAgentMutationResult & {
-  updatedCfg: OpenClawConfig;
-};
-
 class DynamicAgentMutationSkipped extends Error {
   constructor(readonly cfg: OpenClawConfig) {
     super("dynamic agent mutation skipped");
@@ -76,7 +72,7 @@ export async function maybeCreateDynamicAgent(params: {
   senderOpenId: string;
   canCreateForConfig: (cfg: OpenClawConfig) => Promise<boolean>;
   log: (msg: string) => void;
-}): Promise<MaybeCreateDynamicAgentResult> {
+}) {
   const { cfg, runtime, senderOpenId, canCreateForConfig, log } = params;
   const accountId = normalizeAccountId(params.accountId);
 

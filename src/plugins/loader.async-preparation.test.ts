@@ -1,4 +1,6 @@
+import { availableParallelism } from "node:os";
 import { performance } from "node:perf_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { loadOpenClawPlugins, loadOpenClawPluginsAsync } from "./loader.js";
@@ -106,7 +108,18 @@ it("records acquisition failure for one plugin and still loads its sibling", () 
       }
       return prepare(params);
     });
+    const invalid = writePlugin({
+      id: "invalid-external",
+      registration: "throw new Error('invalid config must not execute');",
+      configSchema: { type: "object", required: ["missing"] },
+    });
+    options.config.plugins.allow.push(invalid.id);
+    options.config.plugins.load.paths.splice(1, 0, invalid.file);
     const registry = await loadOpenClawPluginsAsync(options);
+    expect(
+      registry.diagnostics.filter(({ level }) => level === "error").map(({ pluginId }) => pluginId),
+    ).toEqual([first.id, invalid.id]);
+    expect(registry.plugins.map(({ id }) => id)).toEqual([first.id, invalid.id, second.id]);
     expect(registry.plugins.find((plugin) => plugin.id === first.id)?.status).toBe("error");
     expect(registry.plugins.find((plugin) => plugin.id === second.id)?.status).toBe("loaded");
     expect(registry.providers.map(({ provider }) => provider.label)).toEqual(["Second"]);
@@ -128,3 +141,34 @@ it.each(["synchronous CLI", "cached async"])("loads %s without worker acquisitio
     expect(registry.providers.map(({ provider }) => provider.label)).toEqual(["First", "Second"]);
   }),
 );
+
+it("bounds overlapping external captures and preserves registration order", () =>
+  isolated(async ({ options }) => {
+    const more = Array.from({ length: 4 }, (_, index) =>
+      writePlugin({ id: `extra-${index}`, registration: "" }),
+    );
+    options.config.plugins.allow.push(...more.map(({ id }) => id));
+    options.config.plugins.load.paths.push(...more.map(({ file }) => file));
+    const prepare = preparation.preparePluginGenerationArtifact;
+    let active = 0;
+    let peak = 0;
+    vi.spyOn(preparation, "preparePluginGenerationArtifact").mockImplementation(async (params) => {
+      active++;
+      peak = Math.max(peak, active);
+      try {
+        await nextTurn();
+        return await prepare(params);
+      } finally {
+        active--;
+      }
+    });
+    const registry = await loadOpenClawPluginsAsync(options);
+    expect(peak).toBe(Math.min(4, availableParallelism()));
+    expect(registry.plugins.map(({ id, status }) => [id, status])).toEqual([
+      ["first-external", "loaded"],
+      ["second-external", "loaded"],
+      ...more.map(({ id }) => [id, "loaded"]),
+    ]);
+    expect(registry.providers.map(({ provider }) => provider.label)).toEqual(["First", "Second"]);
+    expect(registry.diagnostics.filter(({ level }) => level === "error")).toEqual([]);
+  }));
