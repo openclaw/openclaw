@@ -221,7 +221,7 @@ declare global {
 }
 /** Real Web Audio signal; provider data-channel messages use the existing E2E contract. */
 export async function installTalkPerfFixture(
-  page: Page,
+  page: Pick<Page, "addInitScript" | "route">,
   includeCounters: boolean,
   suspendNativeAudio: boolean,
   transportMode: "webrtc" | "gateway-relay" = "webrtc",

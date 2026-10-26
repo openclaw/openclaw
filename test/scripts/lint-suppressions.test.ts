@@ -167,8 +167,8 @@ describe("production lint suppressions", () => {
         "scripts/e2e/parallels/host-command.ts|no-warning-comments|1",
         // The scheduling probe forwards native methods with the original call receiver through Reflect.apply.
         "scripts/lib/control-ui-resource-counts.ts|typescript/unbound-method|8",
-        // The Talk probe forwards native playback and analyser methods with their original receivers.
-        "scripts/lib/control-ui-talk-fixture.ts|typescript/unbound-method|2",
+        // The Talk probe forwards native playback, analyser, processor, start, and stop methods with their original receivers.
+        "scripts/lib/control-ui-talk-fixture.ts|typescript/unbound-method|5",
         "scripts/lib/plain-gh.mjs|no-warning-comments|1",
         "scripts/lib/sqlite-reliability-process.ts|typescript/prefer-promise-reject-errors|1",
         // The copy-count probe restores the native method after measurement.

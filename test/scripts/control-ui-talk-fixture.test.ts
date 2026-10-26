@@ -30,14 +30,19 @@ it("stops cancelled relay output while a stale cancellation leaves the live turn
   const events: Array<{ type: string; talkEvent?: { turnId?: string; type?: string } }> = [];
   let initializer = "";
   let fixtureArgs: unknown;
+  const disposable = {
+    async dispose() {},
+    async [Symbol.asyncDispose]() {},
+  };
   // The fixture installs only an init script and this route; no browser is required for its timer contract.
   const page = {
-    addInitScript: async (script: unknown, args: unknown) => {
+    addInitScript: async (script: unknown, args?: unknown) => {
       initializer = String(script);
       fixtureArgs = args;
+      return disposable;
     },
-    route: async () => {},
-  } as Page;
+    route: async () => disposable,
+  } satisfies Pick<Page, "addInitScript" | "route">;
   class AudioNode {
     frequency = { value: 0 };
     gain = { value: 0 };
