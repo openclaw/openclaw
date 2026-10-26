@@ -2,6 +2,11 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import { createServer } from "node:http";
 import { Command } from "commander";
 import { expect, it, vi } from "vitest";
+import {
+  readRequestText,
+  respondJson,
+} from "../../../test/helpers/gateway-integration-fixtures.js";
+import { completionConfig } from "../../agents/simple-completion.test-support.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
@@ -23,45 +28,43 @@ it("creates qualified ClawRouter embeddings through the registered CLI without a
     offsets: [0],
     createListener: () =>
       createServer((request, response) => {
-        void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
-          const body: { model: string; input: string[] } = JSON.parse(
-            Buffer.concat(chunks).toString("utf8"),
+        void readRequestText(request)
+          .then((text) => {
+            const body: { model: string; input: string[] } = JSON.parse(text);
+            requests.push({ url: request.url, authorization: request.headers.authorization, body });
+            if (request.url !== "/v1/embeddings") {
+              response.writeHead(404).end();
+              return;
+            }
+            const failure = failures.find(([model]) => model === body.model);
+            const status = failure?.[1] ?? 200;
+            respondJson(response, failure ? { error: { message: failure[2] } } : { data }, status);
+          })
+          .catch((error: unknown) =>
+            response.destroy(error instanceof Error ? error : new Error(String(error))),
           );
-          requests.push({ url: request.url, authorization: request.headers.authorization, body });
-          if (request.url !== "/v1/embeddings") {
-            response.writeHead(404).end();
-            return;
-          }
-          const failure = failures.find(([model]) => model === body.model);
-          const status = failure?.[1] ?? 200;
-          response.writeHead(status, { "content-type": "application/json" });
-          response.end(JSON.stringify(failure ? { error: { message: failure[2] } } : { data }));
-        })().catch((error: unknown) =>
-          response.destroy(error instanceof Error ? error : new Error(String(error))),
-        );
       }),
   });
   try {
     await withOpenClawTestState({ label: "clawrouter-embedding-cli" }, async (state) => {
-      await state.writeConfig({
-        agents: { entries: { main: {} } },
-        plugins: { enabled: false },
-        models: {
-          providers: {
-            clawrouter: {
-              api: "openai-completions",
-              baseUrl: `http://127.0.0.1:${fixture.claim.port}/v1`,
-              apiKey: { source: "env", provider: "default", id: "CLAWROUTER_API_KEY" },
-              models: [],
+      await state.writeConfig(
+        completionConfig(
+          "clawrouter",
+          {
+            api: "openai-completions",
+            baseUrl: `http://127.0.0.1:${fixture.claim.port}/v1`,
+            apiKey: { source: "env", provider: "default", id: "CLAWROUTER_API_KEY" },
+            models: [],
+          },
+          {
+            agents: { entries: { main: {} } },
+            plugins: { enabled: false },
+            memory: {
+              search: { provider: "clawrouter", model: embeddingModel, fallback: "none" },
             },
           },
-        },
-        memory: { search: { provider: "clawrouter", model: embeddingModel, fallback: "none" } },
-      });
+        ),
+      );
       vi.stubEnv("CLAWROUTER_API_KEY", "synthetic-router-key");
       const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       const errors = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
@@ -69,17 +72,8 @@ it("creates qualified ClawRouter embeddings through the registered CLI without a
         throw new Error(`exit ${code}`);
       });
       const run = async (model: string) => {
-        const argv = [
-          "infer",
-          "embedding",
-          "create",
-          "--agent",
-          "main",
-          "--model",
-          `clawrouter/${model}`,
-          ...inputs.flatMap((text) => ["--text", text]),
-          "--json",
-        ];
+        const argv = "infer embedding create --agent main --json".split(" ");
+        argv.push("--model", `clawrouter/${model}`, ...inputs.flatMap((text) => ["--text", text]));
         const program = new Command();
         await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
         await program.parseAsync(argv, { from: "user" });
@@ -90,7 +84,6 @@ it("creates qualified ClawRouter embeddings through the registered CLI without a
           ok: true,
           provider: "openai-compatible",
           model: embeddingModel,
-          attempts: [],
           outputs: [
             { text: "hello", embedding: [1, 0, 0], dimensions: 3 },
             { text: "world", embedding: [0, 1, 0], dimensions: 3 },
