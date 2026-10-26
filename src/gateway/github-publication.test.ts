@@ -251,106 +251,87 @@ describe("Gateway GitHub publication", () => {
     expect(commands).toHaveLength(commandCount);
   });
 
-  it("reuses an existing upstream pull request for a fork head", async () => {
-    mocks.resolveRepository.mockResolvedValue({
-      ...repository,
-      originUrl: "git@github.com:roboclaw-bot/openclaw.git",
-    });
-    overrideCommands((command) => {
-      if (command.startsWith("gh api --hostname github.com repos/roboclaw-bot/openclaw --jq")) {
-        return commandResult(
-          '{"fork":true,"default_branch":"main","parent":{"name":"openclaw","default_branch":"main","owner":{"login":"openclaw"}}}\n',
-        );
-      }
-      if (command.includes("ls-remote") && command.includes("roboclaw-bot/openclaw.git")) {
-        return commandResult(`${NEW_HEAD}\trefs/heads/${BRANCH}\n`);
-      }
-      if (pullLookup(command)) {
-        return pullResponse({ url: "https://github.com/openclaw/openclaw/pull/125201" });
-      }
-      return undefined;
-    });
-    const result = await publish("fork-existing-pr");
-    expect(result).toMatchObject({
-      status: "published",
-      repository: "openclaw/openclaw",
-      url: "https://github.com/openclaw/openclaw/pull/125201",
-    });
-    expect(
-      mocks.runCommand.mock.calls.some(([argv]) =>
-        argv.includes("head=roboclaw-bot:openclaw/publication"),
-      ),
-    ).toBe(true);
-    expect(mocks.runCommand.mock.calls.some(([argv]) => argv.includes("POST"))).toBe(false);
-  });
-
-  it.each([
-    { state: "open" as const, expectedStatus: "published" as const },
-    { state: "closed" as const, expectedStatus: "failed" as const },
-  ])(
-    "handles a $state pull request after a lost POST response",
-    async ({ state, expectedStatus }) => {
+  it.each(["fork head", "lost open response", "lost closed response", "wrong base"] as const)(
+    "reconciles the publication pull request after %s",
+    async (scenario) => {
+      const fork = scenario === "fork head";
+      const lostResponse = scenario.startsWith("lost ");
+      const closed = scenario === "lost closed response";
+      const resultUrl = `https://github.com/openclaw/openclaw/pull/${fork ? "125201" : lostResponse ? "125203" : "right-base"}`;
       let pullLookups = 0;
       let createdBody = "";
+      if (fork) {
+        mocks.resolveRepository.mockResolvedValue({
+          ...repository,
+          originUrl: "git@github.com:roboclaw-bot/openclaw.git",
+        });
+      }
       overrideCommands((command, _argv, input) => {
+        if (
+          fork &&
+          command.startsWith("gh api --hostname github.com repos/roboclaw-bot/openclaw --jq")
+        ) {
+          return commandResult(
+            '{"fork":true,"default_branch":"main","parent":{"name":"openclaw","default_branch":"main","owner":{"login":"openclaw"}}}\n',
+          );
+        }
+        if (
+          fork &&
+          command.includes("ls-remote") &&
+          command.includes("roboclaw-bot/openclaw.git")
+        ) {
+          return commandResult(`${NEW_HEAD}\trefs/heads/${BRANCH}\n`);
+        }
         if (pullLookup(command)) {
-          pullLookups += 1;
-          return pullLookups < 3
-            ? commandResult("[]\n")
-            : pullResponse({
-                url: "https://github.com/openclaw/openclaw/pull/125203",
-                state,
-                body: createdBody,
-              });
+          pullLookups++;
+          if (lostResponse && pullLookups < 3) {
+            return commandResult("[]\n");
+          }
+          return pullResponse({
+            url:
+              scenario === "wrong base"
+                ? "https://github.com/openclaw/openclaw/pull/old-base"
+                : resultUrl,
+            state: closed ? "closed" : "open",
+            baseRef: scenario === "wrong base" ? "release" : "main",
+            body: createdBody,
+          });
         }
         if (command === POST_PULL) {
           createdBody = String(JSON.parse(input ?? "{}").body ?? "");
-          return commandResult("", 1);
+          return lostResponse
+            ? commandResult("", 1)
+            : commandResult(JSON.stringify({ html_url: resultUrl }));
         }
         return undefined;
       });
-      const result = await publish("lost-post-response");
+      const result = await publish(scenario);
       expect(result).toMatchObject(
-        expectedStatus === "published"
-          ? { status: "published", url: "https://github.com/openclaw/openclaw/pull/125203" }
-          : {
+        closed
+          ? {
               status: "failed",
               code: "github_rejected",
               nextAction:
                 "Reopen the closed pull request or retry to create a new publication request.",
-            },
+            }
+          : { status: "published", repository: "openclaw/openclaw", url: resultUrl },
       );
-      expect(mocks.runCommand.mock.calls.filter(([argv]) => argv.includes("POST"))).toHaveLength(1);
-      expect(pullLookups).toBe(3);
+      expect(githubPosts()).toHaveLength(fork ? 0 : 1);
+      if (lostResponse) {
+        expect(pullLookups).toBe(3);
+      } else {
+        const lookup = mocks.runCommand.mock.calls.find(
+          ([argv]) =>
+            argv.includes("state=all") &&
+            argv.includes(`head=${fork ? "roboclaw-bot" : "openclaw"}:openclaw/publication`),
+        );
+        expect(lookup).toBeDefined();
+        if (!fork) {
+          expect(lookup?.[0]).toContain("base=main");
+        }
+      }
     },
   );
-
-  it("does not reuse an open pull request targeting a different base branch", async () => {
-    overrideCommands((command) => {
-      if (pullLookup(command)) {
-        return pullResponse({
-          url: "https://github.com/openclaw/openclaw/pull/old-base",
-          baseRef: "release",
-        });
-      }
-      if (command === POST_PULL) {
-        return commandResult(
-          '{"html_url":"https://github.com/openclaw/openclaw/pull/right-base"}\n',
-        );
-      }
-      return undefined;
-    });
-    const result = await publish("wrong-base-pr");
-    expect(result).toMatchObject({
-      status: "published",
-      url: "https://github.com/openclaw/openclaw/pull/right-base",
-    });
-    const lookup = mocks.runCommand.mock.calls.find(
-      ([argv]) => argv.includes("state=all") && argv.includes("head=openclaw:openclaw/publication"),
-    );
-    expect(lookup?.[0]).toContain("base=main");
-    expect(mocks.runCommand.mock.calls.filter(([argv]) => argv.includes("POST"))).toHaveLength(1);
-  });
 
   it("rejects an effective clean filter before snapshotting workspace content", async () => {
     overrideCommands((_command, argv) => {
