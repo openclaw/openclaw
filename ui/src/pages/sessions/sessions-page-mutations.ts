@@ -146,6 +146,15 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     return deleteSessions(rows.filter((row) => state.selectedSessions.get(row.key) === row));
   }
 
+  // Selections keep captured row copies across same-incarnation refreshes;
+  // automation facts come from the roster row for that incarnation when present.
+  function currentAutomationFlag(row: SessionDeleteRow): boolean | undefined {
+    const current = state.result?.sessions.find(
+      (entry) => entry.key === row.key && entry.sessionId === row.sessionId,
+    );
+    return (current ?? row).hasAutomation;
+  }
+
   // Bound automations turn the delete confirm into an explicit pause warning.
   function confirmDelete(
     message: string,
@@ -165,7 +174,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
           key: row.key,
           agentId: sessionAgentId(row.key, scope.context),
           label: normalizeOptionalString(row.label) ?? row.key,
-          hasAutomation: row.hasAutomation,
+          hasAutomation: currentAutomationFlag(row),
         })),
         gateway: scope.gateway,
         signal: scope.signal,

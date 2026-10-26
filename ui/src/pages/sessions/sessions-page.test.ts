@@ -571,6 +571,23 @@ describe("sessions page lifecycle", () => {
     expect(sessions.deleteMany).toHaveBeenCalledWith([capturedTarget(target)]);
   });
 
+  it("warns about automations added to a selected conversation after selection", async () => {
+    vi.mocked(showConfirmDialog).mockResolvedValue(false);
+    const target = sessionRow("gained-automation");
+    const { page, sessions } = await mountMutation();
+    page.result = sessionsResult([target], 1);
+    // Selecting captures a row copy through the page's real selection owner.
+    selectRows(page, target);
+    // A refreshed row for the same incarnation keeps the captured selection copy.
+    page.result = sessionsResult([{ ...target, hasAutomation: true }], 2);
+    await page.deleteSelected();
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
+    expect(showConfirmDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ confirmLabel: "Delete anyway" }),
+    );
+    expect(sessions.deleteMany).not.toHaveBeenCalled();
+  });
+
   it("publishes unrelated roster updates while an optimistic deletion is pending", async () => {
     const target = sessionRow("before");
     const arrived = sessionRow("arrived", { updatedAt: 2 });

@@ -137,10 +137,12 @@ async function listBoundAutomations(
   const jobs = new Map<string, CronCompactJob>();
   let unlisted = 0;
   for (const page of pages) {
-    for (const job of page?.jobs ?? []) {
+    // A response without a job list names nothing; the row flag still warns.
+    const listed = Array.isArray(page?.jobs) ? page.jobs : [];
+    for (const job of listed) {
       jobs.set(job.id, job);
     }
-    unlisted += Math.max(0, (page?.total ?? 0) - (page?.jobs.length ?? 0));
+    unlisted += Math.max(0, (page?.total ?? 0) - listed.length);
   }
   return { jobs: [...jobs.values()], total: jobs.size + unlisted };
 }
