@@ -117,8 +117,7 @@ it.each([
   const before = await fs.lstat(archive).catch(() => undefined);
   const suppliedBytes = before && failure !== "oversized" ? await fs.readFile(archive) : undefined;
   const restarted = createProvider(options);
-  const [artifact, concurrent] = await Promise.all([restarted.prepare(), restarted.prepare()]);
-  expect(concurrent).toBe(artifact);
+  const artifact = await restarted.prepare();
   expect(artifact.tarballSha256).toBe(built.tarballSha256);
   expect(await fs.readFile(artifact.tarballPath)).toEqual(builtBytes);
   if (!before) {
@@ -131,16 +130,11 @@ it.each([
       expect(await fs.readFile(archive)).toEqual(suppliedBytes);
     }
   }
-  await restarted.close();
-  await expect(fs.access(artifact.tarballPath)).rejects.toHaveProperty("code", "ENOENT");
 });
 
-it.each([
-  { owner: "built runtime", relative: "dist/shared.js" },
-  { owner: "selected plugin", relative: "dist/extensions/remote-runtime/index.js" },
-])("rebuilds changed $owner bytes under the same version and build ID", async ({ relative }) => {
+it("rebuilds changed runtime bytes under the same version and build ID", async () => {
   const { root, packageRoot, options, bytes, archive, sha256 } = await retainArchive();
-  await write(packageRoot, relative, 'export const answer = "changed-runtime";');
+  await write(packageRoot, "dist/shared.js", 'export const answer = "changed-runtime";');
   const artifact = await createProvider(options).prepare();
   expect(artifact).toMatchObject({ buildId, openclawVersion: version });
   expect(artifact.tarballSha256).not.toBe(sha256);

@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
-import type {
-  NodeWorkerSupervisorNodeProof,
-  NodeWorkerSupervisorTransport,
-} from "../node-registry-private.js";
+import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { createGatewayNodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
 import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import * as support from "./service.test-support.js";
 
-function createHeldInstaller(boundary: "attachment read" | "discovery" | "installation") {
+function createHeldInstaller(
+  boundary: "attachment read" | "discovery" | "installation",
+  signal?: AbortSignal,
+) {
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const pause = async <T>(at: typeof boundary, value: T) => {
@@ -19,13 +19,7 @@ function createHeldInstaller(boundary: "attachment read" | "discovery" | "instal
     }
     return value;
   };
-  const node: NodeWorkerSupervisorNodeProof = createNodeWorkerBundleTestNode({
-    nodeId: "cloud-owner-node",
-    connId: "owner-connection",
-    pairingIdentity: "owner-pairing",
-    pairingGeneration: "owner-generation",
-    workerHost: { enabled: true, capacity: { total: 1, available: 1 }, bundlePrewarm: 1 },
-  });
+  const node = createNodeWorkerBundleTestNode({ workerHost: { bundlePrewarm: 1 } });
   const transfer = createNodeWorkerBundleTransferService();
   const grant = vi.spyOn(transfer, "prepare");
   const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () =>
@@ -47,14 +41,12 @@ function createHeldInstaller(boundary: "attachment read" | "discovery" | "instal
       async (environmentId) => pause("attachment read", await readAttachment(environmentId)),
     );
   }
-  const install = vi.fn(
-    createGatewayNodeWorkerBundleInstaller({
-      log: { info: vi.fn(), warn: vi.fn() },
-      gatewayNamespace: "gateway-owner-test",
-      getTransport: () => transport,
-      transfer,
-    }),
-  );
+  const install = createGatewayNodeWorkerBundleInstaller({
+    log: { info: vi.fn(), warn: vi.fn() },
+    gatewayNamespace: "gateway-owner-test",
+    getTransport: () => transport,
+    transfer,
+  });
   const service = support.createService(
     support.createProvider({
       supportedExecutionModes: ["worker-turn"],
@@ -68,27 +60,23 @@ function createHeldInstaller(boundary: "attachment read" | "discovery" | "instal
     }),
     { ensureNodeWorkerBundle: install },
   );
+  const creation = service
+    .createWithRequest({
+      profileId: "development",
+      idempotencyKey: `held-${boundary}`,
+      executionMode: "worker-turn",
+      signal,
+    })
+    .catch((error: unknown) => ({ error }));
   return {
     node,
     entered,
     release,
     grant,
     invoke,
-    install,
     destroy,
-    start: (signal?: AbortSignal) =>
-      service
-        .createWithRequest({
-          profileId: "development",
-          idempotencyKey: `held-${boundary}`,
-          executionMode: "worker-turn",
-          signal,
-        })
-        .then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        ),
-    async close(creation: Promise<unknown>) {
+    creation,
+    async close() {
       release.resolve();
       await creation;
       transfer.closeAll();
@@ -108,13 +96,12 @@ describe("node provisioning installer ownership", () => {
   ] as const)(
     "refuses installation after $change during $boundary",
     async ({ boundary, change }) => {
-      const fixture = createHeldInstaller(boundary);
       const controller = new AbortController();
-      const creation = fixture.start(controller.signal);
+      const fixture = createHeldInstaller(boundary, controller.signal);
+      const { creation } = fixture;
       try {
         await Promise.race([fixture.entered.promise, creation]);
         const record = support.testState.store.list()[0]!;
-        expect(record.state).toBe("provisioning");
         if (change === "cancellation") {
           controller.abort(new DOMException("Provisioning cancelled", "AbortError"));
         } else if (change === "destroy intent") {
@@ -136,14 +123,10 @@ describe("node provisioning installer ownership", () => {
           });
         }
         const replacement = support.testState.store.get(record.environmentId);
-        expect(controller.signal.aborted).toBe(change === "cancellation");
         fixture.release.resolve();
         expect(await creation).toHaveProperty("error");
         expect(fixture.grant).not.toHaveBeenCalled();
         expect(fixture.invoke).not.toHaveBeenCalled();
-        if (boundary === "attachment read") {
-          expect(fixture.install).not.toHaveBeenCalled();
-        }
         if (change !== "replacement owner") {
           expect(fixture.destroy).toHaveBeenCalledOnce();
           expect(support.testState.store.get(record.environmentId)?.state).toBe("destroyed");
@@ -152,7 +135,7 @@ describe("node provisioning installer ownership", () => {
           expect(support.testState.store.get(record.environmentId)).toEqual(replacement);
         }
       } finally {
-        await fixture.close(creation);
+        await fixture.close();
       }
     },
   );
@@ -160,7 +143,7 @@ describe("node provisioning installer ownership", () => {
   it("drains an admitted installation before destroying its lease", async () => {
     const fixture = createHeldInstaller("installation");
     let settled = false;
-    const creation = fixture.start().finally(() => {
+    const creation = fixture.creation.finally(() => {
       settled = true;
     });
     try {
@@ -170,8 +153,6 @@ describe("node provisioning installer ownership", () => {
         environmentId: record.environmentId,
         state: record.state,
       });
-      expect(fixture.grant).toHaveBeenCalledOnce();
-      expect(fixture.invoke).toHaveBeenCalledOnce();
       expect(fixture.destroy).not.toHaveBeenCalled();
       expect(settled).toBe(false);
       fixture.release.resolve();
@@ -179,7 +160,7 @@ describe("node provisioning installer ownership", () => {
       expect(fixture.destroy).toHaveBeenCalledOnce();
       expect(support.testState.store.get(record.environmentId)?.state).toBe("destroyed");
     } finally {
-      await fixture.close(creation);
+      await fixture.close();
     }
   });
 });

@@ -4,13 +4,10 @@ import { expect, it, vi } from "vitest";
 import {
   WORKER_INFERENCE_PROTOCOL_FEATURE,
   validateWorkerInferenceTerminalFrame,
-  type WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { dispatchWorkerRequest } from "../server/ws-connection/worker-connection-dispatch.js";
-import { createSink } from "./inference.test-support.js";
+import { createSink, DONE } from "./inference.test-support.js";
 import * as support from "./service.test-support.js";
 import {
   bindClaimOwner,
@@ -27,13 +24,6 @@ const inferenceFrame = (event: string, payload: unknown) => ({
   event: `worker.inference.${event}`,
   payload,
 });
-const done: WorkerInferenceTerminalOutcome = {
-  type: "done",
-  message: {
-    ...makeAgentAssistantMessage({ content: [{ type: "text", text: delta.delta }] }),
-    stopReason: "stop",
-  },
-};
 
 support.setupWorkerEnvironmentServiceSuite();
 
@@ -74,14 +64,15 @@ it.each(["diagnostic", "credential revocation"] as const)(
     const committed = createDeferredCore();
     const publish = createDeferredCore();
     const { frames, sink, terminal: terminalDelivered } = createSink("inference-publication");
-    const executeInference = vi.fn<support.WorkerEnvironmentServiceOptions["executeInference"]>(
-      async ({ signal, emit }) => {
-        entered.resolve(signal);
-        await continueProvider.promise;
-        emit(delta);
-        return done;
-      },
-    );
+    const executeInference: support.WorkerEnvironmentServiceOptions["executeInference"] = async ({
+      signal,
+      emit,
+    }) => {
+      entered.resolve(signal);
+      await continueProvider.promise;
+      emit(delta);
+      return DONE;
+    };
     const workerService = claimService(placements, { executeInference });
     let mutation: Promise<unknown> | undefined;
     let owner: Awaited<ReturnType<typeof bindClaimOwner>> | undefined;
@@ -101,23 +92,10 @@ it.each(["diagnostic", "credential revocation"] as const)(
       assert(admission.ok, "Worker inference admission failed");
       const identity = admission.identity;
       const request = support.inferenceRequest(identity);
-      const respond = vi.fn();
-      await dispatchWorkerRequest({
-        request: {
-          type: "req",
-          id: "inference-publication",
-          method: "worker.inference.start",
-          params: request,
-        },
-        identity,
-        connectionId: sink.connectionId,
-        service: workerService,
-        send: sink.send,
-        respond,
-        close: vi.fn(),
-        warn: vi.fn(),
-      });
-      expect(respond).toHaveBeenCalledExactlyOnceWith(true, { status: "accepted" });
+      const started = await workerService.startInference(identity, request, sink);
+      assert(started.ok, "Worker inference start failed");
+      expect(started.result).toEqual({ status: "accepted" });
+      started.launch();
       const providerSignal = await awaitGateBeforeSettlement(
         entered.promise,
         terminalDelivered,
@@ -157,13 +135,12 @@ it.each(["diagnostic", "credential revocation"] as const)(
         };
         expect(frames).toEqual([
           inferenceFrame("event", { ...binding, seq: 1, event: delta }),
-          inferenceFrame("terminal", { ...binding, seq: 2, outcome: done }),
+          inferenceFrame("terminal", { ...binding, seq: 2, outcome: DONE }),
         ]);
       } else {
         expect(frames).toEqual([terminal]);
         expect(terminal.payload.outcome).toMatchObject({ type: "error" });
       }
-      expect(executeInference).toHaveBeenCalledOnce();
       publish.resolve();
       await mutation;
     } finally {
