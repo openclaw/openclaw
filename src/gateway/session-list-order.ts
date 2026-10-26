@@ -39,7 +39,7 @@ export function sortAndLimitSessionEntries(
 ): SessionEntryPair[] {
   const timestamps = new Float64Array(entries.length);
   const pins = sortBy === "updatedAt" ? new Float64Array(entries.length) : undefined;
-  const indices = new Array<number>(entries.length);
+  const indices = Array<number>(entries.length);
   for (let index = 0; index < entries.length; index++) {
     const pair = entries[index]!;
     const key = pair[0];
