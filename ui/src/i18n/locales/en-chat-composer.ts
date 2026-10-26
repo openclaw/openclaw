@@ -197,6 +197,18 @@ const catalog = {
     queue: {
       reviewEdit: "Review edit",
       reloadBlocked: "Save or cancel your queued message edit before reloading.",
+      memoryOnlyReloadBlocked:
+        "A pending message is only saved in this tab. Keep this tab open until it is sent, or copy it before discarding it and reloading.",
+      memoryOnlyReview: "Review pending input",
+      memoryOnlyTitle: "Unsent pending message",
+      memoryOnlyDescription:
+        "This pending message stays only in this tab. Copy its text or download its attachments before discarding the local copy to refresh. Discarding does not cancel a message already received by the Gateway.",
+      memoryOnlyText: "Message text",
+      memoryOnlyDiscard: "Discard local copy and refresh",
+      memoryOnlyChanged:
+        "The pending input changed or is being edited. It has not been discarded; review the current input before refreshing.",
+      memoryOnlyUnavailable:
+        "The pending input could not be opened. It remains protected in this tab; try Review pending input again.",
       connectionPending: "Finishing connection recovery. Try sending again when it is ready.",
       editSourceChanged:
         "This queued message changed while you were editing. Your edit is still here. Copy it, cancel the edit, and review the queue before trying again.",

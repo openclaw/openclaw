@@ -34,13 +34,13 @@ import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
 import { AgentRequestReservationEndedError, replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { resolveAgentDeliveryPhase } from "./agent-delivery-phase.js";
-import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import { prepareAgentRequestRouting } from "./agent-request-routing.js";
 import { prepareAgentRunDispatch } from "./agent-run-admission-phase.js";
 import { isGatewayAgentAbortRejection } from "./agent-run-dispatch-outcome.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import {
   persistAgentSessionPhase,
+  type AgentSessionPersistParams,
   type AgentSessionPersistResult,
 } from "./agent-session-persist.js";
 import { finishAgentTurnPreparation } from "./agent-turn-admission-cleanup.js";
@@ -283,9 +283,7 @@ export function createAgentTurnService(
           groupSpace: normalizedSpawned.groupSpace,
         };
         let effectiveBootstrapContextRunKind = preflight.bootstrapContextRunKind;
-        let restoredCronContinuationIdentity:
-          | Pick<RestoredCronContinuation, "lifecycleRevision" | "sessionId">
-          | undefined;
+        let restoredCronContinuationIdentity: AgentSessionPersistParams["restoredCronContinuationIdentity"];
         let cfgForAgent: OpenClawConfig | undefined;
         let freshChild = false;
         let sessionStorePath: string | undefined;
@@ -517,6 +515,7 @@ export function createAgentTurnService(
             return;
           }
           const persistedSession = await persistAgentSessionPhase({
+            controllerInput: earlyRunAbort?.entry?.input,
             freshChild: preparedSession.freshChild,
             onSessionCommitted: (committedEntry) => {
               session.sessionEntry = committedEntry;

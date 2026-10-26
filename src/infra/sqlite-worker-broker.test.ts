@@ -205,8 +205,8 @@ it.for(["resume", "replace", "replace-inode", "symlink", "release"] as const)(
 
 async function openWithRetainedAccess(pathname: string) {
   const capture = stateOwner.captureStateDatabaseAccess;
-  const access = capture(pathname);
-  vi.spyOn(stateOwner, "captureStateDatabaseAccess").mockImplementation((location) =>
+  const access = await capture(pathname);
+  vi.spyOn(stateOwner, "captureStateDatabaseAccess").mockImplementation(async (location) =>
     location === pathname ? access : capture(location),
   );
   return { store: await open(pathname), access };
@@ -214,7 +214,7 @@ async function openWithRetainedAccess(pathname: string) {
 
 function holdDatabaseAdmission(
   pathname: string,
-  access: ReturnType<typeof stateOwner.captureStateDatabaseAccess>,
+  access: Awaited<ReturnType<typeof stateOwner.captureStateDatabaseAccess>>,
 ) {
   const pending = new StateDatabaseAdmissionPendingError(pathname, "Schema publication pending");
   const prepareAccess = access.prepareAccess.bind(access);

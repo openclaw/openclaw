@@ -119,6 +119,8 @@ export type InteractionScenario = {
   expected: string;
   /** Deliberately perturbs execution; exclude its timing from performance comparisons. */
   diagnostic?: string;
+  /** Run only when its ID is explicitly named in --steps. */
+  explicitOnly?: boolean;
   fixture?: InteractionFixtureOptions;
   /** Large-data campaigns replace only their domain's synthetic Gateway responses. */
   fixtureOverrides?: (sandbox?: InteractionSandbox) => InteractionFixtureOverrides;
@@ -1497,13 +1499,126 @@ async function settingsSection(
 }
 
 async function prepareModelPicker(page: Page) {
-  await prepareChat(page);
-  await page.locator(`${activePane} .agent-chat__input textarea`).first().click();
+  await prepareFirstModelPicker(page);
   const trigger = page.locator(`${activePane} [data-chat-model-select]`);
-  await trigger.waitFor({ state: "visible" });
   await trigger.click();
   await page.locator("[data-chat-model-search]").waitFor();
   await trigger.click();
+}
+
+async function prepareFirstModelPicker(page: Page) {
+  await prepareChat(page);
+  await page.locator(`${activePane} .agent-chat__input textarea`).first().click();
+  await page
+    .locator(`${activePane} [data-chat-model-select][aria-disabled="false"][aria-busy="false"]`)
+    .waitFor();
+  if (await page.locator(".chat-controls__model-menu, [data-chat-model-search]").count()) {
+    throw new Error("First-open measurement requires an unopened picker");
+  }
+}
+
+async function runFirstModelPicker(page: Page, recordPhases = false): Promise<InteractionEvidence> {
+  const recorder = recordPhases
+    ? await page.evaluateHandle((pane) => {
+        const events: Array<{
+          target: string;
+          type: string;
+          eventMs: number;
+          observedMs: number;
+        }> = [];
+        const eventTypes = [
+          "pointerdown",
+          "pointerup",
+          "touchstart",
+          "touchend",
+          "click",
+          "focus",
+          "focusin",
+          "keydown",
+          "keyup",
+          "beforeinput",
+          "input",
+        ];
+        const record = (event: Event) => {
+          if (!(event.target instanceof Element)) {
+            return;
+          }
+          const target = event.target.closest(`${pane} [data-chat-model-select]`)
+            ? "trigger"
+            : event.target.closest("[data-chat-model-search]")
+              ? "search"
+              : undefined;
+          if (!target) {
+            return;
+          }
+          events.push({
+            target,
+            type: event.type,
+            eventMs: event.timeStamp,
+            observedMs: performance.now(),
+          });
+        };
+        for (const type of eventTypes) {
+          document.addEventListener(type, record, true);
+        }
+        return {
+          finish(startedAt: number) {
+            const evidence: Record<string, number> = {
+              timeOriginMs: performance.timeOrigin,
+              startedAtMs: startedAt,
+            };
+            for (const event of events) {
+              if (event.observedMs < startedAt) {
+                continue;
+              }
+              const key = `native_${event.target}_${event.type}`;
+              const index = evidence[`${key}_count`] ?? 0;
+              evidence[`${key}_${index}_event_ms`] = event.eventMs - startedAt;
+              evidence[`${key}_${index}_observed_ms`] = event.observedMs - startedAt;
+              evidence[`${key}_count`] = index + 1;
+            }
+            return evidence;
+          },
+          dispose() {
+            for (const type of eventTypes) {
+              document.removeEventListener(type, record, true);
+            }
+          },
+        };
+      }, activePane)
+    : undefined;
+  try {
+    const started = await page.evaluate(() => performance.now());
+    const trigger = page.locator(`${activePane} [data-chat-model-select]`);
+    if ((page.viewportSize()?.width ?? 1440) < 600) {
+      await trigger.tap();
+    } else {
+      await trigger.click();
+    }
+    await page.locator("[data-chat-model-search]").waitFor();
+    await page.waitForFunction(
+      () => document.activeElement === document.querySelector("[data-chat-model-search]"),
+    );
+    const firstOpenReadyMs = await page.evaluate((start) => performance.now() - start, started);
+    await searchModels(page);
+    if (!(await page.locator('[data-chat-model-option="example/model-999"]').isEnabled())) {
+      throw new Error("First-open search result is not selectable");
+    }
+    return recorder
+      ? {
+          firstOpenReadyMs,
+          ...(await recorder.evaluate((value, start) => value.finish(start), started)),
+        }
+      : { firstOpenReadyMs };
+  } finally {
+    if (recorder) {
+      try {
+        await recorder.evaluate((value) => value.dispose());
+      } finally {
+        await recorder.dispose();
+      }
+    }
+  }
 }
 
 async function searchModels(page: Page) {
@@ -2333,6 +2448,23 @@ export const interactionScenarios: readonly InteractionScenario[] = [
         throw new Error("Warm Settings tabs must retain the loaded config schema");
       }
     },
+  },
+  {
+    id: "model-picker-first-open-search",
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected: "The unopened 1,000-model picker focuses search and filters to Warm model 0999.",
+    prepare: prepareFirstModelPicker,
+    run: (page) => runFirstModelPicker(page),
+  },
+  {
+    id: "model-picker-first-open-phases",
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected:
+      "The first-open picker exposes native input timestamps with the original action cadence.",
+    diagnostic: "Native event listeners and post-action collection perturb timing.",
+    explicitOnly: true,
+    prepare: prepareFirstModelPicker,
+    run: (page) => runFirstModelPicker(page, true),
   },
   {
     id: "model-picker-open-search",

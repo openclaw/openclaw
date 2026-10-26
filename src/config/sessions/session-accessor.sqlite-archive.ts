@@ -193,9 +193,13 @@ function runSqliteColdMutation<Result>(
       env: input.workerData.plan.databaseOptions.env,
     }),
   };
-  const stateAccess = captureStateDatabaseAccess(params.stateContext.admission.databasePath);
   return withSqliteTranscriptArchiveSession(params.workerData.plan.databaseOptions, () =>
-    runExclusiveSqliteTranscriptArchiveWorker(() => {
+    runExclusiveSqliteTranscriptArchiveWorker(async () => {
+      params.assertCurrent?.();
+      const stateAccess = await captureStateDatabaseAccess(
+        params.stateContext.admission.databasePath,
+      );
+      params.stateContext.admission.assertCurrent();
       params.assertCurrent?.();
       return runScopedSqliteArchiveMutation(
         params.workerData,

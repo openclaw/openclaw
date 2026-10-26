@@ -1,7 +1,10 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { readBackupEngineImage, type BackupEngine } from "./database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
-import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
+import {
+  readUpdateDatabaseGenerationPair,
+  readUpdateDatabaseGenerations,
+} from "./update-database-generations.js";
 
 export function readUpdatePhysicalDatabaseObservation(pathname: string): {
   engine?: BackupEngine;
@@ -66,4 +69,38 @@ export async function readUpdatePhysicalDatabaseGenerations(
     }
   }
   return Object.assign(result, await readUpdatePostgresDatabaseGenerations(postgres, pluginOwners));
+}
+
+export async function readUpdatePhysicalDatabaseGenerationPair(
+  paths: readonly string[],
+  pluginOwners?: DatabasePortPluginOwners,
+) {
+  const postgres: string[] = [];
+  // Classify the captured image without reacquiring the live source family.
+  const result = readUpdateDatabaseGenerationPair(paths, (imagePath, sourcePath) => {
+    if (readBackupEngineImage(imagePath, sourcePath).engine === "postgres") {
+      postgres.push(sourcePath);
+    }
+  });
+  const fingerprints = await readUpdatePostgresDatabaseGenerations(postgres, pluginOwners);
+  Object.assign(result.committed, fingerprints);
+  Object.assign(result.physical, fingerprints);
+  return result;
+}
+
+/** Only the recorded 9.33-line parent sends an unmarked restore inspection. */
+export async function isLegacyUpdateGenerationRequest(env: NodeJS.ProcessEnv): Promise<boolean> {
+  const { findActiveUpdateRun } = await import("./update-run-reader.js");
+  const { readUpdateRunDriver, sameUpdateRunDriver } = await import("./update-run-driver.js");
+  const run = findActiveUpdateRun({ env });
+  if (run?.status !== "running" || !["2026.9.33", "2026.9.34"].includes(run.before.version ?? "")) {
+    return false;
+  }
+  const parent = readUpdateRunDriver(process.ppid);
+  return (
+    parent !== undefined &&
+    [run.origin.driver, ...(run.origin.previousDrivers ?? [])].some(
+      (driver) => driver && sameUpdateRunDriver(driver, parent),
+    )
+  );
 }

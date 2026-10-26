@@ -407,11 +407,7 @@ describe("secrets runtime provider and media surfaces", () => {
                 request: {
                   auth: {
                     mode: "authorization-bearer",
-                    token: {
-                      source: "env",
-                      provider: "default",
-                      id: "MEDIA_INFERRED_AUDIO_TOKEN",
-                    },
+                    token: envTokenRef("MEDIA_INFERRED_AUDIO_TOKEN"),
                   },
                 },
               },

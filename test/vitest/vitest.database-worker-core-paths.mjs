@@ -81,7 +81,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/session-actor.conformance.test.ts",
   "src/infra/database-engine/audit-retention.conformance.test.ts",
   "src/infra/database-engine/row-limit.conformance.test.ts",
-  "src/infra/database-engine/scalar-portability.conformance.test.ts",
   "src/infra/database-engine/session-owner-portability.conformance.test.ts",
   "src/infra/database-engine/session-transcript-portability.conformance.test.ts",
   "src/infra/database-engine/text-comparison.conformance.test.ts",
@@ -92,7 +91,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/post-ready.conformance.test.ts",
   "src/infra/database-engine/commit-receipts.conformance.test.ts",
   "src/infra/database-engine/receipt-lifecycle.conformance.test.ts",
-  "src/infra/database-engine/agent-opening-refusal.conformance.test.ts",
   "src/infra/database-engine/model-catalog.conformance.test.ts",
   "src/infra/database-engine/cli-owner.conformance.test.ts",
   "src/infra/database-engine/update-command.conformance.test.ts",
@@ -1360,6 +1358,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/failover-retry-controller.inline-auth.worker.test.ts",
   "src/agents/embedded-agent-runner/run/auth-profile-shared-usage.worker.test.ts",
   "src/agents/embedded-agent-runner/run/auth-controller.test.ts",
+  "src/agents/embedded-agent-runner/run/auth-controller.request-auth.test.ts",
   "src/agents/auth-profiles.markauthprofilefailure.test.ts",
 
   "src/node-host/node-worker-launch-store.test.ts",

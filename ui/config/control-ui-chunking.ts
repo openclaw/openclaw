@@ -97,13 +97,15 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/components/chat-details-environment-desktop.css":
       // Share styles without making Outputs import the Details renderer.
       return "chat-details-styles";
+    case "src/shared/dedupe-by-key.ts":
+      // Config search shares this helper without loading optional session UI.
+      return "control-ui-boot-shared";
     case "ui/src/components/session-git-diff.tsx":
     case "ui/src/lib/sessions/usage.ts":
     case "src/shared/weak-owner-map.ts":
     case "src/shared/assistant-display-content.ts":
     case "src/shared/agent-run-status.ts":
     case "ui/src/app/assistant-media.ts":
-    case "src/shared/dedupe-by-key.ts":
     case "ui/src/lib/image-download.ts":
     case "ui/src/lib/download.ts":
     case "src/shared/markdown-code.ts":
@@ -121,7 +123,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "packages/gateway-client/src/session-subscriptions.ts":
     case "ui/src/pages/labs/labs-feature-state.ts":
     case "ui/src/pages/labs/claws-lab-feature.ts":
-    case "ui/src/i18n/locales/en-session-organization-shared.ts":
     case "ui/src/i18n/locales/en-session-skill-library.ts":
     case "ui/src/pages/plugins/detail-tabs.ts":
     case "ui/src/components/confirm-dialog.ts":
@@ -279,8 +280,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/route-entry.ts":
       // Pending New Session previews must render while the Chat route entry waits.
       return "chat-route-entry";
+    case "ui/src/i18n/locales/en-session-organization-shared.ts":
     case "ui/src/i18n/locales/en-chat-composer.ts":
-      // New Session shares composer copy; session copy stays with Chat's boot group.
+      // Settings, New Session, and Chat share this English copy.
       return "chat-english";
     case "ui/src/pages/devices/devices-page.tsx":
       return "devices-page";

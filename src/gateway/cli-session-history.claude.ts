@@ -386,7 +386,7 @@ function resolveClaudeCliInternalSourceTool(text: string): string | undefined {
   if (
     body.startsWith(HEARTBEAT_PROMPT) ||
     body.startsWith(HEARTBEAT_RESPONSE_TOOL_PROMPT) ||
-    isHeartbeatUserMessage({ role: "user", content: body })
+    isHeartbeatUserMessage({ role: "user", content: body }, undefined, { claudeImport: true })
   ) {
     return "heartbeat";
   }
