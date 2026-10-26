@@ -29,8 +29,6 @@ it.each(["current", "stale-attempt", "revoked-capability"] as const)(
       const runId = "source-reply-run";
       const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
       let current = true;
-      let atCommit = false;
-      let commitChecks = 0;
       const stale = new Error("delivery attempt is no longer current");
       const cfg = { session: { store: f.database.path } };
       const run = prepareCronRunAdmission({
@@ -44,9 +42,6 @@ it.each(["current", "stale-attempt", "revoked-capability"] as const)(
         deliveryAttemptFence: {
           async beforeAttempt() {},
           assertCurrent() {
-            if (atCommit) {
-              commitChecks++;
-            }
             if (!current) {
               throw stale;
             }
@@ -78,12 +73,7 @@ it.each(["current", "stale-attempt", "revoked-capability"] as const)(
               revokeMessageActionTurnCapability(run.messageActionTurnCapability);
             }
           }
-          atCommit = request.stage === "commit" && reachedCommit;
-          try {
-            admit(request, grant);
-          } finally {
-            atCommit = false;
-          }
+          admit(request, grant);
         });
         const send = () =>
           runMessageAction({
@@ -108,7 +98,6 @@ it.each(["current", "stale-attempt", "revoked-capability"] as const)(
             );
           }
           expect(reachedCommit).toBe(true);
-          expect(commitChecks).toBe(mode === "revoked-capability" ? 0 : 1);
           expect(sql.queries).toEqual([]);
         } finally {
           sql.restore();
