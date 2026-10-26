@@ -609,6 +609,7 @@ const repositoryScriptEntries = [
   "scripts/perf/native-allocation-profile.mjs!",
   "scripts/perf/session-initial-context-fixture.ts!",
   "scripts/perf/session-initial-context-measure.ts!",
+  "scripts/perf/session-reload-measure.ts!",
   "scripts/perf/sql-probe-measure.ts!",
   "scripts/perf/workspace-manifest-retention.ts!",
   // Maintained guides and source headers invoke these focused workloads by exact path.
