@@ -6,6 +6,7 @@ import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../../app/oper
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { watchAgentScope, watchSelectedAgent } from "../../lib/agents/index.ts";
+import { createChannelCapability } from "../../lib/channels/index.ts";
 import {
   hasCronFormErrors,
   normalizeCronFormState,
@@ -71,7 +72,10 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     publish: publishCronState,
   });
   const agents = projectOwner(context().agents, (source) => source.state);
-  const channels = projectOwner(context().channels, (source) => source.state);
+  const channels = projectOwner(
+    context().acquireChannels(createChannelCapability),
+    (source) => source.state,
+  );
   const runtimeConfig = projectOwner(context().runtimeConfig, (source) => source.state);
   const runTranscript = createCronRunTranscript(publish, () => {
     const scope = gateway.capture();
@@ -144,7 +148,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     let first = boundContext === null || sourceChanged;
     boundContext = currentContext;
     agents.replaceSource(currentContext.agents);
-    channels.replaceSource(currentContext.channels);
+    channels.replaceSource(currentContext.acquireChannels(createChannelCapability));
     runtimeConfig.replaceSource(currentContext.runtimeConfig);
     if (sourceChanged) {
       gateway.invalidate();
@@ -379,7 +383,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       return;
     }
     void presentation.runTask((current) => loadCronRuns(current, options));
-    void context().channels.refresh(false);
+    void context().acquireChannels(createChannelCapability).refresh(false);
     await Promise.all([
       presentation.read("status", (current) => loadCronStatus(current, options)),
       presentation.read("jobs", (current) =>

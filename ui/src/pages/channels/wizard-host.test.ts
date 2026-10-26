@@ -52,7 +52,11 @@ it.each([
   });
   const channels = createChannelCapability(gateway);
   const runtimeConfig = createRuntimeConfigCapability(gateway);
-  const context = { gateway, channels, runtimeConfig } as ApplicationContext;
+  const context = {
+    gateway,
+    acquireChannels: () => channels,
+    runtimeConfig,
+  } as ApplicationContext;
   let currentContext = context;
   const discardDraft = vi.spyOn(runtimeConfig, "discardDraft").mockResolvedValue();
   const refresh = vi.spyOn(channels, "refresh").mockResolvedValue();
@@ -66,6 +70,7 @@ it.each([
     dispose = stop;
     return createChannelSetup({
       getContext: () => currentContext,
+      channels,
       clearSelection: () => {},
       presentWizard: async (pending) => await pending,
       retire: () => {},

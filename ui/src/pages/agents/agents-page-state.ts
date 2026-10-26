@@ -7,6 +7,7 @@ import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { buildToolsEffectiveRequestKey, type AgentsState } from "../../lib/agents/index.ts";
 import { setDefaultAgent } from "../../lib/agents/mutations.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
+import { createChannelCapability } from "../../lib/channels/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
 import type { CronState } from "../../lib/cron/types.ts";
@@ -80,7 +81,8 @@ export function createAgentsPageState(
   const presentation = createAgentsPageLifetime();
   const [skillsFilter, setSkillsFilter] = createSignal("");
   const identities = projectOwner(context.agentIdentity, (identity) => identity.entries());
-  const channels = projectOwner(context.channels, (source) => source.state);
+  const channelCapability = context.acquireChannels(createChannelCapability);
+  const channels = projectOwner(channelCapability, (source) => source.state);
   const navigation = projectOwner(context.navigation, (source) => source.snapshot);
   // The domain helpers mutate then read their state synchronously; Solid only observes it.
   const observation = observeState<AgentsPageData>({
@@ -395,8 +397,8 @@ export function createAgentsPageState(
       githubIdentity.ensureVerified();
       return;
     }
-    if (state.agentsPanel === "channels" && !context.channels.state.channelsSnapshot) {
-      void context.channels.refresh(false);
+    if (state.agentsPanel === "channels" && !channelCapability.state.channelsSnapshot) {
+      void channelCapability.refresh(false);
       return;
     }
     if (state.agentsPanel === "cron") {
@@ -543,7 +545,7 @@ export function createAgentsPageState(
       memoryTarget,
       config: configState,
       channels: {
-        onRefresh: () => void context.channels.refresh(false),
+        onRefresh: () => void channelCapability.refresh(false),
       },
       cron: {
         read: cron.read,

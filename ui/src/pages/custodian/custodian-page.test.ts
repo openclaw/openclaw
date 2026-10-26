@@ -553,7 +553,7 @@ describe("custodian page", () => {
     setChannelsSnapshot(null);
     setChannelsConnected(false);
     setChannelsConnected(true);
-    expect(context.channels.refresh).not.toHaveBeenCalled();
+    expect(context.acquireChannels(createChannelCapability).refresh).not.toHaveBeenCalled();
     expect(context.replace).toHaveBeenCalledWith("custodian");
     expect(page.querySelector(".custodian__nudge--channel-onboarding")).toBeNull();
   });
