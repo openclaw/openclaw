@@ -30,8 +30,7 @@ export function failedGatewayRunConfigSnapshot(
 }
 
 type ReadFailureFixture = { label: string; expected: object; exact?: boolean } & (
-  | { stage: "read"; failure: Error }
-  | { stage: "runtime"; failure: Error }
+  | { stage: "read" | "runtime"; failure: Error }
   | { stage: "snapshot"; snapshot: ReturnType<typeof failedGatewayRunConfigSnapshot> }
 );
 
@@ -39,7 +38,6 @@ export function gatewayRunReadFailures(): ReadFailureFixture[] {
   const unavailable = Object.assign(new Error("configuration storage unavailable"), {
     code: "ENOSPC",
   });
-  const ownership = new OpenClawStateOwnershipMetadataError("/synthetic/state.sqlite", "invalid");
   return [
     {
       label: "rejected final read",
@@ -58,7 +56,7 @@ export function gatewayRunReadFailures(): ReadFailureFixture[] {
     },
     {
       label: "restart ownership refusal",
-      failure: ownership,
+      failure: new OpenClawStateOwnershipMetadataError("/synthetic/state.sqlite", "invalid"),
       stage: "runtime",
       expected: { message: "__exit__:78" },
     },
@@ -88,11 +86,8 @@ export function registerInvalidConfigResetTests(configState: {
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const params = { opts: { dev: true, reset: true, allowUnconfigured: true }, runtime };
       const snapshot: Record<string, unknown> = {
-        ...completeGatewayRunSnapshot({}),
+        ...failedGatewayRunConfigSnapshot(),
         raw: "{ invalid config",
-        parsed: null,
-        valid: false,
-        issues: [{ path: "<root>", message: "JSON parse failed" }],
       };
       delete snapshot.sourceConfig;
       configState.snapshot = snapshot;

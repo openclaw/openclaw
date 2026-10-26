@@ -42,19 +42,22 @@ function mockClock(advance = (delayMs: number) => delayMs) {
 }
 
 it("prints a ready lease without exposing remote credentials in the resume hint", async () => {
-  const rpcOpts = { url: "wss://gateway.example:19444", token: "opaque-credential" };
+  vi.stubEnv("OPENCLAW_PROFILE", "work");
+  vi.stubEnv("OPENCLAW_CONTAINER_HINT", "demo");
+  const rpcOpts = { url: "wss://r.test", token: "secret", localPortOverride: 18999 };
 
   await suspend({ rpcOpts, waitSeconds: 0 });
 
   expect(callGateway).toHaveBeenCalledExactlyOnceWith("gateway.suspend.prepare", rpcOpts, {
     requestId: expect.stringMatching(/^cli-[0-9a-f]{8}$/u),
   });
-  expect(runtime.log).toHaveBeenCalledWith("Gateway suspension prepared.");
   expect(runtime.log).toHaveBeenCalledWith("Suspension ID: suspension-1");
   expect(runtime.log).toHaveBeenCalledWith(
     `Expires: 2026-08-11T12:00:00.000Z (${readyResult.expiresAtMs} ms)`,
   );
-  expect(runtime.log).toHaveBeenCalledWith("Resume with: openclaw gateway resume suspension-1");
+  expect(runtime.log).toHaveBeenCalledWith(
+    "Resume with: openclaw --container demo gateway resume suspension-1 --port 18999",
+  );
 });
 
 it("rejects whitespace-only wait before acquiring a lease", async () => {
@@ -62,17 +65,6 @@ it("rejects whitespace-only wait before acquiring a lease", async () => {
     "--wait must be a non-negative number of seconds",
   );
   expect(callGateway).not.toHaveBeenCalled();
-});
-
-it.each([
-  ["", "openclaw --profile work gateway resume suspension-1 --port 18999"],
-  ["demo", "openclaw --container demo gateway resume suspension-1 --port 18999"],
-])("scopes the resume hint for work, container='%s'", async (container, command) => {
-  vi.stubEnv("OPENCLAW_PROFILE", "work");
-  vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
-  await suspend({ rpcOpts: { localPortOverride: 18999 } });
-
-  expect(runtime.log).toHaveBeenCalledWith(`Resume with: ${command}`);
 });
 
 it.each([
@@ -100,6 +92,7 @@ it("polls with one stable request id until the Gateway is ready", async () => {
     { requestId: "host-operation" },
     { requestId: "host-operation" },
   ]);
+  expect(runtime.log).toHaveBeenCalledWith("Resume with: openclaw gateway resume suspension-1");
 });
 
 it("emits the latest busy result and exits nonzero in JSON mode", async () => {

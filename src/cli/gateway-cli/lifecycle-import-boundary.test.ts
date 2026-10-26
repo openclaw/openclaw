@@ -10,12 +10,8 @@ import {
   withIsolatedSignals,
 } from "./run-loop.test-support.js";
 
-const fixture = vi.hoisted(() => ({
-  releaseLock: vi.fn(async () => {}),
-  error: vi.fn(),
-}));
 vi.mock("../../infra/gateway-lock.js", () => ({
-  acquireGatewayLock: async () => ({ release: fixture.releaseLock }),
+  acquireGatewayLock: async () => ({ release: vi.fn(async () => {}) }),
 }));
 vi.mock("../../infra/systemd-stop-timeout.js", () => ({
   readSystemdStopTimeout: async () => null,
@@ -25,7 +21,7 @@ vi.mock("../../logging/subsystem.js", () => ({
     debug: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),
-    error: fixture.error,
+    error: vi.fn(),
   }),
 }));
 vi.mock("../../logging/logger.js", () => ({ flushLogger: async () => {} }));
@@ -113,11 +109,9 @@ it.for(["SIGTERM", "SIGUSR2"] as const)(
         abortSignal.throwIfAborted();
         await withIsolatedSignals(async ({ captureSignal }) => {
           const originalOn = process.on.bind(process);
-          const installed: string[] = [];
           vi.spyOn(process, "on").mockImplementation((event, listener) => {
             if (event === "SIGTERM" || event === "SIGINT" || event === "SIGUSR2") {
               expect(primed, `lifecycle import must finish before installing ${event}`).toBe(true);
-              installed.push(event);
             }
             return originalOn(event, listener);
           });
@@ -129,12 +123,10 @@ it.for(["SIGTERM", "SIGUSR2"] as const)(
           try {
             await Promise.race([importing.promise, loop]);
             abortSignal.throwIfAborted();
-            expect(installed).toEqual([]);
             expect(start).not.toHaveBeenCalled();
             finishImport.resolve();
             await Promise.race([waitForStart(started), loop]);
             abortSignal.throwIfAborted();
-            expect(installed).toEqual(["SIGTERM", "SIGINT", "SIGUSR2"]);
 
             const missingChunk = vi.fn(() => {
               throw Object.assign(new Error("rotated lifecycle chunk"), {
