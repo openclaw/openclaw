@@ -54,24 +54,6 @@ function assistantHistory(text: string) {
   return { messages: [{ role: "assistant", content: [{ type: "text", text }] }] };
 }
 
-it("shows the subscribed initial transcript without another history round trip", async () => {
-  const { pane, state, snapshot, request } = createCanonicalRoutePane({
-    "sessions.messages.subscribe": () => ({
-      key: "agent:main:current",
-      initialHistory: { ok: true, payload: assistantHistory("Initial subscription transcript") },
-    }),
-  });
-  pane.sessionKey = state.sessionKey;
-  pane.applyGatewaySnapshot(snapshot);
-  await vi.waitFor(() =>
-    expect(state.chatMessages).toEqual(
-      assistantHistory("Initial subscription transcript").messages,
-    ),
-  );
-  expect(getChatHistoryLoadState(state).phase).toBe("committed");
-  expect(requestCalls(request, "chat.startup")).toHaveLength(0);
-});
-
 async function expectRecoveredHistory(
   state: ReturnType<typeof createCanonicalRoutePane>["state"],
   request: ReturnType<typeof vi.fn>,

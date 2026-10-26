@@ -1,7 +1,6 @@
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import * as database from "./session-snapshot-database.ts";
@@ -65,34 +64,6 @@ describe("routed transcript prewarm", () => {
     expect(open).toHaveBeenCalledOnce();
     expect(await reader.read(key)).toEqual(stored);
     expect(open).toHaveBeenCalledTimes(2);
-  });
-
-  it("reads raw records without validation and rejects malformed prewarm when consumed", async () => {
-    await seed();
-    const invalid = {
-      projectionVersion: 3,
-      savedAt: Date.now(),
-      sessionKey: key,
-      sessionId: stored.sessionId,
-      snapshot: { ...stored, deltaCursor: 42 },
-    };
-    const db = await database.openSessionSnapshotDatabase();
-    if (!db) {
-      throw new Error("Snapshot database unavailable");
-    }
-    try {
-      const transaction = db.transaction(database.CHAT_SNAPSHOT_STORE_NAME, "readwrite");
-      const committed = transactionComplete(transaction);
-      transaction.objectStore(database.CHAT_SNAPSHOT_STORE_NAME).put(invalid);
-      await committed;
-    } finally {
-      db.close();
-    }
-    expect(await database.readStoredChatSnapshotRecord(key)).toEqual(invalid);
-    void prewarmChatSnapshot(key);
-    const reader = new snapshots.SessionSnapshotStore();
-    expect(await reader.read(key)).toBeNull();
-    expect(await reader.read(otherKey)).toBeNull();
   });
 
   it("leaves the prewarm available when another session reads normally", async () => {

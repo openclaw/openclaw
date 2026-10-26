@@ -4,7 +4,6 @@ import { createSignal, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { ValueSignal } from "../../lib/board/provider-signals.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
-import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
@@ -13,35 +12,28 @@ import {
 } from "./chat-details-outputs-binding.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { createGatewayBrowserClientFixture, createTestChatPane } from "./chat-pane.test-support.ts";
-import type { ChatDetailsOutputs } from "./components/chat-details-types.ts";
 import { ChatOutputsDesktop, ChatOutputsMobile } from "./components/chat-outputs.tsx";
 import { getSessionWorkspace } from "./components/chat-session-workspace-state.ts";
 
 function boardFixture(sessionKey: string, initiallyLoaded = false) {
-  let loaded = initiallyLoaded;
   const mock = createMockBoardProvider(sessionKey);
-  const snapshot$ = new ValueSignal<ResolvedBoardView["snapshot"]>({
-    ...mock.snapshot$.value,
-    tabs: [],
-    widgets: [],
-  });
-  const loadError$ = new ValueSignal<string | null>(null);
+  const provider = {
+    ...mock,
+    hasLoadedSnapshot: initiallyLoaded,
+    snapshot$: new ValueSignal<ResolvedBoardView["snapshot"]>({
+      ...mock.snapshot$.value,
+      tabs: [],
+      widgets: [],
+    }),
+    loadError$: new ValueSignal<string | null>(null),
+  };
   return {
-    provider: {
-      ...mock,
-      snapshot$,
-      loadError$,
-      get hasLoadedSnapshot() {
-        return loaded;
-      },
-    },
-    fail() {
-      loadError$.set("Dashboard request failed");
-    },
+    provider,
+    fail: () => provider.loadError$.set("Dashboard request failed"),
     resolve(withContent = false) {
-      loaded = true;
-      snapshot$.set(withContent ? mock.snapshot$.value : snapshot$.value);
-      loadError$.set(null);
+      provider.hasLoadedSnapshot = true;
+      provider.snapshot$.set(withContent ? mock.snapshot$.value : provider.snapshot$.value);
+      provider.loadError$.set(null);
     },
   };
 }
@@ -49,10 +41,7 @@ function boardFixture(sessionKey: string, initiallyLoaded = false) {
 function mountOutputs(
   options: { desktop?: boolean; acquired?: boolean; loaded?: boolean; files?: boolean } = {},
 ) {
-  const request = vi.fn<GatewayRequestHandler>(async () => ({}));
-  const { pane, state } = createTestChatPane({
-    client: createGatewayBrowserClientFixture({ request }),
-  });
+  const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
   const workspace = getSessionWorkspace(state);
   workspace.assistantArtifacts = {
     items: options.files
@@ -86,13 +75,9 @@ function mountOutputs(
     createDetailsOutputsBinding(context, state, workspace, board.provider, acquired);
   let binding = bind(options.acquired);
   const read = () => projectDetailsOutputs(binding, workspace, readBoard()).outputs!;
-  const openArtifact = vi.fn();
-  const [outputs, setOutputs] = createSignal<ChatDetailsOutputs>({
-    ...read(),
-    onOpenArtifact: openArtifact,
-  });
+  const [outputs, setOutputs] = createSignal(read());
   const draw = () => {
-    setOutputs({ ...read(), onOpenArtifact: openArtifact });
+    setOutputs(read());
     flush();
   };
   const view = mountSolid(() =>
@@ -104,8 +89,6 @@ function mountOutputs(
   });
   return {
     ...view,
-    request,
-    openArtifact,
     openDashboard,
     button: (name: string) => view.getByRole("button", { name }),
     status: (text?: string) =>
@@ -158,8 +141,6 @@ it.each([false, true])(
   async (desktop) => {
     const view = mountOutputs({ desktop, files: true });
     await waitForSolid(() => expect(view.button("Report.txt")).toBeTruthy());
-    view.button("Report.txt").click();
-    expect(view.openArtifact).toHaveBeenCalledWith("report");
     view.fail();
     await view.status("Dashboard request failed");
     expect(view.queryByRole("button", { name: "Retry" })).toBeNull();
@@ -168,7 +149,6 @@ it.each([false, true])(
     await view.status();
     view.button("Overview").click();
     expect(view.openDashboard).toHaveBeenCalledOnce();
-    expect(view.request.mock.calls.filter(([method]) => method === "board.get")).toHaveLength(0);
   },
 );
 

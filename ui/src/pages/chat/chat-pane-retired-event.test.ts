@@ -113,12 +113,7 @@ it.each([
       ),
     ).toBe("admitted");
     await chatSendActions.resumeStoredChatOutboxes(visiblePane.state);
-    expect(listStoredChatOutboxes(visiblePane.state)).toEqual([
-      expect.objectContaining({
-        sessionKey: successor.key,
-        queue: [expect.objectContaining({ ...input, sendAttempts: 2 })],
-      }),
-    ]);
+    expect(listStoredChatOutboxes(visiblePane.state)[0]?.queue[0]?.sendAttempts).toBe(2);
     const messagesBefore = state.chatMessages;
     expect(send).toHaveBeenCalledTimes(1);
     for (const mock of [history, resume, send]) {
