@@ -1,20 +1,44 @@
+import fs from "node:fs";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import * as initialStateRuntime from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, vi } from "vitest";
 import { setIMessageRuntime } from "../runtime.js";
 
-const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-imessage-state-");
-const createIMessageTestEnv = () => ({ ...process.env, OPENCLAW_STATE_DIR: tempDirs.make() });
+// Vitest runs afterAll hooks in reverse order, so databases close before directory removal.
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
-let env = createIMessageTestEnv();
+afterAll(async () => {
+  const { closeOpenClawAgentDatabasesAsync, closeOpenClawStateDatabaseAsync } =
+    await import("openclaw/plugin-sdk/sqlite-runtime-testing");
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+});
+
+function createIMessageTestEnv(): NodeJS.ProcessEnv & { OPENCLAW_STATE_DIR: string } {
+  const stateDir = fs.realpathSync(
+    tempDirs.make("openclaw-imessage-state-", resolvePreferredOpenClawTmpDir()),
+  );
+  return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+}
+
+let imessageTestEnv = createIMessageTestEnv();
 let stateRuntime = initialStateRuntime;
 const reusedStoreCleanups = new Map<string, () => Promise<void>>();
 
-export function createIMessagePluginStateSyncStoreForTest<T>(options: OpenKeyedStoreOptions) {
-  return stateRuntime.createPluginStateSyncKeyedStoreForTests<T>("imessage", { ...options, env });
+export function createIMessagePluginStateSyncStoreForTest<T>(
+  options: OpenKeyedStoreOptions,
+): PluginStateSyncKeyedStore<T> {
+  return stateRuntime.createPluginStateSyncKeyedStoreForTests<T>("imessage", {
+    ...options,
+    env: imessageTestEnv,
+  });
 }
 
 function installRuntime(
@@ -26,27 +50,32 @@ function installRuntime(
   };
   setRuntime({
     state: {
-      resolveStateDir: () => env.OPENCLAW_STATE_DIR,
-      openChannelIngressQueue: (options) =>
+      resolveStateDir: () => imessageTestEnv.OPENCLAW_STATE_DIR,
+      openChannelIngressQueue: (
+        options?: Omit<
+          Parameters<typeof stateRuntime.createChannelIngressQueueForTests>[0],
+          "channelId"
+        >,
+      ) =>
         stateRuntime.createChannelIngressQueueForTests({
           ...options,
           channelId: "imessage",
-          stateDir: options?.stateDir ?? env.OPENCLAW_STATE_DIR,
+          stateDir: options?.stateDir ?? imessageTestEnv.OPENCLAW_STATE_DIR,
         }),
-      openKeyedStoreV2: <T>(options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0]) => {
-        if (failStores) {
-          return failStore();
-        }
-        const store = stateRuntime.createPluginStateKeyedStoreV2ForTests<T>(
-          "imessage",
-          { ...options, env },
-          { assertCurrent: () => {} },
-        );
-        if (reuseDatabase) {
-          reusedStoreCleanups.set(options.namespace, store.clear);
-        }
-        return store;
-      },
+      openKeyedStoreV2: (failStores
+        ? failStore
+        : (options) => {
+            const store = stateRuntime
+              .createPluginStateKeyedStoreForTests("imessage", {
+                ...options,
+                env: imessageTestEnv,
+              })
+              .withCurrent({ assertCurrent: () => {} });
+            if (reuseDatabase) {
+              reusedStoreCleanups.set(options.namespace, store.clear);
+            }
+            return store;
+          }) as PluginRuntime["state"]["openKeyedStoreV2"],
       openSyncKeyedStore: failStores ? failStore : createIMessagePluginStateSyncStoreForTest,
     },
     channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
@@ -63,7 +92,7 @@ function installRuntime(
 }
 
 export function installIMessageStateRuntimeForTest(): void {
-  env = createIMessageTestEnv();
+  imessageTestEnv = createIMessageTestEnv();
   stateRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
   installRuntime(setIMessageRuntime);
 }
@@ -83,7 +112,7 @@ export async function loadFreshIMessageReplyCacheForTest(options?: {
     // Drain worker-only stores before rotating the fixture state directory.
     await closeOpenClawStateDatabaseAsync();
     stateRuntime.closeOpenClawStateDatabaseForTest();
-    env = createIMessageTestEnv();
+    imessageTestEnv = createIMessageTestEnv();
   }
   if (!options?.preservePersistentState) {
     reusedStoreCleanups.clear();
@@ -99,6 +128,6 @@ export async function loadFreshIMessageReplyCacheForTest(options?: {
 
 export function installIMessageFailingStateRuntimeForTest(): void {
   stateRuntime.closeOpenClawStateDatabaseForTest();
-  env = createIMessageTestEnv();
+  imessageTestEnv = createIMessageTestEnv();
   installRuntime(setIMessageRuntime, { failStores: true });
 }
