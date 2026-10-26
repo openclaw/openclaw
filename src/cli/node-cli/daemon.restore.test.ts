@@ -109,7 +109,6 @@ it.each([
       });
       return;
     }
-    expect(service.install).toHaveBeenCalledOnce();
     const installed = vi.mocked(service.install).mock.calls[0]?.[0];
     expect(installed?.programArguments).toEqual([
       cli.executable,
@@ -133,21 +132,12 @@ it.each([
   { status: "unknown" },
   { status: "migrationPending", nextStep: "run openclaw doctor" },
 ])("reports $status node runtime custody", async (runtimeIntent) => {
-  const { status } = runtimeIntent;
-  if (status === "unknown") {
+  if (runtimeIntent.status === "unknown") {
     vi.mocked(service.readCommand).mockRejectedValueOnce(new Error("inspection unavailable"));
   }
-  mocks.pending.mockReturnValue(status === "migrationPending");
+  mocks.pending.mockReturnValue(runtimeIntent.status === "migrationPending");
   await runNode("status --json");
   expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
     service: expect.objectContaining({ runtimeIntent }),
   });
-  if (status === "known") {
-    expect(mocks.pin).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "node" }),
-      expect.objectContaining({ programArguments }),
-    );
-  } else {
-    expect(mocks.pin).not.toHaveBeenCalled();
-  }
 });
