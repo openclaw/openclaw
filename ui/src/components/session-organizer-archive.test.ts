@@ -77,14 +77,40 @@ function guardedTarget(index: number) {
   };
 }
 
+function modalFixture() {
+  const modal = createModalDialogTestFixture();
+  onTestFinished(() => modal.cleanup());
+  return modal;
+}
+
+function pinNavigation(h: ReturnType<typeof createHarness>, entries: string[]) {
+  const navigation = h.scope.context.navigation;
+  const set = (sidebarEntries: string[]) => navigation.update({ sidebarEntries });
+  set(entries);
+  h.host.pruneSidebarSessionEntry = (key) =>
+    set(navigation.snapshot.sidebarEntries.filter((entry) => entry !== "session:" + key));
+  return {
+    navigation,
+    set,
+    toggle(pin: string, retained: string[]) {
+      set([...retained, pin]);
+      set(retained);
+    },
+  };
+}
+
+function prepareUndo(h: ReturnType<typeof createHarness>, result = sessionsResult([], 1)) {
+  h.scope.sessions.invalidate = vi.fn();
+  h.scope.sessions.refreshReplacement = vi.fn(async () => result);
+}
+
 describe("session organizer nested archive choice", () => {
   it("confirms only the selected offline parent without discovering or archiving its subtree", async () => {
     const h = createHarness({ phase: "reconnecting" });
     h.scope.allowDeferred = true;
     const root = { ...sessionRow(0), hasArchiveDescendants: true };
     const tree = prepareArchiveTree(h, [gatewayRow(0), gatewayRow(1)]);
-    const modal = createModalDialogTestFixture();
-    onTestFinished(() => modal.cleanup());
+    const modal = modalFixture();
     const pending = modal.track(confirmSessionArchive(root, h.scope, () => true));
     const dialog = await waitForConfirmDialogActions();
     expect(document.body.textContent).toContain("Reconnect to archive the complete subtree.");
@@ -94,8 +120,7 @@ describe("session organizer nested archive choice", () => {
     expect(tree.refreshList).not.toHaveBeenCalled();
   });
   it("includes unexpanded persistent descendants through workers but excludes independent branches", async () => {
-    const modal = createModalDialogTestFixture();
-    onTestFinished(() => modal.cleanup());
+    const modal = modalFixture();
     const harness = createHarness();
     const root = gatewayRow(0);
     const worker = gatewayRow(1, { key: "agent:main:subagent:worker" });
@@ -207,8 +232,7 @@ describe("session organizer nested archive choice", () => {
   ] as const)(
     "honors %s for %s sessions with active work at depth %s",
     async (choice, count, activeDepth) => {
-      const modal = createModalDialogTestFixture();
-      onTestFinished(() => modal.cleanup());
+      const modal = modalFixture();
       const harness = createHarness();
       const root = {
         ...sessionRow(0),
@@ -357,15 +381,8 @@ describe("personal pin archive Undo", () => {
       const h = createOfflineArchiveHarness();
       Object.assign(h.scope, { gateway: store.gateway, client, sessions });
       Object.assign(h.scope.context, { gateway: store.gateway, sessions });
-      const navigation = h.scope.context.navigation;
       const pin = "session:" + row.key;
-      navigation.update({ sidebarEntries: [pin] });
-      h.host.pruneSidebarSessionEntry = (key) =>
-        navigation.update({
-          sidebarEntries: navigation.snapshot.sidebarEntries.filter(
-            (entry) => entry !== "session:" + key,
-          ),
-        });
+      const { navigation, toggle } = pinNavigation(h, [pin]);
       await archiveSessionWithUndo(h.host, sessionRow(1), h.scope);
       const undo = vi.mocked(showToast).mock.calls.at(-1)?.[0].onAction;
       assert(undo);
@@ -377,8 +394,7 @@ describe("personal pin archive Undo", () => {
       await undoStarted.promise;
       expect(navigation.snapshot.sidebarEntries).toEqual([]);
       if (outcome === "manual") {
-        navigation.update({ sidebarEntries: [pin] });
-        navigation.update({ sidebarEntries: [] });
+        toggle(pin, []);
       }
       undoReply.resolve();
       await waitForFast(() => expect(store.gateway.snapshot.deferredIntentDraining).toBe(false));
@@ -394,10 +410,9 @@ describe("personal pin archive Undo", () => {
       const key = sessionRow(1).key;
       const pin = "session:" + key;
       const retained = ["session-rail:" + key];
-      const navigation = h.scope.context.navigation;
-      navigation.update({ sidebarEntries: [pin, ...retained] });
+      const { navigation, set, toggle } = pinNavigation(h, [pin, ...retained]);
       const undoPins = captureSessionArchivePins(h.scope, [key]);
-      navigation.update({ sidebarEntries: retained });
+      set(retained);
       h.scope.gateway.snapshot.phase = "connected";
       if (outcome === "replacement-client") {
         h.scope.gateway.snapshot.client = createTestGatewayClient(async () => ({}));
@@ -408,8 +423,7 @@ describe("personal pin archive Undo", () => {
       if (outcome === "recovery-scope") {
         Object.assign(h.scope.client, { recoveryScope: "another-owner" });
       } else if (outcome === "manual") {
-        navigation.update({ sidebarEntries: [...retained, pin] });
-        navigation.update({ sidebarEntries: retained });
+        toggle(pin, retained);
       }
       reply.resolve([key]);
       await operation;
@@ -426,14 +440,7 @@ describe("personal pin archive Undo", () => {
       const h = createOfflineArchiveHarness();
       const row = { ...sessionRow(1), sessionId: "archived-offline" };
       const pin = "session:" + row.key;
-      const navigation = h.scope.context.navigation;
-      navigation.update({ sidebarEntries: [pin] });
-      h.host.pruneSidebarSessionEntry = (key) =>
-        navigation.update({
-          sidebarEntries: navigation.snapshot.sidebarEntries.filter(
-            (entry) => entry !== "session:" + key,
-          ),
-        });
+      const { navigation } = pinNavigation(h, [pin]);
       let onConfirmed: SessionPatchOptions["onConfirmed"];
       const patch = vi.fn<SessionPatchRoute>(async (key, fields, options) => {
         if (fields.archived === true) {
@@ -443,8 +450,7 @@ describe("personal pin archive Undo", () => {
         return patchReceipt(key, { sessionId: row.sessionId });
       });
       h.scope.sessions.patch = patch;
-      h.scope.sessions.invalidate = vi.fn();
-      h.scope.sessions.refreshReplacement = vi.fn(async () => sessionsResult([], 1));
+      prepareUndo(h);
 
       if (surface === "header") {
         await archiveSessionWithUndo(h.host, row, h.scope);
@@ -512,21 +518,19 @@ describe("personal pin archive Undo", () => {
       const key = sessionRow(1).key;
       const pin = "session:" + key;
       const retained = ["session-rail:" + key, "session:agent:main:other"];
-      const navigation = h.scope.context.navigation;
-      navigation.update({ sidebarEntries: [pin, ...retained] });
+      const { navigation, set, toggle } = pinNavigation(h, [pin, ...retained]);
       const undoPins = captureSessionArchivePins(h.scope, [key]);
-      navigation.update({ sidebarEntries: retained });
+      set(retained);
       const reply = createDeferred<readonly string[]>();
       const operation = undoPins.restore(() => reply.promise);
       expect(navigation.snapshot.sidebarEntries).toEqual(retained);
       if (outcome === "profile") {
         h.retireScope();
-        navigation.update({ sidebarEntries: ["session:agent:main:another-profile"] });
+        set(["session:agent:main:another-profile"]);
       } else if (outcome === "manual") {
-        navigation.update({ sidebarEntries: [...retained, pin] });
-        navigation.update({ sidebarEntries: retained });
+        toggle(pin, retained);
       } else if (outcome === "success") {
-        navigation.update({ sidebarEntries: [...retained, "route:usage"] });
+        set([...retained, "route:usage"]);
       }
       if (outcome === "failure") {
         reply.reject(new Error("Undo rejected"));
@@ -550,16 +554,8 @@ describe("personal pin archive Undo", () => {
     const rows = [sessionRow(1), sessionRow(2), sessionRow(3)];
     const pins = rows.slice(0, 2).map((row) => "session:" + row.key);
     const rail = "session-rail:" + rows[0]!.key;
-    const navigation = h.scope.context.navigation;
-    navigation.update({ sidebarEntries: [...pins, rail] });
-    h.host.pruneSidebarSessionEntry = (key) =>
-      navigation.update({
-        sidebarEntries: navigation.snapshot.sidebarEntries.filter(
-          (entry) => entry !== "session:" + key,
-        ),
-      });
-    h.scope.sessions.invalidate = vi.fn();
-    h.scope.sessions.refreshReplacement = vi.fn(async () => sessionsResult([], 1));
+    const { navigation } = pinNavigation(h, [...pins, rail]);
+    prepareUndo(h);
     await archiveConfirmedSessionsWithUndo(h.host, rows, h.scope);
     expect(navigation.snapshot.sidebarEntries).toEqual([rail]);
     h.request.mockResolvedValueOnce({

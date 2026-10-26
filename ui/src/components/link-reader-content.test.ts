@@ -69,6 +69,11 @@ function update(container: HTMLElement, value: ControlUiLinkReaderDocument, link
 describe("link reader document content", () => {
   it("loads only idle file sections entering the viewport and retires observation", () => {
     const visible = new Set<(isIntersecting: boolean) => void>();
+    const notifyVisible = (intersecting = true) => {
+      for (const notify of visible) {
+        notify(intersecting);
+      }
+    };
     vi.stubGlobal(
       "IntersectionObserver",
       class {
@@ -117,35 +122,25 @@ describe("link reader document content", () => {
       }),
     );
     flush();
-    for (const notify of visible) {
-      notify(false);
-    }
+    notifyVisible(false);
     expect(loadSection).not.toHaveBeenCalled();
-    for (const notify of visible) {
-      notify(true);
-    }
+    notifyVisible();
     expect(loadSection).toHaveBeenCalledExactlyOnceWith("files");
     loadSection.mockClear();
 
     for (const state of ["loading", "error"] as const) {
       setSections({ files: state, checks: "idle", discussion: "idle" });
       flush();
-      for (const notify of visible) {
-        notify(true);
-      }
+      notifyVisible();
       expect(loadSection).not.toHaveBeenCalled();
     }
     setSections({ files: "idle" });
     flush();
-    for (const notify of visible) {
-      notify(true);
-    }
+    notifyVisible();
     expect(loadSection).toHaveBeenCalledExactlyOnceWith("files");
     loadSection.mockClear();
     mounted.unmount();
-    for (const notify of visible) {
-      notify(true);
-    }
+    notifyVisible();
     expect(loadSection).not.toHaveBeenCalled();
   });
 
@@ -350,13 +345,11 @@ describe("link reader document content", () => {
       "https://user-images.githubusercontent.com/123/image.png",
     ]);
     for (const image of images) {
-      expect(image.crossOrigin).toBe("anonymous");
-      expect(image.referrerPolicy).toBe("no-referrer");
+      expect(image).toMatchObject({ crossOrigin: "anonymous", referrerPolicy: "no-referrer" });
       expect(image.hasAttribute("onerror")).toBe(false);
       expect(image.hasAttribute("srcset")).toBe(false);
       const open = image.closest("a");
-      expect(open?.href).toBe(image.src);
-      expect(open?.target).toBe("_blank");
+      expect(open).toMatchObject({ href: image.src, target: "_blank" });
       expect(open?.rel).toContain("noreferrer");
       expect(open?.getAttribute("aria-label")).toContain(image.alt);
       open?.focus();

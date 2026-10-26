@@ -151,9 +151,7 @@ describe("patchSessionRows", () => {
   it("binds Mark as read to the current session identity", async () => {
     const row = sessionRow(0);
     const h = createHarness();
-
     await expect(patchSession(h.host, row, { unread: false }, h.scope)).resolves.toBe("completed");
-
     expectPatch(h, row, { unread: false });
   });
 
@@ -173,13 +171,11 @@ describe("patchSessionRows", () => {
         { targets: [sessionTarget(parent)], patch: { unread: false } },
         { targets: [sessionTarget(parent)], patch: { unread: true } },
       ]);
-      expect(h.patch.mock.calls).toEqual([
-        [
-          run.key,
-          { unread: false },
-          { agentId: "main", expectedMarkedUnreadAt: null, expectedSessionId: run.sessionId },
-        ],
-      ]);
+      expect(h.patch).toHaveBeenCalledExactlyOnceWith(
+        run.key,
+        { unread: false },
+        { agentId: "main", expectedMarkedUnreadAt: null, expectedSessionId: run.sessionId },
+      );
     },
   );
 
