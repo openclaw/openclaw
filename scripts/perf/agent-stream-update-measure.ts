@@ -59,7 +59,7 @@ const tools = Array.from({ length: 40 }, (_, index) => makeTool(`synthetic_${ind
 const calls = asyncFragments
   ? Array.from({ length: events }, (_, index) => ({
       ...makeCall(`synthetic_${index % tools.length}`, `call-${index}`),
-      async: true,
+      async: true as const,
     }))
   : [];
 const fragments = calls.map((call, index) => ({
@@ -96,8 +96,14 @@ async function run() {
       return {
         async *[Symbol.asyncIterator]() {
           yield { type: "start", partial: message } as const;
-          for (let index = 0; index < updates; index++) {
-            yield toolResponse ? fragments[index] : update;
+          if (toolResponse) {
+            for (const fragment of fragments) {
+              yield fragment;
+            }
+          } else {
+            for (let index = 0; index < updates; index++) {
+              yield update;
+            }
           }
           yield { type: "done", reason: "stop", message: result } as const;
         },
