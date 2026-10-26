@@ -219,11 +219,10 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       } else {
         setSteeringRuntimeContextRetention(session, true);
         const user = { role: "user" as const, content: "Queued user", timestamp };
-        const clock = vi.spyOn(Date, "now").mockReturnValue(timestamp);
-        try {
+        {
+          using clock = vi.spyOn(Date, "now");
+          clock.mockReturnValue(timestamp);
           attachSteeringRuntimeContext(user, { text });
-        } finally {
-          clock.mockRestore();
         }
         session.agent.steer(user);
       }
@@ -548,11 +547,10 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         target: createTestUserTurnTranscriptTarget(),
       });
       const queued = vi.spyOn(session.agent, "admitSteeringMessage");
-      const clock = vi.spyOn(Date, "now").mockReturnValue(queuedAt);
-      try {
+      {
+        using clock = vi.spyOn(Date, "now");
+        clock.mockReturnValue(queuedAt);
         await session.steer("Expanded runtime prompt", withImage ? [image] : undefined, recorder);
-      } finally {
-        clock.mockRestore();
       }
       const message = queued.mock.calls[0]?.[0];
       assert(message?.role === "user", "expected queued user message");

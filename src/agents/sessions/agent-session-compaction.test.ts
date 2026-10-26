@@ -113,6 +113,7 @@ function createResultHandlers(
   summary: string,
   firstKeptEntryId?: string,
   onPreparation?: (preparation: { latestUnresolvedUserRequest?: string }) => void,
+  retainRequest = false,
 ) {
   const handlers: ExtensionFactory = (api) => {
     api.on("session_before_compact", async ({ preparation }) => {
@@ -122,6 +123,17 @@ function createResultHandlers(
           summary,
           firstKeptEntryId: firstKeptEntryId ?? preparation.firstKeptEntryId,
           tokensBefore: preparation.tokensBefore,
+          ...(retainRequest
+            ? {
+                details: {
+                  readFiles: [],
+                  modifiedFiles: [],
+                  ...(preparation.latestUnresolvedUserRequest
+                    ? { latestUnresolvedUserRequest: preparation.latestUnresolvedUserRequest }
+                    : {}),
+                },
+              }
+            : {}),
         },
       };
     });
@@ -151,6 +163,12 @@ function recordRequests(respond: (model: Model, index: number) => ReturnType<typ
 
 function compactions(manager: SessionManager) {
   return manager.getBranch().filter((entry) => entry.type === "compaction");
+}
+
+async function reopen(target: Parameters<typeof SessionManager.open>[0], dir: string) {
+  const databasePath = resolveSqliteTargetFromSessionStorePath(target.storePath).path;
+  expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
+  return SessionManager.open(target, dir);
 }
 
 type AgentEventHandler = NonNullable<
@@ -191,49 +209,45 @@ describe("AgentSession compaction", () => {
       appendAnswer(sessionManager, "retained answer", 4);
       const observedInstructions: Array<string | undefined> = [];
       const prompts: string[] = [];
-      const network = vi
+      using network = vi
         .spyOn(globalThis, "fetch")
         .mockRejectedValue(new Error("Unexpected network request in compaction test"));
-      try {
-        streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
-          const message = context.messages[0];
-          if (message?.role !== "user") {
-            throw new Error("expected a user summary prompt");
-          }
-          prompts.push(
-            typeof message.content === "string"
-              ? message.content
-              : message.content.map((block) => (block.type === "text" ? block.text : "")).join(""),
-          );
-          return textStream(model, "compacted summary");
-        });
-        const { session } = await createTestSession({
-          sessionManager,
-          extension: (api) =>
-            api.on("session_before_compact", (event) => {
-              observedInstructions.push(event.customInstructions);
-            }),
-          settingsManager: compactionSettings({ reserveTokens: 1_000 }),
-        });
-
-        await session.compact(instructions);
-
-        expect(observedInstructions).toEqual([instructions]);
-        expect(prompts).toHaveLength(2);
-        for (const prompt of prompts) {
-          if (expectedFocus) {
-            expect.soft(prompt).toContain(`<untrusted-text>\n${expectedFocus}\n</untrusted-text>`);
-            expect.soft(prompt).not.toContain("\u0000");
-            expect.soft(prompt).not.toContain("\u202E");
-          } else {
-            expect.soft(prompt).not.toContain("Additional focus:");
-          }
+      streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+        const message = context.messages[0];
+        if (message?.role !== "user") {
+          throw new Error("expected a user summary prompt");
         }
-        expect(compactions(sessionManager).map((entry) => entry.fromHook)).toEqual([false]);
-        expect(network).not.toHaveBeenCalled();
-      } finally {
-        network.mockRestore();
+        prompts.push(
+          typeof message.content === "string"
+            ? message.content
+            : message.content.map((block) => (block.type === "text" ? block.text : "")).join(""),
+        );
+        return textStream(model, "compacted summary");
+      });
+      const { session } = await createTestSession({
+        sessionManager,
+        extension: (api) =>
+          api.on("session_before_compact", (event) => {
+            observedInstructions.push(event.customInstructions);
+          }),
+        settingsManager: compactionSettings({ reserveTokens: 1_000 }),
+      });
+
+      await session.compact(instructions);
+
+      expect(observedInstructions).toEqual([instructions]);
+      expect(prompts).toHaveLength(2);
+      for (const prompt of prompts) {
+        if (expectedFocus) {
+          expect.soft(prompt).toContain(`<untrusted-text>\n${expectedFocus}\n</untrusted-text>`);
+          expect.soft(prompt).not.toContain("\u0000");
+          expect.soft(prompt).not.toContain("\u202E");
+        } else {
+          expect.soft(prompt).not.toContain("Additional focus:");
+        }
       }
+      expect(compactions(sessionManager).map((entry) => entry.fromHook)).toEqual([false]);
+      expect(network).not.toHaveBeenCalled();
     },
   );
 
@@ -303,11 +317,8 @@ describe("AgentSession compaction", () => {
       persistedUserIdempotencyKey: currentUser.idempotencyKey,
     });
 
-    expect(compactionEvents).toEqual([
-      expect.objectContaining({
-        reason: "threshold",
-        outcome: expect.objectContaining({ status: "completed", willRetry: false }),
-      }),
+    expect(compactionEvents).toMatchObject([
+      { reason: "threshold", outcome: { status: "completed", willRetry: false } },
     ]);
     expect(requests).toHaveLength(1);
     expect(
@@ -458,25 +469,12 @@ describe("AgentSession compaction", () => {
           : createAssistant(activeModel, "complete retry");
       return createAssistantResultStream({ ...response, timestamp: Date.now() + agentRequests });
     });
-    const handlers: ExtensionFactory = (api) => {
-      api.on("session_before_compact", async ({ preparation }) => {
-        preparedRequests.push(preparation.latestUnresolvedUserRequest);
-        return {
-          compaction: {
-            summary: "condensed history",
-            firstKeptEntryId: preparation.firstKeptEntryId,
-            tokensBefore: preparation.tokensBefore,
-            details: {
-              readFiles: [],
-              modifiedFiles: [],
-              ...(preparation.latestUnresolvedUserRequest
-                ? { latestUnresolvedUserRequest: preparation.latestUnresolvedUserRequest }
-                : {}),
-            },
-          },
-        };
-      });
-    };
+    const handlers = createResultHandlers(
+      "condensed history",
+      undefined,
+      (preparation) => preparedRequests.push(preparation.latestUnresolvedUserRequest),
+      true,
+    );
     const { session } = await createTestSession({
       settingsManager: createAutoCompactionSettings(),
       extension: handlers,
@@ -550,10 +548,10 @@ describe("AgentSession compaction", () => {
     });
     try {
       await Promise.race([hookEntered.promise, bounded]);
-      const committed = compactions(sessionManager).at(-1);
-      if (!committed) {
-        throw new Error("expected the replacement compaction entry");
-      }
+      const committed = expectDefined(
+        compactions(sessionManager).at(-1),
+        "expected the replacement compaction entry",
+      );
       const contextTokens = estimateContextTokens(session.messages).tokens;
       expect(contextTokens).toBeGreaterThan(0);
       expect(committed).toMatchObject({ summary, tokensAfter: contextTokens });
@@ -698,12 +696,9 @@ describe("compaction writer admission", () => {
     });
     const sessionManager = SessionManager.open(target, dir);
     sessionManager.appendMessage(createAssistant(testModel, "authoritative answer"));
-    const handlers: ExtensionFactory = (api) => {
-      api.on("session_before_compact", async () => ({ cancel: true }));
-    };
     const { session } = await createTestSession({
       sessionManager,
-      extension: handlers,
+      extension: (api) => api.on("session_before_compact", async () => ({ cancel: true })),
     });
     const persistedBefore = await loadTranscriptEvents(target);
     const contextBefore = sessionManager.buildSessionContext();
@@ -713,9 +708,7 @@ describe("compaction writer admission", () => {
     sessionManager.flushPendingPersistence();
     expect(await loadTranscriptEvents(target)).toEqual(persistedBefore);
 
-    const databasePath = resolveSqliteTargetFromSessionStorePath(target.storePath).path;
-    expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
-    const reopened = SessionManager.open(target, dir);
+    const reopened = await reopen(target, dir);
     expect(reopened.getBranch()).toEqual(persistedBefore.slice(1));
     expect(reopened.buildSessionContext()).toEqual(contextBefore);
   });
@@ -756,21 +749,16 @@ describe("compaction writer admission", () => {
     );
     await gate.entered;
     const work = session.compact();
-    const outcome = work.then(
-      (value) => ({ status: "fulfilled" as const, value }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    );
+    const outcome = Promise.allSettled([work]);
     try {
       await summaryReady.promise;
       // The summary continuations reach the held writer before cancellation.
       await nextTurn();
       session.abortCompaction();
       gate.release();
-      const result = await outcome;
-      expect(result).toMatchObject({
-        status: "rejected",
-        error: new Error("Compaction cancelled"),
-      });
+      expect(await outcome).toMatchObject([
+        { status: "rejected", reason: new Error("Compaction cancelled") },
+      ]);
       expect(await loadTranscriptEvents(target)).toEqual(before);
       expect(session.messages).toEqual(messagesBefore);
       expect(published).toEqual([]);
@@ -792,12 +780,6 @@ describe("degraded compaction reload", () => {
     "## Exact identifiers\nNone.",
   ].join("\n");
   const model: Model = { ...testModel, api: "compaction-test-api", contextWindow: 200_000 };
-
-  async function reopen(target: { storePath: string }, dir: string): Promise<SessionManager> {
-    const databasePath = resolveSqliteTargetFromSessionStorePath(target.storePath).path;
-    expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
-    return SessionManager.open(target as Parameters<typeof SessionManager.open>[0], dir);
-  }
 
   function lastCompaction(sessionManager: SessionManager) {
     return expectDefined(
