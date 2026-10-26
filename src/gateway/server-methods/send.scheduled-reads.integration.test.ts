@@ -117,6 +117,9 @@ async function createFixture(state: OpenClawTestState) {
     channelId,
     guildId,
     handle: async ({ method, path }) => {
+      if (method === "GET" && path === "/api/v10/users/@me/guilds") {
+        return Response.json([]);
+      }
       if (method === "GET" && path === `/api/v10/channels/${channelId}/messages`) {
         return providerRead();
       }
@@ -165,6 +168,8 @@ async function createFixture(state: OpenClawTestState) {
       accountId?: string;
       paramsAccountId?: string;
       client?: GatewayClient;
+      channelId?: string;
+      allowNativeChannelNamespace?: boolean;
     },
   ): Promise<Parameters<RespondFn>> => {
     const respond = vi.fn<RespondFn>();
@@ -174,11 +179,14 @@ async function createFixture(state: OpenClawTestState) {
         channel: "discord",
         action,
         params: {
-          channelId,
+          channelId: options.channelId ?? channelId,
           ...(action === "read" ? { limit: 1 } : { messageId }),
           ...(options.paramsAccountId ? { accountId: options.paramsAccountId } : {}),
         },
         ...(options.accountId ? { accountId: options.accountId } : {}),
+        ...(options.allowNativeChannelNamespace !== undefined
+          ? { allowNativeChannelNamespace: options.allowNativeChannelNamespace }
+          : {}),
         sessionKey,
         sessionId,
         idempotencyKey: options.idempotencyKey,
@@ -381,6 +389,21 @@ describe("Gateway scheduled message actions through an installed Discord plugin"
       }),
   );
 
+  it.each([undefined, false])(
+    "rejects an inferred channel name before a scheduled provider mutation (provenance=%s)",
+    async (allowNativeChannelNamespace) => {
+      await withFixture(async (fixture) => {
+        const response = await fixture.invokeAction("pin", {
+          idempotencyKey: `scheduled-pin-inferred-channel-name-${String(allowNativeChannelNamespace)}`,
+          channelId: "discord",
+          allowNativeChannelNamespace,
+        });
+
+        expectDenied(response, "does not specify a destination");
+        expect(fixture.httpRequests.every((request) => request.method === "GET")).toBe(true);
+      });
+    },
+  );
   it("keeps same-key pins separate for different saved accounts", async () =>
     await withFixture(async (fixture) => {
       const otherClient = fixture.createClient({

@@ -79,6 +79,31 @@ export function runResolveOutboundTargetCoreTests(): void {
       }
     });
 
+    it("preserves a plugin-native direct target that matches its channel id", async () => {
+      setActivePluginRegistry(
+        createTargetsTestRegistry([
+          createTestChannelPlugin({
+            id: "irc",
+            label: "IRC",
+            outbound: {
+              deliveryMode: "direct",
+              resolveTarget: ({ to }) =>
+                to
+                  ? { ok: true as const, to: to.trim() }
+                  : { ok: false as const, error: new Error("target required") },
+            },
+            messaging: {
+              targetPrefixes: ["irc"],
+            },
+          }),
+        ]),
+      );
+
+      const res = await resolveOutboundTarget({ channel: "irc", to: "irc", mode: "explicit" });
+
+      expect(res).toEqual({ ok: true, to: "irc" });
+    });
+
     it.each(["tg:self"])(
       "rejects plugin-reserved literal target %s before direct outbound fallback",
       async (to) => {
@@ -116,7 +141,13 @@ export function runResolveOutboundTargetCoreTests(): void {
       },
     );
 
-    it("allows explicit handles that include the provider handle marker", async () => {
+    it.each([
+      "@telegram",
+      "telegram:@telegram",
+      "telegram:@current",
+      "telegram:123456789",
+      "conversation:ref-1",
+    ])("allows explicit destination %s", async (to) => {
       setActivePluginRegistry(
         createTargetsTestRegistry([
           createTestChannelPlugin({
@@ -137,13 +168,9 @@ export function runResolveOutboundTargetCoreTests(): void {
         ]),
       );
 
-      const res = await resolveOutboundTarget({
-        channel: "telegram",
-        to: "telegram:@current",
-        mode: "explicit",
-      });
+      const res = await resolveOutboundTarget({ channel: "telegram", to, mode: "explicit" });
 
-      expect(res).toEqual({ ok: true, to: "telegram:@current" });
+      expect(res).toEqual({ ok: true, to });
     });
 
     it("uses the plugin hint when a channel has outbound support but no target resolver", async () => {

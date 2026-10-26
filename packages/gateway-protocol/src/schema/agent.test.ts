@@ -51,6 +51,27 @@ describe("MessageActionParamsSchema", () => {
     rejects(MessageActionParamsSchema, { ...baseParams, conversationReadOrigin: "delegated" });
   });
 
+  it("accepts only a restrictive channel namespace provenance", () => {
+    expect(
+      Value.Check(MessageActionParamsSchema, {
+        ...baseParams,
+        allowNativeChannelNamespace: false,
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(MessageActionParamsSchema, {
+        ...baseParams,
+        allowNativeChannelNamespace: true,
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(MessageActionParamsSchema, {
+        ...baseParams,
+        allowNativeChannelNamespace: "false",
+      }),
+    ).toBe(false);
+  });
+
   it("rejects caller-supplied current chat classification", () => {
     rejects(MessageActionParamsSchema, {
       ...baseParams,
