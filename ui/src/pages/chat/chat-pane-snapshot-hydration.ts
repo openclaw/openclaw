@@ -10,6 +10,7 @@ import {
   resolveChatSnapshotKey,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { snapshotStoreGeneration } from "./session-snapshot-invalidation-events.ts";
 
 export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation {
   protected hydrateStoredChatSnapshot(
@@ -22,9 +23,11 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
     const target = { sessionKey };
     const cache = state.chatMessagesBySession;
     const cacheKey = resolveChatSnapshotKey(state, target);
+    const generation = snapshotStoreGeneration;
     const requests = chatHistoryRequests(state);
     const isCurrent = () =>
       requests.initialSnapshotHydration === hydration &&
+      generation === snapshotStoreGeneration &&
       this.state === state &&
       this.ownsChatSnapshot(target) &&
       areUiSessionKeysEquivalent(state.sessionKey, sessionKey) &&
@@ -46,39 +49,50 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
         this.boardProviderLease?.restoreSnapshot(board.snapshot, board.receivedAtMs);
       }
     };
-    const reading = this.sessionSnapshotStore.read(cacheKey, (board) => {
-      void restoreBoard(board);
-    });
+    let readySnapshot: ChatSessionSnapshot | null | undefined;
+    const reading = this.sessionSnapshotStore.read(
+      cacheKey,
+      (board) => void restoreBoard(board),
+      (snapshot) => {
+        readySnapshot = snapshot;
+      },
+    );
     const hydration: InitialChatSnapshotHydration = {
       titlePending: true,
       sessionKey,
       connected: this.context.gateway.snapshot.phase === "connected",
+      readReadyHistory: () =>
+        isCurrent() && !requests.acceptedHistory && readySnapshot?.deltaCursor
+          ? { deltaCursor: readySnapshot.deltaCursor, historyState: readySnapshot.historyState }
+          : undefined,
+      adoptReadySnapshot: () => {
+        if (readySnapshot === undefined) {
+          return;
+        }
+        delete hydration.adoptReadySnapshot;
+        delete hydration.readReadyHistory;
+        if (!isCurrent()) {
+          return;
+        }
+        const snapshot = mergeStoredChatSessionSnapshot(cache, state, target, readySnapshot);
+        if (requests.acceptedHistory || !snapshot) {
+          return;
+        }
+        // A sibling may already own a newer base in the shared cache.
+        applyChatCacheSnapshot(state, snapshot);
+        const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
+        cacheChatSessionSnapshot(cache, state, target, mergedSnapshot);
+        this.syncSessionReactions();
+        if (snapshot.progressCard !== undefined) {
+          const progressTarget = this.resolveChatReadTarget();
+          if (progressTarget) {
+            this.progressCards.hydrate(progressTarget, snapshot.progressCard);
+          }
+        }
+      },
       promise: reading
         .then(async (storedSnapshot) => {
-          // Keep cache rendering out of connect preparation. The subscription can
-          // adopt ready rows synchronously after dispatch, before reading their cursor.
-          hydration.adoptReadySnapshot = () => {
-            delete hydration.adoptReadySnapshot;
-            if (!isCurrent()) {
-              return;
-            }
-            const snapshot = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
-            if (requests.acceptedHistory || !snapshot) {
-              return;
-            }
-            // A sibling can fill the shared cache while this pane still needs its
-            // own transcript. Adopt those messages before revalidating their cursor.
-            applyChatCacheSnapshot(state, snapshot);
-            const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
-            cacheChatSessionSnapshot(cache, state, target, mergedSnapshot);
-            this.syncSessionReactions();
-            if (snapshot.progressCard !== undefined) {
-              const progressTarget = this.resolveChatReadTarget();
-              if (progressTarget) {
-                this.progressCards.hydrate(progressTarget, snapshot.progressCard);
-              }
-            }
-          };
+          readySnapshot = storedSnapshot;
           const gateway = this.context.gateway.snapshot;
           if (
             gateway.client &&

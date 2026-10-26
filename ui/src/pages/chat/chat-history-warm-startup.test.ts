@@ -47,6 +47,7 @@ import {
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import * as snapshotDatabase from "./session-snapshot-database.ts";
+import { publishSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
@@ -746,6 +747,96 @@ describe("first chat startup snapshot ordering", () => {
     expect(replacement.state.result?.sessions[0]).toMatchObject(h.liveResult.sessionInfo);
     expect(h.state.chatMessages).toEqual(liveMessages);
   });
+
+  it.each(
+    [true, false].flatMap((beforeHello) =>
+      (["current", "scope", "generation"] as const).map((transition) => ({
+        beforeHello,
+        transition,
+      })),
+    ),
+  )(
+    "sends prepared history facts without publishing rows at dispatch ($transition, beforeHello=$beforeHello)",
+    async ({ beforeHello, transition }) => {
+      const cacheKey = resolveChatSnapshotKey(
+        { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
+        { sessionKey },
+      );
+      const stateRevision = startupRevision();
+      const historyState: ChatHistoryState = {
+        stateRevision,
+        pendingInputs: emptyPendingInputs(),
+        sessionInfo: { key: sessionKey, kind: "direct", sessionId: "warm-session", updatedAt: 1 },
+        commands: startupCommands(),
+      };
+      vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockResolvedValueOnce({
+        projectionVersion: 5,
+        savedAt: 0,
+        sessionKey: cacheKey,
+        sessionId: stored.sessionId,
+        snapshot: { ...stored, historyState },
+      });
+      await prewarmChatSnapshot(cacheKey);
+      await vi.dynamicImportSettled();
+      const h = mountPane(sessionKey, false, new SessionSnapshotStore());
+      const display = createDeferred<boolean>();
+      Object.defineProperty(h.pane.context.gateway.snapshot.client!, "connectSent", {
+        get: () => display.promise,
+      });
+      connectSessionOwner(h);
+      h.state.connected = !beforeHello;
+      let rowsAtDispatch: unknown[] | undefined;
+      let snapshotAtDispatch: ChatSessionSnapshot | null | undefined;
+      h.request.mockImplementationOnce(async () => {
+        rowsAtDispatch = h.state.chatMessages.slice();
+        snapshotAtDispatch = h.snapshot();
+        if (transition === "scope") {
+          Object.defineProperty(h.client, "recoveryScope", { value: "replacement-scope" });
+        } else if (transition === "generation") {
+          await publishSnapshotInvalidation({});
+        }
+        if (beforeHello) {
+          h.connect();
+          void syncSelectedSessionMessageSubscription(h.state);
+        }
+        return {
+          key: sessionKey,
+          initialHistory: {
+            ok: true,
+            payload: {
+              kind: "delta",
+              messages: [],
+              deltaCursor: "current-cursor",
+              sessionInfo: h.liveResult.sessionInfo,
+            },
+          },
+        };
+      });
+      await syncSelectedSessionMessageSubscription(h.state, {
+        initialHistory: true,
+        beforeHello,
+      });
+      expect(rowsAtDispatch).toEqual([]);
+      expect(snapshotAtDispatch).toBeNull();
+      expect(h.request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.messages.subscribe",
+        expect.objectContaining({
+          initialHistory: expect.objectContaining({
+            cursor: stored.deltaCursor,
+            knownState: stateRevision,
+          }),
+        }),
+        expect.anything(),
+      );
+      await h.start();
+      expect(h.request).toHaveBeenCalledTimes(transition === "current" ? 1 : 2);
+      expect(h.state.chatMessages).toEqual(
+        transition === "current" ? stored.messages : liveMessages,
+      );
+      display.resolve(true);
+      await vi.advanceTimersByTimeAsync(0);
+    },
+  );
 
   it("sends the retained cursor and receipts once storage has settled", async () => {
     const record = createDeferred<unknown>();

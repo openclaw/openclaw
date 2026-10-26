@@ -29,6 +29,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import { chromium, type Browser, type CDPSession, type Page } from "playwright";
 import { buildSandboxHostPath } from "../src/agents/sandbox-host.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../src/gateway/control-ui-bootstrap-contract.ts";
@@ -42,7 +43,6 @@ import {
   createControlUiMockBootstrapConfig,
   installControlUiMockBootstrapDocument,
   createControlUiMockGatewayInitScript,
-  controlUiSessionPath,
   controlUiSessionUrl,
   controlUiBundledSettingsStorageKey,
   prepareControlUiMockGatewayScenario,
@@ -768,7 +768,6 @@ const fixture = createControlUiTeamScaleFixture({
   dashboardWidgetFontUrl: dashboardFont
     ? `http://127.0.0.1:${address.port}${dashboardFontPath}`
     : undefined,
-  historyStateReceipt: historyValidatorDelayMs > 0,
   dashboardPaintMarker: values["dashboard-paint-marker"],
 });
 const streamingReply = values["streaming-reply"]
@@ -1248,7 +1247,7 @@ try {
   const paneChromeScript = values["pane-chrome-probe"]
     ? `const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome);`
     : "";
-  const warmProbes = values["warm-reload"]
+  const warmProbes = values["warm-reload"] || firstLoad
     ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"] })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
     : "";
   const boardTickets = values["dashboard-widget"]
@@ -1264,6 +1263,21 @@ try {
   }
   // Fetch the real public document; the init script selects the synthetic session.
   // Session-entry authorization is outside this static-delivery benchmark.
+  const shortSessionUrl = (namespace: "chat" | "dashboard") => {
+    const pathname = buildControlUiSessionPath({
+      namespace,
+      sessionKey: fixture.selectedSessionKey,
+      fallbackAgentId: "main",
+      shortIdLength: values["off-roster-route"] ? 8 : 32,
+    });
+    if (!pathname) {
+      throw new Error("Fixture session has no short route");
+    }
+    return new URL(pathname, baseUrl).href;
+  };
+  const chatDashboardUrl = values["short-route"]
+    ? shortSessionUrl("chat")
+    : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, "chat");
   const chatUrl = usesGatewayHttp
     ? new URL("/chat", baseUrl).href
     : values["full-uuid-route"]
@@ -1272,7 +1286,7 @@ try {
           baseUrl,
         ).href
       : values["short-route"]
-        ? new URL(controlUiSessionPath(fixture.selectedSessionKey, "", face), baseUrl).href
+        ? shortSessionUrl(face)
         : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face);
   const url =
     bootRoute === "chat"
@@ -1575,7 +1589,7 @@ try {
       if (values["chat-dashboard-route"]) {
         await page.evaluate(
           (deepLink) => history.replaceState(null, "", deepLink),
-          controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, "chat"),
+          chatDashboardUrl,
         );
       }
       await settle("chat");
@@ -1630,10 +1644,11 @@ try {
     const bundleIndex = run % bundleSlots.length;
     const layoutCell = layoutCells[Math.floor(run / bundleSlots.length) % layoutCells.length];
     const runRoute = layoutCell?.route ?? bootRoute;
+    const cold = layoutCell?.cold ?? firstLoad;
     const runUrl =
       runRoute === "chat"
-        ? values["chat-dashboard-route"]
-          ? controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, "chat")
+        ? values["chat-dashboard-route"] && !cold
+          ? chatDashboardUrl
           : chatUrl
         : new URL(runRoute === "settings" ? "/settings/appearance" : `/${runRoute}`, baseUrl).href;
     let reloadStorage = warmStates[bundleIndex];
@@ -1691,7 +1706,7 @@ try {
     }
     const validatorRequestsBeforeReload = historyValidatorRequests;
     const cdp = await context.newCDPSession(page);
-    if (layoutCell?.cold ?? firstLoad) {
+    if (cold) {
       await resetColdState(cdp, bundleIndex);
     } else {
       await restoreColdLoadWarmState(page, reloadStorage!, layoutCell && reloadStorage);
@@ -2010,7 +2025,7 @@ try {
     if (historyValidatorDelayMs && metrics.historyValidatorResources.length !== 1) {
       throw new Error("Measured reload lacks the delayed validator resource timing");
     }
-    const warmReload = values["warm-reload"]
+    const warmReload = values["warm-reload"] || firstLoad
       ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
       : undefined;
     const paneChrome = values["pane-chrome-probe"]
