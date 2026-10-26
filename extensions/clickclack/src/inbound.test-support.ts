@@ -36,6 +36,12 @@ export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
     }),
     audit: { caller: { kind: "plugin", id: "clickclack" } },
   });
+  const stores = new Map<string, PluginStateSyncKeyedStore<unknown>>();
+  runtime.state.openSyncKeyedStore = vi.fn((options: { namespace: string }) => {
+    const store = stores.get(options.namespace) ?? createDiscussionMemoryStore<unknown>();
+    stores.set(options.namespace, store);
+    return store;
+  }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"];
   runtime.state.openKeyedStoreV2 = <T>(
     ...args: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>
   ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, ...args);
