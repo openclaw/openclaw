@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 271127,
-  "reason": "Same-host creation grouping measures 270797 to 271127 B startup gzip (+330 B), with five JS and one CSS requests unchanged; Chat grows 409 B and New saves 2054 B/two requests. Retained 20-triplet primary measurements improve 100 ms Worktrees/Claws readiness 7.46%/12.36%. Final corrected New model action task CPU falls 35.83% locally and 9.51% at 100 ms; four-phase task CPU falls 7.73%/1.08%, both p95 lower. Accept the small-byte tradeoff under the measured-win campaign policy and ratchet to the actual head.",
+  "startupJsGzipBytes": 271048,
+  "reason": "Fresh same-host builds at base 394ce384 and code 97b42ed measure startup 271080 to 271048 B gzip with five JS and one CSS requests unchanged; Chat saves 164 B and New saves 2840 B/two requests. New first-action task CPU improves 39.41% locally and 12.77% at 100 ms HTTP latency; four-phase task medians improve 8.37%/4.17% with lower p95. Ratchet to the measured head; retain disclosed small verification-wall and idle-rendering tails in PR #184994 evidence.",
   "updatedAt": "2026-10-26"
 }
