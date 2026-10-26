@@ -566,8 +566,9 @@ function createWorker() {
         return Array.from({length: 100000}, (_, i) => ({i, values: [i, i + 1]}));
       }
       function discardedWorkerAllocation() {
-        const rows = Array.from({length: 100000}, (_, i) => ({i, values: [i, i + 1]}));
-        return rows[rows.length - 1].values[1];
+        // Avoid hot callback bookkeeping that V8 can retain after collecting the rows.
+        const rows = new Array(1_000_000).fill(1);
+        return rows[rows.length - 1];
       }
       parentPort.on('message', async message => {
         if (message !== 'fixed-allocations') return allocateForProfile();
@@ -770,7 +771,8 @@ it.each([
     expect(await readFile(profilePath, "utf8")).not.toBe("");
 
     if (kind === "heap") {
-      for (const includeCollectedObjects of [true, false]) {
+      // Exercise retention before another capture can warm the allocation fixture.
+      for (const includeCollectedObjects of [false, true]) {
         const fixedPath = path.join(directory, `heap-collected-${includeCollectedObjects}`);
         const samplingIntervalBytes = 1024;
         await controlGatewayProfile(child, "heap", "start", fixedPath, {
@@ -853,10 +855,12 @@ it("separates discarded allocation churn from retained objects and cleans up fai
     function retainedAllocation() {
       return Array.from({ length: 100000 }, (_, i) => ({ i, values: [i, i + 1] }));
     }
+    // Reuse the warmed callback so retained captures do not sample new callback bookkeeping.
+    const discardedRow = (_, i) => ({ i, values: [i, i + 1] });
     function discardedAllocation() {
       let checksum = 0;
       for (let batch = 0; batch < 10; batch++) {
-        const rows = Array.from({ length: 20000 }, (_, i) => ({ i, values: [i, i + 1] }));
+        const rows = Array.from({ length: 20000 }, discardedRow);
         checksum += rows[rows.length - 1].values[1];
       }
       return checksum;
