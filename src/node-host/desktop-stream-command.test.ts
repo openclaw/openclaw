@@ -11,10 +11,10 @@ import {
   invokeNodeDesktopStream,
   invokeNodeWorkerDesktopStream,
 } from "./desktop-stream-command.js";
-import { portOf, streamParams, TICKET } from "./stream-command.test-support.js";
+import { portOf, streamParams, TICKET, useStreamFixture } from "./stream-command.test-support.js";
 
-const cleanups: Array<() => Promise<void>> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { cleanups, closeServer } = useStreamFixture();
 
 async function listenRfbSecurity(securityTypes: number[]) {
   const peers = new Set<net.Socket>();
@@ -30,15 +30,7 @@ async function listenRfbSecurity(securityTypes: number[]) {
     server.listen(0, "127.0.0.1", () => resolve());
   });
   const port = portOf(server);
-  cleanups.push(
-    async () =>
-      await new Promise<void>((resolve) => {
-        for (const peer of peers) {
-          peer.destroy();
-        }
-        server.close(() => resolve());
-      }),
-  );
+  closeServer(server, peers);
   return { port, peers };
 }
 
@@ -47,10 +39,6 @@ function handleExpectedPeerTeardownError(error: NodeJS.ErrnoException): void {
     throw error;
   }
 }
-
-afterEach(async () => {
-  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
-});
 
 describe("node desktop stream command", () => {
   it("refuses streaming when the node-local setting is disabled", async () => {

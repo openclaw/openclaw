@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { createEmptyPreparedModelRuntimeFixture } from "../agents/embedded-agent-runner/model.fixture.test-support.js";
 import { createEmptyAgentDiscoveryStores } from "../agents/embedded-agent-runner/model.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "../agents/embedded-agent-runner/model.static-id.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
@@ -108,26 +109,20 @@ it("admits ClawRouter native vision catalog rows and rejects text-only, malforme
         model,
       }));
       const snapshot: PreparedModelRuntimeSnapshot = {
-        catalogOwner: undefined,
+        ...createEmptyPreparedModelRuntimeFixture({
+          agentDir: state.agentDir(),
+          config: cfg,
+          metadataSnapshot,
+          createStores: () => stores,
+        }),
         agentId: "main",
-        agentDir: state.agentDir(),
         workspaceDir: state.workspaceDir,
-        activeProjectKeys: [],
-        config: cfg,
-        observationConfig: cfg,
-        isCurrent: () => true,
-        authModes: {},
-        metadataSnapshot,
         pluginRegistry,
-        allowGatewaySubagentBinding: false,
-        modelCatalog: { entries: [], routeVariants: [] },
         configuredRuntimeModels,
         findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup(
           configuredRuntimeModels,
           metadataSnapshot,
         ),
-        inlineProviderModels: [],
-        createStores: () => stores,
       };
       const resolve = async (model: string, signal?: AbortSignal) => {
         let resources: AsyncDisposable | undefined;
