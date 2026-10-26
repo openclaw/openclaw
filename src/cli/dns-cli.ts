@@ -69,6 +69,7 @@ function writeFileSudoIfNeeded(filePath: string, content: string): void {
       try {
         return fs.realpathSync(filePath);
       } catch (err) {
+        // SAFETY: realpathSync throws ErrnoException with code on missing targets.
         if ((err as { code?: string }).code !== "ENOENT") {
           throw err;
         }

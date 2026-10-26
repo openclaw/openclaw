@@ -115,8 +115,10 @@ describe("dns-cli probe bounds", () => {
       expect(fs.readFileSync(corefilePath, "utf-8")).toBe(
         hasImport ? original : `.:53 {\n  errors\n}\n\nimport ${importGlob}\n`,
       );
-      const serverPath = path.join(etcDir, "conf.d", "openclaw.internal.server");
-      const server = fs.readFileSync(serverPath, "utf-8");
+      const server = fs.readFileSync(
+        path.join(etcDir, "conf.d", "openclaw.internal.server"),
+        "utf-8",
+      );
       expect(server).toContain("openclaw.internal:53 {");
       expect(server).toContain("  bind 100.64.0.1");
       expect(server).toContain(`  file ${testState.zonePath} {`);
@@ -193,7 +195,6 @@ describe("dns-cli probe bounds", () => {
     const etcDir = path.join(brewPrefix, "etc", "coredns");
     const realDir = path.join(brewPrefix, "real-config");
     const linkPath = path.join(etcDir, "Corefile");
-    const serverPath = path.join(etcDir, "conf.d", "openclaw.internal.server");
     fs.mkdirSync(etcDir, { recursive: true });
     fs.mkdirSync(realDir, { recursive: true });
     fs.symlinkSync(realDir, path.join(etcDir, "conf.d"));
