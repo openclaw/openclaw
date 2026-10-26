@@ -107,11 +107,10 @@ function waitForFast(assertion: () => void | Promise<void>) {
 }
 
 function expectSettlement(
-  settled: unknown,
   status: "delivered" | "not-delivered" | "unknown" = "delivered",
   error?: string,
 ) {
-  expect(settled).toHaveBeenCalledExactlyOnceWith({
+  expect(onDeliverySettled).toHaveBeenCalledExactlyOnceWith({
     delivered: status === "unknown" ? undefined : status === "delivered",
     status,
     ...(error === undefined ? {} : { error }),
@@ -260,7 +259,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
             }),
           }),
         );
-        expectSettlement(onDeliverySettled);
+        expectSettlement();
       } else {
         await expect(delivery).rejects.toThrow(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
         await expect(delivery).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
@@ -268,7 +267,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         expect(mocks.resolveDeliveryTarget).not.toHaveBeenCalled();
         expect(mocks.sendCronAnnouncePayloadStrict).not.toHaveBeenCalled();
         expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
-        expectSettlement(onDeliverySettled, "not-delivered", CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+        expectSettlement("not-delivered", CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
       }
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     },
@@ -277,11 +276,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
   it("records non-delivery when admission refuses a failure alert", async () => {
     markGatewayRestartDraining();
     await expect(sendGatewayCronFailureAlert({})).rejects.toThrow("Gateway is restarting");
-    expectSettlement(
-      onDeliverySettled,
-      "not-delivered",
-      "Gateway is restarting. Please try again shortly.",
-    );
+    expectSettlement("not-delivered", "Gateway is restarting. Please try again shortly.");
     expect(mocks.sendCronAnnouncePayloadStrict).not.toHaveBeenCalled();
     expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
@@ -415,7 +410,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     await expect(delivery).resolves.toBeUndefined();
     expect(cleanupOrder).toEqual(["cancel", "release"]);
     expect(release).toHaveBeenCalledOnce();
-    expectSettlement(onDeliverySettled);
+    expectSettlement();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -467,7 +462,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
       await expect(sendFailureWebhook({ to: "https://example.invalid/failure" })).rejects.toThrow(
         errorMessage,
       );
-      expectSettlement(onDeliverySettled, status, errorMessage);
+      expectSettlement(status, errorMessage);
       expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledOnce();
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     },
@@ -567,7 +562,6 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
         expect.objectContaining({ message: "cron: failure alert announcement timed out" }),
       );
       expectSettlement(
-        onDeliverySettled,
         recipientReached ? "unknown" : "not-delivered",
         "cron: failure alert announcement timed out",
       );

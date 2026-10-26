@@ -178,23 +178,17 @@ it("strips attachment capabilities even after another field changed", () => {
     label: "report.csv",
     url: "/api/chat/media/outgoing/agent%3Amain%3Amain/id/full",
   };
-  expectSanitized(
-    assistant(
-      [
-        {
-          type: "attachment",
-          thinkingSignature: "private-reasoning-signature",
-          attachment: {
-            ...attachment,
-            path: "/tmp/private-report.csv",
-            url: attachment.url + "?mediaTicket=secret",
-          },
-        },
-      ],
-      {},
-    ),
-    assistant([{ type: "attachment", attachment }], {}),
-  );
+  const block = { type: "attachment", attachment };
+  const privateBlock = {
+    ...block,
+    thinkingSignature: "private-reasoning-signature",
+    attachment: {
+      ...attachment,
+      path: "/tmp/private-report.csv",
+      url: attachment.url + "?mediaTicket=secret",
+    },
+  };
+  expectSanitized(assistant([privateBlock], {}), assistant([block], {}));
 });
 
 it("normalizes context markers independently from assistant billing", () => {
@@ -229,17 +223,11 @@ describe("transcript display metadata", () => {
       sessionSendDelivery: Object.freeze({ source: "private-session" }),
       chatInputRecovery: Object.freeze({ source: "private-operator-snapshot" }),
     });
-    expect(
-      projectStable([
-        {
-          ...message,
-          providerReplay: {
-            type: "openai-responses-compaction",
-            data: "opaque-display-compaction",
-          },
-        },
-      ]),
-    ).toEqual([userRow("Visible", metadata)]);
+    const providerReplay = {
+      type: "openai-responses-compaction",
+      data: "opaque-display-compaction",
+    };
+    expect(projectStable([{ ...message, providerReplay }])).toEqual([userRow("Visible", metadata)]);
   });
 
   it.each([
@@ -497,27 +485,20 @@ it.each([{ maxChars: 32 }, { maxChars: 8_000, toolResultMaxChars: 32 }])(
       toolOutput: { source: "execution", modelInput: "unverified" },
     };
     const result = toolResult("exec", { toolCallId: "nested-call", isError: true });
-    const message = assistant(
-      [
-        {
-          ...result,
-          text: output,
-          content: [text(output), { type: "image", data: "aW1hZ2U=", path: "/private/image.png" }],
-        },
-      ],
-      { __openclaw: metadata },
-    );
+    const privateResult = {
+      ...result,
+      text: output,
+      content: [text(output), { type: "image", data: "aW1hZ2U=", path: "/private/image.png" }],
+    };
+    const publicResult = {
+      ...result,
+      content: [text(output.slice(0, 32)), { type: "image", omitted: true, bytes: 5 }],
+    };
     expectSanitized(
-      message,
-      assistant(
-        [
-          {
-            ...result,
-            content: [text(output.slice(0, 32)), { type: "image", omitted: true, bytes: 5 }],
-          },
-        ],
-        { __openclaw: { ...metadata, truncated: true, reason: "display-cap" } },
-      ),
+      assistant([privateResult], { __openclaw: metadata }),
+      assistant([publicResult], {
+        __openclaw: { ...metadata, truncated: true, reason: "display-cap" },
+      }),
       options.maxChars,
       options,
     );
