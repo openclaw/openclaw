@@ -10,15 +10,11 @@ const { encoding, codePage } = vi.hoisted(() => ({
   codePage: vi.fn((): number | null => null),
 }));
 
-vi.mock("./windows-encoding.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./windows-encoding.js")>("./windows-encoding.js");
-  return {
-    ...actual,
-    resolveWindowsOemCodePage: codePage,
-    resolveWindowsOemEncoding: encoding,
-  };
-});
+vi.mock("./windows-encoding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./windows-encoding.js")>()),
+  resolveWindowsOemCodePage: codePage,
+  resolveWindowsOemEncoding: encoding,
+}));
 
 const cmd = (name: string) =>
   `@echo off\r\ncd /d "C:\\Users\\${name}\\.openclaw"\r\nnode gateway.js\r\n`;

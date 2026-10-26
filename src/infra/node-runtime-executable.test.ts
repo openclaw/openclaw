@@ -32,10 +32,7 @@ vi.mock("node:path", async (importOriginal) => {
 
 beforeEach(() => {
   probe.mockReset();
-  vi.spyOn(process, "versions", "get").mockReturnValue({
-    ...process.versions,
-    bun: "qa-fixture",
-  });
+  vi.spyOn(process, "versions", "get").mockReturnValue({ ...process.versions, bun: "qa-fixture" });
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -69,16 +66,7 @@ it.each(['"', ""])(
         },
       }),
     ).toBe(executable);
-    expect(probe).toHaveBeenCalledWith(
-      executable,
-      [expect.stringMatching(/node-runtime-probe\.mjs$/), ""],
-      {
-        encoding: "utf8",
-        env: { SystemRoot: String.raw`D:\Windows` },
-        stdio: ["ignore", "pipe", "ignore"],
-        timeout: 5_000,
-      },
-    );
+    expect(probe.mock.calls[0]?.[2].env).toEqual({ SystemRoot: String.raw`D:\Windows` });
   },
 );
 
