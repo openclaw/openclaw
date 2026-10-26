@@ -227,4 +227,12 @@ describe("qwen provider plugin", () => {
       expect(await applySetup(config, provider, method)).toEqual(config);
     },
   );
+  it.each([
+    { name: "coding", provider: "qwen", method: "api-key", rows: 10 },
+    { name: "standard", provider: "qwen", method: "standard-api-key", rows: 14 },
+    { name: "Token Plan", provider: TOKEN_PLAN, method: "api-key", rows: 7 },
+  ])("retains the shipped $name replace catalog", async ({ provider, method, rows }) => {
+    const config = await applySetup({ models: { mode: "replace" } }, provider, method);
+    expect(config.models?.providers?.[provider]?.models).toHaveLength(rows);
+  });
 });

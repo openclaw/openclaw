@@ -41,7 +41,7 @@ it.each([
   const { signal } = controller;
   const failure = new Error(mode);
   if (mode === "preabort" || mode === "factory-error") {
-    controller.abort(failure);
+    controller.abort(new Error("already aborted"));
   }
   const fail = () => {
     throw failure;
@@ -59,7 +59,13 @@ it.each([
       : source.promise;
   const onTimeout = mode === "timeout-error" ? fail : () => "expired";
   const onAbort =
-    mode === "source-first" ? undefined : mode === "preabort" ? () => "cancelled" : fail;
+    mode === "source-first"
+      ? undefined
+      : mode === "preabort"
+        ? () => "cancelled"
+        : () => {
+            throw signal.reason;
+          };
   const pending = retry.raceWithTimeout(operation, 10, onTimeout, { signal, onAbort });
   const outcome = pending.catch((error: unknown) => error);
   if (mode === "operation") {
