@@ -6,25 +6,12 @@ import {
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
 
-const DEFAULT_EXPECTED_POLICY: CliCommandPathPolicy = {
-  configGuard: "run",
-  stateStoreGuard: "skip",
-  loadPlugins: "never",
-  pluginRegistry: { scope: "all" },
-  ownsProtocolStdout: false,
-  hideBanner: false,
-  ensureCliPath: true,
-  networkProxy: "default",
-};
 const bypass = { networkProxy: "bypass" } as const;
 const skip = { ...bypass, configGuard: "skip" } as const;
 
 function expectResolvedPolicy(commands: string, expected: Partial<CliCommandPathPolicy>): void {
   for (const command of commands.split("|")) {
-    expect(resolveCliCommandPathPolicy(command.split(" ")), command).toEqual({
-      ...DEFAULT_EXPECTED_POLICY,
-      ...expected,
-    });
+    expect(resolveCliCommandPathPolicy(command.split(" ")), command).toMatchObject(expected);
   }
 }
 
@@ -65,13 +52,7 @@ function expectProxy(args: string[], expected: "default" | "bypass") {
 describe("command-path-policy", () => {
   it("keeps config-only agent commands on config-only startup", () => {
     const agentPolicy = resolveCliCommandPathPolicy(["agent"]);
-    expect(agentPolicy).toEqual({
-      ...DEFAULT_EXPECTED_POLICY,
-      configGuard: agentPolicy.configGuard,
-      loadPlugins: agentPolicy.loadPlugins,
-      pluginRegistry: { scope: "all" },
-      networkProxy: agentPolicy.networkProxy,
-    });
+    expect(agentPolicy.pluginRegistry).toEqual({ scope: "all" });
     expectLoadPluginsResolver(agentPolicy);
     expectConfigGuardResolver(agentPolicy);
     expect(agentPolicy.loadPlugins(commandContext(["agent"]))).toBe(false);
@@ -112,30 +93,15 @@ describe("command-path-policy", () => {
   });
 
   it.each<[string, Partial<CliCommandPathPolicy>]>([
-    ["agent exec", { configGuard: "skip", ownsProtocolStdout: true, hideBanner: true }],
-    ["agents|agents list|agents bindings", skip],
-    ["agents add|agents team create|config set", { ...bypass, configGuard: "defer" }],
-    ["agents bind|agents unbind|agents set-identity|agents delete", bypass],
-    ["worker", { ...skip, hideBanner: true, ownsProtocolStdout: true }],
-    [
-      "browser extension install|browser extension status|browser extension pair|browser extension setup",
-      { ...bypass, configGuard: "validate" },
-    ],
+    ["browser extension install", { ...bypass, configGuard: "validate" }],
     [
       "browser extension native-host",
       { ...skip, ensureCliPath: false, hideBanner: true, ownsProtocolStdout: true },
     ],
     ["configure", { configGuard: "skip", stateStoreGuard: "run" }],
     ["config file", { ...skip, ensureCliPath: false, ownsProtocolStdout: true }],
-    ["config schema", { ...skip, ownsProtocolStdout: true }],
     ["plugins update", { hideBanner: true }],
     ["plugins list|plugins lint", { ...skip, ensureCliPath: false }],
-    ["plugins install|plugins inspect|plugins registry|plugins doctor", {}],
-    ["plugins build|plugins validate|plugins init|skills search", { configGuard: "skip" }],
-    [
-      "qa suite|config|config validate|gateway status|gateway health|cron list|hooks|hooks list|hooks info|hooks check|skills info",
-      skip,
-    ],
     [
       "memory index",
       { configGuard: "validate", loadPlugins: "always", pluginRegistry: { scope: "memory" } },

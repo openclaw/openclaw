@@ -314,17 +314,17 @@ it.each([
   expect(await readServer()).toEqual({ command: "node", args: [script] });
 });
 
-it("updates approval mode without replacing saved Codex metadata", async () => {
+it("configures approval and exclusions without replacing sibling metadata", async () => {
   await setServer({
     command: process.execPath,
     codex: { agents: ["docs-agent"], defaultToolsApprovalMode: "auto" },
+    toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
   });
-
-  await mcp("configure", "docs", "--approval", "approve");
-
+  await mcp("configure", "docs", "--approval", "approve", "--exclude", "write_*");
   expect(await readServer()).toEqual({
     command: process.execPath,
     codex: { agents: ["docs-agent"], defaultToolsApprovalMode: "approve" },
+    toolFilter: { include: ["old_*"], exclude: ["write_*"] },
   });
 });
 
@@ -417,22 +417,6 @@ it("explains only disabled servers and overrides while preserving JSON output", 
     servers: {},
     tools: [],
     diagnostics: [],
-  });
-});
-
-it("preserves sibling tool filters for configure --exclude", async () => {
-  await setServer({
-    command: "node",
-    args: ["server.mjs"],
-    toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
-  });
-  await mcp("configure", "docs", "--exclude", "write_*");
-
-  mockLog.mockClear();
-  await mcp("show", "docs", "--json");
-  expect(JSON.parse(lastLogLine()).toolFilter).toEqual({
-    include: ["old_*"],
-    exclude: ["write_*"],
   });
 });
 
