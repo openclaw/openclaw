@@ -47,6 +47,11 @@ function packageIdentity() {
 }
 function assertConfig() {
   const config = readJson(configPath);
+  assert.deepEqual(
+    config.gateway?.nodes?.pairing,
+    { autoApproveLocal: false, sshVerify: false },
+    "Upgrade changed the fixture's explicit pairing owner",
+  );
   assert.equal(
     config.agents?.defaults?.models?.["openai/*"]?.agentRuntime?.id,
     "openclaw",
@@ -140,7 +145,11 @@ async function withReceiver(run) {
         }
         const connected = (await rpc("node.list", {})).nodes?.filter((row) => row.connected) ?? [];
         assert(connected.length <= 1, "Unexpected second source node");
-        if (connected.length === 1) {
+        // Device connection can precede the separate command-surface approval.
+        if (
+          connected.length === 1 &&
+          commands.every((command) => connected[0].commands?.includes(command))
+        ) {
           return connected[0].nodeId;
         }
         await delay(100);
@@ -219,7 +228,11 @@ if (mode === "configure") {
         token: { source: "env", provider: "default", id: "GATEWAY_AUTH_TOKEN_REF" },
       },
       controlUi: { enabled: false },
-      nodes: { pairing: { sshVerify: false }, commands: { allow: commands } },
+      // The fixture owns approval; silent local approval would race its pending request IDs.
+      nodes: {
+        pairing: { autoApproveLocal: false, sshVerify: false },
+        commands: { allow: commands },
+      },
     },
     agents: {
       entries: { main: {} },
