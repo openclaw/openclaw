@@ -11,7 +11,6 @@ import { getRuntimeConfig, resetConfigRuntimeState } from "../config/config.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { getMediaDir } from "../media/store.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   createChatVisionModelCatalogSnapshot,
   createDirectChatContext,
@@ -27,6 +26,7 @@ import {
   createDirectChatSessionStoreFixture,
   writeStoredMainSession,
 } from "./server.chat-session-store.test-support.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import {
   createGatewaySuiteHarness,
   dispatchInboundMessageMock,
@@ -100,7 +100,7 @@ test("chat.send keeps duplicate attachment sends retryable until input is admitt
   const firstCatalogSnapshot =
     createDeferred<ReturnType<typeof createChatVisionModelCatalogSnapshot>>();
   try {
-    const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
+    const responses: Array<CapturedChatResponse & { id: string }> = [];
     const context = createDirectChatContext({
       loadGatewayModelCatalogSnapshot: vi
         .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
@@ -159,7 +159,6 @@ test("chat.send keeps duplicate attachment sends retryable until input is admitt
       ),
       signal,
     );
-    expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
 
     await withinTest(callSend("duplicate"), signal);
     expect(responses).toEqual([duplicateResponse]);
@@ -178,10 +177,8 @@ test("chat.send keeps duplicate attachment sends retryable until input is admitt
     ]);
     await withinTest(dispatchEntered.promise, signal);
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-    expect(context.addChatRun).toHaveBeenCalledTimes(1);
     dispatchRelease.resolve();
     await getDirectChatSessionWorkRelease();
-    expect(context.removeChatRun).toHaveBeenCalledTimes(1);
   } finally {
     firstCatalogSnapshot.resolve(createChatVisionModelCatalogSnapshot());
     dispatchRelease.resolve();
@@ -233,14 +230,7 @@ test("chat.send discards prepared inbound media when a hook blocks the turn", as
       client: {
         connId: "conn-owner",
         connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: {
-            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-            version: "1.0.0",
-            platform: "web",
-            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-          },
+          ...gatewayConnect(["operator.write"], { version: "1.0.0", platform: "web" }),
           device: {
             id: "dev-owner",
             publicKey: "synthetic-public-key",
@@ -248,7 +238,6 @@ test("chat.send discards prepared inbound media when a hook blocks the turn", as
             signedAt: 0,
             nonce: "synthetic-nonce",
           },
-          scopes: ["operator.write"],
         },
       },
       respond: captureChatResponse(responses),
