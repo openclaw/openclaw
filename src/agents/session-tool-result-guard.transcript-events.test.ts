@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -19,7 +20,7 @@ import {
   appendTranscriptMessageSync,
   loadSessionEntry,
   listSessionPendingInputs,
-  persistCompactionBoundaryWithSessionEntrySync,
+  persistCompactionBoundaryWithSessionEntryAsync,
 } from "../config/sessions/session-accessor.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -350,8 +351,8 @@ describe("guardSessionManager transcript updates", () => {
     for (const runId of ["run-first", "run-second"]) {
       const guarded = guardSessionManager(sessionManager, {
         runId,
-        withCompactionPersistence: (prepared) =>
-          persistCompactionBoundaryWithSessionEntrySync(target, {
+        withCompactionPersistenceAsync: (prepared) =>
+          persistCompactionBoundaryWithSessionEntryAsync(target, {
             prepared,
             transcriptByteCompactionLatch: {
               activeBytes: 2048,
@@ -360,12 +361,15 @@ describe("guardSessionManager transcript updates", () => {
             },
           }),
       });
-      const keptId = guarded.appendMessage({ role: "user", content: runId, timestamp: 1 });
-      guarded.appendCompaction("summary", keptId, 100, { source: "hook" }, true, {
+      const keptId = expectDefined(
+        await guarded.appendMessageAsync({ role: "user", content: runId, timestamp: 1 }),
+        "Compaction fixture must append its retained user entry",
+      );
+      await guarded.appendCompactionAsync("summary", keptId, 100, { source: "hook" }, true, {
         itemId: `compaction-${runId}`,
       });
     }
-    const compactions = SessionManager.open(target, root)
+    const compactions = (await SessionManager.openAsync(target, root))
       .getBranch()
       .filter((entry) => entry.type === "compaction");
     expect(compactions).toMatchObject([
@@ -708,6 +712,7 @@ describe("append-only assistant errors with deferred display", () => {
       stopReason: "error",
       errorMessage: "provider rate limit",
     });
+    const expected = structuredClone(failed);
     manager.appendMessage(failed);
     manager.appendMessage(
       makeTextToolResult(toolCall.id, toolCall.name, "Persisted result", false, 1),
@@ -719,17 +724,8 @@ describe("append-only assistant errors with deferred display", () => {
     closeOpenClawAgentDatabasesForTest();
     const messages = persistedMessages();
     expect(messages).toMatchObject([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "I" }, toolCall],
-        stopReason: "error",
-        errorMessage: "provider rate limit",
-      },
-      {
-        role: "toolResult",
-        toolCallId: toolCall.id,
-        content: [{ type: "text", text: "Persisted result" }],
-      },
+      expected,
+      makeTextToolResult(toolCall.id, toolCall.name, "Persisted result", false, 1),
       assistantContent("Recovered"),
     ]);
     const normalized = normalizeAssistantReplayContent(messages);
@@ -757,22 +753,16 @@ describe("append-only assistant errors with deferred display", () => {
         media: [{ url: "https://example.invalid/report.pdf", contentType: "application/pdf" }],
       },
     };
-    manager.appendMessage({
+    const failed = {
       ...assistantText("Here", { stopReason: "error", errorMessage: "retry" }),
       ...facts,
-    });
+    };
+    const expected = structuredClone(failed);
+    manager.appendMessage(failed);
     owner.clear();
     manager.appendMessage(assistantText("Recovered"));
     owner.settle(false);
-    expect(messages()).toMatchObject([
-      {
-        ...assistantContent("Here"),
-        stopReason: "error",
-        errorMessage: "retry",
-        ...facts,
-      },
-      assistantContent("Recovered"),
-    ]);
+    expect(messages()).toMatchObject([expected, assistantContent("Recovered")]);
   });
 
   it("keeps one original terminal error without splitting text, tool facts, or usage", async () => {
@@ -791,22 +781,13 @@ describe("append-only assistant errors with deferred display", () => {
       openclawDisplayContent: [displayText, attachment],
     };
     failed.usage = { ...failed.usage, output: 7, totalTokens: 7 };
+    const expected = structuredClone(failed);
     manager.appendMessage(failed);
     manager.appendMessage(makeTextToolResult("call-terminal", "read", "Result", false, 1));
     owner.settle(true);
     owner.settle(true);
     expect(messages()).toMatchObject([
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Partial answer" },
-          { type: "toolCall", id: "call-terminal" },
-        ],
-        openclawDisplayContent: [displayText, attachment],
-        usage: { output: 7 },
-        stopReason: "error",
-        errorMessage: "terminal failure",
-      },
+      expected,
       { role: "toolResult", toolCallId: "call-terminal" },
     ]);
   });

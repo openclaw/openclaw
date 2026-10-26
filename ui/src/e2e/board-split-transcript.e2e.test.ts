@@ -291,15 +291,19 @@ suite.define(() => {
 
   it("activates Side chat from a split dashboard panel", async () => {
     const { page } = await newPage();
-    await installBoard(page, ["board.update", "chat.history", "sessions.companion.ask"], {
-      methodResponses: {
-        "board.update": boardSnapshot(2),
+    await installBoard(
+      page,
+      ["board.update", "chat.history", "sessions.companion.ask", "sessions.companion.state"],
+      {
+        methodResponses: {
+          "board.update": boardSnapshot(2),
+        },
+        historyMessages: [
+          { role: "user", content: "Keep the dashboard visible while I open a side chat." },
+          { role: "assistant", content: "The board chat is currently active." },
+        ],
       },
-      historyMessages: [
-        { role: "user", content: "Keep the dashboard visible while I open a side chat." },
-        { role: "assistant", content: "The board chat is currently active." },
-      ],
-    });
+    );
 
     await suite.openDashboard(page, sessionKey, false);
     const sidePanel = page.locator(".side-panel");

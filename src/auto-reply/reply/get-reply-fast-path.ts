@@ -163,6 +163,7 @@ export async function initFastReplySessionState(params: {
           spawnDepth: existingEntry.spawnDepth,
           subagentRole: existingEntry.subagentRole,
           subagentControlScope: existingEntry.subagentControlScope,
+          blindPrompt: existingEntry.blindPrompt,
         }
       : {}),
     ...resetPreservedSelection,

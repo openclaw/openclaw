@@ -6,7 +6,10 @@ read_when:
   - You are importing, validating, or recovering legacy session history
 ---
 
-Explicit SQLite maintenance runs offline, with the Gateway stopped. This page covers
+SQLite repairs and compaction run offline, with the Gateway stopped. The session
+`inspect` and `validate` modes are read-only and can run while the Gateway is up;
+they do not take the exclusive maintenance lock. Validation may add load, and
+separate reads can observe new commits while the Gateway runs. This page covers
 shared-state compaction and the targeted session SQLite modes.
 
 SQLite keeps pages freed by deletes available for reuse inside the database file.
@@ -95,6 +98,8 @@ compatible backup or upgrade OpenClaw for a newer schema.
 Session-key repair follows complete transcript-owner alias chains, including
 long chains in large databases. It preserves the terminal owner's session key and
 retained transcript history; shortening history is not required to bound the repair's stack.
+Archived registry discovery and recovery diagnostics also process complete
+inventories without expanding them into function arguments.
 
 Runtime session rows and transcripts live in SQLite, by default at
 `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Gateway startup uses
@@ -303,9 +308,10 @@ Duplicate settlement indexes retained artifact paths and manifest moves once per
 inventory instead of rescanning the full history for each duplicate. File-identity
 and source-byte checks still run before originals are retired.
 
-Normal Doctor output and `openclaw update status` show at most five
-`historical_transcript_deferred` examples per session store. Larger groups include
-the total and omitted counts; other warning types remain visible. For every
+Normal Doctor combines historical transcript notices into one summary with at
+most five examples across the checked session stores. `openclaw update status`
+shows at most five `historical_transcript_deferred` examples per session store.
+Larger groups include the total and omitted counts; current problems remain visible. For every
 finding, run `openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json`.
 This summary does not retire recovery references or make missing archives eligible
 for cleanup. Preserve the remaining originals and migration manifests for recovery.
@@ -449,6 +455,9 @@ the store's owning state directory before maintaining another installation.
 Existing hard-linked targets are rejected because another path can share the
 same database inode outside the locked state directory. The same ownership
 checks cover SQLite WAL, shared-memory, and rollback-journal sidecars.
+Automatic all-agent import still checks discovered paths of databases retained
+after agent deletion for symbolic aliases before importing or settling archives,
+while excluding those databases from mutation.
 
 Each import writes a manifest under
 `~/.openclaw/session-sqlite-migration-runs/` before moving transcript artifacts

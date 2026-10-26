@@ -5,7 +5,10 @@ import type {
   PluginAcceptedDeclaredSurface,
   PluginInstallRecord,
 } from "../config/types.plugins.js";
-import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
+import {
+  inspectPluginCapabilityArtifact,
+  resolvePluginArtifactDeclaredSurface,
+} from "./capability-artifact.js";
 import { createManagedPluginArtifactConsentHandler } from "./capability-consent.js";
 import {
   type PluginCapabilityConsentReview,
@@ -18,18 +21,17 @@ import {
 } from "./capability-summary.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { loadInstalledPluginIndexWithDiscovery } from "./installed-plugin-index.js";
+import { recordPluginInstall } from "./installs.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { preparePluginUpdateCapabilityConsent } from "./update-capability-consent.js";
 
 const tempDirs: string[] = [];
 afterEach(() => cleanupTrackedTempDirs(tempDirs));
 
 function createArtifactFixture(files: Record<string, object | string>): string {
   const rootDir = makeTrackedTempDir("openclaw-plugin-capability-consent", tempDirs);
-  for (const [relativePath, contents] of Object.entries(files)) {
-    const filePath = path.join(rootDir, relativePath);
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, typeof contents === "string" ? contents : JSON.stringify(contents));
-  }
+  writeArtifacts(rootDir, files);
   return rootDir;
 }
 
@@ -109,6 +111,59 @@ function createDeclaredSurface(
     ...overrides,
   };
 }
+
+it.each([
+  { enabled: true, ids: ["new-engine"] },
+  { enabled: false, ids: ["new-engine"] },
+  { enabled: true, ids: undefined },
+  { enabled: false, ids: undefined },
+])(
+  "refreshes retained ownership through update record replacement: $enabled / $ids",
+  async ({ enabled, ids }) => {
+    const stage = createArtifactFixture({
+      "package.json": { openclaw: { extensions: ["./index.js"] } },
+      "index.js": "throw new Error('metadata inspection must not run plugin');",
+      "openclaw.plugin.json": {
+        id: "plugin",
+        kind: "context-engine",
+        contextEngineIds: ids,
+        configSchema: {},
+      },
+    });
+    const previousRecord: PluginInstallRecord = {
+      source: "npm",
+      installPath: "/missing/old-artifact",
+      contextEngineIdsByPlugin: { plugin: ["old-engine"], removedChild: ["removed-engine"] },
+    };
+    const config = {
+      plugins: { entries: { plugin: { enabled } }, installs: { plugin: previousRecord } },
+    };
+    const consent = preparePluginUpdateCapabilityConsent({
+      config,
+      pluginId: "plugin",
+      record: previousRecord,
+      installPath: "/missing/old-artifact",
+      packagePluginIds: ["plugin"],
+      onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
+    });
+    await consent.onBeforePluginArtifactCommit({
+      pluginId: "plugin",
+      stagedArtifactDir: stage,
+      mode: "update",
+    });
+    const next = recordPluginInstall(
+      config,
+      consent.acceptInstallRecord({ pluginId: "plugin", ...previousRecord, installPath: stage }),
+    );
+    expect(next.plugins?.installs?.plugin?.contextEngineIdsByPlugin).toEqual(
+      ids ? { plugin: ids } : undefined,
+    );
+    expect(previousRecord.contextEngineIdsByPlugin).toEqual({
+      plugin: ["old-engine"],
+      removedChild: ["removed-engine"],
+    });
+  },
+);
 
 it.each([
   { recordOfficialCapabilities: false, accepted: false },
@@ -304,6 +359,23 @@ it("rejects package extension entries that escape the installed artifact", () =>
 
   expect(() => resolvePluginArtifactDeclaredSurface(rootDir)).toThrow();
 });
+
+it.skipIf(process.platform === "win32")(
+  "reports the discovery rejection when a valid plugin artifact is world-writable",
+  () => {
+    const rootDir = createArtifactFixture(pluginFiles("permissions"));
+    fs.chmodSync(rootDir, 0o777);
+
+    expect(() => inspectPluginCapabilityArtifact(rootDir)).toThrow(
+      `blocked plugin candidate: world-writable path (${fs.realpathSync(rootDir)},`,
+    );
+
+    fs.chmodSync(rootDir, 0o755);
+    expect(inspectPluginCapabilityArtifact(rootDir)).toMatchObject({
+      manifest: { id: "permissions" },
+    });
+  },
+);
 
 it.each([
   { previous: ["read"], next: ["write", "read"], widened: { tools: ["write"] } },

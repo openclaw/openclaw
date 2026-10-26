@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ConfigSnapshotReadMeasure } from "../../../config/io.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../../../infra/deferred-plugin-migrations.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../../../infra/state-migrations.media-persistence-targets.js";
@@ -11,6 +12,7 @@ import type {
 import type { PluginCache } from "../../../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import type { AutomaticHeartbeatRepairAdmission } from "../../doctor-automatic-heartbeat-repair.js";
+import type { DoctorOptions, DoctorPrompter } from "../../doctor-prompter.js";
 import type { CronCodexRuntimePolicyTarget } from "../cron/store-migration.js";
 
 export type DoctorConfigPreflightOptions = {
@@ -30,6 +32,8 @@ export type DoctorConfigPreflightOptions = {
   observe?: boolean;
   measure?: ConfigSnapshotReadMeasure;
   beforeWorkspaceStateMigration?: (config: OpenClawConfig) => Promise<void>;
+  /** Interactive Doctor resolves a moved partition before consuming legacy heartbeat inputs. */
+  cronStoreSelection?: { options: DoctorOptions; prompter?: DoctorPrompter };
   /** Load one authoritative plugin metadata snapshot for the caller's full lifecycle. */
   preparePluginMetadataSnapshot?: boolean;
   /** Enable migrations that may retire security-sensitive stores only during explicit repair. */
@@ -49,11 +53,17 @@ export type DoctorConfigPreflightResult = {
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
   modelBillingRouteMigrationSource?: OpenClawConfig;
   heartbeatMigrationSource?: OpenClawConfig;
+  /** Keep retired config intact until an operator selects its destination partition. */
+  heartbeatMigrationDeferred?: true;
+  /** Cron work waits for a partition; unrelated config repairs remain available. */
+  cronStoreSelectionUnresolved?: true;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   cronCodexRuntimePolicyTargets?: CronCodexRuntimePolicyTarget[];
   stateMigrationStepReceipts?: LegacyStateMigrationStepReceipt[];
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
   postSessionPluginMigrationPlanBound?: boolean;
+  /** Config whose pre-session state migrations completed without unresolved work. */
+  preflightLegacyStateConfig?: OpenClawConfig;
 };
 
 /** Keep migrated selectors with Doctor's model-policy owner until billing facts are captured. */
@@ -79,14 +89,16 @@ export async function retainHeartbeatMigrationInput(
       const entry = candidate.agents?.entries?.[agentId];
       const fallback = resolveHeartbeatAutomationModel(candidate, agentId).fallback;
       if (entry && heartbeat) {
+        const { agentId: _agentId, ...perAgentHeartbeat } = heartbeat;
         // Materialize every inherited owner before changing any selector's billing provenance.
         entry.heartbeat = {
-          ...heartbeat,
+          ...perAgentHeartbeat,
           ...(fallback ? { model: fallback.defaultModel } : {}),
         };
       }
     }
   }
+  copyConfigResolutionFactsThroughRewrite(config, candidate);
   return candidate;
 }
 
@@ -166,6 +178,11 @@ export function prepareDoctorConfigMigrationResult(
       ...(receipts ? { stateMigrationStepReceipts: receipts } : {}),
       ...(postSession ? { postSessionPluginMigration: postSession } : {}),
       ...(planBound ? { postSessionPluginMigrationPlanBound: true } : {}),
+      ...(!params.shouldWriteConfig &&
+      !params.pluginInventoryChanged &&
+      isDeepStrictEqual(preflight.preflightLegacyStateConfig, params.cfg)
+        ? { preflightLegacyStateConfig: preflight.preflightLegacyStateConfig }
+        : {}),
     };
   };
 }

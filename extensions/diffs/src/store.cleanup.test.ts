@@ -16,30 +16,36 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
   await fixture.cleanup();
 });
 
 const artifactPath = (id: string, ...parts: string[]) => path.join(fixture.rootDir, id, ...parts);
 const readPreview = (id: string) => fs.readFile(artifactPath(id, "preview.png"), "utf8");
 
-async function file(id: string, old = false) {
+async function file(id: string, ageHours = 0) {
   const directory = artifactPath(id);
   await fs.mkdir(directory, { recursive: true });
   await fs.writeFile(path.join(directory, "preview.png"), id);
-  if (old) {
-    const time = new Date(Date.now() - 25 * 60 * 60 * 1_000);
+  if (ageHours) {
+    const time = new Date(Date.now() - ageHours * 60 * 60 * 1_000);
     await fs.utimes(directory, time, time);
   }
   return directory;
 }
 
 it.each(["expired", "orphan"] as const)("cleans 129 %s files; keeps live files", async (kind) => {
+  vi.useFakeTimers({ toFake: ["Date"] });
   const live = "f".repeat(20);
+  const young = "e".repeat(20);
+  const boundary = "d".repeat(20);
+  await file(young);
+  await file(boundary, 24);
   await fixture.blobStore.register(live, new Uint8Array(), metadata);
-  await file(live, true);
+  await file(live, 25);
   for (let index = 0; index < 129; index += 1) {
     const id = index.toString(16).padStart(20, "0");
-    await file(id, kind === "orphan");
+    await file(id, kind === "orphan" ? 25 : 0);
     if (kind === "expired") {
       await fixture.blobStore.register(id, new Uint8Array(), metadata, { ttlMs });
       await expireDiffArtifactForTest(fixture.rootDir, id, ttlMs);
@@ -47,15 +53,15 @@ it.each(["expired", "orphan"] as const)("cleans 129 %s files; keeps live files",
   }
 
   await fixture.store.cleanupExpired();
-  expect(await fs.readdir(fixture.rootDir)).toEqual([live]);
+  expect((await fs.readdir(fixture.rootDir)).toSorted()).toEqual([boundary, young, live]);
   expect(await readPreview(live)).toBe(live);
   expect((await fixture.blobStore.entries()).map((entry) => entry.key)).toEqual([live]);
 });
 
 it("scheduled cleanup joins accepted filesystem work before reporting a sibling read failure", async () => {
   const [heldId, failedId] = ["a".repeat(20), "b".repeat(20)];
-  const heldDirectory = await file(heldId, true);
-  await file(failedId, true);
+  const heldDirectory = await file(heldId, 25);
+  await file(failedId, 25);
   const [started, release] = [createDeferred<void>(), createDeferred<void>()];
   const failure = new Error("fixture Blob lookup failed");
   const lookup = fixture.blobStore.lookup.bind(fixture.blobStore);
@@ -71,11 +77,11 @@ it("scheduled cleanup joins accepted filesystem work before reporting a sibling 
     return await remove(target, options);
   });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  const store = new DiffArtifactStore({ ...fixture, logger });
+  const scheduled = new DiffArtifactStore({ ...fixture, logger });
   const settled = vi.fn<() => void>();
-  store.scheduleCleanup();
-  const stopping = store.stopCleanup().then(settled);
-  const joined = store
+  scheduled.scheduleCleanup();
+  const stopping = scheduled.stopCleanup().then(settled);
+  const joined = scheduled
     .cleanupExpired()
     .catch((error: unknown) => error)
     .finally(settled);

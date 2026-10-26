@@ -331,9 +331,15 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `ef37c31de3d3c5c59243bba51d420f9efda9d689` with WebKit
+The pinned build pairs Bun `807211511f81e0a6639bc9eb41d67120f6b85316` with WebKit
 `a2976f02e69fde8ccc45dc8fb346173f9d63f8a1` in prerelease
-`openclaw-v1.4.4-20261019-ef37c31de3-webkit-a2976f02e6`.
+`openclaw-v1.4.4-20261024-807211511f-webkit-a2976f02e6`.
+
+It restores SNI set with `tlsSocket.setServername()` before connecting, including
+with `autoSelectFamily` ([fork change #197](https://github.com/openclaw/bun/pull/197)).
+The Buffer copy reduction was withdrawn pending a container-neutral design;
+serialization remains unchanged from the previous `ef37c31de3` pin.
+
 It includes 58 upstream Bun commits through `ad4089bf`, including native
 lint/format performance improvements and `--no-script` to bypass package scripts.
 The engine replays the 16 fork patches onto upstream WebKit `87ee10da`.
@@ -444,14 +450,14 @@ newest patch. Compare exact versions when measuring a toolchain change, and
 measure setup separately from the test body.
 
 Preflight's manifest bootstrap uses the exact `NODE_VERSION` pin in `ci.yml`
-(24.21.0). Unlike the repository helper, `actions/setup-node` can satisfy a
+(24.22.1). Unlike the repository helper, `actions/setup-node` can satisfy a
 `24.x` request from an older cached patch below OpenClaw's support floor.
 
 CI's execution version does not define the supported user runtime matrix.
-`package.json` accepts Node 24.16+ and Node 26.1+. The full manual CI graph checks
-the Node 24.16.0 floor; `node-runtime-compat.yml` checks Node 26.1.0 weekly and on
+`package.json` accepts Node 24.22.1+ and Node 26.12.1+. The full manual CI graph checks
+the Node 24.22.1 floor; `node-runtime-compat.yml` checks Node 26.12.1 weekly and on
 dispatch. Current packaged fresh-install and upgrade checks run on both
-Node 24.21.0 and Node 26.1.0, with Windows Node 24 fresh-install proof on 24.16.0.
+Node 24.22.1 and Node 26.12.1, with Windows Node 24 fresh-install proof on 24.22.1.
 Both runtime variants use the same candidate package. These support cells stay
 independent of changes to the ordinary execution pin; source/build smoke alone
 does not prove an installed upgrade. See the
@@ -485,13 +491,11 @@ baseline spent 7m57s on them in a 21m48s job. Separating them gives app compilat
 and tests their own 30-minute budget without removing coverage or increasing
 test-process parallelism.
 
-Both phases start after preflight. App tests compile before waiting for the
-same-run Linux runtime artifact; package tests do not consume it.
-The Linux producer publishes the artifact before its remaining built-CLI checks,
-so native execution can proceed while those checks finish. The runtime's build
-identity must match the selected checkout SHA. A failed producer without an
-artifact fails the native wait, and the existing job deadline includes any wait.
-Failed-job reruns retain the successful producer’s artifact from its earlier attempt.
+Package tests start after preflight and do not consume the Linux runtime artifact.
+App tests wait for `build-artifacts` before allocating their macOS runner, so Linux
+runner queueing cannot consume the native test job's 30-minute budget. They download
+the producer's artifact by its output ID and verify the selected checkout SHA before
+execution. Failed-job reruns retain the successful producer's artifact output.
 The aggregate CI gate still requires the Linux checks and both native phases.
 
 Full nonpublishing manual validation also stages the exact candidate runtime and runs
@@ -651,7 +655,9 @@ existing CI job retains its check with the same name.
 GitHub requires both the check and the commit status when both share a required
 context. Missing approval, failed CI, or evaluation errors fail the review status.
 Missing or running CI leaves it pending and keeps merging blocked. CI completion
-automatically evaluates it again. Approval comments do not rerun the test suite.
+automatically evaluates it again. An unfinished run-list entry is refreshed by
+exact run ID before waiting, so delayed list updates do not hide a completed
+attempt. Approval comments do not rerun the test suite.
 
 Every ten minutes, the resolver reconciles CI completions
 from five minutes before the previous successful scheduled pass started until

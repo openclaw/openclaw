@@ -78,13 +78,13 @@ import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { listUnavailableAuthProfiles } from "./auth-unavailability.js";
-import { readModelCatalogWarnings } from "./catalog-warnings.js";
+import { getModelCatalogWarnings, readModelCatalog } from "./catalog-warnings.js";
 import {
   formatProviderAuthProfileCounts,
   resolveProviderAuthOverview,
 } from "./list.auth-overview.js";
 import { groupByProvider, isRich } from "./list.format.js";
-import type { AuthProbeSummary } from "./list.probe.js";
+import type { runAuthProbes } from "./list.probe.js";
 import type { ProviderAuthOverview, StatusRuntimeAuthRoute } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
@@ -225,7 +225,7 @@ export async function modelsStatusCommand(
     runtime,
     skipPluginValidation: opts.probe !== true,
   });
-  for (const warning of await readModelCatalogWarnings(cfg, opts.agent?.trim())) {
+  for (const warning of getModelCatalogWarnings(await readModelCatalog(cfg, opts.agent?.trim()))) {
     runtime.error(sanitizeTerminalText(`${warning.message} ${warning.fixHint}`));
   }
   const explicitAgentId = opts.agent?.trim();
@@ -980,7 +980,7 @@ export async function modelsStatusCommand(
         "integer",
       );
 
-      let probeSummary: AuthProbeSummary | undefined;
+      let probeSummary: Awaited<ReturnType<typeof runAuthProbes>> | undefined;
       if (opts.probe) {
         const [{ withProgressTotals }, { runAuthProbes }] = await Promise.all([
           import("../../cli/progress.js"),

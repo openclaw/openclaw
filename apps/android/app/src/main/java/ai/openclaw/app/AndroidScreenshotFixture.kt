@@ -1101,7 +1101,7 @@ internal object AndroidScreenshotFixture {
           Triple("commands", "List all slash commands.", false),
           Triple("tools", "List available runtime tools.", true),
           Triple("skill", "Run a skill by name.", true),
-          Triple("learn", "Draft a reusable skill from recent work or named sources.", true),
+          Triple("learn", "Learn from recent work or named sources into skills or memory.", true),
           Triple("loop", "Loop a prompt: /loop [interval] <prompt> | /loop status | /loop stop [name]", true),
         ).forEach { (name, description, acceptsArgs) ->
           addJsonObject {

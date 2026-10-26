@@ -1,4 +1,4 @@
-import { createMemo, flush, onCleanup, refresh } from "solid-js";
+import { createMemo, onCleanup, onSettled, refresh } from "solid-js";
 import { listen } from "../../../lib/reactive/listener.ts";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import {
@@ -74,7 +74,6 @@ export function createPositionRail(props: PositionRailParams) {
   let transcriptElement: HTMLElement | undefined;
   let intersectionObserver: IntersectionObserver | undefined;
   let stopTranscriptScroll: (() => void) | undefined;
-  let stopNativeScroll: (() => void) | undefined;
   let stopMessageElements: (() => void) | undefined;
   const observedMessages = new Map<Element, { id: string; messageId: string; visible: boolean }>();
   let visibleIds = new Set<string>();
@@ -82,12 +81,9 @@ export function createPositionRail(props: PositionRailParams) {
   let targetsChanged = true;
   let layoutVisible = false;
   let reader: PositionRailReaderState = { followingResize: false, followActive: false };
-  const stopScrollInput = {
-    handleEvent: (event: Event) => {
-      reader.followActive = false;
-      event.stopPropagation();
-    },
-    passive: true,
+  const stopScrollInput = (event: Event) => {
+    reader.followActive = false;
+    event.stopPropagation();
   };
 
   const scheduleLayout = () => {
@@ -101,6 +97,7 @@ export function createPositionRail(props: PositionRailParams) {
   };
 
   const observeLayout = () => {
+    observationPending = false;
     const scroller = scrollElement;
     if (!scroller) {
       return;
@@ -113,25 +110,37 @@ export function createPositionRail(props: PositionRailParams) {
       layoutVisible = false;
       return;
     }
+    const offset = scroller.scrollTop;
+    const inset = Number.parseFloat(getComputedStyle(scroller).scrollPaddingTop) || 0;
+    const geometryChanged =
+      height !== viewportHeight || offset !== viewportOffset || inset !== viewportInset;
     viewportHeight = height;
-    viewportOffset = scroller.scrollTop;
-    viewportInset = Number.parseFloat(getComputedStyle(scroller).scrollPaddingTop) || 0;
+    viewportOffset = offset;
+    viewportInset = inset;
     viewportResizePending = session?.layout.viewportResizePending ?? false;
     const root = transcriptElement ?? scroller.closest<HTMLElement>(".chat-thread");
     if (root) {
       syncReaderViewport(readTranscriptViewport(root));
     }
-    const visibleMessageIds = new Set(
-      [...observedMessages.values()]
-        .filter((message) => message.visible)
-        .map((message) => message.messageId),
-    );
+    const visibleMessageIds = new Set<string>();
+    for (const message of observedMessages.values()) {
+      if (message.visible) {
+        visibleMessageIds.add(message.messageId);
+      }
+    }
     const visibleOrder = positionMessageIds.filter((id) => visibleMessageIds.has(id));
     const activeMessageId = session?.activeMessageId(
       visibleOrder.length ? visibleOrder : positionMessageIds,
     );
     observedActiveId = activeMessageId ? markerIdsByMessageId.get(activeMessageId) : undefined;
-    scheduleLayout();
+    if (
+      geometryChanged ||
+      !layoutVisible ||
+      reader.followActive ||
+      (observedActiveId ?? markerIds[0]) !== currentActiveId
+    ) {
+      scheduleLayout();
+    }
   };
 
   function requestObservation() {
@@ -180,30 +189,29 @@ export function createPositionRail(props: PositionRailParams) {
       const focusedId =
         focused instanceof HTMLElement ? focused.dataset.positionMarkerId : undefined;
       refreshingWindow = true;
-      try {
-        void refresh(view);
-        // Native keyboard focus needs the virtualized rail target committed synchronously.
-        flush();
-      } finally {
+      void refresh(view);
+      onSettled(() => {
         refreshingWindow = false;
-      }
-      // A virtual window change can move the retained marker out of DOM order.
-      // Restore that focus without treating it as new navigation or recentering.
-      if (
-        !pendingFocusId &&
-        focusedId &&
-        focused instanceof HTMLElement &&
-        scroller?.contains(focused) &&
-        scroller.ownerDocument.activeElement === scroller.ownerDocument.body
-      ) {
-        interactionState.focusedId = focusedId;
-        restoringFocus = true;
-        try {
-          focused.focus({ preventScroll: true });
-        } finally {
-          restoringFocus = false;
+        // A virtual window change can move the retained marker out of DOM order.
+        // Restore its focus after commit without treating it as new navigation.
+        if (
+          connected &&
+          scroller === scrollElement &&
+          !pendingFocusId &&
+          focusedId &&
+          focused instanceof HTMLElement &&
+          scroller?.contains(focused) &&
+          scroller.ownerDocument.activeElement === scroller.ownerDocument.body
+        ) {
+          interactionState.focusedId = focusedId;
+          restoringFocus = true;
+          try {
+            focused.focus({ preventScroll: true });
+          } finally {
+            restoringFocus = false;
+          }
         }
-      }
+      });
     }
   }
 
@@ -216,18 +224,28 @@ export function createPositionRail(props: PositionRailParams) {
   }
 
   function focusMarker(id: string): void {
+    const scroller = scrollElement;
+    const focused = scroller?.ownerDocument.activeElement;
     pendingFocusId = id;
     revealMarker(id);
     refreshWindow();
-    markerElements.get(id)?.focus({ preventScroll: true });
-    pendingFocusId = undefined;
+    onSettled(() => {
+      if (connected && pendingFocusId === id) {
+        pendingFocusId = undefined;
+        const active = scroller?.ownerDocument.activeElement;
+        if (
+          scroller === scrollElement &&
+          (active === focused || active === scroller?.ownerDocument.body)
+        ) {
+          markerElements.get(id)?.focus({ preventScroll: true });
+        }
+      }
+    });
   }
 
   function disconnectVisibility() {
     stopTranscriptScroll?.();
     stopTranscriptScroll = undefined;
-    stopNativeScroll?.();
-    stopNativeScroll = undefined;
     stopMessageElements?.();
     stopMessageElements = undefined;
     scrollElement?.closest(".chat-position-rail")?.removeAttribute("data-overflow");
@@ -256,7 +274,6 @@ export function createPositionRail(props: PositionRailParams) {
         disconnectVisibility();
       }
       transcriptElement = root;
-      stopNativeScroll = listen(root, "scroll", observeLayout, { passive: true });
       stopTranscriptScroll = subscribeTranscriptScroll(root, (observation) => {
         if (observation.type === "offset") {
           // The reading position can cross a landmark without changing the
@@ -271,6 +288,7 @@ export function createPositionRail(props: PositionRailParams) {
           reader.resizeTarget = undefined;
         } else if (observation.type === "resize" && layoutVisible && viewportHeight) {
           // Retain the committed viewport before another composer change can replace it.
+          reader.followActive ||= observation.resumeFollow === true;
           syncReaderViewport(observation.viewport);
           requestObservation();
         }
@@ -280,8 +298,10 @@ export function createPositionRail(props: PositionRailParams) {
         (entries) => {
           for (const entry of entries) {
             const message = observedMessages.get(entry.target);
-            if (message) {
-              message.visible = entry.isIntersecting && entry.intersectionRatio > 0;
+            const visible = entry.isIntersecting && entry.intersectionRatio > 0;
+            if (message && message.visible !== visible) {
+              message.visible = visible;
+              scheduleLayout();
             }
           }
           // Publish current position, retained markers, and Tab entry in one layout commit.
@@ -376,7 +396,6 @@ export function createPositionRail(props: PositionRailParams) {
       markerElements.get(currentActiveId ?? "")?.setAttribute("aria-current", "false");
       currentActiveId = activeId;
       markerElements.get(activeId ?? "")?.setAttribute("aria-current", "true");
-      syncTabStop();
       if (!reader.followingResize) {
         reader.followActive = true;
       }
@@ -413,8 +432,8 @@ export function createPositionRail(props: PositionRailParams) {
     syncVisibleMarks();
     syncTabStop();
     if (initialize || reader.followActive) {
-      // Navigation must reach the final viewport, even if its slot resized before this frame.
-      reader.followActive = viewportResizePending;
+      // An older queued frame must retain navigation until its final viewport is measured.
+      reader.followActive = viewportResizePending || observationPending;
       const focused = markerElements.get(interactionState.focusedId ?? "");
       const current =
         (initialize || focused?.matches(":focus-visible")
@@ -474,10 +493,7 @@ export function createPositionRail(props: PositionRailParams) {
     if (scrollElement) {
       reader.followActive = true;
       observationPending = true;
-      resizeObserver = new ResizeObserver(() => {
-        observationPending = false;
-        observeLayout();
-      });
+      resizeObserver = new ResizeObserver(observeLayout);
       resizeObserver.observe(scrollElement);
       scheduleLayout();
     }
@@ -535,14 +551,7 @@ export function createPositionRail(props: PositionRailParams) {
     }
     const markers = positions.markers;
     if (positions.markerIdsByMessageId !== markerIdsByMessageId) {
-      if (
-        markerIdsByMessageId.size !== positions.markerIdsByMessageId.size ||
-        [...positions.markerIdsByMessageId].some(
-          ([messageId, markerId]) => markerIdsByMessageId.get(messageId) !== markerId,
-        )
-      ) {
-        targetsChanged = true;
-      }
+      targetsChanged = true;
       markerIdsByMessageId = positions.markerIdsByMessageId;
       positionMessageIds = [...positions.markerIdsByMessageId.keys()];
     }
@@ -554,12 +563,6 @@ export function createPositionRail(props: PositionRailParams) {
       return undefined;
     }
     const interaction = interactionState;
-    for (const field of ["focusedId", "hoveredId"] as const) {
-      if (!markers.some((candidate) => candidate.id === interaction[field])) {
-        interaction[field] = null;
-      }
-    }
-
     if (markers !== markerSource) {
       markerSource = markers;
       const ids = markers.map((marker) => marker.id);
@@ -569,16 +572,25 @@ export function createPositionRail(props: PositionRailParams) {
       if (currentActiveId && !markerIndexes.has(currentActiveId)) {
         currentActiveId = undefined;
       }
+      for (const field of ["focusedId", "hoveredId"] as const) {
+        if (!markerIndexes.has(interaction[field] ?? "")) {
+          interaction[field] = null;
+        }
+      }
       markersChanged = true;
     }
-    if (!refreshingWindow) {
+    // Text-only previews retain the rail geometry. Native resize/scroll and
+    // transcript observations already request measurements when it changes.
+    if (!refreshingWindow && markersChanged) {
       requestObservation();
     }
     const indexes = windowIndexes();
     if (!transcriptArraysEqual(indexes, renderedIndexes) || markersChanged) {
       renderedIndexes = indexes;
     }
-    scheduleLayout();
+    if (markersChanged || targetsChanged || refreshingWindow || previewElement) {
+      scheduleLayout();
+    }
     const rovingId = interaction.focusedId ?? currentActiveId ?? markers[0]!.id;
     const moveFocus = (event: KeyboardEvent, index: number) => {
       const nextIndex =
@@ -595,7 +607,7 @@ export function createPositionRail(props: PositionRailParams) {
               );
       event.preventDefault();
       event.stopPropagation();
-      // Commit a distant logical target before focusing it; keyboard input never waits a frame.
+      // A distant logical target receives focus as soon as its marker commits, without a frame.
       if (!(event.currentTarget instanceof HTMLButtonElement)) {
         return;
       }
@@ -604,7 +616,7 @@ export function createPositionRail(props: PositionRailParams) {
     return {
       assistant,
       markers,
-      liveMarkers: positions.liveMarkers,
+      resolveLiveMessage: positions.resolveLiveMessage,
       renderedIndexes,
       activeId: currentActiveId,
       visibleIds,

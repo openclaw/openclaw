@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createTelegramDelivery,
   setupFailureAlertSuite,
@@ -28,7 +27,7 @@ it.each<
 ])(
   "records and notifies a watcher terminal %s",
   async (_name, error, delivery, notices, alerts, priorFailures = 0) => {
-    await withFailureAlertCron({ scheduler: createTestGatewayScheduler() }, async (f) => {
+    await withFailureAlertCron({}, async (f) => {
       f.runIsolatedAgentJob.mockResolvedValue({ status: "error", error });
       const job = await f.addJob("completed watcher", { schedule, delivery });
       for (let attempt = 0; attempt < priorFailures; attempt += 1) {
@@ -66,7 +65,7 @@ it.each<
 it.each([true, false])(
   "preserves an operator force-run of an on-exit job with enabled=%s",
   async (enabled) => {
-    await withFailureAlertCron({ scheduler: createTestGatewayScheduler() }, async (f) => {
+    await withFailureAlertCron({}, async (f) => {
       f.runIsolatedAgentJob.mockResolvedValue({
         status: "error",
         error: "invalid job configuration",

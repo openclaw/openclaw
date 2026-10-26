@@ -8,8 +8,8 @@ import {
 const HEX_COLOR_RE = /#(?:[\da-f]{8}|[\da-f]{6}|[\da-f]{4}|[\da-f]{3})(?![\da-f])/gi;
 
 export function installMarkdownHexColors(parser: MarkdownIt): void {
-  // Existing link owners run first: URLs, files, and issue references keep their meaning.
-  parser.core.ruler.push("hex-colors", (state) => {
+  // Link owners run first; preserve reference metadata before text tokens are joined.
+  parser.core.ruler.before("text_join", "hex-colors", (state) => {
     if (state.env.mode !== "message") {
       return;
     }
@@ -20,7 +20,12 @@ export function installMarkdownHexColors(parser: MarkdownIt): void {
         if (token.type === "link_open" || token.type === "link_close") {
           linkDepth += token.nesting;
         }
-        if (token.type !== "text" || linkDepth !== 0 || !token.content.includes("#")) {
+        if (
+          token.type !== "text" ||
+          token.meta?.githubItemReference ||
+          linkDepth !== 0 ||
+          !token.content.includes("#")
+        ) {
           continue;
         }
         index = replaceMarkdownTextMatches(state, children, index, HEX_COLOR_RE, (match) => {
@@ -44,6 +49,6 @@ export function installMarkdownHexColors(parser: MarkdownIt): void {
     const image = encodeURIComponent(
       `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><path fill="${color}" d="M0 0h16v16H0z"/></svg>`,
     );
-    return `<span class="markdown-hex-color">${color}<img class="markdown-hex-color__swatch" src="data:image/svg+xml,${image}" alt="" aria-hidden="true"></span>`;
+    return `<span class="markdown-hex-color"><img class="markdown-hex-color__swatch" src="data:image/svg+xml,${image}" alt="" aria-hidden="true">${color}</span>`;
   };
 }

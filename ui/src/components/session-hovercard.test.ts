@@ -633,7 +633,8 @@ describe("session hovercard", () => {
       expect(container.querySelector(".session-hovercard__files")).toBeNull();
       expect(createLink?.textContent).toBe("Create PR");
       expect(createLink?.href).toBe(branch.createUrl);
-      expect(createLink?.title).toBe("Create a pull request for feature");
+      expect(createLink?.getAttribute("aria-label")).toBe("Create PR for feature");
+      expect(createLink?.title).toBe("Create PR for feature");
     } else {
       expect(createLink).toBeNull();
       expect(container.querySelector(".session-hovercard__branch-label")?.textContent).toBe(
@@ -655,7 +656,7 @@ describe("session hovercard", () => {
   });
 
   it.each(["active", "markdown-only", "completed"])(
-    "keeps Agent Notepad separate from %s plan metadata",
+    "keeps Task progress separate from %s plan metadata",
     (mode) => {
       const card = progressCard();
       const container = renderCard({
@@ -677,7 +678,7 @@ describe("session hovercard", () => {
       const notepad = container.querySelector(".session-hovercard__notepad");
       expect(notepad).not.toBeNull();
       expect(notepad?.querySelector(".session-hovercard__notepad-title")?.textContent).toBe(
-        "Agent Notepad",
+        "Task progress",
       );
       expect(notepad?.querySelector("strong")?.textContent).toBe("Release");
       expect(container.querySelector(".session-progress-card")).toBeNull();
@@ -708,7 +709,7 @@ describe("session hovercard", () => {
     expect(plan?.querySelector("polyline")).not.toBeNull();
   });
 
-  it("pins a labeled markdown progress bar above the Agent Notepad copy", () => {
+  it("pins a labeled markdown progress bar above the Task progress copy", () => {
     const container = renderCard({
       row: row(),
       progressCard: {

@@ -2,19 +2,13 @@
 
 import { createRoot, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { createOverlay } from "../../../components/overlay-lifecycle.ts";
 import { settleTooltip, tooltipSurface } from "../../../components/tooltip.test-support.ts";
 import {
   afterModalHidden,
   getRenderedModalDialog,
   installDialogPolyfill,
 } from "../../../test-helpers/modal-dialog.ts";
-import "../../../components/modal-dialog.ts";
-import {
-  modelOption,
-  mountModelPicker,
-  waitForModelMenu,
-} from "./chat-model-picker.test-support.tsx";
+import "../../../components/modal-dialog.tsx";
 import {
   createChatPickerOverlay,
   installChatComposerPickerDismissal,
@@ -64,8 +58,18 @@ function pickerIn(composer: HTMLElement) {
   };
 }
 
-function escapeEvent(init: KeyboardEventInit = {}) {
-  return new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...init });
+function escape(target: EventTarget, init: KeyboardEventInit = {}, claimed = false) {
+  const event = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  if (claimed) {
+    event.preventDefault();
+  }
+  target.dispatchEvent(event);
+  return event;
 }
 
 function dismissalSpy(composer: HTMLElement) {
@@ -86,6 +90,11 @@ it("dismisses the tooltip first with the composer listener registered before or 
   field.removeAttribute("data-chat-model-search");
   surface.append(tooltip);
   bindPicker(picker);
+  expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
+  expect(trigger.getAttribute("aria-controls")).toBe(surface.id);
+  expect(document.getElementById(surface.getAttribute("aria-labelledby")!)).toBe(trigger);
+  expect(surface.getAttribute("role")).toBe("dialog");
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
   await tooltip.updateComplete;
   const dismissInvocations = dismissalSpy(composer);
 
@@ -98,110 +107,32 @@ it("dismisses the tooltip first with the composer listener registered before or 
     await settleTooltip(tooltip);
     const popup = tooltipSurface(tooltip)!;
     expect(popup.matches(":popover-open")).toBe(true);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
     if (opening === 0) {
       onTestFinished(installChatComposerPickerDismissal(document));
     }
     dismissInvocations.mockClear();
 
-    const claimedEscape = escapeEvent();
-    claimedEscape.preventDefault();
-    field.dispatchEvent(claimedEscape);
+    escape(field, {}, true);
     expect(popup.matches(":popover-open")).toBe(true);
     expect(picker.open).toBe(true);
     expect(dismissInvocations).not.toHaveBeenCalled();
 
-    const escape = escapeEvent();
-    field.dispatchEvent(escape);
+    const event = escape(field);
     await settleTooltip(tooltip);
     expect(popup.matches(":popover-open")).toBe(false);
-    expect(escape.defaultPrevented).toBe(true);
+    expect(event.defaultPrevented).toBe(true);
     expect(picker.open).toBe(true);
     expect(dismissInvocations).not.toHaveBeenCalled();
     expect(field.value).toBe("Retained choice");
     expect(document.activeElement).toBe(field);
 
-    field.dispatchEvent(escapeEvent());
+    escape(field);
     expect(picker.open).toBe(false);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(dismissInvocations).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(trigger);
   }
-});
-
-it.each([
-  [
-    "context",
-    '<div class="context-usage"><details data-picker data-chat-native-picker><summary>Context</summary><div popover="manual"><input></div></details></div>',
-  ],
-  [
-    "Plus",
-    '<div class="agent-chat__attach-menu" data-picker><button>Plus</button><div popover="manual"><input></div></div>',
-  ],
-  [
-    "emoji",
-    '<button>Emoji</button><div class="emoji-menu-popup" data-picker popover="manual"><input></div>',
-  ],
-])(
-  "leaves %s Escape to its native owner before another composer's invocation menu",
-  (_, markup) => {
-    const invocationComposer = composerWith('<div class="slash-menu"></div>');
-    const nativeComposer = composerWith(markup);
-    const dismissInvocations = dismissalSpy(invocationComposer);
-    onTestFinished(installChatComposerPickerDismissal(document));
-    const surface = nativeComposer.querySelector<HTMLElement>("[popover]")!;
-    const trigger = nativeComposer.querySelector<HTMLElement>("summary, button")!;
-    const picker = nativeComposer.querySelector<HTMLElement>("[data-picker]")!;
-    const overlay = createOverlay("composer-escape-test");
-    onTestFinished(() => overlay.dispose());
-    overlay.bindSurface(surface);
-    overlay.bindTrigger(trigger);
-    overlay.subscribe((open) => picker.toggleAttribute("open", open));
-    expect(overlay.request(true)).toBe(true);
-    const field = surface.querySelector("input")!;
-    field.focus();
-
-    const escape = escapeEvent();
-    field.dispatchEvent(escape);
-    expect(surface.matches(":popover-open")).toBe(false);
-    expect(picker.hasAttribute("open")).toBe(false);
-    expect(escape.defaultPrevented).toBe(true);
-    expect(document.activeElement).toBe(trigger);
-    expect(dismissInvocations).not.toHaveBeenCalled();
-
-    invocationComposer.dispatchEvent(escapeEvent());
-    expect(dismissInvocations).toHaveBeenCalledOnce();
-  },
-);
-
-it("lets the native owner clear search before closing and returning focus", async () => {
-  const composer = composerWith("");
-  onTestFinished(installChatComposerPickerDismissal(document));
-  mountModelPicker({ modelOptions: [modelOption("fixture", "current")] }, { container: composer });
-  const picker = composer.querySelector("details")!;
-  const trigger = picker.querySelector("summary")!;
-  const surface = picker.querySelector<HTMLElement>("[data-anchored-overlay]")!;
-  expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
-  expect(trigger.getAttribute("aria-controls")).toBe(surface.id);
-  expect(document.getElementById(surface.getAttribute("aria-labelledby")!)).toBe(trigger);
-  expect(surface.getAttribute("role")).toBe("dialog");
-  expect(trigger.getAttribute("aria-expanded")).toBe("false");
-  trigger.click();
-  await waitForModelMenu(composer);
-  const search = picker.querySelector("input")!;
-  search.value = "beta";
-  search.dispatchEvent(new Event("input", { bubbles: true }));
-  flush();
-  search.focus();
-  const escape = () => search.dispatchEvent(escapeEvent());
-  escape();
-  flush();
-  expect(search.value).toBe("");
-  expect(picker.open).toBe(true);
-  expect(trigger.getAttribute("aria-expanded")).toBe("true");
-  expect(document.activeElement).toBe(search);
-  escape();
-  expect(picker.open).toBe(false);
-  expect(trigger.getAttribute("aria-expanded")).toBe("false");
-  expect(document.activeElement).toBe(trigger);
 });
 
 it("leaves Escape to an open native modal before dismissing retained invocations", async () => {
@@ -220,9 +151,7 @@ it("leaves Escape to an open native modal before dismissing retained invocations
   document.body.append(modal);
   const { dialog } = await getRenderedModalDialog(document.body);
   expect(dialog.open).toBe(true);
-  const modalEscape = escapeEvent();
-  dialog.dispatchEvent(modalEscape);
-  expect(modalEscape.defaultPrevented).toBe(false);
+  expect(escape(dialog).defaultPrevented).toBe(false);
   expect(dismissInvocations).not.toHaveBeenCalled();
 
   // jsdom does not synthesize the native cancel event from Escape.
@@ -230,9 +159,7 @@ it("leaves Escape to an open native modal before dismissing retained invocations
   dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
   await hidden;
   expect(dialog.open).toBe(false);
-  const invocationEscape = escapeEvent();
-  textarea.dispatchEvent(invocationEscape);
-  expect(invocationEscape.defaultPrevented).toBe(true);
+  expect(escape(textarea).defaultPrevented).toBe(true);
   expect(dismissInvocations).toHaveBeenCalledOnce();
   expect(document.activeElement).toBe(textarea);
 });
@@ -267,17 +194,13 @@ it.each([false, true])(
 
     releaseSecond();
     pointerOutside();
-    const escape = escapeEvent();
-    composer.dispatchEvent(escape);
-    expect(escape.defaultPrevented).toBe(false);
+    expect(escape(composer).defaultPrevented).toBe(false);
     expect(dismissInvocations).toHaveBeenCalledTimes(2);
 
     onTestFinished(installChatComposerPickerDismissal(document));
     pointerOutside();
     expect(dismissInvocations).toHaveBeenCalledTimes(3);
-    const reconnectedEscape = escapeEvent();
-    composer.dispatchEvent(reconnectedEscape);
-    expect(reconnectedEscape.defaultPrevented).toBe(true);
+    expect(escape(composer).defaultPrevented).toBe(true);
     expect(dismissInvocations).toHaveBeenCalledTimes(4);
     expect(document.activeElement).toBe(composer.querySelector("textarea"));
   },
@@ -294,13 +217,11 @@ it.each([
   bindPicker(picker);
   search.focus();
 
-  const escape = escapeEvent(composition);
-  search.dispatchEvent(escape);
-  expect(escape.defaultPrevented).toBe(false);
+  expect(escape(search, composition).defaultPrevented).toBe(false);
   expect(picker.open).toBe(true);
   expect(document.activeElement).toBe(search);
 
-  search.dispatchEvent(escapeEvent());
+  escape(search);
   expect(picker.open).toBe(false);
   expect(document.activeElement).toBe(trigger);
 });

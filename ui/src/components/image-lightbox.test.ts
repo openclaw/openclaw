@@ -22,7 +22,9 @@ vi.mock("@panzoom/panzoom", () => ({
   })),
 }));
 
+import "../lib/toast-host.tsx";
 import "./image-lightbox.tsx";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 
 type Lightbox = HTMLElementTagNameMap["openclaw-image-lightbox"];
 const button = (modal: Lightbox, selector: string) =>
@@ -49,6 +51,7 @@ function mockDecoder(decode = async () => {}) {
   );
 }
 function interceptDownload() {
+  vi.useFakeTimers();
   const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
   onTestFinished(() => click.mockRestore());
   return click;
@@ -64,6 +67,7 @@ function attachLightbox(props: Partial<Lightbox>) {
   return modal;
 }
 
+const animateDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
 let createObjectUrl: ReturnType<typeof vi.fn<(object: Blob | MediaSource) => string>>;
@@ -86,6 +90,10 @@ async function renderLightbox(props: Partial<ImageLightboxProps> = {}, target = 
 
 beforeEach(() => {
   restoreDialogPolyfill = installDialogPolyfill();
+  Object.defineProperty(Element.prototype, "animate", {
+    configurable: true,
+    value: () => ({ finished: Promise.resolve(), cancel: vi.fn() }),
+  });
   createObjectUrl = vi.fn(() => "blob:lightbox-original");
   revokeObjectUrl = vi.fn();
   fetchImage = vi.fn(async () => ({
@@ -107,7 +115,13 @@ beforeEach(() => {
 afterEach(async () => {
   container.remove();
   await Promise.resolve();
+  if (vi.isFakeTimers()) {
+    // Finish delayed download revocation while this test still owns the URL stub.
+    await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
+  }
   restoreDialogPolyfill();
+  restorePropertyDescriptor(Element.prototype, "animate", animateDescriptor);
   vi.unstubAllGlobals();
 });
 
@@ -136,6 +150,89 @@ it("renders video playback, footer actions and live labels", async () => {
   expect(video.getAttribute("aria-label")).toBe("Renamed video");
   expect(modal.querySelector("openclaw-modal-dialog")?.label).toBe("Video preview: Renamed video");
 });
+
+it.each([false, true])(
+  "keeps video usable while its original link loads (gallery: %s)",
+  async (gallery) => {
+    const original = createDeferred<Blob>();
+    fetchImage.mockResolvedValue({ ok: true, blob: () => original.promise });
+    const { modal } = await renderLightbox({
+      mediaKind: "video",
+      src: "https://example.com/demo.mp4",
+      originalSrc: "data:image/png;base64,cG5n",
+      gallery: gallery ? { index: 0, items: [async () => null, async () => null] } : undefined,
+    });
+    const video = modal.querySelector("video")!;
+    const pendingLink = modal.querySelector<HTMLAnchorElement>(".open-original");
+    if (gallery) {
+      expect(pendingLink?.getAttribute("aria-disabled")).toBe("true");
+      expect(pendingLink?.hasAttribute("href")).toBe(false);
+      expect(pendingLink?.tabIndex).toBe(-1);
+      expectFocusCycle(button(modal, ".close"), button(modal, ".next"), { composed: true });
+    } else {
+      expect(pendingLink).toBeNull();
+    }
+    modal.imageTitle = "Renamed while loading";
+    await modal.updateComplete;
+    expect(modal.querySelector("video")).toBe(video);
+    expect(video.getAttribute("aria-label")).toBe(
+      gallery ? "Generated lobster" : "Renamed while loading",
+    );
+    expect(button(modal, ".close").isConnected).toBe(true);
+    expect(fetchImage).toHaveBeenCalledOnce();
+
+    original.resolve(new Blob(["png"], { type: "image/png" }));
+    await waitForSolid(() => {
+      const link = modal.querySelector<HTMLAnchorElement>(".open-original");
+      expect(link?.getAttribute("href")).toBe("blob:lightbox-original");
+      expect(link?.getAttribute("aria-disabled")).toBe("false");
+      expectFocusCycle(button(modal, ".close"), link!, { composed: true });
+    });
+    modal.remove();
+    await Promise.resolve();
+    expect(revokeObjectUrl).toHaveBeenCalledExactlyOnceWith("blob:lightbox-original");
+  },
+);
+
+it.each(["failed", "replaced", "closed"] as const)(
+  "retires original-link work without hiding video: %s",
+  async (outcome) => {
+    const original = createDeferred<Blob>();
+    fetchImage.mockResolvedValue({ ok: true, blob: () => original.promise });
+    const { modal } = await renderLightbox({
+      mediaKind: "video",
+      src: "https://example.com/demo.mp4",
+      originalSrc: "data:image/png;base64,cG5n",
+      gallery: { index: 0, items: [async () => null, async () => null] },
+    });
+    expect(modal.querySelector(".open-original")?.getAttribute("aria-disabled")).toBe("true");
+    const replacement = "https://example.com/replacement.mp4";
+    if (outcome === "closed") {
+      modal.remove();
+      await Promise.resolve();
+    } else if (outcome === "replaced") {
+      modal.originalSrc = replacement;
+      await modal.updateComplete;
+    }
+    if (outcome === "failed") {
+      original.reject(new Error("Original unavailable"));
+      await waitForSolid(() => expect(modal.querySelector(".open-original")).toBeNull());
+      expect(modal.querySelector("video")?.isConnected).toBe(true);
+      expect(button(modal, ".close").isConnected).toBe(true);
+      modal.originalSrc = replacement;
+    } else {
+      original.resolve(new Blob(["png"], { type: "image/png" }));
+      await original.promise;
+    }
+    if (outcome !== "closed") {
+      await waitForSolid(() =>
+        expect(modal.querySelector<HTMLAnchorElement>(".open-original")?.href).toBe(replacement),
+      );
+    }
+    await modal.updateComplete;
+    expect(createObjectUrl).not.toHaveBeenCalled();
+  },
+);
 
 it.each([false, true])(
   "preserves preview/zoom during display upgrade (retry: %s)",
@@ -299,6 +396,52 @@ it("retires detached work and reconnects without downloading", async () => {
   expect(fetchImage).not.toHaveBeenCalled();
 });
 
+it.each(["open", "closed", "reopened"] as const)(
+  "reports failed downloads only in their mounted view: %s",
+  async (state) => {
+    const toast = container.appendChild(document.createElement("openclaw-toast-host"));
+    toast.toast = null;
+    toast.active = false;
+    const original = createDeferred<Blob>();
+    const readOriginalBlob = vi.fn(() => original.promise);
+    const { modal } = await renderLightbox({ readOriginalBlob });
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      toast.remove();
+      vi.useRealTimers();
+    });
+    const download = button(modal, ".download-image");
+    download.click();
+    expect(readOriginalBlob).toHaveBeenCalledOnce();
+    if (state !== "open") {
+      modal.addEventListener("image-lightbox-close", () => modal.remove());
+      button(modal, ".close").click();
+      expect(modal.isConnected).toBe(false);
+      await Promise.resolve();
+      if (state === "reopened") {
+        container.append(modal);
+        await modal.updateComplete;
+        const replacement = button(modal, ".download-image");
+        expect(replacement).not.toBe(download);
+        expect(replacement.disabled).toBe(false);
+      }
+    }
+    original.reject(new Error("Image unavailable"));
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(toast.active).toBe(state === "open");
+    expect(toast.toast).toEqual(
+      state === "open"
+        ? expect.objectContaining({ message: "Could not download this image. Try again." })
+        : null,
+    );
+    if (state === "open") {
+      expect(download.disabled).toBe(false);
+      expect(download.hasAttribute("aria-busy")).toBe(false);
+    }
+  },
+);
+
 it.each([
   ["data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'></svg>", "image/svg+xml", false],
   ["blob:untrusted-svg", "image/svg+xml", false],
@@ -308,10 +451,10 @@ it.each([
     ok: true,
     blob: async () => new Blob(["image"], { type }),
   });
-  const click = interceptDownload();
   const { modal } = await renderLightbox({ src });
   expect(fetchImage).not.toHaveBeenCalled();
   expect(modal.querySelector(".open-original")).toBeNull();
+  const click = interceptDownload();
   button(modal, ".download-image").click();
   await waitForSolid(() =>
     expect(modal.querySelector(".download-image")?.hasAttribute("disabled")).toBe(false),
@@ -330,7 +473,6 @@ it.each(["url", "blob", "gallery-url", "gallery-blob"] as const)(
     const readOriginalBlob = vi.fn(() =>
       blob ? original.promise : Promise.resolve(new Blob(["first"], { type: "image/png" })),
     );
-    const click = interceptDownload();
     const first = "https://example.com/first.png",
       next = "https://example.com/next.png";
     const { modal } = await renderLightbox({
@@ -353,6 +495,7 @@ it.each(["url", "blob", "gallery-url", "gallery-blob"] as const)(
       expect(fetchImage).not.toHaveBeenCalled();
     }
     const download = button(modal, ".download-image");
+    const click = interceptDownload();
     download.click();
     if (blob) {
       flush();
@@ -406,8 +549,32 @@ it("gates zoom shortcuts and traps Tab focus", async () => {
   image.dispatchEvent(new Event("load"));
   flush();
   expect(zoomIn?.getAttribute("aria-disabled")).toBe("false");
-  const availableShortcut = pressKey(dialogAdapter, "+", { cancelable: true });
-  expect(availableShortcut.defaultPrevented).toBe(true);
+  const panzoom = vi.mocked(Panzoom).mock.results.at(-1)!.value;
+  for (const modifier of ["ctrlKey", "metaKey", "altKey"] as const) {
+    for (const key of ["=", "+", "-", "0"]) {
+      const shortcut = pressKey(zoomIn, key, {
+        cancelable: true,
+        shiftKey: key === "+",
+        [modifier]: true,
+      });
+      expect(shortcut.defaultPrevented, `${modifier} ${key}`).toBe(false);
+    }
+  }
+  expect(panzoom.zoomIn).not.toHaveBeenCalled();
+  expect(panzoom.zoomOut).not.toHaveBeenCalled();
+  expect(panzoom.reset).not.toHaveBeenCalled();
+
+  for (const [key, command] of [
+    ["=", panzoom.zoomIn],
+    ["+", panzoom.zoomIn],
+    ["-", panzoom.zoomOut],
+    ["0", panzoom.reset],
+  ] as const) {
+    vi.mocked(command).mockClear();
+    const shortcut = pressKey(zoomIn, key, { cancelable: true, shiftKey: key === "+" });
+    expect(shortcut.defaultPrevented).toBe(true);
+    expect(command).toHaveBeenCalledOnce();
+  }
 
   expectFocusCycle(button(modal, ".close"), button(modal, ".download-image"));
 });
@@ -489,11 +656,7 @@ it.each(["document", "shadow"] as const)(
     const image = modal.querySelector<HTMLImageElement>(".image");
     const elementFromPoint = Object.getOwnPropertyDescriptor(hitTestRoot, "elementFromPoint");
     onTestFinished(() => {
-      if (elementFromPoint) {
-        Object.defineProperty(hitTestRoot, "elementFromPoint", elementFromPoint);
-      } else {
-        Reflect.deleteProperty(hitTestRoot, "elementFromPoint");
-      }
+      restorePropertyDescriptor(hitTestRoot, "elementFromPoint", elementFromPoint);
     });
     Object.defineProperty(hitTestRoot, "elementFromPoint", {
       configurable: true,

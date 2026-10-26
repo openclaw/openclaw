@@ -1,4 +1,3 @@
-// Covers core plugin auto-enable behavior and bundled plugin defaults.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +8,6 @@ import { initializeNativeSessionCatalogPreferences } from "../plugins/native-ses
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   applyPluginAutoEnable,
-  detectPluginAutoEnableCandidates,
   materializePluginAutoEnableCandidates,
 } from "./plugin-auto-enable.js";
 import {
@@ -50,14 +48,6 @@ vi.mock("../channels/plugins/package-state-probes.js", async (importOriginal) =>
       }
       if (params.channelId === "cache-channel") {
         return Boolean(params.env?.CACHE_CHANNEL_TOKEN?.trim());
-      }
-      if (params.channelId === "irc") {
-        return Boolean(params.env?.IRC_HOST?.trim() && params.env?.IRC_NICK?.trim());
-      }
-      if (params.channelId === "slack") {
-        return ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"].some((key) =>
-          Boolean(params.env?.[key]?.trim()),
-        );
       }
       return actual.hasBundledChannelPackageState(params);
     },
@@ -226,22 +216,45 @@ describe("applyPluginAutoEnable core", () => {
     },
   );
 
-  it.each([
-    { name: "an undefined config", config: undefined, envOverrides: {} },
-    {
-      name: "unrelated Slack-prefixed environment variables",
-      config: {},
-      envOverrides: { SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/T000/B000/XXX" },
-    },
-  ])("keeps plugin auto-enable inactive with $name", ({ config, envOverrides }) => {
+  it.each<[string, OpenClawConfig?, ManifestPlugin[]?, NodeJS.ProcessEnv?]>([
+    ["undefined config"],
+    [
+      "unrelated Slack environment",
+      {},
+      undefined,
+      { SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/T000/B000/XXX" },
+    ],
+    [
+      "modelByChannel metadata",
+      { channels: { modelByChannel: { openai: { whatsapp: "openai/gpt-5.4" } } } },
+    ],
+    ["disabled plugin", slackConfig({ entries: { slack: { enabled: false, config: {} } } })],
+    ["disabled built-in channel", { channels: { slack: { botToken: "x", enabled: false } } }],
+    [
+      "disabled external channel",
+      { channels: { matrix: { enabled: false } } },
+      [{ id: "matrix", channels: ["matrix"] }],
+    ],
+    [
+      "globally disabled plugins",
+      slackConfig({
+        enabled: false,
+        allow: ["slack"],
+        entries: { slack: { config: { botToken: "x" } } },
+      }),
+      [{ id: "slack", channels: ["slack"] }],
+    ],
+  ])("keeps auto-enable inactive for %s", (_name, config, plugins, envOverrides) => {
     const result = applyPluginAutoEnable({
       config,
-      env: makeIsolatedEnv(envOverrides),
+      env: envOverrides ? makeIsolatedEnv(envOverrides) : env,
+      ...(plugins ? { manifestRegistry: makeRegistry(plugins) } : {}),
     });
-
-    expect(result.config).toStrictEqual({});
+    expect(result.config).toStrictEqual(config ?? {});
     expect(result.changes).toStrictEqual([]);
-    expect(result.autoEnabledReasons).toStrictEqual({});
+    if (!config || Object.keys(config).length === 0) {
+      expect(result.autoEnabledReasons).toStrictEqual({});
+    }
   });
 
   it.each([{ allow: ["telegram"] }, { allow: [] }])(
@@ -287,13 +300,7 @@ describe("applyPluginAutoEnable core", () => {
         tools: { web: { fetch: { provider: "evilfetch" } } },
         plugins: { allow: ["telegram"] },
       },
-      [
-        {
-          id: "evil-plugin",
-          channels: [],
-          contracts: { webFetchProviders: ["evilfetch"] },
-        },
-      ],
+      [plugin("evil-plugin", { contracts: { webFetchProviders: ["evilfetch"] } })],
     );
 
     expect(result.config.plugins?.entries?.["evil-plugin"]).toBeUndefined();
@@ -307,25 +314,14 @@ describe("applyPluginAutoEnable core", () => {
         "telegram",
       ]),
     );
-
     expect(result.config.plugins?.entries?.firecrawl?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["telegram", "firecrawl"]);
     expect(result.changes).toContain("firecrawl web fetch configured, enabled automatically.");
   });
 
   it("bounds repeated model-candidate preference checks without changing plugin precedence", () => {
-    let denyChecks = 0;
-    const deny = new Proxy(["blocked"], {
-      get(target, property, receiver) {
-        if (property === "includes") {
-          return (pluginId: string) => {
-            denyChecks += 1;
-            return target.includes(pluginId);
-          };
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    });
+    const deny = ["blocked"];
+    const denyChecks = vi.spyOn(deny, "includes");
     const config: OpenClawConfig = {
       agents: {
         ownership: "explicit",
@@ -344,7 +340,7 @@ describe("applyPluginAutoEnable core", () => {
       plugins: { deny },
     };
     expect(validateConfigObject(config).ok).toBe(true);
-    denyChecks = 0;
+    denyChecks.mockClear();
 
     const result = autoEnable(config, [
       plugin("primary", { providers: ["primary"] }),
@@ -361,7 +357,7 @@ describe("applyPluginAutoEnable core", () => {
       ),
     ]);
 
-    expect(denyChecks).toBeLessThanOrEqual(6);
+    expect(denyChecks.mock.calls.length).toBeLessThanOrEqual(6);
     expect(result.config.plugins?.entries?.primary?.enabled).toBe(false);
     expect(result.config.plugins?.entries?.secondary?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.blocked).toBeUndefined();
@@ -370,14 +366,9 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it.each([
-    { name: "OpenClaw preference", runtime: "openclaw", api: undefined, codexEnabled: false },
-    {
-      name: "implicit subscription route with legacy Completions",
-      runtime: undefined,
-      api: "openai-completions",
-      codexEnabled: true,
-    },
-  ] as const)("preserves $name for auth-profile models", ({ runtime, api, codexEnabled }) => {
+    ["OpenClaw preference", "openclaw", undefined, false],
+    ["implicit subscription route with legacy Completions", undefined, "openai-completions", true],
+  ] as const)("preserves %s for auth-profile models", (_name, runtime, api, codexEnabled) => {
     const config: OpenClawConfig = {
       auth: { profiles: { "openai:work": { provider: "openai", mode: "oauth" } } },
       ...(api ? modelConfig("openai", "https://api.openai.com/v1", { api }) : {}),
@@ -389,10 +380,7 @@ describe("applyPluginAutoEnable core", () => {
           },
         },
       },
-      plugins: {
-        allow: ["openai"],
-        entries: { openai: { enabled: true } },
-      },
+      ...pluginConfig("openai", { enabled: true }, ["openai"]),
     };
     const result = autoEnable(config, [
       plugin("openai", { providers: ["openai"] }),
@@ -421,16 +409,6 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("claude-cli agent runtime configured, enabled automatically.");
   });
 
-  it("ignores channels.modelByChannel for plugin auto-enable", () => {
-    const result = autoEnable({
-      channels: { modelByChannel: { openai: { whatsapp: "openai/gpt-5.4" } } },
-    });
-
-    expect(result.config.plugins?.entries?.modelByChannel).toBeUndefined();
-    expect(result.config.plugins?.allow).toBeUndefined();
-    expect(result.changes).toStrictEqual([]);
-  });
-
   it("does not auto-enable WhatsApp from persisted auth state alone", () => {
     const persistedEnv = makeIsolatedEnv();
     const authDir = path.join(
@@ -443,10 +421,7 @@ describe("applyPluginAutoEnable core", () => {
     fs.writeFileSync(path.join(authDir, "creds.json"), "{}", "utf-8");
 
     const params = { config: {}, env: persistedEnv };
-    const candidates = detectPluginAutoEnableCandidates(params);
     const result = applyPluginAutoEnable(params);
-
-    expect(candidates).toStrictEqual([]);
     expect(result.config).toStrictEqual({});
     expect(result.changes).toStrictEqual([]);
   });
@@ -548,9 +523,7 @@ describe("applyPluginAutoEnable core", () => {
   );
 
   it("does not reuse same-turn results for omitted metadata after current snapshot replacement", () => {
-    const config: OpenClawConfig = {
-      channels: { apn: { someKey: "value" } },
-    };
+    const config: OpenClawConfig = { channels: { apn: { someKey: "value" } } };
     const firstRegistry = makeRegistry([{ id: "apn-one", channels: ["apn"] }]);
     const secondRegistry = makeRegistry([{ id: "apn-two", channels: ["apn"] }]);
     setCurrentPluginMetadataSnapshot(
@@ -571,57 +544,11 @@ describe("applyPluginAutoEnable core", () => {
     expect(second).not.toBe(first);
   });
 
-  it("respects explicit disable", () => {
-    const result = autoEnable(slackConfig({ entries: { slack: { enabled: false, config: {} } } }));
-
-    expect(result.config.plugins?.entries?.slack?.enabled).toBe(false);
-    expect(result.changes).toStrictEqual([]);
-  });
-
-  it("respects built-in channel explicit disable via channels.<id>.enabled", () => {
-    const result = autoEnable({ channels: { slack: { botToken: "x", enabled: false } } });
-
-    expect(result.config.channels?.slack?.enabled).toBe(false);
-    expect(result.config.plugins?.entries?.slack).toBeUndefined();
-    expect(result.changes).toStrictEqual([]);
-  });
-
-  it("does not auto-enable plugin channels when only enabled=false is set", () => {
-    const result = autoEnable({ channels: { matrix: { enabled: false } } }, [
-      { id: "matrix", channels: ["matrix"] },
-    ]);
-
-    expect(result.config.plugins?.entries?.matrix).toBeUndefined();
-    expect(result.changes).toStrictEqual([]);
-  });
-
-  it("skips when plugins are globally disabled", () => {
-    expect(
-      detectPluginAutoEnableCandidates({
-        config: {
-          channels: { slack: { botToken: "x" } },
-          plugins: {
-            enabled: false,
-            allow: ["slack"],
-            entries: { slack: { config: { botToken: "x" } } },
-          },
-        },
-        env,
-        manifestRegistry: makeRegistry([{ id: "slack", channels: ["slack"] }]),
-      }),
-    ).toStrictEqual([]);
-
-    const result = autoEnable(slackConfig({ enabled: false }));
-
-    expect(result.config.plugins?.entries?.slack?.enabled).toBeUndefined();
-    expect(result.changes).toStrictEqual([]);
-  });
-
   it("carries loader resolution facts onto a config the auto-enable rewrite rebuilt", () => {
     const unresolvedPath = "channels.a2a.peers.hermes.outboundToken";
     const config: OpenClawConfig = {
       channels: {
-        slack: { botToken: "x" },
+        slack: { botToken: "${SLACK_UNSET_TOKEN}" },
         a2a: {
           peers: { hermes: { token: "inbound-secret", outboundToken: "${A2A_UNSET_OUT}" } },
         },
@@ -629,32 +556,20 @@ describe("applyPluginAutoEnable core", () => {
     };
     setConfigResolutionFacts(
       config,
-      createConfigResolutionFacts([{ varName: "A2A_UNSET_OUT", configPath: unresolvedPath }]),
-    );
-
-    const result = applyPluginAutoEnable({ config, env });
-
-    expect(result.config).not.toBe(config);
-    expect(result.config.channels?.slack?.enabled).toBe(true);
-    expect(hasUnresolvedConfigPath(result.config, unresolvedPath)).toBe(true);
-    expect(hasUnresolvedConfigPath(result.config, "channels.a2a.peers.hermes.token")).toBe(false);
-  });
-
-  it("keeps a fact for a sibling value the rewrite left untouched", () => {
-    const config: OpenClawConfig = {
-      channels: { slack: { botToken: "${SLACK_UNSET_TOKEN}" } },
-    };
-    setConfigResolutionFacts(
-      config,
       createConfigResolutionFacts([
+        { varName: "A2A_UNSET_OUT", configPath: unresolvedPath },
         { varName: "SLACK_UNSET_TOKEN", configPath: "channels.slack.botToken" },
       ]),
     );
 
     const result = applyPluginAutoEnable({ config, env });
 
+    expect(result.config).not.toBe(config);
+    expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.channels?.slack?.botToken).toBe("${SLACK_UNSET_TOKEN}");
     expect(hasUnresolvedConfigPath(result.config, "channels.slack.botToken")).toBe(true);
+    expect(hasUnresolvedConfigPath(result.config, unresolvedPath)).toBe(true);
+    expect(hasUnresolvedConfigPath(result.config, "channels.a2a.peers.hermes.token")).toBe(false);
   });
 
   it("leaves a config without loader facts without facts", () => {

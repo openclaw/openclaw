@@ -1,6 +1,10 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
   validateSessionsListParams,
@@ -95,7 +99,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       }
       return;
     }
-    const discoveredTargets = new Map<string, Promise<SessionStoreTarget[]>>();
+    const discoveredTargets = new Map<string, Promise<readonly SessionStoreTarget[]>>();
     const prepareSearch = async () => {
       sessionMutationAuthorization?.assertCurrent();
       const cfg = context.getRuntimeConfig();
@@ -240,7 +244,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         const limit = params.limit ?? 10;
         const sortedHits = targetResults
           .flatMap((result) => result.hits)
-          .toSorted(
+          // oxlint-disable-next-line unicorn/no-array-sort -- flatMap returns a fresh, private array.
+          .sort(
             (left, right) =>
               right.score - left.score ||
               right.timestamp - left.timestamp ||
@@ -299,8 +304,11 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         respond: respondToCaller,
         assertCurrent,
         beforeRespond: () => {
-          // An event delivered before roster admission may not have established its ancestor rows.
-          if (client?.connId) {
+          // Legacy receipts belong to admitted roster rows; delta clients retain socket baselines.
+          if (
+            client?.connId &&
+            !hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS)
+          ) {
             context.forgetConnectionAncestors(client.connId);
           }
         },

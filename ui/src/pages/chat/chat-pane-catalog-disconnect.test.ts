@@ -8,10 +8,11 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { requestCalls } from "./chat-host.test-support.ts";
 import { catalogList } from "./chat-pane-catalog.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
-import { createGatewayBrowserClientFixture, type TestChatPane } from "./chat-pane.test-support.ts";
+import type { TestChatPane } from "./chat-pane.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -73,15 +74,11 @@ it.each(["lookup-before", "lookup-after", "read-resolve", "read-reject"] as cons
     const lookupStage = timing.startsWith("lookup");
     const lookup = createDeferred<SessionsCatalogListResult>();
     const read = createDeferred<SessionsCatalogReadResult>();
-    const respond = (method: string) => {
-      if (method === listMethod) {
-        return lookup.promise;
-      }
-      if (method === readMethod) {
-        return read.promise;
-      }
-      return Promise.resolve({});
+    const pending: Record<string, Promise<unknown>> = {
+      [listMethod]: lookup.promise,
+      [readMethod]: read.promise,
     };
+    const respond = (method: string) => pending[method] ?? Promise.resolve({});
     const request = vi.fn(lookupStage ? respond : async (method: string) => await respond(method));
     if (lookupStage) {
       read.resolve(readResult);
@@ -98,8 +95,6 @@ it.each(["lookup-before", "lookup-after", "read-resolve", "read-reject"] as cons
       let history = { ...pane.history };
       let error = state.lastError;
       if (lookupStage) {
-        expect(active.length).toBeGreaterThan(0);
-        expect(pane.isConnected).toBe(true);
         if (timing === "lookup-before") {
           pane.remove();
           lookup.resolve(listed);
@@ -110,7 +105,6 @@ it.each(["lookup-before", "lookup-after", "read-resolve", "read-reject"] as cons
         }
       } else {
         pane.remove();
-        expectClosed(fixture);
         history = { ...pane.history };
         error = state.lastError;
         if (timing === "read-reject") {

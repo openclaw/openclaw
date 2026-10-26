@@ -49,6 +49,9 @@ export const GITHUB_PULL_REQUEST_LOGIN_PATTERN = "^[A-Za-z0-9](?:[A-Za-z0-9_-]{0
 export const GitHubPullRequestPrepareSchema = closedObject({
   action: Type.Literal("prepare_pr"),
   pullRequestUrl: GitHubPullRequestInspectSchema.properties.pullRequestUrl,
+  conflictsResolved: Type.Optional(Type.Boolean()),
+  // Acknowledges returned conflicts; never selects the source to import.
+  expectedHeadCommit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}$" })),
 });
 const GitHubPullRequestRefSchema = closedObject({
   repository: NonEmptyString,
@@ -73,6 +76,7 @@ export const SessionGitHubPublishParamsSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,
+  workspacePath: Type.Optional(Type.String({ minLength: 1, maxLength: 2048 })),
   title: Type.Optional(GitHubPublicationTitleSchema),
   body: Type.Optional(GitHubPublicationBodySchema),
   draft: Type.Optional(Type.Boolean()),
@@ -172,11 +176,12 @@ export const SessionGitHubBaseRefreshResultSchema = closedObject({
   review: Type.Optional(closedObject({ mode: Type.Literal("local"), base: NonEmptyString })),
 });
 export const SessionGitHubPullRequestPrepareResultSchema = closedObject({
-  status: Type.Literal("prepared"),
+  status: stringLiteralUnion(["prepared", "conflicts"]),
   url: NonEmptyString,
   headCommit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
   headChanged: Type.Boolean(),
   changedPaths: Type.Array(Type.String()),
+  conflictPaths: Type.Array(Type.String()),
   review: Type.Optional(closedObject({ mode: Type.Literal("local"), base: NonEmptyString })),
 });
 

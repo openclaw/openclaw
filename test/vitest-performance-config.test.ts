@@ -96,6 +96,13 @@ import path from "node:path";
 import { createVitest } from ${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("vitest/node")).href)};
 const root = ${JSON.stringify(root)};
 const cacheConfig = ${JSON.stringify(loadVitestPerformanceConfig({}, "linux", root))};
+const create = (options = {}, overrides = {}) => createVitest("test", {
+  root, config: false, watch: false, ...cacheConfig, ...options,
+}, overrides);
+const withContext = async (options, overrides, run) => {
+  const ctx = await create(options, overrides);
+  try { await run(ctx); } finally { await ctx.close(); }
+};
 ${source}
 `),
     );
@@ -118,18 +125,16 @@ const plugin = {
     return { code: code.replace('"__OPTIMIZER_ROOT__"', JSON.stringify(directory)), map: null };
   },
 };
-const create = () => createVitest("test", {
-  root, config: false, watch: false, ...cacheConfig,
+const options = {
   projects: ["A", "B"].map(name => ({
     extends: false,
     root,
     plugins: [plugin, createVitestProjectCachePlugin()],
     test: { name, ...cacheConfig },
   })),
-});
+};
 for (let pass = 0; pass < 2; pass++) {
-  const ctx = await create();
-  try {
+  await withContext(options, {}, async ctx => {
     const directories = [];
     for (const name of ["A", "B"]) {
       const project = ctx.getProjectByName(name);
@@ -138,9 +143,7 @@ for (let pass = 0; pass < 2; pass++) {
       directories.push(dependencyRoot);
     }
     assert.notEqual(directories[0], directories[1]);
-  } finally {
-    await ctx.close();
-  }
+  });
 }
 assert.equal(transforms.length, 2, "both projects must reuse their own persisted transforms on the second run");
 `,
@@ -349,26 +352,18 @@ const plugin = {
     }
   },
 };
-const create = () => createVitest("test", {
-  root, config: false, watch: false, ...cacheConfig,
-}, { plugins: [plugin] });
-let ctx;
-try {
-  ctx = await create();
+await withContext({}, { plugins: [plugin] }, async ctx => {
   assert.equal((await ctx.getRootProject().import("./project-subject.js")).version, "1.0.0");
   assert.equal((await ctx.import("./vitest-subject.js")).version, "1.0.0");
   assert.ok(fs.readdirSync(cacheConfig.fsModuleCachePath).length > 1);
-  await ctx.close();
-  ctx = undefined;
-  transitionLock("2.0.0");
-  importInHook = true;
-  ctx = await create();
+});
+transitionLock("2.0.0");
+importInHook = true;
+await withContext({}, { plugins: [plugin] }, async ctx => {
   assert.deepEqual(hookValues, ["2.0.0", "2.0.0"], "configureVitest imports must use the current generation");
   assert.equal((await ctx.import("./post-init.js")).version, "2.0.0");
   assert.ok(keyed.has(path.join(root, "post-init.js").replaceAll("\\\\", "/")));
-} finally {
-  await ctx?.close();
-}
+});
 `,
     );
   });
@@ -381,11 +376,10 @@ try {
 ${generationHelpers}
 fs.writeFileSync(path.join(root, "first.js"), "export const value = 1;");
 fs.writeFileSync(path.join(root, "next.js"), 'export const value = 2; export const version = "__DEPENDENCY_VERSION__";');
-const create = () => createVitest("test", { root, config: false, watch: false, ...cacheConfig }, {
+const overrides = {
   plugins: [versionPlugin("fixture-clear-generation", root, { "next.js": null })],
-});
-let ctx = await create();
-try {
+};
+await withContext({}, overrides, async ctx => {
   assert.equal((await ctx.import("./first.js")).value, 1);
   assert.ok(fs.readdirSync(cacheConfig.fsModuleCachePath).length > 1);
   await ctx.waitForTestRunEnd();
@@ -395,16 +389,13 @@ try {
   assert.equal(next.value, 2);
   assert.equal(next.version, "1.0.0");
   assert.ok(fs.readdirSync(cacheConfig.fsModuleCachePath).length > 0);
-  await ctx.close();
-  ctx = undefined;
-  transitionLock("2.0.0");
-  ctx = await create();
+});
+transitionLock("2.0.0");
+await withContext({}, overrides, async ctx => {
   const current = await ctx.import("./next.js");
   assert.equal(current.value, 2);
   assert.equal(current.version, "2.0.0", "post-clear entries must use the current generation after restart");
-} finally {
-  await ctx?.close();
-}
+});
 `,
     );
   });

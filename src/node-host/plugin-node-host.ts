@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { throwCollectedErrors } from "../infra/error-graph-internal.js";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { assertCurrentUsageAuthorization } from "../infra/exec-approvals-authorization.kernel.js";
 import { prepareExecApprovalsCurrentRead } from "../infra/exec-approvals-store.js";
 import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals.js";
@@ -152,10 +152,7 @@ export function watchRegisteredNodeHostCommandAvailability(
         );
         // Retry only unfinished owners; successful cleanup must not run twice.
         cleanups = cleanups.filter((_cleanup, index) => results[index]?.status === "rejected");
-        const failures = results.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        throwCollectedErrors(failures, "node-host watcher cleanup failed");
+        throwIfSettledRejected(results, "node-host watcher cleanup failed");
       })
       .catch((error: unknown) => {
         stopping = undefined;
@@ -370,7 +367,6 @@ function resetNodeHostPluginRegistry(): void {
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.nodeHostPluginTestApi")] = {
-    getNodeHostPluginRegistry: () => nodeHostPluginRegistry,
     resetNodeHostPluginRegistry,
   };
 }

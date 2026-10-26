@@ -1,13 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
+import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import {
   beforeSettlement,
@@ -24,10 +21,7 @@ import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
-const protocolFeatures = [
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-];
+const protocolFeatures = [...WORKER_PROTOCOL_FEATURES];
 const ensureNodeWorkerBundle = async () => ({
   ...support.BOOTSTRAP_RECEIPT,
   protocolFeatures: [...protocolFeatures],
@@ -401,7 +395,11 @@ describe("worker environment service provision replay", () => {
       expect.objectContaining({ leaseId, profile: { region: "test" } }),
     );
     expect(destroy).toHaveBeenCalledTimes(1);
-    expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
+    expect(destroy).toHaveBeenCalledWith({
+      leaseId,
+      profile: { region: "test" },
+      signal: expect.any(AbortSignal),
+    });
     expect(support.testState.store.get(pending.environmentId)).toMatchObject({
       state: "failed",
       leaseId: null,

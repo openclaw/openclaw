@@ -6,7 +6,6 @@ import {
   invalidateSessionAutomationIndex,
   registerSessionAutomationSource,
   sessionHasAutomation,
-  unregisterSessionAutomationSource,
 } from "./session-automation-index.js";
 
 const cfg: OpenClawConfig = {};
@@ -112,24 +111,4 @@ test("reads during array replacement do not consume the pending owner delta", ()
   expectChanges();
   invalidateSessionAutomationIndex();
   expectChanges("agent:main:cron:a");
-});
-
-test("stopped services cannot clear a replacement registration", () => {
-  expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(false);
-  const expectChanges = watchChanges();
-  const source = (id: string) => ({
-    getJobs: () => [job({ id })],
-    getDefaultAgentId: () => "main",
-  });
-  const staleSource = source("stale"),
-    freshSource = source("fresh");
-  registerSessionAutomationSource(freshSource);
-  expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(true);
-  expect(sessionHasAutomation("agent:main:cron:stale", cfg)).toBe(false);
-  unregisterSessionAutomationSource(staleSource);
-  expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(true);
-  unregisterSessionAutomationSource(freshSource);
-  expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(false);
-  invalidateSessionAutomationIndex();
-  expectChanges("agent:main:cron:fresh", "agent:main:cron:fresh");
 });

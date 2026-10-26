@@ -1,6 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
+  getPreparedModelRuntimeMocks,
   usePreparedModelRuntimeHarness,
   getPreparedModelRuntimeTestApi,
 } from "./prepared-model-runtime.test-harness.js";
@@ -31,6 +32,17 @@ import {
   registerPreparedModelRuntimePublicationListener,
 } from "./prepared-model-runtime.js";
 import { withPreparedModelRuntimeReadBatch } from "./prepared-model-runtime.owner.js";
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
+  return {
+    ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+    createSubsystemLogger: (subsystem: string) =>
+      createMockSubsystemLogger(subsystem, {
+        warn: (...args) => getPreparedModelRuntimeMocks().warn(...args),
+      }),
+  };
+});
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
@@ -70,10 +82,10 @@ function holdNextCatalogWrite() {
   const started = createDeferred();
   const release = createDeferred();
   const pending: (() => Promise<unknown>)[] = [];
-  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _agentDir) => {
     started.resolve();
     await release.promise;
-    return { agentDir: String(agentDir), wrote: false };
+    return {};
   });
   return {
     started,
@@ -603,8 +615,8 @@ describe("prepared model runtime snapshots", () => {
     const refreshError = new Error("queued auth refresh failed");
     await using configWrite = holdNextCatalogWrite();
     mocks.ensureOpenClawModelsJson
-      .mockResolvedValueOnce({ agentDir: fixture.state.agentDir("secondary"), wrote: false })
-      .mockResolvedValueOnce({ agentDir: fixture.state.agentDir("default"), wrote: false })
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({})
       .mockRejectedValueOnce(refreshError);
 
     const refresh = configWrite.track(refreshPreparedModelRuntimeSnapshots({}));
@@ -636,7 +648,7 @@ describe("prepared model runtime snapshots", () => {
       return { entries: [] };
     });
     mocks.ensureOpenClawModelsJson
-      .mockResolvedValueOnce({ agentDir: fixture.state.agentDir("default"), wrote: false })
+      .mockResolvedValueOnce({})
       .mockRejectedValueOnce(new Error("unexpected auth replay"));
 
     await expect(publishGateway({}, { catalogMode: "static" })).resolves.toBeUndefined();

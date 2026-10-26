@@ -1,11 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { commitMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-store.js";
 import {
   markOrphanedMainSessionForRecovery,
   markRestartAbortedMainSessions,
-  markStartupOrphanedMainSessionsForRecovery,
 } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { mainSessionRecoveryLog } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import { recoverStore } from "../agents/main-session-recovery/main-session-restart-recovery-store.js";
@@ -71,13 +69,67 @@ const cfg = { agents: { entries: { main: {} } } };
 let state: OpenClawTestState;
 let storePath: string;
 
-function recoveryTarget(sessionKey: string, sessionId: string) {
+type ShutdownParams = Parameters<typeof prepareGatewayRunShutdown>[0];
+function shutdown(
+  harness: Pick<ShutdownParams, "chatRunState" | "agentRunSeq" | "broadcast" | "nodeSendToSession">,
+  resolveGatewayContext: GatewayContextResolver,
+  overrides: Partial<ShutdownParams> = {},
+) {
+  return prepareGatewayRunShutdown({
+    chatRunState: harness.chatRunState,
+    agentRunSeq: harness.agentRunSeq,
+    broadcast: harness.broadcast,
+    nodeSendToSession: harness.nodeSendToSession,
+    resolveGatewayContext,
+    timeoutMs: 0,
+    warnings: [],
+    getPendingReplyCount: () => 0,
+    removeChatRun: () => undefined,
+    markMainSessionsAbortedForRestart: async (params) => {
+      await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
+    },
+    ...overrides,
+  });
+}
+
+function recoveryTarget(
+  sessionKey: string,
+  sessionId: string,
+  scope = storePath,
+  agentId = "main",
+) {
   return captureSessionTarget({
-    storeScope: storePath,
+    storeScope: scope,
     sessionKey,
     incarnation: sessionId,
-    agentId: "main",
+    agentId,
   });
+}
+
+function recoveryFixture(sessionKey: string, sessionId: string) {
+  const resolveGatewayContext = () => undefined;
+  const runId = `${sessionId}-run`;
+  return {
+    target: { storePath, sessionKey },
+    runId,
+    resolveGatewayContext,
+    admit: (overrides: Partial<Parameters<typeof beginSessionEffect>[0]> = {}) =>
+      beginSessionEffect({
+        scope: storePath,
+        identities: [sessionKey, sessionId],
+        resolveGatewayContext,
+        ...overrides,
+      }),
+    register: (overrides: Partial<Parameters<typeof registerRecoveryRun>[0]> = {}) =>
+      registerRecoveryRun({
+        sessionKey,
+        sessionId,
+        runId,
+        resolveGatewayContext,
+        timeoutMs: 60_000,
+        ...overrides,
+      }),
+  };
 }
 
 function registerRecoveryRun(
@@ -91,14 +143,12 @@ function registerRecoveryRun(
   const { resolveGatewayContext, storePath: scopedStorePath, ...options } = params;
   const registration = registerChatAbortController({
     ...options,
-    target: scopedStorePath
-      ? captureSessionTarget({
-          storeScope: scopedStorePath,
-          sessionKey: options.sessionKey,
-          incarnation: options.sessionId,
-          agentId: options.agentId ?? "main",
-        })
-      : recoveryTarget(options.sessionKey, options.sessionId),
+    target: recoveryTarget(
+      options.sessionKey,
+      options.sessionId,
+      scopedStorePath,
+      scopedStorePath ? (options.agentId ?? "main") : "main",
+    ),
   });
   if (!registration.registered) {
     throw new Error("Expected a fresh recovery source");
@@ -137,33 +187,22 @@ it.each([
   "other physical store",
   "newer run",
   "reset",
-  "non-main",
+  "child lineage",
   "completed",
 ] as const)("revalidates collected shutdown recovery custody after %s", async (releaseAt) => {
   const sessionKey = `agent:main:dashboard:released-${releaseAt}`;
   const sessionId = `released-${releaseAt}`;
-  const runId = `${sessionId}-run`;
-  const target = { storePath, sessionKey };
+  const f = recoveryFixture(sessionKey, sessionId);
+  const { runId, target, resolveGatewayContext } = f;
   await replaceSessionEntry(target, { sessionId, updatedAt: 1, lifecycleRunId: runId });
-  const resolveGatewayContext = () => undefined;
-  const admission = await beginSessionEffect({
-    scope: storePath,
-    identities: [sessionKey, sessionId],
-    resolveGatewayContext,
-    assertAllowed: () => {},
-  });
-  const registration = registerRecoveryRun({
-    resolveGatewayContext,
-    runId,
-    sessionKey,
-    sessionId,
-    timeoutMs: 60_000,
-  });
+  const admission = await f.admit({ assertAllowed: () => {} });
+  const registration = f.register();
   const releaseClaim = await claimRpcSourceForTest(registration.entry);
   const shouldMark =
     releaseAt === "before planning" ||
     releaseAt === "before commit" ||
-    releaseAt === "other physical store";
+    releaseAt === "other physical store" ||
+    releaseAt === "child lineage";
   if (releaseAt !== "user abort") {
     registration.controller.abort(createAgentRunRestartAbortError());
   }
@@ -193,16 +232,7 @@ it.each([
   const harness = createAgentEventTestHarness();
   let replacement: ReturnType<typeof registerRecoveryRun> | undefined;
   try {
-    await prepareGatewayRunShutdown({
-      resolveGatewayContext,
-      timeoutMs: 0,
-      warnings: [],
-      getPendingReplyCount: () => 0,
-      chatRunState: harness.chatRunState,
-      agentRunSeq: harness.agentRunSeq,
-      removeChatRun: () => undefined,
-      broadcast: harness.broadcast,
-      nodeSendToSession: harness.nodeSendToSession,
+    await shutdown(harness, resolveGatewayContext, {
       markMainSessionsAbortedForRestart: async (params) => {
         if (releaseAt === "user abort") {
           registration.controller.abort(createAgentRunDirectAbortError());
@@ -218,24 +248,20 @@ it.each([
           releaseAt === "newer run" ||
           releaseAt === "other physical store"
         ) {
-          replacement = registerRecoveryRun({
-            resolveGatewayContext,
+          replacement = f.register({
             runId: releaseAt === "newer run" ? "newer-run" : runId,
-            sessionKey,
-            sessionId,
-            timeoutMs: 60_000,
             ...(releaseAt === "other physical store"
               ? { storePath: state.statePath("other-store", "sessions.json") }
               : {}),
           });
         }
-        if (releaseAt === "newer run" || releaseAt === "reset" || releaseAt === "non-main") {
+        if (releaseAt === "newer run" || releaseAt === "reset" || releaseAt === "child lineage") {
           await replaceSessionEntry(target, {
             sessionId: releaseAt === "reset" ? "reset-session" : sessionId,
             lifecycleRunId: releaseAt === "newer run" ? "newer-run" : runId,
             restartRecoveryDeliveryRunId: runId,
             updatedAt: Date.now(),
-            ...(releaseAt === "non-main" ? { spawnDepth: 1 } : {}),
+            ...(releaseAt === "child lineage" ? { spawnDepth: 1 } : {}),
           });
         }
         await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
@@ -274,9 +300,9 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
     const sourceOnly = kind === "delegated source-only";
     const sessionKey = delegated ? "agent:main:main" : `agent:main:dashboard:restart-${kind}`;
     const sessionId = `restart-${kind}-session`;
+    const f = recoveryFixture(sessionKey, sessionId);
+    const { target, resolveGatewayContext } = f;
     const runId = `restart-${kind}-run`;
-    const target = { storePath, sessionKey };
-    const resolveGatewayContext = () => undefined;
     await replaceSessionEntry(target, {
       sessionId,
       updatedAt: 1_000,
@@ -298,12 +324,7 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
         },
       },
     );
-    const admission = await beginSessionEffect({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
-      resolveGatewayContext,
-      assertAllowed: () => {},
-    });
+    const admission = await f.admit({ assertAllowed: () => {} });
     const reply =
       kind === "queue"
         ? createReplyOperation({
@@ -315,12 +336,8 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
         : undefined;
     const queued =
       kind === "queue"
-        ? registerRecoveryRun({
-            resolveGatewayContext,
+        ? f.register({
             runId,
-            sessionKey,
-            sessionId,
-            timeoutMs: 60_000,
             onCancel: () => admission.release(),
           })
         : undefined;
@@ -339,20 +356,7 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
     const recoveryLog = vi.spyOn(mainSessionRecoveryLog, "info");
     try {
       const harness = createAgentEventTestHarness();
-      await prepareGatewayRunShutdown({
-        resolveGatewayContext,
-        timeoutMs: 0,
-        warnings: [],
-        getPendingReplyCount: () => 0,
-        chatRunState: harness.chatRunState,
-        agentRunSeq: harness.agentRunSeq,
-        removeChatRun: () => undefined,
-        broadcast: harness.broadcast,
-        nodeSendToSession: harness.nodeSendToSession,
-        markMainSessionsAbortedForRestart: async (params) => {
-          await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
-        },
-      });
+      await shutdown(harness, resolveGatewayContext);
       expect(loadSessionEntry(target)).toMatchObject({
         status: "interrupted",
         abortedLastRun: true,
@@ -428,8 +432,8 @@ it.each(["none", "active", "pending"] as const)(
   async (callbackFailure) => {
     const sessionKey = `agent:main:dashboard:owned-shutdown-${callbackFailure}`;
     const sessionId = `owned-shutdown-${callbackFailure}`;
-    const target = { storePath, sessionKey };
-    const resolveGatewayContext = () => undefined;
+    const f = recoveryFixture(sessionKey, sessionId);
+    const { target, resolveGatewayContext } = f;
     const owner = Symbol(sessionKey);
     const controller = new AbortController();
     const pendingController = new AbortController();
@@ -455,11 +459,8 @@ it.each(["none", "active", "pending"] as const)(
       status: "done",
     });
     let recoveryMarkedBeforeInterruption = false;
-    const admission = await beginSessionEffect({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
+    const admission = await f.admit({
       owner,
-      resolveGatewayContext,
       onInterrupt: (reason) => {
         recoveryMarkedBeforeInterruption = Boolean(loadSessionEntry(target)?.mainRestartRecovery);
         controller.abort(reason);
@@ -471,27 +472,26 @@ it.each(["none", "active", "pending"] as const)(
     });
     const pendingValidation = vi.fn();
     let pendingPromoted = false;
-    const pending = beginSessionEffect({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
-      owner,
-      serializeOwner: true,
-      resolveGatewayContext,
-      assertAllowed: pendingValidation,
-      onInterrupt: (reason) => {
-        pendingController.abort(reason);
-        if (callbackFailure === "pending") {
-          throw new Error("Synthetic pending admission cancellation failure");
-        }
-      },
-    }).then(
-      (lease) => {
-        pendingPromoted = true;
-        lease.release();
-        return undefined;
-      },
-      (error: unknown) => error,
-    );
+    const pending = f
+      .admit({
+        owner,
+        serializeOwner: true,
+        assertAllowed: pendingValidation,
+        onInterrupt: (reason) => {
+          pendingController.abort(reason);
+          if (callbackFailure === "pending") {
+            throw new Error("Synthetic pending admission cancellation failure");
+          }
+        },
+      })
+      .then(
+        (lease) => {
+          pendingPromoted = true;
+          lease.release();
+          return undefined;
+        },
+        (error: unknown) => error,
+      );
     const interruptFinalWrite = vi.fn();
     const finalAdmission = await beginSessionEffect({
       scope: storePath,
@@ -510,15 +510,11 @@ it.each(["none", "active", "pending"] as const)(
       .finally(() => finalAdmission.release());
     const siblingInterrupt = vi.fn();
     const unboundInterrupt = vi.fn();
-    const sibling = await beginSessionEffect({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
+    const sibling = await f.admit({
       resolveGatewayContext: () => undefined,
       onInterrupt: siblingInterrupt,
     });
-    const unbound = await beginSessionEffect({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
+    const unbound = await f.admit({
       resolveGatewayContext: undefined,
       onInterrupt: unboundInterrupt,
     });
@@ -551,24 +547,10 @@ it.each(["none", "active", "pending"] as const)(
     try {
       expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 1, queuedCount: 1 });
       expect(pendingValidation).not.toHaveBeenCalled();
-      const shutdown = await prepareGatewayRunShutdown({
-        resolveGatewayContext,
-        timeoutMs: 0,
-        warnings: [],
-        getPendingReplyCount: () => 0,
-        chatRunState: harness.chatRunState,
-        agentRunSeq: harness.agentRunSeq,
-        removeChatRun: () => undefined,
-        broadcast: harness.broadcast,
-        nodeSendToSession: harness.nodeSendToSession,
+      const closing = await shutdown(harness, resolveGatewayContext, {
         markMainSessionsAbortedForRestart: async (params) => {
           await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
-          successor = await beginSessionEffect({
-            scope: storePath,
-            identities: [sessionKey, sessionId],
-            resolveGatewayContext,
-            onInterrupt: successorInterrupt,
-          });
+          successor = await f.admit({ onInterrupt: successorInterrupt });
         },
       });
       expect(controller.signal.aborted).toBe(true);
@@ -584,31 +566,28 @@ it.each(["none", "active", "pending"] as const)(
       expect(queuedTask).not.toHaveBeenCalled();
       expect(admission.isActive()).toBe(false);
       expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 0, queuedCount: 0 });
-      expect(finalAdmission.isActive()).toBe(true);
-      expect(interruptFinalWrite).not.toHaveBeenCalled();
-      expect(sibling.isActive()).toBe(true);
-      expect(unbound.isActive()).toBe(true);
-      expect(siblingInterrupt).not.toHaveBeenCalled();
-      expect(unboundInterrupt).not.toHaveBeenCalled();
-      expect(successor?.isActive()).toBe(true);
-      expect(successorInterrupt).not.toHaveBeenCalled();
+      for (const [lease, interrupt] of [
+        [finalAdmission, interruptFinalWrite],
+        [sibling, siblingInterrupt],
+        [unbound, unboundInterrupt],
+        [successor, successorInterrupt],
+      ] as const) {
+        expect(lease?.isActive()).toBe(true);
+        expect(interrupt).not.toHaveBeenCalled();
+      }
       let released = false;
-      void shutdown.released.then(
-        () => {
-          released = true;
-        },
-        () => {
-          released = true;
-        },
-      );
+      const noteReleased = () => {
+        released = true;
+      };
+      void closing.released.then(noteReleased, noteReleased);
       await Promise.resolve();
       expect(released).toBe(false);
       persistFinalWrite.resolve();
       await finalWrite;
       if (callbackFailure === "none") {
-        await shutdown.released;
+        await closing.released;
       } else {
-        await expect(shutdown.released).rejects.toThrow(
+        await expect(closing.released).rejects.toThrow(
           `Synthetic ${callbackFailure} admission cancellation failure`,
         );
       }
@@ -655,6 +634,7 @@ it.each(
     const sessionId = `persisted-terminal-${outcome}-${aliased}`;
     const runId = `${sessionId}-run`;
     const clientRunId = aliased ? `${runId}-client` : runId;
+    const identity = { sessionKey, sessionId, agentId: "main" };
     const target = { storePath, sessionKey };
     const subscriptionConfig = { ...cfg, logging: { audit: { enabled: false } } };
     setRuntimeConfigSnapshot(subscriptionConfig, subscriptionConfig);
@@ -666,16 +646,14 @@ it.each(
     };
     params.chatRunState.registry.add(runId, { sessionKey, clientRunId });
     const registration = registerSubscriptionChatRun(params, {
+      ...identity,
       runId: clientRunId,
-      sessionKey,
-      sessionId,
-      agentId: "main",
       target: recoveryTarget(sessionKey, sessionId),
     });
     bindGatewayContextResolver(registration.entry.input, resolveGatewayContext);
     const releaseClaim = await claimRpcSourceForTest(registration.entry);
     registration.markExecutionStarted();
-    registerAgentRunContext(runId, { sessionKey, sessionId, agentId: "main" });
+    registerAgentRunContext(runId, identity);
     const unsubs = startGatewayEventSubscriptions(params);
     let unsubscribeAgent: Promise<void> | undefined;
     const drain = () => (unsubscribeAgent ??= unsubs.agentUnsub());
@@ -699,10 +677,8 @@ it.each(
         registration.controller.abort(createAgentRunRestartAbortError());
       }
       emitAgentEvent({
+        ...identity,
         runId,
-        sessionKey,
-        sessionId,
-        agentId: "main",
         stream: "lifecycle",
         data: {
           phase: "end",
@@ -729,36 +705,23 @@ it.each(
         lastRunId: clientRunId,
       });
 
-      await prepareGatewayRunShutdown({
-        ...params,
-        resolveGatewayContext,
-        timeoutMs: 0,
-        warnings: [],
-        getPendingReplyCount: () => 0,
-        removeChatRun: () => undefined,
+      await shutdown(params, resolveGatewayContext, {
+        restartRecoveryCandidates: params.restartRecoveryCandidates,
         markMainSessionsAbortedForRestart: async (captured) => {
           if (outcome === "replacement") {
             // The old terminal is already durable; a newer turn wins before its marker writes.
             replacement = registerSubscriptionChatRun(params, {
+              ...identity,
               runId: replacementRunId,
-              sessionKey,
-              sessionId,
-              agentId: "main",
               target: recoveryTarget(sessionKey, sessionId),
             });
             bindGatewayContextResolver(replacement.entry.input, resolveGatewayContext);
             releaseReplacementClaim = await claimRpcSourceForTest(replacement.entry);
             replacement.markExecutionStarted();
-            registerAgentRunContext(replacementRunId, {
-              sessionKey,
-              sessionId,
-              agentId: "main",
-            });
+            registerAgentRunContext(replacementRunId, identity);
             emitAgentEvent({
+              ...identity,
               runId: replacementRunId,
-              sessionKey,
-              sessionId,
-              agentId: "main",
               stream: "lifecycle",
               data: { phase: "start", startedAt: Date.now() },
             });
@@ -883,18 +846,8 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
     }
     registrations[1]!.controller.abort(createAgentRunRestartAbortError());
     const warnings: string[] = [];
-    await prepareGatewayRunShutdown({
-      resolveGatewayContext,
-      timeoutMs: 0,
+    await shutdown(harness, resolveGatewayContext, {
       warnings,
-      getPendingReplyCount: () => 0,
-      chatRunState: harness.chatRunState,
-      agentRunSeq: harness.agentRunSeq,
-      removeChatRun: () => undefined,
-      broadcast: harness.broadcast,
-      nodeSendToSession: harness.nodeSendToSession,
-      markMainSessionsAbortedForRestart: (params) =>
-        markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir }).then(() => {}),
     });
     await joinPersistence();
     expect(read(mainKey).mainRestartRecovery?.cycleId).toEqual(expect.any(String));
@@ -920,60 +873,6 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
     });
     expect(active).toEqual({ active: false, runIds: [] });
 
-    rotateAgentEventLifecycleGeneration();
-    await markStartupOrphanedMainSessionsForRecovery({ cfg, stateDir: state.stateDir });
-    const mainTarget = { storePath, sessionKey: mainKey };
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const observed = await commitMainSessionRecovery({
-      target: mainTarget,
-      command: {
-        kind: "observe",
-        cycleId: "next-boot",
-        lifecycleGeneration,
-        sessionKey: mainKey,
-      },
-    });
-    if (
-      observed.transition.kind !== "observed" ||
-      observed.transition.view.status !== "recoverable"
-    ) {
-      throw new Error("eligible dashboard main session lost its restart recovery owner");
-    }
-    const reserved = await commitMainSessionRecovery({
-      target: mainTarget,
-      command: {
-        kind: "prepare_attempt",
-        attempt: observed.transition.view.nextAttempt,
-        observation: observed.transition.view.observation,
-        lifecycleGeneration,
-        runId: "resumed-main-run",
-        now: Date.now(),
-        executionIdentity: { state: "disabled" },
-      },
-    });
-    expect(reserved.transition.kind).toBe("reserved");
-    const admitted = await commitMainSessionRecovery({
-      target: mainTarget,
-      command: {
-        kind: "admit_recovery",
-        lifecycleGeneration,
-        runId: "resumed-main-run",
-        sessionId: read(mainKey).sessionId,
-        now: Date.now(),
-      },
-    });
-    expect(admitted.transition.kind).toBe("admitted_recovery");
-    await persistGatewaySessionLifecycleEvent({
-      sessionKey: mainKey,
-      event: {
-        runId: "resumed-main-run",
-        sessionId: read(mainKey).sessionId,
-        lifecycleGeneration,
-        ts: Date.now(),
-        data: { phase: "end" },
-      },
-    });
-    expect(read(mainKey).status).toBe("done");
     const child = read(childKey);
     expect(child).toMatchObject({
       status: "interrupted",
@@ -982,7 +881,10 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
       lastRunError: expect.stringContaining("restart"),
     });
     expect(child.lifecycleRunId).toBeUndefined();
-    expect(child.restartRecoveryRuns).toBeUndefined();
+    expect(child.restartRecoveryRuns).toEqual([
+      { runId: `${childKey}:run`, lifecycleGeneration: getAgentEventLifecycleGeneration() },
+    ]);
+    expect(child.mainRestartRecovery?.cycleId).toEqual(expect.any(String));
     const row = buildGatewaySessionRow({
       cfg,
       agentId: "main",

@@ -1,0 +1,82 @@
+import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
+import * as json from "../../lib/snapshot-json.ts";
+import {
+  debugSnapshotStore,
+  openSessionSnapshotDatabase,
+  resetSessionSnapshotDatabase,
+  SIDEBAR_SNAPSHOT_STORE_NAME,
+} from "./session-snapshot-database.ts";
+
+const sidebarRecordsSchema = json.array(
+  json.object(
+    {
+      savedAt: json.refine(json.number, (value) => value >= 0),
+      sessionKey: json.refine(json.text, (value) => value.length > 0),
+      projectionVersion: json.literal(1),
+      model: json.unknown,
+    },
+    true,
+  ),
+);
+export type SidebarRecord = json.SnapshotValue<typeof sidebarRecordsSchema>[number];
+export const sidebarRecordBytes = (record: SidebarRecord) =>
+  new TextEncoder().encode(JSON.stringify(record)).byteLength;
+
+export async function accessSidebarSnapshot<Model>(
+  key: string,
+  validate: (value: unknown) => Model | null,
+  isCurrent: () => boolean,
+  incoming?: SidebarRecord,
+): Promise<Model | null> {
+  const database = await openSessionSnapshotDatabase();
+  if (!database) {
+    return null;
+  }
+  try {
+    if (!isCurrent()) {
+      return null;
+    }
+    const transaction = database.transaction(SIDEBAR_SNAPSHOT_STORE_NAME, "readwrite");
+    const store = transaction.objectStore(SIDEBAR_SNAPSHOT_STORE_NAME);
+    const records = sidebarRecordsSchema.parse(await requestResult(store.getAll()));
+    if (!isCurrent()) {
+      await transactionComplete(transaction);
+      return null;
+    }
+    const retained = records.filter((record) => record.sessionKey !== incoming?.sessionKey);
+    if (incoming) {
+      retained.push(incoming);
+      store.put(incoming);
+    }
+    let bytes = 0;
+    let count = 0;
+    let result: Model | null = null;
+    for (const record of retained.toSorted((a, b) => b.savedAt - a.savedAt)) {
+      const admitted = validate(record.model);
+      if (admitted === null) {
+        store.delete(record.sessionKey);
+        continue;
+      }
+      bytes += sidebarRecordBytes(record);
+      if (
+        count++ >= 8 ||
+        bytes > 512 * 1024 ||
+        Date.now() - record.savedAt > 30 * 24 * 60 * 60 * 1000
+      ) {
+        store.delete(record.sessionKey);
+      } else if (record.sessionKey === key) {
+        result = admitted;
+      }
+    }
+    await transactionComplete(transaction);
+    return isCurrent() ? result : null;
+  } catch (error) {
+    debugSnapshotStore("resetting cache after sidebar projection failure", error);
+    if (isCurrent()) {
+      await resetSessionSnapshotDatabase(database);
+    }
+    return null;
+  } finally {
+    database.close();
+  }
+}

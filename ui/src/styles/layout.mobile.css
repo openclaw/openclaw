@@ -120,11 +120,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   }
 }
 
-/* Inside the drawer there is no Escape key to hint at. */
-.shell--mobile-nav .settings-sidebar__esc {
-  display: none;
-}
-
 /* Show the hamburger toggle at the same breakpoint where the drawer takes over;
    the desktop rail toggle makes no sense once the sidebar is a drawer. */
 .shell--mobile-nav .topbar .topbar-nav-toggle {
@@ -323,6 +318,8 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .chat-thread {
+    --chat-thread-padding-top: 0px;
+
     margin-top: 0;
     /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
        on the scroll container floats macOS overlay scrollbars off the edge. */

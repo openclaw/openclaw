@@ -4,7 +4,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as backupRunRecords from "../state/backup-run-records.js";
 import { createSqliteWalHealth } from "./sqlite-wal-health.test-support.js";
 import { buildStatusCommandReportLines } from "./status.command-report.js";
-import { createStatusCommandReportDataParams } from "./status.test-support.js";
+import { createStatusCommandReportDataParams, createStatusHealth } from "./status.test-support.js";
 
 // mock-isolation: Keep database inspection in its own owner proof; these tests exercise report data.
 vi.mock("./status-database-engines.js", async (importOriginal) => ({
@@ -18,7 +18,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllEnvs();
-  vi.restoreAllMocks();
 });
 
 async function report(overrides: Parameters<typeof createStatusCommandReportDataParams>[0] = {}) {
@@ -78,6 +77,36 @@ it("shows skipped audit text when fast status omits the security audit", async (
     "Skipped in fast status. Full report: openclaw security audit\nDeep check: openclaw status --deep",
   );
 });
+
+it.each([false, true])(
+  "reports auxiliary health warnings only when degraded=%s",
+  async (degraded) => {
+    const quarantined = [
+      {
+        engineId: "synthetic-context",
+        operation: "ingest",
+        reason: "provider failed",
+        failedAt: 1,
+      },
+    ];
+    const output = await report({
+      health: createStatusHealth({
+        contextEngines: { quarantined: degraded ? quarantined : [] },
+        configReload: { hotReloadStatus: degraded ? "disabled" : "active" },
+      }),
+      tableWidth: 240,
+    });
+    if (degraded) {
+      expect(output).toMatch(/Context engine[^\n]*WARN/);
+      expect(output).toContain("1 quarantined; downgraded to legacy: synthetic-context");
+      expect(output).toMatch(/Config hot reload[^\n]*WARN/);
+      expect(output).toContain("watcher retries exhausted; restart the gateway to restore it");
+    } else {
+      expect(output).not.toContain("Context engine");
+      expect(output).not.toContain("Config hot reload");
+    }
+  },
+);
 
 it("renders the recorded SQLite checkpoint warning in deep status", async () => {
   const params = createStatusCommandReportDataParams();

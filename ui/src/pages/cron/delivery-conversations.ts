@@ -10,13 +10,17 @@ export function invalidateStaleDeliveryRoute(
   current: CronFormState,
   patch: Partial<CronFormState>,
 ): Partial<CronFormState> {
+  const agentId =
+    (patch.clearAgent ?? current.clearAgent) ? "" : (patch.agentId ?? current.agentId).trim();
   const deliveryIdentityChanged =
     ("deliveryMode" in patch && patch.deliveryMode !== current.deliveryMode) ||
     ("deliveryTarget" in patch && patch.deliveryTarget !== current.deliveryTarget) ||
-    ("deliveryChannel" in patch && patch.deliveryChannel !== current.deliveryChannel) ||
-    ("deliveryAccountId" in patch && patch.deliveryAccountId !== current.deliveryAccountId) ||
-    ("deliveryTo" in patch && patch.deliveryTo !== current.deliveryTo) ||
-    ("agentId" in patch && patch.agentId !== current.agentId);
+    ("deliveryChannel" in patch &&
+      patch.deliveryChannel?.trim() !== current.deliveryChannel.trim()) ||
+    ("deliveryAccountId" in patch &&
+      patch.deliveryAccountId?.trim() !== current.deliveryAccountId.trim()) ||
+    ("deliveryTo" in patch && patch.deliveryTo?.trim() !== current.deliveryTo.trim()) ||
+    agentId !== (current.clearAgent ? "" : current.agentId.trim());
   return deliveryIdentityChanged && patch.deliveryThreadId === undefined
     ? { ...patch, deliveryThreadId: undefined }
     : patch;

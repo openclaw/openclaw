@@ -1,24 +1,22 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { nativeHistoryMessage } from "./chat-pane-history.test-support.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
-  createRenderTestChatPane,
-  type TestChatPane,
-} from "./chat-pane.test-support.ts";
+} from "./chat-application-context.test-support.ts";
+import { nativeHistoryMessage } from "./chat-pane-history.test-support.ts";
+import { createRenderTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 import { subscribeTranscriptScroll } from "./components/chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
   resizeObservers,
   transcriptDomState,
-  type TestContentRow,
 } from "./components/chat-transcript.test-support.ts";
-import { mountTestTranscript } from "./test-helpers/chat-transcript-native.tsx";
+import { render, renderChatThread } from "./test-helpers/chat-transcript-native.tsx";
 
 beforeEach(installTranscriptDomMocks);
 afterEach(() => {
@@ -34,17 +32,28 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     transcriptDomState.measuredRowHeight = 120;
     // Startup frames and the scroll idle debounce must share the controlled clock.
     vi.useFakeTimers();
+    let maximum = 800;
+    const nativeScrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight")!;
+    // Both the pane and the explicit thread mount need their real scroll range
+    // before the initial intersection can decide whether this is a short page.
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
+      return this.classList.contains("chat-thread")
+        ? maximum + 600
+        : nativeScrollHeight.get!.call(this);
+    });
     const context = createInitializationContext();
     context.config.subscribe = () => () => {};
     const pane = createRenderTestChatPane();
     // Independent scenarios must not restore the previous case's cached reader.
     pane.paneId = `maintenance-history-${movement}`;
+    pane.presentationId = pane.paneId;
+    pane.sessionKey = `agent:main:maintenance-history-${movement}`;
     pane.initialize(context);
     document.body.append(pane.element);
     await pane.updateComplete;
     // Connect normally: the pane lifecycle must supply the scroll-policy owners.
     const state = (pane as unknown as TestChatPane).state;
-    state.sessionKey = "agent:main:maintenance-history";
+    state.sessionKey = pane.sessionKey;
     const request = vi.fn(async () => ({
       messages: [nativeHistoryMessage(1), nativeHistoryMessage(2)],
       hasMore: false,
@@ -52,22 +61,20 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     }));
     state.client = createGatewayBrowserClientFixture({ request });
     state.connected = true;
-    state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
+    state.chatMessages = Array.from({ length: 12 }, (_, index) => nativeHistoryMessage(index + 3));
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
     state.chatLoading = false;
     state.chatHasAutoScrolled = true;
     pane.render();
     const props = expectDefined(pane.chatProps, "rendered pane callbacks");
-    const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
-      kind: "content",
-      key: `row:${index}`,
-      content: <div>Message {index}</div>,
-    }));
-    const mounting = mountTestTranscript("maintenance-history", rows, props.transcript);
+    const host = document.body.appendChild(document.createElement("div"));
+    onTestFinished(() => render(null, host));
+    // The production thread owns geometry updates; the pane only supplies policy callbacks.
+    render(renderChatThread(props, props.transcript), host);
     await vi.advanceTimersByTimeAsync(0);
-    const { container, renderRows, transcript, session } = await mounting;
-    session.setContentReady(true);
-    let maximum = 800;
+    flush();
+    const transcript = props.transcript;
+    const container = expectDefined(transcript.scrollElement, "mounted transcript scrollport");
     Object.defineProperties(container, {
       clientHeight: { configurable: true, value: 600 },
       scrollHeight: { configurable: true, get: () => maximum + 600 },
@@ -77,10 +84,7 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
         container.scrollTop = Math.max(0, Math.min(options.top ?? container.scrollTop, maximum));
       }
     };
-    container.addEventListener(
-      "scroll",
-      expectDefined(props.onChatScroll, "native scroll callback"),
-    );
+    transcript.update();
     for (const observer of resizeObservers) {
       observer.emitTarget(container, 800, 600);
     }
@@ -90,19 +94,14 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
         scrolling = event.scrolling;
       }
     });
-    // Finish initial anchoring before exercising maintenance above the end.
-    renderRows(rows);
+    // Establish a settled end command before exercising maintenance above it.
     flush();
     vi.advanceTimersToNextFrame();
     flush();
-    expect(container.scrollTop).toBe(800);
     expect(transcript.scrollToEnd({ behavior: "instant" })).toBe(true);
+    expect(container.scrollTop).toBe(800);
     expect(transcript.isPositionSettled).toBe(true);
     container.dispatchEvent(new Event("scroll"));
-    renderRows(rows);
-    const sentinel = container.appendChild(document.createElement("div"));
-    sentinel.className = "chat-history-sentinel";
-    pane.historySentinel = sentinel;
 
     class HistoryIntersectionObserver {
       constructor(private readonly callback: IntersectionObserverCallback) {}

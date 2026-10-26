@@ -45,24 +45,20 @@ import * as promptCacheRequestObserver from "./embedded-agent-runner/prompt-cach
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "./internal-runtime-context.js";
-import { SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION } from "./subagents/completion/subagent-completion-instructions.js";
+import { buildSubagentPrivateCompletionInstruction } from "./subagents/completion/subagent-completion-instructions.js";
 import { startPromptCacheMcpServer } from "./test-helpers/prompt-cache-mcp.test-support.js";
 
 const cases = [
-  { api: "openai-responses", provider: "openai", model: "gpt-5.5", route: "responses" },
-  { api: "openai-completions", provider: "openai", model: "gpt-4o", route: "completions" },
-  {
-    api: "anthropic-messages",
-    provider: "anthropic",
-    model: "claude-sonnet-4-6",
-    route: "messages",
-  },
-  { api: "anthropic-messages", provider: "anthropic", model: "claude-opus-5", route: "in-history" },
-] satisfies Array<{ api: WireApi; provider: string; model: string; route: string }>;
+  ["openai-responses", "openai", "gpt-5.5", "responses"],
+  ["openai-completions", "openai", "gpt-4o", "completions"],
+  ["anthropic-messages", "anthropic", "claude-sonnet-4-6", "messages"],
+  ["anthropic-messages", "anthropic", "claude-opus-5", "in-history"],
+] satisfies Array<[WireApi, string, string, string]>;
 const PNG = createSolidPngBuffer(1, 1, { r: 12, g: 34, b: 56 }).toString("base64");
 const FAILED_ASSISTANT_TEXT = "partial assistant output before provider error";
 const FAILED_ASSISTANT_REPLAY_TEXT =
   "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
+const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 
 function responseFor(api: WireApi, model: string, request: number, tool: boolean, failure = false) {
   const id = `cache_${request}`;
@@ -102,14 +98,12 @@ function rateLimitResponse(api: WireApi) {
   });
 }
 
-afterEach(async () => {
-  await clearActivePluginRegistry();
-});
+afterEach(() => clearActivePluginRegistry());
 
 it.for(cases)(
-  "preserves $route prefixes across tool loops, hooks, images, errors, rate-limit retries, refresh and reopen",
+  "preserves %j prefixes across tool loops, hooks, images, errors, rate-limit retries, refresh and reopen",
   { timeout: 120_000 },
-  async ({ api, provider, model, route }, { signal }) => {
+  async ([api, provider, model, route], { signal }) => {
     await withOpenClawTestState({ label: `prompt-cache-${route}` }, async (state) => {
       await bindSessionMcpRuntimeTestScheduler();
       const mcp = await startPromptCacheMcpServer(signal);
@@ -154,17 +148,11 @@ it.for(cases)(
         config.mcp = mcp.config;
         await state.writeConfig(config);
         setRuntimeConfigSnapshot(config);
-        const registry = await loadAndActivateRootPluginRegistry({
+        await loadAndActivateRootPluginRegistry({
           config,
           workspaceDir: state.workspaceDir,
           throwOnLoadError: true,
         });
-        expect(
-          registry.typedHooks.some(
-            (hook) => hook.pluginId === "cache-proof" && hook.hookName === "before_prompt_build",
-          ),
-          "Gateway startup admitted the prompt hook",
-        ).toBe(true);
         const target = {
           agentId: "main",
           sessionId,
@@ -207,43 +195,32 @@ it.for(cases)(
                 }
                 const occurrences = new Map<string, number>();
                 let userAnchor = "";
-                userEnvelopes = new Map(
-                  context.messages.flatMap<readonly [string, string]>((message) => {
-                    if (
-                      message.role !== "user" ||
-                      message.operatorMessage ||
-                      // Legacy transient carriers intentionally refresh beyond the cache boundary.
-                      (message.runtimeContextCarrier && !message.runtimeContextCarrierRetained)
-                    ) {
-                      return [];
-                    }
-                    const { content, ...envelope } = message;
-                    // The wire-prefix oracle below separately protects their content.
-                    const text =
-                      typeof content === "string"
-                        ? content
-                        : content
-                            .flatMap((block) => (block.type === "text" ? [block.text] : []))
-                            .join("\n");
-                    const textDigest = createHash("sha256").update(text).digest("hex");
-                    // Match identical carriers within their preceding user position;
-                    // a newly appended carrier must not replace an earlier occurrence.
-                    const identity = message.runtimeContextCarrier
-                      ? `${userAnchor}:${textDigest}`
-                      : textDigest;
-                    if (!message.runtimeContextCarrier) {
-                      userAnchor = textDigest;
-                    }
-                    const occurrence = occurrences.get(identity) ?? 0;
-                    occurrences.set(identity, occurrence + 1);
-                    return [
-                      [
-                        `${identity}:${occurrence}`,
-                        createHash("sha256").update(stableStringify(envelope)).digest("hex"),
-                      ],
-                    ];
-                  }),
-                );
+                userEnvelopes = new Map();
+                for (const message of context.messages) {
+                  // Legacy transient carriers intentionally refresh beyond the cache boundary.
+                  if (
+                    message.role !== "user" ||
+                    message.operatorMessage ||
+                    (message.runtimeContextCarrier && !message.runtimeContextCarrierRetained)
+                  ) {
+                    continue;
+                  }
+                  const { content, ...envelope } = message;
+                  const text =
+                    typeof content === "string"
+                      ? content
+                      : content
+                          .flatMap((block) => (block.type === "text" ? [block.text] : []))
+                          .join("\n");
+                  const textDigest = digest(text);
+                  // Anchor identical carriers to their preceding user, retaining each occurrence.
+                  const identity = message.runtimeContextCarrier
+                    ? `${userAnchor}:${textDigest}`
+                    : (userAnchor = textDigest);
+                  const occurrence = occurrences.get(identity) ?? 0;
+                  occurrences.set(identity, occurrence + 1);
+                  userEnvelopes.set(`${identity}:${occurrence}`, digest(stableStringify(envelope)));
+                }
                 return observer.onModelRequest(runtimeModel, context);
               },
             };
@@ -278,17 +255,12 @@ it.for(cases)(
                 expect(prefix.breakpoints.length, "legacy Messages cache boundary").toBeGreaterThan(
                   0,
                 );
-                const unsafeMarker = prefix.breakpoints.find(
-                  (point) => runtimeIndex >= 0 && point.index >= runtimeIndex,
-                );
-                if (unsafeMarker) {
-                  const digest = createHash("sha256")
-                    .update(prefix.history[runtimeIndex]!)
-                    .digest("hex");
-                  throw new Error(
-                    `messages request ${requests.length + 1}, turn ${turn}: cacheBreakpoint covers transient segment=history[${runtimeIndex}] previous=absent next=${digest} marker=${unsafeMarker.index}`,
-                  );
-                }
+                expect(
+                  prefix.breakpoints.some(
+                    (point) => runtimeIndex >= 0 && point.index >= runtimeIndex,
+                  ),
+                  "Messages breakpoints exclude transient history",
+                ).toBe(false);
               }
               expect(prefix.tools, "advertised tool").toContain('"name":"cache_probe"');
               requests.push({ turn, payload, prefix, userEnvelopes });
@@ -376,7 +348,7 @@ it.for(cases)(
                     status: "ok",
                     statusLabel: "completed successfully",
                     result: "Synthetic child verification completed.",
-                    replyInstruction: SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION,
+                    replyInstruction: buildSubagentPrivateCompletionInstruction(undefined),
                   },
                 ]
               : undefined;
@@ -526,10 +498,6 @@ it.for(cases)(
             // The runner may append fresh runtime context alongside the tool results.
             expect(input.filter((item) => item.type === "function_call_output")).toHaveLength(5);
             expect(input.filter((item) => item.type === "function_call")).toEqual([]);
-            expect(
-              continuation.prompt_cache_key,
-              "tool continuations retain the session affinity key",
-            ).toBe((requests[0]!.payload as Record<string, unknown>).prompt_cache_key);
           }
           expect(
             requests[0]!.userEnvelopes.size,

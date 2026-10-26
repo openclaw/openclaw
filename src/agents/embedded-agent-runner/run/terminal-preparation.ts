@@ -11,6 +11,7 @@ import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
 import {
+  filterAgentRunTerminalPayloadsForPresentation,
   prepareAgentRunTerminalReply,
   sanitizeAgentRunTerminalReply,
 } from "../../agent-run-terminal-reply.js";
@@ -142,6 +143,7 @@ export function prepareEmbeddedRunTerminal(input: {
     reportedModelRef.provider === input.provider && reportedModelRef.model === input.model
       ? (input.outerContextTokenMeta.contextTokensSource ?? "resolved")
       : "resolved";
+  const providerRefusal = resolveProviderRefusal(attributionAssistant);
   const agentMeta: EmbeddedAgentMeta = {
     sessionId: input.sessionIdUsed,
     sessionFile: input.sessionFileUsed,
@@ -157,7 +159,13 @@ export function prepareEmbeddedRunTerminal(input: {
         }
       : {}),
     agentHarnessId: attempt.agentHarnessId,
-    providerRefusal: resolveProviderRefusal(attributionAssistant),
+    providerRefusal: providerRefusal
+      ? {
+          ...providerRefusal,
+          accessProgram: attempt.cyberAccessProgram,
+          authProfileId: input.authProfileId,
+        }
+      : undefined,
     ...(attempt.runtimeModelSelection
       ? { runtimeModelSelection: attempt.runtimeModelSelection }
       : {}),
@@ -249,8 +257,6 @@ export function prepareEmbeddedRunTerminal(input: {
     lastToolError: cleanYield ? undefined : attempt.lastToolError,
     config: runParams.config,
     isCronTrigger: runParams.trigger === "cron",
-    // A conversation's continuation keeps conversational silence and failure reporting.
-    isHeartbeatTrigger: runParams.trigger === "heartbeat" && !runParams.continuesConversation,
     sessionKey: runParams.sessionKey ?? runParams.sessionId,
     provider: input.activeErrorContext.provider,
     providerOwner: input.providerOwner,
@@ -359,6 +365,9 @@ export function prepareEmbeddedRunTerminal(input: {
     !attempt.didSendDeterministicApprovalPrompt &&
     !attempt.lastToolError &&
     (attempt.toolMetas?.length ?? 0) === 0;
+  const payloadsForVisibleCompletion = filterAgentRunTerminalPayloadsForPresentation({
+    payloads: recoveredFinalAssistantPayloadsAfterPromptTimeout ?? payloadsWithToolMedia,
+  });
   const attemptToolSummary = buildTraceToolSummary(attempt);
   // Cron execution denials must not look like successful silent completions.
   let failureSignal: EmbeddedRunFailureSignal | undefined;
@@ -393,6 +402,7 @@ export function prepareEmbeddedRunTerminal(input: {
     finalAssistantMessageRawText,
     payloads,
     payloadsWithToolMedia,
+    payloadsForVisibleCompletion,
     timedOutDuringPrompt,
     recoveredFinalAssistantPayloadsAfterPromptTimeout,
     hasSuccessfulFinalAssistantAfterPromptTimeout,

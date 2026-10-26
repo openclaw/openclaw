@@ -67,6 +67,9 @@ it.each([
     return createChannelSetup({
       getContext: () => currentContext,
       clearSelection: () => {},
+      presentWizard: async (pending) => await pending,
+      retire: () => {},
+      startWhatsApp: (force, accountId) => channels.startWhatsApp(force, accountId),
     });
   });
   try {

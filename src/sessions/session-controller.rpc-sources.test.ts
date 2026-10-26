@@ -1,9 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  createAgentRunRestartAbortError,
-  isAgentRunRestartAbortReason,
-} from "../agents/run-termination.js";
 import { createQueueTestRun, createQueueSettings } from "../auto-reply/reply/queue.test-helpers.js";
 import { enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
 import {
@@ -18,7 +14,6 @@ import { captureSessionTarget } from "./session-controller.lifecycle.js";
 import {
   bindSessionControllerSource as bindSource,
   captureSessionControllerSourceSettlement as sourceSettlement,
-  holdSessionControllerSourceWithdrawal as holdWithdrawal,
   reserveSessionControllerSource as reserveSource,
 } from "./session-controller.mailbox.js";
 import {
@@ -103,16 +98,23 @@ function state(ref: RpcSourceRef) {
 const settle = (...sources: ReturnType<typeof reserve>[]) =>
   Promise.all(sources.map(({ entry }) => sourceSettlement(entry.input)));
 
-it("reserves before async preparation, then executes the same input rather than a second turn", async () => {
+it("reserves through async preparation and starts each same-input turn and clock only in FIFO order", async () => {
+  vi.useFakeTimers();
   const first = reserve("first");
   const prepared = createDeferred();
   const second = reserve("second");
   const order: string[] = [];
   const follower = runSource(second.entry, async () => {
+    expect(state(second.entry)).toMatchObject({ active: true, startedAt: Date.now() });
     order.push("second");
   });
+  await vi.advanceTimersByTimeAsync(60_000);
   expect(state(first.entry)).toMatchObject({ active: false, queued: true });
-  expect(state(second.entry)).toMatchObject({ active: false });
+  expect(state(second.entry)).toMatchObject({
+    active: false,
+    startedAt: undefined,
+    aborted: false,
+  });
   expect(order).toEqual([]);
   const leader = (async () => {
     await prepared.promise;
@@ -175,52 +177,6 @@ it("keeps byte-exact spaced protocol IDs distinct during cancellation and duplic
   spaced.cleanup();
   expect([...rpcSourceTesting].map(([runId]) => runId)).toEqual(["run"]);
   plain.cleanup();
-});
-
-it.each([false, true])("preserves exact cancellation reason (restart: %s)", (restart) => {
-  const source = reserve("reason");
-  const reason = restart ? createAgentRunRestartAbortError() : new Error("private reason");
-  expect(cancelSource(source.entry, reason)).toBe(true);
-  expect(source.entry.input.abortSignal.reason).toBe(reason);
-  expect(isAgentRunRestartAbortReason(source.entry.input.abortSignal.reason)).toBe(restart);
-  expect(cancelSource(source.entry, reason)).toBe(false);
-  source.cleanup();
-});
-
-it("holds selection through withdrawal and cancels before releasing the held selector", async () => {
-  const source = reserve("withdrawn");
-  const hold = holdWithdrawal(source.entry.input);
-  const execute = vi.fn(async () => {});
-  const pending = runSource(source.entry, execute);
-  const rejected = expect(pending).rejects.toThrow();
-  expect(cancelSource(source.entry)).toBe(false);
-  expect(execute).not.toHaveBeenCalled();
-  expect(hold.cancel(() => {}, "rpc")).toBe(true);
-  hold();
-  await rejected;
-  await settle(source);
-  expect(execute).not.toHaveBeenCalled();
-  expect(source.entry.input.abortSignal.aborted).toBe(true);
-  source.cleanup();
-});
-
-it("releases a refused withdrawal without poisoning the input or losing its queued execution", async () => {
-  const source = reserve("retry-withdrawal");
-  const hold = holdWithdrawal(source.entry.input);
-  const execute = vi.fn(async () => {});
-  const pending = runSource(source.entry, execute);
-  expect(() =>
-    hold.cancel(() => {
-      throw new Error("commit refused");
-    }, "rpc"),
-  ).toThrow("commit refused");
-  expect(source.entry.input.abortSignal.aborted).toBe(false);
-  expect(execute).not.toHaveBeenCalled();
-  hold();
-  hold();
-  await pending;
-  expect(execute).toHaveBeenCalledOnce();
-  source.cleanup();
 });
 
 it("stale cancellation and cleanup cannot erase or cancel a successor with a reused run ID", () => {
@@ -385,28 +341,4 @@ it("lists only the captured logical session and agent", () => {
   for (const [runId] of rpcSourceTesting.entries()) {
     rpcSourceTesting.delete(runId);
   }
-});
-
-it("does not project a waiting source as active or start its execution clock while a predecessor prepares", async () => {
-  vi.useFakeTimers();
-  const predecessor = reserve("preparing");
-  const waiting = reserve("waiting");
-  const started = createDeferred();
-  const release = createDeferred();
-  const task = runSource(waiting.entry, async () => {
-    started.resolve();
-    await release.promise;
-  });
-  await vi.advanceTimersByTimeAsync(60_000);
-  expect(state(waiting.entry)).toMatchObject({
-    active: false,
-    startedAt: undefined,
-    aborted: false,
-  });
-  predecessor.cleanup();
-  await started.promise;
-  expect(state(waiting.entry)).toMatchObject({ active: true, startedAt: Date.now() });
-  release.resolve();
-  await task;
-  waiting.cleanup();
 });

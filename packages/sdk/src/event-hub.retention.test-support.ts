@@ -8,19 +8,16 @@ type Held = {
   mode: Mode;
   hub: EventHub<Payload>;
   iterator: AsyncIterator<Payload>;
-  refs: Array<{ kind: Payload["kind"]; value: WeakRef<Payload> }>;
+  refs: WeakRef<Payload>[];
 };
 const held: Held[] = [];
 const cleanupErrors: string[] = [];
-const reason = (error: unknown) =>
-  error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-
 function publishWeak(hub: EventHub<Payload>, kind: Payload["kind"]) {
   // This activation owns the only temporary strong payload reference.
   const payload: Payload = { kind };
   const value = new WeakRef(payload);
   hub.publish(payload);
-  return { kind, value };
+  return value;
 }
 
 async function prepare(mode: Mode) {
@@ -65,17 +62,16 @@ try {
     gc();
     await setImmediate();
   }
-  const observations = held.flatMap(({ mode, refs }) =>
-    refs.map(({ kind, value }) => ({ mode, kind, retained: value.deref() !== undefined })),
-  );
   assert.equal(control.deref(), undefined, "Uncached control retained; no retention conclusion");
   for (const { mode, iterator, refs } of held) {
     if (mode === "hub-close") {
-      const expected = refs[0]?.value.deref();
+      const expected = refs[0]?.deref();
       assert.ok(expected, "Hub close must retain its unread event for draining");
       const next = await iterator.next();
       assert.equal(next.done, false);
       assert.equal(next.value, expected);
+    } else {
+      refs.forEach((ref) => assert.equal(ref.deref(), undefined, mode));
     }
     if (mode === "filter-error") {
       await assert.rejects(iterator.next(), /synthetic filter retirement/);
@@ -83,18 +79,15 @@ try {
       assert.deepEqual(await iterator.next(), { done: true, value: undefined });
     }
   }
-  assert.deepEqual(
-    observations.filter(({ mode, retained }) => mode !== "hub-close" && retained),
-    [],
-    "Retired iterators must release backlog and reentrant payloads",
-  );
   passed = true;
 } finally {
   for (const { hub, iterator } of held) {
     try {
       await iterator.return?.();
     } catch (error) {
-      cleanupErrors.push(reason(error));
+      cleanupErrors.push(
+        error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      );
     } finally {
       hub.close();
     }

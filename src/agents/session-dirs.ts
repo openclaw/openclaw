@@ -8,10 +8,13 @@ function mapAgentSessionDirs(
   entries: Dirent[],
   includeDirName?: (dirName: string) => boolean,
 ): string[] {
-  return entries
-    .filter((entry) => entry.isDirectory() && (includeDirName?.(entry.name) ?? true))
-    .map((entry) => path.join(agentsDir, entry.name, "sessions"))
-    .toSorted((a, b) => a.localeCompare(b));
+  return (
+    entries
+      .filter((entry) => entry.isDirectory() && (includeDirName?.(entry.name) ?? true))
+      .map((entry) => path.join(agentsDir, entry.name, "sessions"))
+      // oxlint-disable-next-line unicorn/no-array-sort -- map creates a private array of session paths.
+      .sort((a, b) => a.localeCompare(b))
+  );
 }
 
 export function resolveAgentSessionDirsFromAgentsDirSync(

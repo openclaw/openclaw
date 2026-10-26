@@ -1,13 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
-import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { startOpenAiResponsesModelServer } from "../../../helpers/openai-responses-model-fixture.js";
 import { createDeferred } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
-  listenLoopback,
   messageText,
   sendChat,
   waitForRun,
@@ -35,25 +34,18 @@ type ProviderProof = {
   responseReleasedAt?: number;
 };
 
-function writeProgress(phase: string, details: Record<string, unknown> = {}): void {
+function writeProgress(phase: string): void {
   // E2E runs suppress console output. The worker fd reaches the runner's silence watchdog.
-  writeSync(2, `${JSON.stringify({ phase, ...details })}\n`);
+  writeSync(2, `${JSON.stringify({ phase })}\n`);
 }
 
 async function startControlledProvider() {
   const responseGate = createDeferred();
   const proof: ProviderProof = {};
-  const server = createServer((request, response) => {
-    void (async () => {
-      if (request.method === "GET" && request.url === "/v1/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ data: [{ id: "gpt-5.6-luna", object: "model" }] }));
-        return;
-      }
-      if (request.method !== "POST" || request.url !== "/v1/responses") {
-        response.writeHead(404).end();
-        return;
-      }
+  const server = await startOpenAiResponsesModelServer({
+    modelId: "gpt-5.6-luna",
+    bindError: "controlled provider did not bind a loopback port",
+    onRequest: async (request, response) => {
       for await (const chunk of request) {
         // Consume the real provider request before holding its response open.
         void chunk;
@@ -72,24 +64,15 @@ async function startControlledProvider() {
         "provider-timeout-recovery-proof-message",
         "provider-timeout-recovery-proof-response",
       );
-    })().catch((error: unknown) => {
-      if (!response.headersSent) {
-        response.writeHead(500);
-      }
-      response.end(error instanceof Error ? error.message : String(error));
-    });
+    },
   });
-  const baseUrl = await listenLoopback(server, "controlled provider did not bind a loopback port");
   return {
-    baseUrl,
+    baseUrl: server.baseUrl,
     proof,
     release: () => responseGate.resolve(),
     stop: async () => {
       responseGate.resolve();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server.close();
     },
   };
 }
@@ -100,9 +83,14 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
     let provider: Awaited<ReturnType<typeof startControlledProvider>>;
     let gateway: QaGatewayChild;
     const cleanups: Array<() => Promise<void>> = [];
+    const stability = (sinceSeq?: number) =>
+      gateway.call(
+        "diagnostics.stability",
+        { limit: 1000, ...(sinceSeq === undefined ? {} : { sinceSeq }) },
+        { timeoutMs: 10_000 },
+      ) as Promise<StabilitySnapshot>;
 
     afterAll(async () => {
-      const startedAt = Date.now();
       writeProgress("fixture-cleanup-started");
       const errors: unknown[] = [];
       for (const cleanup of cleanups.splice(0).toReversed()) {
@@ -112,10 +100,7 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
           errors.push(error);
         }
       }
-      writeProgress("fixture-cleanup-complete", {
-        elapsedMs: Date.now() - startedAt,
-        errors: errors.length,
-      });
+      writeProgress("fixture-cleanup-complete");
       if (errors.length === 1) {
         throw errors[0];
       }
@@ -127,7 +112,6 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
     // Vitest gives fixture hooks their own bounded budget; the unchanged test
     // deadline starts only after Gateway bootstrap has completed.
     beforeAll(async () => {
-      const startedAt = Date.now();
       writeProgress("fixture-bootstrap-started");
       provider = await startControlledProvider();
       cleanups.push(() => provider.stop());
@@ -165,18 +149,14 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
         },
       });
 
-      writeProgress("fixture-bootstrap-complete", { elapsedMs: Date.now() - startedAt });
+      writeProgress("fixture-bootstrap-complete");
     });
 
     it(
       "keeps a quiet provider request alive past recovery and completes within its allowance",
       { timeout: TEST_TIMEOUT_MS },
       async ({ signal }) => {
-        const baseline = (await gateway.call(
-          "diagnostics.stability",
-          { limit: 1000 },
-          { timeoutMs: 10_000 },
-        )) as StabilitySnapshot;
+        const baseline = await stability();
         const baselineSeq = typeof baseline.lastSeq === "number" ? baseline.lastSeq : 0;
         const sessionKey = `agent:qa:provider-timeout-recovery-${randomUUID()}`;
         const started = await sendChat(
@@ -187,36 +167,24 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
         expect(started).toMatchObject({ status: "started" });
         expect(typeof started.runId).toBe("string");
 
-        const admissionStartedAt = Date.now();
-        let nextAdmissionProgressAt = admissionStartedAt;
+        let nextAdmissionProgressAt = Date.now();
         while (provider.proof.requestStartedAt === undefined) {
           if (Date.now() >= nextAdmissionProgressAt) {
-            writeProgress("provider-request-pending", {
-              elapsedMs: Date.now() - admissionStartedAt,
-            });
+            writeProgress("provider-request-pending");
             nextAdmissionProgressAt = Date.now() + 60_000;
           }
           await sleep(100, undefined, { signal });
         }
         while (Date.now() - provider.proof.requestStartedAt < CHECKPOINT_AFTER_FLOOR_MS) {
           const elapsedMs = Date.now() - provider.proof.requestStartedAt;
-          writeProgress("provider-request-active", {
-            elapsedMs,
-            globalRecoveryFloorMs: GLOBAL_RECOVERY_FLOOR_MS,
-            providerAllowanceMs: PROVIDER_ALLOWANCE_MS,
-            clientClosed: provider.proof.clientClosedAt !== undefined,
-          });
+          writeProgress("provider-request-active");
           await sleep(Math.min(60_000, CHECKPOINT_AFTER_FLOOR_MS - elapsedMs), undefined, {
             signal,
           });
         }
 
         const checkpointElapsedMs = Date.now() - provider.proof.requestStartedAt;
-        const checkpoint = (await gateway.call(
-          "diagnostics.stability",
-          { limit: 1000, sinceSeq: baselineSeq },
-          { timeoutMs: 10_000 },
-        )) as StabilitySnapshot;
+        const checkpoint = await stability(baselineSeq);
         const recoveryEvents = (checkpoint.events ?? []).filter(
           (event) =>
             event.type === "session.recovery.requested" ||
@@ -227,7 +195,7 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
         expect(provider.proof.clientClosedAt).toBeUndefined();
         expect(recoveryEvents).toEqual([]);
 
-        writeProgress("provider-checkpoint-complete", { checkpointElapsedMs });
+        writeProgress("provider-checkpoint-complete");
         provider.release();
         const terminal = await waitForRun(gateway, started.runId);
         expect(terminal.status).toBe("ok");
@@ -242,12 +210,7 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
           ),
         ).toBe(true);
 
-        writeProgress("provider-timeout-recovery-proof-complete", {
-          head: process.env.OPENCLAW_PROOF_HEAD_SHA ?? process.env.GITHUB_SHA ?? "local-checkout",
-          checkpointElapsedMs,
-          terminalStatus: terminal.status,
-          marker: RESPONSE_MARKER,
-        });
+        writeProgress("provider-timeout-recovery-proof-complete");
       },
     );
   },

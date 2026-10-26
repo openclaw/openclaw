@@ -60,6 +60,19 @@ describe("Control UI accent presentation", () => {
       }
       expect(reads).not.toHaveBeenCalled();
 
+      for (const property of [
+        "--shell-viewport-height",
+        "--shell-safe-area-bottom",
+        ...["assistant", "terminal", "browser", "link-reader", "desktop"].flatMap((owner) => [
+          `--oc-${owner}-reserve-bottom`,
+          `--oc-${owner}-reserve-right`,
+        ]),
+      ]) {
+        root.style.setProperty(property, "123px");
+        syncControlUiSystemChrome();
+      }
+      expect(reads).not.toHaveBeenCalled();
+
       narrow = true;
       syncControlUiSystemChrome();
       expectChrome("#203040");

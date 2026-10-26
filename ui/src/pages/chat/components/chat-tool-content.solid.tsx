@@ -1,9 +1,13 @@
-import { createSignal, lazy, Loading, Show } from "solid-js";
+import { createSignal, lazy, Show } from "solid-js";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import type { ToolRenderOptions } from "./chat-tool-render-model.ts";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 const ExpandedContent = lazy(() => import("./chat-tool-expanded.solid.tsx"), {
   export: "ExpandedToolCardContent",
@@ -11,9 +15,9 @@ const ExpandedContent = lazy(() => import("./chat-tool-expanded.solid.tsx"), {
 
 export function ExpandedToolCardContent(props: { card: ToolCard; options: ToolRenderOptions }) {
   return (
-    <Loading>
+    <ChatLazyBoundary>
       <ExpandedContent {...props} />
-    </Loading>
+    </ChatLazyBoundary>
   );
 }
 
@@ -37,7 +41,9 @@ export function RawOutputToggle(props: {
         </span>
       </button>
       <div class="chat-tool-card__raw-body" hidden={!open()}>
-        <ToolDataBlock text={props.text} />
+        <Show when={open()}>
+          <ToolDataBlock text={props.text} />
+        </Show>
       </div>
     </div>
   );

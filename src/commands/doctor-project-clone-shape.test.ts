@@ -3,12 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import { runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { expectText } from "../test-utils/text-assertions.js";
 
 const execFileAsync = promisify(execFile);
 const checkId = "core/doctor/project-clone-shape";
@@ -18,134 +19,130 @@ async function git(root: string, ...args: string[]): Promise<string> {
   return (await execFileAsync("git", ["-C", root, ...args])).stdout.trim();
 }
 
-it.each(["full", "partial", "shallow", "both", "missing"])(
-  "inspects only registry clones and reports %s clone repair",
-  async (shape) => {
-    await withOpenClawTestState({ prefix: "openclaw-doctor-clones-" }, async (state) => {
-      const userInfo = ["user", ["synthetic", "secret"].join("-")].join(":");
-      const prefixes = ["https://", "https::https://", "", "odd_scheme://"];
-      const remote = (prefix: string, auth: string) =>
-        `${prefix}${auth}@example.invalid${prefix ? "/" : ":org/"}project.git`;
-      const urlKeys = prefixes.flatMap((prefix) =>
-        ["promisor", "partialclonefilter"].map(
-          (field) =>
-            `remote.${remote(prefix, userInfo)}?opaque=query-private#fragment-private.${field}`,
-        ),
-      );
-      const source = state.path("source");
-      await git(state.root, "init", "-b", "main", source);
-      await git(source, "config", "user.name", "OpenClaw Test");
-      await git(source, "config", "user.email", "test@example.invalid");
-      for (const content of ["first", "second"]) {
-        await fs.writeFile(path.join(source, "README.md"), `${content}\n`);
-        await git(source, "add", ".");
-        await git(source, "commit", "-m", content);
-      }
-      const origin = state.path("origin.git");
-      await git(state.root, "clone", "--bare", source, origin);
-      await git(origin, "config", "uploadpack.allowFilter", "true");
-      const originUrl = pathToFileURL(origin).href;
-      const cloneInto = (destination: string, ...flags: string[]) =>
-        git(state.root, "clone", ...flags, originUrl, destination);
-      const ignored = state.path("workspace");
-      await cloneInto(ignored, "--filter=blob:none");
-      const cfg = { agents: { defaults: { workspace: ignored } } };
-      const clone = state.path("project's clone");
-      const partial = shape === "partial" || shape === "both";
-      const shallow = shape === "shallow" || shape === "both";
-      await cloneInto(
-        clone,
-        ...(partial ? ["--filter=blob:none"] : []),
-        ...(shallow ? ["--depth=1"] : []),
-      );
-      await registerClonedProjectRegistry({ path: clone, name: "Stored project", originUrl });
-      await registerProjectRegistry({ path: ignored, name: "User checkout" });
-      if (shape === "both") {
-        for (const key of urlKeys) {
-          await git(clone, "config", key, key.endsWith(".promisor") ? "true" : "blob:none");
-        }
-        await git(clone, "config", "extensions.partialclone", "origin");
-      }
-      const configBefore = await fs.readFile(path.join(clone, ".git", "config"), "utf8");
-      if (shape === "missing") {
-        await fs.rm(clone, { recursive: true, force: true });
-      }
-      const checks = (await resolveDoctorContributionHealthChecks()).filter(
-        (check) => check.id === checkId,
-      );
-      const detect = async () =>
-        (
-          await runDoctorLintChecks(
-            { mode: "lint", cfg, runtime },
-            { checks, includeAllChecks: true },
-          )
-        ).findings;
-      const findings = await detect();
-      if (shape === "full") {
-        expect(findings).toEqual([]);
-        return;
-      }
-      expect(findings).toHaveLength(1);
-      const finding = findings[0]!;
-      expect(finding).toMatchObject({ checkId, severity: "warning", path: clone });
-      expect(finding.message).toContain("Stored project");
-      if (shape === "missing") {
-        expect(finding.message).toContain("Skipped");
-        return;
-      }
-      expect(finding.message).toContain(`shallow=${shallow}`);
-      if (partial) {
-        expect(finding.message).toContain("remote.origin.promisor");
-        expect(finding.message).toContain("remote.origin.partialclonefilter");
-      }
-      if (shape === "both") {
-        for (const output of [finding.message, finding.path, finding.fixHint]) {
-          for (const credential of [
-            "user:",
-            "synthetic-secret",
-            "query-private",
-            "fragment-private",
-          ]) {
-            expect(output).not.toContain(credential);
-          }
-        }
-        for (const prefix of prefixes) {
-          for (const field of ["promisor", "partialclonefilter"]) {
-            expect(finding.message).toContain(`remote.${remote(prefix, "***")}.${field}`);
-          }
-        }
-        expect(finding.message).toContain("extensions.partialclone");
-        for (const command of [
-          "git config --get-regexp '^remote\\..*\\.(promisor|partialclonefilter)$'",
-          "git config --unset-all <the key shown by that command>",
-          "git config --unset-all remote.origin.partialclonefilter",
-          "git config --unset-all remote.origin.promisor",
-        ]) {
-          expect(finding.fixHint).toContain(command);
-        }
-        expect(finding.fixHint).not.toMatch(/git config --unset-all .*(?::\/\/|::|@)/);
-      }
-      expect(await fs.readFile(path.join(clone, ".git", "config"), "utf8")).toBe(configBefore);
-      expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe(String(shallow));
-      if (shape === "both") {
-        // URL-keyed entries must be removed locally, never printed with credentials.
-        const localKeys = await git(
-          clone,
-          "config",
-          "--name-only",
-          "--get-regexp",
-          "^remote\\..*\\.(promisor|partialclonefilter)$",
+describe("doctor project clone shape", () => {
+  it.each(["full", "partial", "shallow", "both", "missing"])(
+    "inspects only registry clones and reports %s clone repair",
+    async (shape) => {
+      await withOpenClawTestState({ prefix: "openclaw-doctor-clones-" }, async (state) => {
+        const address = "example.invalid/project.git?opaque=query-private#fragment-private";
+        const userInfo = "user:synthetic-secret"; // Synthetic redaction fixture.
+        const addressRemotes = [
+          `https://${userInfo}@${address}`,
+          `https::https://${userInfo}@${address}`,
+          `${userInfo}@example.invalid:org/project.git?opaque=query-private#fragment-private`,
+          `odd_scheme://${userInfo}@${address}`,
+        ];
+        const urlKeys = addressRemotes.flatMap((remote) =>
+          ["promisor", "partialclonefilter"].map((field) => `remote.${remote}.${field}`),
         );
-        for (const key of urlKeys) {
-          expect(localKeys.split("\n")).toContain(key);
-          await git(clone, "config", "--unset-all", key);
+        const source = state.path("source");
+        await git(state.root, "init", "-b", "main", source);
+        await git(source, "config", "user.name", "OpenClaw Test");
+        await git(source, "config", "user.email", "test@example.invalid");
+        for (const content of ["first", "second"]) {
+          await fs.writeFile(path.join(source, "README.md"), `${content}\n`);
+          await git(source, "add", ".");
+          await git(source, "commit", "-m", content);
         }
-      }
-      await execFileAsync("sh", ["-ec", finding.fixHint!.split("\n").slice(1, -1).join("\n")]);
-      expect(await detect()).toEqual([]);
-      expect(await git(clone, "rev-list", "--objects", "--missing=print", "--all")).not.toMatch(
-        /^\?/m,
-      );
-    });
-  },
-);
+        const origin = state.path("origin.git");
+        await git(state.root, "clone", "--bare", source, origin);
+        await git(origin, "config", "uploadpack.allowFilter", "true");
+        const originUrl = pathToFileURL(origin).href;
+        const ignored = state.path("workspace");
+        await git(state.root, "clone", "--filter=blob:none", originUrl, ignored);
+        const cfg = { agents: { defaults: { workspace: ignored } } };
+        const clone = state.path("project's clone");
+        const partial = shape === "partial" || shape === "both";
+        const shallow = shape === "shallow" || shape === "both";
+        await git(
+          state.root,
+          "clone",
+          ...(partial ? ["--filter=blob:none"] : []),
+          ...(shallow ? ["--depth=1"] : []),
+          originUrl,
+          clone,
+        );
+        await registerClonedProjectRegistry({ path: clone, name: "Stored project", originUrl });
+        await registerProjectRegistry({ path: ignored, name: "User checkout" });
+        if (shape === "both") {
+          for (const key of urlKeys) {
+            await git(clone, "config", key, key.endsWith(".promisor") ? "true" : "blob:none");
+          }
+          await git(clone, "config", "extensions.partialclone", "origin");
+        }
+        const configBefore = await fs.readFile(path.join(clone, ".git", "config"), "utf8");
+        if (shape === "missing") {
+          await fs.rm(clone, { recursive: true, force: true });
+        }
+        const checks = (await resolveDoctorContributionHealthChecks()).filter(
+          (check) => check.id === checkId,
+        );
+        const detect = async () =>
+          (
+            await runDoctorLintChecks(
+              { mode: "lint", cfg, runtime },
+              { checks, includeAllChecks: true },
+            )
+          ).findings;
+        const findings = await detect();
+        if (shape === "full") {
+          expect(findings).toEqual([]);
+          return;
+        }
+        expect(findings).toHaveLength(1);
+        const finding = findings[0]!;
+        expect(finding).toMatchObject({
+          severity: "warning",
+          category: shape === "missing" ? "fix-now" : "recommended",
+          path: clone,
+        });
+        expect(finding.message).toContain("Stored project");
+        if (shape === "missing") {
+          expect(finding.message).toContain("Skipped");
+          return;
+        }
+        expect(finding.message).toContain(`shallow=${shallow}`);
+        if (partial) {
+          expectText(finding.message, [
+            "remote.origin.promisor",
+            "remote.origin.partialclonefilter",
+          ]);
+        }
+        if (shape === "both") {
+          expectText(
+            [finding.message, finding.path, finding.fixHint].join("\n"),
+            [],
+            ["user:", "synthetic-secret", "query-private", "fragment-private"],
+          );
+          expectText(finding.message, [
+            "https://***@example.invalid/project.git",
+            "https::https://***@example.invalid/project.git",
+            "***@example.invalid:org/project.git",
+            "odd_scheme://***@example.invalid/project.git",
+            "extensions.partialclone",
+          ]);
+          expectText(finding.fixHint!, [
+            "git config --get-regexp '^remote\\..*\\.(promisor|partialclonefilter)$'",
+            "git config --unset-all <the key shown by that command>",
+            "git config --unset-all remote.origin.partialclonefilter",
+            "git config --unset-all remote.origin.promisor",
+          ]);
+          expect(finding.fixHint).not.toMatch(/git config --unset-all .*(?::\/\/|::|@)/);
+        }
+        expect(await fs.readFile(path.join(clone, ".git", "config"), "utf8")).toBe(configBefore);
+        expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe(String(shallow));
+        if (shape === "both") {
+          for (const key of urlKeys) {
+            await git(clone, "config", "--unset-all", key);
+          }
+        }
+        // Exercise the printed operator commands against the local origin.
+        await execFileAsync("sh", ["-ec", finding.fixHint!.split("\n").slice(1, -1).join("\n")]);
+        expect(await detect()).toEqual([]);
+        expect(await git(clone, "rev-list", "--objects", "--missing=print", "--all")).not.toMatch(
+          /^\?/m,
+        );
+      });
+    },
+  );
+});

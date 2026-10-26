@@ -3,20 +3,21 @@ import {
   createOpenAIResponsesTransportStreamFn,
   requestPreparedOpenAIResponsesCompaction,
 } from "@openclaw/ai/transports";
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import type { Context, Model, ModelRequestHeaders } from "openclaw/plugin-sdk/llm";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, expect, it, vi } from "vitest";
 import { wrapXaiProviderStream } from "./stream.js";
+import { captureXaiRequest, xaiModel } from "./test-helpers.js";
 
-const sdkState = vi.hoisted(() => ({
-  clients: [] as Array<Record<string, unknown>>,
-  post: vi.fn(),
-}));
+const sdkState = vi.hoisted(() => {
+  const clients: Array<{ defaultHeaders?: ModelRequestHeaders }> = [];
+  return { clients, post: vi.fn() };
+});
 
 vi.mock("openai", () => {
   class MockOpenAI {
-    constructor(options: Record<string, unknown>) {
+    constructor(options: { defaultHeaders?: ModelRequestHeaders }) {
       sdkState.clients.push(options);
     }
 
@@ -25,30 +26,22 @@ vi.mock("openai", () => {
   return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
 });
 
-const model = {
+const model = xaiModel({
   id: "grok-4",
-  name: "Grok 4",
-  api: "openai-responses",
-  provider: "xai",
   baseUrl: "https://api.x.ai/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 256_000,
-  maxTokens: 8_192,
-} satisfies Model<"openai-responses">;
+});
 
 function prepareRequests(
   context: Context,
   targetModel: Model<"openai-responses"> = model,
   wrapper: { fastMode?: boolean; clientVersion?: string } = {},
 ) {
-  const streamFn: StreamFn | undefined = wrapXaiProviderStream(
+  const streamFn = wrapXaiProviderStream(
     {
       streamFn: createOpenAIResponsesTransportStreamFn(),
       extraParams: { fastMode: wrapper.fastMode, tool_stream: false },
     } as never,
-    { clientVersion: wrapper.clientVersion },
+    wrapper,
   );
   if (!streamFn) {
     throw new Error("expected xAI stream wrapper");
@@ -116,33 +109,46 @@ it("compacts and replays through the legacy xAI fast-mode wrapper", async () => 
   context.messages.push({ role: "user", content: "What was the code?", timestamp: 3 });
   const replayPayload = await requests.replay();
 
-  expect(replayPayload?.model).toBe("grok-4-fast");
-  // Normal replay carries the system prompt in instructions, not compaction input.
-  expect(replayPayload?.instructions).toBe("Retain the conversation.");
-  expect(replayPayload?.input).toEqual([
-    expect.objectContaining({ type: "compaction", encrypted_content: "opaque" }),
-    expect.objectContaining({ role: "user", type: "message" }),
-  ]);
+  expect(replayPayload).toMatchObject({
+    model: "grok-4-fast",
+    instructions: "Retain the conversation.",
+    input: [
+      { type: "compaction", encrypted_content: "opaque" },
+      { role: "user", type: "message" },
+    ],
+  });
   expect(JSON.stringify(replayPayload)).not.toContain("NORTH-COPPER-17");
 });
 
 it("uses the same OAuth proxy headers as a normal turn", async () => {
+  const target = xaiModel({
+    id: "grok-4.7",
+    name: "Subscription default",
+    input: ["text"],
+    params: { canonicalModelId: "grok-fixture-unselected" },
+    baseUrl: "https://cli-chat-proxy.grok.com/v1",
+  });
+  const contract = {
+    "x-grok-client-version": "2026.7.2",
+    "x-grok-model-override": target.id,
+    "X-XAI-Token-Auth": "xai-grok-cli",
+  };
+  const captured = captureXaiRequest(target, {
+    extraParams: { tool_stream: false },
+    headers: { "X-XAI-Token-Auth": "operator-value", "X-Existing": "kept", "x-delete": null },
+  });
+  expect(captured.modelId).toBe(target.id);
+  expect(captured.headers).toEqual({ "X-Existing": "kept", "x-delete": null, ...contract });
   const requests = prepareRequests(
     { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
-    { ...model, id: "grok-4.5", baseUrl: "https://cli-chat-proxy.grok.com/v1" },
+    target,
     { clientVersion: "2026.7.2" },
   );
   await requests.compact();
-  const compactHeaders = sdkState.clients[0]?.defaultHeaders;
-
   await requests.replay();
-  const normalHeaders = sdkState.clients[1]?.defaultHeaders;
-
+  const [compactHeaders, normalHeaders] = sdkState.clients.map((client) => client.defaultHeaders);
   expect(compactHeaders).toEqual(normalHeaders);
-  expect(compactHeaders).toMatchObject({
-    "x-existing": "kept",
-    "x-grok-client-version": "2026.7.2",
-    "x-grok-model-override": "grok-4.5",
-    "x-xai-token-auth": "xai-grok-cli",
-  });
+  expect(Object.fromEntries(new Headers(omitNullRequestHeaders(compactHeaders)))).toMatchObject(
+    Object.fromEntries(new Headers({ "X-Existing": "kept", ...contract })),
+  );
 });

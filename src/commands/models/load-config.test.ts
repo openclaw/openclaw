@@ -10,16 +10,14 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Model-command fixtures control source and runtime snapshots without loading operator state.
-vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
-  loadConfig: mocks.getRuntimeConfig,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
-    async () =>
-      mocks.getRuntimeConfig(...args),
-  getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
-  setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
-}));
+vi.mock("../../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "getRuntimeConfig"),
+    getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
+    setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
+  };
+});
 
 vi.mock("../../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
@@ -29,7 +27,7 @@ vi.mock("../../cli/command-secret-targets.js", () => ({
   getModelsCommandSecretTargetIds: mocks.getModelsCommandSecretTargetIds,
 }));
 
-import { loadModelsConfig, loadModelsConfigWithSource } from "./load-config.js";
+import { loadModelsConfig } from "./load-config.js";
 
 describe("models load-config", () => {
   const configWithKey = (apiKey: unknown) => ({ models: { providers: { openai: { apiKey } } } });
@@ -53,7 +51,7 @@ describe("models load-config", () => {
   ] as const)("resolves secrets and preserves the %s source snapshot", async (_label, source) => {
     mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(source);
     const runtime = createTestRuntime();
-    const result = await loadModelsConfigWithSource({ commandName: "models list", runtime });
+    const result = await loadModelsConfig({ commandName: "models list", runtime });
     const expectedSource = source ?? runtimeConfig;
     expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith({
       config: runtimeConfig,
@@ -63,8 +61,7 @@ describe("models load-config", () => {
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, expectedSource);
     expect(runtime.error.mock.calls).toEqual([["[secrets] diag-one"], ["[secrets] diag-two"]]);
     expect(runtime.log).not.toHaveBeenCalled();
-    expect(result).toEqual({ sourceConfig: expectedSource, resolvedConfig, diagnostics });
-    expect(result.sourceConfig).toBe(expectedSource);
+    expect(result).toBe(resolvedConfig);
   });
 
   it.each([false, true])("loads the resolved config with skipPluginValidation=%s", async (skip) => {

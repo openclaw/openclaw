@@ -2,6 +2,7 @@ import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
+import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { ChatDetails } from "./chat-details.tsx";
 
@@ -15,26 +16,17 @@ it("keeps Details in the mobile host through opening, parking, and returning", a
   const navigate = vi.fn();
   let details: ChatDetails | undefined;
   mountSolid(() => {
-    const [host, setHost] = createSignal<ChatMobileHost>({
-      scopeKey: "details-mobile",
-      open: true,
-      suspended: false,
-      mode: "dock",
-      height: 280,
-      reservedHeight: 280,
-      destination: { area: "details" },
-      detailsMount: target,
-      setDetailsMount() {},
-      navigate,
-      reveal() {},
-      close,
-      back() {},
-      toggleExpanded() {},
-      resize() {},
-      keyboardVisible: false,
-      onComposerEditingChange() {},
-      onViewportChange() {},
-    });
+    const [host, setHost] = createSignal<ChatMobileHost>(
+      createChatMobileHostFixture("details-mobile", {
+        open: true,
+        height: 280,
+        reservedHeight: 280,
+        destination: { area: "details" },
+        detailsMount: target,
+        navigate,
+        close,
+      }),
+    );
     updateHost = (patch) => setHost((previous) => ({ ...previous, ...patch }));
     return createComponent(ChatDetails, {
       chat: {

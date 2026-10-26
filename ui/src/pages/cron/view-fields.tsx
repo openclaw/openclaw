@@ -71,6 +71,11 @@ export function focusFormField(props: string) {
   if (!(el instanceof HTMLElement)) {
     return;
   }
+  // Advanced fields cannot be scrolled to or focused while their disclosure is closed.
+  const details = el.closest("details");
+  if (details) {
+    details.open = true;
+  }
   el.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
   el.focus();
 }
@@ -112,7 +117,7 @@ export function FieldRow(props: {
             <div class={["cron-control", { "cron-control--wide": props.wide }]}>
               {props.control}
               {props.error ? (
-                <div id={props.errorId} class="cron-help cron-error">
+                <div id={props.errorId} class="cron-help cron-error" role="alert">
                   {t(props.error)}
                 </div>
               ) : undefined}

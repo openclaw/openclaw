@@ -1,13 +1,15 @@
-import { execFile } from "node:child_process";
-import { once } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import tls from "node:tls";
-import { promisify } from "node:util";
 import { expect, it } from "vitest";
+import * as httpFixtures from "../../../test/helpers/gateway-integration-fixtures.js";
+import {
+  PROXY_FIXTURE_CERTIFICATE as cert,
+  PROXY_FIXTURE_KEY as key,
+} from "../../test-helpers/proxy-tls-fixture.js";
 import { invokeRemoteNativeHookRelay as invokeRelay } from "./native-hook-relay-remote-client.js";
 
 it("verifies TLS and sends only the relay capability; refuses redirects and bounds responses", async () => {
@@ -16,53 +18,34 @@ it("verifies TLS and sends only the relay capability; refuses redirects and boun
   let received = 0;
   const requests: Promise<void>[] = [];
   let mode = "ok";
-  await promisify(execFile)("openssl", [
-    ..."req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost".split(" "),
-    "-addext",
-    "subjectAltName=IP:127.0.0.1",
-    "-keyout",
-    path.join(dir, "key.pem"),
-    "-out",
-    path.join(dir, "cert.pem"),
-  ]);
-  const cert = await readFile(path.join(dir, "cert.pem"), "utf8");
-  const server = createServer(
-    { key: await readFile(path.join(dir, "key.pem")), cert },
-    (req, res) => {
-      const request = (async () => {
-        received++;
-        expect(req).toMatchObject({
-          headers: { authorization: "Bearer synthetic-relay-capability" },
-          url: "/__openclaw__/native-hook/relay",
-        });
-        expect(JSON.parse((await buffer(req)).toString())).toMatchObject({
-          generation: "current",
-          relayId: "relay",
-        });
-        if (mode === "hang") {
-          return;
-        }
-        res.writeHead(mode === "redirect" ? 302 : 200, {
-          location: "https://127.0.0.1/never-follow",
-        });
-        res.end(
-          mode === "large"
-            ? "x".repeat(1024 * 1024 + 1)
-            : JSON.stringify({ ok: true, result: { stdout: "allow", stderr: "", exitCode: 0 } }),
-        );
-      })();
-      requests.push(request);
-      void request.catch(() => res.destroy());
-    },
-  );
+  const server = createServer({ key, cert }, (req, res) => {
+    const request = (async () => {
+      received++;
+      expect(req).toMatchObject({
+        headers: { authorization: "Bearer synthetic-relay-capability" },
+        url: "/__openclaw__/native-hook/relay",
+      });
+      expect(JSON.parse((await buffer(req)).toString())).toMatchObject({
+        generation: "current",
+        relayId: "relay",
+      });
+      if (mode === "hang") {
+        return;
+      }
+      res.writeHead(mode === "redirect" ? 302 : 200, {
+        location: "https://127.0.0.1/never-follow",
+      });
+      res.end(
+        mode === "large"
+          ? "x".repeat(1024 * 1024 + 1)
+          : JSON.stringify({ ok: true, result: { stdout: "allow", stderr: "", exitCode: 0 } }),
+      );
+    })();
+    requests.push(request);
+    void request.catch(() => res.destroy());
+  });
   try {
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing address");
-    }
-    const url = `https://127.0.0.1:${address.port}/__openclaw__/native-hook/relay`;
+    const url = `${await httpFixtures.listenLoopback(server, "https")}/__openclaw__/native-hook/relay`;
     const credential = path.join(dir, "credential.json");
     const save = (target: string) =>
       writeFile(credential, JSON.stringify({ url: target, token: "synthetic-relay-capability" }));

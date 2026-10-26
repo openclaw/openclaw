@@ -251,11 +251,19 @@ function renderCatalogGroup(
   const hasActiveRun = createMemo(() => activity().running);
   const hasUnread = createMemo(() => activity().unread);
   const hasBrandIcon = createMemo(() => hasProviderBrandIcon(readCatalog().id));
-  const loadingMore = createMemo(() => params.snapshot.loadingMoreCatalogIds.has(readCatalog().id));
+  const loadingMore = createMemo(
+    () =>
+      params.snapshot.loadingMoreCatalogIds.has(readCatalog().id) ||
+      Boolean(
+        readCatalog().requiresFreshList &&
+        (readCatalog().pending || readCatalog().hosts.some((host) => host.pending)),
+      ),
+  );
   const hasMore = createMemo(() => readCatalog().hosts.some((host) => Boolean(host.nextCursor)));
   const canCreateSession = createMemo(() => readCatalog().capabilities.startTerminal === true);
   const errorMessages = createMemo(() => catalogErrorMessages(readCatalog()));
   const hasError = createMemo(() => errorMessages().length > 0);
+  const retryFresh = () => readCatalog().requiresFreshList && hasError();
   const errorMessage = createMemo(() => errorMessages().join("; "));
   const errorHelp = createMemo(() =>
     t("chat.sidebar.catalogDiscoveryHelp", {
@@ -319,11 +327,6 @@ function renderCatalogGroup(
         disabledReason={sectionDragDisabledReason()}
         onStartDrag={(id) => params.host.sessionOrganizer.startSidebarSectionDrag(id)}
         onFinishDrag={() => params.host.sessionOrganizer.finishSidebarSectionDrag()}
-        reorder={{
-          label: readCatalog().label,
-          onMove: (target: string, position: "before" | "after") =>
-            params.host.sessionOrganizer.reorderSidebarSection(sectionId(), target, position),
-        }}
         onContextMenu={(event) => {
           event.preventDefault();
           params.host.sidebarMenus.openCatalogViewMenu(
@@ -424,7 +427,7 @@ function renderCatalogGroup(
               {(host) => renderCatalogHostGroup(readCatalog, host, readLiveRowsByKey, params)}
             </For>
           </div>
-          {hasMore() ? (
+          {hasMore() || retryFresh() ? (
             <button
               type="button"
               class="sidebar-session-catalog-load-more"
@@ -433,7 +436,7 @@ function renderCatalogGroup(
               aria-busy={loadingMore() ? "true" : "false"}
               onClick={() => void params.host.sessionData.loadMoreSessionCatalog(readCatalog().id)}
             >
-              {t("chat.selectors.loadMoreSessions")}
+              {retryFresh() ? t("common.retry") : t("chat.selectors.loadMoreSessions")}
             </button>
           ) : undefined}
         </>

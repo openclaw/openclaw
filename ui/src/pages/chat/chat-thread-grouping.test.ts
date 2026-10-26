@@ -2,7 +2,7 @@
 import { beforeEach, expect, it } from "vitest";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
-import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import { assistantGroupCanOwnActiveRunStatus } from "./chat-assistant-reply.ts";
 import {
   groupsOf,
   message,
@@ -13,14 +13,10 @@ import {
   signedText as signed,
   toolResult,
 } from "./chat-thread-fixtures.test-support.ts";
-import {
-  assistantGroupCanOwnActiveRunStatus,
-  collapseCompletedTurnWork,
-  coalesceActivityRuns,
-  groupMessages,
-} from "./chat-thread-grouping.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
 import { buildItems, type CachedChatItemsProps } from "./chat-thread.test-support.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
+import { collapseCompletedTurnWork, coalesceActivityRuns } from "./chat-turn-presentation.ts";
 
 const sessionKey = "agent:main:dashboard:answers";
 const cli: MessageClientSource = { id: "cli", mode: "cli", displayName: "Release helper" };
@@ -43,9 +39,7 @@ function collapse(messages: unknown[]) {
   return collapseCompletedTurnWork(cachedGroups(messages), { sessionKey, runWorking: false });
 }
 function projected(messages: unknown[]) {
-  return coalesceAgentRunFrames(coalesceActivityRuns(collapse(messages))).flatMap((item) =>
-    item.kind === "agent-run-frame" ? item.parts : [item],
-  );
+  return coalesceActivityRuns(collapse(messages));
 }
 function visible(items: ReturnType<typeof projected>) {
   return messagesOf(groupsOf(items));
@@ -68,9 +62,6 @@ function tool(id: string, timestamp: number, extra: object = {}) {
 function expectProvenance(messages: unknown[]) {
   const groups = cachedGroups(messages);
   expect(groups.map((group) => group.messages.map((source) => source.message))).toEqual([messages]);
-  expect(groups.flatMap((group) => group.messages).map((entry) => entry.duplicateCount)).toEqual(
-    messages.map(() => undefined),
-  );
   return groups;
 }
 function expectHistory(messages: unknown[], shown: number[], folded: number[]) {
@@ -234,23 +225,13 @@ it("keeps media visible and folds commentary after replacement", () => {
     tool("render-diagram", 3),
     message("assistant", "Done", 4),
   ];
-  expect(collapse(messages)).toMatchObject([
-    { kind: "group", role: "user" },
-    { kind: "work-group", groups: [{ role: "tool" }] },
-    { kind: "group", role: "assistant", messages: [{ message: preview }] },
-    { kind: "group", role: "assistant" },
-  ]);
+  expectHistory(messages, [0, 1, 3], [2]);
   const replacement = { ...preview, content: [{ type: "text", text: "Preparing a diagram" }] };
-  expect(
-    collapse(messages.map((entry) => (entry === preview ? replacement : entry))),
-  ).toMatchObject([
-    { kind: "group", role: "user" },
-    {
-      kind: "work-group",
-      groups: [{ role: "assistant", messages: [{ message: replacement }] }, { role: "tool" }],
-    },
-    { kind: "group", role: "assistant" },
-  ]);
+  expectHistory(
+    messages.map((entry) => (entry === preview ? replacement : entry)),
+    [0, 3],
+    [1, 2],
+  );
 });
 it.each([true, false])(
   "keeps work with its answer above a trailing steer (working=%s)",

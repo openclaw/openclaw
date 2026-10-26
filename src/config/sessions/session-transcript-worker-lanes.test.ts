@@ -54,7 +54,7 @@ const absent = { ok: true as const, value: false };
 
 it("keeps native close conservative until an unqualified reader is retired", async () => {
   const pool = createSessionTranscriptHistoryPool();
-  const request = { kind: "prewarm" as const, database: input().database, env: {}, history: false };
+  const request = { kind: "prewarm" as const, database: input().database, env: {} };
   const read = () => pool.run(() => request, {});
   observed.run.mockResolvedValue(prewarmed);
   try {
@@ -342,6 +342,30 @@ it("retains branch reads across four-minute gaps and retires after five idle min
   }
 });
 
+it.each([historyLane, projectionLane, maintenanceLane])(
+  "keeps $name idle retirement anchored to reads across database cleanup",
+  async (lane) => {
+    observed.run.mockResolvedValue(absent);
+    await input().read(lane);
+    const resource = observed.resources.at(-1)!;
+    const siblingLane = lane === historyLane ? maintenanceLane : historyLane;
+    await input().read(siblingLane);
+    const siblingResource = observed.resources.at(-1)!;
+
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    await siblingResource.close();
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    await resource.close();
+    await vi.advanceTimersByTimeAsync(60_000 - 1);
+    expect(isSessionHistoryWorkerCold(lane)).toBe(false);
+    expect(isSessionHistoryWorkerCold(siblingLane)).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(isSessionHistoryWorkerCold(lane)).toBe(true);
+    expect(isSessionHistoryWorkerCold(siblingLane)).toBe(true);
+  },
+);
+
 it.each([historyLane, maintenanceLane])(
   "dedupes $name prewarm custody without extending idle retirement",
   async (lane) => {
@@ -356,7 +380,6 @@ it.each([historyLane, maintenanceLane])(
     expect(observed.run).toHaveBeenCalledOnce();
     expect(observed.run.mock.calls[0]?.[0]).toMatchObject({
       kind: "prewarm",
-      history: lane === historyLane,
     });
     expect(lane.pending).toBe(1);
     expect(isSessionHistoryWorkerCold(lane)).toBe(false);
@@ -378,6 +401,30 @@ it.each([historyLane, maintenanceLane])(
     expect(observed.run).toHaveBeenCalledTimes(2);
   },
 );
+
+it("rearms idle retirement after expired and explicit native cleanup both fail", async () => {
+  observed.explicitSqliteCloseReleasesNativeResources = false;
+  observed.run.mockResolvedValue(absent);
+  await input().read();
+  const resource = observed.resources.at(-1)!;
+  const failure = new Error("native retirement failed");
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  observed.rotate.mockRejectedValueOnce(failure).mockRejectedValueOnce(failure);
+  try {
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(warning).toHaveBeenCalledOnce();
+    expect(isSessionHistoryWorkerCold()).toBe(false);
+    await expect(resource.close()).rejects.toBe(failure);
+    expect(observed.unregister).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(observed.rotate).toHaveBeenCalledTimes(3);
+    expect(isSessionHistoryWorkerCold()).toBe(true);
+    expect(observed.unregister).toHaveBeenCalledOnce();
+  } finally {
+    warning.mockRestore();
+  }
+});
 
 it.each([historyLane, maintenanceLane])(
   "settles failed and revoked $name prewarms without rejecting callers",

@@ -1,6 +1,6 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
-import type { AssistantMessage, Model } from "../../llm/types.js";
+import type { AssistantMessage, Model, ModelRequestHeaders } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { notifyListeners } from "../../shared/listeners.js";
 import {
@@ -134,7 +134,7 @@ export abstract class AgentSessionBase {
 
   protected async getRequiredRequestAuth(model: Model): Promise<{
     apiKey: string;
-    headers?: Record<string, string>;
+    headers?: ModelRequestHeaders;
   }> {
     const result = await this.sessionModelRegistry.getApiKeyAndHeaders(model);
     if (!result.ok) {
@@ -160,7 +160,7 @@ export abstract class AgentSessionBase {
 
   protected async getCompactionRequestAuth(model: Model): Promise<{
     apiKey?: string;
-    headers?: Record<string, string>;
+    headers?: ModelRequestHeaders;
   }> {
     if (
       getStreamLlmRuntime(this.agent.streamFn) ===
@@ -177,10 +177,6 @@ export abstract class AgentSessionBase {
     return this.withExternalSessionWriteSettlement
       ? await this.withExternalSessionWriteSettlement(run)
       : await run();
-  }
-
-  private eventMayWriteSession(event: AgentEvent): boolean {
-    return event.type === "message_end" || this.currentExtensionRunner.hasHandlers(event.type);
   }
 
   /**
@@ -300,7 +296,7 @@ export abstract class AgentSessionBase {
   protected lastRunEndedForTurnHandoff = false;
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
-  protected handleAgentEvent = async (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
+  protected handleAgentEvent = (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
     const prepareToolResult = createSessionToolResultPreparer(this.sessionManager, event);
     if (event.type === "agent_end") {
       const reason: unknown = signal?.reason;
@@ -310,15 +306,15 @@ export abstract class AgentSessionBase {
         reason !== null &&
         (reason as { turnHandoff?: unknown }).turnHandoff === true;
     }
-    if (this.eventMayWriteSession(event)) {
-      await this.runWithSessionWriteSettlement(
-        async () => await this.handleAgentEventUnlocked(event, prepareToolResult),
-      );
-      // Supported callbacks can replace the current result.
-      prepareToolResult();
-      return;
+    if (event.type === "message_end" || this.currentExtensionRunner.hasHandlers(event.type)) {
+      return this.runWithSessionWriteSettlement(() =>
+        this.handleAgentEventUnlocked(event, prepareToolResult),
+      ).then(() => {
+        // Supported callbacks can replace the current result.
+        prepareToolResult();
+      });
     }
-    await this.handleAgentEventUnlocked(event, prepareToolResult);
+    return this.handleAgentEventUnlocked(event, prepareToolResult);
   };
 
   private async handleAgentEventUnlocked(

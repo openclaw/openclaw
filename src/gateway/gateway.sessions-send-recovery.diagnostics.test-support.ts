@@ -3,47 +3,15 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionControllerEntry } from "../sessions/session-controller.contracts.js";
-import type { RpcSourceRef } from "../sessions/session-controller.rpc-sources.types.js";
 import type { GatewayClient } from "./client.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 export const RECOVERY_PROBE_ID = "session-recovery-proof";
 const METHOD = "sessionRecoveryProof.inspect";
 
-// Serialized into the fixture plugin so it observes the child Gateway's actual
-// owner, not an unrelated registry imported into the test process.
+// Observe the child's RPC outcome cache without coupling diagnostics to private controller state.
 const inspectLiveRecovery: GatewayRequestHandler = ({ params, context, respond }) => {
-  const { runId, sessionKey } = params as { runId: string; sessionKey: string };
-  const state = Reflect.get(globalThis, Symbol.for("openclaw.sessionControllers")) as
-    | {
-        controllers: Map<string, SessionControllerEntry>;
-        rpcSourcesByRunId: Map<string, Set<RpcSourceRef>>;
-      }
-    | undefined;
-  const sources = [...(state?.rpcSourcesByRunId.get(runId) ?? [])];
-  const mailboxes = [...(state?.controllers.values() ?? [])]
-    .filter((entry) => entry.key === sessionKey || entry.aliases.has(sessionKey))
-    .slice(0, 2)
-    .map((entry) => {
-      const mailbox = entry.mailbox;
-      return {
-        active: Boolean(entry.active),
-        preparing: mailbox?.preparing === true,
-        dispatchEnabled: mailbox?.dispatchEnabled === true,
-        inputs: mailbox?.entries
-          .filter((input) => input.protocolRunId === runId)
-          .slice(0, 2)
-          .map((input) => ({
-            phase: input.phase,
-            claimed: mailbox.claim?.inputs.includes(input) === true,
-            enqueued: input.custody.enqueued === true,
-            adopted: input.custody.adopted === true,
-            completed: input.custody.completed === true,
-            aborted: input.abortSignal.aborted,
-          })),
-      };
-    });
+  const { runId } = params as { runId: string };
   const dedupe = ["pending-chat:", "chat:", "agent:"].map((prefix) => {
     const entry = context.dedupe.get(prefix + runId);
     const payload = entry?.payload as { status?: string; stopReason?: string } | undefined;
@@ -58,17 +26,7 @@ const inspectLiveRecovery: GatewayRequestHandler = ({ params, context, respond }
       stopped: Boolean(payload?.stopReason),
     };
   });
-  respond(true, {
-    registryPresent: Boolean(state),
-    sources: sources.slice(0, 2).map(({ input, adapter }) => ({
-      phase: input.phase,
-      started: adapter.timing?.startedAtMs !== undefined,
-      terminalObserved: adapter.terminalOutcomeObserved === true,
-      terminalPersisted: adapter.projectSessionTerminalPersisted === true,
-    })),
-    mailboxes,
-    dedupe,
-  });
+  respond(true, { dedupe });
 };
 
 export async function writeRecoveryDiagnosticProbe(directory: string): Promise<void> {
@@ -97,7 +55,7 @@ export async function writeRecoveryDiagnosticProbe(directory: string): Promise<v
   );
 }
 
-export async function readRecoveryDiagnosticSnapshot(
+async function readRecoveryDiagnosticSnapshot(
   databasePath: string,
   sessionKey: string,
   runId: string,
@@ -205,6 +163,34 @@ function recoveryLogMessages(logs: string): string[] {
   });
 }
 
+const CHAT_INPUT_RECOVERY_REFUSAL_LABELS = new Map([
+  [
+    "accepted chat turn recovery ownership changed; automatic retry stopped to avoid duplicate execution | UNAVAILABLE",
+    "accepted-recovery-ownership-changed",
+  ],
+  [
+    "Chat admission ended or was cancelled; submit a new turn. | UNAVAILABLE",
+    "chat-admission-ended",
+  ],
+  [
+    "Chat input was not durably admitted; refresh and retry. | UNAVAILABLE",
+    "input-not-durably-admitted",
+  ],
+]);
+
+function projectChatInputRecoveryBlocked(line: string) {
+  const match = line.match(
+    /Chat input recovery blocked: (.+) (\{"sessionKeyHash":"[a-f0-9]{16}","inputId":"[a-f0-9-]{36}","ageMs":\d+\})$/u,
+  );
+  if (!match) {
+    return undefined;
+  }
+  return {
+    facts: match[2]!,
+    refusal: CHAT_INPUT_RECOVERY_REFUSAL_LABELS.get(match[1]!),
+  };
+}
+
 function recoveryLogTail(logs: string): string[] {
   // Do not emit raw log lines: even a recovery error may contain request text,
   // paths, or credentials. Preserve only fixed event labels and numeric timings.
@@ -216,68 +202,23 @@ function recoveryLogTail(logs: string): string[] {
       if (!event) {
         return [];
       }
-      const time = line.match(/\b\d{4}-\d{2}-\d{2}T[\d:.+-]+/u)?.[0] ?? "";
-      const facts = line.match(
+      const blocked =
+        event === "Chat input recovery blocked:"
+          ? projectChatInputRecoveryBlocked(line)
+          : undefined;
+      const timeSource =
+        event === "Chat input recovery blocked:" ? line.slice(0, line.indexOf(event)) : line;
+      const time = timeSource.match(/\b\d{4}-\d{2}-\d{2}T[\d:.+-]+/u)?.[0] ?? "";
+      const facts = (event === "Chat input recovery blocked:" ? blocked?.facts : line)?.match(
         /"(?:kind|outcome|waitReason|decision|reason|nextOwner)":"(?:peer|chat|accepted|stale|cancelled|blocked|aborted|none|endpoint-replaced|requester-unavailable|permission-denied|transient-admission|store-unavailable|unknown|started|settled|deferred|stopped|not_main_session|archived|work_start_blocked|work_start_pending|dispatch_target_unavailable|live_owner|already_handled|state_changed|inactive|tombstoned|exhausted|message_action_authority_unavailable|observation_only|pending_delivery|invalid_harness_completion|delegated_authority_unavailable|dispatch_skipped|terminal-residue|terminal-evidence|pending_delivery_notice|operator|session-preparation|outbound-delivery|session-owner|next-startup|main-session-recovery)"|"(?:runId|inputId|sourceRunId|recoveryRunId)":"[a-f0-9-]{36}"|"(?:attempts|[a-zA-Z]+Ms)":\d+(?:\.\d+)?|\b(?:stage=(?:request|startup|steer|queued)|[a-zA-Z.]+=\d+(?:\.\d+)?ms|(?:started|settled|failed|skipped)=\d+|\d+(?:\.\d+)?ms)\b|\b(?:restart|rpc|cancelled|interrupted|stop|SIGTERM|SIGKILL)\b/gu,
       );
-      return [`${time} ${event} ${(facts ?? []).join(" ")}`.trim().slice(0, 500)];
+      const projected = [
+        ...(blocked?.refusal ? [`"refusal":"${blocked.refusal}"`] : []),
+        ...(facts ?? []),
+      ];
+      return [`${time} ${event} ${projected.join(" ")}`.trim().slice(0, 500)];
     })
     .slice(-40);
-}
-
-function projectReplayDecision(line: string) {
-  const match = line.match(/Pending input replay: (\{[^\n]+\})/u);
-  if (!match) {
-    return undefined;
-  }
-  try {
-    const record = asOptionalRecord(JSON.parse(match[1]!));
-    if (typeof record?.inputHash !== "string" || !/^[a-f0-9]{16}$/u.test(record.inputHash)) {
-      return undefined;
-    }
-    const known = (value: unknown, choices: readonly string[]) =>
-      typeof value === "string" && choices.includes(value) ? value : undefined;
-    const outcome = known(record.outcome, [
-      "accepted",
-      "stale",
-      "cancelled",
-      "blocked",
-      "aborted",
-      "skipped",
-    ]);
-    if (!outcome) {
-      return undefined;
-    }
-    return {
-      inputHash: record.inputHash,
-      outcome,
-      state: known(record.state, ["queued", "interrupted", "cancelled"]),
-      skipReason: known(record.skipReason, [
-        "predecessor-not-ready",
-        "state-not-interrupted",
-        "missing-recovery-metadata",
-        "expired",
-      ]),
-      staleReason: known(record.staleReason, [
-        "session-changed",
-        "input-missing",
-        "input-changed",
-        "state-not-interrupted",
-        "consumed",
-      ]),
-      waitReason: known(record.waitReason, [
-        "none",
-        "endpoint-replaced",
-        "requester-unavailable",
-        "permission-denied",
-        "transient-admission",
-        "store-unavailable",
-        "unknown",
-      ]),
-    };
-  } catch {
-    return undefined;
-  }
 }
 
 export async function printRecoveryFailureDiagnostics(params: {
@@ -313,10 +254,6 @@ export async function printRecoveryFailureDiagnostics(params: {
   const startup = (params.startupSnapshot ?? { unavailable: true }) as { rows?: unknown[] };
   const { rows, ...summary } = durable;
   const { rows: startupRows, ...startupSummary } = startup;
-  const decisions = recoveryLogMessages(fileLog).flatMap((line) => {
-    const decision = projectReplayDecision(line);
-    return decision ? [decision] : [];
-  });
   const diagnostic = JSON.stringify({
     replayLogAtLimit: Buffer.byteLength(fileLog) >= RECOVERY_LOG_BYTES,
     runId,
@@ -333,23 +270,6 @@ export async function printRecoveryFailureDiagnostics(params: {
   }
   for (const row of startupRows ?? []) {
     console.error(`[session-recovery-row] ${JSON.stringify({ phase: "before-startup", row })}`);
-  }
-  const seen = new Set<string>();
-  for (const row of [...(startupRows ?? []), ...(rows ?? [])]) {
-    const input = asOptionalRecord(row);
-    if (!input || typeof input.inputHash !== "string" || seen.has(input.inputHash)) {
-      continue;
-    }
-    seen.add(input.inputHash);
-    const observed = decisions.filter((decision) => decision.inputHash === input.inputHash);
-    console.error(
-      `[session-recovery-decision] ${JSON.stringify({
-        marker: input.marker,
-        inputHash: input.inputHash,
-        observation: observed.length ? "recorded" : "not-observed",
-        decisions: observed.slice(-4),
-      })}`,
-    );
   }
   console.error(
     `[session-recovery-child-log] ${JSON.stringify({ console: recoveryLogTail(params.restartedLogs), file: recoveryLogTail(fileLog) })}`,

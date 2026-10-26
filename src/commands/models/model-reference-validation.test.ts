@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createTestModelDefinition } from "../test-runtime-config-helpers.js";
 import { inspectModelReference } from "./model-reference-validation.js";
 
 function inspect(cfg: OpenClawConfig, provider: string, model: string) {
@@ -28,15 +29,11 @@ describe("inspectModelReference", () => {
             baseUrl: "https://openrouter.ai/api/v1",
             api: "openai-completions",
             models: [
-              {
-                id: "openrouter/auto",
+              createTestModelDefinition("openrouter/auto", {
                 name: "Auto Router",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: 200000,
                 maxTokens: 8192,
-              },
+              }),
             ],
           },
         },

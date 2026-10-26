@@ -116,7 +116,6 @@ export function createMobileHeaderSessionMenu(options: {
   currentOwner: () => SessionCreatedActor | null;
   category: () => string | null | undefined;
   viewOptions: () => MenuEntry[];
-  palette: () => MenuItem;
   host: () => HeaderSessionMenuMobileHost | undefined;
   source: () => HTMLElement | undefined;
   closeMenu: () => void;

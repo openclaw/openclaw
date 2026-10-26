@@ -1,9 +1,8 @@
 // Code Mode model matrix tests cover repeatable small-model acceptance evidence.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { useAutoCleanupTempDirTracker, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildCodeModeMatrixAgentEnv,
@@ -19,6 +18,11 @@ import {
   projectQaEvidenceScenarioOutcomes,
   validateQaEvidenceSummaryJson,
 } from "../api.js";
+import {
+  matrixArtifactOptions,
+  matrixResult,
+  matrixSourceIdentity,
+} from "./code-mode-model-matrix.test-support.js";
 
 const extendedTasks = [
   "large-result-reduction",
@@ -342,11 +346,7 @@ describe("Code Mode model matrix extended fixtures", () => {
       const result = await runCodeModeModelMatrix(options, {
         buildCliArtifacts: async () => {},
         readBuildSha256: async () => "fixture-build",
-        readSourceIdentity: async () => ({
-          gitSha: "fixture-source",
-          sourceDirty: false,
-          sourcePatchSha256: null,
-        }),
+        readSourceIdentity: matrixSourceIdentity("fixture-source"),
       });
       const readArtifact = async (name: string) =>
         await fs.readFile(path.join(result.outputDir, name), "utf8");
@@ -468,11 +468,7 @@ describe("Code Mode model matrix extended fixtures", () => {
       throw new Error("dry run must not execute");
     };
     const result = await runCodeModeModelMatrix(options, {
-      readSourceIdentity: async () => ({
-        gitSha: "fixture-source",
-        sourceDirty: false,
-        sourcePatchSha256: null,
-      }),
+      readSourceIdentity: matrixSourceIdentity("fixture-source"),
       buildCliArtifacts: forbidden,
       readBuildSha256: forbidden,
       runCell: forbidden,
@@ -508,44 +504,24 @@ describe("Code Mode model matrix extended fixtures", () => {
 
 describe("Code Mode model matrix artifacts", () => {
   it("rejects output inside Git metadata", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-git-test-"));
-    try {
+    await withTempDir("openclaw-code-mode-git-test-", async (repoRoot) => {
       await fs.mkdir(path.join(repoRoot, ".git"));
       await expect(
         runCodeModeModelMatrix(
+          matrixArtifactOptions(repoRoot, path.join(".git", "refs", "evidence"), { dryRun: true }),
           {
-            allowFailures: false,
-            dryRun: true,
-            keepState: false,
-            models: ["ollama/qwen3.5:9b"],
-            modes: ["code"],
-            outputDir: path.join(".git", "refs", "evidence"),
-            repetitions: 1,
-            repoRoot,
-            tasks: ["read"],
-            thinking: "off",
-            timeoutSeconds: 10,
-          },
-          {
-            readSourceIdentity: async () => ({
-              gitSha: "abc123",
-              sourceDirty: false,
-              sourcePatchSha256: null,
-            }),
+            readSourceIdentity: matrixSourceIdentity("abc123"),
           },
         ),
       ).rejects.toThrow("must not overlap Git metadata");
       await expect(fs.access(path.join(repoRoot, ".git", "refs"))).rejects.toMatchObject({
         code: "ENOENT",
       });
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
+    });
   });
 
   it("rejects case aliases of missing runtime artifacts", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-case-test-"));
-    try {
+    await withTempDir("openclaw-code-mode-case-test-", async (repoRoot) => {
       const canonicalRoot = await fs.realpath(repoRoot);
       const rootName = path.basename(canonicalRoot);
       const letterIndex = rootName.search(/[a-z]/iu);
@@ -566,61 +542,30 @@ describe("Code Mode model matrix artifacts", () => {
 
       await expect(
         runCodeModeModelMatrix(
+          matrixArtifactOptions(repoRoot, path.join("DIST", "evidence"), { dryRun: true }),
           {
-            allowFailures: false,
-            dryRun: true,
-            keepState: false,
-            models: ["ollama/qwen3.5:9b"],
-            modes: ["code"],
-            outputDir: path.join("DIST", "evidence"),
-            repetitions: 1,
-            repoRoot,
-            tasks: ["read"],
-            thinking: "off",
-            timeoutSeconds: 10,
-          },
-          {
-            readSourceIdentity: async () => ({
-              gitSha: "abc123",
-              sourceDirty: false,
-              sourcePatchSha256: null,
-            }),
+            readSourceIdentity: matrixSourceIdentity("abc123"),
           },
         ),
       ).rejects.toThrow("must not overlap runtime artifacts");
       await expect(fs.access(path.join(repoRoot, "DIST", "evidence"))).rejects.toMatchObject({
         code: "ENOENT",
       });
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
+    });
   });
 
   it("rejects package artifact namespaces before reservation creates them", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-package-test-"));
-    try {
+    await withTempDir("openclaw-code-mode-package-test-", async (repoRoot) => {
       await fs.mkdir(path.join(repoRoot, "packages"));
       await expect(
         runCodeModeModelMatrix(
-          {
-            allowFailures: false,
-            dryRun: true,
-            keepState: false,
-            models: ["ollama/qwen3.5:9b"],
-            modes: ["code"],
-            outputDir: path.join("packages", "new-package", "dist", "evidence"),
-            repetitions: 1,
+          matrixArtifactOptions(
             repoRoot,
-            tasks: ["read"],
-            thinking: "off",
-            timeoutSeconds: 10,
-          },
+            path.join("packages", "new-package", "dist", "evidence"),
+            { dryRun: true },
+          ),
           {
-            readSourceIdentity: async () => ({
-              gitSha: "abc123",
-              sourceDirty: false,
-              sourcePatchSha256: null,
-            }),
+            readSourceIdentity: matrixSourceIdentity("abc123"),
           },
         ),
       ).rejects.toThrow("must not overlap runtime artifacts");
@@ -629,32 +574,17 @@ describe("Code Mode model matrix artifacts", () => {
           code: "ENOENT",
         },
       );
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
+    });
   });
 
   it.each(["dist", path.join("packages", "agent-core", "dist")])(
     "rejects output inside build-created runtime artifacts: %s",
     async (artifactDir) => {
-      const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-build-test-"));
-      let hashed = false;
-      try {
+      await withTempDir("openclaw-code-mode-build-test-", async (repoRoot) => {
+        let hashed = false;
         await expect(
           runCodeModeModelMatrix(
-            {
-              allowFailures: false,
-              dryRun: false,
-              keepState: false,
-              models: ["ollama/qwen3.5:9b"],
-              modes: ["code"],
-              outputDir: path.join(artifactDir, "evidence"),
-              repetitions: 1,
-              repoRoot,
-              tasks: ["read"],
-              thinking: "off",
-              timeoutSeconds: 10,
-            },
+            matrixArtifactOptions(repoRoot, path.join(artifactDir, "evidence")),
             {
               buildCliArtifacts: async () => {
                 await fs.mkdir(path.join(repoRoot, artifactDir), { recursive: true });
@@ -663,11 +593,7 @@ describe("Code Mode model matrix artifacts", () => {
                 hashed = true;
                 return "build123";
               },
-              readSourceIdentity: async () => ({
-                gitSha: "abc123",
-                sourceDirty: false,
-                sourcePatchSha256: null,
-              }),
+              readSourceIdentity: matrixSourceIdentity("abc123"),
             },
           ),
         ).rejects.toThrow("must not overlap runtime artifacts");
@@ -677,9 +603,7 @@ describe("Code Mode model matrix artifacts", () => {
             code: "ENOENT",
           },
         );
-      } finally {
-        await fs.rm(repoRoot, { force: true, recursive: true });
-      }
+      });
     },
   );
 
@@ -691,95 +615,67 @@ describe("Code Mode model matrix artifacts", () => {
   ] as const)("keeps tool summary scopes separate: %s", async (_name, calls, outerCalls) => {
     const repoRoot = tempDirs.make("openclaw-code-mode-metrics-");
     const result = await runCodeModeModelMatrix(
-      {
-        allowFailures: false,
-        dryRun: false,
-        keepState: false,
-        models: ["ollama/fixture"],
-        modes: ["code"],
-        outputDir: "artifacts",
-        repetitions: 1,
-        repoRoot,
-        tasks: ["read"],
-        thinking: "off",
-        timeoutSeconds: 10,
-      },
+      matrixArtifactOptions(repoRoot, "artifacts", { models: ["ollama/fixture"] }),
       {
         buildCliArtifacts: async () => {},
         readBuildSha256: async () => "build123",
-        readSourceIdentity: async () => ({
-          gitSha: "abc123",
-          sourceDirty: false,
-          sourcePatchSha256: null,
-        }),
-        runCell: async (params) => ({
-          ...params.cell,
-          buildSha256: params.buildSha256,
-          gitSha: params.gitSha,
-          sourceDirty: false,
-          sourcePatchSha256: null,
-          codeModeEngaged: true,
-          elapsedMs: 10,
-          expected: "CM-EXPECTED",
-          final: "CM-EXPECTED",
-          failureCategory: null,
-          observedModel: "fixture",
-          observedProvider: "ollama",
-          oracle: {
-            answer: true,
-            effect: true,
-            engagement: true,
-            identity: true,
-            toolExecution: true,
-          },
-          passed: true,
-          status: "ok",
-          timestamp: "2026-07-28T12:00:00.000Z",
-          // This envelope models mixed outer/nested terminals, not nine outer calls.
-          ...(calls !== undefined
-            ? {
-                toolSummary: { calls, tools: ["exec", "read", "write"] },
-                bridgeCalls: { search: 0, describe: 0, call: 5 },
-              }
-            : {}),
-          ...(outerCalls !== undefined
-            ? {
-                gateway: {
-                  outerCalls,
-                  promptSha256: "prompt123",
-                  fixtureSha256: "fixture123",
-                  settings: {
-                    executor: "node",
-                    thinking: "off",
-                    timeoutSeconds: 10,
-                    execTimeoutMs: 10,
-                    maxOutputBytes: 1024,
-                    maxModelOutputTokens: 128,
-                    runtime: "openclaw",
-                    fast: false,
-                    allowedTools: ["read"],
+        readSourceIdentity: matrixSourceIdentity("abc123"),
+        runCell: async (params) =>
+          matrixResult(params.cell, {
+            buildSha256: params.buildSha256,
+            gitSha: params.gitSha,
+            codeModeEngaged: true,
+            elapsedMs: 10,
+            expected: "CM-EXPECTED",
+            final: "CM-EXPECTED",
+            observedModel: "fixture",
+            observedProvider: "ollama",
+            timestamp: "2026-07-28T12:00:00.000Z",
+            // This envelope models mixed outer/nested terminals, not nine outer calls.
+            ...(calls !== undefined
+              ? {
+                  toolSummary: { calls, tools: ["exec", "read", "write"] },
+                  bridgeCalls: { search: 0, describe: 0, call: 5 },
+                }
+              : {}),
+            ...(outerCalls !== undefined
+              ? {
+                  gateway: {
+                    outerCalls,
+                    promptSha256: "prompt123",
+                    fixtureSha256: "fixture123",
+                    settings: {
+                      executor: "node",
+                      thinking: "off",
+                      timeoutSeconds: 10,
+                      execTimeoutMs: 10,
+                      maxOutputBytes: 1024,
+                      maxModelOutputTokens: 128,
+                      runtime: "openclaw",
+                      fast: false,
+                      allowedTools: ["read"],
+                    },
+                    behavior: {},
+                    startupMs: 0,
+                    traceAvailable: true,
+                    interview: {
+                      traceAvailable: false,
+                      answer: null,
+                      rationaleReview: "required",
+                      checks: {},
+                    },
+                    artifacts: {
+                      taskTrace: "task.json",
+                      interviewTrace: "interview.json",
+                      receipts: "receipts.json",
+                      taskReceipts: "task-receipts.json",
+                      interviewReceipts: "interview-receipts.json",
+                      log: "gateway.log",
+                    },
                   },
-                  behavior: {},
-                  startupMs: 0,
-                  traceAvailable: true,
-                  interview: {
-                    traceAvailable: false,
-                    answer: null,
-                    rationaleReview: "required",
-                    checks: {},
-                  },
-                  artifacts: {
-                    taskTrace: "task.json",
-                    interviewTrace: "interview.json",
-                    receipts: "receipts.json",
-                    taskReceipts: "task-receipts.json",
-                    interviewReceipts: "interview-receipts.json",
-                    log: "gateway.log",
-                  },
-                },
-              }
-            : {}),
-        }),
+                }
+              : {}),
+          }),
       },
     );
     expect(result.exitCode).toBe(0);
@@ -802,24 +698,11 @@ describe("Code Mode model matrix artifacts", () => {
   });
 
   it("continues after cell crashes and reports first-pass versus eventual success", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-matrix-test-"));
-    try {
+    await withTempDir("openclaw-code-mode-matrix-test-", async (repoRoot) => {
       let calls = 0;
       let initialBuildRead = true;
       const result = await runCodeModeModelMatrix(
-        {
-          allowFailures: false,
-          dryRun: false,
-          keepState: false,
-          models: ["ollama/qwen3.5:9b"],
-          modes: ["code"],
-          outputDir: "artifacts",
-          repetitions: 2,
-          repoRoot,
-          tasks: ["read"],
-          thinking: "off",
-          timeoutSeconds: 10,
-        },
+        matrixArtifactOptions(repoRoot, "artifacts", { repetitions: 2 }),
         {
           buildCliArtifacts: async () => {},
           now: () => new Date("2026-07-28T12:00:00Z"),
@@ -830,11 +713,7 @@ describe("Code Mode model matrix artifacts", () => {
             }
             return "build123";
           },
-          readSourceIdentity: async () => ({
-            gitSha: "abc123",
-            sourceDirty: false,
-            sourcePatchSha256: null,
-          }),
+          readSourceIdentity: matrixSourceIdentity("abc123"),
           runCell: async ({ cell, gitSha }) => {
             calls += 1;
             const before = validateQaEvidenceSummaryJson(
@@ -848,36 +727,19 @@ describe("Code Mode model matrix artifacts", () => {
             if (cell.repetition === 1) {
               throw new Error("fixture exploded");
             }
-            return {
+            return matrixResult(cell, {
               buildSha256: "build123",
               bridgeCalls: { search: 0, describe: 0, call: 1 },
               codeModeEngaged: true,
               elapsedMs: 10,
               expected: "CM-EXPECTED",
-              failureCategory: null,
               final: "CM-EXPECTED",
               gitSha,
-              id: cell.id,
-              mode: cell.mode,
-              model: cell.model,
               observedModel: "qwen3.5:9b",
               observedProvider: "ollama",
-              oracle: {
-                answer: true,
-                effect: true,
-                engagement: true,
-                identity: true,
-                toolExecution: true,
-              },
-              passed: true,
-              repetition: cell.repetition,
-              sourceDirty: false,
-              sourcePatchSha256: null,
-              status: "ok",
-              task: cell.task,
               timestamp: "2026-07-28T12:00:00.000Z",
               toolSummary: { calls: 1, tools: ["exec"] },
-            } satisfies CodeModeMatrixCellResult;
+            }) satisfies CodeModeMatrixCellResult;
           },
         },
       );
@@ -965,8 +827,6 @@ describe("Code Mode model matrix artifacts", () => {
       expect(evidence.entries[1]).toMatchObject({
         result: { status: "pass", timing: { wallMs: 10 } },
       });
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
+    });
   });
 });

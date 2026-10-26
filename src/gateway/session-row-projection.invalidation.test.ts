@@ -302,10 +302,12 @@ it("reuses descendants after parent progress while keeping inherited models curr
             undefined,
             context.resolveGatewayContext,
           ),
-        ).presentation.snapshot({
-          agentId: "main",
-          key,
-        }).row!;
+        )
+          .getPresentation()
+          .snapshot({
+            agentId: "main",
+            key,
+          }).row!;
       const siblingSnapshot = snapshot(siblingKey);
       const parentSnapshot = snapshot(parentKey);
       const siblingBytes = JSON.stringify(siblingSnapshot);
@@ -563,6 +565,10 @@ it("reuses row identities across lists until their entry, profile, or config cha
       expect(unassigned.owners).toEqual([]);
       expect(unassigned.sessions[0]?.owner).toBeUndefined();
       expect(unassigned.sessions[0]?.participants?.[0]?.label).toBe("Renamed agent");
+      expect((await list()).sessions[0]?.owner).toBeUndefined();
+      Object.assign(cfg.agents.entries, { missing: { identity: { name: "New agent" } } });
+      sessionChanges.emit({ all: true, scope: "config" });
+      expect((await list()).sessions[0]?.owner?.actor.label).toBe("New agent");
       assignSessionOwner(scope, {
         owner: { type: "agent", id: "main" },
         assignedBy: { type: "system", id: "test" },

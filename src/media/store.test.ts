@@ -261,11 +261,12 @@ describe("media store", () => {
           (subdir) => store.saveMediaBuffer(Buffer.from("media"), "text/plain", subdir),
         ),
       );
-      const past = (Date.now() - 10_000) / 1000;
+      // Keep file ages independent of setup and cleanup latency.
+      const now = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(now);
       for (const [index, saved] of files.entries()) {
-        if (index !== 3) {
-          await fs.utimes(saved.path, past, past);
-        }
+        const time = (now - (index === 3 ? 0 : 10_000)) / 1000;
+        await fs.utimes(saved.path, time, time);
       }
       await store.cleanOldMedia(1_000, options);
       for (const [index, saved] of files.entries()) {

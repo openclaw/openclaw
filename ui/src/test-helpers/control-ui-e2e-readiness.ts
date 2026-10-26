@@ -15,7 +15,10 @@ export function extendControlUiE2eWaitTimeoutForSourceServer(): void {
 }
 
 /** Selected descriptors and cached rows can render before the authoritative roster. */
-export async function waitForControlUiInitialRoster(page: Page): Promise<void> {
+export async function waitForControlUiInitialRoster(
+  page: Page,
+  timeout = controlUiE2eWaitTimeoutMs,
+): Promise<void> {
   try {
     await page
       .waitForFunction(
@@ -34,7 +37,7 @@ export async function waitForControlUiInitialRoster(page: Page): Promise<void> {
           return readiness?.ready || (offline && readiness?.booted === true);
         },
         undefined,
-        { timeout: controlUiE2eWaitTimeoutMs },
+        { timeout },
       )
       .then((ready) => ready.dispose());
   } catch (cause) {
@@ -91,8 +94,11 @@ export async function waitForControlUiTerminalReady(page: Page): Promise<void> {
 }
 
 /** In-app confirms must reach full opacity before accepting clicks. */
-export async function waitForConfirmModal(page: Page): Promise<Locator> {
-  const modal = page.locator("openclaw-modal-dialog").last();
+export async function waitForConfirmModal(
+  page: Page,
+  // Callers with other open dialogs identify their intended modal before waiting for readiness.
+  modal: Locator = page.locator("openclaw-modal-dialog").last(),
+): Promise<Locator> {
   const dialog = modal.locator("dialog[open]");
   await dialog.waitFor({ state: "visible", timeout: controlUiE2eWaitTimeoutMs });
   const element = await dialog.elementHandle();

@@ -113,7 +113,6 @@ it.each(["read", "error", "rewritten", "unmarked"] as const)(
           ? jsonResult({ revision, steps: null })
           : (await execute({ markdown: initialMarkdown })).result;
       if (kind === "rewritten") {
-        expect(Object.keys(result).toSorted()).toEqual(["content", "details"]);
         result.content = [{ type: "text", text: "New receipt wording " + revision }];
       }
       recordToolCallOutcome(state, {

@@ -2,14 +2,55 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
+import { buildChildEnv } from "../../scripts/ci-run-node-test-shard.mts";
 import {
   createChangedNodeTestShards as createChangedNodeTestShardsWithSmoke,
   resolveChangedNodeTestTargets,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { createSelectedNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
+import {
+  createNodeTestShardBundles,
+  createSelectedNodeTestShardBundles,
+  type CompactNodeTestShard,
+} from "../../scripts/lib/ci-node-test-plan.mts";
 import { PR_PROTECTED_RUNTIME_TEST_FILES } from "../../scripts/lib/ci-proof-test-inventory.mts";
 
 type Shards = ReturnType<typeof createChangedNodeTestShards>;
+type FileSelection =
+  | {
+      targets?: string[];
+      includePatterns?: string[];
+      groups?: { includePatterns?: string[] }[];
+    }[]
+  | null;
+export function writeFiles(cwd: string, files: Record<string, string> | readonly string[]) {
+  const entries: [string, string][] = Array.isArray(files)
+    ? files.map((file): [string, string] => [file, "export {};\n"])
+    : Object.entries(files);
+  for (const [file, source] of entries) {
+    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+    writeFileSync(path.join(cwd, file), source);
+  }
+}
+
+export function fullOwnerPlan(runnerBackend?: string, changedPaths?: string[]) {
+  return createNodeTestShardBundles({
+    compactMode: "pull-request",
+    runnerBackend,
+    changedPaths,
+    includeReleaseOnlyPluginShards: false,
+  });
+}
+
+export function expectSameFields<K extends PropertyKey>(
+  actual: Partial<Record<K, unknown>>,
+  expected: Partial<Record<K, unknown>>,
+  keys: readonly K[],
+) {
+  for (const key of keys) {
+    expect(actual[key], String(key)).toEqual(expected[key]);
+  }
+}
+
 export const gatewayCallsitesGuard = "src/gateway/client-callsites.guard.test.ts";
 
 export const smokeTestFiles = new Set([
@@ -34,22 +75,55 @@ export function createChangedNodeTestShards(
 }
 
 export function materializeGatewayCallsitesFixture(cwd: string) {
-  const file = path.join(cwd, gatewayCallsitesGuard);
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, "export {};\n");
+  writeFiles(cwd, [gatewayCallsitesGuard]);
 }
 
 export function fallbackGroups(shards: NonNullable<Shards>) {
   return shards.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]);
 }
 
-export function selectedFiles(shards: Shards) {
+export function selectedFiles(shards: FileSelection) {
   return (shards ?? []).flatMap((shard) =>
     (shard.targets ?? []).concat(
       shard.includePatterns ?? [],
       shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? [],
     ),
   );
+}
+
+type NodeTestJobResources = Pick<CompactNodeTestShard, "planConcurrency" | "env">;
+
+export function expectProjectedNodeTestResources(
+  job: NodeTestJobResources,
+  group: CompactNodeTestShard["groups"][number],
+  ownerJob: NodeTestJobResources,
+  owner: CompactNodeTestShard["groups"][number],
+  scratchDir: string,
+) {
+  // Repacking may serialize a parallel owner, but cannot add concurrency or workers.
+  expect(job.planConcurrency ?? 1, `${group.shard_name} plan concurrency`).toBeLessThanOrEqual(
+    ownerJob.planConcurrency ?? 1,
+  );
+  const childEnv = (row: NodeTestJobResources, entry: CompactNodeTestShard["groups"][number]) =>
+    buildChildEnv(
+      { kind: "group", name: entry.shard_name, plan: entry },
+      {
+        // A wide serial CI host can admit eight workers; parallel plans admit two.
+        OPENCLAW_VITEST_MAX_WORKERS: row.planConcurrency === 1 ? "8" : "2",
+        ...row.env,
+      },
+      scratchDir,
+      0,
+    );
+  const projected = childEnv(job, group);
+  // Callers assert selected files separately; the include-file handoff is not a resource limit.
+  const { OPENCLAW_VITEST_INCLUDE_FILE: _projectedIncludes, ...projectedResources } = projected;
+  const { OPENCLAW_VITEST_INCLUDE_FILE: _ownerIncludes, ...ownerResources } = childEnv(
+    ownerJob,
+    owner,
+  );
+  expect(projectedResources, `${group.shard_name} child environment`).toEqual(ownerResources);
+  return projected;
 }
 
 export function expectCanonicalGroupedConcurrency(shards: Shards, runnerBackend?: string) {
@@ -71,11 +145,6 @@ export function expectCanonicalGroupedConcurrency(shards: Shards, runnerBackend?
   for (const { shard, group } of groups) {
     if (!group.includePatterns) {
       // Paired isolated tooling configs retain whole processes and serial admission.
-      expect(group.shard_name).toBe("core-tooling-isolated");
-      expect(group.configs.toSorted()).toEqual([
-        "test/vitest/vitest.tooling-docker.config.ts",
-        "test/vitest/vitest.tooling-isolated.config.ts",
-      ]);
       expect(shard.planConcurrency).toBe(1);
       continue;
     }

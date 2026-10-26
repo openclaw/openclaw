@@ -16,12 +16,13 @@ import { readScratchStateFromDatabase } from "../cron/scratch-read.kernel.js";
 import { hashCronScratchSource, readCronJobScratchState } from "../cron/scratch-store.js";
 import { writeCronJobScratchInDatabase } from "../cron/scratch-write.kernel.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { cronStoreKey } from "../cron/store/key.js";
+import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import {
   loadCronRows,
   loadedCronStoreFromRows,
   projectCronJobThroughStorageCodec,
 } from "../cron/store/row-codec.js";
+import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage as errorMessage, hasErrnoCode } from "../infra/errors.js";
@@ -32,15 +33,33 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-sta
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { shortenHomePath } from "../utils.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
-import { resolveLegacyHeartbeatAgents } from "./doctor-heartbeat-legacy.js";
+import { decodeDoctorHeartbeatJobRows } from "./doctor-heartbeat-jobs.js";
+import {
+  resolveLegacyHeartbeatAgents,
+  resolveLegacyHeartbeatConfig,
+} from "./doctor-heartbeat-legacy.js";
+import {
+  resolveDoctorHeartbeatReceiptJob,
+  selectDoctorHeartbeatMonitor,
+} from "./doctor-heartbeat-monitors.js";
 import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
+import { analyzeLegacyHeartbeatTasks, validateHeartbeatTasks } from "./heartbeat-task-legacy.js";
 
 const LEGACY_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
+function resolveHeartbeatFileAgentIds(cfg: OpenClawConfig): string[] {
+  const enrolled = new Set(resolveLegacyHeartbeatAgents(cfg).map((agent) => agent.agentId));
+  // Explicit settings still own files when another agent's enrollment excludes them.
+  return listAgentIds(cfg).filter(
+    (agentId) => enrolled.has(agentId) || resolveLegacyHeartbeatConfig(cfg, agentId) !== undefined,
+  );
+}
+
 type HeartbeatScratchMigrationResult = {
   changes: string[];
   warnings: string[];
+  notices?: string[];
 };
 
 type HeartbeatSource = {
@@ -51,7 +70,7 @@ type HeartbeatSource = {
   sha256: string;
 };
 
-export async function readHeartbeatSource(
+async function readHeartbeatSource(
   cfg: OpenClawConfig,
   agentId: string,
   options?: { recoverClaims?: boolean; env?: NodeJS.ProcessEnv },
@@ -120,27 +139,27 @@ export async function readHeartbeatSource(
   };
 }
 
-export function completedHeartbeatSourceWarning(agentId: string): string {
-  return `Agent "${agentId}" has completed cutover; its newly present HEARTBEAT.md was retained without changing the operator-owned automation.`;
+function completedHeartbeatSourceWarning(agentId: string): string {
+  return `Agent "${agentId}" has completed cutover; its HEARTBEAT.md was retained without changing the operator-owned automation.`;
 }
 
-export function shouldInspectHeartbeatScratchSource(
+function shouldInspectHeartbeatScratchSource(
   hasMonitor: boolean,
   receipt: DefaultProactiveJobReceipt | undefined,
 ): boolean {
   return hasMonitor || receipt?.phase === "complete";
 }
 
-export function heartbeatScratchMigrationConflict(
+function heartbeatScratchMigrationConflict(
   agentId: string,
   content: string,
   state: CronJobScratchState,
 ): string | undefined {
   if (state.currentRevision > 0 && !state.scratch) {
-    return `Agent "${agentId}" scratch was explicitly unset; it was left unchanged.`;
+    return `Agent "${agentId}" scratch was explicitly unset; it was left unchanged and HEARTBEAT.md was retained for review.`;
   }
   if (state.scratch && state.scratch.content !== content && !state.scratch.sourceSha256) {
-    return `Agent "${agentId}" already has different cron scratch; it was left unchanged.`;
+    return `Agent "${agentId}" already has different cron scratch; the automation keeps it and HEARTBEAT.md was retained for review.`;
   }
   return undefined;
 }
@@ -395,39 +414,67 @@ export async function collectHeartbeatScratchMigrationFindings(
     fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to migrate HEARTBEAT.md into cron scratch.`,
   } as const;
   const findings: HealthFinding[] = [];
-  const migrationAgents = resolveLegacyHeartbeatAgents(cfg);
-  for (const agent of migrationAgents) {
+  const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
+  for (const agentId of resolveHeartbeatFileAgentIds(cfg)) {
     const heartbeatPath = path.join(
-      resolveAgentWorkspaceDir(cfg, agent.agentId, env),
+      resolveAgentWorkspaceDir(cfg, agentId, env),
       LEGACY_HEARTBEAT_FILENAME,
     );
     try {
-      const source = await readHeartbeatSource(cfg, agent.agentId, { env });
+      const source = await readHeartbeatSource(cfg, agentId, { env });
       if (!source) {
         continue;
       }
+      const shouldImport =
+        withExistingOpenClawStateDatabaseReadOnly(
+          ({ db }) => {
+            const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
+            const receipt = readDefaultProactiveJobReceiptInDatabase(db, storeKey, agentId);
+            if (receipt?.phase === "complete") {
+              return false;
+            }
+            const jobs = decodeDoctorHeartbeatJobRows(loadCronRows(db, storeKey));
+            const previous = selectDoctorHeartbeatMonitor(jobs, agentId);
+            const monitor = receipt
+              ? resolveDoctorHeartbeatReceiptJob(cfg, jobs, agentId, receipt, previous)
+              : previous;
+            return (
+              !monitor ||
+              !heartbeatScratchMigrationConflict(
+                agentId,
+                source.content,
+                readScratchStateFromDatabase(db, storeKey, monitor.id),
+              )
+            );
+          },
+          { env },
+        ) ?? true;
+      if (shouldImport) {
+        validateHeartbeatTasks(analyzeLegacyHeartbeatTasks(source.content));
+      }
       findings.push({
         ...MIGRATION_FINDING_DEFAULTS,
-        target: agent.agentId,
+        target: agentId,
         path: heartbeatPath,
         requirement: "legacy-heartbeat-file",
-        message: `Agent "${agent.agentId}" still stores heartbeat instructions in HEARTBEAT.md.`,
+        message: `Agent "${agentId}" still stores heartbeat instructions in HEARTBEAT.md.`,
       });
     } catch (error) {
+      const deferred = error instanceof CronStoreSelectionRequiredError;
       findings.push({
         ...MIGRATION_FINDING_DEFAULTS,
-        target: agent.agentId,
+        target: agentId,
         path: heartbeatPath,
-        requirement: "heartbeat-file-migration-blocked",
-        severity: "error",
-        message: `Agent "${agent.agentId}" HEARTBEAT.md cannot be migrated: ${errorMessage(error)}`,
+        requirement: deferred ? "heartbeat-migration-deferred" : "heartbeat-file-migration-blocked",
+        severity: deferred ? "warning" : "error",
+        message: `Agent "${agentId}" HEARTBEAT.md cannot be migrated: ${errorMessage(error)}`,
       });
     }
   }
   return findings;
 }
 
-/** Migrates each enrolled agent's heartbeat file into its stable monitor job. */
+/** File ownership is independent of enrollment; disabled agents retain their scratch too. */
 export async function maybeMigrateHeartbeatFilesToScratch(params: {
   cfg: OpenClawConfig;
   shouldRepair: boolean;
@@ -437,21 +484,20 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
   const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
   const changes: string[] = [];
   const warnings: string[] = [];
-  const migrationAgents = resolveLegacyHeartbeatAgents(params.cfg);
+  const notices: string[] = [];
+  const migrationAgents = resolveHeartbeatFileAgentIds(params.cfg);
   if (!params.shouldRepair) {
-    for (const agent of migrationAgents) {
+    for (const agentId of migrationAgents) {
       try {
-        const source = await readHeartbeatSource(params.cfg, agent.agentId, { env });
+        const source = await readHeartbeatSource(params.cfg, agentId, { env });
         if (source) {
           note(
-            `${shortenHomePath(source.path)} will migrate into automation scratch for ${agent.agentId}.`,
+            `${shortenHomePath(source.path)} will migrate into automation scratch for ${agentId}.`,
             "Heartbeat migration preview",
           );
         }
       } catch (error) {
-        warnings.push(
-          `Agent "${agent.agentId}" HEARTBEAT.md cannot be migrated: ${errorMessage(error)}`,
-        );
+        warnings.push(`Agent "${agentId}" HEARTBEAT.md cannot be migrated: ${errorMessage(error)}`);
       }
     }
     noteDoctorMigrationResult({ warnings });
@@ -486,7 +532,12 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
   for (const agentId of new Set([...monitors.keys(), ...listAgentIds(params.cfg)])) {
     const monitor = monitors.get(agentId);
     const receipt = withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId),
+      ({ db }) =>
+        readDefaultProactiveJobReceiptInDatabase(
+          db,
+          resolveCronStoreKeyInDatabase(db, storePath, env),
+          agentId,
+        ),
       { env },
     );
     if (!shouldInspectHeartbeatScratchSource(Boolean(monitor), receipt)) {
@@ -504,7 +555,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     }
     if (receipt?.phase === "complete") {
       retainedSources.add(source.entryKey);
-      warnings.push(completedHeartbeatSourceWarning(agentId));
+      notices.push(completedHeartbeatSourceWarning(agentId));
       continue;
     }
     // Group by the directory entry being removed (canonical parent directory +
@@ -536,7 +587,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       plannedRevisionByJobId.set(monitor.id, state.currentRevision);
       const conflict = heartbeatScratchMigrationConflict(agentId, source.content, state);
       if (conflict) {
-        warnings.push(conflict);
+        notices.push(conflict);
       } else {
         importAgents.push([agentId, monitor]);
         if (current?.sourceSha256 !== source.sha256) {
@@ -550,18 +601,19 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       continue;
     }
 
-    if (!keepSource) {
-      // Archive before the claim rename: if doctor dies mid-claim, the content is
-      // already durable under the state backups instead of only at a hidden
-      // .doctor-importing-* path nothing rescans.
-      try {
+    try {
+      validateHeartbeatTasks(analyzeLegacyHeartbeatTasks(source.content));
+      if (!keepSource) {
+        // Archive before the claim rename: if doctor dies mid-claim, the content is
+        // already durable under the state backups instead of only at a hidden
+        // .doctor-importing-* path nothing rescans.
         await archiveSource({ agentId: importAgents[0]![0], source, env });
-      } catch (error) {
-        warnings.push(
-          `${shortenHomePath(source.path)} was not migrated: ${errorMessage(error)}. Rerun doctor to retry safely.`,
-        );
-        continue;
       }
+    } catch (error) {
+      warnings.push(
+        `${shortenHomePath(source.path)} was not migrated: ${errorMessage(error)}. Rerun doctor to retry safely.`,
+      );
+      continue;
     }
 
     // Claim before committing so path replacement cannot redirect imported bytes.
@@ -583,10 +635,11 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       try {
         const { shouldWriteScratch, destination } = runOpenClawStateWriteTransaction(
           ({ db }) => {
-            const currentJob = loadedCronStoreFromRows(
-              loadCronRows(db, cronStoreKey(storePath)),
-            ).store.jobs.find((job) => job.id === monitor.id);
-            const receipt = readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId);
+            const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
+            const currentJob = loadedCronStoreFromRows(loadCronRows(db, storeKey)).store.jobs.find(
+              (job) => job.id === monitor.id,
+            );
+            const receipt = readDefaultProactiveJobReceiptInDatabase(db, storeKey, agentId);
             if (
               !currentJob ||
               receipt?.phase !== "pending" ||
@@ -598,7 +651,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
             ) {
               throw new Error("automation changed during scratch migration");
             }
-            const state = readScratchStateFromDatabase(db, cronStoreKey(storePath), monitor.id);
+            const state = readScratchStateFromDatabase(db, storeKey, monitor.id);
             if (state.currentRevision !== plannedRevisionByJobId.get(monitor.id)) {
               throw new Error("scratch changed during migration");
             }
@@ -606,7 +659,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
               return { shouldWriteScratch: false, destination: state };
             }
             const { result } = writeCronJobScratchInDatabase(db, {
-              storeKey: cronStoreKey(storePath),
+              storeKey,
               jobId: monitor.id,
               content: source.content,
               expectedRevision: state.currentRevision,
@@ -669,11 +722,11 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
         verifyDestination: () => {
           const verified = withExistingOpenClawStateDatabaseReadOnly(
             ({ db }) => {
-              const jobs = loadedCronStoreFromRows(loadCronRows(db, cronStoreKey(storePath))).store
-                .jobs;
+              const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
+              const jobs = loadedCronStoreFromRows(loadCronRows(db, storeKey)).store.jobs;
               return importAgents.every(([agentId, monitor]) => {
                 const job = jobs.find((candidate) => candidate.id === monitor.id);
-                const receipt = readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId);
+                const receipt = readDefaultProactiveJobReceiptInDatabase(db, storeKey, agentId);
                 return (
                   receipt?.phase === "pending" &&
                   receipt.jobId === monitor.id &&
@@ -683,7 +736,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
                     projectCronJobThroughStorageCodec(monitor),
                   ) &&
                   isDeepStrictEqual(
-                    readScratchStateFromDatabase(db, cronStoreKey(storePath), monitor.id),
+                    readScratchStateFromDatabase(db, storeKey, monitor.id),
                     verifiedScratch.get(monitor.id),
                   )
                 );
@@ -714,6 +767,6 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     }
   }
 
-  noteDoctorMigrationResult({ changes, warnings });
-  return { changes, warnings };
+  noteDoctorMigrationResult({ changes, warnings, notices });
+  return { changes, warnings, ...(notices.length ? { notices } : {}) };
 }

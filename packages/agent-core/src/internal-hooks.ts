@@ -27,7 +27,7 @@ export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToo
 
 const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>();
 
-export type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
+type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
 
 const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();
 const toolTurnInputScopeByHook = new WeakMap<InternalToolTurnCompletionHook, object>();
@@ -51,15 +51,13 @@ export function commitInternalToolTurnInput(
   }
 }
 
-type InternalReadyToolCall = { toolCallId: string; args: unknown };
-
 export type InternalToolBatchLifecycle = {
   /**
    * Commit admitted calls in assistant order as they launch: prepared calls just
    * before their implementations start, argument-validation rejections when the
    * launch reaches them. May throw before launch.
    */
-  commitReadyCalls?: (calls: readonly InternalReadyToolCall[]) => void;
+  commitReadyCalls?: (calls: readonly { toolCallId: string; args: unknown }[]) => void;
   /** Release admission state for admitted calls, prepared or rejected, that will not launch. */
   releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
   /** Observe settled outcomes in assistant order, before warning text changes their identity. */
@@ -86,6 +84,7 @@ export type InternalSteeringQueueObserver = {
   drainContext?: () => AgentMessage[];
   reserve: (messages: readonly AgentMessage[]) => () => void;
   onChange?: () => void;
+  subscribe?: (listener: () => void) => () => void;
 };
 const steeringQueueObserverByCallback = new WeakMap<
   InternalSteeringGetter,
@@ -121,6 +120,14 @@ type InternalToolResultAcknowledgement = () => void;
 const toolResultAcknowledgementByValue = new WeakMap<object, InternalToolResultAcknowledgement>();
 const toolResultProvenanceByValue = new WeakMap<object, object>();
 const toolResultContentSourceByValue = new WeakMap<object, ToolResultContentSource>();
+
+/** Copy present private state without clearing a target's existing slot. */
+function copyInternalSlot<T>(slots: WeakMap<object, T>, source: object, target: object): void {
+  const value = slots.get(source);
+  if (value) {
+    slots.set(target, value);
+  }
+}
 
 /** Install OpenClaw-owned loop control without adding a plugin-facing Agent option. */
 export function setInternalBeforeToolBatch(
@@ -179,10 +186,18 @@ export function attachInternalSyncSteeringGetter(
   observer?: InternalSteeringQueueObserver,
 ): InternalSteeringGetter {
   syncSteeringGetterByCallback.set(callback, syncGetter);
+  attachInternalSteeringQueueObserver(callback, observer);
+  return callback;
+}
+
+/** Wrapping a getter must retain observation of its exact underlying queue. */
+export function attachInternalSteeringQueueObserver(
+  callback: InternalSteeringGetter,
+  observer: InternalSteeringQueueObserver | undefined,
+): void {
   if (observer) {
     steeringQueueObserverByCallback.set(callback, observer);
   }
-  return callback;
 }
 
 export function getInternalSteeringQueueObserver(
@@ -214,10 +229,7 @@ export function getInternalToolExecutionPreparer(
 
 /** Preserve private execution ownership when an adapter replaces a tool object. */
 export function copyInternalToolExecutionPreparer<T extends object>(source: object, target: T): T {
-  const preparer = toolExecutionPreparerByTool.get(source);
-  if (preparer) {
-    toolExecutionPreparerByTool.set(target, preparer);
-  }
+  copyInternalSlot(toolExecutionPreparerByTool, source, target);
   return target;
 }
 
@@ -268,18 +280,9 @@ export function getInternalToolResultContentSource(
 
 /** Carry private commit ownership through result transforms and message construction. */
 export function copyInternalToolResultState<T extends object>(source: object, target: T): T {
-  const acknowledge = toolResultAcknowledgementByValue.get(source);
-  if (acknowledge) {
-    toolResultAcknowledgementByValue.set(target, acknowledge);
-  }
-  const provenance = toolResultProvenanceByValue.get(source);
-  if (provenance) {
-    toolResultProvenanceByValue.set(target, provenance);
-  }
-  const contentSource = toolResultContentSourceByValue.get(source);
-  if (contentSource) {
-    toolResultContentSourceByValue.set(target, contentSource);
-  }
+  copyInternalSlot(toolResultAcknowledgementByValue, source, target);
+  copyInternalSlot(toolResultProvenanceByValue, source, target);
+  copyInternalSlot(toolResultContentSourceByValue, source, target);
   return target;
 }
 

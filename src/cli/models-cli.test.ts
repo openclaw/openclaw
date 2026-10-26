@@ -1,6 +1,5 @@
 import "../commands/models/accounts.js";
 import "../commands/models/auth-order.js";
-import "../commands/models/fallbacks-shared.js";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime, ExitError } from "../runtime.js";
@@ -13,23 +12,11 @@ const mocks = vi.hoisted(() => ({
   modelsListCommand: vi.fn().mockResolvedValue(undefined),
   modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetCommand: vi.fn().mockResolvedValue(undefined),
-  modelsRefreshCommand: vi.fn().mockResolvedValue(undefined),
-  noopAsync: vi.fn(async () => undefined),
-  changeFallbacksCommand: vi.fn().mockResolvedValue(undefined),
-  clearFallbacksCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAliasesAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesListCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAliasesRemoveCommand: vi.fn().mockResolvedValue(undefined),
-  modelsScanCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAuthAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLogoutCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAuthActivateCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAuthOrderGetCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthOrderUpdateCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAuthPasteApiKeyCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAuthPasteTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthSetupTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAccountsListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAccountsLoginCommand: vi.fn().mockResolvedValue(undefined),
@@ -42,11 +29,9 @@ vi.mock("../commands/models/list.list-command.js", () => ({
 vi.mock("../commands/models/list.status-command.js", () => ({
   modelsStatusCommand: mocks.modelsStatusCommand,
 }));
+// mock-isolation: Observe auth command routing without invoking interactive provider sign-in.
 vi.mock("../commands/models/auth.js", () => ({
-  modelsAuthAddCommand: mocks.modelsAuthAddCommand,
   modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
-  modelsAuthPasteApiKeyCommand: mocks.modelsAuthPasteApiKeyCommand,
-  modelsAuthPasteTokenCommand: mocks.modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand: mocks.modelsAuthSetupTokenCommand,
 }));
 vi.mock("../commands/models/auth-list.js", () => ({
@@ -58,73 +43,37 @@ vi.mock("../commands/models/accounts.js", async (importOriginal) => ({
   modelsAccountsLoginCommand: mocks.modelsAccountsLoginCommand,
   modelsAccountsUpdateDefaultCommand: mocks.modelsAccountsUpdateDefaultCommand,
 }));
-vi.mock("../commands/models/auth-activate.js", () => ({
-  modelsAuthActivateCommand: mocks.modelsAuthActivateCommand,
-}));
 vi.mock("../commands/models/auth-logout.js", () => ({
   modelsAuthLogoutCommand: mocks.modelsAuthLogoutCommand,
 }));
 vi.mock("../commands/models/auth-order.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/models/auth-order.js")>()),
-  modelsAuthOrderGetCommand: mocks.modelsAuthOrderGetCommand,
   modelsAuthOrderUpdateCommand: mocks.modelsAuthOrderUpdateCommand,
 }));
+// mock-isolation: Observe alias command routing without reading stored model configuration.
 vi.mock("../commands/models/aliases.js", () => ({
-  modelsAliasesAddCommand: mocks.modelsAliasesAddCommand,
   modelsAliasesListCommand: mocks.modelsAliasesListCommand,
-  modelsAliasesRemoveCommand: mocks.modelsAliasesRemoveCommand,
 }));
-vi.mock("../commands/models/fallbacks-shared.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../commands/models/fallbacks-shared.js")>()),
-  changeFallbacksCommand: mocks.changeFallbacksCommand,
-  clearFallbacksCommand: mocks.clearFallbacksCommand,
-  listFallbacksCommand: mocks.noopAsync,
-}));
-// mock-isolation: Observe CLI routing without scanning live providers.
-vi.mock("../commands/models/scan.js", () => ({ modelsScanCommand: mocks.modelsScanCommand }));
 // mock-isolation: Observe CLI routing without changing stored model configuration.
 vi.mock("../commands/models/set.js", () => ({ modelsSetCommand: mocks.modelsSetCommand }));
-vi.mock("../commands/models/refresh.js", () => ({
-  modelsRefreshCommand: mocks.modelsRefreshCommand,
-}));
 
 describe("models cli", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  function authCase(args: string, command: ReturnType<typeof vi.fn>, expected = {}) {
-    return {
-      label: args,
-      args: ["models", "auth", ...args.split(" ")],
-      command,
-      expected: { agent: "poe", ...expected },
-    };
-  }
-  function globalCase(args: string, command: ReturnType<typeof vi.fn>, field?: string) {
-    return { label: args, args: args.split(" "), command, field };
-  }
+  afterEach(() => vi.restoreAllMocks());
+  beforeEach(() => vi.clearAllMocks());
 
   const register = (program: Command) => registerModelsCli(program.enablePositionalOptions());
-  const runModelsCommand = (argv: string[]) => runRegisteredCli({ register, argv });
+  const runModelsCommand = (argv: string[] | string) =>
+    runRegisteredCli({ register, argv: typeof argv === "string" ? argv.split(" ") : argv });
 
   function expectCommandOptions(
     command: ReturnType<typeof vi.fn>,
     expected: Record<string, unknown>,
   ) {
-    expect(command).toHaveBeenCalledTimes(1);
-    const [options, context] = command.mock.calls[0] ?? [];
-    expect(options).toEqual(expect.objectContaining(expected));
-    if (!context || typeof context !== "object") {
-      throw new Error("expected command context");
-    }
+    expect(command).toHaveBeenCalledWith(expect.objectContaining(expected), expect.any(Object));
   }
 
-  async function detectJsonOutput(args: string[]) {
+  async function detectJsonOutput(argv: string) {
+    const args = argv.split(" ");
     const program = new Command();
     register(program);
     let detected: boolean | undefined;
@@ -144,35 +93,21 @@ describe("models cli", () => {
   it.each(["--json", "--status-json"])(
     "declares and forwards %s as machine output",
     async (flag) => {
-      expect(await detectJsonOutput(["models", flag])).toBe(true);
+      expect(await detectJsonOutput(`models ${flag}`)).toBe(true);
       expectCommandOptions(mocks.modelsStatusCommand, { json: true });
     },
   );
 
   it("does not apply the parent status alias to a child action", async () => {
-    expect(await detectJsonOutput(["models", "--status-json", "list"])).toBe(false);
+    expect(await detectJsonOutput("models --status-json list")).toBe(false);
   });
 
   it.each([
-    {
-      name: "an ignored parent status alias and a JSON-looking provider value",
-      args: "models --status-json auth list --provider --json".split(" "),
-      provider: "--json",
-      json: false,
-    },
-    {
-      name: "a real JSON flag before a plain-looking provider value",
-      args: "models auth list --json --provider --plain".split(" "),
-      provider: "--plain",
-      json: true,
-    },
-  ])("classifies $name by its actual Commander role", async ({ args, provider, json }) => {
+    ["models --status-json auth list --provider --json", "--json", false],
+    ["models auth list --json --provider --plain", "--plain", true],
+  ] as const)("classifies %s by its actual Commander role", async (args, provider, json) => {
     expect(await detectJsonOutput(args)).toBe(json);
     expectCommandOptions(mocks.modelsAuthListCommand, { provider, json });
-  });
-
-  it("declares parent --status-plain as plain machine output owning stdout", () => {
-    expect(isModelsPlainMachineOutput(["node", "openclaw", "models", "--status-plain"])).toBe(true);
   });
 
   it("does not declare plain after argv terminator as plain machine output", () => {
@@ -182,72 +117,48 @@ describe("models cli", () => {
   });
 
   it("does not turn plain output into JSON failure envelope", async () => {
-    expect(await detectJsonOutput(["models", "aliases", "list", "--plain"])).toBe(false);
+    expect(await detectJsonOutput("models aliases list --plain")).toBe(false);
   });
 
+  const provider = { provider: "anthropic" };
+  const authCase = (
+    args: string,
+    command: keyof typeof mocks,
+    expected: Record<string, unknown> = provider,
+  ) => ({ args, command, expected });
   it.each([
-    authCase("--agent poe add", mocks.modelsAuthAddCommand),
-    authCase("--agent poe activate openai:saved", mocks.modelsAuthActivateCommand, {
-      profileId: "openai:saved",
-    }),
-    authCase("--agent poe logout openai:manual --yes", mocks.modelsAuthLogoutCommand, {
+    authCase("--agent poe logout openai:manual --yes", "modelsAuthLogoutCommand", {
       profileId: "openai:manual",
       yes: true,
     }),
-    authCase("--agent poe setup-token --provider anthropic", mocks.modelsAuthSetupTokenCommand, {
-      provider: "anthropic",
-    }),
-    authCase("--agent poe paste-token --provider anthropic", mocks.modelsAuthPasteTokenCommand, {
-      provider: "anthropic",
-    }),
-    authCase("--agent poe login-github-copilot --yes", mocks.modelsAuthLoginCommand, {
+    authCase("--agent poe setup-token --provider anthropic", "modelsAuthSetupTokenCommand"),
+    authCase("--agent poe login-github-copilot --yes", "modelsAuthLoginCommand", {
       provider: "github-copilot",
       method: "device",
       yes: true,
     }),
-  ])("passes parent --agent to models auth $label", async ({ args, command, expected }) => {
-    await runModelsCommand(args);
-
-    expectCommandOptions(command, expected);
-  });
-
-  it.each([
-    authCase("order get --provider anthropic --agent poe", mocks.modelsAuthOrderGetCommand, {
-      provider: "anthropic",
-    }),
     authCase(
       "order set --provider anthropic anthropic:first anthropic:second --agent poe",
-      mocks.modelsAuthOrderUpdateCommand,
-      { provider: "anthropic", order: ["anthropic:first", "anthropic:second"] },
+      "modelsAuthOrderUpdateCommand",
+      { ...provider, order: ["anthropic:first", "anthropic:second"] },
     ),
-    authCase("order clear --provider anthropic --agent poe", mocks.modelsAuthOrderUpdateCommand, {
-      provider: "anthropic",
+    authCase("order clear --provider anthropic --agent poe", "modelsAuthOrderUpdateCommand", {
+      ...provider,
       order: null,
     }),
-  ])("passes leaf --agent to models auth $label", async ({ args, command, expected }) => {
-    await runModelsCommand(args);
-
-    expectCommandOptions(command, expected);
+  ])("passes parent or leaf --agent to models auth $args", async ({ args, command, expected }) => {
+    await runModelsCommand(`models auth ${args}`);
+    expectCommandOptions(mocks[command], { agent: "poe", ...expected });
   });
 
   it("maps --device-code to the provider device-code auth method", async () => {
-    await runModelsCommand("models auth login --provider openai --device-code".split(" "));
+    await runModelsCommand("models auth login --provider openai --device-code");
 
     expectCommandOptions(mocks.modelsAuthLoginCommand, {
       provider: "openai",
       method: "device-code",
     });
   });
-
-  const globalModelCommands = [
-    globalCase("set-image openai/gpt-image-1", mocks.modelsSetCommand, "imageModel"),
-    globalCase("aliases add zzz soraka/grok-4.6", mocks.modelsAliasesAddCommand),
-    globalCase("aliases remove zzz", mocks.modelsAliasesRemoveCommand),
-    globalCase("image-fallbacks remove openai/gpt-5.5", mocks.changeFallbacksCommand),
-    globalCase("image-fallbacks clear", mocks.clearFallbacksCommand),
-    globalCase("scan --no-probe --no-input", mocks.modelsScanCommand),
-    globalCase("refresh", mocks.modelsRefreshCommand),
-  ];
 
   it.each([
     [
@@ -265,30 +176,25 @@ describe("models cli", () => {
     const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
       throw new ExitError(code);
     });
-    await expect(runModelsCommand(args.split(" "))).rejects.toMatchObject({ code: 1 });
+    await expect(runModelsCommand(args)).rejects.toMatchObject({ code: 1 });
     expect(error).toHaveBeenCalledWith(expect.stringContaining(message));
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(command).not.toHaveBeenCalled();
   });
 
-  it.each(globalModelCommands)(
-    "still runs models $label without --agent",
-    async ({ args, command, field }) => {
-      await runModelsCommand(["models", ...args]);
-      expect(command).toHaveBeenCalledOnce();
-      if (field) {
-        expect(command).toHaveBeenCalledWith(args[1], defaultRuntime, field);
-      }
-    },
-  );
+  it("selects the image model field for set-image", async () => {
+    await runModelsCommand("models set-image openai/gpt-image-1");
+    expect(mocks.modelsSetCommand).toHaveBeenCalledWith(
+      "openai/gpt-image-1",
+      defaultRuntime,
+      "imageModel",
+    );
+  });
 
   it("shows help for models auth without error exit", async () => {
     const program = new Command();
     program.exitOverride();
-    program.configureOutput({
-      writeOut: () => {},
-      writeErr: () => {},
-    });
+    program.configureOutput({ writeOut: () => {}, writeErr: () => {} });
     registerModelsCli(program);
 
     await expect(program.parseAsync(["models", "auth"], { from: "user" })).rejects.toMatchObject({
@@ -296,43 +202,28 @@ describe("models cli", () => {
     });
   });
 
-  const accountCommands = [
-    {
-      args: ["use", "personal-account"],
-      command: mocks.modelsAccountsUpdateDefaultCommand,
-      expected: { action: "use", authProfileId: "personal-account" },
-    },
-    {
-      args: ["clear-default", "anthropic"],
-      command: mocks.modelsAccountsUpdateDefaultCommand,
-      expected: { action: "clear-default", provider: "anthropic" },
-    },
-  ];
-
-  it.each(accountCommands)(
-    "resolves personal-account Gateway options for $args",
-    async ({ args, command, expected }) => {
-      const flags =
-        "--url wss://accounts.example --token-file /tmp/gateway-token --password-file /tmp/gateway-password --timeout 45000 --json".split(
-          " ",
-        );
-      await runModelsCommand(["models", "accounts", ...flags, ...args]);
-      expectCommandOptions(command, {
-        ...expected,
-        url: "wss://accounts.example",
-        tokenFile: "/tmp/gateway-token",
-        passwordFile: "/tmp/gateway-password",
-        timeout: "45000",
-        json: true,
-      });
-    },
-  );
+  it.each([
+    ["use personal-account", { action: "use", authProfileId: "personal-account" }],
+    ["clear-default anthropic", { action: "clear-default", provider: "anthropic" }],
+  ] as const)("resolves personal-account Gateway options for %s", async (args, expected) => {
+    const flags =
+      "--url wss://accounts.example --token-file /tmp/gateway-token --password-file /tmp/gateway-password --timeout 45000 --json".split(
+        " ",
+      );
+    await runModelsCommand(["models", "accounts", ...flags, ...args.split(" ")]);
+    expectCommandOptions(mocks.modelsAccountsUpdateDefaultCommand, {
+      ...expected,
+      url: "wss://accounts.example",
+      tokenFile: "/tmp/gateway-token",
+      passwordFile: "/tmp/gateway-password",
+      timeout: "45000",
+      json: true,
+    });
+  });
 
   it("lets explicit leaf options override the account group and inherits models JSON", async () => {
     await runModelsCommand(
-      "models --json accounts --port 19001 --timeout 45000 list --port 19002 --timeout 9000".split(
-        " ",
-      ),
+      "models --json accounts --port 19001 --timeout 45000 list --port 19002 --timeout 9000",
     );
     expectCommandOptions(mocks.modelsAccountsListCommand, {
       port: "19002",

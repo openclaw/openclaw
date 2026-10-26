@@ -75,6 +75,18 @@ function injectionOperation(backend: Parameters<typeof attachBackend>[1]) {
   return runningOperation({ originatingLeafEntryId: "leaf-a" }, backend);
 }
 
+function messageOperation(
+  queueMessage: NonNullable<Backend["messageInjection"]>["queueMessage"],
+  backend: Parameters<typeof attachBackend>[1] = {},
+) {
+  return injectionOperation({
+    supportsTranscriptCommitWait: true,
+    runId: "run-a",
+    ...backend,
+    messageInjection: { isAvailable: () => true, queueMessage },
+  });
+}
+
 function observeClear(operation: ReplyOperation) {
   const afterClear = vi.fn();
   runAfterReplyOperationClear(operation, afterClear);
@@ -668,7 +680,7 @@ it.each(["reentrant", "abort-frozen", "retained-terminal"] as const)(
     const terminal = state === "retained-terminal";
     const order: string[] = [];
     const beforeSupersede = vi.fn(() => order.push("record"));
-    const operation = createTestReplyOperation({ turnKind: terminal ? undefined : "heartbeat" });
+    const operation = createTestReplyOperation();
     const cancel = vi.fn((reason) => {
       order.push(`cancel:${reason}`);
       if (state === "reentrant") {
@@ -942,12 +954,9 @@ it.each([
     const claimPendingUserInputAnswer = vi.fn(async () => {
       throw error;
     });
-    const operation = injectionOperation({
-      supportsTranscriptCommitWait: true,
-      runId: "run-a",
+    const operation = messageOperation(queueMessage, {
       toolAuthorityFingerprint: "active-authority",
       claimPendingUserInputAnswer,
-      messageInjection: { isAvailable: () => true, queueMessage },
     });
     const target = captureInjectionTarget(operation.key)!;
     const confirmSteerTargetRunIdForPersistence = vi.fn(async () => {});
@@ -994,16 +1003,13 @@ it.each(["callback", "queue-fulfilled", "queue-rejected"] as const)(
     const delivery = createDeferred();
     const callerOnQueueAccepted = vi.fn();
     let queueOptions: ReplyBackendQueueMessageOptions | undefined;
-    const operation = injectionOperation({
-      runId: "run-a",
-      messageInjection: {
-        isAvailable: () => true,
-        queueMessage: vi.fn((_text, options) => {
-          queueOptions = options;
-          return delivery.promise;
-        }),
-      },
-    });
+    const operation = messageOperation(
+      vi.fn((_text, options) => {
+        queueOptions = options;
+        return delivery.promise;
+      }),
+      { supportsTranscriptCommitWait: undefined },
+    );
     const target = captureInjectionTarget(operation.key)!;
     const attempt = await beginReplyMessageInjectionTarget(target, "input", {
       onQueueAccepted: callerOnQueueAccepted,
@@ -1099,19 +1105,11 @@ it.each(
 );
 
 it("rejects an ABA successor even when key and leaf are reused", async () => {
-  const first = injectionOperation({
-    supportsTranscriptCommitWait: true,
-    runId: "run-a",
-    messageInjection: { isAvailable: () => true, queueMessage: vi.fn(async () => {}) },
-  });
+  const first = messageOperation(vi.fn(async () => {}));
   const target = captureInjectionTarget(first.key)!;
   first.complete();
   const successorQueue = vi.fn(async () => {});
-  injectionOperation({
-    supportsTranscriptCommitWait: true,
-    runId: "run-a",
-    messageInjection: { isAvailable: () => true, queueMessage: successorQueue },
-  });
+  messageOperation(successorQueue);
   await expect(queueTargetMessage(target, "must not move")).resolves.toMatchObject({
     status: "rejected",
     reason: "no_active_run",
@@ -1120,15 +1118,10 @@ it("rejects an ABA successor even when key and leaf are reused", async () => {
 });
 
 it("keeps an invoked queue authoritative when the owner clears synchronously", async () => {
-  const operation = runningOperation({ originatingLeafEntryId: "leaf-a" });
   const queueMessage = vi.fn(async () => {
     operation.complete();
   });
-  attachBackend(operation, {
-    supportsTranscriptCommitWait: true,
-    runId: "run-a",
-    messageInjection: { isAvailable: () => true, queueMessage },
-  });
+  const operation = messageOperation(queueMessage);
   const target = captureInjectionTarget(operation.key)!;
   await expect(queueTargetMessage(target, "last input")).resolves.toEqual(acceptedResult);
   expect(controllerQueries.isSessionRunActiveForKey(operation.key)).toBe(false);

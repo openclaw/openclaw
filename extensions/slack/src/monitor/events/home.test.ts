@@ -41,9 +41,12 @@ describe("Slack home events", () => {
     vi.clearAllMocks();
   });
 
-  it("publishes the Home tab without an inactive slash command hint", async () => {
+  it.each([
+    [undefined, "Send a DM or mention OpenClaw in a channel to start a session."],
+    ["acme", "Send a DM, mention OpenClaw in a channel, or use `/acme` to start a session."],
+  ])("publishes the Home tab with command %s", async (slashCommandName, text) => {
     const trackEvent = vi.fn();
-    const { publish, openHome } = createHomeContext({ trackEvent });
+    const { publish, openHome } = createHomeContext({ trackEvent, slashCommandName });
 
     await openHome({ event_ts: "123.456" }, { api_app_id: "A1" });
 
@@ -56,27 +59,7 @@ describe("Slack home events", () => {
     });
     expect(publish.mock.calls[0]?.[0]?.view.blocks[1]).toMatchObject({
       type: "section",
-      text: {
-        text: "Send a DM or mention OpenClaw in a channel to start a session.",
-      },
-    });
-  });
-
-  it("publishes the configured slash command name", async () => {
-    const { publish, openHome } = createHomeContext({ slashCommandName: "acme" });
-
-    await openHome();
-
-    expect(publish).toHaveBeenCalledWith({
-      token: "xoxb-test",
-      user_id: "U123",
-      view: expect.any(Object),
-    });
-    expect(publish.mock.calls[0]?.[0]?.view.blocks[1]).toMatchObject({
-      type: "section",
-      text: {
-        text: "Send a DM, mention OpenClaw in a channel, or use `/acme` to start a session.",
-      },
+      text: { text },
     });
   });
 

@@ -7,14 +7,19 @@ import {
   buildQuerySuggestions,
   buildSessionsCsv,
   removeQueryToken,
+  setQueryTokensForKey,
 } from "./query.ts";
 import type { UsageSessionEntry } from "./types.ts";
 import { buildUsageFilterOptions } from "./view.test-support.ts";
 
-it("removes an entire quoted term without leaving phrase fragments", () => {
-  const quotedLabel = 'label:"Team  Planning"';
-  expect(removeQueryToken(`${quotedLabel} provider:openai`, quotedLabel)).toBe("provider:openai ");
-});
+it.each(['label:"Team  Planning"', '"label:Team  Planning"'])(
+  "removes an entire quoted term without leaving phrase fragments: %s",
+  (quotedLabel) => {
+    expect(removeQueryToken(`${quotedLabel} provider:openai`, quotedLabel)).toBe(
+      "provider:openai ",
+    );
+  },
+);
 
 it("limits suggestions before matching while preserving raw option spelling", () => {
   const values = [
@@ -42,14 +47,34 @@ it("limits suggestions before matching while preserving raw option spelling", ()
     buildQuerySuggestions(query, extractQueryTerms(query), options);
   expect(options.agent).toEqual(["OpenAI", "openai", " ", "four", "five", "six"]);
   for (const key of ["agent", "channel", "provider", "model"]) {
-    expect(suggest(`${key}:OPEN`).map((entry) => entry.value)).toEqual([
-      `${key}:OpenAI`,
-      `${key}:openai`,
-    ]);
+    for (const query of [`${key}:OPEN`, `"${key}:OPEN"`, `${key}:"OPEN"`]) {
+      expect(suggest(query).map((entry) => entry.value)).toEqual([
+        `${key}:OpenAI`,
+        `${key}:openai`,
+      ]);
+    }
     expect(suggest(`${key}:seventh`)).toEqual([]);
   }
   expect(suggest("constructor:")).toEqual([]);
   expect(suggest("has:err")).toEqual([{ label: "has:errors", value: "has:errors" }]);
+});
+
+it("quotes newly selected multiword values so they parse as one term", () => {
+  const query = setQueryTokensForKey("provider:local ", "model", ["Local Model"]);
+  expect(query).toBe('provider:local model:"Local Model" ');
+  expect(extractQueryTerms(query).map(({ key, value }) => ({ key, value }))).toEqual([
+    { key: "provider", value: "local" },
+    { key: "model", value: "Local Model" },
+  ]);
+  // Reselecting keeps the existing quoted term instead of appending a duplicate.
+  expect(setQueryTokensForKey(query, "model", ["Local Model"])).toBe(query);
+
+  const options = buildUsageFilterOptions([
+    { key: "session-1", model: "Local Model", usage: null },
+  ]);
+  expect(buildQuerySuggestions("model:Loc", extractQueryTerms("model:Loc"), options)).toEqual([
+    { label: "model:Local Model", value: 'model:"Local Model"' },
+  ]);
 });
 
 const csvForLabel = (label: string, usage: UsageSessionEntry["usage"] = null) =>

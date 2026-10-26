@@ -44,6 +44,7 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "openclaw-activity-page": HTMLAttributes<HTMLElement>;
       "openclaw-cron-scratch-editor": HTMLAttributes<HTMLElement>;
       "openclaw-ip-location": HTMLAttributes<HTMLElement>;
       "openclaw-home-session": HTMLAttributes<HTMLElement>;
@@ -99,15 +100,7 @@ declare module "@solidjs/web" {
           entry: import("../pages/agents-home/claws-catalog-client.ts").ClawCatalogEntry,
         ) => void;
       };
-      "openclaw-claws-catalog-dialog": HTMLAttributes<HTMLElement> & {
-        "prop:initialPackageName"?: string;
-        "prop:pageMode"?: boolean;
-        "prop:onClose"?: () => void;
-        "prop:onAdded"?: () => void;
-        "prop:onSelectEntry"?: (
-          entry: import("../pages/agents-home/claws-catalog-client.ts").ClawCatalogEntry,
-        ) => void;
-      };
+      "openclaw-claws-catalog-dialog": HTMLAttributes<HTMLElement>;
       "openclaw-github-identity": HTMLAttributes<HTMLElement>;
       "openclaw-chat-permission-card": HTMLAttributes<HTMLElement>;
       "openclaw-chat-run-failure-notice": HTMLAttributes<HTMLElement>;

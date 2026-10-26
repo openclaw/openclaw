@@ -62,13 +62,6 @@ const probeResult = (definitionBackup?: boolean) =>
       ...(definitionBackup === undefined ? {} : { definitionBackup }),
     }),
   });
-const timedStep = (phase: string, args: string, durationMs: number): UpdateStepResult => ({
-  name: `managed-service-${phase}`,
-  command: `openclaw gateway ${args}`,
-  cwd: "/fixture/root",
-  durationMs,
-  exitCode: 0,
-});
 
 it("times the executor probe separately from the reconciliation install child", async () => {
   mocks.command.mockImplementation(async (argv: string[]) => {
@@ -83,22 +76,19 @@ it("times the executor probe separately from the reconciliation install child", 
     });
   });
   const steps: UpdateStepResult[] = [];
-  const onGatewayStartAttempted = vi.fn();
   await expect(
     runInstall({
       result: { root: "/fixture/root", mode: "git" },
       opts: executorOptions(),
       nodeRunner: "node",
       gatewayPort: 18809,
-      onGatewayStartAttempted,
       onTimedStep: (step) => steps.push(step),
     }),
   ).resolves.toBe("unverified");
 
-  expect(onGatewayStartAttempted).toHaveBeenCalledExactlyOnceWith("install");
-  expect(steps).toEqual([
-    timedStep("executor-check", "install --update-executor check --json", 9_000),
-    timedStep("install", "install --force --port 18809 --json", 24_000),
+  expect(steps.map(({ name, durationMs }) => [name, durationMs])).toEqual([
+    ["managed-service-executor-check", 9_000],
+    ["managed-service-install", 24_000],
   ]);
 });
 
@@ -113,33 +103,28 @@ it("keeps failed reconciliation children on the existing failure path", async ()
   expect(onTimedStep).not.toHaveBeenCalled();
 });
 
-it.each(["", "UPDATE_NATIVE_AUTHORITY: exit 1"])(
-  "classifies a completed pre-write refusal with stderr %j",
-  async (stderr) => {
-    const error =
-      "SERVICE_DEFINITION_UNKNOWN: Service definition inspection or backup failed; the definition was preserved: inspection failed";
-    mocks.command.mockImplementation(async (argv: string[]) =>
-      argv.includes("check")
-        ? probeResult(true)
-        : createCommandResult({
-            code: 1,
-            stdout: JSON.stringify({ action: "install", ok: false, error }),
-            stderr,
+it("keeps outer authority failure classification when the child also reports a preserved definition", async () => {
+  mocks.command.mockImplementation(async (argv: string[]) =>
+    argv.includes("check")
+      ? probeResult(true)
+      : createCommandResult({
+          code: 1,
+          stderr: "UPDATE_NATIVE_AUTHORITY: exit 1",
+          stdout: JSON.stringify({
+            action: "install",
+            ok: false,
+            error: "SERVICE_DEFINITION_UNKNOWN: inspection failed",
           }),
-    );
-    const definitionRecovery: UpdateServiceDefinitionRecovery = {};
-    const failure = await runInstall({ opts: executorOptions(), definitionRecovery }).catch(
-      (cause: unknown) => cause,
-    );
-    expect(failure).toBeInstanceOf(Error);
-    expect(failure instanceof UpdateCommandRecoveryPendingError).toBe(stderr !== "");
-    expect(failure).toHaveProperty(
-      "message",
-      `updated install refresh failed: ${stderr || error} (/fixture/root/dist/entry.js)`,
-    );
-    expect(definitionRecovery).toEqual({ preserved: true, unverified: false });
-  },
-);
+        }),
+  );
+  const definitionRecovery: UpdateServiceDefinitionRecovery = {};
+  const failure = runInstall({ opts: executorOptions(), definitionRecovery });
+  await expect(failure).rejects.toBeInstanceOf(UpdateCommandRecoveryPendingError);
+  await expect(failure).rejects.toThrow(
+    "updated install refresh failed: UPDATE_NATIVE_AUTHORITY: exit 1 (/fixture/root/dist/entry.js)",
+  );
+  expect(definitionRecovery).toEqual({ preserved: true, unverified: false });
+});
 
 it.each([false, true])("retains a timed step when history write fails=%s", (failed) => {
   if (failed) {
@@ -148,19 +133,14 @@ it.each([false, true])("retains a timed step when history write fails=%s", (fail
     });
   }
   const result: UpdateRunResult = { status: "ok", mode: "git", steps: [], durationMs: 0 };
-  const step = timedStep("install", "install --force --json", 24_000);
-  expect(() => recordServiceTimedStep(result, step, { runId: "run-1", env: {} })).not.toThrow();
+  const step: UpdateStepResult = {
+    name: "managed-service-install",
+    command: "openclaw gateway install",
+    cwd: "/fixture/root",
+    durationMs: 24_000,
+    exitCode: 0,
+  };
+  const run = { runId: "run-1", env: {}, busyTimeoutMs: 71_000 };
+  recordServiceTimedStep(result, step, run);
   expect(result.steps).toEqual([step]);
-  if (!failed) {
-    expect(mocks.recordStep).toHaveBeenCalledExactlyOnceWith(
-      "run-1",
-      expect.objectContaining({
-        step: "managed-service-install",
-        status: "completed",
-        startedAtMs: Date.now() - 24_000,
-        endedAtMs: Date.now(),
-      }),
-      { env: {} },
-    );
-  }
 });

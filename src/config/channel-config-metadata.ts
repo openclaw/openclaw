@@ -16,7 +16,7 @@ import {
 } from "../plugins/official-external-plugin-catalog.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { collectPluginProviderRequestOwners } from "../plugins/plugin-provider-request-policy.js";
-import { PLUGIN_ORIGIN_PRIORITIES } from "../plugins/record-groups.js";
+import { groupPluginRecords, PLUGIN_ORIGIN_PRIORITIES } from "../plugins/record-groups.js";
 import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 
@@ -65,7 +65,10 @@ function assertChannelConfigSchemaTraversalDepth(
 export function collectPluginSchemaMetadataCore(
   registry: PluginManifestRegistry,
 ): PluginUiMetadata[] {
-  const requestOwners = collectPluginProviderRequestOwners(registry.plugins);
+  const requestOwners = groupPluginRecords(
+    collectPluginProviderRequestOwners(registry.plugins),
+    ([, owner]) => owner.plugin,
+  );
   const deduped = new Map<
     string,
     PluginUiMetadata & {
@@ -93,9 +96,7 @@ export function collectPluginSchemaMetadataCore(
       providerRequest: record.providerRequest
         ? {
             providers: Object.fromEntries(
-              [...requestOwners]
-                .filter(([, owner]) => owner.plugin === record)
-                .map(([provider, { policy }]) => [provider, policy]),
+              (requestOwners.get(record) ?? []).map(([provider, { policy }]) => [provider, policy]),
             ),
           }
         : undefined,

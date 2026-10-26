@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { loginHarness, openLogin } from "./model-providers-page.login.test-support.ts";
@@ -37,6 +38,7 @@ it.each([
           } satisfies ModelCatalogResult)
         : originalRequest(method, ...args),
     );
+    const creation = deferred<null>();
     let signal: AbortSignal | undefined;
     const create = vi.fn(async (_params: unknown, options?: { signal?: AbortSignal }) => {
       signal = options?.signal;
@@ -45,7 +47,7 @@ it.each([
           signal?.addEventListener("abort", () => resolve(null), { once: true });
         });
       }
-      return null;
+      return creation.promise;
     });
     Object.assign(context, { sessions: { create, state: {} } });
     const page = appendPage(context);
@@ -84,6 +86,16 @@ it.each([
           { signal: expect.any(AbortSignal) },
         ),
       );
+      const button = startChat()!;
+      await waitForSolid(() => expect(button.disabled).toBe(true));
+      button.click();
+      expect(create).toHaveBeenCalledTimes(1);
+      if (!cancel) {
+        creation.resolve(null);
+        await waitForSolid(() => expect(button.disabled).toBe(false));
+        expect(startChat()).toBe(button);
+        expect(page.querySelector(".model-setup-wizard")?.textContent).toContain("Request failed");
+      }
     } else {
       await waitForSolid(() =>
         expect(request.mock.calls.some(([method]) => method === "models.list")).toBe(true),

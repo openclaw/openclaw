@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
-import { readTuiSessionUserMessage } from "../tui-session-events.js";
 import { ChatLog } from "./chat-log.js";
 import { MarkdownMessageComponent } from "./markdown-message.js";
 
@@ -33,43 +32,26 @@ describe("ChatLog run state", () => {
     expectOrder(rendered, "Preserved second", "Second continuation");
   });
 
-  it.each([false, true])("anchors a delayed prompt after pruning (streaming=%s)", (streaming) => {
+  it("anchors a delayed prompt before the surviving streaming reply after pruning", () => {
     chatLog = new ChatLog(20);
-    chatLog.finalizeAssistant("Evicted reply.", streaming ? "old-run" : "run");
-    if (streaming) {
-      chatLog.updateAssistant("Surviving reply.", "run");
-      addNotices(18);
-      chatLog.startTool("tool", "read_file", { path: "active.txt" });
-    } else {
-      addNotices(19);
-      chatLog.finalizeAssistant("Surviving reply.", "run");
-    }
+    chatLog.finalizeAssistant("Evicted reply.", "old-run");
+    chatLog.updateAssistant("Surviving reply.", "run");
+    addNotices(18);
+    chatLog.startTool("tool", "read_file", { path: "active.txt" });
     chatLog.addLiveUser("Delayed prompt.", { messageId: "user", runId: "run" });
     const rendered = render();
     expect(chatLog.children).toHaveLength(20);
     expect(rendered).not.toContain("Evicted reply.");
     expectOrder(rendered, "Delayed prompt.", "Surviving reply.");
-    if (streaming) {
-      expectOrder(rendered, "Surviving reply.", "Read File");
-    }
+    expectOrder(rendered, "Surviving reply.", "Read File");
   });
 
   it("deduplicates authoritative user events and adopts the matching pending prompt", () => {
     chatLog.addPendingUser("local-send", "Persisted prompt.");
     chatLog.updateAssistant("Already streaming.", "shared-run");
-    const message = readTuiSessionUserMessage({
-      message: {
-        role: "user",
-        content: "Persisted prompt.",
-        __openclaw: { id: "shared-user", idempotencyKey: "local-send:user", runId: "shared-run" },
-      },
-    });
-    expect(message).not.toBeNull();
-    if (!message) {
-      throw new Error("expected a persisted user message");
-    }
-    chatLog.addLiveUser(message.text, message);
-    chatLog.addLiveUser(message.text, message);
+    const identity = { messageId: "shared-user", sendId: "local-send", runId: "shared-run" };
+    chatLog.addLiveUser("Persisted prompt.", identity);
+    chatLog.addLiveUser("Persisted prompt.", identity);
 
     expect(render()).toContain("Persisted prompt.");
     const roles = chatLog.children.map((c) =>
@@ -96,10 +78,10 @@ describe("ChatLog run state", () => {
   it("re-keys a pending user in place without moving its position", () => {
     chatLog.addPendingUser("local", "queued hello");
     chatLog.updateAssistant("hi there", "r-accepted");
-    expect(chatLog.rekeyPendingUser("local", "r-accepted")).toBe(true);
+    chatLog.rekeyPendingUser("local", "r-accepted");
 
     expectOrder(render(), "queued hello", "hi there");
-    expect(chatLog.dropPendingUser("r-accepted")).toBe(true);
+    chatLog.dropPendingUser("r-accepted");
     expect(chatLog.countPendingUsers()).toBe(0);
   });
 });

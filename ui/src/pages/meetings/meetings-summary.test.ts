@@ -28,14 +28,19 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("generates on open, holds failures without retry loops, and retries explicitly", async () => {
+it("generates on open, keeps tabs responsive, and holds failures until explicit retry", async () => {
   vi.useFakeTimers();
   const pending = deferred<typeof meetingPage>();
+  const retry = deferred<typeof meetingPage>();
   detail.session = { ...meetingEntry, hasSummary: false };
-  summarize
-    .mockReturnValueOnce(pending.promise)
-    .mockImplementation(async () => (detail = meetingPage));
+  summarize.mockReturnValueOnce(pending.promise).mockReturnValueOnce(retry.promise);
   const { page } = mount(request, "?selector=meeting");
+  await waitForText(page, "Generating meeting summary");
+  const transcript = button(page, "Transcript");
+  transcript.click();
+  await waitForSolid(() => expect(transcript.ariaSelected).toBe("true"));
+  expect(page.textContent).toContain("Keep the reader quiet and readable.");
+  button(page, "Summary").click();
   await waitForText(page, "Generating meeting summary");
   await vi.advanceTimersByTimeAsync(9_000);
   expect(summarize).toHaveBeenCalledTimes(1);
@@ -44,10 +49,39 @@ it("generates on open, holds failures without retry loops, and retries explicitl
   await vi.advanceTimersByTimeAsync(9_000);
   expect(summarize).toHaveBeenCalledTimes(1);
   button(page.querySelector(".transcripts-summary")!, "Retry").click();
+  await waitForText(page, "Generating meeting summary");
+  expect(page.textContent).not.toContain("Summary provider unavailable");
+  detail = meetingPage;
+  retry.resolve(meetingPage);
   await waitForText(page, "Reader layout discussed.");
   await vi.advanceTimersByTimeAsync(15_000);
   expect(summarize).toHaveBeenCalledTimes(2);
   expect(page.textContent).not.toContain("Summary provider unavailable");
+});
+
+it("finishes replacement notes while a cancelled summary request remains unresolved", async () => {
+  const retired = deferred<typeof meetingPage>();
+  const replacement = deferred<typeof meetingPage>();
+  summarize.mockReturnValueOnce(retired.promise).mockReturnValueOnce(replacement.promise);
+  const { page, setSearch } = mount(request, "?selector=old");
+  await waitForText(page, "Generating meeting summary");
+  setSearch("?selector=new");
+  await waitForSolid(() => expect(summarize).toHaveBeenCalledTimes(2));
+  replacement.resolve({
+    ...meetingPage,
+    summary: { ...meetingPage.summary, markdown: "Current meeting notes" },
+  });
+  await waitForText(page, "Current meeting notes");
+  expect(page.textContent).not.toContain("Generating meeting summary");
+
+  retired.resolve({
+    ...meetingPage,
+    summary: { ...meetingPage.summary, markdown: "Retired meeting notes" },
+  });
+  await retired.promise;
+  flush();
+  expect(page.textContent).toContain("Current meeting notes");
+  expect(page.textContent).not.toContain("Retired meeting notes");
 });
 
 it.each([
@@ -64,23 +98,20 @@ it.each([
   expect(page.textContent).toContain(expected);
 });
 
-it.each(["selection", "client", "authorization"])("fences replaced %s", async (replacement) => {
+it.each(["client", "authorization"])("fences replaced %s", async (replacement) => {
   const pending = deferred<typeof meetingPage>();
   summarize.mockReturnValue(pending.promise);
-  const { page, setSearch, snapshot, notify } = mount(request, "?selector=old");
+  const { page, snapshot, notify } = mount(request, "?selector=old");
   await waitForText(page, "Generating meeting summary");
   detail = meetingPage;
-  if (replacement === "selection") {
-    setSearch("?selector=new");
-  } else if (replacement === "client") {
+  if (replacement === "client") {
     snapshot.client = { request } as unknown as GatewayBrowserClient;
-    notify();
   } else {
     snapshot.hello = {
       auth: { role: "operator", scopes: ["operator.read"] },
     } as ApplicationGatewaySnapshot["hello"];
-    notify();
   }
+  notify();
   await waitForText(page, "Reader layout discussed.");
   const late = { ...meetingPage.summary, markdown: "Late private notes" };
   pending.resolve({ ...meetingPage, summary: late });

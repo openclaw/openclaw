@@ -265,6 +265,11 @@ type OpenRouterFusionPromptContribution = {
   dynamicSuffix?: string;
 };
 
+function normalizeRouterBaseUrl<T extends { baseUrl?: string }>(value: T) {
+  const baseUrl = normalizeOpenRouterBaseUrl(value.baseUrl);
+  return baseUrl && baseUrl !== value.baseUrl ? { ...value, baseUrl } : undefined;
+}
+
 function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model: T): T | undefined {
   const normalizedBaseUrl = normalizeOpenRouterBaseUrl(model.baseUrl);
   const normalizedId = normalizeOpenRouterApiModelId(model.id);
@@ -449,22 +454,9 @@ export default defineSingleProviderPluginEntry({
           normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
         );
       },
-      normalizeConfig: ({ providerConfig }) => {
-        const normalizedBaseUrl = normalizeOpenRouterBaseUrl(providerConfig.baseUrl);
-        return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
-          ? { ...providerConfig, baseUrl: normalizedBaseUrl }
-          : undefined;
-      },
+      normalizeConfig: ({ providerConfig }) => normalizeRouterBaseUrl(providerConfig),
       normalizeResolvedModel: ({ model }) => normalizeOpenRouterResolvedModel(model),
-      normalizeTransport: ({ api: apiLocal, baseUrl }) => {
-        const normalizedBaseUrl = normalizeOpenRouterBaseUrl(baseUrl);
-        return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
-          ? {
-              api: apiLocal,
-              baseUrl: normalizedBaseUrl,
-            }
-          : undefined;
-      },
+      normalizeTransport: ({ api, baseUrl }) => normalizeRouterBaseUrl({ api, baseUrl }),
       classifyFailoverReason: ({ provider, errorMessage }) => {
         if (provider?.trim().toLowerCase() !== PROVIDER_ID) {
           return undefined;

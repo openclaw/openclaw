@@ -1,23 +1,23 @@
 {
   "name": "@openclaw/x",
-  "version": "2026.10.5",
+  "version": "2026.10.7",
   "description": "OpenClaw X mentions and public reply channel plugin",
   "type": "module",
   "dependencies": {
-    "@solidjs/web": "2.0.0-rc.16",
+    "@solidjs/web": "2.0.0-rc.18",
     "linkify-it": "6.1.0",
-    "solid-js": "2.0.0-rc.16",
+    "solid-js": "2.0.0-rc.18",
     "tlds": "1.261.0",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "@solidjs/compiler": "2.0.0-rc.16",
+    "@solidjs/compiler": "2.0.0-rc.18",
     "esbuild": "0.28.2",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.10.5"
+    "openclaw": ">=2026.10.7"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -44,7 +44,7 @@
       "minHostVersion": ">=2026.9.8"
     },
     "compat": {
-      "pluginApi": ">=2026.10.5"
+      "pluginApi": ">=2026.10.7"
     },
     "build": {
       "bundledDist": true

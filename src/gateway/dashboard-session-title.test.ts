@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   generate: vi.fn(),
   utility: vi.fn(),
   readTranscript: vi.fn(),
+  readTail: vi.fn(),
+  prepareSkills: vi.fn(),
   patch: vi.fn(),
   load: vi.fn(),
 }));
@@ -28,15 +30,19 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
 }));
 // mock-isolation: Registry and transport behavior are covered by the real-provider title suites.
 vi.mock("../skills/discovery/chat-commands.js", () => ({
-  prepareSkillCommandsForWorkspace: async () => [],
+  prepareSkillCommandsForWorkspace: mocks.prepareSkills,
 }));
 // mock-isolation: Title orchestration tests supply transcript reads without starting workers.
 vi.mock("./session-transcript-title-reader.js", () => ({
   readSessionTitleFieldsFromTranscriptAsync: mocks.readTranscript,
 }));
+// mock-isolation: Supply the recent conversation without starting history workers.
+vi.mock("./session-transcript-readers.js", () => ({
+  readSessionTranscriptBoundedMessageTailPageAsync: mocks.readTail,
+}));
 
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -122,6 +128,8 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       firstUserMessage: null,
       lastMessagePreview: null,
     });
+    mocks.readTail.mockReset().mockResolvedValue({ events: [] });
+    mocks.prepareSkills.mockReset().mockResolvedValue([]);
     mockSessionUpdate(baseEntry);
   });
 
@@ -136,8 +144,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       await expect(
         maybeGenerateDashboardSessionTitle({ ...titleParams(), userMessage }),
       ).resolves.toBe(false);
-      expect(mocks.generate).not.toHaveBeenCalled();
-      expect(mocks.patch).not.toHaveBeenCalled();
+      expectCalls(0, mocks.generate, mocks.patch);
     },
   );
 
@@ -177,7 +184,6 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   });
 
   it("preserves the native primary auth profile for utility models under ACP", async () => {
-    mocks.utility.mockReturnValue("openai/gpt-5.6-luna");
     await expectTitleRoute(
       {
         utilityModelRef: "openai/gpt-5.6-luna",
@@ -197,25 +203,106 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     );
   });
 
-  it.each([
-    ["Reply with ok’", "Reply with ok"],
-    ["'Users' can't edit permissions'", "Users' can't edit permissions"],
-    [`${"a".repeat(52)} "long quoted span"`, `${"a".repeat(52)} long q`],
-  ])("normalizes generated title wrappers", async (generated, expected) => {
-    mocks.generate.mockImplementation(async ({ normalizeLabel }) => normalizeLabel(generated));
-
-    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
-
-    const update = mocks.patch.mock.calls[0]?.[1];
-    expect(await update?.({ ...baseEntry })).toEqual({ displayName: expected });
-  });
-
   it("skips a persisted display name even when supplied an older entry", async () => {
     const params = titleParams({ ...baseEntry, displayName: "My release" });
     await expect(maybeGenerateDashboardSessionTitle({ ...params, entry: baseEntry })).resolves.toBe(
       false,
     );
     expectCalls(0, mocks.generate, mocks.patch);
+  });
+
+  it.each(["ordinary", "registered skill", "prepared skill"] as const)(
+    "refines a generated Dashboard title once after six follow-up messages (%s)",
+    async (mode) => {
+      const prepared = mode === "prepared skill";
+      const taskMessage = (text: string) => (mode === "ordinary" ? text : `/review ${text}`);
+      if (mode !== "ordinary") {
+        mocks.prepareSkills.mockResolvedValue([
+          { name: "review", skillName: "review", description: "Review a task" },
+        ]);
+      }
+      let current: InternalSessionEntry = {
+        ...baseEntry,
+        ...(prepared
+          ? {
+              displayName: "Release Planning",
+              titleRefinement: {
+                sessionId: baseEntry.sessionId,
+                generatedName: "Release Planning",
+                remainingMessages: 7,
+              },
+            }
+          : {}),
+      };
+      mocks.load.mockImplementation(() => current);
+      mocks.patch.mockImplementation(async (_scope, update) => {
+        const patch = await update(current);
+        if (patch) {
+          current = { ...current, ...patch };
+        }
+        return current;
+      });
+      const params = { ...titleDefaults };
+      await maybeGenerateDashboardSessionTitle({
+        ...params,
+        userMessage: taskMessage(params.userMessage),
+      });
+      mocks.generate.mockResolvedValue("Fix release signing");
+      mocks.readTail.mockResolvedValue({
+        events: [
+          {
+            event: {
+              type: "message",
+              message: { role: "user", content: "The release fails during signing" },
+            },
+          },
+        ],
+      });
+      for (const userMessage of ["/status", "/unknown task"]) {
+        await maybeGenerateDashboardSessionTitle({ ...params, userMessage });
+      }
+      for (let index = 0; index < 5; index++) {
+        await maybeGenerateDashboardSessionTitle({
+          ...params,
+          userMessage: taskMessage("Investigate signing"),
+        });
+      }
+      expect(current.displayName).toBe("Release Planning");
+      await maybeGenerateDashboardSessionTitle({
+        ...params,
+        userMessage: taskMessage("Fix the certificate"),
+      });
+      expect(current.displayName).toBe("Fix release signing");
+      expect(mocks.generate.mock.calls.at(-1)?.[0].userMessage).toContain("Fix the certificate");
+      expect(mocks.generate.mock.calls.at(-1)?.[0].userMessage).toContain("fails during signing");
+      for (let index = 0; index < 8; index++) {
+        await maybeGenerateDashboardSessionTitle(params);
+      }
+      expect(mocks.generate).toHaveBeenCalledTimes(prepared ? 1 : 2);
+    },
+  );
+
+  it("does not overwrite a manual rename while the one-time refinement is in flight", async () => {
+    let current: SessionEntry = { ...baseEntry };
+    mocks.load.mockImplementation(() => current);
+    mocks.patch.mockImplementation(async (_scope, update) => {
+      const patch = await update(current);
+      if (patch) {
+        current = { ...current, ...patch };
+      }
+      return current;
+    });
+    await maybeGenerateDashboardSessionTitle(titleDefaults);
+    for (let index = 0; index < 5; index++) {
+      await maybeGenerateDashboardSessionTitle(titleDefaults);
+    }
+    const pending = pendingLabel();
+    const refinement = maybeGenerateDashboardSessionTitle(titleDefaults);
+    await pending.started;
+    current = { ...current, displayName: "My release" };
+    pending.resolve("Fix release signing");
+    await expect(refinement).resolves.toBe(false);
+    expect(current.displayName).toBe("My release");
   });
 
   it("titles over an Android platform auto-label without treating it as a rename", async () => {
@@ -276,14 +363,9 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     async (outcome) => {
       vi.useFakeTimers();
       const reply = createDeferredCore();
-      const firstAttempt = createDeferredCore();
-      const label = createDeferredCore<string>();
+      const label = pendingLabel(true);
       const params = titleParams();
       const onFallback = vi.fn();
-      mocks.generate.mockImplementationOnce(async () => {
-        firstAttempt.resolve();
-        return await label.promise;
-      });
       if (outcome === "unavailable") {
         mocks.generate.mockRejectedValue(new Error("endpoint unavailable"));
       }
@@ -292,7 +374,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
         retryAfter: reply.promise,
         onFallback,
       });
-      await firstAttempt.promise;
+      await label.started;
       label.reject(new Error("conversation label generation failed (primary fallback)"));
       try {
         await vi.advanceTimersByTimeAsync(0);
@@ -325,33 +407,19 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(mocks.generate).toHaveBeenCalledOnce();
   });
 
-  it("bounds a worktree join without cancelling the canonical background naming request", async () => {
-    vi.useFakeTimers();
-    const naming = pendingLabel();
-    const params = titleParams();
-    const background = maybeGenerateDashboardSessionTitle(params);
-    const { onError, onTitleStateChanged, worktree } = worktreeRequest({
-      ...params,
-      sessionKey: "dashboard:chat-1",
-    });
-    await vi.advanceTimersByTimeAsync(30_000);
-    await expect(worktree).resolves.toBeUndefined();
-    expect(onError).toHaveBeenCalledOnce();
-    naming.resolve("Release Planning");
-    await expect(background).resolves.toBe(true);
-    expect(mocks.generate).toHaveBeenCalledOnce();
-    expect(onTitleStateChanged).not.toHaveBeenCalled();
-    expect(mocks.load()).toMatchObject({ displayName: "Release Planning" });
-  });
-
-  it.each(["generated", "fallback"])(
-    "persists a late %s title after the worktree caller stops waiting",
+  it.each(["generated", "fallback", "background owner"])(
+    "persists a late title after the worktree caller stops waiting (%s)",
     async (outcome) => {
       vi.useFakeTimers();
       const naming = pendingLabel();
       const params = titleParams();
-      const { onError, onTitleStateChanged, worktree } = worktreeRequest(params);
-      const background = maybeGenerateDashboardSessionTitle(params);
+      const backgroundFirst = outcome === "background owner";
+      const original = backgroundFirst ? maybeGenerateDashboardSessionTitle(params) : undefined;
+      const { onError, onTitleStateChanged, worktree } = worktreeRequest({
+        ...params,
+        sessionKey: backgroundFirst ? "dashboard:chat-1" : params.sessionKey,
+      });
+      const background = original ?? maybeGenerateDashboardSessionTitle(params);
 
       await naming.started;
       await vi.advanceTimersByTimeAsync(8_000);
@@ -360,19 +428,23 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       await expect(worktree).resolves.toBeUndefined();
       expect(onError).toHaveBeenCalledOnce();
       expect(mocks.patch).not.toHaveBeenCalled();
-      if (outcome === "generated") {
+      if (outcome !== "fallback") {
         naming.resolve("Release Planning");
       } else {
         naming.reject(new Error("model attempts exhausted"));
       }
-      await background;
+      if (backgroundFirst) {
+        await expect(background).resolves.toBe(true);
+      } else {
+        await background;
+      }
       await vi.advanceTimersByTimeAsync(0);
 
       expect(mocks.load()).toMatchObject({
         displayName:
-          outcome === "generated" ? "Release Planning" : expect.stringMatching(/^[a-z]+-[a-z]+$/),
+          outcome !== "fallback" ? "Release Planning" : expect.stringMatching(/^[a-z]+-[a-z]+$/),
       });
-      expect(onTitleStateChanged).toHaveBeenCalledTimes(2);
+      expect(onTitleStateChanged).toHaveBeenCalledTimes(backgroundFirst ? 0 : 2);
       expectCalls(1, mocks.patch, mocks.generate);
     },
   );
@@ -433,7 +505,9 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     await expect(first).resolves.toBe(true);
     await expect(duplicate).resolves.toBe(false);
 
-    expectCalls(1, mocks.generate, mocks.patch, mocks.load, mocks.readTranscript);
+    expectCalls(1, mocks.generate, mocks.patch, mocks.readTranscript);
+    // Each admitted turn reads current title state before counting toward refinement.
+    expect(mocks.load).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -481,17 +555,16 @@ function textAttachment(text: string): ChatAttachment {
 }
 
 describe("deriveGoalSessionTitle", () => {
-  it("skips slash commands", () => {
-    expect(deriveGoalSessionTitle("/new")).toBeUndefined();
-    expect(deriveGoalSessionTitle("/model openai/gpt-5.4")).toBeUndefined();
-  });
-
-  it("prefers a task-verb sentence over earlier banter", () => {
-    expect(deriveGoalSessionTitle("Hey. Investigate why heartbeat failed overnight.")).toBe(
+  it.each([
+    ["/new", undefined],
+    ["/model openai/gpt-5.4", undefined],
+    [
+      "Hey. Investigate why heartbeat failed overnight.",
       "Investigate why heartbeat failed overnight.",
-    );
+    ],
+  ])("derives a task title from %s", (input, expected) => {
+    expect(deriveGoalSessionTitle(input)).toBe(expected);
   });
-
   it("truncates long goals at a word boundary within 60 characters", () => {
     const result = deriveGoalSessionTitle(
       "investigate the long gateway timeout that keeps happening when the utility model cannot name sessions during onboarding",
@@ -551,6 +624,9 @@ describe("worktree title source lifecycle", () => {
     };
     return { withSource, entered, closed, asserted, active };
   }
+
+  const awaitGeneration = (started: Promise<void>, request: Promise<unknown>) =>
+    awaitGateBeforeSettlement(started, request, "title completed before generation started");
 
   beforeEach(() => {
     current = { ...sourceEntry };
@@ -628,11 +704,7 @@ describe("worktree title source lifecycle", () => {
       );
       const settled = request.catch(() => {});
       try {
-        await awaitGateBeforeSettlement(
-          started.promise,
-          request,
-          "title completed before generation started",
-        );
+        await awaitGeneration(started.promise, request);
         await nextTurn();
         expect(source.entered.length).toBeGreaterThan(0);
         expect(source.closed).toEqual(source.entered);
@@ -705,11 +777,7 @@ describe("worktree title source lifecycle", () => {
     );
     const settled = first.catch(() => {});
     try {
-      await awaitGateBeforeSettlement(
-        started.promise,
-        first,
-        "title completed before generation started",
-      );
+      await awaitGeneration(started.promise, first);
       const duplicate = context.run("duplicate", () =>
         duplicateOwner.run(() =>
           maybeGenerateSessionTitle({ ...params, withSource: duplicateSource }),

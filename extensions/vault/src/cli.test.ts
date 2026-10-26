@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { registerVaultCommands } from "./cli.js";
 
@@ -27,14 +27,11 @@ function runSetup(planPath: string, args: string[]) {
 }
 
 async function createSetupPlan(args: string[]): Promise<{ targets: Record<string, unknown>[] }> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vault-cli-"));
-  const planPath = path.join(dir, "plan.json");
-  try {
+  return await withTempDir("openclaw-vault-cli-", async (dir) => {
+    const planPath = path.join(dir, "plan.json");
     await runSetup(planPath, args);
     return JSON.parse(await fs.readFile(planPath, "utf8"));
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
+  });
 }
 
 async function runStatus(config: OpenClawConfig, args: string[] = []) {
@@ -48,12 +45,11 @@ describe("vault CLI setup plan", () => {
   it.skipIf(process.platform === "win32")(
     "creates private plans in a readable directory without overwriting files or following symlinks",
     async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vault-plan-security-"));
-      const privatePath = path.join(dir, "private.json");
-      const existingPath = path.join(dir, "existing.json");
-      const targetPath = path.join(dir, "target.json");
-      const symlinkPath = path.join(dir, "symlink.json");
-      try {
+      await withTempDir("openclaw-vault-plan-security-", async (dir) => {
+        const privatePath = path.join(dir, "private.json");
+        const existingPath = path.join(dir, "existing.json");
+        const targetPath = path.join(dir, "target.json");
+        const symlinkPath = path.join(dir, "symlink.json");
         await fs.chmod(dir, 0o755);
         await runSetup(privatePath, setupArgs);
         expect((await fs.stat(privatePath)).mode & 0o777).toBe(0o600);
@@ -65,9 +61,7 @@ describe("vault CLI setup plan", () => {
         await fs.symlink(targetPath, symlinkPath);
         await expect(runSetup(symlinkPath, setupArgs)).rejects.toThrow("Plan path already exists");
         await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("keep-me");
-      } finally {
-        await fs.rm(dir, { recursive: true, force: true });
-      }
+      });
     },
   );
 

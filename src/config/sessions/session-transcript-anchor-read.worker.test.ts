@@ -6,6 +6,7 @@ import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -773,10 +774,18 @@ it("keeps incognito anchors with their memory owner without creating durable sta
       entryId: "question",
       rawSeq: 1,
     });
-    await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
+    await expect(
+      listDirectoryTreeStrict(state.stateDir).then((inventory) =>
+        inventory.map((walkEntry) => walkEntry.relativePath),
+      ),
+    ).resolves.toEqual([]);
     memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
     await expect(readAnchor({ ...scope, entryId: "question" })).resolves.toBeUndefined();
-    await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
+    await expect(
+      listDirectoryTreeStrict(state.stateDir).then((inventory) =>
+        inventory.map((walkEntry) => walkEntry.relativePath),
+      ),
+    ).resolves.toEqual([]);
   });
 });
 

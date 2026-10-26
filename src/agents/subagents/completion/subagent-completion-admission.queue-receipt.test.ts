@@ -20,17 +20,54 @@ import {
   createTestGatewayScheduler,
 } from "../../../test-utils/gateway-scheduler-clock.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { resolveRequesterRecoveryDelivery } from "../announce/subagent-announce-completion-delivery.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { useCompletionDatabase } from "./completion-database.test-support.js";
 import { SubagentCompletionSourceChangedError } from "./subagent-completion-admission.store.js";
 import {
+  armRequesterWake,
+  readCompletionSystemEvents,
+  records,
+  reopenCompletionFixtureOwners,
   seedSubagentCompletionOwner,
   settleRequesterCompletionBatch,
 } from "./subagent-completion-admission.test-helpers.js";
 import type { RequesterWakeCommittedWrite } from "./subagent-completion-mutation.types.js";
 
 const db = useCompletionDatabase("openclaw-requester-outcome-");
+
+it("retains a failed recovered requester without queuing another model input", async () => {
+  const { subagent } = armRequesterWake(records());
+  seedSubagentCompletionOwner({ subagent, databaseOptions: { database: db.value } });
+  const completion = structuredClone(subagent.completion);
+  const recovery = resolveRequesterRecoveryDelivery(
+    {
+      sessionId: "requester-session",
+      updatedAt: Date.now(),
+      restartRecoveryTerminalRunIds: ["recovered-requester"],
+    },
+    "recovered-requester",
+  );
+  assert(recovery?.kind === "delivery");
+
+  await settleRequesterCompletionBatch({
+    entries: [subagent],
+    outcome: recovery.delivery,
+    databaseOptions: { database: db.value },
+  });
+
+  db.value = await reopenCompletionFixtureOwners();
+  const restored = subagentRuns.get(subagent.runId)!;
+  expect(restored.completion).toEqual(completion);
+  expect(restored.delivery).toMatchObject({
+    status: "failed",
+    disposition: "permanent_failure",
+    lastError: "recovered requester completed without durable final delivery evidence",
+  });
+  expect(restored.requesterSettleWake).toBeUndefined();
+  expect(readCompletionSystemEvents(db.value)).toEqual([]);
+});
 
 it.each(["pending", "completed", "replaced", "absent"] as const)(
   "joins the existing %s intent after a published callback fails",

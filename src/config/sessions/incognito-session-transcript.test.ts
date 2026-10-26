@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -30,7 +31,6 @@ import type { SessionAccessScope } from "./session-accessor.types.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import {
   withSessionActorStorage,
-  runWithSessionActorStorage,
   type SelectedSessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
@@ -51,7 +51,7 @@ const create = (
 ) => createSessionEntryWithTranscript(scope, () => ({ ok: true, entry: value }), options);
 function expectEmpty(...states: OpenClawTestState[]) {
   for (const state of states) {
-    expect.soft(fs.readdirSync(state.stateDir, { recursive: true })).toEqual([]);
+    expect.soft(listDirectoryTreeStrictSync(state.stateDir)).toEqual([]);
   }
 }
 const expectHeader = (scope: SessionAccessScope, sessionId: string, extra = {}) =>
@@ -124,62 +124,38 @@ it.each(["ambient", "omitted", "sentinel", "durable"] as const)(
           : undefined;
     const scope = scopeFor(env, ` ${key} `, storePath);
     const original = makeEntry("created-incognito");
-    expect(process.env.OPENCLAW_STATE_DIR).toBe(ambient.stateDir);
-    expect(explicit.stateDir).not.toBe(ambient.stateDir);
-
     await withMemory(scope, async () => {
-      const createChecked = async (value: SessionEntry, label: string, previous?: SessionEntry) => {
+      const createChecked = async (value: SessionEntry, label: string) => {
         let followed = false;
-        const result = await createSessionEntryWithTranscript(
-          scope,
-          (snapshot) => {
-            const expected = previous ? expect.objectContaining(previous) : undefined;
-            expect(snapshot).toMatchObject({
-              existingEntry: expected,
-              targetEntry: expected,
-              labelInUse: false,
-            });
-            return { ok: true, entry: value };
+        const result = await create(scope, value, {
+          cwd: state.workspaceDir,
+          label,
+          afterCommitted: async (_entry, source) => {
+            source.assertCurrent();
+            expect(loadSessionEntry(scope)).toMatchObject(value);
+            await Promise.resolve();
+            source.assertCurrent();
+            expect(loadSessionEntry(scope)).toMatchObject(value);
+            followed = true;
           },
-          {
-            cwd: state.workspaceDir,
-            label,
-            afterCommitted: async (_entry, source) => {
-              source.assertCurrent();
-              expect(loadSessionEntry(scope)).toMatchObject(value);
-              await Promise.resolve();
-              source.assertCurrent();
-              expect(loadSessionEntry(scope)).toMatchObject(value);
-              followed = true;
-            },
-          },
-        );
+        });
         expect(followed).toBe(true);
         expect(result).toMatchObject({ ok: true, entry: { ...value, label }, sessionFile: key });
       };
       await createChecked(original, "unused");
-      expect(memorySessionActorOwners.read({ agentId, path: sentinel })).toMatchObject({
-        agentId,
-        path: sentinel,
-      });
       expectEmpty(explicit, ambient);
 
       const transcriptScope = { ...scope, sessionKey: key, sessionId: original.sessionId };
-      const target = await resolveSessionTranscriptRuntimeTarget(transcriptScope);
-      expect(target).toMatchObject({
+      expect(await resolveSessionTranscriptRuntimeTarget(transcriptScope)).toMatchObject({
         agentId,
         sessionId: original.sessionId,
         sessionKey: key,
         storePath: sentinel,
       });
       await expectHeader(transcriptScope, original.sessionId, { cwd: state.workspaceDir });
-      const candidate = resolveSessionEntryCandidateTarget({
-        agentId,
-        env,
-        cfg: {},
-        candidateKeys: [key],
-      });
-      expect(candidate).toMatchObject({
+      expect(
+        resolveSessionEntryCandidateTarget({ agentId, env, cfg: {}, candidateKeys: [key] }),
+      ).toMatchObject({
         agentId,
         sessionKey: key,
         persisted: true,
@@ -187,7 +163,7 @@ it.each(["ambient", "omitted", "sentinel", "durable"] as const)(
       });
 
       const updated = { ...original, label: "recreated", updatedAt: 2 };
-      await createChecked(updated, "recreated", original);
+      await createChecked(updated, "recreated");
       expect(loadSessionEntry(scope)).toMatchObject(updated);
     });
     memorySessionActorOwners.closeDatabase({ agentId, path: sentinel });
@@ -222,7 +198,6 @@ it.each([
     expect(listOpenClawRegisteredAgentDatabases({ env: explicit.env })).toEqual([
       expect.objectContaining({ agentId: physicalOwner, path: databasePath }),
     ]);
-    expect(fs.existsSync(databasePath)).toBe(true);
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     expect(loadSessionEntry(scope)).toMatchObject(original);
@@ -255,38 +230,37 @@ it("rolls back creation after commit authority is revoked", async () => {
   });
 });
 it("reopens incognito turns without writing a durable locator", async () => {
-  const state = explicit;
-  const scope = { agentId: "main", env: state.env, sessionKey };
+  const scope = { agentId: "main", env: explicit.env, sessionKey };
   await withMemory(scope, async () => {
     await create(scope, makeEntry("incognito-session"));
-    const durableStorePath = path.join(state.workspaceDir, "sessions.json");
+    const durableStorePath = path.join(explicit.workspaceDir, "sessions.json");
     expect(loadSessionEntry({ ...scope, storePath: durableStorePath })?.incognito).toBe(true);
     const target = {
       ...scope,
       sessionId: "incognito-session",
-      storePath: resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env }),
+      storePath: resolveSessionStorePathCore(undefined, scope),
     };
-    const firstTurn = await SessionManager.openAsync(target, state.workspaceDir);
+    const firstTurn = await SessionManager.openAsync(target, explicit.workspaceDir);
     await firstTurn.appendMessageAsync(makeUserMessage("first question", 1));
     await firstTurn.appendMessageAsync(
       makeAgentAssistantMessage({ content: [{ type: "text", text: "first answer" }] }),
     );
-    const secondTurn = await SessionManager.openAsync(target, state.workspaceDir);
+    const secondTurn = await SessionManager.openAsync(target, explicit.workspaceDir);
     await secondTurn.appendMessageAsync(makeUserMessage("second question", 3));
-    const messages = secondTurn.buildSessionContext().messages;
-    expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
-    expect(messages[0]).toMatchObject({ content: "first question" });
-    expect(messages[2]).toMatchObject({ content: "second question" });
+    expect(secondTurn.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "first question" },
+      { role: "assistant" },
+      { role: "user", content: "second question" },
+    ]);
     expect(fs.existsSync(durableStorePath)).toBe(false);
-    expectEmpty(state);
+    expectEmpty(explicit);
   });
 });
 
 it("retains archived incognito transcripts until owner close", async () => {
-  const state = explicit;
   const scope = {
     agentId: "main",
-    env: state.env,
+    env: explicit.env,
     sessionKey: "agent:main:dashboard:incognito-archived",
   };
   await withMemory(scope, async (binding) => {
@@ -302,38 +276,29 @@ it("retains archived incognito transcripts until owner close", async () => {
       transcriptEvents: [event],
     }));
     const activeScope = { ...scope, sessionKey: "agent:main:dashboard:incognito-active" };
-    const activeActor = await binding.actor.storage.acquire(activeScope.sessionKey);
-    try {
-      await runWithSessionActorStorage({ ...binding, actor: activeActor }, async () => {
-        await create(activeScope, makeEntry("active", now, false));
-        const maintenanceConfig = resolveMaintenanceConfigFromInput({
-          archiveDashboardAfter: false,
-          maxDiskBytes: false,
-          maxEntries: 1,
-          pruneAfter: "365d",
-        });
-        for (const mode of ["skip", "warn", "enforce"] as const) {
-          await patchSessionEntryCore(activeScope, () => ({ model: mode }), {
-            maintenanceConfig: { ...maintenanceConfig, mode: mode === "warn" ? "warn" : "enforce" },
-            skipMaintenance: mode === "skip",
-          });
-          if (mode !== "enforce") {
-            expect(memoryRead(binding)?.archivedAt).toBeUndefined();
-          }
-        }
+    await withMemory(activeScope, async () => {
+      await create(activeScope, makeEntry("active", now, false));
+      const maintenanceConfig = resolveMaintenanceConfigFromInput({
+        archiveDashboardAfter: false,
+        maxDiskBytes: false,
+        maxEntries: 1,
+        pruneAfter: "365d",
       });
-    } finally {
-      await activeActor.release();
-    }
+      for (const mode of ["skip", "warn", "enforce"] as const) {
+        await patchSessionEntryCore(activeScope, () => ({ model: mode }), {
+          maintenanceConfig: { ...maintenanceConfig, mode: mode === "warn" ? "warn" : "enforce" },
+          skipMaintenance: mode === "skip",
+        });
+        if (mode !== "enforce") {
+          expect(memoryRead(binding)?.archivedAt).toBeUndefined();
+        }
+      }
+    });
     expect(loadSessionEntry(scope)).toMatchObject({
       sessionId: "archived",
       archivedAt: expect.any(Number),
     });
-    const entries = listSessionEntriesCore({
-      agentId: "main",
-      env: state.env,
-      storePath: binding.path,
-    });
+    const entries = listSessionEntriesCore({ ...scope, storePath: binding.path });
     expect(entries).toHaveLength(2);
     expect(
       entries
@@ -346,6 +311,6 @@ it("retains archived incognito transcripts until owner close", async () => {
     memorySessionActorOwners.closeDatabase(binding);
     expect(memorySessionActorOwners.read(binding)).toBeUndefined();
     expect(fs.existsSync(binding.path)).toBe(false);
-    expectEmpty(state);
+    expectEmpty(explicit);
   });
 });

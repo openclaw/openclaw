@@ -1,5 +1,19 @@
 import type { PortalSummary } from "@openclaw/gateway-protocol";
-import { For, Show, createMemo, createUniqueId, onCleanup, onSettled } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  action,
+  affects,
+  createMemo,
+  createOptimistic,
+  createUniqueId,
+  latest,
+  onCleanup,
+  onSettled,
+} from "solid-js";
 import type { PortalPanelToggleDetail } from "../../components/panel-toggle-contract.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -7,13 +21,15 @@ import { Menu } from "../../components/solid/menu.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
 import { registerPortalsEnglish } from "../../i18n/locales/en-portals.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { showToast } from "../../lib/toast.ts";
+import { PendingEnvironment, PortalProbeLoading } from "./portals-read-states.tsx";
 import { createPortals, type PortalsModel, type PortalsPresentation } from "./portals-state.ts";
-import "../../styles/session-panel-rail.css";
-import "./portals.css";
+import sessionPanelRailStyles from "../../styles/session-panel-rail.css?inline";
+import portalStyles from "./portals.css?inline";
 
 registerEnglishCatalog(registerPortalsEnglish);
 const PORTAL_FRAME_SANDBOX =
@@ -28,7 +44,14 @@ function PortalsPageContent(props: PortalsPageProps, host: PortalsPageElement) {
   const model = createPortals(useApplication(), () => host);
   owners.set(host, model);
   onCleanup(() => owners.delete(host));
-  return <PortalContent model={model} mobile={props.mobile} />;
+  return (
+    <>
+      <style>{`${sessionPanelRailStyles}\n${portalStyles}`}</style>
+      <Show when={model.state().previewEpoch} keyed>
+        {(_previewEpoch) => <PortalContent model={model} mobile={props.mobile} />}
+      </Show>
+    </>
+  );
 }
 
 function EmptyState(props: { model: PortalsModel; mobile?: boolean }) {
@@ -50,7 +73,7 @@ function EmptyState(props: { model: PortalsModel; mobile?: boolean }) {
             fallback={
               <>
                 <Show
-                  when={!state().loaded && (state().loading || !state().connected)}
+                  when={!state().loaded && !state().connected}
                   fallback={
                     <>
                       <div class="portals-empty__title">
@@ -106,7 +129,13 @@ function EmptyState(props: { model: PortalsModel; mobile?: boolean }) {
   );
 }
 
-function PortalPreview(props: { model: PortalsModel; portal: PortalSummary; mobile?: boolean }) {
+function PortalPreview(props: {
+  model: PortalsModel;
+  portal: PortalSummary;
+  mobile?: boolean;
+  closing: string | null;
+  closePortal: (portal: PortalSummary) => void;
+}) {
   const state = () => props.model.state();
   const embedded = () => props.model.presentation().embedded;
   const desktop = () => embedded() && !props.mobile;
@@ -145,6 +174,13 @@ function PortalPreview(props: { model: PortalsModel; portal: PortalSummary; mobi
   const frameKey = () => `${props.portal.id}\u0000${portalUrl()}`;
   const probeStatus = () =>
     state().portalProbeState?.key === frameKey() ? state().portalProbeState!.status : "probing";
+  const probeRead = createMemo(() => {
+    const probe = state().portalProbeState;
+    return probe?.key === frameKey() ? probe : undefined;
+  });
+  const probeReady = createMemo(async () => {
+    await probeRead()?.result;
+  });
   const noticeKey = () =>
     probeStatus() === "new-tab-required"
       ? "newTabRequired"
@@ -228,12 +264,12 @@ function PortalPreview(props: { model: PortalsModel; portal: PortalSummary; mobi
                   id: "close",
                   label: t("portalsPage.embeddedClose"),
                   icon: <Icon name="x" class="portals-embedded__menu-icon" />,
-                  disabled: !state().canClosePortal || state().closingPortalId === props.portal.id,
+                  disabled: !state().canClosePortal || props.closing === props.portal.id,
                 },
               ]}
               onSelect={(item) => {
                 if (item.id === "close") {
-                  void props.model.closePortal(props.portal);
+                  props.closePortal(props.portal);
                 }
                 if (item.id === "copy") {
                   void copyToClipboard(props.portal.publicUrl).then((copied) =>
@@ -290,8 +326,8 @@ function PortalPreview(props: { model: PortalsModel; portal: PortalSummary; mobi
               type="button"
               title={t("portalsPage.closePortal", { title: props.portal.title })}
               aria-label={t("portalsPage.closePortal", { title: props.portal.title })}
-              disabled={!state().canClosePortal || state().closingPortalId === props.portal.id}
-              onClick={() => void props.model.closePortal(props.portal)}
+              disabled={!state().canClosePortal || props.closing === props.portal.id}
+              onClick={() => props.closePortal(props.portal)}
             >
               <Icon name="x" />
             </button>
@@ -302,13 +338,13 @@ function PortalPreview(props: { model: PortalsModel; portal: PortalSummary; mobi
             {state().error}
           </div>
         </Show>
-        <Show
-          when={probeStatus() === "probing"}
-          fallback={
+        <Show when={probeRead()} fallback={<PortalProbeLoading />}>
+          <Loading on={probeRead()} fallback={<PortalProbeLoading />}>
+            {probeReady()}
             <Show
               when={needsNotice()}
               fallback={
-                <Show when={frameKey()} keyed>
+                <Show when={probeRead()} keyed>
                   {(_frameKey) => (
                     <iframe
                       class="portals-preview__frame"
@@ -379,33 +415,118 @@ function PortalPreview(props: { model: PortalsModel; portal: PortalSummary; mobi
                 />
               </Show>
             </Show>
-          }
-        >
-          <div class="portals-empty portals-preview__state" role="status" aria-live="polite">
-            <div class="portals-empty__title">{t("portalsPage.loading")}</div>
-          </div>
+          </Loading>
         </Show>
       </Show>
     </section>
   );
 }
 
+function PortalReadiness(props: {
+  model: PortalsModel;
+  readReady: () => null;
+  children: JSX.Element;
+}) {
+  return (
+    <Loading
+      on={!props.model.state().listReady ? props.model.state().listRead : null}
+      fallback={
+        <section class="portals-empty" role="status" aria-live="polite">
+          <div class="portals-empty__title">{t("portalsPage.loading")}</div>
+        </section>
+      }
+    >
+      <Errored
+        fallback={(error, reset) => (
+          <section class="portals-empty" role="alert">
+            <div class="callout danger">{formatUiError(error())}</div>
+            <button
+              class="btn"
+              type="button"
+              onClick={() => {
+                void props.model.loadPresentation();
+                reset();
+              }}
+            >
+              {t("portalsPage.retry")}
+            </button>
+          </section>
+        )}
+      >
+        {props.readReady()}
+        {props.children}
+      </Errored>
+    </Loading>
+  );
+}
+
 // The session host supplies mobile presentation; pane width is not a platform signal.
 export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) {
   const state = () => props.model.state();
-  const environment = () =>
-    state().pendingEnvironment?.id === state().pendingEnvironmentId
-      ? state().pendingEnvironment
-      : null;
-  const environmentError = () =>
-    state().environmentFailure?.environmentId === state().pendingEnvironmentId
-      ? state().environmentFailure!.message
-      : null;
-  const failed = () =>
-    environmentError() ||
-    (environment() &&
-      environment()!.status !== "starting" &&
-      environment()!.status !== "available");
+  const receipt = createMemo(() => state().listRead);
+  const ready = createMemo(async () => {
+    const model = props.model;
+    await receipt().result;
+    const current = model.state();
+    if (!current.listReady && current.error) {
+      throw new Error(current.error);
+    }
+  });
+  const epoch = createMemo(() => {
+    state();
+    return props.model.presentationEpoch;
+  });
+  const presentation = createMemo(() => {
+    const currentEpoch = epoch();
+    const [closing, setClosing] = createOptimistic<string | null>(null);
+    return { epoch: currentEpoch, closing, setClosing };
+  });
+  const presentClose = action(function* (
+    view: ReturnType<typeof presentation>,
+    portalId: string,
+    pending: Promise<void>,
+    retired: Promise<void>,
+  ) {
+    if (view.epoch === props.model.presentationEpoch) {
+      view.setClosing(portalId);
+      affects(ready);
+    }
+    yield Promise.race([pending, retired]);
+  });
+  const closePortal = async (portal: PortalSummary) => {
+    const view = presentation();
+    if (!state().canClosePortal || state().closingPortalId) {
+      return;
+    }
+    const retired = props.model.retired;
+    const pending = props.model.closePortal(portal);
+    await Promise.resolve();
+    await presentClose(view, portal.id, pending, retired).catch((error: unknown) =>
+      showToast({ message: formatUiError(error) }),
+    );
+  };
+  const closing = () => presentation().closing() ?? state().closingPortalId;
+  const readReady = () => {
+    if (state().listReady) {
+      latest(ready);
+    } else {
+      ready();
+    }
+    return null;
+  };
+  const environmentReceipt = createMemo(() => state().environmentRead);
+  const environmentReady = createMemo(async () => {
+    const read = environmentReceipt();
+    const model = props.model;
+    await read.result;
+    const current = model.state();
+    if (
+      current.environmentRead === read &&
+      current.environmentFailure?.environmentId === current.pendingEnvironmentId
+    ) {
+      throw new Error(current.environmentFailure.message);
+    }
+  });
   const selectedPortal = createMemo(() =>
     state().portals.find(
       (portal) =>
@@ -425,34 +546,41 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
                 wide
                 docsUrl="https://docs.openclaw.ai/gateway/portals"
               />
-              <Show when={selectedPortal()} fallback={<EmptyState model={props.model} />}>
-                <section class="portals-layout">
-                  <aside class="portals-rail" aria-label={t("portalsPage.listLabel")}>
-                    <For each={state().portals} keyed={(portal) => portal.id}>
-                      {(portal) => (
-                        <button
-                          class={[
-                            "portals-rail__item",
-                            { active: portal().id === selectedPortal()!.id },
-                          ]}
-                          type="button"
-                          aria-current={portal().id === selectedPortal()!.id ? "true" : undefined}
-                          onClick={() => props.model.selectPortal(portal())}
-                        >
-                          <span class="portals-rail__title">{portal().title}</span>
-                          <span class="portals-rail__port">
-                            {t("portalsPage.portLabel", { port: String(portal().port) })}
-                          </span>
-                          <Show when={portal().description}>
-                            <span class="portals-rail__description">{portal().description}</span>
-                          </Show>
-                        </button>
-                      )}
-                    </For>
-                  </aside>
-                  <PortalPreview model={props.model} portal={selectedPortal()!} />
-                </section>
-              </Show>
+              <PortalReadiness model={props.model} readReady={readReady}>
+                <Show when={selectedPortal()} fallback={<EmptyState model={props.model} />}>
+                  <section class="portals-layout">
+                    <aside class="portals-rail" aria-label={t("portalsPage.listLabel")}>
+                      <For each={state().portals} keyed={(portal) => portal.id}>
+                        {(portal) => (
+                          <button
+                            class={[
+                              "portals-rail__item",
+                              { active: portal().id === selectedPortal()!.id },
+                            ]}
+                            type="button"
+                            aria-current={portal().id === selectedPortal()!.id ? "true" : undefined}
+                            onClick={() => props.model.selectPortal(portal())}
+                          >
+                            <span class="portals-rail__title">{portal().title}</span>
+                            <span class="portals-rail__port">
+                              {t("portalsPage.portLabel", { port: String(portal().port) })}
+                            </span>
+                            <Show when={portal().description}>
+                              <span class="portals-rail__description">{portal().description}</span>
+                            </Show>
+                          </button>
+                        )}
+                      </For>
+                    </aside>
+                    <PortalPreview
+                      model={props.model}
+                      portal={selectedPortal()!}
+                      closing={closing()}
+                      closePortal={(portal) => void closePortal(portal)}
+                    />
+                  </section>
+                </Show>
+              </PortalReadiness>
             </>
           }
         >
@@ -460,39 +588,41 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
             class="portals-embedded portals-page--embedded"
             data-mobile={props.mobile ? "" : undefined}
           >
-            <Show
-              when={selectedPortal()}
-              fallback={<EmptyState model={props.model} mobile={props.mobile} />}
-            >
-              <PortalPreview model={props.model} portal={selectedPortal()!} mobile={props.mobile} />
-            </Show>
+            <PortalReadiness model={props.model} readReady={readReady}>
+              <Show
+                when={selectedPortal()}
+                fallback={<EmptyState model={props.model} mobile={props.mobile} />}
+              >
+                <PortalPreview
+                  model={props.model}
+                  portal={selectedPortal()!}
+                  mobile={props.mobile}
+                  closing={closing()}
+                  closePortal={(portal) => void closePortal(portal)}
+                />
+              </Show>
+            </PortalReadiness>
           </div>
         </Show>
       }
     >
-      <section class="portals-empty" role="status" aria-live="polite">
-        <div class="portals-empty__title">
-          {t(
-            failed()
-              ? "portalsPage.environmentUnavailable"
-              : environment()?.status === "available"
-                ? "portalsPage.waitingForApp"
-                : "portalsPage.environmentStarting",
+      <Loading on={environmentReceipt()} fallback={<PendingEnvironment model={props.model} />}>
+        <Errored
+          fallback={(error, reset) => (
+            <PendingEnvironment
+              model={props.model}
+              error={formatUiError(error())}
+              retry={() => {
+                void props.model.loadPendingEnvironment();
+                reset();
+              }}
+            />
           )}
-        </div>
-        <Show when={environmentError() || environment()?.worker?.error}>
-          <p>{environmentError() ?? environment()?.worker?.error}</p>
-        </Show>
-        <Show when={failed()}>
-          <button
-            class="btn"
-            type="button"
-            onClick={() => void props.model.loadPendingEnvironment()}
-          >
-            {t("portalsPage.retry")}
-          </button>
-        </Show>
-      </section>
+        >
+          {environmentReady()}
+          <PendingEnvironment model={props.model} />
+        </Errored>
+      </Loading>
     </Show>
   );
 }

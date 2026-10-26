@@ -13,7 +13,6 @@ export function createTelegramDelivery(): NonNullable<CronJobCreate["delivery"]>
 }
 
 type FailureAlertParams = {
-  scheduler: Deps["scheduler"];
   failureAlert?: NonNullable<Deps["cronConfig"]>["failureAlert"];
   runResult?: Awaited<ReturnType<JobRunner>>;
   useFallback?: boolean;
@@ -45,7 +44,6 @@ export function setupFailureAlertSuite() {
     const { sendCronFailureAlert, ...deps } = mocks;
     const cron = new CronService({
       ...cronTestDeps({ storePath }),
-      scheduler: params.scheduler,
       cronConfig:
         params.failureAlert === undefined ? undefined : { failureAlert: params.failureAlert },
       log: noopLogger,

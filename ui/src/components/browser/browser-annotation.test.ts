@@ -1,9 +1,9 @@
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { buildBrowserAnnotationContent, composeAnnotatedImage } from "./browser-annotation.ts";
 import { inspectBrowserElementAt, readBrowserInspectedNode } from "./browser-client.ts";
+import { createBrowserClient } from "./browser-panel-controller-test-support.ts";
 
 const page = { url: "https://example.com", title: "t", strokes: [] };
 function annotate(overrides: Partial<Parameters<typeof buildBrowserAnnotationContent>[0]>) {
@@ -83,17 +83,18 @@ it("uses a bounded plain-text URL fallback for non-host URLs", () => {
 it("preserves valid UTF-16 from inspected accessible names", async () => {
   const element = document.createElement("button");
   element.setAttribute("aria-label", `${"a".repeat(78)}${" ".repeat(41)}😀tail`);
-  const client = {
-    request: async (_method: string, envelope: { body?: { fn?: string } }) => {
-      const fn = expectDefined(envelope.body?.fn || undefined, "browser evaluation function");
-      return {
-        result: runInNewContext(`(${fn})()`, {
-          document: { elementFromPoint: () => element },
-        }),
-      };
-    },
-  };
-  const inspected = await inspectBrowserElementAt(client as unknown as GatewayBrowserClient, {
+  const { client } = createBrowserClient(async ({ body }) => {
+    const fn = body?.fn;
+    if (typeof fn !== "string") {
+      throw new Error("Expected browser evaluation function");
+    }
+    return {
+      result: runInNewContext(`(${fn})()`, {
+        document: { elementFromPoint: () => element },
+      }),
+    };
+  });
+  const inspected = await inspectBrowserElementAt(client, {
     targetId: "proof-tab",
     x: 10,
     y: 20,

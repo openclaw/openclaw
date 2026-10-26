@@ -1,4 +1,7 @@
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  ProviderResolveDynamicModelContext,
+  ProviderRuntimeModel,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect } from "vitest";
 
@@ -59,7 +62,10 @@ export const claude5ContractCases: Claude5ContractCase[] = [
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
-type TestModel = ProviderRuntimeModel & { api: "anthropic-messages" };
+type TestModel = ProviderRuntimeModel & {
+  api: "anthropic-messages";
+  headers?: Record<string, string>;
+};
 export function makeModel(id: string, overrides: Partial<TestModel> = {}): TestModel {
   return {
     id,
@@ -76,13 +82,18 @@ export function makeModel(id: string, overrides: Partial<TestModel> = {}): TestM
   };
 }
 
-export function createModelRegistry(models: ProviderRuntimeModel[]) {
+export function createModelRegistry(
+  models: ProviderRuntimeModel[],
+): ProviderResolveDynamicModelContext["modelRegistry"] {
   return {
+    getAll: () => models,
+    getAvailable: () => models,
+    hasConfiguredAuth: () => true,
     find: (providerId: string, modelId: string) =>
       models.find(
         (model) =>
           model.provider === providerId && model.id.toLowerCase() === modelId.toLowerCase(),
-      ) ?? null,
+      ),
   };
 }
 

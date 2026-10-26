@@ -1,7 +1,10 @@
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { noteDoctorRepairResult } from "./doctor-health-contribution-utils.js";
-import { recordDoctorHealthWarnings } from "./doctor-health-contribution.js";
+import {
+  recordDoctorHealthWarnings,
+  renderStructuredHealthFindings,
+} from "./doctor-health-contribution.js";
 
 export async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyPluginManifestContracts } =
@@ -29,9 +32,9 @@ export async function runAgentMemorySchemaHealth(ctx: DoctorHealthFlowContext): 
 export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairCodexSessionRoutes } =
     await import("../commands/doctor/shared/codex-route-warnings.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
   const result = await maybeRepairCodexSessionRoutes({
     cfg: ctx.cfg,
+    modelReplacements: ctx.options.modelReplacements,
     ...(ctx.configResult.retiredModelRefConfig
       ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
       : {}),
@@ -50,7 +53,7 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
         }
       : {}),
   });
-  noteDoctorRepairResult(result, note);
+  noteDoctorRepairResult(result);
 }
 
 export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -61,6 +64,7 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
     shouldRepair: ctx.prompter.shouldRepair,
     integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
     onWarnings: (warnings) => recordDoctorHealthWarnings(ctx, [], warnings),
+    onFindings: (findings) => renderStructuredHealthFindings(ctx, findings),
     ...(ctx.configResult.postSessionPluginMigration
       ? { postSessionPluginMigration: ctx.configResult.postSessionPluginMigration }
       : {}),
@@ -96,7 +100,11 @@ export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise
       shouldRepair: ctx.prompter.shouldRepair,
     }),
   );
-  const { note } = await import("../../packages/terminal-core/src/note.js");
-  noteDoctorRepairResult(inference, note);
+  noteDoctorRepairResult(inference);
   recordDoctorHealthWarnings(ctx, [], inference.warnings);
+  const { noteScheduledContextReport } =
+    await import("../commands/doctor/cron/execution-context-check.js");
+  await measureGatewayBootstrapStep("doctor.legacy-cron.execution-context", () =>
+    noteScheduledContextReport({ cfg: ctx.cfg, env: ctx.env }),
+  );
 }

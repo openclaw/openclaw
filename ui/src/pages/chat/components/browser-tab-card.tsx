@@ -14,12 +14,65 @@ import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { loadLinkPreview } from "../../../lib/link-preview.ts";
 import { openExternalUrlSafe, resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
+import { projectApplicationConfig, projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../../lib/reactive/projection.ts";
-import { browserTabTweet } from "./browser-tab-tweet.ts";
-import "../../../styles/session-menu.css";
-import "./browser-tab-card.css";
+import { sharedThemeProjection } from "../../../lib/reactive/shared-application-projections.ts";
+
+/** Adapts existing anonymous page metadata; never fetches or embeds remote markup. */
+function browserTabTweet(url: string, title?: string, page?: ControlUiLinkPreview) {
+  const parsed = URL.parse(url);
+  if (
+    !parsed ||
+    !["http:", "https:"].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.port ||
+    !/^(?:(?:www|mobile)\.)?(?:x|twitter)\.com$/u.test(parsed.hostname)
+  ) {
+    return undefined;
+  }
+  const status = /^\/([a-zA-Z0-9_]{1,15})\/status\/\d+(?:\/(?:photo|video)\/\d+)?\/?$/u.exec(
+    parsed.pathname,
+  );
+  const anonymous = /^\/i\/(?:web\/)?status\/\d+\/?$/u.test(parsed.pathname);
+  if (!status && !anonymous) {
+    return undefined;
+  }
+  let handle = anonymous ? undefined : status?.[1];
+  let author: string | undefined;
+  let text: string | undefined;
+  for (const candidate of [page?.title, title]) {
+    const clean = candidate?.trim().replace(/\s+\/\s+(?:X|Twitter)$/u, "");
+    if (!clean) {
+      continue;
+    }
+    const named =
+      /^(.*?)\s+\(@([a-zA-Z0-9_]{1,15})\)(?:\s+on (?:X|Twitter))?(?::\s*([\s\S]+))?$/u.exec(clean);
+    if (named && (!handle || named[2]!.toLowerCase() === handle.toLowerCase())) {
+      author ??= named[1]?.trim() || undefined;
+      handle ??= named[2];
+      text ??= named[3];
+    }
+    const quoted = /^(.*?)\s+on (?:X|Twitter):\s*([\s\S]+)$/u.exec(clean);
+    if (quoted && !named) {
+      author ??= quoted[1]?.trim() || undefined;
+      text ??= quoted[2];
+    }
+  }
+  text = text?.trim();
+  if (
+    text &&
+    ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("“") && text.endsWith("”")))
+  ) {
+    text = text.slice(1, -1);
+  }
+  return {
+    author,
+    handle: handle ? "@" + handle : undefined,
+    text: page?.description?.trim() || text,
+  };
+}
 
 type BrowserTabCardProps = {
   context?: ApplicationContext;
@@ -36,9 +89,9 @@ export function BrowserTabCardHost(props: BrowserTabCardProps) {
     const context = props.context ?? application;
     return (
       context && [
-        projectOwner(context.gateway, (owner) => owner),
-        projectOwner(context.config, (owner) => owner),
-        projectOwner(context.theme, (owner) => owner),
+        projectGateway(context.gateway),
+        projectApplicationConfig(context.config),
+        sharedThemeProjection(context.theme),
       ]
     );
   });

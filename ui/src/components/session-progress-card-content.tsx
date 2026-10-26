@@ -1,8 +1,8 @@
 import type { ProgressCard, ProgressCardStep, SessionRunStatus } from "@openclaw/gateway-protocol";
-import { createMemo, createSignal, For, Show, useContext, type Accessor } from "solid-js";
+import { createMemo, For, Show, useContext, type Accessor } from "solid-js";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { createInterval } from "../lib/reactive/timers.ts";
+import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import {
   progressCardPresentation,
@@ -19,15 +19,11 @@ export function CardActivity(props: {
   hideTooltip?: boolean;
 }) {
   const presented = useContext(ContentPresentation);
-  const [revision, setRevision] = createSignal(0);
-  createInterval(
-    () => setRevision((value) => value + 1),
-    () => (presented() ? 30_000 : undefined),
-  );
   const timestamp = () => props.view().activityTimestamp;
   const label = createMemo(() => {
-    revision();
-    presented();
+    if (presented()) {
+      readVisibleTime(30_000);
+    }
     return t(props.view().activityKey, { time: formatRelativeTimestamp(timestamp()) });
   });
   const count = () => {
@@ -70,7 +66,9 @@ export function StepMarker(props: {
               ? "check"
               : props.outcome
                 ? "circleX"
-                : "clock"
+                : props.status === "pending"
+                  ? "circleDashed"
+                  : "clock"
           }
         />
       }

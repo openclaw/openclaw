@@ -126,7 +126,7 @@ export function resolveSignalDeliveredConversationKey(params: {
   to: string;
 }): string | null {
   // Delivery already succeeded, so conversation-key recovery is fail-soft.
-  // Approval route revalidation stays fail-closed in approval-reaction-routes.ts.
+  // Approval route revalidation stays fail-closed in approval-reactions.ts.
   try {
     return (
       resolveSignalTarget({

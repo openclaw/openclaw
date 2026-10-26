@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -5,7 +6,10 @@ import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import * as sqliteCopy from "./sqlite-file-copy.js";
 import {
   inspectSqliteSchemaHeaderInProcess,
   prepareSqliteReadOnlyCopyInProcess,
@@ -50,6 +54,14 @@ function createDatabaseFixture(sql: string) {
   const fixture = createFixture(Buffer.alloc(0));
   withDatabase(fixture.sourcePath, (db) => db.exec(sql), false);
   return fixture;
+}
+
+function expectRows(location: string, queries: Record<string, unknown>) {
+  withDatabase(location, (database) => {
+    for (const [sql, expected] of Object.entries(queries)) {
+      expect(database.prepare(sql).all()).toEqual(expected);
+    }
+  });
 }
 
 function patternedBytes(size: number): Buffer {
@@ -107,12 +119,19 @@ function createWalActivationFixture() {
     bytes: fs.readFileSync(activatedPath + suffix),
   }));
   activated.close();
-  const injected = afterFirstCopy(() => {
-    for (const { suffix, bytes } of family) {
-      fs.writeFileSync(fixture.sourcePath + suffix, bytes);
+  const copy = sqliteCopy.copySqliteFile;
+  let injected = false;
+  vi.spyOn(sqliteCopy, "copySqliteFile").mockImplementation(async (...args) => {
+    const result = await copy(...args);
+    if (!injected && args[0] === fixture.sourcePath) {
+      injected = true;
+      for (const { suffix, bytes } of family) {
+        fs.writeFileSync(fixture.sourcePath + suffix, bytes);
+      }
     }
+    return result;
   });
-  return { family, fixture, injected };
+  return { family, fixture, injected: () => injected };
 }
 
 function afterPrivateCopy(stagingRoot: string, operation: (pathname: string) => void): void {
@@ -121,9 +140,9 @@ function afterPrivateCopy(stagingRoot: string, operation: (pathname: string) => 
     fsync(descriptor);
     // Native cloning returns an owned fd without going through fs.openSync.
     const copied = fs.fstatSync(descriptor, { bigint: true });
-    const target = fs
-      .readdirSync(stagingRoot, { recursive: true })
-      .map((entry) => path.join(stagingRoot, String(entry)))
+    const target = listDirectoryTreeStrictSync(stagingRoot)
+      .map((walkEntry) => walkEntry.relativePath)
+      .map((entry) => path.join(stagingRoot, entry))
       .find((pathname) => {
         const current = fs.statSync(pathname, { bigint: true });
         return current.isFile() && current.dev === copied.dev && current.ino === copied.ino;
@@ -301,6 +320,60 @@ it("rechecks journal state when an inactive WAL family gains sidecars during sch
   expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
   for (const { suffix, bytes } of family.filter((file) => file.suffix !== "-shm")) {
     expect(fs.readFileSync(fixture.sourcePath + suffix)).toEqual(bytes);
+  }
+});
+
+it("does not recopy a stable WAL family when a reader creates its wal-index", async () => {
+  const fixture = createDatabaseFixture("PRAGMA journal_mode=WAL; CREATE TABLE probe(value TEXT);");
+  let family: Buffer[];
+  withDatabase(
+    fixture.sourcePath,
+    (db) => {
+      db.exec("INSERT INTO probe VALUES ('retained in WAL')");
+      family = ["", "-wal"].map((suffix) => fs.readFileSync(fixture.sourcePath + suffix));
+    },
+    false,
+  );
+  for (const [index, suffix] of ["", "-wal"].entries()) {
+    fs.writeFileSync(fixture.sourcePath + suffix, family![index]!);
+  }
+  expect(fs.existsSync(`${fixture.sourcePath}-shm`)).toBe(false);
+  const copy = sqliteCopy.copySqliteFile;
+  let mainCopies = 0;
+  vi.spyOn(sqliteCopy, "copySqliteFile").mockImplementation(async (...args) => {
+    const result = await copy(...args);
+    if (args[0] === fixture.sourcePath && ++mainCopies === 1) {
+      const probe = spawnSync(
+        resolveTestNodeExecPath(),
+        [
+          "--input-type=module",
+          "-e",
+          `
+        import { DatabaseSync } from 'node:sqlite';
+        using db = new DatabaseSync(process.argv[1], { readOnly: true });
+        process.stdout.write(JSON.stringify(db.prepare('SELECT value FROM probe').all()));
+      `,
+          fixture.sourcePath,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(probe.status, probe.stderr).toBe(0);
+      expect(JSON.parse(probe.stdout)).toEqual([{ value: "retained in WAL" }]);
+    }
+    return result;
+  });
+  const prepared = await prepareSqliteReadOnlyCopyInProcess(
+    fixture.sourcePath,
+    fixture.stagingRoot,
+  );
+  try {
+    expectRows(prepared.location, { "SELECT value FROM probe": [{ value: "retained in WAL" }] });
+    expect(["", "-wal"].map((suffix) => fs.readFileSync(fixture.sourcePath + suffix))).toEqual(
+      family!,
+    );
+    expect(mainCopies).toBe(1);
+  } finally {
+    prepared.cleanup();
   }
 });
 
@@ -547,14 +620,10 @@ it.each(["append", "restart"] as const)("captures a committed prefix across WAL 
       expect(fs.statSync(walPath).size).toBe(capturedWalBytes);
       expect(fs.statSync(`${prepared.location}-wal`).size).toBeLessThan(capturedWalBytes);
     }
-    withDatabase(prepared.location, (snapshot) => {
-      expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
-      expect(snapshot.prepare("SELECT value FROM entries").all()).toEqual([{ value }]);
-      expect(snapshot.prepare("SELECT length(data) AS bytes FROM payload").get()).toEqual({
-        bytes: payloadBytes,
-      });
+    expectRows(prepared.location, {
+      "PRAGMA integrity_check": [{ integrity_check: "ok" }],
+      "SELECT value FROM entries": [{ value }],
+      "SELECT length(data) AS bytes FROM payload": [{ bytes: payloadBytes }],
     });
     expect(snapshotSqliteFamily(fixture.sourcePath)).toEqual(sourceAfterWrites);
   } finally {
@@ -623,17 +692,10 @@ it("rejects a reset WAL paired with checkpoint-restored main bytes during native
     prepared = await prepareSqliteReadOnlyCopyInProcess(fixture.sourcePath, fixture.stagingRoot);
     expect(reset).toBe(true);
     expect(restored).toBe(true);
-    withDatabase(prepared.location, (snapshot) => {
-      expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
-      expect(
-        snapshot
-          .prepare(
-            "SELECT left_value.value AS left_value, right_value.value AS right_value FROM left_value CROSS JOIN right_value",
-          )
-          .get(),
-      ).toEqual({ left_value: "A", right_value: "A" });
+    expectRows(prepared.location, {
+      "PRAGMA integrity_check": [{ integrity_check: "ok" }],
+      "SELECT left_value.value AS left_value, right_value.value AS right_value FROM left_value CROSS JOIN right_value":
+        [{ left_value: "A", right_value: "A" }],
     });
     expect(snapshotSqliteFamily(fixture.sourcePath)).toEqual(sourceAfterWrites);
   } finally {
@@ -862,10 +924,8 @@ it("snapshots a fixed 16 MiB database when staging can write one complete copy",
   );
 
   expectSnapshot(fixture, bytes, (location) => {
-    withDatabase(location, (snapshot) => {
-      expect(snapshot.prepare("SELECT length(payload) AS bytes FROM probe").get()).toEqual({
-        bytes: 16 * MIB,
-      });
+    expectRows(location, {
+      "SELECT length(payload) AS bytes FROM probe": [{ bytes: 16 * MIB }],
     });
   });
   expect(written).toBeLessThanOrEqual(bytes.length);

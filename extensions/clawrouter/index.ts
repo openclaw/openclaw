@@ -1,8 +1,8 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { ModelInferenceCapabilitiesSchema } from "openclaw/plugin-sdk/decisions";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
+import type { ModelRequestHeaders } from "openclaw/plugin-sdk/llm";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderResolveDynamicModelContext,
@@ -15,7 +15,11 @@ import type {
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
-import { wrapProviderPayloadHook } from "openclaw/plugin-sdk/provider-stream-shared";
+import {
+  createAnthropicThinkingPrefillPayloadWrapper,
+  createOpenAIHostedWebSearchWrapper,
+  wrapProviderPayloadHook,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   buildProviderToolCompatFamilyHooks,
   findUnsupportedSchemaKeywords,
@@ -23,6 +27,7 @@ import {
   SCHEMA_NESTED_KEYS,
 } from "openclaw/plugin-sdk/provider-tools";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
@@ -32,6 +37,7 @@ import {
   normalizeFastMode,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { clawrouterMediaUnderstandingProvider } from "./audio-transcription.js";
 import { normalizeClawRouterApiBaseUrl, normalizeClawRouterRootUrl } from "./base-url.js";
 import { buildClawRouterDecisionProvider } from "./decision-provider.js";
 import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
@@ -40,6 +46,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
   buildClawRouterProviderConfig,
+  decisionCapabilities,
   CLAWROUTER_REASONING_EFFORT_LEVELS,
   normalizeClawRouterReasoningEfforts,
   normalizeClawRouterResolvedModel,
@@ -48,6 +55,7 @@ import {
 import {
   resolveClawRouterServiceTiers,
   resolveFastModeSupport,
+  resolveNativeWebSearch,
   resolveServiceTiers,
 } from "./provider-policy-api.js";
 import { buildClawRouterSpeechProvider } from "./speech-provider.js";
@@ -57,12 +65,6 @@ const PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "patternProperties",
   "additionalProperties",
 ]);
-
-const decisionCapabilities = ModelInferenceCapabilitiesSchema.parse(
-  manifest.modelCatalog.providers.clawrouter.models.find(
-    (model) => model.id === "openai/gpt-6-luna",
-  )?.inference,
-);
 
 const ENV_API_KEY_MARKER = "CLAWROUTER_API_KEY";
 const ATTRIBUTION_VALUE_MAX_LENGTH = 256;
@@ -138,13 +140,13 @@ function sanitizeBoundedId(value: string | undefined, policy: BoundedIdPolicy): 
   return `${safePrefix.slice(0, policy.maxLength - suffix.length)}${suffix}`;
 }
 
-function findHeader(headers: Record<string, string>, target: string): string | undefined {
+function findHeader(headers: ModelRequestHeaders, target: string): string | null | undefined {
   const normalizedTarget = target.toLowerCase();
   return Object.entries(headers).find(([name]) => name.toLowerCase() === normalizedTarget)?.[1];
 }
 
 function setHeaderDefault(
-  headers: Record<string, string>,
+  headers: ModelRequestHeaders,
   name: string,
   value: string | undefined,
 ): void {
@@ -154,19 +156,28 @@ function setHeaderDefault(
 }
 
 const openAiServiceTier = buildProviderStreamFamilyHooks("openai-responses-service-tier");
+const log = createSubsystemLogger("clawrouter-stream");
 
 function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
-  const underlying = ctx.streamFn;
-  if (!underlying) {
+  const streamFn = ctx.streamFn;
+  if (!streamFn) {
     return undefined;
   }
-  return (model, context, options) => {
+  // Same Claude contract as the native Anthropic provider: extended thinking needs a
+  // final user turn, and the transport strips prefill only for some Claude families.
+  const claudeStream = createAnthropicThinkingPrefillPayloadWrapper(streamFn, (stripped) => {
+    log.warn(
+      `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because Anthropic extended thinking requires conversations to end with a user turn`,
+    );
+  });
+  const routedStream: StreamFn = (model, context, options) => {
+    const underlying = model.api === "anthropic-messages" ? claudeStream : streamFn;
     const apiKey = options?.apiKey?.trim();
     const dispatchKey = apiKey && apiKey !== ENV_API_KEY_MARKER ? apiKey : undefined;
     const preparedModel = prepareClawRouterRequestModel(model);
     const hasExplicitRequestId =
       findHeader(options?.headers ?? {}, REQUEST_ID_HEADER) !== undefined;
-    const headers: Record<string, string> = {};
+    const headers: ModelRequestHeaders = {};
     for (const [name, value] of Object.entries(preparedModel.headers ?? {})) {
       if (name.toLowerCase() !== "authorization" || !dispatchKey) {
         headers[name] = value;
@@ -226,6 +237,20 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
       : underlying;
     return stream({ ...preparedModel, headers }, context, options);
   };
+  // Evaluate catalog facts before dispatch removes private route metadata.
+  return createOpenAIHostedWebSearchWrapper(
+    routedStream,
+    ({ model }) =>
+      ctx.nativeWebSearchAllowedByToolPolicy !== false &&
+      resolveNativeWebSearch({
+        config: ctx.config,
+        provider: model.provider,
+        modelId: model.id,
+        api: model.api,
+        baseUrl: model.baseUrl,
+        modelParams: model.params,
+      }),
+  );
 }
 
 // JSON Schema allows `type` to be an array; a union containing "object" still
@@ -409,6 +434,7 @@ export default defineSingleProviderPluginEntry({
   manifest,
   register(api) {
     api.registerSpeechProvider(buildClawRouterSpeechProvider);
+    api.registerMediaUnderstandingProvider(clawrouterMediaUnderstandingProvider);
     api.registerDecisionProvider(buildClawRouterDecisionProvider());
     api.registerImageGenerationProvider(buildClawRouterImageGenerationProvider());
     api.registerModelCatalogProvider({
@@ -617,7 +643,10 @@ export default defineSingleProviderPluginEntry({
       normalizeResolvedModel: ({ model }) => normalizeClawRouterResolvedModel(model),
       resolveFastModeSupport,
       resolveServiceTiers,
-      wrapSimpleCompletionStreamFn: wrapClawRouterProviderStream,
+      resolveNativeWebSearch,
+      wrapSimpleCompletionStreamFn: (ctx) =>
+        // Isolated completions share routing/auth but must remain tool-free.
+        wrapClawRouterProviderStream({ ...ctx, nativeWebSearchAllowedByToolPolicy: false }),
       wrapStreamFn: wrapClawRouterProviderStream,
       buildReplayPolicy: (ctx) => {
         if (ctx.modelApi === "anthropic-messages") {

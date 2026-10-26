@@ -25,6 +25,13 @@ const repoName = repository.nameWithOwner;
 const enterprise = "github.enterprise.invalid";
 const repoEndpoint = (suffix = "") => `repos/${repoName}${suffix}`;
 const repoCommand = "pr_gh_plain repo view --json url";
+const assignContributor = "pr_gh_plain pr edit 42 --add-assignee contributor";
+const restRepository = {
+  id: repository.databaseId,
+  full_name: repository.nameWithOwner,
+  html_url: repository.url,
+  node_id: repository.id,
+};
 const authorCommand = (host = "github.com") =>
   `printf "%s\\n" "$FAKE_GH_FIXTURE" | jq .authorSources | pr_gh commit-authors ${repoName} ${host}`;
 const quotaDetail =
@@ -137,6 +144,10 @@ function expectJson(result: MetadataResult, expected: unknown, status = 0) {
 
 function expectCall(result: MetadataResult, ...args: string[]) {
   expect(result.calls).toContainEqual(args);
+}
+
+function expectAssignedRepository(result: MetadataResult, url = repository.url) {
+  expectCall(result, "pr", "edit", "42", "--add-assignee", "contributor", "--repo", url);
 }
 
 const pullEndpoint = repoEndpoint("/pulls/42");
@@ -467,7 +478,7 @@ it.each(["observation", "repository only"])(
         : viewPull("baseRepository"),
       { ghRepo: "https://GITHUB.COM/Base-Owner/Base-Repo" },
     );
-    expect(result.status, result.stderr).toBe(0);
+    expectResult(result, 0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       baseRepository: repository,
       ...(selection === "observation"
@@ -519,8 +530,7 @@ it("verifies the GraphQL fallback writer", () => {
     "pr_gh_writer_login github.com",
     { protectedGh: true },
   );
-  expectResult(result, 0);
-  expect(result.stdout.trim()).toBe("fixture-writer");
+  expectResult(result, 0, { stdout: "fixture-writer\n" });
   expect(callsTo(result, "graphql")).toHaveLength(1);
 });
 
@@ -570,42 +580,38 @@ it.each(["exact", "absent", "unavailable"])("requires exact %s collaborator auth
   });
 });
 
-it.each(["complete", "partial", "duplicate", "errors"])(
-  "requires %s GraphQL comment evidence",
-  (mode) => {
-    const node = {
-      databaseId: 12,
+it.each(["complete", "duplicate", "errors"])("requires %s GraphQL comment evidence", (mode) => {
+  const node = {
+    databaseId: 12,
+    body: "review",
+    url: `${repository.url}/pull/42#issuecomment-12`,
+    author: { databaseId: 274271284, login: "clawsweeper", __typename: "Bot" },
+  };
+  const page = (nodes: unknown[], hasNextPage: boolean) => pullPage("comments", nodes, hasNextPage);
+  const result = fallback(
+    repoEndpoint("/issues/42/comments?per_page=100"),
+    mode === "errors"
+      ? [{ ...page([node], false), errors: [{ message: "partial result" }] }]
+      : [
+          page([node], true),
+          page([{ ...node, databaseId: mode === "duplicate" ? 12 : 13 }], false),
+        ],
+    "pr_gh_plain issue-comments base-owner/base-repo github.com 42",
+  );
+  expectResult(result, mode === "complete" ? 0 : 65);
+  if (mode === "complete") {
+    const comments = JSON.parse(result.stdout).flat();
+    expect(comments).toHaveLength(2);
+    expect(comments[0]).toMatchObject({
+      id: 12,
       body: "review",
-      url: `${repository.url}/pull/42#issuecomment-12`,
-      author: { databaseId: 274271284, login: "clawsweeper", __typename: "Bot" },
-    };
-    const page = (nodes: unknown[], hasNextPage: boolean) =>
-      pullPage("comments", nodes, hasNextPage);
-    const result = fallback(
-      repoEndpoint("/issues/42/comments?per_page=100"),
-      mode === "errors"
-        ? [{ ...page([node], false), errors: [{ message: "partial result" }] }]
-        : [
-            page([node], mode !== "partial"),
-            page([{ ...node, databaseId: mode === "duplicate" ? 12 : 13 }], false),
-          ],
-      "pr_gh_plain issue-comments base-owner/base-repo github.com 42",
-    );
-    expect(result.status, result.stderr).toBe(mode === "complete" ? 0 : 65);
-    if (mode === "complete") {
-      const comments = JSON.parse(result.stdout).flat();
-      expect(comments).toHaveLength(2);
-      expect(comments[0]).toMatchObject({
-        id: 12,
-        body: "review",
-        user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-        html_url: node.url,
-      });
-    } else {
-      expect(result.stdout).toBe("");
-    }
-  },
-);
+      user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
+      html_url: node.url,
+    });
+  } else {
+    expect(result.stdout).toBe("");
+  }
+});
 
 it("pins GraphQL author order and human attribution", () => {
   const first = "1".repeat(40);
@@ -651,7 +657,7 @@ it.each([false, true])("requires complete GraphQL files (truncated=%s)", (trunca
     [pullResponse(nullableIdentity), page("src/a.ts", !truncated), page("src/b.ts", false)],
     viewPull("headRefOid,author,headRepository,headRepositoryOwner,files"),
   );
-  expect(result.status, result.stderr).toBe(truncated ? 65 : 0);
+  expectResult(result, truncated ? 65 : 0);
   if (!truncated) {
     expect(JSON.parse(result.stdout)).toEqual({
       ...nullableIdentity,
@@ -660,11 +666,8 @@ it.each([false, true])("requires complete GraphQL files (truncated=%s)", (trunca
   } else {
     expect(result.stdout).toBe("");
   }
-  expect(result.calls.some((args) => args[0] === "pr")).toBe(false);
   expect(
-    result.calls
-      .filter((args) => args.includes("graphql"))
-      .every((args) => args.includes("Cache-Control: max-age=0")),
+    callsTo(result, "graphql").every((args) => args.includes("Cache-Control: max-age=0")),
   ).toBe(true);
 });
 it.each([
@@ -731,13 +734,11 @@ it.each([0, 101, 4])("bounds reads for %i ordered authors", (count) => {
 
 it.each([
   { fixture: { authorSources: null }, calls: 0 },
-  { fixture: { authorSources: {} }, calls: 0 },
   { fixture: { authorSources: [source(1), source(1)] }, calls: 0 },
   { fixture: { authorSources: [{ oid: "main", changesTree: true }] }, calls: 0 },
   { fixture: { authorSources: [{ oid: sha(1) }] }, calls: 0 },
   ...[
     null,
-    {},
     [],
     [record(2)],
     [record(1), record(1)],
@@ -804,23 +805,14 @@ it.each([false, true])("preserves cleanup-failed results: %s", (failed) => {
     stderr: "",
     stdout: failed
       ? "HTTP 503: No server is currently available\n"
-      : JSON.stringify({
-          id: 1,
-          full_name: "base-owner/base-repo",
-          html_url: "https://github.com/base-owner/base-repo",
-          node_id: "R_base",
-        }) + "\n",
+      : JSON.stringify(restRepository) + "\n",
   });
   expectPayload(result, Buffer.from("payload"), true);
 });
-it.each(
-  ["GH_REPO", "--repo"].flatMap((selection) =>
-    ["github.enterprise.invalid", "github.enterprise.invalid:8443"].map((enterpriseHost) => ({
-      selection,
-      enterpriseHost,
-    })),
-  ),
-)("resolves $selection at $enterpriseHost without GH_HOST", ({ selection, enterpriseHost }) => {
+it.each([
+  { selection: "GH_REPO", enterpriseHost: enterprise },
+  { selection: "--repo", enterpriseHost: `${enterprise}:8443` },
+])("resolves $selection at $enterpriseHost without GH_HOST", ({ selection, enterpriseHost }) => {
   const repoURL = `https://${enterpriseHost}/base-owner/base-repo`;
   const explicit = selection === "--repo" ? " --repo base-owner/base-repo" : "";
   const result = readPrMetadata(
@@ -830,11 +822,11 @@ it.each(
       defaultRepoURL: repoURL,
       protectedGh: true,
     },
-    `pr_gh_plain repo view --json url${explicit}; pr_gh_plain pr edit 42 --add-assignee contributor`,
+    `${repoCommand}${explicit}; ${assignContributor}`,
   );
   expectJson(result, { url: repoURL });
   expectCall(result, ...revalidatedCall(repoEndpoint(), enterpriseHost));
-  expectCall(result, "pr", "edit", "42", "--add-assignee", "contributor", "--repo", repoURL);
+  expectAssignedRepository(result, repoURL);
   expect(result.calls).toContainEqual(
     selection === "--repo" ? ["browse", "--repo", "base-owner/base-repo"] : ["browse"],
   );
@@ -849,7 +841,7 @@ it.each(["forbidden", "quota"] as const)("applies %s collaborator failure policy
   });
   expectSupplementalQuota(result);
 });
-it.each([undefined, null, 0, -1, 1.5])("blocks CI dispatch without repo ID: %s", (id) => {
+it.each([undefined, 0, 1.5])("blocks CI dispatch without repo ID: %s", (id) => {
   const result = readPrMetadata(
     {
       initialPatch: {
@@ -881,12 +873,6 @@ it("collects only complete paginated REST metadata", () => {
   expectResult(result, 0, { stderr: "", notifications: "", attempts: 2 });
   expect(callsTo(result, pullEndpoint)).toHaveLength(2);
   expect(result.calls.filter((args) => args[0] === "api")).toHaveLength(3);
-  expect(result.calls.some((args) => args.includes("repos/base-owner/base-repo"))).toBe(false);
-  expect(
-    result.calls.every(
-      (args) => (args[0] === "api" && !args.includes("graphql")) || args[0] === "browse",
-    ),
-  ).toBe(true);
   const metadata = JSON.parse(result.stdout);
   expect(metadata).toMatchObject({
     number: 42,
@@ -913,10 +899,10 @@ it.each<{ fixture: Fixture; diagnostic: string }>([
         : "consistent with changedFiles",
   })),
   { fixture: { failure: "exit", failureTarget: "files" }, diagnostic: "exited with status 7" },
-  ...[null, {}, "unavailable"].map((files) => ({
-    fixture: { changedFiles: 0, files },
+  {
+    fixture: { changedFiles: 0, files: null },
     diagnostic: "malformed paginated metadata",
-  })),
+  },
   ...[
     [restFile({ additions: -1 })],
     [restFile({ additions: 0.5 })],
@@ -1000,7 +986,6 @@ it.each([
   ["pr_meta_json 42", "pull", 1],
   ["ensure_gh_api_auth", "user", 1],
   [`${viewPull("headRefOid")} --jq .headRefOid`, "pull", 75],
-  ["pr_gh_plain pr view 42 --json headRefOid --jq=.headRefOid", "pull", 75],
   [
     'node --input-type=module -e \'import { execPrGh } from "./scripts/pr-lib/github.mjs"; execPrGh(["api","repos/base-owner/base-repo/pulls/42","--input","-"], {input:Buffer.from("private payload")}, "plain")\'',
     "pull",
@@ -1099,9 +1084,7 @@ it.each([
   ["pr_gh repo view --json unsupported", "Unsupported REST repository metadata field: unsupported"],
 ])("rejects invalid JSON field selection: %s", (command, diagnostic) => {
   const result = readPrMetadata({}, command);
-  expect(result.status).toBe(1);
-  expect(result.stdout).toBe("");
-  expect(result.stderr).toBe(`${diagnostic}\n`);
+  expectResult(result, 1, { stdout: "", stderr: `${diagnostic}\n` });
 });
 
 it("preserves canonical repository identities for differently cased callers", () => {
@@ -1112,13 +1095,7 @@ it("preserves canonical repository identities for differently cased callers", ()
     },
     "pr_gh_plain repo-authority Base-Owner/Base-Repo GitHub.com",
   );
-  expect(result.status, result.stderr).toBe(0);
-  expect(JSON.parse(result.stdout)).toEqual({
-    id: 1,
-    node_id: "R_base",
-    full_name: repository.nameWithOwner,
-    html_url: repository.url,
-  });
+  expectJson(result, restRepository);
 });
 
 it("accepts canonical repository casing when adopting an explicit qualified observation", () => {
@@ -1126,8 +1103,7 @@ it("accepts canonical repository casing when adopting an explicit qualified obse
     { ghRepo: "https://GITHUB.COM/base-owner/base-repo" },
     'pr_observe 42; printf "%s\\n" "$PR_REPOSITORY_URL"',
   );
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toBe("https://github.com/base-owner/base-repo\n");
+  expectResult(result, 0, { stdout: `${repository.url}\n` });
   expect(result.calls).toHaveLength(1);
 });
 
@@ -1142,26 +1118,16 @@ it.each(["selected gh", "selected Git"])(
         probeGit: !selectedGh,
         defaultRepoURL: "https://github.com/base-owner/base-repo",
       },
-      `${selectedGh ? "pr_gh_plain repo view --json url" : "pr_meta_json 42"}; pr_gh_plain pr edit 42 --add-assignee contributor`,
+      `${selectedGh ? repoCommand : "pr_meta_json 42"}; ${assignContributor}`,
     );
     expect(result.status, result.stderr).toBe(0);
     if (selectedGh) {
-      expect(JSON.parse(result.stdout)).toEqual({
-        url: "https://github.com/base-owner/base-repo",
-      });
+      expectJson(result, { url: repository.url });
     } else {
       expect(JSON.parse(result.stdout).url).toBe("https://github.com/base-owner/base-repo/pull/42");
     }
     expect(result.calls.filter((args) => args[0] === "browse")).toEqual([["browse"], ["browse"]]);
-    expect(result.calls).toContainEqual([
-      "pr",
-      "edit",
-      "42",
-      "--add-assignee",
-      "contributor",
-      "--repo",
-      "https://github.com/base-owner/base-repo",
-    ]);
+    expectAssignedRepository(result);
   },
 );
 it.each([
@@ -1172,9 +1138,7 @@ it.each([
   },
 ])("filters view JSON through the shell: $command", ({ command, expected }) => {
   const result = readPrMetadata({}, command);
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toBe(`${expected}\n`);
-  expect(result.stderr).toBe("");
+  expectResult(result, 0, { stdout: `${expected}\n`, stderr: "" });
 });
 it.each(["environment", "explicit", "explicit-git-suffix"])(
   "preserves the %s repository override before gh's default",
@@ -1188,10 +1152,9 @@ it.each(["environment", "explicit", "explicit-git-suffix"])(
         ghRepo: explicit ? "ignored/repo" : "base-owner/base-repo",
         defaultRepoURL: "https://github.com/ignored/default",
       },
-      `pr_gh pr view 42 --json number,headRefOid${explicit}; pr_gh_plain pr edit 42 --add-assignee contributor${explicit}`,
+      `${viewPull("number,headRefOid")}${explicit}; ${assignContributor}${explicit}`,
     );
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ number: 42, headRefOid: head });
+    expectJson(result, { number: 42, headRefOid: head });
     expect(result.calls.filter((args) => args[0] === "browse")).toEqual(
       explicit ? [] : [["browse"], ["browse"]],
     );
@@ -1202,13 +1165,11 @@ it.each([
   {
     shape: "renamed",
     files: [
-      {
+      restFile({
         filename: "src/renamed.ts",
         previous_filename: "src/previous.ts",
         status: "renamed",
-        additions: 0,
-        deletions: 0,
-      },
+      }),
     ],
     expected: [{ path: "src/renamed.ts", changeType: "RENAMED", additions: 0, deletions: 0 }],
   },

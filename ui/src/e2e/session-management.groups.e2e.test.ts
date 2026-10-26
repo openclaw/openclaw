@@ -139,9 +139,7 @@ suite.define(() => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await suite.browser.newContext({
       colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
+      ...createControlUiE2eContextOptions(),
     });
     const automationPage: CronJobsListResult = {
       jobs: [
@@ -218,20 +216,18 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
 
-      // A personal rail shortcut leaves its ordinary session row in recency order.
+      // A personal pin moves its one row into Pinned, above the other sessions.
       const sidebarRows = page.locator(".sidebar-recent-session");
       await sidebarRows.first().waitFor({ state: "visible", timeout: 10_000 });
       const pinnedZoneRow = page.locator(
-        '.sidebar-rail [data-sidebar-entry="session:agent:main:release"]',
+        '[data-session-section="pinned"] .sidebar-recent-session[data-session-key="agent:main:release"]',
       );
-      await pinnedZoneRow.getByRole("link", { name: "Release planning", exact: true }).waitFor();
-      expect(await pinnedZoneRow.locator(".sidebar-recent-session").count()).toBe(0);
+      await pinnedZoneRow.getByText("Release planning", { exact: true }).waitFor();
+      expect(await page.locator('.sidebar-rail [data-sidebar-entry^="session:"]').count()).toBe(0);
       const groups = page.locator(".sidebar-recent-sessions__group");
-      await expect.poll(() => groups.count()).toBe(1);
-      await expect
-        .poll(() => groups.first().getAttribute("data-session-section"))
-        .toBe("ungrouped");
-      await expect.poll(() => page.locator('[data-session-section="pinned"]').count()).toBe(0);
+      const sectionIds = () =>
+        groups.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-session-section")));
+      await expect.poll(sectionIds).toEqual(["pinned", "ungrouped"]);
 
       // Chats keep recency order with the open session highlighted in place —
       // selecting a row must not reshuffle the list.
@@ -240,7 +236,7 @@ suite.define(() => {
         chatRows.evaluateAll((rows) =>
           rows.map((row) => row.querySelector(".sidebar-recent-session__name")?.textContent ?? ""),
         );
-      await expect.poll(rowNames).toEqual(["Release planning", "Data migration", "Research notes"]);
+      await expect.poll(rowNames).toEqual(["Data migration", "Research notes"]);
       const sidebarMigration = sidebarRows.filter({ hasText: "Data migration" });
       await expect
         .poll(() =>
@@ -266,6 +262,7 @@ suite.define(() => {
       const patchesBeforeUnpin = (await gateway.getRequests("sessions.patch")).length;
       await sidebarReleasePin.click();
       await expect.poll(() => pinnedZoneRow.count()).toBe(0);
+      await expect.poll(sectionIds).toEqual(["ungrouped"]);
       await sidebarRows
         .filter({ hasText: "Release planning" })
         .getByRole("button", { name: "Pin session", exact: true })
@@ -529,6 +526,9 @@ suite.define(() => {
       const groupMenuButton = researchGroup.getByRole("button", {
         name: "Group options for Research",
       });
+      // The hint skips the group name its header already shows; the accessible
+      // name keeps it so repeated group buttons stay distinguishable.
+      expect(await groupMenuButton.getAttribute("title")).toBe("Group options");
       await researchGroup.locator(".sidebar-recent-sessions__head").hover();
       await groupMenuButton.click();
       await page.getByRole("menuitem", { name: "Rename group" }).waitFor({ state: "visible" });
@@ -818,9 +818,8 @@ suite.define(() => {
       await alphaToggle.click();
       await expect.poll(() => alpha.locator(".sidebar-recent-session").count()).toBe(0);
 
-      // Header buttons intentionally keep their click behavior; reorder from
-      // the dedicated grip beside them.
-      await gamma.locator(".sidebar-session-group-drag-handle").dragTo(alpha, {
+      // The header label is the drag source; a plain click still toggles it above.
+      await gamma.locator(".sidebar-session-group-toggle").dragTo(alpha, {
         targetPosition: { x: 4, y: 2 },
       });
       const customGroupOrder = () =>

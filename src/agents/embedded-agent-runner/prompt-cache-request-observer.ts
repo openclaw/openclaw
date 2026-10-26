@@ -8,10 +8,12 @@ import {
   type PromptCacheChange,
 } from "./prompt-cache-observability.js";
 import { preparePromptCacheHistory, type ProviderPromptState } from "./provider-prompt-state.js";
+import type { SystemPromptSeriesStatus } from "./session-prompt-state.js";
 
 type PromptCacheObservationStart = ReturnType<typeof beginPromptCacheObservation> & {
   requestIndex: number;
   messageCount: number;
+  systemPromptSeries?: SystemPromptSeriesStatus;
 };
 type PromptCacheSnapshot = PromptCacheObservationStart["snapshot"];
 
@@ -33,6 +35,7 @@ export type PromptCacheRequestObservation = {
   previousCacheRead?: number;
   requestGapMs?: number;
   providerPrefix?: string;
+  systemPromptSeries?: SystemPromptSeriesStatus;
   dropCause?: string;
   promptTokens?: number;
   responseId?: string;
@@ -48,7 +51,7 @@ export function createPromptCacheRequestObserver(
   params: Omit<
     Parameters<typeof beginPromptCacheObservation>[0],
     "provider" | "modelId" | "modelApi" | "systemPrompt" | "tools" | "messages"
-  >,
+  > & { getSystemPromptSeries?: () => SystemPromptSeriesStatus | undefined },
   onObservation: (
     observation: PromptCacheRequestObservation,
     snapshot: PromptCacheSnapshot,
@@ -82,6 +85,7 @@ export function createPromptCacheRequestObserver(
         }),
         requestIndex,
         messageCount: context.messages.length,
+        systemPromptSeries: params.getSystemPromptSeries?.(),
       };
       onRequest?.(request);
       return request;
@@ -127,6 +131,7 @@ export function createPromptCacheRequestObserver(
         previousCacheRead: request.previousCacheRead ?? undefined,
         requestGapMs: request.requestGapMs,
         providerPrefix,
+        systemPromptSeries: request.systemPromptSeries,
         dropCause,
         requests: cacheBreak?.requests,
         promptTokens:

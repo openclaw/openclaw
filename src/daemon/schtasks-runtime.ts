@@ -165,14 +165,14 @@ function createStartupEntryRemovalError(error: unknown): Error {
 export async function waitForScheduledTaskRunningEvidence(
   env: GatewayServiceEnv,
 ): Promise<boolean> {
-  const deadline = Date.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
+  const deadline = performance.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
   while (true) {
-    const remaining = deadline - Date.now();
+    const remaining = deadline - performance.now();
     if (remaining <= 0) {
       return false;
     }
     const probe = probeScheduledTaskState(resolveTaskName(env), remaining);
-    if (Date.now() >= deadline) {
+    if (performance.now() >= deadline) {
       return false;
     }
     // Only Scheduler supervision, not an old Startup process, proves takeover.
@@ -476,8 +476,8 @@ export async function waitForFallbackTakeoverRuntime(
   previousRuntime: GatewayServiceRuntime,
 ): Promise<GatewayServiceRuntime> {
   let runtime = initialRuntime;
-  const deadline = Date.now() + FALLBACK_TAKEOVER_REPROBE_TIMEOUT_MS;
-  while (runtime.status !== "running" && Date.now() < deadline) {
+  const deadline = performance.now() + FALLBACK_TAKEOVER_REPROBE_TIMEOUT_MS;
+  while (runtime.status !== "running" && performance.now() < deadline) {
     await sleep(FALLBACK_TAKEOVER_REPROBE_INTERVAL_MS);
     runtime = await resolveFallbackRuntime(env, installedCommand, "control").catch(
       (err: unknown) => {

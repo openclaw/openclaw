@@ -82,19 +82,16 @@ async function runDoctor(env: NodeJS.ProcessEnv) {
 async function runInteractiveDoctor(env: NodeJS.ProcessEnv, expectImport: boolean) {
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
-  const ptyEnv: Record<string, string> = {};
-  for (const [key, value] of Object.entries({
-    ...env,
-    NODE_ENV: undefined,
-    VITEST: undefined,
-    OPENCLAW_NO_RESPAWN: "1",
-    TERM: "xterm-256color",
-    NO_COLOR: "1",
-  })) {
-    if (value !== undefined) {
-      ptyEnv[key] = value;
-    }
-  }
+  const ptyEnv = Object.fromEntries(
+    Object.entries({
+      ...env,
+      NODE_ENV: undefined,
+      VITEST: undefined,
+      OPENCLAW_NO_RESPAWN: "1",
+      TERM: "xterm-256color",
+      NO_COLOR: "1",
+    }).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
   const deadline = performance.now() + 60_000;
   const child = await spawnTerminalPty({
     file: process.execPath,
@@ -130,10 +127,11 @@ async function runInteractiveDoctor(env: NodeJS.ProcessEnv, expectImport: boolea
       answeredThrough += prompt.index + prompt[0].length;
       const question = prompt[1]!.trim();
       if (
-        question ===
-          "Pause the managed Gateway while you review repairs? Doctor restores its prior service state when finished." ||
-        question === "Migrate auth profile JSON files into SQLite now?" ||
-        question === "Apply recommended config repairs now?"
+        [
+          "Pause the managed Gateway while you review repairs? Doctor restores its prior service state when finished.",
+          "Migrate auth profile JSON files into SQLite now?",
+          "Apply recommended config repairs now?",
+        ].includes(question)
       ) {
         if (question.startsWith("Migrate auth")) {
           importsAccepted++;
@@ -154,9 +152,9 @@ async function runInteractiveDoctor(env: NodeJS.ProcessEnv, expectImport: boolea
       clearTimeout(timeout);
       if (failure) {
         reject(new Error(`${failure}\n${stripAnsi(output)}`));
-      } else {
-        resolve(event.exitCode);
+        return;
       }
+      resolve(event.exitCode);
     });
   });
   expect(exitCode, stripAnsi(output)).toBe(0);

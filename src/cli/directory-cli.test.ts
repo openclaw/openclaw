@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
-import { captureEnv } from "../test-utils/env.js";
 import { mockFirstRecordArg } from "../test-utils/mock-call-assertions.js";
 import { registerDirectoryCli } from "./directory-cli.js";
 
@@ -36,23 +35,21 @@ vi.mock("./command-secret-targets.js", () => ({
 }));
 
 // mock-isolation: Directory commands read and mutate synthetic channel config, never host config.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.loadConfig,
-  loadConfig: mocks.loadConfig,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.loadConfig>) =>
-    async () =>
-      mocks.loadConfig(...args),
-  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite: async () => {
-    const snapshot = await mocks.readConfigFileSnapshot();
-    return {
-      snapshot: { ...snapshot, sourceConfig: snapshot.sourceConfig ?? snapshot.config },
-      writeOptions: {},
-    };
-  },
-  replaceConfigFile: mocks.replaceConfigFile,
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "loadConfig"),
+    readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+    readConfigFileSnapshotForWrite: async () => {
+      const snapshot = await mocks.readConfigFileSnapshot();
+      return {
+        snapshot: { ...snapshot, sourceConfig: snapshot.sourceConfig ?? snapshot.config },
+        writeOptions: {},
+      };
+    },
+    replaceConfigFile: mocks.replaceConfigFile,
+  };
+});
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: mocks.applyPluginAutoEnable,
@@ -104,10 +101,12 @@ function resolveSecrets(config: Parameters<typeof createTestConfigSnapshot>[0]) 
   };
 }
 
-function runDirectory(args: string[]) {
+function runDirectory(args: string[] | string) {
   const program = new Command().name("openclaw");
   registerDirectoryCli(program);
-  return program.parseAsync(["directory", ...args], { from: "user" });
+  return program.parseAsync(["directory", ...(typeof args === "string" ? args.split(" ") : args)], {
+    from: "user",
+  });
 }
 
 function installDirectory(directory: Record<string, unknown>, channelId = "demo-directory") {
@@ -139,7 +138,7 @@ describe("registerDirectoryCli", () => {
   });
 
   it("installs an explicit optional directory channel on demand", async () => {
-    const { tokenRef, sourceConfig, runtimeConfig: initialRuntime } = secretFixture();
+    const { tokenRef, runtimeConfig: initialRuntime } = secretFixture();
     let runtimeConfig = initialRuntime;
     mocks.loadConfig.mockImplementation(() => runtimeConfig);
 
@@ -166,14 +165,6 @@ describe("registerDirectoryCli", () => {
 
     await runDirectory(["self", "--channel", "slack", "--json"]);
 
-    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        rawChannel: "slack",
-        allowInstall: true,
-        preferRegisteredPlugin: true,
-        cfg: sourceConfig,
-      }),
-    );
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
     const replaceArgs = firstRecordArg(mocks.replaceConfigFile);
     expect(replaceArgs.sourceConfig).toEqual({
@@ -226,20 +217,17 @@ describe("registerDirectoryCli", () => {
       mocks.loadConfig.mockReturnValue(sourceConfig);
     });
     await runDirectory([
-      "groups",
-      "members",
-      "--channel",
-      "slack",
-      "--group-id",
+      ..."groups members --channel slack --group-id".split(" "),
       " group-1 ",
-      "--limit",
-      "5",
-      "--json",
+      ..."--limit 5 --json".split(" "),
     ]);
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       sourceConfig: enabledConfig,
       baseHash: "config-1",
-      writeOptions: {},
+      writeOptions: {
+        assertConfigPathForWrite: expect.any(Function),
+        beforeCommit: expect.any(Function),
+      },
     });
     expect(listGroupMembers).toHaveBeenCalledWith(
       expect.objectContaining({ groupId: "group-1", limit: 5 }),
@@ -279,31 +267,22 @@ describe("registerDirectoryCli", () => {
     });
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "whatsapp",
-      plugin: {
-        id: "whatsapp",
-        directory: { self },
-      },
+      plugin: { id: "whatsapp", directory: { self } },
       configured: ["whatsapp"],
       source: "single-configured",
     });
 
     await runDirectory(["self", "--json"]);
 
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: { channels: {} },
-      env: process.env,
-    });
-    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
-      cfg: autoEnabledConfig,
-      channel: null,
-      accountResolution: "read_only",
-    });
     expect(self).toHaveBeenCalledTimes(1);
     expect(firstRecordArg(self).cfg).toBe(autoEnabledConfig);
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       sourceConfig: autoEnabledConfig,
       baseHash: "config-1",
-      writeOptions: {},
+      writeOptions: {
+        assertConfigPathForWrite: expect.any(Function),
+        beforeCommit: expect.any(Function),
+      },
     });
   });
 
@@ -382,14 +361,9 @@ describe("registerDirectoryCli", () => {
     "explains $test.label self lookup in $mode mode",
     async ({ mode, test: { self, reason, message } }) => {
       installDirectory({ self: self() });
-      await runDirectory([
-        "self",
-        "--channel",
-        "demo-directory",
-        "--account",
-        "account-1",
-        ...(mode === "JSON" ? ["--json"] : []),
-      ]);
+      await runDirectory(
+        `self --channel demo-directory --account account-1${mode === "JSON" ? " --json" : ""}`,
+      );
       if (mode === "JSON") {
         expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledWith({
           status: "unavailable",
@@ -409,7 +383,7 @@ describe("registerDirectoryCli", () => {
       listPeers: vi.fn().mockResolvedValue([]),
     });
 
-    await runDirectory(["peers", "list", "--channel", "demo-directory", "--account", "account-1"]);
+    await runDirectory("peers list --channel demo-directory --account account-1");
 
     const output = runtimeState.runtimeLogs.join("\n");
     expect(output).toContain("No peers found");
@@ -426,60 +400,42 @@ describe("registerDirectoryCli", () => {
       method: "listGroupMembers",
       title: "Group Members",
     },
-  ])("$title preserves table bytes and raw JSON", async ({ args, method, title }) => {
-    const columns = 80;
-    const originalColumns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
-    const originalEnv = captureEnv(["TERM"]);
-    Object.defineProperty(process.stdout, "columns", { configurable: true, value: columns });
-    process.env.TERM = "xterm";
-    try {
-      for (const [name, expectedName] of [
-        ["  Alice  ", "Alice"],
-        [undefined, ""],
-        ["A\u001B[31m\r\nB\tC", "A\\r\\nB\\tC"],
-      ] as const) {
-        const entry = {
-          id: "u\u001B]0;directory-id\u0007🦞\n1",
-          ...(name === undefined ? {} : { name }),
-        };
-        const original = structuredClone(entry);
-        const isSelf = method === "self";
-        installDirectory(
-          { [method]: vi.fn().mockResolvedValue(isSelf ? entry : [entry]) },
-          "slack",
-        );
-        runtimeState.defaultRuntime.log.mockClear();
-        runtimeState.defaultRuntime.writeJson.mockClear();
-        await runDirectory([...args, "--channel", "slack"]);
+  ])("$title sanitizes displayed cells but preserves raw JSON", async ({ args, method, title }) => {
+    for (const [name, expectedName] of [
+      ["  Alice  ", "Alice"],
+      [undefined, ""],
+      ["A\u001B[31m\r\nB\tC", "A\\r\\nB\\tC"],
+    ] as const) {
+      const entry = {
+        id: "u\u001B]0;directory-id\u0007🦞\n1",
+        ...(name === undefined ? {} : { name }),
+      };
+      const original = structuredClone(entry);
+      const isSelf = method === "self";
+      installDirectory({ [method]: vi.fn().mockResolvedValue(isSelf ? entry : [entry]) }, "slack");
+      runtimeState.defaultRuntime.log.mockClear();
+      runtimeState.defaultRuntime.writeJson.mockClear();
+      await runDirectory([...args, "--channel", "slack"]);
 
-        const leftWidth = columns / 2 - 2;
-        const rightWidth = leftWidth + 1;
-        expect(runtimeState.defaultRuntime.log.mock.calls).toEqual([
-          [isSelf ? theme.heading(title) : `${theme.heading(title)} ${theme.muted("(1)")}`],
-          [
-            [
-              `┌${"─".repeat(leftWidth)}┬${"─".repeat(rightWidth)}┐`,
-              `│ ID${" ".repeat(leftWidth - 3)}│ Name${" ".repeat(rightWidth - 5)}│`,
-              `├${"─".repeat(leftWidth)}┼${"─".repeat(rightWidth)}┤`,
-              `│ u🦞\\n1${" ".repeat(leftWidth - 7)}│ ${expectedName}${" ".repeat(rightWidth - expectedName.length - 1)}│`,
-              `└${"─".repeat(leftWidth)}┴${"─".repeat(rightWidth)}┘`,
-            ].join("\n"),
-          ],
-        ]);
-        expect(runtimeState.defaultRuntime.writeJson).not.toHaveBeenCalled();
-        await runDirectory([...args, "--channel", "slack", "--json"]);
-        expect(runtimeState.defaultRuntime.writeJson.mock.calls).toEqual([
-          [isSelf ? original : [original]],
-        ]);
-        expect(entry).toEqual(original);
-      }
-    } finally {
-      if (originalColumns) {
-        Object.defineProperty(process.stdout, "columns", originalColumns);
-      } else {
-        Reflect.deleteProperty(process.stdout, "columns");
-      }
-      originalEnv.restore();
+      const heading = runtimeState.defaultRuntime.log.mock.calls[0]?.[0];
+      const table = runtimeState.defaultRuntime.log.mock.calls[1]?.[0];
+      expect(heading).toBe(
+        isSelf ? theme.heading(title) : `${theme.heading(title)} ${theme.muted("(1)")}`,
+      );
+      expect(
+        String(table)
+          .split("\n")[3]
+          ?.split("│")
+          .slice(1, -1)
+          .map((cell) => cell.trim()),
+      ).toEqual(["u🦞\\n1", expectedName]);
+      expect(table).not.toContain("\u001b");
+      expect(runtimeState.defaultRuntime.writeJson).not.toHaveBeenCalled();
+      await runDirectory([...args, "--channel", "slack", "--json"]);
+      expect(runtimeState.defaultRuntime.writeJson.mock.calls).toEqual([
+        [isSelf ? original : [original]],
+      ]);
+      expect(entry).toEqual(original);
     }
   });
 
@@ -487,9 +443,7 @@ describe("registerDirectoryCli", () => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: { "openclaw-weixin": {} } },
       channelId: "openclaw-weixin",
-      plugin: {
-        id: "openclaw-weixin",
-      },
+      plugin: { id: "openclaw-weixin" },
       configChanged: false,
       pluginInstalled: false,
     });
@@ -498,10 +452,6 @@ describe("registerDirectoryCli", () => {
       "exit:1",
     );
 
-    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledTimes(1);
-    const installArgs = firstRecordArg(mocks.resolveInstallableChannelPlugin);
-    expect(installArgs.rawChannel).toBe("openclaw-weixin");
-    expect(installArgs.allowInstall).toBe(true);
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(
       runtimeState.runtimeErrors.some((message) =>

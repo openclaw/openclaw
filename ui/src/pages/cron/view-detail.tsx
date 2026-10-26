@@ -1,14 +1,21 @@
-import { createMemo } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { AdminRequired, ErrorBanner, EnabledSwitch, JobMenu } from "./view-controls.tsx";
+import {
+  AdminRequired,
+  ErrorBanner,
+  EnabledSwitch,
+  JobMenu,
+  NoticeBanner,
+} from "./view-controls.tsx";
 import { Editor } from "./view-editor.tsx";
 import { describeJobSchedule, TriggerIndicator } from "./view-job-status.tsx";
 import { RunsSection } from "./view-runs.tsx";
+import { CronSuggestionLists } from "./view-suggestions.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
 export function DetailView(
   props: CronProps & {
@@ -49,7 +56,8 @@ export function DetailView(
         <DetailHeader {...props} mode={props.mode} selectedJob={selectedJob()} />
         <AdminRequired {...props} />
         {hasDetailTabs() ? <DetailTabs {...props} /> : undefined}
-        <ErrorBanner error={props.error} />
+        <ErrorBanner error={props.error} reads={props.reads} />
+        <NoticeBanner notice={props.notice} />
         <div
           id="cron-detail-panel"
           class="cron-tab-panel"
@@ -63,7 +71,10 @@ export function DetailView(
               </div>
             </SettingsSection>
           ) : (
-            <Editor {...props} mode={props.mode} />
+            <>
+              <Editor {...props} mode={props.mode} />
+              <CronSuggestionLists {...props} />
+            </>
           )}
         </div>
       </SettingsPage>
@@ -104,33 +115,33 @@ function DetailHeader(
           </div>
         ) : undefined}
         <div class="cron-detail-meta">
-          {props.mode === "job" && props.selectedJob && props.canManage ? (
-            <EnabledSwitch {...props} job={props.selectedJob} />
-          ) : undefined}
+          <Show
+            when={props.mode === "job" && props.canManage ? props.selectedJob : undefined}
+            keyed
+          >
+            {(job) => <EnabledSwitch {...props} job={job} />}
+          </Show>
           <span class="cron-detail-sub">{subtitle()}</span>
           {props.selectedJob?.trigger ? <TriggerIndicator /> : undefined}
         </div>
       </div>
       <div class="cron-detail-actions">
-        {props.mode === "job" && props.selectedJob && props.canManage ? (
-          <>
-            <button
-              type="button"
-              class="btn btn--sm"
-              data-test-id="cron-run-now"
-              disabled={props.busy || !props.connected}
-              onClick={() => {
-                const job = props.selectedJob;
-                if (job) {
-                  props.onRun(job, "force");
-                }
-              }}
-            >
-              <Icon name="play" /> {t("cron.actions.runNow")}
-            </button>
-            <JobMenu {...props} job={props.selectedJob} />
-          </>
-        ) : undefined}
+        <Show when={props.mode === "job" && props.canManage ? props.selectedJob : undefined} keyed>
+          {(job) => (
+            <>
+              <button
+                type="button"
+                class="btn btn--sm"
+                data-test-id="cron-run-now"
+                disabled={props.busy || !props.connected}
+                onClick={() => props.onRun(job, "force")}
+              >
+                <Icon name="play" /> {t("cron.actions.runNow")}
+              </button>
+              <JobMenu {...props} job={job} />
+            </>
+          )}
+        </Show>
       </div>
     </div>
   );

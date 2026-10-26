@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as restartHealth from "../cli/daemon-cli/restart-health.constants.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -17,6 +18,7 @@ vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
+afterEach(() => vi.restoreAllMocks());
 
 it.each(
   [false, true].flatMap((withNodeIdentity) =>
@@ -53,16 +55,18 @@ it.each(
         const cfg = { gateway: { mode: "local" as const, port: claim.port } };
         fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
         if (probe === "health") {
+          vi.spyOn(restartHealth, "DEFAULT_RESTART_HEALTH_TIMEOUT_MS", "get").mockReturnValue(
+            1_000,
+          );
           const result = await checkGatewayHealth({
             cfg,
-            timeoutMs: 1_000,
             runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
           });
           expect(result.healthOk).toBe(false);
         } else if (probe === "pairing") {
           await collectDevicePairingHealthFindings({ cfg, healthOk: true });
         } else if (probe === "memory") {
-          await probeGatewayMemoryStatus({ cfg, timeoutMs: 1_000 });
+          await probeGatewayMemoryStatus({ cfg });
         } else {
           await refreshGatewayAuthStateAfterAuthProfileRepair();
         }

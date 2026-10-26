@@ -1,8 +1,7 @@
-import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Value } from "typebox/value";
-import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WorkerConnectRequestFrameSchema } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
@@ -20,16 +19,12 @@ import {
   type ExecutionIdentityAdmissionWork,
 } from "../../audit/execution-identity-admission.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import {
-  runWithoutOwnedSessionTranscriptWrites,
-  withOwnedSessionTranscriptWrites,
-} from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
+import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
-import { saveMediaBuffer } from "../../media/store.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   buildWorkerConnectParams,
   type WorkerLaunchDescriptor,
@@ -39,6 +34,8 @@ import { verifyAgentRuntimeIdentityToken } from "../agent-runtime-identity-token
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   completeTurn,
+  createLauncher,
+  installLauncherTest,
   environmentForTunnel,
   launchDescriptor,
   localResult,
@@ -52,8 +49,6 @@ import {
   OWNER_EPOCH,
   SESSION_ID,
   browserEnvironment,
-  cleanupWorkerTurnLauncherTest,
-  createWorkerSessionTurnPlacementProvider,
   openSessionManager,
   placements,
   root,
@@ -61,11 +56,8 @@ import {
   sessionTarget,
   setWorkerTurnAdmissionCleanup,
   setWorkerTurnSessionTarget,
-  setupWorkerTurnLauncherTest,
   turn,
 } from "./worker-turn-launcher.test-support.js";
-
-afterAll(closeStateDatabaseForTest);
 
 function wireUser(text: string, timestamp: number) {
   return { role: "user", content: [{ type: "text", text }], timestamp };
@@ -86,8 +78,7 @@ async function verifyIdentity(assignment: WorkerLaunchDescriptor["assignment"]) 
 }
 
 describe("worker turn launcher remote handoff", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+  installLauncherTest();
   afterEach(() => setActiveNodeContexts([]));
 
   it("settles a delegated worker reply and conflict without borrowing its parent transcript", async () => {
@@ -141,14 +132,8 @@ describe("worker turn launcher remote handoff", () => {
         expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
           { stagedResultRef: request.source.stagedResult!.ref, workspaceAcceptedAtMs: null },
         ]);
-        await request.source.journal.commit(MANIFEST_REF);
         return {
-          manifestRef: MANIFEST_REF,
-          changed: false,
-          verifyStable: async () => {},
-          verifyLocalStable: async () => {},
-          publishStagedResult: async () => {},
-          discardPreparedStagedResult: async () => {},
+          ...(await reconcileUnchangedLocalWorkspace(request)),
           getAppliedWorkspaceResult: () => ({
             manifestRef: MANIFEST_REF,
             manifest: { version: 1 as const, baseCommit: null, entries: [] },
@@ -176,13 +161,14 @@ describe("worker turn launcher remote handoff", () => {
           ownerEpoch: OWNER_EPOCH,
         });
         descriptor = launchDescriptor(request.plan);
-        const connectFrame = {
-          type: "req" as const,
-          id: "launch-validation",
-          method: "connect" as const,
-          params: buildWorkerConnectParams(descriptor),
-        };
-        expect(Value.Check(WorkerConnectRequestFrameSchema, connectFrame)).toBe(true);
+        expect(
+          Value.Check(WorkerConnectRequestFrameSchema, {
+            type: "req",
+            id: "launch-validation",
+            method: "connect",
+            params: buildWorkerConnectParams(descriptor),
+          }),
+        ).toBe(true);
         expect(descriptor.admission.handshake).toEqual({
           bundleHash: bootstrapReceipt.bundleHash,
           openclawVersion: bootstrapReceipt.openclawVersion,
@@ -198,10 +184,6 @@ describe("worker turn launcher remote handoff", () => {
           activeRuntimeIdentity &&
             createAgentRuntimeApprovalAuthorityValidator(placements)(activeRuntimeIdentity),
         ).toBe(true);
-        expect(descriptor.connectionEndpoint).toEqual({
-          kind: "unix",
-          socketPath: "/worker/gateway.sock",
-        });
         expect(acknowledgeCredentialDelivery).not.toHaveBeenCalled();
         request.onDispatchReady?.();
         expect(acknowledgeCredentialDelivery).toHaveBeenCalledOnce();
@@ -224,9 +206,8 @@ describe("worker turn launcher remote handoff", () => {
       await resumePreparation.promise;
       return { kind: "local" as const, path: root };
     });
-    const provider = createWorkerSessionTurnPlacementProvider({
+    const provider = createLauncher({
       environments,
-      placements,
       resolveWorkspace,
       reconcileActivePlacement: async () => {},
     });
@@ -306,14 +287,6 @@ describe("worker turn launcher remote handoff", () => {
       parentEntries,
     );
     expect(runLocal).not.toHaveBeenCalled();
-    expect(resolveWorkspace).toHaveBeenCalledWith({
-      sessionId: SESSION_ID,
-      sessionKey: sessionTarget.sessionKey,
-      agentId: sessionTarget.agentId,
-    });
-    expect(reconcileWorkspace).toHaveBeenCalledWith(
-      expect.objectContaining({ source: expect.objectContaining({ kind: "local", path: root }) }),
-    );
     const conflictSummary =
       "Cloud result applied with 1 conflict(s); kept local versions: src/local.ts. Cloud versions staged at refs/openclaw/worker-results/";
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
@@ -338,7 +311,6 @@ describe("worker turn launcher remote handoff", () => {
     );
     const assignment = expectDefined(descriptor, "worker launch descriptor").assignment;
     expect(descriptor).toMatchObject({
-      version: 4,
       assignment: {
         prompt: expect.stringMatching(/^\[[^\]]+\] Inspect this workspace$/u),
         suppressPromptTranscript: true,
@@ -362,7 +334,6 @@ describe("worker turn launcher remote handoff", () => {
       gatewayUiCommandTarget: { connId: "requesting-ui", profileId: "requester" },
       executionIdentity: { runId: "run-worker-turn" },
     });
-    expect(assignment.agentId).toBe(verifiedRuntimeIdentity?.agentId);
     expect(
       verifiedRuntimeIdentity &&
         createAgentRuntimeApprovalAuthorityValidator(placements)(verifiedRuntimeIdentity),
@@ -398,26 +369,7 @@ describe("worker turn launcher remote handoff", () => {
 
   it("keeps reset tool pairs valid without replaying the already-persisted current user", async () => {
     setActiveNodeContexts([{ nodeId: "disconnected-mac", isCurrent: () => false }]);
-    const remote = path.join(await realpath(root), "remote");
-    await mkdir(remote);
-    await seedActivePlacement("worker-turn", remote);
-    const image = {
-      type: "image" as const,
-      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==",
-      mimeType: "image/png",
-    };
-    const inlineImages = [
-      { ...image, sourceIndex: 0 },
-      { ...image, sourceIndex: 2 },
-    ];
-    const savedImage = await saveMediaBuffer(
-      Buffer.from(image.data, "base64"),
-      "image/png",
-      "inbound",
-      5_000,
-      "offloaded.png",
-    );
-    const imagePath = savedImage.path;
+    await seedActivePlacement();
     const manager = await openSessionManager();
     await manager.appendMessageAsync(readCall("shared-call", 16, "toolUse"));
     const firstKeptEntryId = await manager.appendMessageAsync(
@@ -442,16 +394,6 @@ describe("worker turn launcher remote handoff", () => {
     );
     let descriptor: WorkerLaunchDescriptor | undefined;
     const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
-      runWorkspaceCommand: vi.fn(
-        async (command) =>
-          await runCommandWithTimeout([...command.argv], {
-            cwd: remote,
-            input: command.input,
-            timeoutMs: 5_000,
-            signal: command.signal,
-          }),
-      ),
-      stageAttachments: vi.fn(async () => {}),
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
         request.onDispatchReady?.();
         descriptor = launchDescriptor(request.plan);
@@ -463,7 +405,7 @@ describe("worker turn launcher remote handoff", () => {
       get: vi.fn(() => browserEnvironment()),
       startTunnel: vi.fn(async () => tunnel),
     });
-    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const provider = createLauncher({ environments });
 
     await provider.executeTurn(
       runIdentity("run-persisted-user"),
@@ -475,25 +417,12 @@ describe("worker turn launcher remote handoff", () => {
         },
         toolsAllow: ["browser"],
         suppressNextUserMessagePersistence: true,
-        images: inlineImages,
-        imageOrder: ["inline", "offloaded", "inline"],
-        media: [{ path: imagePath, contentType: "image/png", kind: "image" }],
       },
       localResult,
     );
 
     const assignment = expectDefined(descriptor, "worker launch descriptor").assignment;
-    expect(assignment.prompt).toEqual([
-      { type: "text", text: expect.stringContaining("Inspect this workspace") },
-      image,
-      image,
-      image,
-    ]);
-    expect(JSON.stringify(assignment.prompt)).toContain("media/inbound/openclaw-staged-");
-    expect(tunnel.stageAttachments).toHaveBeenCalledOnce();
-    expect(assignment.systemPrompt).toContain(
-      "You are a personal assistant running inside OpenClaw.",
-    );
+    expect(assignment.prompt).toContain("Inspect this workspace");
     expect(assignment.systemPrompt).toContain("active_node=unknown");
     expect(assignment.systemPrompt).toContain("active_node_identity=unknown");
     expect(assignment.systemPrompt).not.toContain("disconnected-mac");

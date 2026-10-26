@@ -62,8 +62,12 @@ const BUNDLED_CATALOG_SOURCE_REFS = new Set(
   Object.keys(DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG.sources ?? {}),
 );
 
-function* bundledOfficialExternalPluginCatalogEntries(): Generator<OfficialExternalPluginCatalogEntry> {
+function prepareBundledOfficialExternalPluginCatalog() {
   const seen = new Set<string>();
+  const entries: OfficialExternalPluginCatalogEntry[] = [];
+  const byId = new Map<string, OfficialExternalPluginCatalogEntry>();
+  const byPackage = new Map<string, OfficialExternalPluginCatalogEntry>();
+  const canonicalIds = new Set<string>();
   for (const entry of BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES) {
     if (
       getFeedEntryInstallCandidateRecords(entry).some(
@@ -75,20 +79,30 @@ function* bundledOfficialExternalPluginCatalogEntries(): Generator<OfficialExter
     const key = resolveOfficialExternalPluginCatalogEntryKey(entry);
     if (key && !seen.has(key)) {
       seen.add(key);
-      yield entry;
+      entries.push(entry);
+      for (const id of resolveOfficialExternalPluginLookupIds(entry)) {
+        if (!byId.has(id)) {
+          byId.set(id, entry);
+        }
+      }
+      const packageName = normalizeOptionalString(entry.name);
+      if (packageName && !byPackage.has(packageName)) {
+        byPackage.set(packageName, entry);
+      }
+      const canonicalId = resolveOfficialExternalPluginId(entry)?.toLowerCase();
+      if (canonicalId) {
+        canonicalIds.add(canonicalId);
+      }
     }
   }
+  return { entries, byId, byPackage, canonicalIds };
 }
 
-function findBundledOfficialExternalPluginCatalogEntry(
-  matches: (entry: OfficialExternalPluginCatalogEntry) => boolean,
-): OfficialExternalPluginCatalogEntry | undefined {
-  for (const entry of bundledOfficialExternalPluginCatalogEntries()) {
-    if (matches(entry)) {
-      return entry;
-    }
-  }
-  return undefined;
+let bundledCatalog: ReturnType<typeof prepareBundledOfficialExternalPluginCatalog> | undefined;
+
+function getBundledOfficialExternalPluginCatalog() {
+  // Shipped JSON has process lifetime; hosted catalogs and install provenance remain live.
+  return (bundledCatalog ??= prepareBundledOfficialExternalPluginCatalog());
 }
 
 function formatFeedInstallCandidateSpec(
@@ -162,22 +176,16 @@ function resolveFeedEntryInstallCandidate(params: {
 /** Source-specific catalog pins stay attached to the artifact they authenticate. */
 export function resolveOfficialExternalPluginInstallSources(
   entry: OfficialExternalPluginCatalogEntry,
-  params?: {
-    catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
-    resolvedInstall?: PluginPackageInstall | null;
-  },
+  params?: { resolvedInstall?: PluginPackageInstall | null },
 ): PluginInstallSource[] {
   const install =
     params?.resolvedInstall === undefined
-      ? resolveOfficialExternalPluginInstall(entry, params)
+      ? resolveOfficialExternalPluginInstall(entry)
       : params.resolvedInstall;
   if (!install) {
     return [];
   }
-  const candidates = resolveFeedEntryInstallSources({
-    entry,
-    catalogConfig: params?.catalogConfig,
-  });
+  const candidates = resolveFeedEntryInstallSources({ entry });
   return candidates.length > 0 ? candidates : resolvePluginInstallSources(install);
 }
 
@@ -308,7 +316,7 @@ export async function loadConfiguredHostedOfficialExternalPluginCatalogEntries(
 }
 
 export function listOfficialExternalPluginCatalogEntries(): OfficialExternalPluginCatalogEntry[] {
-  return [...bundledOfficialExternalPluginCatalogEntries()];
+  return [...getBundledOfficialExternalPluginCatalog().entries];
 }
 
 /** Returns whether an id is the canonical id of an official external plugin. */
@@ -317,18 +325,14 @@ export function isOfficialExternalPluginId(pluginId: string): boolean {
   if (!normalized) {
     return false;
   }
-  return (
-    findBundledOfficialExternalPluginCatalogEntry(
-      (entry) => resolveOfficialExternalPluginId(entry)?.toLowerCase() === normalized,
-    ) !== undefined
-  );
+  return getBundledOfficialExternalPluginCatalog().canonicalIds.has(normalized);
 }
 
 function resolveOfficialExternalPluginOwners(
   matches: (manifest: OfficialExternalPluginCatalogManifest) => boolean | undefined,
 ): string[] {
   const pluginIds = new Set<string>();
-  for (const entry of bundledOfficialExternalPluginCatalogEntries()) {
+  for (const entry of getBundledOfficialExternalPluginCatalog().entries) {
     const pluginId = resolveOfficialExternalPluginId(entry);
     const manifest = getOfficialExternalPluginCatalogManifest(entry);
     if (pluginId && manifest && matches(manifest)) {
@@ -365,12 +369,11 @@ export function resolveOfficialExternalProviderContractPluginIds(params: {
 
 /** Resolves official web provider owners from matching documented environment credentials. */
 export function resolveOfficialExternalWebProviderContractPluginIdsForEnv(params: {
-  contract: OfficialExternalProviderContract;
   env: NodeJS.ProcessEnv;
 }): string[] {
   return resolveOfficialExternalPluginOwners((manifest) => {
     const contractProviderIds = normalizedProviderIdSet(
-      manifest.contracts?.[params.contract] ?? [],
+      manifest.contracts?.webFetchProviders ?? [],
     );
     return (
       contractProviderIds.size > 0 &&
@@ -511,9 +514,7 @@ export function getOfficialExternalPluginCatalogEntry(
   if (!normalized) {
     return undefined;
   }
-  return findBundledOfficialExternalPluginCatalogEntry((entry) =>
-    resolveOfficialExternalPluginLookupIds(entry).includes(normalized),
-  );
+  return getBundledOfficialExternalPluginCatalog().byId.get(normalized);
 }
 
 export function getOfficialExternalPluginCatalogEntryForPackage(
@@ -523,9 +524,7 @@ export function getOfficialExternalPluginCatalogEntryForPackage(
   if (!normalized) {
     return undefined;
   }
-  return findBundledOfficialExternalPluginCatalogEntry(
-    (entry) => normalizeOptionalString(entry.name) === normalized,
-  );
+  return getBundledOfficialExternalPluginCatalog().byPackage.get(normalized);
 }
 
 /** Source discovery alone does not make an external package part of the core distribution. */

@@ -3,26 +3,12 @@ import type { CreateChannelIngressDrainOptions } from "../../channels/message/in
 import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.types.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
 import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
-import type { HeartbeatRunResult } from "../../infra/heartbeat-wake-contracts.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
 import type { OpenAsyncKeyedStoreOptions } from "../../plugin-state/plugin-state-store.types.js";
+import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 
 type TtsRuntimeApi = typeof import("../../tts/runtime-api.js");
-type BuildTtsSystemPromptHintAsync = TtsRuntimeApi["buildTtsSystemPromptHintAsync"];
-type ListSpeechVoices = TtsRuntimeApi["listSpeechVoices"];
-type PrepareTtsRequest = TtsRuntimeApi["prepareTtsRequest"];
-type TextToSpeech = typeof import("../../tts/tts.js").textToSpeech;
-type TextToSpeechStream = TtsRuntimeApi["textToSpeechStream"];
-type TextToSpeechTelephony = TtsRuntimeApi["textToSpeechTelephony"];
-
-type RuntimeRequestHeartbeatOptions = Parameters<
-  typeof import("../../infra/heartbeat-wake.js").requestHeartbeat
->[0];
-
-type RuntimeRequestHeartbeatNowOptions = Omit<RuntimeRequestHeartbeatOptions, "source" | "intent"> &
-  Partial<Pick<RuntimeRequestHeartbeatOptions, "source" | "intent">>;
-
 type RuntimeWriteConfigOptions = {
   /** Revalidate caller authority at guarded publication; accepted writes still settle. */
   assertCurrent?: () => void;
@@ -44,26 +30,6 @@ type RuntimeConfigReplaceResult = import("../../config/mutate.js").ConfigReplace
 type RuntimeProviderListParams = {
   config?: import("../../config/types.openclaw.js").OpenClawConfig;
 };
-type RuntimeConfigMutationContext = {
-  snapshot: import("../../config/types.openclaw.js").ConfigFileSnapshot;
-  previousHash: string | null;
-};
-type RuntimeMutateConfigFileParams<T = void> = {
-  base?: ConfigMutationBase;
-  baseHash?: string;
-  afterWrite: RuntimeConfigAfterWrite;
-  writeOptions?: RuntimeWriteConfigOptions;
-  mutate: (
-    draft: import("../../config/types.openclaw.js").OpenClawConfig,
-    context: RuntimeConfigMutationContext,
-  ) => Promise<T | void> | T | void;
-};
-type RuntimeReplaceConfigFileParams = {
-  nextConfig: import("../../config/types.openclaw.js").OpenClawConfig;
-  baseHash?: string;
-  afterWrite: RuntimeConfigAfterWrite;
-  writeOptions?: RuntimeWriteConfigOptions;
-};
 type RuntimeSessionEntry = import("../../config/sessions/types.js").SessionEntry;
 type RuntimeSessionPluginExtensions =
   | Record<string, Record<string, SessionPluginJsonValue>>
@@ -75,15 +41,6 @@ type RuntimeSessionStoreReadParams = {
   sessionKey: string;
   readConsistency?: "latest";
   storePath?: string;
-};
-type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
-  readOnly?: boolean;
-  /** Restrict results to exact persisted keys while retaining canonical listing validation. */
-  sessionKeys?: readonly string[];
-  /** Set false to skip derived participant identities and counts when reading metadata. */
-  includeParticipants?: boolean;
-  /** Capture the admitted store's physical identity; access policy remains caller-owned. */
-  captureSource?: (assertCurrent: () => void) => void;
 };
 type RuntimeSessionStoreEntrySummary = {
   sessionKey: string;
@@ -101,96 +58,6 @@ type RuntimeCreateSessionEntryContext = RuntimeCreateSessionEntryResult & {
 };
 type RuntimeCreateSessionEntryFinalPatch = {
   pluginExtensions: RuntimeSessionPluginExtensions;
-};
-type RuntimeCreateSessionEntryBaseParams = {
-  cfg: import("../../config/types.openclaw.js").OpenClawConfig;
-  key: string;
-  agentId?: string;
-  label?: string;
-  /** Create-only title snapshot: trimmed, capped at 500 UTF-16 units without splitting pairs; not a unique label. */
-  displayName?: string;
-  spawnedCwd?: string;
-  sessionRoot?: string;
-  permissionMode?: RuntimeSessionEntry["permissionMode"];
-  /** Bind the created session's CLI execution to this paired node. */
-  execNode?: string;
-  /** Working directory interpreted only by execNode. */
-  execCwd?: string;
-  initialEntry:
-    | {
-        agentHarnessId: string;
-        color?: string;
-        modelSelectionLocked?: true;
-        pluginExtensions?: RuntimeSessionPluginExtensions;
-      }
-    | {
-        cliBackendId: string;
-        color?: string;
-        model: string;
-        cliSessionBinding: import("../../config/sessions/types.js").CliSessionBinding;
-        modelSelectionLocked: true;
-        pluginExtensions?: RuntimeSessionPluginExtensions;
-        /** Registry-injected owner; plugin callers cannot select another owner. */
-        pluginOwnerId?: string;
-      }
-    | {
-        acpBackendId: string;
-        color?: string;
-        acpSessionBinding: {
-          acpAgentId: string;
-          agentSessionId: string;
-        };
-        modelSelectionLocked?: true;
-        pluginExtensions?: RuntimeSessionPluginExtensions;
-        /** Registry-injected owner; plugin callers cannot select another owner. */
-        pluginOwnerId?: string;
-      };
-};
-type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
-  (
-    | {
-        /** Retry an interrupted initializer only when persisted trusted state matches exactly. */
-        recoverMatchingInitialEntry: true;
-        afterCreate: (
-          created: RuntimeCreateSessionEntryContext,
-        ) => Promise<RuntimeCreateSessionEntryFinalPatch>;
-      }
-    | {
-        recoverMatchingInitialEntry?: never;
-        afterCreate?: (
-          created: RuntimeCreateSessionEntryContext,
-        ) => Promise<RuntimeCreateSessionEntryFinalPatch | void>;
-      }
-  );
-type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
-  /** Synchronous final ownership check executed inside the commit transaction. */
-  assertCommitAllowed?: () => void;
-  fallbackEntry?: RuntimeSessionEntry;
-  maintenanceConfig?: import("../../config/sessions/store-maintenance.js").ResolvedSessionMaintenanceConfigInput;
-  preserveActivity?: boolean;
-  replaceEntry?: boolean;
-  update: (
-    entry: RuntimeSessionEntry,
-    context: { existingEntry?: RuntimeSessionEntry },
-  ) => Promise<Partial<RuntimeSessionEntry> | null> | Partial<RuntimeSessionEntry> | null;
-};
-type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
-  entry: RuntimeSessionEntry;
-};
-type RuntimeSessionWorkAdmissionParams = {
-  storePath: string;
-  sessionKey: string;
-  signal?: AbortSignal;
-};
-type RuntimeSessionStoreEntryUpdateParams = {
-  storePath: string;
-  sessionKey: string;
-  update: (
-    entry: RuntimeSessionEntry,
-  ) => Promise<Partial<RuntimeSessionEntry> | null> | Partial<RuntimeSessionEntry> | null;
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-  requireWriteSuccess?: boolean;
 };
 /** @public Part of the PluginRuntime declaration contract. */
 export type PluginRuntimeThinkingPolicyRequest = {
@@ -216,19 +83,6 @@ export type RuntimeLogger = {
   info: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
   error: (message: string, meta?: Record<string, unknown>) => void;
-};
-
-export type RunHeartbeatOnceOptions = {
-  reason?: string;
-  agentId?: string;
-  sessionKey?: string;
-  /** Override heartbeat config (e.g. `{ target: "last" }` to deliver to the last active channel). */
-  heartbeat?: { target?: string };
-};
-
-type LlmCompleteMessage = {
-  role: "system" | "user" | "assistant";
-  content: string;
 };
 
 export type LlmCompleteCaller = {
@@ -263,18 +117,11 @@ type LlmCompleteCommonParams = {
   agentId?: string;
 };
 
-type LlmDirectCompleteParams = LlmCompleteCommonParams & {
-  messages: LlmCompleteMessage[];
-  /** Provider-native constrained-output request. Unsupported transports may ignore it. */
-  responseFormat?: Record<string, unknown>;
-  /** Fail before dispatch unless the exact selected credential has this host-resolved mode. */
-  requiredAuthMode?: "oauth";
-  execution?: undefined;
-};
-
 export type LlmIsolatedAgentRuntimeCompleteParams = LlmCompleteCommonParams & {
   /** Isolated runtimes currently accept one fresh user prompt, not a replayed chat history. */
   messages: [{ role: "user"; content: string }];
+  /** Advisory final-output schema; isolated runtimes without native support may ignore it. */
+  outputSchema?: JsonSchemaObject;
   execution: {
     /**
      * Fresh completion through the configured agent runtime with no supplied tools.
@@ -287,7 +134,19 @@ export type LlmIsolatedAgentRuntimeCompleteParams = LlmCompleteCommonParams & {
   };
 };
 
-export type LlmCompleteParams = LlmDirectCompleteParams | LlmIsolatedAgentRuntimeCompleteParams;
+export type LlmCompleteParams =
+  | (LlmCompleteCommonParams & {
+      messages: {
+        role: "system" | "user" | "assistant";
+        content: string;
+      }[];
+      /** Provider-native constrained-output request. Unsupported transports may ignore it. */
+      responseFormat?: Record<string, unknown>;
+      /** Fail before dispatch unless the exact selected credential has this host-resolved mode. */
+      requiredAuthMode?: "oauth";
+      execution?: undefined;
+    })
+  | LlmIsolatedAgentRuntimeCompleteParams;
 
 export type LlmCompleteErrorCode =
   | "LLM_COMPLETION_NOT_AUTHORIZED"
@@ -301,16 +160,6 @@ export type LlmCompleteErrorCode =
   | "LLM_COMPLETION_OUTPUT_REJECTED"
   | "LLM_COMPLETION_FAILED";
 
-type LlmCompleteExecution =
-  | {
-      mode: "direct-provider";
-      owner: { kind: "provider"; id: string };
-    }
-  | {
-      mode: "isolated-agent-runtime";
-      owner: { kind: "cli" | "harness"; id: string };
-    };
-
 export type LlmCompleteResult = {
   text: string;
   provider: string;
@@ -321,25 +170,21 @@ export type LlmCompleteResult = {
   stopReason?: StopReason;
   agentId: string;
   usage: LlmCompleteUsage;
-  execution: LlmCompleteExecution;
+  execution:
+    | {
+        mode: "direct-provider";
+        owner: { kind: "provider"; id: string };
+      }
+    | {
+        mode: "isolated-agent-runtime";
+        owner: { kind: "cli" | "harness"; id: string };
+      };
   audit: {
     caller: LlmCompleteCaller;
     purpose?: string;
     sessionKey?: string;
   };
 };
-
-type RuntimeRunEmbeddedAgentParams = Omit<
-  import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
-  "admittedRunContext" | "preparedRunAdmission"
-> & {
-  /** @deprecated Ignored; the host derives availability. Retained until the next Plugin SDK major. */
-  githubPublicationAvailable?: boolean;
-};
-
-type RuntimeRunEmbeddedAgent = (
-  params: RuntimeRunEmbeddedAgentParams,
-) => Promise<import("../../agents/embedded-agent-runner/types.js").EmbeddedAgentRunResult>;
 
 /** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
@@ -359,16 +204,29 @@ export type PluginRuntimeCore = {
      * Persist a focused config mutation. Callers must choose the post-write
      * behavior explicitly so the gateway can hot-reload, restart, or defer.
      */
-    mutateConfigFile: <T = void>(
-      params: RuntimeMutateConfigFileParams<T>,
-    ) => Promise<RuntimeConfigReplaceResult & { result: T | undefined }>;
+    mutateConfigFile: <T = void>(params: {
+      base?: ConfigMutationBase;
+      baseHash?: string;
+      afterWrite: RuntimeConfigAfterWrite;
+      writeOptions?: RuntimeWriteConfigOptions;
+      mutate: (
+        draft: import("../../config/types.openclaw.js").OpenClawConfig,
+        context: {
+          snapshot: import("../../config/types.openclaw.js").ConfigFileSnapshot;
+          previousHash: string | null;
+        },
+      ) => Promise<T | void> | T | void;
+    }) => Promise<RuntimeConfigReplaceResult & { result: T | undefined }>;
     /**
      * Persist a full config replacement. Callers must choose the post-write
      * behavior explicitly so the gateway can hot-reload, restart, or defer.
      */
-    replaceConfigFile: (
-      params: RuntimeReplaceConfigFileParams,
-    ) => Promise<RuntimeConfigReplaceResult>;
+    replaceConfigFile: (params: {
+      nextConfig: import("../../config/types.openclaw.js").OpenClawConfig;
+      baseHash?: string;
+      afterWrite: RuntimeConfigAfterWrite;
+      writeOptions?: RuntimeWriteConfigOptions;
+    }) => Promise<RuntimeConfigReplaceResult>;
   };
   agent: {
     defaults: {
@@ -397,7 +255,15 @@ export type PluginRuntimeCore = {
       opts: import("../../agents/command/types.js").AgentCommandIngressOpts,
       runtime: import("../../runtime.js").RuntimeEnv,
     ) => ReturnType<typeof import("../../agents/agent-command.js").agentCommandFromIngress>;
-    runEmbeddedAgent: RuntimeRunEmbeddedAgent;
+    runEmbeddedAgent: (
+      params: Omit<
+        import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+        "admittedRunContext" | "preparedRunAdmission"
+      > & {
+        /** @deprecated Ignored; the host derives availability. Retained until the next Plugin SDK major. */
+        githubPublicationAvailable?: boolean;
+      },
+    ) => Promise<import("../../agents/embedded-agent-runner/types.js").EmbeddedAgentRunResult>;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     /**
      * Shares the embedded runner's CLI-backend dispatch eligibility (route,
@@ -411,7 +277,64 @@ export type PluginRuntimeCore = {
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
       createSessionEntry: (
-        params: RuntimeCreateSessionEntryParams,
+        params: {
+          cfg: import("../../config/types.openclaw.js").OpenClawConfig;
+          key: string;
+          agentId?: string;
+          label?: string;
+          /** Create-only title snapshot: trimmed, capped at 500 UTF-16 units without splitting pairs; not a unique label. */
+          displayName?: string;
+          spawnedCwd?: string;
+          sessionRoot?: string;
+          permissionMode?: RuntimeSessionEntry["permissionMode"];
+          /** Bind the created session's CLI execution to this paired node. */
+          execNode?: string;
+          /** Working directory interpreted only by execNode. */
+          execCwd?: string;
+          initialEntry:
+            | {
+                agentHarnessId: string;
+                color?: string;
+                modelSelectionLocked?: true;
+                pluginExtensions?: RuntimeSessionPluginExtensions;
+              }
+            | {
+                cliBackendId: string;
+                color?: string;
+                model: string;
+                cliSessionBinding: import("../../config/sessions/types.js").CliSessionBinding;
+                modelSelectionLocked: true;
+                pluginExtensions?: RuntimeSessionPluginExtensions;
+                /** Registry-injected owner; plugin callers cannot select another owner. */
+                pluginOwnerId?: string;
+              }
+            | {
+                acpBackendId: string;
+                color?: string;
+                acpSessionBinding: {
+                  acpAgentId: string;
+                  agentSessionId: string;
+                };
+                modelSelectionLocked?: true;
+                pluginExtensions?: RuntimeSessionPluginExtensions;
+                /** Registry-injected owner; plugin callers cannot select another owner. */
+                pluginOwnerId?: string;
+              };
+        } & (
+          | {
+              /** Retry an interrupted initializer only when persisted trusted state matches exactly. */
+              recoverMatchingInitialEntry: true;
+              afterCreate: (
+                created: RuntimeCreateSessionEntryContext,
+              ) => Promise<RuntimeCreateSessionEntryFinalPatch>;
+            }
+          | {
+              recoverMatchingInitialEntry?: never;
+              afterCreate?: (
+                created: RuntimeCreateSessionEntryContext,
+              ) => Promise<RuntimeCreateSessionEntryFinalPatch | void>;
+            }
+        ),
       ) => Promise<RuntimeCreateSessionEntryResult>;
       /** @deprecated Use getSessionEntryAsync. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
       getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
@@ -429,7 +352,15 @@ export type PluginRuntimeCore = {
       ) => Promise<RuntimeSessionStoreEntrySummary | undefined>;
       /** @deprecated Use listSessionEntriesAsync for metadata reads. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
       listSessionEntries: (
-        params?: RuntimeSessionStoreListParams,
+        params?: Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">> & {
+          readOnly?: boolean;
+          /** Restrict results to exact persisted keys while retaining canonical listing validation. */
+          sessionKeys?: readonly string[];
+          /** Set false to skip derived participant identities and counts when reading metadata. */
+          includeParticipants?: boolean;
+          /** Capture the admitted store's physical identity; access policy remains caller-owned. */
+          captureSource?: (assertCurrent: () => void) => void;
+        },
       ) => RuntimeSessionStoreEntrySummary[];
       /** Read-only metadata listing; saved prompts and other detached snapshots are omitted. */
       listSessionEntriesAsync: typeof import("../../plugin-sdk/session-store-runtime.js").listSessionEntriesAsync;
@@ -445,18 +376,44 @@ export type PluginRuntimeCore = {
       >;
       /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
       patchSessionEntry: (
-        params: RuntimeSessionStoreEntryPatchParams,
+        params: RuntimeSessionStoreReadParams & {
+          /** Synchronous final ownership check executed inside the commit transaction. */
+          assertCommitAllowed?: () => void;
+          fallbackEntry?: RuntimeSessionEntry;
+          maintenanceConfig?: import("../../config/sessions/store-maintenance.js").ResolvedSessionMaintenanceConfigInput;
+          preserveActivity?: boolean;
+          replaceEntry?: boolean;
+          update: (
+            entry: RuntimeSessionEntry,
+            context: { existingEntry?: RuntimeSessionEntry },
+          ) => Promise<Partial<RuntimeSessionEntry> | null> | Partial<RuntimeSessionEntry> | null;
+        },
       ) => Promise<RuntimeSessionEntry | null>;
       prepareSessionEntryPatch: typeof import("../../plugin-sdk/session-store-runtime.js").prepareSessionEntryPatch;
-      upsertSessionEntry: (params: RuntimeUpsertSessionEntryParams) => Promise<void>;
+      upsertSessionEntry: (
+        params: RuntimeSessionStoreReadParams & {
+          entry: RuntimeSessionEntry;
+        },
+      ) => Promise<void>;
       runWithWorkAdmission: <T>(
-        params: RuntimeSessionWorkAdmissionParams,
+        params: {
+          storePath: string;
+          sessionKey: string;
+          signal?: AbortSignal;
+        },
         run: (signal: AbortSignal) => Promise<T>,
       ) => Promise<T>;
       /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
-      updateSessionStoreEntry: (
-        params: RuntimeSessionStoreEntryUpdateParams,
-      ) => Promise<RuntimeSessionEntry | null>;
+      updateSessionStoreEntry: (params: {
+        storePath: string;
+        sessionKey: string;
+        update: (
+          entry: RuntimeSessionEntry,
+        ) => Promise<Partial<RuntimeSessionEntry> | null> | Partial<RuntimeSessionEntry> | null;
+        skipMaintenance?: boolean;
+        takeCacheOwnership?: boolean;
+        requireWriteSuccess?: boolean;
+      }) => Promise<RuntimeSessionEntry | null>;
     };
   };
   hooks: {
@@ -475,19 +432,9 @@ export type PluginRuntimeCore = {
     }) => Promise<{ ok: true; runId: string } | { ok: false; reason: string }>;
   };
   system: {
+    captureSessionEventTarget: typeof import("./runtime-session-events.js").captureSessionEventTarget;
+    enqueueSessionEvent: typeof import("./runtime-session-events.js").enqueueSessionEvent;
     enqueueSystemEvent: typeof import("./system-events.js").enqueueSystemEventFromSdk;
-    requestHeartbeat: typeof import("../../infra/heartbeat-wake.js").requestHeartbeat;
-    /**
-     * @deprecated Use `requestHeartbeat({ source, intent, reason })` so wake producers declare
-     * scheduler intent explicitly.
-     */
-    requestHeartbeatNow: (opts?: RuntimeRequestHeartbeatNowOptions) => void;
-    /**
-     * Run a single heartbeat cycle immediately (bypassing the coalesce timer).
-     * Accepts an optional `heartbeat` config override so callers can choose
-     * an explicit destination or opt into internal-only `target: "none"` runs.
-     */
-    runHeartbeatOnce: (opts?: RunHeartbeatOnceOptions) => Promise<HeartbeatRunResult>;
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
   };
@@ -501,12 +448,12 @@ export type PluginRuntimeCore = {
   };
   tts: {
     /** Await machine preference preparation before rendering; optional for older custom runtimes. */
-    buildSystemPromptHintAsync?: BuildTtsSystemPromptHintAsync;
-    prepareTtsRequest: PrepareTtsRequest;
-    textToSpeech: TextToSpeech;
-    textToSpeechStream: TextToSpeechStream;
-    textToSpeechTelephony: TextToSpeechTelephony;
-    listVoices: ListSpeechVoices;
+    buildSystemPromptHintAsync?: TtsRuntimeApi["buildTtsSystemPromptHintAsync"];
+    prepareTtsRequest: TtsRuntimeApi["prepareTtsRequest"];
+    textToSpeech: typeof import("../../tts/tts.js").textToSpeech;
+    textToSpeechStream: TtsRuntimeApi["textToSpeechStream"];
+    textToSpeechTelephony: TtsRuntimeApi["textToSpeechTelephony"];
+    listVoices: TtsRuntimeApi["listSpeechVoices"];
   };
   mediaUnderstanding: {
     resolveAudioInputBudget: MediaUnderstandingRuntime["resolveAudioInputBudget"];

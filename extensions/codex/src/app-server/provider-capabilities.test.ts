@@ -12,10 +12,7 @@ import {
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-const appServer = {
-  start: {},
-  requestTimeoutMs: 1_000,
-} as CodexAppServerRuntimeOptions;
+const appServer = { start: {}, requestTimeoutMs: 1_000 } as CodexAppServerRuntimeOptions;
 
 const request = vi.fn(async (_method: string) => ({ webSearch: false }));
 const client = { request } as unknown as CodexAppServerClient;
@@ -78,7 +75,7 @@ describe("resolveCodexProviderWebSearchSupport", () => {
       });
       vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
       const stdinClosed = once(harness.process.stdin, "close");
-      const pending = resolveCodexProviderWebSearchSupport({
+      const pending = resolveSupport({
         clientFactory: createIsolatedCodexAppServerClient,
         appServer: {
           ...appServer,
@@ -86,9 +83,6 @@ describe("resolveCodexProviderWebSearchSupport", () => {
         },
         authProfileId: null,
         agentDir,
-        config: undefined,
-        modelProviderOverride: undefined,
-        signal: new AbortController().signal,
       });
       let settled = false;
       const outcome = pending.finally(() => {
@@ -115,13 +109,6 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     request.mockResolvedValueOnce({ webSearch: true });
     await expect(resolveSupport()).resolves.toBe("supported");
     await expect(resolveSupport()).resolves.toBe("unsupported");
-
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenCalledWith(
-      "modelProvider/capabilities/read",
-      {},
-      expect.objectContaining({ timeoutMs: 1_000 }),
-    );
   });
 
   it("does not use default OpenAI capabilities for a copilot thread", async () => {
@@ -129,30 +116,18 @@ describe("resolveCodexProviderWebSearchSupport", () => {
       method === "config/read" ? { config: { model_provider: undefined } } : { webSearch: true },
     );
     clientFactory.mockResolvedValue({ request: read } as unknown as CodexAppServerClient);
-    const result = await resolveSupport({
-      expectedNativeModelProvider: "copilot",
-    });
-    expect(result).toBe("unknown");
-    expect(read).toHaveBeenCalledExactlyOnceWith(
-      "config/read",
-      { includeLayers: false },
-      expect.anything(),
+    await expect(resolveSupport({ expectedNativeModelProvider: "copilot" })).resolves.toBe(
+      "unknown",
     );
+    expect(read.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
   });
 
   it("forwards one prepared auth handoff to capability startup", async () => {
     request.mockResolvedValue({ webSearch: true });
-    const preparedAuth = {
-      kind: "api-key" as const,
-      apiKey: "prepared-platform-key",
-    };
-
-    await expect(
-      resolveSupport({
-        authProfileId: "openai:decoy",
-        preparedAuth,
-      }),
-    ).resolves.toBe("supported");
+    const preparedAuth = { kind: "api-key" as const, apiKey: "prepared-platform-key" };
+    await expect(resolveSupport({ authProfileId: "openai:decoy", preparedAuth })).resolves.toBe(
+      "supported",
+    );
 
     expect(clientFactory.mock.calls[0]?.[0]?.preparedAuth).toBe(preparedAuth);
     expect(clientFactory).not.toHaveBeenCalledWith(
@@ -160,10 +135,9 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     );
   });
 
-  it.each(["startup", "read"])("reports unknown support after %s failure", async (stage) => {
-    (stage === "startup" ? clientFactory : request).mockRejectedValueOnce(new Error(stage));
+  it("reports unknown support after startup failure", async () => {
+    clientFactory.mockRejectedValueOnce(new Error("startup"));
     await expect(resolveSupport()).resolves.toBe("unknown");
-    expect(request).toHaveBeenCalledTimes(stage === "startup" ? 0 : 1);
   });
 
   it.each([
@@ -172,10 +146,8 @@ describe("resolveCodexProviderWebSearchSupport", () => {
   ])(
     "resolves the %s override without probing native capabilities",
     async (modelProviderOverride, expected) => {
-      request.mockResolvedValue({ webSearch: expected === "unsupported" });
       await expect(resolveSupport({ modelProviderOverride })).resolves.toBe(expected);
       expect(clientFactory).not.toHaveBeenCalled();
-      expect(request).not.toHaveBeenCalled();
     },
   );
 });

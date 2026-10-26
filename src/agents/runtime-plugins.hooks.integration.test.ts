@@ -106,6 +106,5 @@ it("blocks a tool call through the run's before_tool_call hook when no process r
     workspaceDir: makePluginLoaderTempDir(),
     run: async () => runBeforeToolCallHook({ toolName: "exec", params: { command: "ls -a" } }),
   });
-  expect(outcome.blocked).toBe(true);
-  expect(outcome.blocked && outcome.reason).toContain("guarded exec");
+  expect(outcome).toMatchObject({ blocked: true, reason: expect.stringContaining("guarded exec") });
 });

@@ -1,3 +1,4 @@
+import { CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS } from "../../state/openclaw-state-db-additive-columns.js";
 import {
   DOCTOR_OWNED_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -8,12 +9,13 @@ import {
   stateEngineSchema,
 } from "../../state/openclaw-state-db-engine.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-db-maintenance.js";
-import { ensureAgentDeletionJournalPhaseSchema } from "../../state/openclaw-state-db-schema-additive.js";
-import { tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
+import { ensureFirstUseAdditiveStateColumnsForStrictMigration } from "../../state/openclaw-state-db-schema-additive.js";
 import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
 import { withLegacyStateWriteIndexes } from "../../state/openclaw-state-db-schema-v27-indexes.js";
 import { withLegacyPublicationDraft } from "../../state/openclaw-state-db-schema-v28-publication.js";
+import { withLegacyLocalWorkspaceManifests } from "../../state/openclaw-state-db-schema-v31-workspace-manifests.js";
 import { listOpenClawStateFeatureSchemas } from "../../state/openclaw-state-feature-schema.js";
+import { RETAINED_STATE_TABLES } from "../../state/openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import manifest from "../../state/postgres-schema.generated/manifest.json" with { type: "json" };
 import { statePostgresRuntime } from "../../state/postgres-schema.generated/runtime.js";
@@ -24,7 +26,13 @@ import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schem
 import { extractSqliteTableSchema } from "../sqlite-schema-sql.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { openEngineStore } from "./open.js";
-import { DatabasePortDataError, type PortDescriptor, type PortTable } from "./port-descriptor.js";
+import {
+  DatabasePortDataError,
+  pendingSqliteColumns,
+  type PortDescriptor,
+  type PortTable,
+} from "./port-descriptor.js";
+import { withLegacyPostgresIndexOrdering } from "./postgres-index-ordering.js";
 
 export async function loadStatePortDescriptor(
   sourceVersion = OPENCLAW_STATE_SCHEMA_VERSION,
@@ -37,11 +45,11 @@ export async function loadStatePortDescriptor(
       return backup;
     }
     // v28 appends publication draft choices; v24-v26 additionally retain older indexes.
-    // v29 removes credential tables; v30 only fences automation policies.
+    // v29 removes credential tables; v30 fences policies; v31 adds per-path workspace baselines.
     if (
       backup ||
-      OPENCLAW_STATE_SCHEMA_VERSION !== 30 ||
-      ![24, 25, 26, 27, 28, 29].includes(sourceVersion)
+      OPENCLAW_STATE_SCHEMA_VERSION !== 34 ||
+      ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing shared-state PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -54,33 +62,53 @@ export async function loadStatePortDescriptor(
     fact: (typeof statePostgresRuntime.expectedCatalog)[number],
   ): fact is typeof fact & { value: PortTable["columns"][number] } => fact.kind === "column";
   const historical = sourceVersion < 28;
+  const legacyWorkspace = sourceVersion < 31;
   const catalog = [
     ...statePostgresRuntime.expectedCatalog,
     ...(source?.expectedCatalog ?? []),
   ].filter(
     (fact) =>
-      !historical ||
-      !isColumn(fact) ||
-      fact.value.name !== "draft" ||
-      ![
-        "github_publication_requests",
-        "github_personal_publication_requests",
-        "github_repository_publication_requests",
-      ].includes(fact.table),
+      (!legacyWorkspace ||
+        (fact.table !== "local_workspace_manifest_nodes" &&
+          (fact.table !== "local_workspace_projections" ||
+            !isColumn(fact) ||
+            fact.value.name !== "checkpoint_json"))) &&
+      (!historical ||
+        !isColumn(fact) ||
+        fact.value.name !== "draft" ||
+        ![
+          "github_publication_requests",
+          "github_personal_publication_requests",
+          "github_repository_publication_requests",
+        ].includes(fact.table)),
   );
   const columns = catalog.filter(isColumn);
   const keys = catalog.filter(
     (fact): fact is typeof fact & { value: string[] } => fact.kind === "primaryKey",
   );
+  const sourceSql = (sql: string, schemaSql = sql) => {
+    const workspace = legacyWorkspace ? withLegacyLocalWorkspaceManifests(sql) : sql;
+    const publication = historical ? withLegacyPublicationDraft(workspace) : workspace;
+    return sourceVersion < 33
+      ? withLegacyPostgresIndexOrdering(
+          publication,
+          sourceVersion < 32 ? "sqlite" : "schema-nullability",
+          schemaSql,
+        )
+      : publication;
+  };
   const schema = (
     entry: Omit<typeof metadata, "fragments" | "sqliteRanges">,
     postgres: string,
     sqlite: string,
   ) => {
-    const names = new Set(entry.tables.map((table) => table.name));
+    const tables = entry.tables.filter(
+      (table) => !legacyWorkspace || table.name !== "local_workspace_manifest_nodes",
+    );
+    const names = new Set(tables.map((table) => table.name));
     return {
-      sqlite: historical ? withLegacyPublicationDraft(sqlite) : sqlite,
-      tables: entry.tables.map(({ name, identities }) => ({
+      sqlite: sourceSql(sqlite),
+      tables: tables.map(({ name, identities }) => ({
         name,
         identities,
         columns: columns
@@ -88,10 +116,8 @@ export async function loadStatePortDescriptor(
           .map((fact) => ({ name: fact.value.name, type: fact.value.type })),
         pk: keys.find((fact) => fact.table === name)?.value ?? [],
       })),
-      preData: historical
-        ? withLegacyPublicationDraft(postgres.slice(entry.preData[0], entry.preData[1]))
-        : postgres.slice(entry.preData[0], entry.preData[1]),
-      postData: postgres.slice(entry.postData[0], entry.postData[1]),
+      preData: sourceSql(postgres.slice(entry.preData[0], entry.preData[1])),
+      postData: sourceSql(postgres.slice(entry.postData[0], entry.postData[1]), postgres),
       expectedCatalog: catalog.filter((fact) => names.has(fact.table)),
     };
   };
@@ -120,6 +146,7 @@ export async function loadStatePortDescriptor(
     id: "state",
     version: sourceVersion,
     minimumPostgresVersion: manifest.minimumPostgresVersion,
+    retainedSqliteTables: RETAINED_STATE_TABLES,
     ...eager,
     fragments: metadata.fragments.map((fragment) => {
       const runtime = statePostgresRuntime.fragments.find((entry) => entry.id === fragment.id)!;
@@ -137,22 +164,17 @@ export async function loadStatePortDescriptor(
         );
       }
       assertOpenClawStateDatabaseForMaintenance(db, { pathname: "shared-state port source" });
-      const needsPhaseColumn =
-        tableHasColumn(db, "agent_deletion_journal", "agent_id") &&
-        !tableHasColumn(db, "agent_deletion_journal", "phase");
-      const pendingColumns: Record<string, readonly string[]> = needsPhaseColumn
-        ? { agent_deletion_journal: ["phase"] }
-        : {};
-      // First-use columns are valid absent; porting completes them in its private copy.
-      return { version, migrationRequired: false, pendingColumns };
+      return {
+        version,
+        migrationRequired: false,
+        pendingColumns: pendingSqliteColumns(db, CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS),
+      };
     },
     migrateSqliteSource(file, _version, assertCurrent) {
       using db = openNodeSqliteDatabase(file);
       admitSqliteSchema(db);
-      if (tableHasColumn(db, "agent_deletion_journal", "agent_id")) {
-        assertCurrent();
-        ensureAgentDeletionJournalPhaseSchema(db);
-      }
+      assertCurrent();
+      ensureFirstUseAdditiveStateColumnsForStrictMigration(db);
     },
     async admit(file, input) {
       // Historical SQLite images use their descriptor; restored PG anchors still

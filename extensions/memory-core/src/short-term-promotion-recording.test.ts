@@ -2,15 +2,12 @@
 // snippets: heading-inherited ordinary prose is kept, transcript wrappers are
 // still rejected (issue #161268).
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it as baseIt, vi } from "vitest";
+import { describe, expect, it as baseIt, vi } from "vitest";
+import * as recallStore from "./short-term-promotion-store.js";
+import { buildClaimHash } from "./short-term-promotion-utils.js";
 import { recordShortTermRecalls, type ShortTermRecallEntry } from "./short-term-promotion.js";
-import {
-  configureMemoryCoreDreamingStateForTests,
-  resetMemoryCoreDreamingStateForTests,
-  shortTermTestState as testing,
-} from "./test-helpers.js";
+import { createMemoryCoreTestHarness, shortTermTestState as testing } from "./test-helpers.js";
 
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
@@ -43,21 +40,94 @@ async function readRecallStoreSnippets(workspaceDir: string): Promise<string[]> 
     .toSorted();
 }
 
-describe("short-term recall recording of Conversation Summary snippets", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
+describe("short-term recall recording", () => {
+  const { createTempWorkspace } = createMemoryCoreTestHarness();
 
-  beforeAll(async () => {
-    await configureMemoryCoreDreamingStateForTests();
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-promote-recording-"));
-  });
-
-  afterAll(async () => {
-    if (fixtureRoot) {
-      await fs.rm(fixtureRoot, { recursive: true, force: true });
-    }
-    resetMemoryCoreDreamingStateForTests();
-  });
+  baseIt(
+    "indexes retained claims once while daily signals keep the first matching entry",
+    async () => {
+      const workspaceDir = await createTempWorkspace("memory-promote-daily-index-");
+      const nowIso = "2026-06-18T12:00:00.000Z";
+      const snippet = "The archive uses compressed backups.";
+      const retained = Array.from({ length: 512 }, (_, index): ShortTermRecallEntry => ({
+        key: `memory:retained:${String(index).padStart(3, "0")}`,
+        path: "memory/2026-06-18.md",
+        startLine: index + 1,
+        endLine: index + 1,
+        source: "memory",
+        snippet: index >= 510 ? snippet : `Stored observation ${index}.`,
+        recallCount: 1,
+        dailyCount: 0,
+        groundedCount: 0,
+        totalScore: 0.9,
+        maxScore: 0.9,
+        firstRecalledAt: nowIso,
+        lastRecalledAt: nowIso,
+        queryHashes: [],
+        recallDays: [],
+        conceptTags: [],
+        claimHash: index >= 510 ? buildClaimHash(snippet) : `unrelated-${index}`,
+      }));
+      await testing.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: nowIso,
+        entries: Object.fromEntries(retained.map((entry) => [entry.key, entry])),
+      });
+      let claimHashReads = 0;
+      using mocks = new DisposableStack();
+      const readStore = recallStore.readStore;
+      mocks.use(
+        vi.spyOn(recallStore, "readStore").mockImplementation(async (...args) => {
+          const store = await readStore(...args);
+          for (const entry of Object.values(store.entries)) {
+            const claimHash = entry.claimHash;
+            Object.defineProperty(entry, "claimHash", {
+              configurable: true,
+              enumerable: true,
+              get() {
+                claimHashReads += 1;
+                return claimHash;
+              },
+            });
+          }
+          return store;
+        }),
+      );
+      const writeStore = recallStore.writeStore;
+      mocks.use(
+        vi.spyOn(recallStore, "writeStore").mockImplementation(async (dir, store) => {
+          // Keep work-count instrumentation out of the storage serialization boundary.
+          for (const entry of Object.values(store.entries)) {
+            Object.defineProperty(entry, "claimHash", {
+              configurable: true,
+              enumerable: true,
+              writable: true,
+              value: entry.claimHash,
+            });
+          }
+          await writeStore(dir, store);
+        }),
+      );
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "daily archive notes",
+        signalType: "daily",
+        nowMs: Date.parse(nowIso),
+        results: Array.from({ length: 32 }, () =>
+          memoryRecallResult("memory/2026-06-19.md", 1, 1, 0.9, snippet),
+        ),
+      });
+      const store = await testing.readRecallStore(workspaceDir, nowIso);
+      expect(store.entries["memory:retained:510"]).toMatchObject({
+        dailyCount: 32,
+        recallCount: 1,
+        path: "memory/2026-06-18.md",
+        startLine: 511,
+      });
+      expect(store.entries["memory:retained:511"]?.dailyCount).toBe(0);
+      expect(claimHashReads).toBeLessThanOrEqual(retained.length * 3);
+    },
+  );
 
   baseIt.each([
     ["Conversation Summary: Router VLAN 20 was migrated successfully.", true],
@@ -75,7 +145,7 @@ describe("short-term recall recording of Conversation Summary snippets", () => {
     ["Conversation Summary: - **Session Key**: agent:main:main", false],
     ["Conversation Summary: Session Key rotation was completed.", true],
   ])("records %s: %s", async (snippet, accepted) => {
-    const workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
+    const workspaceDir = await createTempWorkspace("memory-promote-recording-");
     await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
     await recordMemoryRecalls(workspaceDir, "session recap", [
       memoryRecallResult("memory/2026-06-18.md", 1, 1, 0.92, snippet),

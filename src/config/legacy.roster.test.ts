@@ -10,7 +10,7 @@ import { createConfigIO, readConfigFileSnapshot, resetConfigRuntimeState } from 
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 import { validateConfigObjectRaw } from "./validation.js";
 
-async function readSnapshot() {
+function readSnapshot() {
   resetConfigRuntimeState();
   return readConfigFileSnapshot();
 }
@@ -22,11 +22,15 @@ async function withConfig(
 ) {
   await withTempHome(async (home) => {
     const configDir = path.join(home, ".openclaw");
+    const configPath = path.join(configDir, "openclaw.json");
+    const raw = typeof config === "string" ? config : JSON.stringify(config);
     await fs.mkdir(configDir, { recursive: true });
-    for (const [name, value] of Object.entries({ "openclaw.json": config, ...includes })) {
+    await fs.writeFile(configPath, raw);
+    for (const [name, value] of Object.entries(includes)) {
       await fs.writeFile(path.join(configDir, name), JSON.stringify(value));
     }
-    await run(await readSnapshot(), path.join(configDir, "openclaw.json"));
+    await run(await readSnapshot(), configPath);
+    expect(await fs.readFile(configPath, "utf8")).toBe(raw);
   });
 }
 
@@ -38,17 +42,12 @@ function provenance(targetPath: string, at: string[], hasSiblingOverrides: boole
   return { path: at, kind: "single", hasSiblingOverrides, hasArrayAncestor: false, targetPath };
 }
 
+const roster = (entries: unknown) => ({ agents: { entries } });
+
 describe("persisted implicit-main roster migration", () => {
   it("normalizes a commented pre-roster config in memory without rewriting it", async () => {
-    await withTempHome(async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      const raw = `// operator comment\n{ gateway: { mode: "local" } }\n`;
-      await fs.writeFile(configPath, raw);
-      const snapshot = await readSnapshot();
-
+    await withConfig(`// operator comment\n{ gateway: { mode: "local" } }\n`, (snapshot) => {
       expect(snapshot.sourceConfig.agents?.entries).toEqual({ main: {} });
-      expect(await fs.readFile(configPath, "utf8")).toBe(raw);
     });
   });
 
@@ -102,14 +101,25 @@ describe("persisted implicit-main roster migration", () => {
     );
   });
 
-  it("keeps an unrelated ancestor include from owning a locally authored roster", async () => {
+  const include = { $include: "./included.json" };
+  it.each([
+    ["unrelated ancestor", false, { ...include, ...roster({}) }, { channels: {} }],
+    ["identical ancestor", true, { ...include, ...roster({ main: {} }) }, roster({ main: {} })],
+    ["entry-internal identity", false, roster({ main: { identity: include } }), { name: "Main" }],
+    ["legacy list id", true, { agents: { list: [{ id: include, default: true }] } }, "10"],
+  ] as const)("tracks roster ownership for %s includes", async (_name, owned, config, included) => {
     await withConfig(
-      { $include: "./channels.json", agents: { entries: {} } },
+      config,
       (snapshot) => {
-        expect(snapshot.agentRosterIncludeOwned).toBe(false);
-        expect(configIncludeOwnsAgentRoster(snapshot)).toBe(false);
+        expect([snapshot.agentRosterIncludeOwned, configIncludeOwnsAgentRoster(snapshot)]).toEqual([
+          owned,
+          owned,
+        ]);
+        if (typeof included === "string") {
+          expect(snapshot.sourceConfigBeforeMigrations).toHaveProperty("agents.list.0.id", "10");
+        }
       },
-      { "channels.json": { channels: { telegram: { enabled: true } } } },
+      { "included.json": included },
     );
   });
 
@@ -124,41 +134,6 @@ describe("persisted implicit-main roster migration", () => {
         "delegating.json": { $include: "./entries.json" },
         "entries.json": { entries: { main: {} } },
       },
-    );
-  });
-
-  it("records an identical ancestor roster contribution as include-owned", async () => {
-    const entries = { main: {} };
-    await withConfig(
-      { $include: "./base.json", agents: { entries } },
-      (snapshot) => {
-        expect(snapshot.agentRosterIncludeOwned).toBe(true);
-        expect(configIncludeOwnsAgentRoster(snapshot)).toBe(true);
-      },
-      { "base.json": { agents: { entries } } },
-    );
-  });
-
-  it("keeps an entry-internal identity include locally roster-owned", async () => {
-    await withConfig(
-      { agents: { entries: { main: { identity: { $include: "./identity.json" } } } } },
-      (snapshot) => {
-        expect(snapshot.agentRosterIncludeOwned).toBe(false);
-        expect(configIncludeOwnsAgentRoster(snapshot)).toBe(false);
-      },
-      { "identity.json": { name: "Main" } },
-    );
-  });
-
-  it("records a legacy list id include as roster-owned", async () => {
-    await withConfig(
-      { agents: { list: [{ id: { $include: "./agent-id.json" }, default: true }] } },
-      (snapshot) => {
-        expect(snapshot.sourceConfigBeforeMigrations).toHaveProperty("agents.list.0.id", "10");
-        expect(snapshot.agentRosterIncludeOwned).toBe(true);
-        expect(configIncludeOwnsAgentRoster(snapshot)).toBe(true);
-      },
-      { "agent-id.json": "10" },
     );
   });
 
@@ -196,7 +171,6 @@ describe("persisted implicit-main roster migration", () => {
             pluginContracts: false,
           });
           expect(migrated.partiallyValid).not.toBe(true);
-          expect(migrated.config).not.toBeNull();
           if (!migrated.config) {
             throw new Error("Doctor did not produce a canonical roster");
           }
@@ -271,7 +245,7 @@ describe("persisted implicit-main roster migration", () => {
 
   it("preserves own blocked entry fields for strict schema rejection", () => {
     const unsafeEntry = JSON.parse('{"__proto__":{"tools":{"allow":["*"]}}}');
-    const config = { agents: { entries: { ops: unsafeEntry } } };
+    const config = roster({ ops: unsafeEntry });
     const validation = validateConfigObjectRaw(config);
     expect(validation.ok).toBe(false);
     if (!validation.ok) {
@@ -280,17 +254,16 @@ describe("persisted implicit-main roster migration", () => {
         message: "agent entries must not contain blocked object keys",
       });
     }
-    expect(Object.hasOwn(config.agents.entries.ops, "__proto__")).toBe(true);
-    expect(config.agents.entries.ops.tools).toBeUndefined();
+    expect(Object.hasOwn(unsafeEntry, "__proto__")).toBe(true);
+    expect(unsafeEntry.tools).toBeUndefined();
   });
 
   it.each([{ entries: {} }, { list: [] }])(
     "bootstraps a non-explicit empty roster without rewriting it: %j",
     async (agents) => {
-      await withConfig({ agents }, async (snapshot, configPath) => {
+      await withConfig({ agents }, (snapshot) => {
         expect(snapshot.valid).toBe(true);
         expect(snapshot.sourceConfig.agents?.entries).toEqual({ main: {} });
-        expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({ agents });
       });
     },
   );
@@ -300,20 +273,17 @@ describe("persisted implicit-main roster migration", () => {
     ["duplicate defaults", { ops: {}, research: { default: true }, writer: { default: true } }],
     ["false default markers", { ops: { default: false }, research: { default: false } }],
   ])("rejects %s without inventing legacy ownership", async (_label, entries) => {
-    await withConfig({ agents: { entries } }, async (snapshot, configPath) => {
+    await withConfig(roster(entries), (snapshot) => {
       expect(snapshot.valid).toBe(false);
       expect(snapshot.issues).toContainEqual(
         expect.objectContaining({ path: expect.stringMatching(/^agents\.(entries|ownership)/) }),
       );
-      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
-        agents: { entries },
-      });
     });
   });
 
   it("requires Doctor for a shipped default marker without changing its owner or bytes", async () => {
     const entries = { ops: {}, research: { default: true } };
-    await withConfig({ agents: { entries } }, async (snapshot, configPath) => {
+    await withConfig(roster(entries), (snapshot) => {
       expect(snapshot.valid).toBe(false);
       expect(snapshot.sourceConfig.agents?.entries).toEqual(entries);
       expect(snapshot.legacyIssues).toContainEqual(
@@ -322,12 +292,11 @@ describe("persisted implicit-main roster migration", () => {
           message: expect.stringContaining("doctor --fix"),
         }),
       );
-      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({ agents: { entries } });
     });
   });
 
   it("leaves non-boolean default markers for schema validation", async () => {
-    await withConfig({ agents: { entries: { ops: { default: "yes" } } } }, (snapshot) => {
+    await withConfig(roster({ ops: { default: "yes" } }), (snapshot) => {
       expect(snapshot.valid).toBe(false);
       expect(snapshot.issues).toContainEqual(
         expect.objectContaining({ path: "agents.entries.ops.default" }),

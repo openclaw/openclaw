@@ -3,7 +3,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import * as sandboxRuntime from "../../agents/sandbox/runtime-status.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import type { ReplyPayload } from "../types.js";
-import { applyMixedDirectives } from "./directive-handling.mixed-inline.test-helpers.js";
+import {
+  applyMixedDirectives,
+  createInlineDirectiveParams,
+} from "./directive-handling.mixed-inline.test-helpers.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
@@ -51,45 +54,22 @@ function directiveParams(
   overrides: Partial<Parameters<typeof applyInlineDirectiveOverrides>[0]> = {},
 ): Parameters<typeof applyInlineDirectiveOverrides>[0] {
   const model = overrides.model ?? "gpt-5.5";
-  const sessionEntry = overrides.sessionEntry ?? { sessionId: "session-1", updatedAt: 1 };
-  const directives = parseInlineSessionDirectives(body);
   return {
-    ctx: buildTestCtx({ Body: body, CommandAuthorized: true }),
-    cfg: {},
-    agentId: "main",
-    agentDir: "/tmp/agent",
-    workspaceDir: "/tmp/workspace",
-    agentCfg: {},
-    sessionEntry,
-    sessionStore: { "agent:main:main": sessionEntry },
-    sessionKey: "agent:main:main",
-    sessionScope: undefined,
-    isGroup: false,
-    allowTextCommands: true,
-    command: {
-      surface: "webchat",
+    ...createInlineDirectiveParams({
+      body,
+      cfg: {},
       channel: "webchat",
-      ownerList: [],
+      provider: "openai",
+      model,
+      sessionEntry: overrides.sessionEntry,
+      sessionKey: "agent:main:main",
       senderIsOwner: true,
-      isAuthorizedSender: true,
-      rawBodyNormalized: body,
-      commandBodyNormalized: body,
-    },
-    directives,
-    elevatedEnabled: true,
-    elevatedAllowed: true,
-    elevatedFailures: [],
-    defaultProvider: "openai",
-    defaultModel: model,
-    aliasIndex: { byAlias: new Map(), byKey: new Map() },
-    provider: "openai",
-    model,
+    }),
+    ctx: buildTestCtx({ Body: body, CommandAuthorized: true }),
     modelState: createModelSelectionStateFixture({ agentCfg: {}, provider: "openai", model }),
     initialModelLabel: `openai/${model}`,
     formatModelSwitchEvent: (label) => label,
-    resolvedElevatedLevel: "off",
-    defaultActivation: () => "always",
-    contextTokens: 8192,
+    effectiveModelDirective: undefined,
     typing: createMockTypingController(),
     ...overrides,
   };
@@ -356,28 +336,37 @@ describe("applyInlineDirectiveOverrides", () => {
     },
   );
 
-  it("stops a mixed inline turn when its transaction rejects unsupported thinking", async () => {
-    const errorText =
-      'Thinking level "ultra" is not supported for openai/gpt-5.6-luna. Use one of: off, low, medium, high, max.';
-    mocks.handleDirective.mockImplementation(async (params) => {
-      if (!params.persistenceState) {
+  it("cleans up typing when a mixed directive transaction rejects", async () => {
+    mocks.handleDirective.mockImplementation(async ({ persistenceState }) => {
+      if (!persistenceState) {
         throw new Error("Expected a mixed-message transaction");
       }
-      params.persistenceState.outcome = { kind: "rejected", errorText };
-      params.onRejection?.();
-      return { text: errorText };
+      persistenceState.outcome = { kind: "rejected", errorText: "rejected" };
     });
-    const typing = createMockTypingController();
+    const params = directiveParams("/think high please solve");
+    const result = await applyInlineDirectiveOverrides(params);
+    expectRejectedDirective(result, params.typing, { text: "rejected", isError: true });
+  });
+
+  const verboseAnswer = { text: "Current verbose level: full.\nOptions: on, full, off." };
+  const reasoningAnswer = { text: "Current reasoning level: stream.\nOptions: on, off, stream." };
+  it.each([
+    ["/verbose", { kind: "reply", reply: verboseAnswer, preRunRejection: undefined }],
+    ["please reply\n/reasoning", { kind: "continue", directiveAck: reasoningAnswer }],
+  ])("answers %j with the agent entry default", async (body, expected) => {
+    const { handleDirectiveOnly } = await vi.importActual<
+      typeof import("./directive-handling.impl.js")
+    >("./directive-handling.impl.js");
+    mocks.handleDirective.mockImplementation(handleDirectiveOnly);
+
     const result = await applyInlineDirectiveOverrides(
-      directiveParams("/think ultra please solve", {
-        model: "gpt-5.6-luna",
-        contextTokens: 372_000,
-        typing,
+      directiveParams(body, {
+        agentCfg: { verboseDefault: "on", reasoningDefault: "off" },
+        agentEntry: { id: "main", verboseDefault: "full", reasoningDefault: "stream" },
       }),
     );
 
-    expectRejectedDirective(result, typing, { text: errorText, isError: true });
-    expect(mocks.handleDirective).toHaveBeenCalledOnce();
+    expect(result).toEqual(expect.objectContaining(expected));
   });
 
   it("rejects unexpected native model arguments before model selection", async () => {

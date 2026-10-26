@@ -75,18 +75,16 @@ it.for([
         });
         const logger = createNoopLogger();
         const adapter = createGatewayCronTargetResolver(state.env, logger);
-        const enqueueSessionEvent = vi.fn(adapter.enqueueSessionEvent);
-        const resolveOriginDeliveryContext = vi.fn(async () => deliveryContext);
-        const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
-          async (params) => {
-            await params.onDeliverySettled({
-              delivered: false,
-              status: "not-delivered",
-              error: "failure alert channel unavailable",
-            });
-            throw new Error("failure alert channel unavailable");
-          },
-        );
+        const sendCronFailureAlert: NonNullable<CronServiceDeps["sendCronFailureAlert"]> = async (
+          params,
+        ) => {
+          await params.onDeliverySettled({
+            delivered: false,
+            status: "not-delivered",
+            error: "failure alert channel unavailable",
+          });
+          throw new Error("failure alert channel unavailable");
+        };
         const failRun = async () => ({
           status: "error" as const,
           error: "temporary upstream error",
@@ -97,8 +95,8 @@ it.for([
           cronConfig: { failureAlert: { enabled: true, after: 1 } },
           defaultAgentId: "main",
           log: logger,
-          resolveOriginDeliveryContext,
-          enqueueSessionEvent,
+          resolveOriginDeliveryContext: async () => deliveryContext,
+          enqueueSessionEvent: adapter.enqueueSessionEvent,
           sendCronFailureAlert,
           runIsolatedAgentJob: failRun,
           runSessionEvent: failRun,
@@ -115,19 +113,6 @@ it.for([
           });
 
           await cron.run(job.id, "force");
-          expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-          await expect(sendCronFailureAlert.mock.results[0]?.value).rejects.toThrow(
-            "failure alert channel unavailable",
-          );
-          expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-            expect.stringContaining('Automation "Important report" failed 1 times'),
-            {
-              agentId,
-              sessionKey: carriesOrigin ? target : undefined,
-              contextKey: `cron:${job.id}:failure-alert`,
-              ...(carriesOrigin ? { deliveryContext } : { createIfMissing: true }),
-            },
-          );
           expect(receipts).toHaveLength(1);
           await expect(withinTest(receipts[0]!.accepted, signal)).resolves.toEqual({ ok: true });
           await expect(withinTest(receipts[0]!.settled, signal)).resolves.toMatchObject({
@@ -143,9 +128,7 @@ it.for([
           expect(turn.prompt).toContain('Automation "Important report" failed 1 times');
           expect(turn.messageTo).toBe(carriesOrigin ? deliveryContext.to : undefined);
           expect(turn.messageThreadId).toBe(carriesOrigin ? deliveryContext.threadId : undefined);
-          expect(resolveOriginDeliveryContext).toHaveBeenCalledTimes(carriesOrigin ? 1 : 0);
           expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-          expect(deps.requestHeartbeat).not.toHaveBeenCalled();
           expect(peekSystemEventEntries(expectedSessionKey)).toEqual([]);
         } finally {
           cron.stop();

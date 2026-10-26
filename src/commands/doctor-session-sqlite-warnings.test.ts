@@ -9,7 +9,11 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
-import { readSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
+import {
+  collectSessionSqliteMigrationFindings,
+  formatSessionSqliteMigrationWarnings,
+  readSessionSqliteMigrationWarnings,
+} from "./doctor-session-sqlite-warnings.js";
 import { useDoctorSessionSqliteTestFixture } from "./doctor-session-sqlite.test-support.js";
 
 const { createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
@@ -110,4 +114,46 @@ it("keeps cleanup import proof after resolved warnings disappear", async () => {
   expect(readSessionSqliteMigrationWarnings(store.env)).toEqual([]);
   expect(inspectSessionSqliteRecovery({ cfg: {}, env: store.env })).toEqual(before);
   expect(fs.readFileSync(manifestPath)).toEqual(original);
+});
+
+it("bounds historical examples without presenting them as current failures or losing retained warning evidence", () => {
+  const currentMessages = [
+    "Current transcript is missing.",
+    ...Array.from({ length: 6 }, (_, index) => `Current transcript ${index + 2} is missing.`),
+  ];
+  const targets = [
+    {
+      storePath: "/example/sessions.json",
+      issues: [
+        ...Array.from({ length: 7 }, (_, index) => ({
+          code: "historical_transcript_deferred",
+          message: `Historical claim ${index + 1} retained.`,
+        })),
+        ...currentMessages.map((message) => ({ code: "transcript_missing", message })),
+      ],
+    },
+    {
+      storePath: "/example/other-sessions.json",
+      issues: [{ code: "historical_transcript_deferred", message: "Other store claim retained." }],
+    },
+  ];
+  const findings = collectSessionSqliteMigrationFindings(targets, {});
+  const historical = findings.filter((finding) => finding.category === "historical");
+  const current = findings.filter((finding) => finding.category === "fix-now");
+  expect(historical).toHaveLength(1);
+  const summary = historical[0]!;
+  expect(summary.message).toContain(
+    "8 historical recovery notice(s); showing 5 example(s), 3 omitted",
+  );
+  expect(summary.message).not.toContain("Historical claim 6 retained.");
+  expect(summary.message).not.toContain("Other store claim retained.");
+  expect(summary.fixHint).toContain("--session-sqlite-all-agents --json");
+  expect(summary.fixHint).toContain("No action needed if expected conversations are visible");
+  expect(current.map((finding) => [finding.errorCode, finding.message])).toEqual(
+    currentMessages.map((message) => ["transcript_missing", message]),
+  );
+  expect(formatSessionSqliteMigrationWarnings(targets, {}).join("\n")).toContain(
+    "historical_transcript_deferred",
+  );
+  expect(targets[0]?.issues).toHaveLength(14);
 });

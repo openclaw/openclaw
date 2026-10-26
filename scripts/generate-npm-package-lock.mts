@@ -17,13 +17,14 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
 import { parsePkgAndParentSelector, type PackageSelector } from "@pnpm/parse-overrides";
 import pMap from "p-map";
 import semver from "semver";
 import { list as listTar } from "tar";
 import { parse as parseYaml } from "yaml";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import { resolveRuntimeToolingEntrypointUrl } from "../src/infra/runtime-process-manifest.ts";
 import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mts";
 import { pnpmLockfileDocuments, resolveSnapshot } from "./lib/pnpm-lockfile-documents.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
@@ -62,7 +63,6 @@ const NPM_LOCK_MAX_JOBS = 16;
 // Observed nested-override locks settle after one reload; a lock still changing after
 // this many reloads is oscillating and must fail instead of shipping an unstable lock.
 const NPM_LOCK_MAX_RELOAD_PASSES = 3;
-const NPM_LOCK_WORKER_KIND = "openclaw-npm-lock-package";
 
 function usage() {
   return [
@@ -2144,11 +2144,10 @@ export function resolveNpmLockJobs(
 
 async function runPackageWorker(packageDir: string, rootDir: string) {
   return await new Promise<string>((resolve, reject) => {
-    const worker = new Worker(new URL(import.meta.url), {
+    const worker = new Worker(resolveRuntimeToolingEntrypointUrl("npmPackageLock"), {
       // Each worker loads policy from the source checkout, using this checkout's tooling.
       env: { ...process.env, OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: rootDir },
       workerData: {
-        kind: NPM_LOCK_WORKER_KIND,
         packageDir,
       },
     });
@@ -2227,15 +2226,7 @@ async function main() {
   }
 }
 
-if (!isMainThread && workerData?.kind === NPM_LOCK_WORKER_KIND) {
-  const sendToParent = parentPort?.postMessage.bind(parentPort);
-  try {
-    const output = generateNpmPackageLock(workerData.packageDir);
-    sendToParent?.({ output });
-  } catch (error) {
-    sendToParent?.({ error: error instanceof Error ? error.message : String(error) });
-  }
-} else if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(handleMainError);
 }
 

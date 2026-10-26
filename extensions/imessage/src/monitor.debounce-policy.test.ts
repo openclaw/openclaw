@@ -11,9 +11,9 @@ import {
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { expect, it, vi } from "vitest";
 import { IMessageRpcClient, createIMessageRpcClient } from "./client.js";
-import { monitorIMessageProvider } from "./monitor.js";
 import { resolveIMessageInboundDecision } from "./monitor/inbound-processing.js";
 import { createIMessageDurableIngress } from "./monitor/ingress.js";
+import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
 import { getIMessageRuntime } from "./runtime.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
@@ -31,10 +31,7 @@ vi.mock("./monitor/inbound-processing.js", async (importOriginal) => ({
     reason: "dmPolicy disabled",
   })),
 }));
-vi.mock("./monitor/ingress.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./monitor/ingress.js")>();
-  return { ...actual, createIMessageDurableIngress: vi.fn(actual.createIMessageDurableIngress) };
-});
+vi.mock("./monitor/ingress.js", { spy: true });
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
   return { ...actual, createChannelInboundDebouncer: vi.fn(actual.createChannelInboundDebouncer) };

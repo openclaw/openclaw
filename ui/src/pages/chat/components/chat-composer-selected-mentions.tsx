@@ -3,6 +3,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { observeFontLoading } from "../../../lib/reactive/font-loading.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
@@ -19,9 +20,8 @@ function mentionOverflow(
   readMore: () => HTMLElement,
 ) {
   let element: HTMLElement | undefined;
-  let disposed = false;
   const sync = () => {
-    if (disposed || !element?.isConnected) {
+    if (!element?.isConnected) {
       return;
     }
     const people = readPeople().flatMap((person) => personElements.get(person.profileId) ?? []);
@@ -69,12 +69,7 @@ function mentionOverflow(
   }, sync);
   onSettled(() => {
     sync();
-    if (document.fonts?.status === "loading") {
-      void document.fonts.ready.then(sync);
-    }
-    return () => {
-      disposed = true;
-    };
+    return observeFontLoading(document.fonts, sync);
   });
   return (node: HTMLElement) => {
     element = node;

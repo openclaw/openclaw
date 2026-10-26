@@ -329,7 +329,9 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
               : {
                   details: { reason: error.reason },
                   retryable:
-                    error.reason === "rate-limited" || error.reason === "context-unavailable",
+                    error.reason === "rate-limited" ||
+                    error.reason === "context-unavailable" ||
+                    error.reason === "timeout",
                   ...(error.retryAfterMs ? { retryAfterMs: error.retryAfterMs } : {}),
                 },
           ),

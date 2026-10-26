@@ -28,15 +28,19 @@ import {
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
 import { hasLiveAgentRunContext, listAgentRunsForSession } from "../../infra/agent-run-registry.js";
+import { isAcpSessionKey, isCronSessionKey } from "../../routing/session-key.js";
 import {
   captureGatewaySessionControllerWork,
   captureSessionControllerSettlement,
   isSessionControllerWorkActive,
 } from "../../sessions/session-controller.lifecycle.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../../state/openclaw-agent-db.paths.js";
+import { resolveSubagentChildAuthority } from "../subagents/registry/subagent-child-owner-match.js";
+import { getLatestSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
 import {
   hasCompletedMainSessionRecoveryOutcome,
   isMainRestartRecoveryTerminalOnly,
+  isKilledMainSessionRecoveryFenceOnly,
   transitionMainSessionRecovery,
 } from "./main-session-recovery-state.js";
 import type { MainSessionRecoveryStoreTarget } from "./main-session-recovery-store.js";
@@ -70,7 +74,7 @@ async function markRecoveryStore(params: {
         replaceRuns?: boolean;
         runs?: RestartRecoveryRun[];
       }
-    | { action: "retire_terminal" }
+    | { action: "retire_terminal" | "release_killed" }
     | { action: "restore_yielded"; isCurrent: () => boolean }
     | undefined;
 }) {
@@ -86,7 +90,7 @@ async function markRecoveryStore(params: {
         throw new Error("Yielded requester continuation changed before recovery handoff");
       }
     },
-    update: (entries) => {
+    update: async (entries) => {
       const replacements: Array<{ sessionKey: string; entry: SessionEntry }> = [];
       const counts = { marked: 0, skipped: 0 };
       for (const { sessionKey, entry } of entries) {
@@ -94,7 +98,28 @@ async function markRecoveryStore(params: {
         if (!plan) {
           continue;
         }
-        if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
+        // Planning precedes the transaction. Registry custody belongs to an exact
+        // task, not to the child's lifetime; retain its initial accepted run too.
+        const childOwner = !isMainRestartRecoveryCandidate(entry, sessionKey)
+          ? await getLatestSubagentRunByChildSessionKey(sessionKey, params.agentId)
+          : undefined;
+        const registryOwnsTurn =
+          childOwner &&
+          childOwner.execution.endedAt === undefined &&
+          resolveSubagentChildAuthority(childOwner, entry).status === "verified" &&
+          ([
+            entry.lifecycleRunId,
+            entry.lastRunId,
+            entry.restartRecoveryDeliverySourceRunId,
+          ].includes(childOwner.runId) ||
+            (!entry.lifecycleRunId &&
+              !entry.lastRunId &&
+              !entry.restartRecoveryDeliverySourceRunId));
+        if (
+          isCronSessionKey(sessionKey) ||
+          isAcpSessionKey(sessionKey) ||
+          (!isMainRestartRecoveryCandidate(entry, sessionKey) && registryOwnsTurn)
+        ) {
           counts.skipped++;
           continue;
         }
@@ -104,7 +129,7 @@ async function markRecoveryStore(params: {
           }
           transitionMainSessionRecovery(
             entry,
-            plan.action === "restore_yielded"
+            plan.action === "restore_yielded" || plan.action === "release_killed"
               ? { kind: "clear" }
               : {
                   kind: "observe",
@@ -288,13 +313,11 @@ export async function markRestartAbortedMainSessions(params: {
               captureYieldedMainSessionContinuation({
                 entry,
                 requester,
+                purpose: "recovery",
               })
             ) {
               recordSkip("yielded_continuation", sessionKey);
               return undefined;
-            }
-            if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
-              recordSkip("not_main_session", sessionKey);
             }
             const runs = normalizeMainSessionRecoveryRunFences([
               ...(entry.restartRecoveryRuns ?? []).filter(
@@ -471,6 +494,7 @@ async function markOrphanedMainSessionStore(
       const continuation = captureYieldedMainSessionContinuation({
         entry,
         requester: requesters.get(sessionKey),
+        purpose: "recovery",
       });
       if (continuation) {
         // A newer foreground start clears endedAt. Only an unclaimed waiting cycle
@@ -489,6 +513,12 @@ async function markOrphanedMainSessionStore(
           };
         }
         return undefined;
+      }
+      if (isKilledMainSessionRecoveryFenceOnly(entry)) {
+        // Stop is terminal. An ownerless fence must not resurrect the run or
+        // hold the conversation forever; pending delivery remains with recovery.
+        orphanChecks.push(hasLiveOwner);
+        return { action: "release_killed" };
       }
       // A crash or early restart abort can persist the interruption without a claim.
       // Reuse the normal mark transition, preserving budgets on existing cycles.
@@ -509,6 +539,7 @@ async function markOrphanedMainSessionStore(
       if (
         hasClaim &&
         !completed &&
+        isMainRestartRecoveryCandidate(entry, sessionKey) &&
         (entry.abortedLastRun === true ||
           (!entry.pendingFinalDelivery &&
             entry.status !== undefined &&
@@ -546,12 +577,14 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   startupCheckedStorePaths?: Set<string>;
   updatedBeforeMs?: number;
   onOwnerPending?: OrphanMarkParams["onOwnerPending"];
+  assertCommitAllowed?: () => void;
 }): Promise<{ marked: number; skipped: number; failedTargets?: RestartRecoveryStoreTarget[] }> {
   const result = { marked: 0, skipped: 0 };
   const failedTargets: RestartRecoveryStoreTarget[] = [];
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const storeTargets = await discoverRestartRecoveryStoreTargets(params);
   for (const target of storeTargets) {
+    params.assertCommitAllowed?.();
     const key = restartRecoveryStoreTargetKey(target);
     if (params.startupCheckedStorePaths?.has(key)) {
       continue;

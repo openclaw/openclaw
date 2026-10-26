@@ -29,17 +29,18 @@ import type { GatewayPluginReloadStatus } from "./server-plugin-reload-status.ty
 
 const PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS = 60_000;
 
-// Logs/readiness have broader readership than admin inspection: never project owner IDs here.
+// Keep acquisition facts in raw logs; each egress applies its own redaction policy.
 function logRetainedReferences(
   instances: readonly PluginInstanceHandle[],
   phase: "queued" | "timeout",
-  log: Pick<ReturnType<typeof createSubsystemLogger>, "info">,
+  log: Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">,
 ): void {
   const selected = instances
     .slice(0, 8)
-    .map((instance) => instance.retentionSnapshot({ limit: 8, includeOwners: false }));
-  log.info(
-    `Plugin retained references (${phase}): ${JSON.stringify({ instances: selected, omittedInstances: Math.max(0, instances.length - selected.length) })}. Use administrator plugins.inspect runtimeRetention for acquisition owners; a turn awaiting its own retained work cannot drain.`,
+    .map((instance) => instance.retentionSnapshot({ limit: 8 }));
+  log[phase === "timeout" ? "warn" : "info"](
+    `Plugin retained references (${phase}); a turn awaiting its own retained work cannot drain.`,
+    { instances: selected, omittedInstances: Math.max(0, instances.length - selected.length) },
   );
 }
 
@@ -121,7 +122,9 @@ export function createPluginReloadCleanup({
     }
   };
   const admittedWorkDeadline = () =>
-    (admittedWorkDeadlineAtMs ??= Date.now() + admittedWorkTimeoutMs);
+    (admittedWorkDeadlineAtMs ??= performance.now() + admittedWorkTimeoutMs);
+  // Budgets use the monotonic clock their timers run on; status reports a wall-clock deadline.
+  const wallClockDeadline = (deadlineAtMs: number) => Date.now() + deadlineAtMs - performance.now();
   const observeDrain = async (
     label: string,
     signal: AbortSignal,
@@ -134,7 +137,7 @@ export function createPluginReloadCleanup({
       await withPluginHostCleanupTimeout(
         label,
         () => run(currentSignal),
-        Math.max(0, deadlineAtMs - Date.now()),
+        Math.max(0, deadlineAtMs - performance.now()),
       );
     } finally {
       // Detach observers when the wait ends; admitted work keeps its own lifetime.
@@ -145,11 +148,11 @@ export function createPluginReloadCleanup({
     signal: AbortSignal,
     reportStatus: (status: GatewayPluginReloadStatus) => void,
   ) => {
-    const deadlineAtMs = Date.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS;
+    const deadlineAtMs = performance.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS;
     reportStatus({
       phase: "recovering",
       pluginIds: [...changedPluginIds],
-      deadlineAtMs,
+      deadlineAtMs: wallClockDeadline(deadlineAtMs),
       reason: "Waiting for cleanup and admitted work before restoring the previous plugin runtime.",
     });
     try {
@@ -335,7 +338,12 @@ export function createPluginReloadCleanup({
     const reason = count
       ? `Plugin replacement queued behind ${count} ${includeCalls ? "admitted" : "retained"} work item(s) for plugin ${[...pluginIds].join(", ")}; new agent runs wait up to the ${admittedWorkTimeoutMs / 1_000}s drain budget.${waitForDrain ? " Press Ctrl+C to cancel the waiting reload." : ""}`
       : "Waiting for admitted plugin cleanup before replacing it.";
-    reportStatus({ phase: "reloading", pluginIds: [...changedPluginIds], deadlineAtMs, reason });
+    reportStatus({
+      phase: "reloading",
+      pluginIds: [...changedPluginIds],
+      deadlineAtMs: wallClockDeadline(deadlineAtMs),
+      reason,
+    });
     log.info(reason);
     logRetainedReferences(instances, "queued", log);
     try {

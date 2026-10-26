@@ -31,12 +31,12 @@ The agent's **Tools** settings include run-dependent tools such as
 also adds explicit denies for them. Their catalog rows do not bypass the GitHub
 workspace and identity checks or the meeting transcript caller checks.
 
-| Profile     | Includes                                                                                                                                                                                                                                                                         |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal`   | `session_status`, `gateway` (update only)                                                                                                                                                                                                                                        |
-| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `gateway` (update only), `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `view_image`, `image_generate`, `music_generate`, `video_generate`         |
-| `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `gateway` (update only), `ask_user` |
-| `full`      | No core profile filtering; selects optional plugin tools too                                                                                                                                                                                                                     |
+| Profile     | Includes                                                                                                                                                                                                                                                                              |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `minimal`   | `session_status`, `gateway` (maintenance only)                                                                                                                                                                                                                                        |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `gateway` (maintenance only), `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `view_image`, `image_generate`, `music_generate`, `video_generate`         |
+| `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `gateway` (maintenance only), `ask_user` |
+| `full`      | No core profile filtering; selects optional plugin tools too                                                                                                                                                                                                                          |
 
 `coding` and `messaging` also include the [theme tool](/tools/theme) and implicitly
 allow `bundle-mcp` (configured MCP servers).
@@ -51,12 +51,14 @@ optional plugin tools. Explicit `full` contributes a wildcard to plugin tool
 selection, including optional tools from enabled plugins. Plugin configuration,
 availability, and independent policy restrictions still apply.
 
-The `minimal`, `coding`, and `messaging` profiles include `gateway` with only the
-`update.run` action. This lets owners request an OpenClaw update through the
-existing tool without granting configuration reads. Updates use the same Gateway
-handler as `/update` and the Control UI. External-chat updates require current
-owner authorization and `commands.restart`; Control UI updates retain their
-operator authorization.
+The `minimal`, `coding`, and `messaging` profiles include `gateway` maintenance
+actions: `update.run`, `restart`, and `update.cleanup`, without configuration
+reads. Each requires an explicit owner request or operator-scheduled admission.
+Updates and restarts use runtime-supervised paths. Cleanup keeps the Gateway
+serving and permanently retires eligible rollback copies; `dryRun` previews.
+External-chat updates and restarts require current owner authorization and
+`commands.restart`; cleanup does not restart and is independent of that flag.
+Control UI requests retain their operator authorization.
 
 The `full` profile and an unset profile retain the tool's configuration-read
 actions. In a limited profile, explicitly add `gateway` to `tools.alsoAllow` to
@@ -75,7 +77,7 @@ whether the tool is available. Subagent and non-owner restrictions still apply.
 | `group:memory`     | `memory_search`, `memory_get`                                                                                                                                                                                                                            |
 | `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                                                                                                                                    |
 | `group:ui`         | `browser`, `screen`, `theme`, `dashboard`, `terminal`, `portal`, `canvas`, `show_widget`                                                                                                                                                                 |
-| `group:automation` | `heartbeat_respond`, `automations` (`cron` alias), `gateway`, `plugins`, `openclaw`                                                                                                                                                                      |
+| `group:automation` | `automations` (`cron` alias), `gateway`, `plugins`, `openclaw`                                                                                                                                                                                           |
 | `group:messaging`  | `message`                                                                                                                                                                                                                                                |
 | `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
 | `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`                                                                                                                                                   |
@@ -234,7 +236,42 @@ Tool Search and Code Mode remain available as dispatchers over the permitted cat
 
 Adding, changing or removing `tools.gatewayPolicy` requires a Gateway restart. Deployment owners such as OCE supply the policy when deploying the Gateway and activate changes through restart or replacement after affected old work ends. Newly assembled tools then use the new deployment policy. Ordinary tool-policy settings keep their existing reload behavior.
 
-This policy limits model-directed tools. Direct human Gateway administration keeps its existing authorization. It does not configure native Codex tools, restrict arbitrary Harness-local programs, or replace the separate controls required for scheduled command jobs and automation administration.
+This policy limits model-directed tools. Direct human Gateway administration keeps its existing authorization. It does not configure native Codex tools or restrict arbitrary Harness-local programs.
+
+### Automation scope and command jobs
+
+The tool/action allowlist alone cannot distinguish an ordinary Agent-turn schedule from a command job. Add automation restrictions when model turns should keep caller-scoped scheduling:
+
+```json5
+{
+  tools: {
+    gatewayPolicy: {
+      allow: ["automations"],
+      actions: {
+        automations: [
+          "status",
+          "list",
+          "get",
+          "add",
+          "update",
+          "remove",
+          "run",
+          "runs",
+          "next_check",
+          "wake",
+        ],
+      },
+      automations: { scope: "caller", allowCommandJobs: false },
+    },
+  },
+}
+```
+
+`scope: "caller"` withholds administrative automation grants from model turns, including conversations started by administrators or configured channel owners and restored continuations. Existing caller ownership and visibility checks still apply.
+
+`allowCommandJobs: false` rejects model creation, conversion, editing, enablement and manual execution of command jobs and on-exit command watchers. The Gateway checks the stored job as well as the requested change, so a patch that omits the payload kind cannot bypass the restriction. Ordinary Agent-turn schedules remain available. Use `cron.triggers.enabled: false` separately to disable streams, script payloads, condition triggers and event sources; that setting also applies to humans.
+
+These automation fields affect model-directed calls. Direct authorized human UI, CLI and RPC administration remains available. Omit the fields to retain existing conversational administrator management. Changes follow the Gateway restart contract above.
 
 ## `tools.byProvider`
 

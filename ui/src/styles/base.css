@@ -1,6 +1,7 @@
 /* Details and the desktop menus share the same block-divider color. Keep the
    token available before lazy menu/Details styles load, without changing other borders. */
 .chat-details-desktop-body,
+.context-usage__popover,
 .chat-dashboard-menu__panel,
 .side-panel-position-menu,
 .chat-pr-menu,
@@ -16,12 +17,29 @@
   --bg-hover: #1f2330;
   --bg-muted: #1f2330;
 
+  /* Interaction layers follow the host surface and the theme's own ink. */
+  --surface-hover-amount: 6%;
+  --surface-selected-amount: 8%;
+  --surface-selected-hover-amount: 11%;
+  --surface-hover: color-mix(in srgb, var(--text) var(--surface-hover-amount), transparent);
+  --surface-selected: color-mix(in srgb, var(--text) var(--surface-selected-amount), transparent);
+  --surface-selected-hover: color-mix(
+    in srgb,
+    var(--text) var(--surface-selected-hover-amount),
+    transparent
+  );
+  --navigation-selected-border: transparent;
+
   --card: #161920;
   --card-foreground: #f0f0f2;
   --card-highlight: rgba(255, 255, 255, 0.04);
   --popover: #191c24;
   --popover-foreground: #f0f0f2;
+  --chat-send-foreground: var(--primary-foreground);
+  --chat-composer-surface: var(--popover);
+  --chat-user-surface: var(--accent-subtle);
   --session-hovercard-surface: color-mix(in srgb, var(--card) 94%, black 6%);
+  --session-hovercard-attribution-surface: color-mix(in srgb, var(--text) 6%, transparent);
 
   --panel: #0e1015;
   --panel-strong: #191c24;
@@ -40,13 +58,22 @@
   --muted: #8b8b94;
   --muted-strong: #898990;
   --muted-foreground: #8b8b94;
+  /* Low-emphasis chrome follows the actual surface; secondary copy keeps --muted. */
+  --text-tertiary: color-mix(in srgb, var(--text) 48.4%, transparent);
+  --icon-interactive: var(--text-tertiary);
+  --icon-decorative: var(--text-tertiary);
+  --icon-active: var(--text-strong);
+  --control-secondary-text: var(--muted);
+  --context-ring-track: color-mix(in srgb, var(--muted) 75%, transparent);
+  --navigation-selected-icon: var(--icon-active);
   --file-icon-glyph: var(--muted);
 
-  /* Navigation controls use their own resting ink and subdued primary action. */
-  --sidebar-rail-control-color: color-mix(in srgb, var(--text-strong) 46%, transparent);
-  --sidebar-rail-action-bg: oklch(from var(--accent) calc(l * 0.94) calc(c * 0.72) h);
-  --sidebar-rail-action-hover-bg: oklch(from var(--accent-hover) calc(l * 0.94) calc(c * 0.72) h);
-  --sidebar-rail-action-active-bg: oklch(from var(--accent) calc(l * 0.9) calc(c * 0.72) h);
+  /* Navigation controls use their own resting ink and the selected accent pair. */
+  --sidebar-rail-control-color: var(--icon-interactive);
+  --sidebar-toolbar-action-opacity: 1;
+  --sidebar-rail-action-bg: var(--accent);
+  --sidebar-rail-action-hover-bg: var(--accent-hover);
+  --sidebar-rail-action-active-bg: color-mix(in srgb, var(--accent) 90%, var(--text));
 
   /* GitHub references share an opaque neutral surface; only their ink carries status. */
   --github-item-bg: color-mix(in srgb, var(--text) 6%, var(--bg));
@@ -65,19 +92,26 @@
   --rail-header-padding-end: 8px;
   --rail-header-action-size: 28px;
   --rail-header-action-glyph-size: 16px;
-  --rail-header-action-color: var(--muted);
+  --rail-header-action-color: var(--icon-interactive);
   --rail-header-action-hover-color: var(--text);
-  --rail-header-action-active-color: var(--accent);
+  --rail-header-action-active-color: var(--icon-active);
   --rail-header-action-disabled-opacity: 0.4;
   --rail-header-action-gap: 2px;
   --rail-header-background: var(--bg);
-  --session-header-control-surface: var(--bg-elevated);
+  --session-header-sharing-surface: color-mix(in srgb, var(--text) 4%, transparent);
+  --session-header-control-surface: color-mix(in srgb, var(--text) 5%, transparent);
+  --session-header-control-hover-bg: var(--surface-hover);
+  --session-header-control-active-hover-bg: color-mix(in srgb, var(--text) 10%, transparent);
+  --session-header-sharing-hover-bg: var(--surface-hover);
+  --session-header-sharing-active-bg: var(--session-header-control-active-hover-bg);
+  --session-header-control-active-color: var(--icon-active);
   --rail-header-title-size: var(--control-ui-text-sm);
   --rail-header-title-weight: 600;
   --rail-divider-color: var(--border);
   --rail-divider-size: 1px;
   --resize-handle-size: 6px;
   --resize-handle-line-size: 1px;
+  --shell-divider-size: var(--resize-handle-line-size);
   --resize-handle-active-line-size: 2px;
   --resize-handle-rest-color: color-mix(in srgb, var(--border) 74%, transparent);
   --resize-handle-active-color: color-mix(in srgb, var(--text) 42%, transparent);
@@ -92,7 +126,7 @@
    *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
    *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
    *   --card/--popover/--secondary foreground pairs: 15.4:1 / 14.9:1 / 15.4:1 ✓
-   *   --selection-fg #ffffff on --selection-bg #005fcc: 6.0:1 AA ✓
+   *   --selection-fg #ffffff on --selection-bg #5a7593: 4.8:1 AA ✓
    */
   --accent: #ff5c5c;
   --accent-hover: #ff7070;
@@ -120,7 +154,7 @@
      feedback that never costs readability. */
   --link: color-mix(in srgb, var(--accent-hover) 85%, var(--text));
   --link-hover: color-mix(in srgb, var(--link) 82%, var(--text));
-  --selection-bg: #005fcc;
+  --selection-bg: #5a7593;
   --selection-fg: #ffffff;
   --primary: #d13c3c;
   /* Imported palettes supply a fill/ink pair, not a hover pair. Keep their
@@ -219,6 +253,12 @@
   --info: #60a5fa;
   --info-subtle: rgba(96, 165, 250, 0.08);
   --pr-merged: #a78bfa;
+  /* Categorical chart series: distinct hues validated for color-vision separation on this surface. */
+  --chart-series-1: #3987e5;
+  --chart-series-2: #d95926;
+  --chart-series-3: #199e70;
+  --chart-series-4: #c98500;
+  --chart-series-5: #d55181;
 
   --focus: rgba(255, 92, 92, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
@@ -335,7 +375,7 @@
   --menu-item-radius: var(--radius-sm);
   --menu-item-height: 28px;
   --menu-padding: 4px;
-  --menu-selected: color-mix(in srgb, var(--text) 8%, transparent);
+  --menu-selected: var(--surface-selected);
 
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
@@ -429,6 +469,7 @@
   .chat-pr.chat-pr,
   .nav-item.nav-item,
   .sidebar-recent-session.sidebar-recent-session,
+  .plugin-catalog-detail__security-score.plugin-catalog-detail__security-score,
   .settings-sidebar__item.settings-sidebar__item,
   .btn.btn,
   .agent-select__trigger.agent-select__trigger,
@@ -523,12 +564,14 @@
   --bg-hover: #efebe4;
   --bg-muted: #efebe4;
   --bg-content: #f4f1ec;
+  --chat-user-surface: color-mix(in srgb, var(--accent) 15%, var(--bg));
 
-  --session-header-control-surface: color-mix(in srgb, var(--text) 9%, var(--bg-content));
-  --session-header-sharing-hover-bg: color-mix(in srgb, var(--text) 12%, var(--bg-content));
-  --session-header-sharing-active-bg: color-mix(in srgb, var(--text) 15%, var(--bg-content));
-  --session-header-control-hover-bg: color-mix(in srgb, var(--text) 7%, var(--bg-content));
-  --session-header-control-active-color: color-mix(in srgb, var(--accent) 20%, var(--text));
+  --surface-hover-amount: 4%;
+  --surface-selected-amount: 6%;
+  --surface-selected-hover-amount: 9%;
+  --session-header-sharing-surface: color-mix(in srgb, var(--text) 3%, transparent);
+  --session-header-control-surface: var(--surface-selected);
+  --session-header-control-active-hover-bg: var(--surface-selected-hover);
   --subagent-avatar-ink: 45% 36%;
   --subagent-avatar-tint: 45% 94%;
   --subagent-avatar-tint-strength: 100%;
@@ -539,6 +582,7 @@
   --popover: #ffffff;
   --popover-foreground: #211e1a;
   --session-hovercard-surface: var(--card);
+  --session-hovercard-attribution-surface: color-mix(in srgb, var(--text) 4%, transparent);
 
   --panel: #faf9f7;
   --panel-strong: #f4f1ec;
@@ -630,6 +674,11 @@
   --info: #1d4ed8;
   --info-subtle: rgba(29, 78, 216, 0.08);
   --pr-merged: #7c3aed;
+  --chart-series-1: #2a78d6;
+  --chart-series-2: #eb6834;
+  --chart-series-3: #1baf7a;
+  --chart-series-4: #eda100;
+  --chart-series-5: #e87ba4;
 
   --focus: rgba(189, 69, 49, 0.15);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
@@ -666,7 +715,9 @@
   scrollbar-width: thin;
 }
 
-.sr-only {
+.sr-only,
+.settings-control__sr-label,
+.cron-required-sr {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -674,9 +725,13 @@
   padding: 0;
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
-  clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* Preserve the additional clipping only for the existing generic utility. */
+.sr-only {
+  clip-path: inset(50%);
 }
 
 html,
@@ -850,9 +905,8 @@ a:where(
     .sidebar-markdown a,
     .markdown a,
     .markdown-body a,
-    .chat-session-rail__answer a,
     .dreams-diary__para a
-  ):not(:where(.btn, [role="button"])) {
+  ):not(:where(.btn, [role="button"], .chat-assistant-attachment-card__action)) {
   text-decoration: underline;
 }
 
@@ -901,7 +955,9 @@ textarea,
   user-select: text;
 }
 
-::selection {
+/* Highlight styles inherit from the document root; matching every element
+   separately repeats this work whenever a large subtree changes. */
+:root::selection {
   background: var(--selection-bg);
   color: var(--selection-fg);
 }
@@ -936,7 +992,7 @@ textarea,
 @keyframes rise {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(var(--rise-start-y, 8px));
   }
   to {
     opacity: 1;

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
@@ -26,6 +26,7 @@ import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../../sessions/inp
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
@@ -318,8 +319,7 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
             input.attempt.userTurnTranscriptRecorder = recorder;
           }
           const reload = vi.spyOn(manager, "reloadPersistedTranscriptAsync");
-          const admitted = createDeferred();
-          const release = createDeferred();
+          const admittedGate = createEnteredGate();
           const speech = {
             ...makeAssistantMessageFixture({
               content: [{ type: "text", text: "voice reply" }],
@@ -329,13 +329,12 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
             provenance: { kind: "realtime_voice" as const, sourceChannel: "talk" },
           };
           const writing = withSessionManagerWrite(manager, async () => {
-            admitted.resolve();
-            await release.promise;
+            await admittedGate.wait();
             await appendSessionTranscriptNote(target, speech);
           });
-          await admitted.promise;
+          await admittedGate.entered;
           const preparing = prepareEmbeddedAttemptSessionBoundary(input);
-          release.resolve();
+          admittedGate.release();
           const [, boundary] = await Promise.all([writing, preparing]);
 
           expect(boundary.orphanRepair).toBeUndefined();
@@ -459,12 +458,11 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
           (error: unknown) => ({ kind: "rejected" as const, error }),
         );
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             claimed.promise,
-            outcome.then(() => {
-              throw new Error("repair settled before its projection was claimed");
-            }),
-          ]);
+            outcome,
+            "repair settled before its projection was claimed",
+          );
           const abortReason = new Error("cancel owned projection wait");
           controller.abort(abortReason);
           await expect(outcome).resolves.toMatchObject({

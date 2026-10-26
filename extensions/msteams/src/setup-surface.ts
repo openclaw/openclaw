@@ -8,7 +8,6 @@ import {
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
   type OpenClawConfig,
-  type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import { createAccountScopedGroupAccessSection } from "openclaw/plugin-sdk/setup-runtime";
 import type { MSTeamsTeamConfig } from "../runtime-api.js";
@@ -39,202 +38,11 @@ export function openDelegatedOAuthUrl(url: string): Promise<void> {
   );
 }
 
-function looksLikeGuid(value: string): boolean {
-  return /^[0-9a-fA-F-]{16,}$/.test(value);
-}
-
-async function promptMSTeamsAllowFrom(params: {
-  cfg: OpenClawConfig;
-  accountId?: string;
-  prompter: WizardPrompter;
-}): Promise<OpenClawConfig> {
-  const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultMSTeamsAccountId(params.cfg),
-  );
-  const existing = resolveMSTeamsAccountConfig(params.cfg, accountId).allowFrom ?? [];
-  await params.prompter.note(
-    [
-      t("wizard.msteams.allowlistIntro"),
-      t("wizard.msteams.allowlistResolve"),
-      t("wizard.msteams.examples"),
-      "- alex@example.com",
-      "- Alex Johnson",
-      "- 00000000-0000-0000-0000-000000000000",
-    ].join("\n"),
-    t("wizard.msteams.allowlistTitle"),
-  );
-
-  while (true) {
-    const entry = await params.prompter.text({
-      message: t("wizard.msteams.allowFromPrompt"),
-      placeholder: "alex@example.com, Alex Johnson",
-      initialValue: existing[0] ? existing[0] : undefined,
-      validate: (value) => (value.trim() ? undefined : t("common.required")),
-    });
-    const parts = splitSetupEntries(entry);
-    if (parts.length === 0) {
-      await params.prompter.note(
-        t("wizard.msteams.enterAtLeastOneUser"),
-        t("wizard.msteams.allowlistTitle"),
-      );
-      continue;
-    }
-
-    const resolved = await resolveMSTeamsUserAllowlist({
-      cfg: params.cfg,
-      accountId,
-      entries: parts,
-    }).catch(() => null);
-
-    let ids: string[];
-    if (!resolved) {
-      ids = parts.filter((part) => looksLikeGuid(part));
-      if (ids.length !== parts.length) {
-        await params.prompter.note(
-          t("wizard.msteams.graphLookupUnavailable"),
-          t("wizard.msteams.allowlistTitle"),
-        );
-        continue;
-      }
-    } else {
-      const unresolved = resolved.filter((item) => !item.resolved || !item.id);
-      if (unresolved.length > 0) {
-        await params.prompter.note(
-          t("wizard.msteams.couldNotResolve", {
-            entries: unresolved.map((item) => item.input).join(", "),
-          }),
-          t("wizard.msteams.allowlistTitle"),
-        );
-        continue;
-      }
-      ids = resolved.flatMap((item) => (item.id ? [item.id] : []));
-    }
-    const unique = mergeAllowFromEntries(existing, ids);
-    return patchMSTeamsAccountConfig({
-      cfg: params.cfg,
-      accountId,
-      patch: { dmPolicy: "allowlist", allowFrom: unique },
-      scopeDefaultToAccounts: shouldScopeMSTeamsDefaultToAccounts(params.cfg, accountId),
-    });
-  }
-}
-
 function shouldScopeMSTeamsDefaultToAccounts(cfg: OpenClawConfig, accountId: string): boolean {
   if (normalizeAccountId(accountId) !== DEFAULT_ACCOUNT_ID) {
     return false;
   }
   return Object.keys(cfg.channels?.msteams?.accounts ?? {}).length > 0;
-}
-
-function setMSTeamsTeamsAllowlist(
-  cfg: OpenClawConfig,
-  accountId: string,
-  entries: Array<{ teamKey: string; channelKey?: string }>,
-): OpenClawConfig {
-  const baseTeams = resolveMSTeamsAccountConfig(cfg, accountId).teams ?? {};
-  const teams: Record<string, MSTeamsTeamConfig> = { ...baseTeams };
-  for (const entry of entries) {
-    const teamKey = entry.teamKey;
-    if (!teamKey) {
-      continue;
-    }
-    const existing = teams[teamKey] ?? {};
-    if (entry.channelKey) {
-      const channels = { ...existing.channels };
-      channels[entry.channelKey] = channels[entry.channelKey] ?? {};
-      teams[teamKey] = { ...existing, channels };
-    } else {
-      teams[teamKey] = existing;
-    }
-  }
-  return patchMSTeamsAccountConfig({
-    cfg,
-    accountId,
-    patch: { teams },
-    scopeDefaultToAccounts: shouldScopeMSTeamsDefaultToAccounts(cfg, accountId),
-  });
-}
-
-function listMSTeamsGroupEntries(cfg: OpenClawConfig, accountId: string): string[] {
-  return Object.entries(resolveMSTeamsAccountConfig(cfg, accountId).teams ?? {}).flatMap(
-    ([teamKey, value]) => {
-      const channels = value?.channels ?? {};
-      const channelKeys = Object.keys(channels);
-      if (channelKeys.length === 0) {
-        return [teamKey];
-      }
-      return channelKeys.map((channelKey) => `${teamKey}/${channelKey}`);
-    },
-  );
-}
-
-async function resolveMSTeamsGroupAllowlist(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  entries: string[];
-  prompter: Pick<WizardPrompter, "note">;
-}): Promise<Array<{ teamKey: string; channelKey?: string }>> {
-  let resolvedEntries = params.entries
-    .map((entry) => parseMSTeamsTeamEntry(entry))
-    .filter((entry) => entry !== null);
-  if (
-    params.entries.length === 0 ||
-    !resolveMSTeamsCredentials(resolveMSTeamsAccountConfig(params.cfg, params.accountId), {
-      allowEnvFallback: params.accountId === "default",
-      pathPrefix: resolveMSTeamsAccountConfigPath(params.cfg, params.accountId),
-    })
-  ) {
-    return resolvedEntries;
-  }
-  try {
-    const lookups = await resolveMSTeamsChannelAllowlist({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      entries: params.entries,
-    });
-    const resolvedChannels = lookups.flatMap((entry) =>
-      entry.resolved && entry.teamId && entry.channelId
-        ? [{ teamKey: entry.teamId, channelKey: entry.channelId }]
-        : [],
-    );
-    const resolvedTeams = lookups.flatMap((entry) =>
-      entry.resolved && entry.teamId && !entry.channelId ? [{ teamKey: entry.teamId }] : [],
-    );
-    const unresolved = lookups.filter((entry) => !entry.resolved).map((entry) => entry.input);
-    resolvedEntries = [
-      ...resolvedChannels,
-      ...resolvedTeams,
-      ...unresolved.map((entry) => parseMSTeamsTeamEntry(entry)).filter((entry) => entry !== null),
-    ];
-    const summary: string[] = [];
-    if (resolvedChannels.length > 0) {
-      summary.push(
-        t("wizard.msteams.resolvedChannels", {
-          entries: resolvedChannels.map((entry) => entry.channelKey).join(", "),
-        }),
-      );
-    }
-    if (resolvedTeams.length > 0) {
-      summary.push(
-        t("wizard.msteams.resolvedTeams", {
-          entries: resolvedTeams.map((entry) => entry.teamKey).join(", "),
-        }),
-      );
-    }
-    if (unresolved.length > 0) {
-      summary.push(t("wizard.msteams.unresolvedKept", { entries: unresolved.join(", ") }));
-    }
-    if (summary.length > 0) {
-      await params.prompter.note(summary.join("\n"), t("wizard.msteams.channelsLabel"));
-    }
-    return resolvedEntries;
-  } catch (err) {
-    await params.prompter.note(
-      t("wizard.msteams.channelLookupFailed", { error: formatUnknownError(err) }),
-      t("wizard.msteams.channelsLabel"),
-    );
-    return resolvedEntries;
-  }
 }
 
 const msteamsGroupAccessBase = createAccountScopedGroupAccessSection({
@@ -243,14 +51,106 @@ const msteamsGroupAccessBase = createAccountScopedGroupAccessSection({
   placeholder: "Team Name/Channel Name, teamId/conversationId",
   currentPolicy: ({ cfg, accountId }) =>
     resolveMSTeamsAccountConfig(cfg, accountId).groupPolicy ?? "allowlist",
-  currentEntries: ({ cfg, accountId }) => listMSTeamsGroupEntries(cfg, accountId),
+  currentEntries: ({ cfg, accountId }) =>
+    Object.entries(resolveMSTeamsAccountConfig(cfg, accountId).teams ?? {}).flatMap(
+      ([teamKey, value]) => {
+        const channels = value?.channels ?? {};
+        const channelKeys = Object.keys(channels);
+        if (channelKeys.length === 0) {
+          return [teamKey];
+        }
+        return channelKeys.map((channelKey) => `${teamKey}/${channelKey}`);
+      },
+    ),
   updatePrompt: ({ cfg, accountId }) => Boolean(resolveMSTeamsAccountConfig(cfg, accountId).teams),
-  resolveAllowlist: ({ cfg, accountId, entries, prompter }) =>
-    resolveMSTeamsGroupAllowlist({ cfg, accountId, entries, prompter }),
+  resolveAllowlist: async (params) => {
+    let resolvedEntries = params.entries
+      .map((entry) => parseMSTeamsTeamEntry(entry))
+      .filter((entry) => entry !== null);
+    if (
+      params.entries.length === 0 ||
+      !resolveMSTeamsCredentials(resolveMSTeamsAccountConfig(params.cfg, params.accountId), {
+        allowEnvFallback: params.accountId === "default",
+        pathPrefix: resolveMSTeamsAccountConfigPath(params.cfg, params.accountId),
+      })
+    ) {
+      return resolvedEntries;
+    }
+    try {
+      const lookups = await resolveMSTeamsChannelAllowlist({
+        cfg: params.cfg,
+        accountId: params.accountId,
+        entries: params.entries,
+      });
+      const resolvedChannels = lookups.flatMap((entry) =>
+        entry.resolved && entry.teamId && entry.channelId
+          ? [{ teamKey: entry.teamId, channelKey: entry.channelId }]
+          : [],
+      );
+      const resolvedTeams = lookups.flatMap((entry) =>
+        entry.resolved && entry.teamId && !entry.channelId ? [{ teamKey: entry.teamId }] : [],
+      );
+      const unresolved = lookups.filter((entry) => !entry.resolved).map((entry) => entry.input);
+      resolvedEntries = [
+        ...resolvedChannels,
+        ...resolvedTeams,
+        ...unresolved
+          .map((entry) => parseMSTeamsTeamEntry(entry))
+          .filter((entry) => entry !== null),
+      ];
+      const summary: string[] = [];
+      if (resolvedChannels.length > 0) {
+        summary.push(
+          t("wizard.msteams.resolvedChannels", {
+            entries: resolvedChannels.map((entry) => entry.channelKey).join(", "),
+          }),
+        );
+      }
+      if (resolvedTeams.length > 0) {
+        summary.push(
+          t("wizard.msteams.resolvedTeams", {
+            entries: resolvedTeams.map((entry) => entry.teamKey).join(", "),
+          }),
+        );
+      }
+      if (unresolved.length > 0) {
+        summary.push(t("wizard.msteams.unresolvedKept", { entries: unresolved.join(", ") }));
+      }
+      if (summary.length > 0) {
+        await params.prompter.note(summary.join("\n"), t("wizard.msteams.channelsLabel"));
+      }
+      return resolvedEntries;
+    } catch (err) {
+      await params.prompter.note(
+        t("wizard.msteams.channelLookupFailed", { error: formatUnknownError(err) }),
+        t("wizard.msteams.channelsLabel"),
+      );
+      return resolvedEntries;
+    }
+  },
   fallbackResolved: (entries) =>
     entries.map((entry) => parseMSTeamsTeamEntry(entry)).filter((entry) => entry !== null),
-  applyAllowlist: ({ cfg, accountId, resolved }) =>
-    setMSTeamsTeamsAllowlist(cfg, accountId, resolved),
+  applyAllowlist: ({ cfg, accountId, resolved: entries }) => {
+    const baseTeams = resolveMSTeamsAccountConfig(cfg, accountId).teams ?? {};
+    const teams: Record<string, MSTeamsTeamConfig> = { ...baseTeams };
+    for (const entry of entries) {
+      const teamKey = entry.teamKey;
+      const existing = teams[teamKey] ?? {};
+      if (entry.channelKey) {
+        const channels = { ...existing.channels };
+        channels[entry.channelKey] = channels[entry.channelKey] ?? {};
+        teams[teamKey] = { ...existing, channels };
+      } else {
+        teams[teamKey] = existing;
+      }
+    }
+    return patchMSTeamsAccountConfig({
+      cfg,
+      accountId,
+      patch: { teams },
+      scopeDefaultToAccounts: shouldScopeMSTeamsDefaultToAccounts(cfg, accountId),
+    });
+  },
 });
 
 const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
@@ -294,7 +194,77 @@ const msteamsDmPolicy: ChannelSetupDmPolicy = createChannelDmPolicy({
       patch,
       scopeDefaultToAccounts: shouldScopeMSTeamsDefaultToAccounts(cfg, account.accountId),
     }),
-  promptAllowFrom: promptMSTeamsAllowFrom,
+  promptAllowFrom: async (params) => {
+    const accountId = normalizeAccountId(
+      params.accountId ?? resolveDefaultMSTeamsAccountId(params.cfg),
+    );
+    const existing = resolveMSTeamsAccountConfig(params.cfg, accountId).allowFrom ?? [];
+    await params.prompter.note(
+      [
+        t("wizard.msteams.allowlistIntro"),
+        t("wizard.msteams.allowlistResolve"),
+        t("wizard.msteams.examples"),
+        "- alex@example.com",
+        "- Alex Johnson",
+        "- 00000000-0000-0000-0000-000000000000",
+      ].join("\n"),
+      t("wizard.msteams.allowlistTitle"),
+    );
+
+    while (true) {
+      const entry = await params.prompter.text({
+        message: t("wizard.msteams.allowFromPrompt"),
+        placeholder: "alex@example.com, Alex Johnson",
+        initialValue: existing[0] ? existing[0] : undefined,
+        validate: (value) => (value.trim() ? undefined : t("common.required")),
+      });
+      const parts = splitSetupEntries(entry);
+      if (parts.length === 0) {
+        await params.prompter.note(
+          t("wizard.msteams.enterAtLeastOneUser"),
+          t("wizard.msteams.allowlistTitle"),
+        );
+        continue;
+      }
+
+      const resolved = await resolveMSTeamsUserAllowlist({
+        cfg: params.cfg,
+        accountId,
+        entries: parts,
+      }).catch(() => null);
+
+      let ids: string[];
+      if (!resolved) {
+        ids = parts.filter((part) => /^[0-9a-fA-F-]{16,}$/.test(part));
+        if (ids.length !== parts.length) {
+          await params.prompter.note(
+            t("wizard.msteams.graphLookupUnavailable"),
+            t("wizard.msteams.allowlistTitle"),
+          );
+          continue;
+        }
+      } else {
+        const unresolved = resolved.filter((item) => !item.resolved || !item.id);
+        if (unresolved.length > 0) {
+          await params.prompter.note(
+            t("wizard.msteams.couldNotResolve", {
+              entries: unresolved.map((item) => item.input).join(", "),
+            }),
+            t("wizard.msteams.allowlistTitle"),
+          );
+          continue;
+        }
+        ids = resolved.flatMap((item) => (item.id ? [item.id] : []));
+      }
+      const unique = mergeAllowFromEntries(existing, ids);
+      return patchMSTeamsAccountConfig({
+        cfg: params.cfg,
+        accountId,
+        patch: { dmPolicy: "allowlist", allowFrom: unique },
+        scopeDefaultToAccounts: shouldScopeMSTeamsDefaultToAccounts(params.cfg, accountId),
+      });
+    }
+  },
 });
 
 const msteamsSetupWizardBase = createMSTeamsSetupWizardBase();

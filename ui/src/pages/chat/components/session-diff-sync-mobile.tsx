@@ -16,13 +16,11 @@ export type SessionDiffSyncMobileData = {
   branch: string;
 };
 
-export type SessionDiffSyncMobileProps = {
+/** Body below the mobile host's Sync title/Back rail; owns no navigation or Git operation. */
+export function SessionDiffSyncMobile(props: {
   /** Null when the native owner cannot offer Sync. Never substitute the selected commit. */
   data: SessionDiffSyncMobileData | null;
-};
-
-/** Body below the mobile host's Sync title/Back rail; owns no navigation or Git operation. */
-export function SessionDiffSyncMobile(props: SessionDiffSyncMobileProps) {
+}) {
   const available = () => {
     const data = props.data;
     return data?.root && data.branch && data.command ? data : null;

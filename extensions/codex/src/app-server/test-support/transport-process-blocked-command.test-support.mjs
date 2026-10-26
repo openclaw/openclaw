@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import fs, { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -32,24 +33,31 @@ try {
     controller.stdout.once("data", resolve);
   });
   const commandPath = `/proc/${process.pid}/cmdline`;
-  const originalOpen = fs.openSync;
-  const result = { inspectorClosed: false, inspectorUsed: false };
-  // A blocking FIFO models cmdline's kernel waits; the controller runs independently.
-  installProcfsFixture(
-    (file, ...args) =>
-      file === commandPath ? originalOpen(fifo, "r") : originalOpen(file, ...args),
-    `const fixtureFs = require("node:fs");
-const fixtureOpen = fixtureFs.openSync;
-fixtureFs.openSync = (file, ...args) => file === ${JSON.stringify(commandPath)}
-  ? fixtureOpen(${JSON.stringify(fifo)}, "r") : fixtureOpen(file, ...args);
-`,
-    (inspector) => {
-      result.inspectorUsed = true;
-      inspector.once("close", () => {
-        result.inspectorClosed = true;
-      });
+  const originalOpen = fsPromises.open;
+  const result = { descriptorClosed: false, inspectionSpawns: 0 };
+  let closed;
+  const descriptorClosed = new Promise((resolve) => {
+    closed = resolve;
+  });
+  // A FIFO models a procfs kernel wait without blocking the Gateway's event loop.
+  installProcfsFixture({
+    open: async (file, ...args) => {
+      if (file !== commandPath) {
+        return originalOpen(file, ...args);
+      }
+      const handle = await originalOpen(fifo, "r");
+      const close = handle.close.bind(handle);
+      handle.close = async () => {
+        await close();
+        result.descriptorClosed = true;
+        closed();
+      };
+      return handle;
     },
-  );
+    onSpawn: () => {
+      result.inspectionSpawns += 1;
+    },
+  });
   process.env.NODE_OPTIONS = `--require=${preload}`;
   process.env.BUN_OPTIONS = `--preload=${preload}`;
   const started = performance.now();
@@ -67,7 +75,7 @@ fixtureFs.openSync = (file, ...args) => file === ${JSON.stringify(commandPath)}
     result.outcome = { status: "rejected", reason: error.reason };
   }
   result.inspectionMs = performance.now() - started;
-  [result.firstHeartbeatMs] = await Promise.all([heartbeat, controllerClosed]);
+  [result.firstHeartbeatMs] = await Promise.all([heartbeat, controllerClosed, descriptorClosed]);
   result.ambientPreloadExecuted = fs.existsSync(marker);
   console.log(JSON.stringify(result));
 } finally {

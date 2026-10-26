@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import { createVitestCacheWarmGroups } from "../../scripts/lib/ci-node-test-plan.mts";
 import { BUN_UI_TEST_ENV } from "../../scripts/lib/ci-test-runtime.mts";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
@@ -49,8 +48,6 @@ vi.mock(import("../../scripts/lib/ci-node-test-plan.mts"), async (importOriginal
 });
 
 type Invocation = { args: string[]; env: NodeJS.ProcessEnv };
-type Collection = Invocation & { files: string[] };
-type PlannedCollection = { configs: string[]; runtime: string | undefined; files: string[] };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const originalExitCode = process.exitCode;
 afterEach(() => {
@@ -59,13 +56,9 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it.each(
-  ["linux", "linux-hosted"].flatMap((platform) =>
-    [undefined, "bun-all", "dual-all"].map((policy) => ({ platform, policy })),
-  ),
-)(
-  "preserves protected Node and Bun seeds for $platform ($policy)",
-  async ({ platform, policy }) => {
+it.each(["linux", "linux-hosted"])(
+  "preserves protected Node and Bun seeds for %s despite the consumer policy",
+  async (platform) => {
     const root = tempDirs.make("openclaw-cache-warm-test-");
     const cacheRoot = join(root, "transforms");
     const compileRoot = join(root, "compile");
@@ -78,7 +71,7 @@ it.each(
       GITHUB_ACTIONS: undefined,
       OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: undefined,
       CACHE_WARM_PLATFORM: platform,
-      OPENCLAW_CI_TEST_RUNTIME_POLICY: policy,
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-all",
       NODE_OPTIONS: "--max-old-space-size=8192",
       NODE_COMPILE_CACHE: compileRoot,
       OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: cacheRoot,
@@ -97,43 +90,18 @@ it.each(
       vi.stubEnv(name, value);
     }
     const invocations: Invocation[] = [];
-    const nonUiCollections: PlannedCollection[] = [];
-    const uiCollections: Collection[] = [];
-    const recordUi = (args: string[], env: NodeJS.ProcessEnv) => {
-      const includeFile =
-        env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE ?? env.OPENCLAW_VITEST_INCLUDE_FILE;
-      uiCollections.push({ args, env, files: JSON.parse(readFileSync(includeFile!, "utf8")) });
-    };
+    let uiFiles: string[] = [];
     vi.mocked(runManagedCommand).mockImplementation(async (command) => {
       const { args = [], env = {} } = command;
       invocations.push({ args, env });
       expect(command.requireProcessTreeExit).toBe(true);
       if (args.includes("scripts/ci-run-node-test-shard.mts")) {
         expect(env.OPENCLAW_NODE_TEST_PLAN_CONCURRENCY).toBe("1");
-        return await runShardPlans(resolveShardPlans(env), {
-          env,
-          scratchDir: root,
-          runChild: async (childArgs, childEnv) => {
-            expect(childArgs).toContain("--testNamePattern=(?!)");
-            if (childArgs.includes("ui/vitest.config.ts")) {
-              recordUi(childArgs, childEnv);
-            } else {
-              nonUiCollections.push({
-                configs: childArgs.slice(0, childArgs.indexOf("--")),
-                runtime: childEnv.OPENCLAW_VITEST_RUNTIME,
-                files: JSON.parse(readFileSync(childEnv.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8")),
-              });
-              expect(childEnv.NODE_OPTIONS).toBe("--max-old-space-size=8192");
-              // Exit 1 is an ordinary test failure; infrastructure exits stop shard admission.
-              return childEnv.OPENCLAW_VITEST_RUNTIME === "node" && nonUiCollections.length === 1
-                ? 1
-                : 0;
-            }
-            return 0;
-          },
-        });
+        expect(JSON.parse(env.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON!)).toEqual([
+          "--testNamePattern=(?!)",
+        ]);
       } else if (args.includes("scripts/run-vitest.mjs")) {
-        recordUi(args, env);
+        uiFiles = JSON.parse(readFileSync(env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE!, "utf8"));
       } else {
         expect({ args, options: env.NODE_OPTIONS }).toMatchObject({
           args: expect.arrayContaining(["--testNamePattern=(?!)"]),
@@ -146,24 +114,24 @@ it.each(
     await import("../../scripts/ci-warm-vitest-caches.mts");
 
     expect(process.exitCode).toBe(1);
-    expect(uiCollections.map(({ env }) => env.OPENCLAW_VITEST_RUNTIME)).toEqual(["bun", "node"]);
-    for (const collection of uiCollections) {
-      expect(collection.files).toEqual(ui.includePatterns);
-      expect(collection.args).toContain("--testNamePattern=(?!)");
-      expect(collection.env.OPENCLAW_VITEST_MAX_WORKERS).toBe("1");
-      expect(collection.env.NODE_OPTIONS).toBeUndefined();
-      expect(collection.env.NODE_COMPILE_CACHE).toBe(compileRoot);
+    const bun = invocations.find(({ args }) => args.includes("scripts/run-vitest.mjs"))!;
+    const node = invocations.at(-1)!;
+    expect(uiFiles).toEqual(ui.includePatterns);
+    expect(bun.args).toContain("--testNamePattern=(?!)");
+    expect(bun.env.OPENCLAW_VITEST_MAX_WORKERS).toBe("1");
+    for (const { env } of [bun, node]) {
+      expect(env.NODE_OPTIONS).toBeUndefined();
+      expect(env.NODE_COMPILE_CACHE).toBe(compileRoot);
+      expect(env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBeUndefined();
     }
-    const [bun, node] = uiCollections;
     expect(bun!.env).toMatchObject({
       ...BUN_UI_TEST_ENV,
       OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: join(cacheRoot, "vitest-cache-bun-0"),
     });
     expect(bun!.env.OPENCLAW_BUN_PATH).toBeUndefined();
     expect(bun!.env.OPENCLAW_VITEST_INCLUDE_FILE).toBeUndefined();
-    expect(node!.env.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT).toBe(join(cacheRoot, "vitest-cache-0"));
-    expect(bun!.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBeUndefined();
-    expect(node!.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBeUndefined();
+    expect(node.env.OPENCLAW_CI_TEST_RUNTIME_POLICY).toBe("node");
+    expect(JSON.parse(node.env.OPENCLAW_NODE_TEST_GROUPS_JSON!)).toEqual([ui]);
     expect(existsSync(bun!.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE!)).toBe(false);
     expect(invocations.at(-1)!.args).toContain("scripts/ci-run-node-test-shard.mts");
     expect(
@@ -172,21 +140,18 @@ it.each(
         env.OPENCLAW_NODE_COMPILE_CACHE_WRITER,
       ]),
     ).toEqual([...invocations.slice(0, -1).map(() => ["0", "0"]), ["1", "1"]]);
-    expect(nonUiCollections.filter(({ runtime }) => runtime === "bun")).toEqual(
-      groups
-        .filter((group) => group !== ui && (platform === "linux" || group === groups[0]))
-        .map((group) => ({ configs: group.configs, runtime: "bun", files: group.includePatterns })),
+    const backend = invocations.find(({ args }) =>
+      args.includes("scripts/ci-run-node-test-shard.mts"),
+    )!;
+    expect(backend.env.NODE_OPTIONS).toBe("--max-old-space-size=8192");
+    expect(backend.env.OPENCLAW_CI_TEST_RUNTIME_POLICY).toBe(
+      platform === "linux" ? "dual-all" : "bun-all",
+    );
+    expect(JSON.parse(backend.env.OPENCLAW_NODE_TEST_GROUPS_JSON!)).toEqual(
+      platform === "linux" ? groups.filter((group) => group !== ui) : [groups[0]],
     );
     if (platform === "linux") {
-      const nonUiGroups = groups.filter((group) => group !== ui);
-      expect(JSON.parse(invocations[0]!.env.OPENCLAW_NODE_TEST_GROUPS_JSON!)).toEqual(nonUiGroups);
-      expect(nonUiCollections.filter(({ runtime }) => runtime === "node")).toEqual(
-        nonUiGroups.map((group) => ({
-          configs: group.configs,
-          runtime: "node",
-          files: group.includePatterns,
-        })),
-      );
+      expect(invocations).toHaveLength(3);
     } else {
       expect(
         invocations

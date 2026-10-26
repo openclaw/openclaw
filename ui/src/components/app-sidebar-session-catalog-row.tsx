@@ -8,7 +8,7 @@ import type {
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
@@ -190,21 +190,19 @@ export function renderCatalogSessionRow(
           href={target().href}
           class="sidebar-recent-session__link"
           aria-current={active() ? "page" : undefined}
-          onClick={(event: MouseEvent) => {
-            if (!shouldHandleNavigationClick(event)) {
-              return;
-            }
-            event.preventDefault();
-            if (params.snapshot.catalogOpenTarget === "terminal" && canOpenTerminal()) {
-              openCatalogSessionInTerminal(
-                params.host,
-                catalogKey(),
-                params.snapshot.newSessionAgentId,
-              );
-            } else {
-              params.host.onNavigate?.(routeId, target().options);
-            }
-          }}
+          onClick={(event: MouseEvent) =>
+            handleNavigationClick(event, () => {
+              if (params.snapshot.catalogOpenTarget === "terminal" && canOpenTerminal()) {
+                openCatalogSessionInTerminal(
+                  params.host,
+                  catalogKey(),
+                  params.snapshot.newSessionAgentId,
+                );
+              } else {
+                params.host.onNavigate?.(routeId, target().options);
+              }
+            })
+          }
         >
           <span class="sidebar-session-indicator">
             {running() ? (
@@ -232,7 +230,7 @@ export function renderCatalogSessionRow(
               data-catalog-session-menu="true"
               type="button"
               title={t("chat.sidebar.openSessionMenu")}
-              aria-label={t("chat.sidebar.openSessionMenu")}
+              aria-label={`${t("chat.sidebar.openSessionMenu")}: ${label()}`}
               aria-haspopup="menu"
               aria-expanded={menuOpen() ? "true" : "false"}
               onClick={(event) => {

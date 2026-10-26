@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
 import { GATEWAY_SERVICE_SELECTOR_ENV_KEYS } from "../../daemon/constants.js";
+import { GatewayServiceAuthorityError } from "../../daemon/service-update-authority.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -10,6 +11,7 @@ import {
   hasDeferredUpdateModelRetirement,
   recordUpdateModelRetirement,
 } from "../../infra/update-deferred-model-retirement.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import {
   createUpdateRun,
   getUpdateRun,
@@ -22,7 +24,9 @@ import { VERSION } from "../../version.js";
 import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import { finishUpdate } from "./update-command-post-update.js";
+import * as rollbackModule from "./update-command-rollback.js";
 import * as sourceRuntime from "./update-command-runtime.js";
+import { GatewayRestartHealthError } from "./update-command-service-command.js";
 import type * as revalidation from "./update-command-service-revalidation.js";
 import type * as service from "./update-command-service.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
@@ -448,29 +452,41 @@ export function registerServiceInstallationConvergenceTests(
     { drift: true, restart: false, outcome: "ok", status: "skipped" },
     { drift: true, restart: true, outcome: "reconciliation-pending", status: "skipped" },
     { drift: true, restart: true, outcome: "readiness-pending", status: "skipped" },
+    { drift: false, restart: true, outcome: "absent", status: "skipped" },
   ] as const)(
     "reconciles an already-current service installation (drift=$drift, restart=$restart, outcome=$outcome)",
     async ({ drift, restart, outcome, status }) => {
       const identity = createManagedServiceIdentityFixture(makeHome());
       try {
+        const absent = outcome === "absent";
+        const absentMessage = "Gateway restart skipped: no Gateway service or listener is running.";
         const packageRoot = path.join(identity.home, "prefix-b");
-        const serviceUpdateVerdict = {
-          kind: "owned" as const,
-          root: path.join(identity.home, drift ? "prefix-a" : "prefix-b"),
-          fingerprint: "installed-command",
-          refreshDefinition: true,
-          requiresInstallRootRefresh: drift,
-        };
+        const serviceUpdateVerdict = absent
+          ? { kind: "absent" as const }
+          : {
+              kind: "owned" as const,
+              root: path.join(identity.home, drift ? "prefix-a" : "prefix-b"),
+              fingerprint: "installed-command",
+              refreshDefinition: true,
+              requiresInstallRootRefresh: drift,
+            };
         mocks.revalidateService.mockResolvedValue(serviceUpdateVerdict);
         mocks.readServiceState.mockResolvedValue(managedServiceState(process.env));
         const serviceObservation = {
           inspected: true,
           runtimeInspected: true,
-          running: true,
+          running: !absent,
           serviceEnv: process.env,
           serviceUpdateVerdict,
+          ...(absent && {
+            serviceMutationAllowed: false,
+            serviceMutationSkipMessage: absentMessage,
+          }),
         };
         mocks.restartService.mockImplementationOnce(async ({ result }) => {
+          if (outcome === "absent") {
+            throw new Error("An absent service must not restart");
+          }
           expect(mocks.stopService).not.toHaveBeenCalled();
           expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
           expect(mocks.printResult).not.toHaveBeenCalled();
@@ -522,8 +538,99 @@ export function registerServiceInstallationConvergenceTests(
             }),
           );
         }
+        if (absent) {
+          expect(mocks.printResult.mock.lastCall?.[0].steps).toEqual([]);
+          expect(defaultRuntime.error).toHaveBeenCalledWith(absentMessage);
+        }
       } finally {
         identity.restore();
+      }
+    },
+  );
+}
+
+export function registerVerifiedActivationFailureTests({
+  tempDirs,
+  mocks,
+}: {
+  tempDirs: { make(prefix: string): string };
+  mocks: Pick<FixtureMocks, "restartService" | "printResult">;
+}) {
+  it.each([
+    "restart-health",
+    "reported-failure",
+    "authority",
+    "unknown",
+    "data-at-risk",
+    "health-with-authority",
+    "admission-unavailable",
+  ] as const)(
+    "classifies post-activation failures without granting authority (%s)",
+    async (outcome) => {
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-verified-target-") };
+      const run = createUpdateRun({ trigger: "cli" }, { env });
+      const rollback = vi.spyOn(rollbackModule, "rollbackFailedUpdate");
+      mocks.restartService.mockImplementationOnce(async ({ onVerified }) => {
+        onVerified?.(Date.now());
+        if (outcome === "data-at-risk") {
+          throw new DoctorMaintenanceRefusalError("Incomplete migration", {
+            kind: "data-at-risk",
+            reason: "incomplete-migration",
+          });
+        }
+        if (outcome === "reported-failure") {
+          return "restart-health-failed";
+        }
+        if (outcome === "authority") {
+          throw new GatewayServiceAuthorityError(new Error("Service authority revoked"));
+        }
+        if (outcome === "admission-unavailable") {
+          throw new DoctorMaintenanceRefusalError("Admission unavailable", {
+            kind: "deferred",
+            reason: "admission-unavailable",
+          });
+        }
+        if (outcome === "health-with-authority") {
+          throw new GatewayRestartHealthError("Health reporting failed", {
+            cause: new GatewayServiceAuthorityError(new Error("Service authority revoked")),
+          });
+        }
+        if (outcome === "unknown") {
+          throw new Error("Unknown post-activation failure");
+        }
+        throw new GatewayRestartHealthError("post-activation receipt unavailable");
+      });
+      const finishing = finishSuccessfulPackageSwitch({
+        run: { runId: run.runId, env },
+        restartEnvironment: process.env,
+      });
+      if (outcome !== "restart-health" && outcome !== "reported-failure") {
+        await expect(finishing).rejects.toMatchObject({
+          result: {
+            status: "error",
+            ...(outcome === "data-at-risk"
+              ? { recovery: { dataAtRisk: "incomplete-migration" } }
+              : {}),
+          },
+        });
+        expect(getUpdateRun(run.runId, { env })?.status).toBe("failed");
+      } else {
+        await expect(finishing).resolves.toBeUndefined();
+        expect(rollback).not.toHaveBeenCalled();
+        expect(getUpdateRun(run.runId, { env })?.status).toBe("succeeded");
+        const result = mocks.printResult.mock.lastCall?.[0];
+        expect(result.status).toBe("ok");
+        expect(
+          result.steps.find((step: { name: string }) => step.name === "post-update maintenance")
+            ?.advisory,
+        ).toMatchObject({
+          kind: "recoverable-maintenance",
+          message: expect.stringContaining(
+            outcome === "restart-health"
+              ? "post-activation receipt unavailable"
+              : "restart-unhealthy",
+          ),
+        });
       }
     },
   );

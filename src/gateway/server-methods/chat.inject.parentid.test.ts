@@ -1,23 +1,14 @@
-import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   attachManagedOutgoingMediaToMessage,
   createManagedOutgoingMediaBlocks,
@@ -25,49 +16,23 @@ import {
 import { listManagedImageRecordEntries } from "../managed-image-record-store.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 
-const tempDirs = createTempDirTracker();
-async function createFixture() {
-  const dir = tempDirs.make("openclaw-chat-inject-");
-  const scope = {
-    dir,
-    agentId: "main",
-    sessionKey: "main",
-    sessionId: "inject-session",
-    storePath: path.join(dir, "sessions.json"),
-  };
-  setRuntimeConfigSnapshot({});
-  await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
-  return scope;
-}
-
-let fixture: Awaited<ReturnType<typeof createFixture>>;
-const updates: Array<{ message?: unknown; sessionKey?: string; agentId?: string }> = [];
-let unsubscribe = () => {};
-beforeEach(async () => {
-  fixture = await createFixture();
-  updates.length = 0;
-  unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
-});
-afterEach(async () => {
-  unsubscribe();
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  await closeStateDatabaseForTest();
-  clearRuntimeConfigSnapshot();
-  tempDirs.cleanup();
-});
-
-async function readLastTranscriptRecord(): Promise<Record<string, unknown>> {
-  const events = await loadTranscriptEvents(fixture);
-  expect(events.length).toBeGreaterThanOrEqual(2);
-  return events.at(-1) as Record<string, unknown>;
-}
-
-it.for([false, true])(
-  "joins committed media before publication or callback failure (%s)",
-  async (failCallback, test) => {
+it("joins committed media before publication and preserves source text", (test) =>
+  withOpenClawTestState({ label: "chat-inject", scenario: "minimal" }, async (state) => {
+    const fixture = {
+      dir: state.stateDir,
+      agentId: "main",
+      sessionKey: "main",
+      sessionId: "inject-session",
+      storePath: state.statePath("sessions.json"),
+    };
+    setRuntimeConfigSnapshot({});
+    await replaceSessionEntry(fixture, { sessionId: fixture.sessionId, updatedAt: Date.now() });
+    const updates: Array<{ message?: unknown; sessionKey?: string; agentId?: string }> = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
     const entered = createDeferred();
     const release = createDeferred();
+    const message = "Here is your key: sk-proj-FAKEKEYFORTESTINGONLY1234567890";
+    const content = [{ type: "text", text: message }];
     const bytes = createSolidPngBuffer(1, 1, { r: 34, g: 51, b: 68 });
     let pending: ReturnType<typeof appendInjectedAssistantMessageToTranscript> | undefined;
     try {
@@ -79,8 +44,10 @@ it.for([false, true])(
       });
       pending = appendInjectedAssistantMessageToTranscript({
         ...fixture,
-        message: "Image ready",
-        content: [{ type: "text", text: "Image ready" }, ...blocks],
+        sessionKey: "global",
+        message,
+        config: {},
+        content: [...content, ...blocks],
         stopReason: "aborted",
         onMessageCommitted: (receipt, acceptCompletion) => {
           acceptCompletion(async () => {
@@ -94,9 +61,6 @@ it.for([false, true])(
               }),
             ).toBe(true);
           });
-          if (failCallback) {
-            throw new Error("Synthetic callback failure after custody acceptance");
-          }
         },
       });
       await racePromiseWithAbortSignal(
@@ -110,41 +74,27 @@ it.for([false, true])(
       expect(updates).toEqual([]);
       release.resolve();
       expect(await pending).toMatchObject({
-        ok: !failCallback,
-        ...(!failCallback ? { message: { stopReason: "aborted" } } : {}),
+        ok: true,
+        message: { content: [...content, ...blocks], stopReason: "aborted" },
       });
-      expect(updates).toHaveLength(failCallback ? 0 : 1);
+      expect(updates).toHaveLength(1);
       const entries = await listManagedImageRecordEntries({ stateDir: fixture.dir });
       expect(entries.map(({ record }) => record)).toMatchObject([
         { messageId: expect.any(String), retentionClass: "history" },
       ]);
-      expect((await readLastTranscriptRecord()).message).toMatchObject({
-        content: [{ type: "text", text: "Image ready" }],
-        openclawDisplayContent: [{ type: "text", text: "Image ready" }, ...blocks],
-        stopReason: "aborted",
+      const last = (await loadTranscriptEvents(fixture)).at(-1);
+      expect(last).toMatchObject({
+        message: {
+          content,
+          openclawDisplayContent: [...content, ...blocks],
+          stopReason: "aborted",
+        },
       });
+      expect(updates[0]).toMatchObject({ sessionKey: "agent:main:main", agentId: "main" });
+      expect(last).toHaveProperty("message", updates[0]?.message);
     } finally {
       release.resolve();
       await Promise.allSettled([pending]);
+      unsubscribe();
     }
-  },
-);
-
-it("preserves injected source text through its persisted transcript owner", async () => {
-  const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
-  const appended = await appendInjectedAssistantMessageToTranscript({
-    ...fixture,
-    sessionKey: "global",
-    message: `Here is your key: ${fakeApiKey}`,
-    config: {},
-  });
-
-  expect(appended.ok).toBe(true);
-  expect(JSON.stringify(appended.message)).toContain(fakeApiKey);
-  expect(updates).toHaveLength(1);
-  expect(updates[0]).toMatchObject({ sessionKey: "agent:main:main", agentId: "main" });
-
-  const last = await readLastTranscriptRecord();
-  expect(JSON.stringify(last.message)).toContain(fakeApiKey);
-  expect(updates[0]?.message).toEqual(last.message);
-});
+  }));

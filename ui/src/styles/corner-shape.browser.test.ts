@@ -1,95 +1,49 @@
-import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { readStyles, styleDocument, styleFixture } from "./style-fixture.test-support.ts";
 
 const fixture = styleFixture("corner-shape-", { ignoreCloseErrors: true });
 
-// Rewrite the property in both feature queries and declarations: unsupported
-// engines also ignore corner-shape outside an @supports block.
-const SUPPORTS_CONDITION = "@supports (corner-shape: superellipse(1.5))";
-
-type CornerCase = {
-  readonly circular: string;
-  readonly markup: string;
-  readonly selector: string;
-  readonly superelliptical: string;
-};
-
-function corner(
-  selector: string,
-  circular: string,
-  superelliptical: string,
-  markup = `<div class="${selector.slice(1)}">Surface</div>`,
-): CornerCase {
-  return { selector, circular, superelliptical, markup };
+function corners(circular: string, superelliptical: string, selectors: string) {
+  return selectors.split(", ").map((selector) => ({ selector, circular, superelliptical }));
 }
 
-// Nested fixtures match the real DOM: descendant selectors must still apply.
-const CORNER_CASES: readonly CornerCase[] = [
-  corner(".btn", "10px", "12.5px", '<button class="btn" type="button">Send</button>'),
-  corner(".card", "14px", "17.5px"),
-  corner(
-    ".option-card",
-    "20px",
-    "25px",
-    '<section class="option-card" role="group"><div class="option-card__choices">' +
-      '<button type="button" class="option-card__choice">Choice</button></div></section>',
-  ),
-  corner(".option-card__choice", "14px", "17.5px", ""),
-  corner(".exec-approval-card", "14px", "17.5px"),
-  corner(".agent-chat__input", "20px", "25px"),
-  corner(".sidebar-recent-session", "10px", "12.5px"),
-  corner(".nav-item", "10px", "12.5px", '<a class="nav-item" href="#/chat">Chat</a>'),
-  corner(".settings-group", "14px", "17.5px"),
-  // Item radius is panel radius minus 4px, at both scales.
-  corner(
-    ".slash-menu",
+const CORNER_CASES = [
+  ...corners(
     "10px",
     "12.5px",
-    '<div class="slash-menu" role="listbox"><div class="slash-menu__scroll">' +
-      '<div class="slash-menu-group"><div class="slash-menu-item" role="option">Item</div>' +
-      "</div></div></div>",
+    ".btn, .sidebar-recent-session, .nav-item, .slash-menu, .chat-reply-context-menu",
   ),
-  corner(
-    ".agent-chat__input .slash-menu",
-    "20px",
-    "25px",
-    '<div class="agent-chat__input"><div class="slash-menu">Menu</div></div>',
-  ),
-  corner(".slash-menu-item", "6px", "8.5px", ""),
-  corner(
-    ".chat-reply-context-menu",
-    "10px",
-    "12.5px",
-    '<div class="chat-reply-context-menu" role="menu">' +
-      '<button type="button" role="menuitem">Reply</button></div>',
-  ),
-  corner(".chat-reply-context-menu button", "6px", "8.5px", ""),
-  corner(
-    ".agent-chat__search-bar",
+  ...corners(
     "14px",
     "17.5px",
-    '<div class="agent-chat__search-bar"><input type="text" /></div>',
+    ".card, .option-card__choice, .exec-approval-card, .settings-group, .agent-chat__search-bar",
   ),
-];
-
-const ROUND_CASES: readonly CornerCase[] = [
-  corner(".chip", "9999px", "9999px", '<span class="chip">Chip</span>'),
-  corner(".statusDot", "9999px", "9999px", '<span class="statusDot"></span>'),
+  ...corners("20px", "25px", ".option-card, .agent-chat__input, .agent-chat__input .slash-menu"),
+  // Item radius is panel radius minus 4px, at both scales.
+  ...corners("6px", "8.5px", ".slash-menu-item, .chat-reply-context-menu button"),
 ];
 
 // Neither siblings nor non-opted descendants may inherit scaled radius tokens.
-const EXCLUDED_CASES: readonly CornerCase[] = [
-  corner(".run-inspector__panel", "10px", "10px"),
-  corner(
-    ".settings-segmented",
-    "10px",
-    "10px",
-    '<div class="settings-group"><div class="settings-segmented">Segmented</div></div>',
-  ),
+const ALL_CASES = [
+  ...CORNER_CASES,
+  ...corners("9999px", "9999px", ".chip, .statusDot"),
+  ...corners("10px", "10px", ".run-inspector__panel, .settings-segmented"),
 ];
 
-const ALL_CASES = [...CORNER_CASES, ...ROUND_CASES, ...EXCLUDED_CASES];
+// Nested fixtures match the real DOM; keep non-opted descendants and menu items nested.
+const markup = `<main>
+  <button class="btn" type="button">Send</button><div class="card">Surface</div>
+  <section class="option-card" role="group"><div class="option-card__choices"><button type="button" class="option-card__choice">Choice</button></div></section>
+  <div class="exec-approval-card">Surface</div><div class="agent-chat__input">Surface</div>
+  <div class="sidebar-recent-session">Surface</div><a class="nav-item" href="#/chat">Chat</a>
+  <div class="settings-group">Surface</div>
+  <div class="slash-menu" role="listbox"><div class="slash-menu__scroll"><div class="slash-menu-group"><div class="slash-menu-item" role="option">Item</div></div></div></div>
+  <div class="agent-chat__input"><div class="slash-menu">Menu</div></div>
+  <div class="chat-reply-context-menu" role="menu"><button type="button" role="menuitem">Reply</button></div>
+  <div class="agent-chat__search-bar"><input type="text" /></div>
+  <span class="chip">Chip</span><span class="statusDot"></span><div class="run-inspector__panel">Surface</div>
+  <div class="settings-group"><div class="settings-segmented">Segmented</div></div>
+</main>`;
 
 // CSSOM can serialize the same circular shape as round or superellipse(1).
 // https://drafts.csswg.org/css-borders-4/#valdef-corner-shape-value-round
@@ -103,58 +57,44 @@ const ROOT_RADIUS_TOKENS = {
   "--radius-xl": "20px",
 } as const;
 
-function readUiCss(): string {
-  const css = readStyles(
-    "styles/base",
-    "styles/components",
-    "styles/layout",
-    "styles/option-card",
-    "styles/chat/startup-layout",
-    "styles/chat/layout",
-    "styles/chat/message-layout",
-    "styles/chat/composer-surface",
-    "styles/chat/composer",
-    "styles/settings-controls",
-    "styles/settings",
-    "pages/activity/run-inspector",
-  );
-  expect(css).toContain(SUPPORTS_CONDITION);
-  return css;
-}
+const css = readStyles(
+  "styles/base",
+  "styles/components",
+  "styles/layout",
+  "styles/option-card",
+  "styles/chat/startup-layout",
+  "styles/chat/layout",
+  "styles/chat/message-layout",
+  "styles/chat/composer-surface",
+  "styles/chat/composer",
+  "styles/settings-controls",
+  "styles/settings",
+  "pages/activity/run-inspector",
+);
 
-type CornerProbe = Record<string, { radius: string; shape: string }>;
-
-async function probeCorners(supported: boolean): Promise<CornerProbe> {
-  return withFixture(supported, (page) =>
+async function probeCorners(supported: boolean) {
+  return fixture.withPage(String(supported), cornerDocument(supported), (page) =>
     page.evaluate(
-      (probes: readonly string[]) => {
-        return Object.fromEntries(
-          probes.map((selector) => {
-            const element = document.querySelector(selector);
-            if (!element) {
-              throw new Error(`Missing corner fixture element for ${selector}`);
-            }
-            const style = getComputedStyle(element);
-            const radius = style.borderTopLeftRadius;
-            return [selector, { radius, shape: style.getPropertyValue("corner-shape") }];
-          }),
-        );
-      },
+      (probes: readonly string[]) =>
+        probes.map((selector) => {
+          const element = document.querySelector(selector);
+          if (!element) {
+            throw new Error(`Missing corner fixture element for ${selector}`);
+          }
+          const style = getComputedStyle(element);
+          return [style.borderTopLeftRadius, style.getPropertyValue("corner-shape")];
+        }),
       ALL_CASES.map((item) => item.selector),
     ),
   );
 }
 
-function withFixture<T>(supported: boolean, run: (page: Page) => Promise<T>) {
-  const css = readUiCss();
-  return fixture.withPage(
-    String(supported),
-    styleDocument(
-      supported ? css : css.replaceAll("corner-shape:", "openclaw-unsupported-corner-shape:"),
-      `<main>${ALL_CASES.map((item) => item.markup).join("")}</main>`,
-      'data-theme-mode="light"',
-    ),
-    run,
+function cornerDocument(supported: boolean) {
+  return styleDocument(
+    // Rewrite declarations too: unsupported engines ignore ungated corner-shape.
+    supported ? css : css.replaceAll("corner-shape:", "openclaw-unsupported-corner-shape:"),
+    markup,
+    'data-theme-mode="light"',
   );
 }
 
@@ -163,22 +103,16 @@ fixture.describe("Control UI corner curvature", () => {
     "preserves opted-in, round and excluded corners (supported=%s)",
     async (supported) => {
       expect(await probeCorners(supported)).toEqual(
-        Object.fromEntries(
-          ALL_CASES.map((item) => [
-            item.selector,
-            {
-              radius: supported ? item.superelliptical : item.circular,
-              shape:
-                supported && CORNER_CASES.includes(item) ? "superellipse(1.5)" : CIRCULAR_SHAPE,
-            },
-          ]),
-        ),
+        ALL_CASES.map((item) => [
+          supported ? item.superelliptical : item.circular,
+          supported && CORNER_CASES.includes(item) ? "superellipse(1.5)" : CIRCULAR_SHAPE,
+        ]),
       );
     },
   );
 
   it("keeps the :root radius tokens MCP apps read canonical under the scale", async () => {
-    const tokens = await withFixture(true, (page) =>
+    const tokens = await fixture.withPage("root-tokens", cornerDocument(true), (page) =>
       page.evaluate((names: string[]) => {
         const style = getComputedStyle(document.documentElement);
         return Object.fromEntries(names.map((name) => [name, style.getPropertyValue(name).trim()]));
