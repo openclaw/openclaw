@@ -181,11 +181,15 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       params.fallbackAgentId,
       ...listAgentIds(params.cfg).filter((agentId) => agentId !== params.fallbackAgentId),
     ];
-    catalogEntries = agentIds.flatMap((agentId) =>
-      (captureAgentEntries(agentId)?.pairs ?? []).map(([sessionKey, entry]) =>
-        Object.freeze({ sessionKey, entry, agentId }),
-      ),
-    );
+    catalogEntries = [];
+    for (const agentId of agentIds) {
+      const pairs = captureAgentEntries(agentId)?.pairs ?? [];
+      // oxlint-disable-next-line typescript/prefer-for-of -- Read pairs directly without per-row iterators.
+      for (let index = 0; index < pairs.length; index++) {
+        const pair = pairs[index]!;
+        catalogEntries.push(Object.freeze({ sessionKey: pair[0], entry: pair[1], agentId }));
+      }
+    }
     Object.freeze(catalogEntries);
     return catalogEntries;
   };

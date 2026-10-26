@@ -423,6 +423,7 @@ const repositoryScriptEntries = [
   "scripts/perf/tool-result-owned-freeze-measure.ts!",
   "scripts/perf/tool-search-allowlist-measure.ts!",
   "scripts/perf/tools-catalog-copy-measure.ts!",
+  "scripts/perf/session-catalog-entry-snapshot-measure.ts!",
   // Standalone owner benchmark; invocation is documented in its header.
   "scripts/perf/model-tool-projection-measure.ts!",
   "scripts/perf/trajectory-skills-metadata-measure.ts!",
