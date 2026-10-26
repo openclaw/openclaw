@@ -258,6 +258,16 @@ function expectLastDraftUpdateText(
   expect(draftUpdateTexts(draftStream).at(-1)).toBe(expected);
 }
 
+function previewWithId(messageId: () => string | undefined) {
+  const draft = {
+    ...createDraftStreamStub(),
+    messageId,
+    channelId: () => (messageId() ? "C123" : undefined),
+  };
+  createSlackDraftStreamMock.mockReturnValueOnce(draft);
+  return draft;
+}
+
 function createPreparedSlackMessage(params?: {
   cfg?: Record<string, unknown>;
   accountConfig?: Record<string, unknown>;
@@ -617,22 +627,6 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
         if (entry.kind === "item") {
           const { kind: _kind, itemKind, ...payload } = entry;
           await params.replyOptions?.onItemEvent?.({ ...payload, kind: itemKind });
-        } else if (entry.kind === "command_output") {
-          const { kind: _kind, explanation: _explanation, ...payload } = entry;
-          await params.replyOptions?.onCommandOutput?.(payload);
-          if (entry.phase === "end") {
-            const item = projectAgentToolActivity({
-              toolCallId: entry.toolCallId ?? entry.itemId ?? `tool-${index}`,
-              name: entry.name ?? "exec",
-              phase: "result",
-              isError: entry.exitCode == null ? undefined : entry.exitCode !== 0,
-              meta: entry.title,
-            });
-            await params.replyOptions?.onItemEvent?.({
-              ...item,
-              itemId: entry.itemId ?? item.itemId,
-            });
-          }
         } else if (entry.kind === "tool_start") {
           const { kind: _kind, ...payload } = entry;
           await params.replyOptions?.onToolStart?.(payload);
@@ -684,8 +678,10 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
         } else if (entry.kind === "approval") {
           const { kind: _kind, ...payload } = entry;
           await params.replyOptions?.onApprovalEvent?.(payload);
-        } else {
+        } else if (entry.kind === "partial") {
           await params.replyOptions?.onPartialReply?.({ text: entry.text });
+        } else {
+          throw new Error(`Unsupported test event: ${entry.kind}`);
         }
       }
       if (mockedDispatchError) {
@@ -1218,16 +1214,11 @@ it("gates native progress previews before message_sending hooks", async () => {
 
 it("posts the final below a human message received while the preview was sealing", async () => {
   let messageId: string | undefined = "171234.567";
-  const draftStream = {
-    ...createDraftStreamStub(),
-    seal: vi.fn(async () => {
-      messageId = undefined;
-    }),
-    finalizeMessage: vi.fn(async () => false),
-    messageId: () => messageId,
-    channelId: () => (messageId ? "C123" : undefined),
-  };
-  createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+  const draftStream = previewWithId(() => messageId);
+  draftStream.seal.mockImplementation(async () => {
+    messageId = undefined;
+  });
+  draftStream.finalizeMessage.mockResolvedValue(false);
 
   await dispatch();
 
@@ -2266,8 +2257,7 @@ it("starts a new draft delivery target when a queued followup is admitted", asyn
   await dispatch({});
   await capturedReplyOptions?.onQueuedFollowupAdmitted?.();
 
-  expect(draftStream.flush).toHaveBeenCalledTimes(1);
-  expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+  expectCalls(1, draftStream.flush, draftStream.forceNewMessage);
 });
 
 it("keeps complete preambles visible between streamed updates", async () => {
@@ -2464,8 +2454,7 @@ it("retracts and resumes Slack plans while retaining other block progress", asyn
     { kind: "assistant_start" },
     { kind: "plan", phase: "update", steps: [] },
     checkpoint(async () => {
-      expect(draftStream.clear).toHaveBeenCalledTimes(1);
-      expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+      expectCalls(1, draftStream.clear, draftStream.forceNewMessage);
     }),
     planEvent("Resume"),
     { kind: "assistant_start" },
@@ -2600,12 +2589,7 @@ it.each(["interrupted", "already-visible", "chart"] as const)(
   "preserves TTS text and media through %s preview fallback",
   async (scenario) => {
     let messageId: string | undefined = "171234.567";
-    const draftStream = {
-      ...createDraftStreamStub(),
-      messageId: () => messageId,
-      channelId: () => (messageId ? "C123" : undefined),
-    };
-    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    const draftStream = previewWithId(() => messageId);
     const spokenText = "Spoken answer";
     const previouslyVisible = scenario === "already-visible";
     if (scenario === "interrupted") {
@@ -2677,14 +2661,11 @@ it.each(["interrupted", "already-visible", "chart"] as const)(
 
 it("defers hooks and suppresses duplicate TTS finals when flush creates the preview id", async () => {
   let flushed = false;
-  const draftStream = {
-    ...createDraftStreamStub(),
-    flush: vi.fn(async () => {
-      flushed = true;
-    }),
-    messageId: () => (flushed ? "171234.567" : undefined),
-  };
-  createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+  const draftStream = useDraftStream();
+  draftStream.flush.mockImplementation(async () => {
+    flushed = true;
+  });
+  draftStream.messageId = () => (flushed ? "171234.567" : undefined);
   finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
   mockedSlackIsThreadReply = false;
   mockedReplyThreadTsSequence = [undefined, undefined];
