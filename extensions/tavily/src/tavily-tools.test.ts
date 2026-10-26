@@ -8,7 +8,10 @@ const { runTavilySearch, runTavilyExtract } = vi.hoisted(() => ({
   runTavilyExtract: vi.fn(async (params: Record<string, unknown>) => ({ ok: true, params })),
 }));
 
-vi.mock("./tavily-client.js", () => ({ runTavilySearch, runTavilyExtract }));
+vi.mock("./tavily-client.js", () => ({
+  runTavilySearch,
+  runTavilyExtract,
+}));
 
 function configWithWebSearch(webSearch: Record<string, unknown>): OpenClawConfig {
   return { plugins: { entries: { tavily: { config: { webSearch } } } } };
