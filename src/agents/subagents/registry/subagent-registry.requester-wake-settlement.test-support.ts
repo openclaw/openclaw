@@ -108,6 +108,21 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
     const activeContext = context ?? createGatewayContext();
     await registry.activateSubagentRegistry(() => activeContext).settled;
   };
+  const requesterMailbox = () =>
+    getExistingSessionControllerMailbox(
+      requesterSessionKey,
+      captureSessionTarget({
+        storeScope: getFixture().sessionStorePath,
+        sessionKey: requesterSessionKey,
+      }),
+    );
+  const retireMailbox = async (mailbox: ReturnType<typeof requesterMailbox>) => {
+    // A regressed reservation must not hold teardown behind it.
+    for (const input of mailbox?.entries.slice() ?? []) {
+      retireSessionControllerInput(input);
+    }
+    await flushOwnedWork();
+  };
   async function restoreChild(runId: string, overrides: Partial<SubagentRunRecord>) {
     const childSessionKey = `agent:main:subagent:${runId}`;
     const { sessionId, lifecycleRevision } = await prepareChildSession(childSessionKey, runId, 1);
@@ -175,13 +190,7 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
       }
       await registry.resetSubagentRegistryForTests({ persist: false });
       await activate();
-      const mailbox = getExistingSessionControllerMailbox(
-        requesterSessionKey,
-        captureSessionTarget({
-          storeScope: getFixture().sessionStorePath,
-          sessionKey: requesterSessionKey,
-        }),
-      );
+      const mailbox = requesterMailbox();
       try {
         await withinTest(flushOwnedWork(), signal);
         const firstChild = firstKind === "interrupted predecessor" ? "later-a" : "first";
@@ -197,10 +206,7 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
         await advance(120_000, firstKind === "cohort" ? 3 : 2);
         expect(getAgentCalls().map((request) => request.params?.idempotencyKey)).toEqual(expected);
       } finally {
-        for (const input of mailbox?.entries.slice() ?? []) {
-          retireSessionControllerInput(input);
-        }
-        await flushOwnedWork();
+        await retireMailbox(mailbox);
       }
     },
   );
@@ -233,13 +239,7 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
     await registry.resetSubagentRegistryForTests({ persist: false });
     vi.setSystemTime(200_000);
     await activate();
-    const mailbox = getExistingSessionControllerMailbox(
-      requesterSessionKey,
-      captureSessionTarget({
-        storeScope: getFixture().sessionStorePath,
-        sessionKey: requesterSessionKey,
-      }),
-    );
+    const mailbox = requesterMailbox();
     try {
       await withinTest(flushOwnedWork(), signal);
       for (const runId of earlierWave) {
@@ -252,11 +252,7 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
       expect(readWake("yielded-child")).toBeUndefined();
       await advance(120_000, 1);
     } finally {
-      // A regressed raw reservation must not hold the fixture's teardown behind it.
-      for (const input of mailbox?.entries.slice() ?? []) {
-        retireSessionControllerInput(input);
-      }
-      await flushOwnedWork();
+      await retireMailbox(mailbox);
     }
   });
   it.each(["retry", "cancel", "replace"] as const)(
@@ -277,7 +273,6 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
           retireAfterSettle: true,
         },
       });
-      const { sessionStorePath } = getFixture();
       const original = registry.getSubagentRunByRunId(runId)!;
       await using capacity = holdWorkerCapacity();
       const captureRequester = deliveryRuntime.captureRequesterSessionEntryCurrent;
@@ -289,13 +284,7 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
         });
       const context = createGatewayContext();
       await activate(context);
-      const source = getExistingSessionControllerMailbox(
-        requesterSessionKey,
-        captureSessionTarget({
-          storeScope: sessionStorePath,
-          sessionKey: requesterSessionKey,
-        }),
-      )?.entries.find(
+      const source = requesterMailbox()?.entries.find(
         (input) =>
           input.sourceTurnId === `requester-settle:main:${requesterSessionKey}:${runId}:yield-1`,
       );

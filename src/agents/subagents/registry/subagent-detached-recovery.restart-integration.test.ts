@@ -142,63 +142,89 @@ describe("detached subagent restart recovery", () => {
       const childSessionKey = `agent:main:${humanFollowup || sourceKind === "channel" || drain || missingSource ? "dashboard" : "subagent"}:warm-restart-child`;
       const requesterSessionId = "warm-restart-parent-session";
       const requesterLifecycleRevision = "warm-restart-parent-lifecycle";
+      const childScope = { agentId: "main", sessionKey: childSessionKey };
+      const childIdentity = {
+        sessionId: "warm-restart-child-session",
+        lifecycleRevision: "child-revision",
+      };
+      const requesterIdentity = {
+        sessionId: requesterSessionId,
+        lifecycleRevision: requesterLifecycleRevision,
+      };
+      const updateChild = (update: Partial<Parameters<typeof replaceSessionEntry>[1]>) =>
+        replaceSessionEntry(childScope, { ...loadSessionEntry(childScope)!, ...update });
+      const inPreviousGateway = <T>(work: () => T) =>
+        withPluginRuntimeGatewayRequestScope(
+          {
+            client,
+            context: previousContext,
+            resolveGatewayContext: previousContext.resolveGatewayContext,
+            isWebchatConnect: () => false,
+          },
+          work,
+        );
+      const settleRecovery = async () => {
+        await fixture.settle();
+        await testing.sweepOnceForTests();
+        await fixture.settle();
+      };
+      const preserveForRestart = (
+        entry: Parameters<typeof preserveSubagentRunForRestart>[0]["entry"],
+      ) =>
+        preserveSubagentRunForRestart({
+          entry,
+          terminal: buildAgentRunTerminalOutcome({ status: "error", stopReason: "restart" }),
+          runs: subagentRuns,
+        });
       await replaceSessionEntry(
         { agentId: requesterAgentId, sessionKey: requesterSessionKey },
         {
-          sessionId: requesterSessionId,
-          lifecycleRevision: requesterLifecycleRevision,
+          ...requesterIdentity,
           updatedAt: now,
           status: "done",
           endedAt: now - 500,
         },
       );
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey: childSessionKey },
-        {
-          sessionId: "warm-restart-child-session",
-          updatedAt: now,
-          abortedLastRun: true,
-          createdVia: "spawn",
-          ...(!channelSource
-            ? {
-                createdActor: {
-                  type: "agent" as const,
-                  id: "main",
-                  delegatedBy: {
-                    type: "human" as const,
-                    source: "profile" as const,
-                    id: client.authenticatedUserProfile!.profileId,
-                  },
+      await replaceSessionEntry(childScope, {
+        sessionId: "warm-restart-child-session",
+        updatedAt: now,
+        abortedLastRun: true,
+        createdVia: "spawn",
+        ...(!channelSource
+          ? {
+              createdActor: {
+                type: "agent" as const,
+                id: "main",
+                delegatedBy: {
+                  type: "human" as const,
+                  source: "profile" as const,
+                  id: client.authenticatedUserProfile!.profileId,
                 },
-              }
-            : {}),
-          spawnedBy: requesterSessionKey,
-          parentSessionKey: requesterSessionKey,
-          spawnDepth: 1,
-          ...(verified
-            ? {
-                lifecycleRevision: "child-revision",
-                status: "interrupted" as const,
-                lastRunId: runId,
-              }
-            : {}),
-          ...(channelSource && sourceKind !== "channel" && sourceKind !== "missing-channel"
-            ? {
-                restartRecoveryRequesterSource: createRestartRecoveryRequesterSource({
-                  agentId: "main",
-                  sessionKey: childSessionKey,
-                  entry: {
-                    sessionId: "warm-restart-child-session",
-                    lifecycleRevision: "child-revision",
-                    updatedAt: now,
-                  },
-                  sourceRunId: sourceKind === "mismatched-channel" ? "another-child-run" : runId,
-                  requesterOrigin,
-                }),
-              }
-            : {}),
-        },
-      );
+              },
+            }
+          : {}),
+        spawnedBy: requesterSessionKey,
+        parentSessionKey: requesterSessionKey,
+        spawnDepth: 1,
+        ...(verified
+          ? {
+              lifecycleRevision: "child-revision",
+              status: "interrupted" as const,
+              lastRunId: runId,
+            }
+          : {}),
+        ...(channelSource && sourceKind !== "channel" && sourceKind !== "missing-channel"
+          ? {
+              restartRecoveryRequesterSource: createRestartRecoveryRequesterSource({
+                agentId: "main",
+                sessionKey: childSessionKey,
+                entry: { ...childIdentity, updatedAt: now },
+                sourceRunId: sourceKind === "mismatched-channel" ? "another-child-run" : runId,
+                requesterOrigin,
+              }),
+            }
+          : {}),
+      });
       if (sourceKind === "channel") {
         const scope = {
           agentId: "main",
@@ -306,11 +332,7 @@ describe("detached subagent restart recovery", () => {
           authority: source.authority,
           agentId: "main",
           sessionKey: requesterSessionKey,
-          entry: {
-            sessionId: requesterSessionId,
-            lifecycleRevision: requesterLifecycleRevision,
-            updatedAt: now,
-          },
+          entry: { ...requesterIdentity, updatedAt: now },
           sourceRunId: "warm-restart-parent-turn",
         });
       }
@@ -319,34 +341,27 @@ describe("detached subagent restart recovery", () => {
       bindGatewayContextResolver(predecessor, previousContext.resolveGatewayContext);
       client.internal = { ...client.internal, operatorRunAuthority: source?.authority };
       if (collect && source) {
-        await withPluginRuntimeGatewayRequestScope(
-          {
-            client,
-            context: previousContext,
-            resolveGatewayContext: previousContext.resolveGatewayContext,
-            isWebchatConnect: () => false,
-          },
-          () =>
-            registerSubagentRun({
-              runId,
-              childAgentId: "main",
-              childSessionKey,
-              sessionEntry: predecessor.childSessionIdentity,
-              requesterAgentId: "main",
-              requesterSessionKey,
-              requesterTurnRunId: "warm-restart-parent-turn",
-              requesterDisplayKey: requesterSessionKey,
-              task: predecessor.task,
-              cleanup: "keep",
-              collect: true,
-              groupId: "restart-group",
-              swarmRequesterSessionKey: requesterSessionKey,
-              expectsCompletionMessage: false,
-              completionTarget: "parent",
-              completionRequesterSessionId: requesterSessionId,
-              completionRequesterLifecycleRevision: requesterLifecycleRevision,
-              gatewayContextResolver: previousContext.resolveGatewayContext,
-            }),
+        await inPreviousGateway(() =>
+          registerSubagentRun({
+            runId,
+            childAgentId: "main",
+            childSessionKey,
+            sessionEntry: predecessor.childSessionIdentity,
+            requesterAgentId: "main",
+            requesterSessionKey,
+            requesterTurnRunId: "warm-restart-parent-turn",
+            requesterDisplayKey: requesterSessionKey,
+            task: predecessor.task,
+            cleanup: "keep",
+            collect: true,
+            groupId: "restart-group",
+            swarmRequesterSessionKey: requesterSessionKey,
+            expectsCompletionMessage: false,
+            completionTarget: "parent",
+            completionRequesterSessionId: requesterSessionId,
+            completionRequesterLifecycleRevision: requesterLifecycleRevision,
+            gatewayContextResolver: previousContext.resolveGatewayContext,
+          }),
         );
         expect(loadSubagentRegistryFromSqlite().get(runId)?.operatorRecoverySource).toMatchObject({
           sessionKey: requesterSessionKey,
@@ -371,29 +386,15 @@ describe("detached subagent restart recovery", () => {
           cleanupCompletedAt: now,
         });
         runId = "human-child-followup";
-        await withPluginRuntimeGatewayRequestScope(
-          {
-            client,
-            context: previousContext,
-            resolveGatewayContext: previousContext.resolveGatewayContext,
-            isWebchatConnect: () => false,
-          },
-          () =>
-            reactivateCompletedSubagentSession({
-              sessionKey: childSessionKey,
-              runId,
-              task: "Verify the retained result.",
-              gatewayContextResolver: previousContext.resolveGatewayContext,
-            }),
+        await inPreviousGateway(() =>
+          reactivateCompletedSubagentSession({
+            sessionKey: childSessionKey,
+            runId,
+            task: "Verify the retained result.",
+            gatewayContextResolver: previousContext.resolveGatewayContext,
+          }),
         );
-        await replaceSessionEntry(
-          { agentId: "main", sessionKey: childSessionKey },
-          {
-            ...loadSessionEntry({ agentId: "main", sessionKey: childSessionKey })!,
-            status: "interrupted",
-            lastRunId: runId,
-          },
-        );
+        await updateChild({ status: "interrupted", lastRunId: runId });
         expect(loadSubagentRegistryFromSqlite().get(runId)?.operatorRecoverySource).toMatchObject({
           agentId: "main",
           sessionKey: childSessionKey,
@@ -405,15 +406,7 @@ describe("detached subagent restart recovery", () => {
       }
       const registeredPredecessor = (await getSubagentRunByChildSessionKey(childSessionKey))!;
       bindGatewayContextResolver(registeredPredecessor, previousContext.resolveGatewayContext);
-      const continuation = await withPluginRuntimeGatewayRequestScope(
-        {
-          client,
-          context: previousContext,
-          resolveGatewayContext: previousContext.resolveGatewayContext,
-          isWebchatConnect: () => false,
-        },
-        () => captureOperatorToolGatewayContinuationContext(),
-      );
+      const continuation = await inPreviousGateway(captureOperatorToolGatewayContinuationContext);
       expect(continuation?.operatorAuthority).toBe(source?.authority);
       if (!collect) {
         subagentRuns.bindCompletionAuthority(registeredPredecessor, continuation!);
@@ -425,13 +418,7 @@ describe("detached subagent restart recovery", () => {
         subagentRuns.runWithCompletionAuthority(registeredPredecessor, () => {}),
       ).not.toThrow();
       if (verified && !drain) {
-        expect(
-          await preserveSubagentRunForRestart({
-            entry: registeredPredecessor,
-            terminal: buildAgentRunTerminalOutcome({ status: "error", stopReason: "restart" }),
-            runs: subagentRuns,
-          }),
-        ).toMatchObject({ preserved: true });
+        expect(await preserveForRestart(registeredPredecessor)).toMatchObject({ preserved: true });
       }
       expect(subagentRuns.get(runId)?.execution.status).toBe(drain ? "running" : "interrupted");
       previousOpen = false;
@@ -511,24 +498,18 @@ describe("detached subagent restart recovery", () => {
           });
           activeRunIds.add(request.idempotencyKey);
           // Native admission clears the persisted terminal status before model execution.
-          await replaceSessionEntry(
-            { agentId: "main", sessionKey: childSessionKey },
-            {
-              ...loadSessionEntry({ agentId: "main", sessionKey: childSessionKey })!,
-              status: undefined,
-              abortedLastRun: false,
-              lifecycleRunId: request.idempotencyKey,
-              lastRunId: request.idempotencyKey,
-            },
-          );
+          await updateChild({
+            status: undefined,
+            abortedLastRun: false,
+            lifecycleRunId: request.idempotencyKey,
+            lastRunId: request.idempotencyKey,
+          });
           request.assertAdmittedSourceCurrent?.();
           return { status: "started", runId: request.idempotencyKey };
         });
       }
       await activateSubagentRegistry(() => replacementContext).settled;
-      await fixture.settle();
-      await testing.sweepOnceForTests();
-      await fixture.settle();
+      await settleRecovery();
 
       let successor = await getSubagentRunByChildSessionKey(childSessionKey);
       if (missingSource) {
@@ -658,23 +639,13 @@ describe("detached subagent restart recovery", () => {
       }
       if (humanFollowup) {
         resumeRunId = successor!.runId;
-        await replaceSessionEntry(
-          { agentId: "main", sessionKey: childSessionKey },
-          {
-            ...loadSessionEntry({ agentId: "main", sessionKey: childSessionKey })!,
-            status: "interrupted",
-            abortedLastRun: true,
-            lifecycleRunId: undefined,
-            lastRunId: resumeRunId,
-          },
-        );
-        expect(
-          await preserveSubagentRunForRestart({
-            entry: successor!,
-            terminal: buildAgentRunTerminalOutcome({ status: "error", stopReason: "restart" }),
-            runs: subagentRuns,
-          }),
-        ).toMatchObject({ preserved: true });
+        await updateChild({
+          status: "interrupted",
+          abortedLastRun: true,
+          lifecycleRunId: undefined,
+          lastRunId: resumeRunId,
+        });
+        expect(await preserveForRestart(successor!)).toMatchObject({ preserved: true });
         clearAgentRunContext(resumeRunId);
         activeRunIds.delete(resumeRunId);
         replacementOpen = false;
@@ -695,9 +666,7 @@ describe("detached subagent restart recovery", () => {
         };
         bindGatewayContextResolver(secondRuntime, recoveryResolver);
         await activateSubagentRegistry(recoveryResolver).settled;
-        await fixture.settle();
-        await testing.sweepOnceForTests();
-        await fixture.settle();
+        await settleRecovery();
         successor = await getSubagentRunByChildSessionKey(childSessionKey);
         expect(launch).toHaveBeenCalledTimes(2);
         expect(successor).toMatchObject({
