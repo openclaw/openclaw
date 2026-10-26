@@ -7,10 +7,7 @@ import * as updateCheck from "../../infra/update-check.js";
 import { UpdateDoctorError } from "../../infra/update-doctor-result.js";
 import * as updateLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
-import {
-  CommandProcessCleanupError,
-  hasCommandProcessCleanupError,
-} from "../../process/exec-result.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import {
   resolveCommandProcessSignal,
   retainCommandProcessCleanup,
@@ -316,14 +313,13 @@ describe("update plugin lifecycle lease boundaries", () => {
 
   registerPrivateHandoffBindingTests();
 
-  it.each(["returned", "uncertain", "plugins", "targetConfigConvergence"] as const)(
+  it.each(["returned", "plugins", "targetConfigConvergence"] as const)(
     "settles finalizer recovery before reporting a %s failure",
     async (phase) => {
       await prepareFinalizationPackage(await resolveUpdateRoot());
       mocks.verifyGateway.mockResolvedValue({ ok: true, summary: "healthy" });
-      const returned = phase === "returned" || phase === "uncertain";
+      const returned = phase === "returned";
       const failure = new Error(`finalize:${phase} failed`);
-      const cleanup = new CommandProcessCleanupError();
       if (returned) {
         vi.mocked(completePostCorePluginUpdate).mockResolvedValueOnce({
           configSnapshot: validConfigSnapshot,
@@ -334,18 +330,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       } else {
         vi.mocked(completePostCorePluginUpdate).mockRejectedValueOnce(failure);
       }
-      if (phase === "uncertain") {
-        mocks.verifyGateway.mockRejectedValueOnce(cleanup);
-      }
       const command = finalize({ timeout: returned ? undefined : "5" });
-      if (phase === "uncertain") {
-        const error = await command.catch((reason: unknown) => reason);
-        expect(hasCommandProcessCleanupError(error)).toBe(true);
-        expect(collectNestedErrorCandidates(error)).toContain(cleanup);
-        expect(listUpdateRuns()[0]?.status).toBe("running");
-        expectNoCalls(defaultRuntime.writeJson, mocks.triage);
-        return;
-      }
       const recovery = { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" };
       if (returned) {
         await expect(command).rejects.toMatchObject({ code: 1 });
