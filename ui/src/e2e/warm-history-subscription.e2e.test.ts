@@ -189,8 +189,8 @@ suite.define(() => {
                   ? []
                   : added.map((entry) => ({
                       message: entry,
-                      messageId: entry.__openclaw.id,
-                      messageSeq: entry.__openclaw.seq,
+                      messageId: entry["__openclaw"].id,
+                      messageSeq: entry["__openclaw"].seq,
                     })),
             },
       );
@@ -268,8 +268,8 @@ suite.define(() => {
                 deltaCursor: "retired-owner-cursor",
                 messages: added.map((entry) => ({
                   message: entry,
-                  messageId: entry.__openclaw.id,
-                  messageSeq: entry.__openclaw.seq,
+                  messageId: entry["__openclaw"].id,
+                  messageSeq: entry["__openclaw"].seq,
                 })),
               },
             },
