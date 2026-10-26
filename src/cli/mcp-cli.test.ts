@@ -284,7 +284,7 @@ it.each(["cert.pem", " cert.pem "])(
   "preserves literal TLS client paths from add flags: %j",
   async (name) => {
     const clientCert = path.join(workspaceDir, name);
-    const clientKey = path.join(workspaceDir, `${name.replace(".pem", "")}-key.pem`);
+    const clientKey = path.join(workspaceDir, name.replace("cert", "key"));
     await mcp(
       "add",
       "literal-tls",
