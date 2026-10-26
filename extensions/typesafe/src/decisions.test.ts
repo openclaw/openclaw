@@ -1,5 +1,6 @@
 import type { DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
 import { expect, it } from "vitest";
+import manifest from "../openclaw.plugin.json" with { type: "json" };
 import type { RuntimeConfig } from "./config.js";
 import { createPreparedDecisionProvider } from "./decisions.js";
 
@@ -9,10 +10,14 @@ type Decision = NonNullable<
 >;
 const config = { apiKey: "synthetic-key", timeoutMs: 2000 };
 const hosted = "https://api.typesafe.ai/v1";
-const row = (decision: Decision, id = "jev-1.13.0") => ({
+const pinned = manifest.modelCatalog.providers.typesafe.models.find(
+  (model) => model.id === "jev-1.13.0",
+)!;
+const row = (decision: Decision, id = pinned.id) => ({
   provider: "typesafe",
   id,
-  name: id,
+  name: id === pinned.id ? pinned.name : id,
+  ...(id === pinned.id ? { baseUrl: pinned.baseUrl } : {}),
   inference: { chat: false as const, decision },
 });
 const facts: Decision = {
@@ -32,8 +37,8 @@ const auth = { mode: "authorization-bearer" as const, token: unresolved };
 const enabled = { "TYPESAFE-DANGER-ZONE-LONG-CONTEXT": "true" };
 const disabled = { "typesafe-danger-zone-long-context": "false" };
 const model: ProviderConfig["models"][number] = {
-  id: "jev-1.13.0",
-  name: "Jev",
+  id: pinned.id,
+  name: pinned.name,
   reasoning: false,
   input: ["text"],
   contextWindow: 4096,

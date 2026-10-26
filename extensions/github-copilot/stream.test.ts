@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
@@ -47,6 +48,37 @@ function payloadStream(payload: unknown) {
     return { async *[Symbol.asyncIterator]() {} } as never;
   });
 }
+
+it("preserves a single configured integration identity through completions streaming", () => {
+  const captured: Headers[] = [];
+  const streamFn = vi.fn<StreamFn>((_model, _context, options) => {
+    captured.push(new Headers(omitNullRequestHeaders(options?.headers)));
+    return { async *[Symbol.asyncIterator]() {} } as never;
+  });
+  const wrapped = expectDefined(
+    wrapCopilotProviderStream({
+      streamFn,
+      config: {
+        models: {
+          providers: { "github-copilot": { headers: { "copilot-integration-id": "vscode-chat" } } },
+        },
+      },
+    } as never),
+    "Copilot stream fn",
+  );
+  const model = {
+    provider: "github-copilot",
+    api: "openai-completions",
+    id: "test-model",
+  } as never;
+  const context = { messages: [{ role: "user", content: "hello" }] } as never;
+  void wrapped(model, context, {});
+  void wrapped(model, context, { headers: { "COPILOT-INTEGRATION-ID": "caller-identity" } });
+  expect(captured.map((headers) => headers.get("copilot-integration-id"))).toEqual([
+    "vscode-chat",
+    "caller-identity",
+  ]);
+});
 
 describe("wrapCopilotAnthropicStream", () => {
   it("normalizes colliding Anthropic IDs and is idempotent", async () => {

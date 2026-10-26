@@ -24,6 +24,7 @@ function countRoleVisits<T>(memberRoleIds: string[], read: () => T) {
       visits++;
       yield role;
     }
+    return undefined;
   });
   try {
     return { value: read(), iterations: iter.mock.calls.length, visits };

@@ -32,7 +32,14 @@ afterEach(() => {
 describe("RestScheduler", () => {
   it("bounds the queue at 1000 requests and accepts work after draining", async () => {
     const release = createDeferred<void>();
-    const scheduler = new RestScheduler(() => release.promise);
+    let active = 0;
+    let peak = 0;
+    const scheduler = new RestScheduler(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await release.promise;
+      active -= 1;
+    });
     const enqueue = (guild: string) =>
       scheduler.enqueue({ method: "GET", path: `/guilds/${guild}/roles`, priority: "background" });
     const requests = Array.from({ length: 1000 }, (_, index) => enqueue(`g${index}`));
@@ -42,6 +49,7 @@ describe("RestScheduler", () => {
     release.resolve();
     await Promise.all(requests);
     await enqueue("after-drain");
+    expect(peak).toBe(4);
   });
 
   it("limits a rate-limited request to three retries", async () => {

@@ -77,6 +77,16 @@ it("stops a transferred uninspected service when restart is allowed", async () =
     stopped,
     restartRequired: false,
   });
+  expect(
+    serviceMaintenance.maybeStopManagedServiceBeforeMutableUpdate,
+  ).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      root: "/synthetic",
+      phase: "prepare",
+      shouldRestart: true,
+      assertCurrent: params.assertCurrent,
+    }),
+  );
   expect(params.onStopped).toHaveBeenCalledExactlyOnceWith(stopped);
   expect(params.onStep).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ name: "managed-service", exitCode: 0 }),

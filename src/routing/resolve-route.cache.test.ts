@@ -73,11 +73,14 @@ test("keeps cached routes independent of returned route mutations", () => {
     channel: "discord",
     peer: { kind: "direct", id: "user-1" },
   };
-  const route = resolveAgentRoute(input);
+  let route = resolveAgentRoute(input);
   const expected = { ...route };
-  route.agentId = "caller-owned-agent";
-  route.sessionKey = "caller-owned-session";
-  expect(resolveAgentRoute(input)).toEqual(expected);
+  for (let index = 0; index < 2; index += 1) {
+    route.agentId = "caller-owned-agent";
+    route.sessionKey = "caller-owned-session";
+    route = resolveAgentRoute(input);
+    expect(route).toEqual(expected);
+  }
 });
 
 test.each(collisionCases)("keeps %s distinct in cached routes", (_name, bindings, checks) => {

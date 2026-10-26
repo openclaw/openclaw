@@ -64,6 +64,12 @@ test("25 to 26 crosses the ordinary activation boundary and delegates migration 
   // The physical version and owner are authoritative; the registry may lag Doctor's commit.
   assert.equal(f.ok(f.run("compatibility", [f.initial, f.candidate, f.databasePath])).includes('"agentDatabases":1'), true);
   assert.equal(f.ok(f.create()), "A_PREPARED");
+  const record = f.read();
+  assert.deepEqual(record.nativeUpdate, { backupRoot: f.backupRoot });
+  assert.equal(record.agentMigration, undefined);
+  assert.equal(f.ok(f.run("journal-original-witness", [f.journal, JSON.stringify(record)])), f.witness);
+  const future = { ...f.after, schemaVersions: { state: 25, agent: 42 } };
+  assert.equal(f.ok(f.run("migration-kind", [JSON.stringify(f.before), JSON.stringify(future)])), "native-update");
 });
 
 test("native restoration rebinds replaced files while retaining the original session witness", t => {
@@ -150,6 +156,14 @@ function reconciliationFixture(t) {
   f.evidence = proof(f, ["recovery-snapshot", f.journal, f.serving, f.journalBytes.toString(), "restored", JSON.stringify(f.request)]);
   return f;
 }
+
+test("unchanged stopped reconciliation evidence may retire its exact journal", t => {
+  const f = reconciliationFixture(t);
+  assert.equal(proof(f, ["recovery-finish", f.journal, f.evidence, f.serving, "restored"]), "OK");
+  assert.equal(existsSync(f.journal), false);
+  assert.deepEqual(readFileSync(f.configPath), f.configBytes);
+  assert.deepEqual(readFileSync(f.witnessPath), f.witnessBytes);
+});
 
 for (const target of ["config", "journal"]) {
 test(`${target} replacement during final database validation refuses journal retirement`, t => {

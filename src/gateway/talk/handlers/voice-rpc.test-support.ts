@@ -40,9 +40,13 @@ export function voiceRpc(
   options: () => Pick<HandlerOptions, "context" | "client" | "sessionMutationCommitGuard">,
 ) {
   function start(method: string, params: Record<string, unknown>, client = options().client) {
+    const handler = talkVoiceHandlers[method];
+    if (!handler) {
+      throw new Error(`Missing Talk voice handler: ${method}`);
+    }
     const respond = vi.fn<RespondFn>();
     const completed = Promise.resolve(
-      talkVoiceHandlers[method]({
+      handler({
         ...options(),
         client,
         params,
