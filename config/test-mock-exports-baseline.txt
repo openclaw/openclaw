@@ -2372,7 +2372,6 @@
 ["src/auto-reply/reply/commands-stop-target.test.ts","./abort-trigger-text.js","145ade7e98a6954f6c830cadddcf501966166e6f1a826e6eaa0ac9c10912a7c1",1]
 ["src/auto-reply/reply/commands-subagents-routing.test.ts","../../agents/subagents/registry/subagent-control-scope.js","d3920c8f20233c4689e47db0ccf1d15ffdcd6540fd69dee847517992b46e6bba",1]
 ["src/auto-reply/reply/commands-subagents.test.ts","../../gateway/call.js","fceab03be2c37c01df003d7954582e10c27758f1cc538e487399d246ac62317a",1]
-["src/auto-reply/reply/commands-subagents/action-agents.test.ts","../../../channels/plugins/index.js","fafb216f7d4b8e66ec4663199a87370e920be81854a154dd5e8f40b988af48bb",1]
 ["src/auto-reply/reply/commands-system-agent.test.ts","../../channels/message-access/admission-evidence.js","ac930d278d525bc3da185fd3764ce8a3abe9c74a57391a9ae839c4f79bc456ef",1]
 ["src/auto-reply/reply/commands-system-agent.test.ts","../../system-agent/rescue-message.js","8091aa8e6a2e7536cd3f90d5a5409fe95101a5ce49ab5d4518d49d9e20d69026",1]
 ["src/auto-reply/reply/commands-system-prompt.test.ts","../../agents/model-selection.js","54ba0a1861a758df3e2beca2f5d1a7d8a72d8647a07d2f19693b07959f290799",1]
