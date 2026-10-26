@@ -168,8 +168,8 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
         title: "notes.md",
         mimeType: "text/markdown",
         sourceIdentity: "attachment:notes",
-        resolveSource: (requestUpdate) => {
-          requestSourceUpdate = requestUpdate;
+        resolveSource: (onSourceChange) => {
+          requestSourceUpdate = onSourceChange;
           return { status: "ready", src: source };
         },
       };
@@ -245,6 +245,15 @@ describe.runIf(browserMode)("Markdown attachment controls", () => {
           source = "/retried-notes.md";
           expectDefined(requestSourceUpdate, "Source update callback")();
           await expect.poll(() => fetchMock.mock.calls.length).toBe(3);
+          expect(reader.checkVisibility()).toBe(false);
+          expect(isObserved(viewport)).toBe(false);
+          await expect
+            .poll(() =>
+              panel
+                .querySelector<HTMLElement>(".sidebar-attachment-preview__loading")
+                ?.checkVisibility(),
+            )
+            .toBe(true);
           recovered.resolve(nextResponse);
         } else {
           refreshed.resolve(nextResponse);

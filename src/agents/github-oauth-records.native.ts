@@ -1,10 +1,12 @@
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { publishSecretStoreChange } from "../secrets/store/secret-store-changes.js";
 import {
   deleteHiddenGitHubSecretInDatabase,
   readHiddenGitHubSecretInDatabase,
 } from "../secrets/store/secret-store-hidden-github.kernel.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   githubDeviceRecordName,
   githubOAuthRecordName,
@@ -24,11 +26,15 @@ export function readGitHubDeviceAuthorizationRecordNative(requestId: string) {
 }
 
 function remove(name: string) {
-  runOpenClawStateWriteTransaction(
-    ({ db }) => deleteHiddenGitHubSecretInDatabase(db, name),
-    undefined,
-    { operationLabel: "secrets.store.delete-hidden-github" },
-  );
+  try {
+    runOpenClawStateWriteTransaction(
+      ({ db }) => deleteHiddenGitHubSecretInDatabase(db, name),
+      undefined,
+      { operationLabel: "secrets.store.delete-hidden-github" },
+    );
+  } finally {
+    publishSecretStoreChange(resolveOpenClawStateSqlitePath(), [name]);
+  }
 }
 
 /** Retained only for the deprecated synchronous Gateway Plugin SDK service. */

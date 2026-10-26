@@ -1,0 +1,108 @@
+.wizard-sign-in {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 12px 8px 4px;
+  text-align: center;
+}
+
+.wizard-sign-in p {
+  margin: 0;
+}
+
+.wizard-sign-in__badge {
+  position: relative;
+  display: grid;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 4px;
+  place-items: center;
+}
+
+.wizard-sign-in__icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  font-size: 18px;
+}
+
+.wizard-sign-in__ring {
+  position: absolute;
+  inset: 0;
+  border: 2px solid color-mix(in srgb, var(--accent) 18%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: btn-spinner-spin 1.2s linear infinite;
+}
+
+.wizard-sign-in__title {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.wizard-sign-in__lead {
+  max-width: 340px;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.wizard-sign-in__callout {
+  max-width: 360px;
+  text-align: left;
+}
+
+.wizard-sign-in__code {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.wizard-sign-in__code .wizard-step__sign-in-code {
+  border-style: solid;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 28px;
+}
+
+.wizard-sign-in__actions {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.wizard-sign-in__fallback,
+.wizard-sign-in__note {
+  max-width: 340px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.wizard-sign-in__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: var(--cursor-action);
+}
+
+.wizard-sign-in__link:hover {
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wizard-sign-in__ring {
+    animation: none;
+    border-color: var(--accent);
+  }
+}

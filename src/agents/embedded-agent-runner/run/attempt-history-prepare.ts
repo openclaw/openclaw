@@ -1,5 +1,4 @@
 import { preserveCompactionReplayWindow } from "@openclaw/ai/transports";
-import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
@@ -9,9 +8,7 @@ import {
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
-import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
-import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
@@ -72,8 +69,10 @@ export async function prepareEmbeddedAttemptHistory(
       allowedToolNames: replayAllowedToolNames,
       sessionManager,
     });
+    input.setup.prepStages.mark("history-sanitize");
     cacheTrace?.recordStage("session:sanitized", { messages: prior });
     const validated = await validateReplayTurns({ ...replayContext(), messages: prior });
+    input.setup.prepStages.mark("history-validation");
 
     if (
       attempt.sessionKey &&
@@ -100,12 +99,42 @@ export async function prepareEmbeddedAttemptHistory(
             ? [{ sessionId: entry.sessionId, role: entry.subagentRole, lastStatus: entry.status }]
             : [],
         );
-        validated.push(
-          buildHierarchyReinforcementMessage({
-            summary: suspension.summary ?? "No recovery briefing was captured.",
-            activeSubagents: subagents,
-          }),
-        );
+        const hasSubagents = subagents.length > 0;
+        // The user role makes the fallback treat the briefing as input, not its own output.
+        validated.push({
+          role: "user",
+          content: [
+            "[SYSTEM HANDOFF] The previous model is no longer active and a fallback model is now active.",
+            ...(hasSubagents
+              ? [
+                  "You are the new LEADER (Orchestrator). Do not perform tasks already delegated to subordinates.",
+                  "",
+                  "ACTIVE SUBORDINATE UNITS:",
+                  subagents
+                    .map(
+                      (s) =>
+                        `- Subagent ${s.sessionId} (${s.role ?? "leaf"}): ${s.lastStatus ?? "running"}`,
+                    )
+                    .join("\n"),
+                ]
+              : [
+                  "Review the current state below and continue the conversation from where the previous model left off.",
+                ]),
+            "",
+            "CURRENT STATE SUMMARY:",
+            suspension.summary ?? "No recovery briefing was captured.",
+            ...(hasSubagents
+              ? [
+                  "",
+                  "INSTRUCTIONS:",
+                  "1. Review the state and subordinate reports.",
+                  "2. Provide strategic guidance and commands to subordinates.",
+                  "3. Do not repeat work already performed by subordinates.",
+                ]
+              : []),
+          ].join("\n"),
+          timestamp: Date.now(),
+        });
         await patchSessionEntryCore(
           { agentId: sessionAgentId, storePath, sessionKey: attempt.sessionKey },
           (entry) => {
@@ -131,16 +160,8 @@ export async function prepareEmbeddedAttemptHistory(
 
     let limited = validated;
     if (!isSettledTurnFinalization) {
-      const heartbeatSummary =
-        attempt.config && sessionAgentId
-          ? resolveHeartbeatSummaryForAgent(attempt.config, sessionAgentId)
-          : undefined;
-      const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(
-        validated,
-        heartbeatSummary?.ackMaxChars,
-        heartbeatSummary?.prompt,
-      );
-      const truncated = preserveCompactionReplayWindow(
+      const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(validated);
+      limited = preserveCompactionReplayWindow(
         heartbeatFiltered,
         limitHistoryTurns(
           heartbeatFiltered,
@@ -157,12 +178,8 @@ export async function prepareEmbeddedAttemptHistory(
           enabled: compactionReplayEnabled,
         },
       );
-      // Truncation can orphan tool_result blocks by removing the assistant message
-      // that contained the matching tool_use, so repair the pairs once more.
-      limited = transcriptPolicy.repairToolUseResultPairing
-        ? sanitizeToolUseResultPairingForModel(truncated, isOpenAIResponsesApi)
-        : truncated;
     }
+    input.setup.prepStages.mark("history-window");
     cacheTrace?.recordStage("session:limited", { messages: limited });
     if (limited.length > 0 || prior.length > 0) {
       activeSession.agent.state.messages = limited;
@@ -179,6 +196,7 @@ export async function prepareEmbeddedAttemptHistory(
     availableTools: new Set(capabilityToolNames),
     citationsMode: attempt.config?.memory?.citations,
     sandboxed,
+    memoryProjectKey: attempt.preparedModelRuntime?.projectKey ?? undefined,
     promptBudget: {
       contextTokens:
         attempt.contextTokenBudget ?? attempt.model.contextWindow ?? attempt.model.maxTokens,
@@ -194,6 +212,7 @@ export async function prepareEmbeddedAttemptHistory(
     isOpenAIResponsesApi,
     warn: (message) => log.warn(message),
   });
+  input.setup.prepStages.mark("context-engine");
   activeSession.agent.state.messages = messages;
   if (systemPrompt !== systemPromptText) {
     setSystemPrompt(systemPrompt);

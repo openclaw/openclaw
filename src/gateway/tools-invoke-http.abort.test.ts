@@ -1,13 +1,16 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   prepareSystemAgentRunAdmission,
   readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -17,6 +20,7 @@ import type { authorizeScopedGatewayHttpRequestOrReply } from "./http-utils.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const lifecycle = vi.hoisted(() => ({
   authorize:
@@ -118,6 +122,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   resolveGatewayContext = undefined;
   lifecycle.authorize.mockReset();
   lifecycle.authorize.mockResolvedValue({
@@ -130,6 +135,8 @@ beforeEach(() => {
   lifecycle.execute.mockReset();
   lifecycle.execute.mockResolvedValue({ ok: true });
 });
+
+afterEach(() => clearRuntimeConfigSnapshot());
 
 function invokeAbortProbe(signal?: AbortSignal): Promise<Response> {
   return fetch(`http://127.0.0.1:${serverPort}/tools/invoke`, {
@@ -249,7 +256,8 @@ describe("POST /tools/invoke request cancellation", () => {
   });
 
   it("retains each child's original grant after HTTP completion without adopting a replacement", async () => {
-    await withOpenClawTestState({ label: "http-tool-child-authority" }, async () => {
+    const stateOptions = { label: "http-tool-child-authority", prepareProfileCatalog: true };
+    await withOpenClawTestState(stateOptions, async () => {
       const cfg: OpenClawConfig = {
         gateway: {
           roles: {
@@ -309,12 +317,11 @@ describe("POST /tools/invoke request cancellation", () => {
             requestAuth: authorizedRequest({
               authMethod: "trusted-proxy",
               trustDeclaredOperatorScopes: true,
-              authenticatedUserProfile: {
-                profileId: person.id,
-                displayName: person.displayName,
-                hasAvatar: false,
-                updatedAt: person.updatedAt,
-              },
+              authenticatedUserProfile: gatewayProfile(
+                person.id,
+                person.displayName,
+                person.updatedAt,
+              ),
               operatorAccessAuthority: {
                 signal: grant.signal,
                 assertCurrent: () => grant.signal.throwIfAborted(),

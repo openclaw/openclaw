@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.core.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { beginConversationDeliveryOperation } from "../config/sessions/conversation-delivery-store.js";
 import {
   readConversation,
@@ -10,12 +11,11 @@ import {
 } from "../config/sessions/conversation-registry.js";
 import { resolveConversationRouteFingerprint } from "../config/sessions/conversation-route-fingerprint.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createChannelHandler } from "../infra/outbound/deliver-channel.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
-import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerOperations } from "../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { setActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
@@ -32,6 +32,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
+  prepareConversationDeliveryRouteAuthorization,
   resolveConversationRouteEligibilitiesForAgent,
   withAuthorizedConversationDelivery,
   withAuthorizedQueuedConversationDelivery,
@@ -55,6 +56,40 @@ afterEach(() => {
 });
 afterAll(async () => state.cleanup());
 
+function installReefPlugin(plugin: ChannelPlugin) {
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "reef", source: "test", plugin }]));
+}
+
+function seedConversation(peerId: string) {
+  const scope = { agentId: "main", databaseAgentId: "main", storePath };
+  const sessionKey = `agent:main:reef:channel:${peerId}`;
+  replaceSessionEntrySync(
+    { ...scope, sessionKey },
+    {
+      sessionId: `session-${peerId}`,
+      updatedAt: 100,
+      chatType: "channel",
+      delivery: {
+        kind: "external",
+        route: {
+          channel: "reef",
+          accountId: "default",
+          target: { to: `reef:${peerId}`, chatType: "channel" },
+        },
+        context: { channel: "reef", accountId: "default", to: `reef:${peerId}` },
+        origin: { provider: "reef", accountId: "default", nativeChannelId: "native-original" },
+      },
+    },
+  );
+  const conversationRef = buildConversationRef({
+    channel: "reef",
+    accountId: "default",
+    kind: "channel",
+    peerId,
+  });
+  return { scope, sessionKey, conversationRef };
+}
+
 it("expires plugin binding inspection when async route preparation settles", async () => {
   const conversation = {
     channel: "reef",
@@ -77,28 +112,14 @@ it("expires plugin binding inspection when async route preparation settles", asy
       );
       const inspections = inspect();
       expect(inspections).toMatchObject([{ status: "available", binding: { targetSessionKey } }]);
-      return inspections.map(
-        (inspection) => () =>
-          inspection.status === "available" &&
-          inspection.binding?.targetSessionKey === targetSessionKey
-            ? { kind: "agent", agentId: "main" }
-            : { kind: "unavailable" },
-      );
+      return inspections.map(() => () => ({ kind: "agent", agentId: "main" }));
     },
   };
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "reef",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "reef" }),
-          conversationBindings: { supportsCurrentConversationBinding: true },
-          messaging,
-        },
-      },
-    ]),
-  );
+  installReefPlugin({
+    ...createChannelTestPluginBase({ id: "reef" }),
+    conversationBindings: { supportsCurrentConversationBinding: true },
+    messaging,
+  });
   await getSessionBindingService().bind({
     conversation,
     targetSessionKey,
@@ -126,30 +147,7 @@ it("expires plugin binding inspection when async route preparation settles", asy
 it.each(["final", "queued"] as const)(
   "%s authority initiates current platform effects under its worker grant and joins accepted sends",
   async (phase) => {
-    const scope = { agentId: "main", databaseAgentId: "main", storePath };
-    const sessionKey = `agent:main:reef:channel:${phase}`;
-    const entry: SessionEntry = {
-      sessionId: `session-${phase}`,
-      updatedAt: 100,
-      chatType: "channel",
-      delivery: {
-        kind: "external",
-        route: {
-          channel: "reef",
-          accountId: "default",
-          target: { to: `reef:${phase}`, chatType: "channel" },
-        },
-        context: { channel: "reef", accountId: "default", to: `reef:${phase}` },
-        origin: { provider: "reef", accountId: "default", nativeChannelId: "native-original" },
-      },
-    };
-    replaceSessionEntrySync({ ...scope, sessionKey }, entry);
-    const conversationRef = buildConversationRef({
-      channel: "reef",
-      accountId: "default",
-      kind: "channel",
-      peerId: phase,
-    });
+    const { scope, sessionKey, conversationRef } = seedConversation(phase);
     const conversation = await readConversation(scope, conversationRef);
     expect(conversation).toMatchObject({ sessionKey, nativeChannelId: "native-original" });
     const routeFingerprint = resolveConversationRouteFingerprint(conversation!);
@@ -177,21 +175,18 @@ it.each(["final", "queued"] as const)(
             scope,
             initiate,
           );
-    const observeAttempt = async () => {
-      const sql = observeHostDataSql();
-      try {
-        return await attempt(async () => undefined);
-      } finally {
-        sql.restore();
-        // Existing shared-state route-owner checks are a separate authority boundary.
-        expect(
-          sql.queries.filter((query) =>
-            /\b(?:conversations|conversation_deliveries|session_conversations)\b/i.test(query),
-          ),
-        ).toEqual([]);
-      }
-    };
-    await expect(observeAttempt()).resolves.toBeUndefined();
+    const sql = observeHostDataSql();
+    try {
+      await expect(attempt(async () => undefined)).resolves.toBeUndefined();
+    } finally {
+      sql.restore();
+      // Existing shared-state route-owner checks are a separate authority boundary.
+      expect(
+        sql.queries.filter((query) =>
+          /\b(?:conversations|conversation_deliveries|session_conversations)\b/i.test(query),
+        ),
+      ).toEqual([]);
+    }
     const initialForeign = new (requireNodeSqlite().DatabaseSync)(storePath);
     try {
       initialForeign.exec("PRAGMA busy_timeout = 0");
@@ -239,17 +234,8 @@ it.each(["final", "queued"] as const)(
 
     const effect = createDeferred<{ channel: string; messageId: string }>();
     const sendText = vi.fn(() => effect.promise);
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "reef",
-          source: "test",
-          plugin: createOutboundTestPlugin({
-            id: "reef",
-            outbound: { deliveryMode: "direct", sendText },
-          }),
-        },
-      ]),
+    installReefPlugin(
+      createOutboundTestPlugin({ id: "reef", outbound: { deliveryMode: "direct", sendText } }),
     );
     const prepareEntered = createDeferred();
     const releasePreparation = createDeferred();
@@ -317,11 +303,7 @@ it.each(["final", "queued"] as const)(
       const run = workerStore.runSqliteWorkerStoreOperation;
       vi.spyOn(workerStore, "runSqliteWorkerStoreOperation").mockImplementation(
         <Operations extends SqliteWorkerOperations, T>(
-          store: SqliteWorkerStore<Operations>,
-          operation: (owner: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-          context?: Parameters<typeof run>[2],
-          assertCurrent?: Parameters<typeof run>[3],
-          admission?: Parameters<typeof run>[4],
+          ...[store, operation, ...runOptions]: Parameters<typeof run<Operations, T>>
         ) =>
           run(
             store,
@@ -336,9 +318,7 @@ it.each(["final", "queued"] as const)(
                   return result;
                 },
               }),
-            context,
-            assertCurrent,
-            admission,
+            ...runOptions,
           ),
       );
       const pending = handler.sendText("admitted before revocation");
@@ -376,3 +356,69 @@ it.each(["final", "queued"] as const)(
     }
   },
 );
+
+it("allows no-op binding delivery and fences a retained grant after reassignment", async () => {
+  const cfg: OpenClawConfig = {
+    ...config,
+    agents: { entries: { main: {}, other: {} } },
+  };
+  const peerId = "retained-binding-authority";
+  const { scope, sessionKey, conversationRef } = seedConversation(peerId);
+  const bindingRef = { channel: "reef", accountId: "default", conversationId: peerId };
+  const sendText = vi.fn().mockResolvedValue({ channel: "reef", messageId: "allowed" });
+  installReefPlugin({
+    ...createOutboundTestPlugin({ id: "reef", outbound: { deliveryMode: "direct", sendText } }),
+    conversationBindings: { supportsCurrentConversationBinding: true },
+  });
+  const conversation = await readConversation(scope, conversationRef);
+  expect(conversation).toMatchObject({ sessionKey, nativeChannelId: "native-original" });
+  const authority = {
+    config: cfg,
+    readCurrentConfig: () => cfg,
+    agentId: "main",
+    conversationRef,
+    expectedRouteFingerprint: resolveConversationRouteFingerprint(conversation!),
+  };
+  const bindings = getSessionBindingService();
+  await bindings.bind({
+    conversation: bindingRef,
+    targetSessionKey: sessionKey,
+    targetKind: "session",
+  });
+  const routeAuthority = await prepareConversationDeliveryRouteAuthorization({
+    ...authority,
+    conversation: conversation!,
+  });
+  try {
+    const handler = await createChannelHandler({
+      cfg,
+      channel: "reef",
+      to: `reef:${peerId}`,
+      withDirectAdapterHandoff: (initiate) =>
+        withAuthorizedConversationDelivery({ ...authority, scope, routeAuthority }, initiate),
+    });
+    const missingRef = { ...bindingRef, conversationId: "missing-retained-binding-authority" };
+    expect(await bindings.resolveByConversationAsync(missingRef)).toBeNull();
+    await expect(handler.sendText("allowed after no-op settlement")).resolves.toMatchObject({
+      messageId: "allowed",
+    });
+    expect(sendText).toHaveBeenCalledOnce();
+
+    // Only the runtime binding changes; the retained config, plugin, and conversation stay current.
+    const replacement = await bindings.bind({
+      conversation: bindingRef,
+      targetSessionKey: "agent:other:reef:channel:replacement",
+      targetKind: "session",
+    });
+    expect(replacement).toMatchObject({
+      targetSessionKey: "agent:other:reef:channel:replacement",
+    });
+    expect(await readConversation(scope, conversationRef)).toEqual(conversation);
+    await expect(handler.sendText("rejected after runtime reassignment")).rejects.toThrow(
+      "Conversation binding ownership changed",
+    );
+    expect(sendText).toHaveBeenCalledOnce();
+  } finally {
+    routeAuthority.dispose();
+  }
+});

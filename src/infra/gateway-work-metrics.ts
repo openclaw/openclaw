@@ -1,5 +1,5 @@
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.ts";
+import { notifyListeners, registerListener } from "../shared/listeners.ts";
 
 export type GatewayWorkMetricsSnapshot = {
   sessions: { running: number; queued: number };
@@ -8,15 +8,129 @@ export type GatewayWorkMetricsSnapshot = {
 
 type Listener = (snapshot: GatewayWorkMetricsSnapshot | undefined) => void;
 
+export type SessionRowSelectionKind =
+  | "broad"
+  | "agent"
+  | "store"
+  | "exact"
+  | "session-id"
+  | "parent"
+  | "running-candidate";
+
+type SessionRowSelectionMetric = {
+  kind: SessionRowSelectionKind;
+  task: string;
+  calls: number;
+  rows: number;
+};
+
+const rowSelections = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionRowSelectionMetrics"),
+  () => {
+    const sampledFirstDifferences: Record<string, number> = {};
+    return {
+      counters: new Map<string, Map<SessionRowSelectionKind, SessionRowSelectionMetric>>(),
+      resets: 0,
+      materialization: {
+        created: 0,
+        reused: 0,
+        rebuilt: 0,
+        skipped: 0,
+        deepComparisons: 0,
+        sampledFirstDifferences,
+      },
+    };
+  },
+);
+
+/** Keep caller attribution bounded and free of session, agent, or request identities. */
+function selectionTask(task: string | undefined): string {
+  switch (task) {
+    case "gateway:rpc:sessions.list":
+      return "sessions.list";
+    case "gateway:rpc:sessions.catalog.list":
+      return "sessions.catalog.list";
+    case "gateway:rpc:sessions.resolve":
+      return "sessions.resolve";
+    case "gateway:rpc:sessions.usage":
+      return "sessions.usage";
+    case "gateway:rpc:status":
+    case "gateway:rpc:health":
+      return "status";
+    case "gateway:task-pr-lineage":
+      return "task-pr-lineage";
+    case "gateway:rpc:controlUi.sessionPullRequests.subscribe":
+    case "gateway:rpc:controlUi.sessionPullRequests.checks":
+    case "scheduler:control-ui-session-pr-poll":
+      return "control-ui-pr";
+    default:
+      return "other";
+  }
+}
+
+/** Successful selections update scalar totals; snapshots allocate outside the selector. */
+export function recordSessionRowSelection(
+  kind: SessionRowSelectionKind,
+  rows: number,
+  task: string | undefined,
+): void {
+  const caller = selectionTask(task);
+  let kinds = rowSelections.counters.get(caller);
+  if (!kinds) {
+    rowSelections.counters.set(caller, (kinds = new Map()));
+  }
+  let counter = kinds.get(kind);
+  if (!counter) {
+    kinds.set(kind, (counter = { kind, task: caller, calls: 0, rows: 0 }));
+  }
+  counter.calls++;
+  counter.rows += rows;
+}
+
+export function recordSessionRowSelectionReset(): void {
+  rowSelections.resets++;
+}
+
+/** Sample one in 64 rebuilds; diagnostic snapshots log field names, never row values. */
+export function recordSessionRowMaterialization(
+  outcome: "created" | "reused" | "rebuilt" | "skipped",
+  deepCompared: boolean,
+): boolean {
+  const counters = rowSelections.materialization;
+  counters[outcome]++;
+  counters.deepComparisons += Number(deepCompared);
+  return outcome === "rebuilt" && (counters.rebuilt - 1) % 64 === 0;
+}
+
+export function recordSessionRowMaterializationDifference(field: string): void {
+  const differences = rowSelections.materialization.sampledFirstDifferences;
+  differences[field] = (differences[field] ?? 0) + 1;
+}
+
+export function getSessionRowSelectionMetrics() {
+  return {
+    selections: [...rowSelections.counters.values()].flatMap((kinds) =>
+      [...kinds.values()].map((counter) => Object.assign({}, counter)),
+    ),
+    resets: rowSelections.resets,
+    materialization: {
+      ...rowSelections.materialization,
+      sampledFirstDifferences: { ...rowSelections.materialization.sampledFirstDifferences },
+    },
+  };
+}
+
 const state = resolveGlobalSingleton<{
   snapshot: GatewayWorkMetricsSnapshot | undefined;
   listeners: Set<Listener>;
-  demandListeners: Set<() => void>;
+  demand: { onChanged: () => void };
 }>(Symbol.for("openclaw.gatewayWorkMetrics"), () => ({
   snapshot: undefined,
   listeners: new Set<Listener>(),
-  demandListeners: new Set<() => void>(),
+  demand: { onChanged: () => {} },
 }));
+
+export const gatewayWorkMetricsDemand = state.demand;
 
 /** The Gateway projection publishes after owner changes and clears on shutdown. */
 export function publishGatewayWorkMetrics(snapshot: GatewayWorkMetricsSnapshot | undefined): void {
@@ -29,22 +143,18 @@ export function onGatewayWorkMetrics(listener: Listener): () => void {
   const wasEmpty = state.listeners.size === 0;
   const unsubscribe = registerListener(state.listeners, listener);
   if (wasEmpty) {
-    notifyListeners(state.demandListeners, undefined);
+    notifyListeners([state.demand.onChanged], undefined);
   }
   notifyListeners([listener], state.snapshot);
   return () => {
     const subscribed = state.listeners.has(listener);
     unsubscribe();
     if (subscribed && state.listeners.size === 0) {
-      notifyListeners(state.demandListeners, undefined);
+      notifyListeners([state.demand.onChanged], undefined);
     }
   };
 }
 
 export function hasGatewayWorkMetricsListeners(): boolean {
   return state.listeners.size > 0;
-}
-
-export function onGatewayWorkMetricsDemand(listener: () => void): () => void {
-  return registerListener(state.demandListeners, listener);
 }

@@ -27,17 +27,18 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   sameGitHubPublicationWorkspace,
   type PublicationSessionIdentity as SessionIdentity,
+  prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import {
   exactClaimForPlacement,
-  createSharedGitHubPublicationReadMethods,
   type GitHubPublicationClaimRequestV2,
   type GitHubPublicationSessionRequestV2,
 } from "./github-publication-coordinator-methods.js";
 import {
   matchesGitHubPublicationIdentityRow,
-  projectGitHubPublicationResult,
+  projectGitHubPublicationResult as projectReceipt,
 } from "./github-publication-receipt.js";
+import type { GitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
 import { insertRepositoryGitHubPublicationAsync } from "./github-publication-request-async.js";
 import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
 import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
@@ -56,7 +57,6 @@ import {
 } from "./github-repository-publication-store.js";
 import { prepareRepositoryOwner } from "./github-repository-publication-workspace.js";
 import { matchesRepositoryGitHubPublicationClaim } from "./github-repository-publication.kernel.js";
-import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { resolvePlacementTurnEnvironment } from "./worker-environments/placement-record.js";
 import type {
   WorkerSessionPlacementStore,
@@ -68,8 +68,13 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
   getCommittedRuntimeConfig: () => OpenClawConfig;
   assertCurrent: () => void;
   signal: AbortSignal;
+  recovery?: GitHubPublicationRecoveryBackoff;
 }) {
   const { placements, getCommittedRuntimeConfig } = params;
+  const projectGitHubPublicationResult = (row: RepositoryGitHubPublicationRow) => {
+    const result = projectReceipt(row);
+    return params.recovery?.describe(result) ?? result;
+  };
   const prepareSource = async (
     requester: Pick<GitHubPublicationRequesterPolicyV2, "prepareSource">,
     selector: Parameters<GitHubPublicationRequesterPolicyV2["prepareSource"]>[0],
@@ -96,7 +101,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
   const makeRow = async (input: {
     session: SessionIdentity;
     workspace: SessionRepositoryWorkspaceRecord;
-    request: { idempotencyKey: string; title?: string; body?: string };
+    request: { idempotencyKey: string; title?: string; body?: string; draft?: boolean };
     identity: PreparedGitHubPublicationIdentity;
     target: Awaited<ReturnType<typeof prepareRepositoryGitHubPublicationTarget>>;
     action?: PersonalGitHubSessionActionV2;
@@ -128,6 +133,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       requester_authority_json: input.requesterAuthorityJson,
       title: input.request.title ?? null,
       body: input.request.body ?? null,
+      draft: input.request.draft ? 1 : 0,
       push_repository: input.target.pushRepository,
       repository: input.target.repository,
       base_branch: input.target.baseBranch,
@@ -170,12 +176,12 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     if (!input.sessionKey) {
       throw new Error("GitHub publication requires an authoritative session.");
     }
-    const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+    using selectedSession = await prepareGitHubPublicationSession(input.sessionKey, {
       cfg: getCommittedRuntimeConfig(),
-      key: input.sessionKey,
       agentId: input.agentId,
-      assertActive: params.assertCurrent,
+      assertCurrent: params.assertCurrent,
     });
+    const loaded = selectedSession.loaded;
     requester.assertCurrent();
     if (!loaded.entry?.sessionId) {
       throw new Error("GitHub publication session changed.");
@@ -187,6 +193,8 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       agentId: input.agentId,
     };
     const currentOwner = await prepareRepositoryOwner(session);
+    using _ = { [Symbol.dispose]: () => currentOwner.release() };
+
     const initial = currentOwner();
     const assertCurrent = () => {
       requester.assertCurrent();
@@ -214,7 +222,10 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       existing &&
       (existing.workspace_id !== initial.workspace.workspaceId ||
         existing.title !== (input.title ?? null) ||
-        existing.body !== (input.body ?? null))
+        existing.body !== (input.body ?? null) ||
+        (existing.draft == null
+          ? input.draft === false
+          : existing.draft !== Number(input.draft ?? false)))
     ) {
       throw new Error("GitHub publication idempotency key was reused.");
     }
@@ -302,12 +313,12 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       if (input.selection?.source === "personal") {
         throw new Error("My GitHub publication requires direct personal authorization.");
       }
-      const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+      using selectedSession = await prepareGitHubPublicationSession(input.sessionKey!, {
         cfg: getCommittedRuntimeConfig(),
-        key: input.sessionKey!,
         agentId: input.agentId,
-        assertActive: params.assertCurrent,
+        assertCurrent: params.assertCurrent,
       });
+      const loaded = selectedSession.loaded;
       const placement = loaded.entry?.sessionId
         ? await placements.getAsync(loaded.entry.sessionId)
         : undefined;
@@ -357,6 +368,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       if (existing) {
         assertPersonalGitHubPublicationReplay(existing, input, selected);
         const prepared = await preparePersonalStatus(existing.request_id);
+        using _ = { [Symbol.dispose]: () => prepared?.release() };
         action.assertCurrent();
         return (await personalStatus(existing, action, action, prepared)).result;
       }
@@ -368,9 +380,10 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         action,
         async (assertReservation) => {
           const currentOwner = await prepareRepositoryOwner(action);
+          using _ = { [Symbol.dispose]: () => currentOwner.release() };
+
           const initial = currentOwner();
           const assertCurrent = () => {
-            action.assertCurrent();
             assertReservation();
             bound.assertCurrent();
             if (!sameGitHubPublicationWorkspace(initial, currentOwner())) {
@@ -446,12 +459,12 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
     },
     ...createRepositoryGitHubPublicationRecovery({
       placements,
+      recovery: params.recovery,
       getCommittedRuntimeConfig,
       assertCurrent: params.assertCurrent,
       isExecuting: (requestId) => active.has(requestId),
       execute: (row, assertCustody) => execute(row, { assertCustody }),
     }),
-    ...createSharedGitHubPublicationReadMethods("repository"),
     preparePersonalStatus,
     async personalStatusAsync(
       action: PersonalGitHubAction,
@@ -475,8 +488,9 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         return null;
       }
       const prepared = await preparePersonalStatus(row.request_id);
+      using _ = { [Symbol.dispose]: () => prepared?.release() };
       action.assertCurrent();
-      return personalStatus(row, action, session, prepared);
+      return await personalStatus(row, action, session, prepared);
     },
     async confirmPersonalV2(
       input: SessionGitHubConfirmParams,

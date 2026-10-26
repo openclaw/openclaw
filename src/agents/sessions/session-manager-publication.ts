@@ -1,6 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  parseConversationPublications,
+  retainConversationWorkerPublication,
+  type ConversationPublication,
+} from "../../config/sessions/session-accessor.sqlite-conversation-publication.js";
+import {
   retainSessionEntryWorkerPublication,
   publishSessionEntryWorkerInvalidations,
 } from "../../config/sessions/session-accessor.sqlite-entry-worker-publication.js";
@@ -12,8 +17,8 @@ import {
 import {
   parseSessionTranscriptAuthorityReceipts,
   retainSessionTranscriptWorkerPublication,
-  type SessionTranscriptAuthorityReceipt,
 } from "../../config/sessions/session-transcript-authority.js";
+import type { SessionTranscriptAuthorityReceipt } from "../../config/sessions/session-transcript-authority.types.js";
 import type { InitialSessionTranscriptWriter } from "../../config/sessions/transcript-write-context.js";
 import {
   observeSqliteWorkerCommittedFacts,
@@ -27,6 +32,7 @@ export type SessionManagerAuthorityPublication = {
   kind: "session-manager-authority";
   transcriptPublication: readonly SessionTranscriptAuthorityReceipt[];
   entryPublication: readonly SessionEntryMetadataReceipt[];
+  conversationPublication: readonly ConversationPublication[];
 };
 
 export function unwrapSessionManagerPublication(
@@ -41,7 +47,7 @@ export function unwrapSessionManagerPublication(
 export function createSessionManagerPublicationHooks(params: {
   agentId: string;
   storePath: string;
-  databaseIdentity: string | (() => string | undefined);
+  databaseIdentity: () => string | undefined;
   initialWriter?: InitialSessionTranscriptWriter;
   beforeIdentityPublication?: (publication: SessionManagerAuthorityPublication) => void;
 }) {
@@ -49,6 +55,7 @@ export function createSessionManagerPublicationHooks(params: {
     expected?: SessionManagerAuthorityPublication;
     entry?: ReturnType<typeof retainSessionEntryWorkerPublication>;
     transcript?: ReturnType<typeof retainSessionTranscriptWorkerPublication>;
+    conversation?: ReturnType<typeof retainConversationWorkerPublication>;
     scope?: { agentId: string; storePath: string; databaseIdentity: string };
   };
   let pending: Pending | undefined;
@@ -66,16 +73,17 @@ export function createSessionManagerPublicationHooks(params: {
         request.facts.transcriptPublication,
       );
       const entryPublication = parseSessionEntryMetadataReceipts(request.facts.entryPublication);
-      const databaseIdentity =
-        typeof params.databaseIdentity === "function"
-          ? params.databaseIdentity()
-          : params.databaseIdentity;
+      const conversationPublication = parseConversationPublications(
+        request.facts.conversationPublication,
+      );
+      const databaseIdentity = params.databaseIdentity();
       if (
         !transcriptPublication ||
         !entryPublication ||
+        !conversationPublication ||
         !pending ||
         !databaseIdentity ||
-        [...transcriptPublication, ...entryPublication].some(
+        [...transcriptPublication, ...entryPublication, ...conversationPublication].some(
           (receipt) => receipt.source.identity !== databaseIdentity,
         )
       ) {
@@ -86,9 +94,15 @@ export function createSessionManagerPublicationHooks(params: {
         kind: "session-manager-authority",
         transcriptPublication,
         entryPublication,
+        conversationPublication,
       };
       pending.entry = retainSessionEntryWorkerPublication(pending.scope);
       pending.transcript = retainSessionTranscriptWorkerPublication(pending.scope);
+      pending.conversation = retainConversationWorkerPublication(
+        databaseIdentity,
+        params.storePath,
+      );
+      pending.conversation.begin(conversationPublication);
       const unchanged = entryPublication.flatMap((receipt) =>
         [...receipt.facts].flatMap(([key, fact]) =>
           fact.kind === "postimage" && !fact.value.facts.lifecycleChanged ? [key] : [],
@@ -99,6 +113,24 @@ export function createSessionManagerPublicationHooks(params: {
           entryPublication.flatMap((receipt) => Array.from(receipt.facts.keys())),
           new Map(),
           unchanged,
+          undefined,
+          new Map(
+            entryPublication.flatMap((receipt) =>
+              [...receipt.facts].flatMap(([key, fact]) =>
+                fact.kind === "postimage" ? [[key, fact.value.entry] as const] : [],
+              ),
+            ),
+          ),
+          undefined,
+          new Map(
+            entryPublication.flatMap((receipt) =>
+              [...receipt.facts].flatMap(([key, fact]) =>
+                fact.kind === "postimage" && fact.value.fullEntry
+                  ? [[key, fact.value.fullEntry] as const]
+                  : [],
+              ),
+            ),
+          ),
         );
       }
       pending.transcript.begin(transcriptPublication);
@@ -111,6 +143,7 @@ export function createSessionManagerPublicationHooks(params: {
       pending = owner;
       let committed = false;
       const unknown = () => {
+        owner.conversation?.settle(undefined, true);
         owner.entry?.settle(undefined, true, owner.transcript?.settle(false, true));
       };
       observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
@@ -132,6 +165,7 @@ export function createSessionManagerPublicationHooks(params: {
         const entryPublication = expected.entryPublication;
         committed = true;
         try {
+          owner.conversation?.settle(expected.conversationPublication);
           owner.entry.settleMetadata(
             owner.expected.entryPublication,
             owner.transcript.settle(true, false, owner.expected.transcriptPublication),
@@ -185,6 +219,7 @@ export function createSessionManagerPublicationHooks(params: {
             (admission.settlement?.kind === "completed" &&
               nativeCommit === undefined &&
               admission.failureSource !== "protocol");
+          owner.conversation?.settle(undefined, !rolledBack);
           owner.entry?.settle(undefined, !rolledBack, owner.transcript?.settle(false, !rolledBack));
         }
         if (pending === owner) {

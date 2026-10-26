@@ -4,8 +4,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type Mock } from "vitest";
 import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import * as sessionIdentity from "../config/sessions/session-accessor.sqlite-identity.js";
+import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { RespondFn } from "./server-methods/types.js";
 import { prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
+import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 type GoalChatScope = { agentId: string; sessionKey: string; sessionId: string; storePath: string };
@@ -25,18 +27,14 @@ export function createGoalChatStartRequest(
 }
 
 export function readGoalChatUserMessages(scope: GoalChatScope) {
-  const transcriptScope = {
+  return loadTranscriptEventsSync({
     ...scope,
     sessionId: loadSessionEntry(scope)?.sessionId ?? scope.sessionId,
-  };
-  return loadTranscriptEventsSync(transcriptScope).flatMap((event) => {
-    if (!event || typeof event !== "object" || !("message" in event)) {
+  }).flatMap((event) => {
+    if (!isRecord(event) || !isRecord(event.message)) {
       return [];
     }
-    const message = event.message;
-    return message && typeof message === "object" && "role" in message && message.role === "user"
-      ? [message]
-      : [];
+    return event.message.role === "user" ? [event.message] : [];
   });
 }
 
@@ -45,15 +43,11 @@ export function expectGoalChatRetryResponses(
   runId: string,
   goalId: string | undefined,
 ) {
-  expect(
-    responses.some((response) => {
-      const [ok, result] = response.mock.calls[0]!;
-      return ok && isRecord(result) && result.status === "started";
-    }),
-  ).toBe(true);
+  let started = false;
   for (const response of responses) {
     const [ok, result, error] = response.mock.calls[0]!;
     if (ok) {
+      started ||= isRecord(result) && result.status === "started";
       if (isRecord(result) && result.status === "in_flight") {
         expect(result).toEqual({ status: "in_flight", runId });
       } else {
@@ -63,6 +57,7 @@ export function expectGoalChatRetryResponses(
       expect(error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
     }
   }
+  expect(started).toBe(true);
 }
 
 export function registerGoalChatRestartSettlementCase(fixture: {
@@ -94,7 +89,7 @@ export function registerGoalChatRestartSettlementCase(fixture: {
       });
     try {
       const response = await fixture.send(request);
-      expect(rejected).toBe(true);
+      expect(rejected, `Publication calls: ${notification.mock.calls.length}`).toBe(true);
       expect(response.mock.calls[0]?.[0]).toBe(false);
       fixture.assertNoModelRun();
       expect(loadSessionEntry(fixture.scope())).toMatchObject({
@@ -109,4 +104,75 @@ export function registerGoalChatRestartSettlementCase(fixture: {
       notification.mockRestore();
     }
   });
+}
+
+export function installReplyDispatchHook(eligibleDispatchKinds?: readonly ["acp"]) {
+  const handler = vi.fn(async () => ({
+    handled: true,
+    queuedFinal: false,
+    counts: { tool: 0, block: 0, final: 0 },
+  }));
+  const registry = getTestPluginRegistry();
+  registry.typedHooks.push({
+    pluginId: "goal-dispatch-fixture",
+    hookName: "reply_dispatch",
+    handler,
+    ...(eligibleDispatchKinds ? { eligibleDispatchKinds } : {}),
+    source: "test",
+  });
+  initializeGlobalHookRunner(registry);
+  return handler;
+}
+
+export function registerGoalChatOperationCollisionCases(fixture: {
+  scope: () => GoalChatScope;
+  goalStart: (
+    message: string,
+    idempotencyKey: string,
+  ) => ReturnType<typeof createGoalChatStartRequest>;
+  rpc: (method: "chat.send", params: Record<string, unknown>) => Promise<Mock<RespondFn>>;
+  withHeldModel: (run: () => Promise<void>) => Promise<void>;
+  userMessages: () => ReturnType<typeof readGoalChatUserMessages>;
+  waitForModelRun: () => Promise<void>;
+}) {
+  it.each(["objective", "issuedAtMs"] as const)(
+    "rejects a concurrent operation ID collision on %s",
+    async (collision) => {
+      const firstRequest = fixture.goalStart(
+        "Finish the release checklist",
+        `goal-collision-${collision}`,
+      );
+      const secondRequest = {
+        ...firstRequest,
+        ...(collision === "objective"
+          ? { message: "Review the migration plan" }
+          : { intent: { ...firstRequest.intent, issuedAtMs: firstRequest.intent.issuedAtMs + 1 } }),
+      };
+      await fixture.withHeldModel(async () => {
+        const responses = await Promise.all([
+          fixture.rpc("chat.send", firstRequest),
+          fixture.rpc("chat.send", secondRequest),
+        ]);
+        const accepted = responses.flatMap((response, index) =>
+          response.mock.calls[0]?.[0] ? [index] : [],
+        );
+        expect(accepted).toHaveLength(1);
+        const rejected = responses[accepted[0] === 0 ? 1 : 0];
+        expect(rejected?.mock.calls[0]).toEqual([
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            details: expect.objectContaining({ reason: "goal-operation-conflict" }),
+          }),
+        ]);
+        const acceptedRequest = [firstRequest, secondRequest][accepted[0]!];
+        expect(loadSessionEntry(fixture.scope())?.goal?.objective).toBe(acceptedRequest?.message);
+        expect(fixture.userMessages()).toEqual([
+          expect.objectContaining({ content: acceptedRequest?.message }),
+        ]);
+        await fixture.waitForModelRun();
+      });
+    },
+  );
 }

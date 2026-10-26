@@ -6,10 +6,8 @@ import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
-import {
-  prunePublishedSessionArchivesByRetention,
-  publishSessionStateArchives,
-} from "./session-accessor.sqlite-archive-store.js";
+import { applyMemorySessionEntryCleanup } from "./session-accessor.memory-cleanup.js";
+import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { withNativeSessionCommitContext } from "./session-accessor.sqlite-commit-context.js";
@@ -18,7 +16,6 @@ import type {
   SessionEntryLifecycleMutationResult,
 } from "./session-accessor.sqlite-contract.js";
 import {
-  captureNativeSessionWorkerDeletion,
   hasPreparedNativeSessionDeletion,
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
 } from "./session-accessor.sqlite-deletion.js";
@@ -64,7 +61,7 @@ export { purgeDeletedAgentSessionEntries } from "./session-agent-purge.js";
 
 export { applySessionEntryExactReplacements as applySessionEntryReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 
-/** Applies exact lifecycle removals/upserts using SQLite session rows. */
+/** Applies exact lifecycle removals/upserts through the selected session owner. */
 export async function applySessionEntryLifecycleMutation(
   params: SessionEntryLifecycleMutationParams,
   resolved = captureLifecycleDatabaseScope(
@@ -78,12 +75,17 @@ export async function applySessionEntryLifecycleMutation(
 ): Promise<SessionEntryLifecycleMutationResult> {
   const removals = [...(params.removals ?? [])];
   const upserts = [...(params.upserts ?? [])];
+  const memory = applyMemorySessionEntryCleanup({ ...params, removals, upserts }, resolved);
+  if (memory) {
+    return memory;
+  }
   const databaseOptions = toDatabaseOptions(resolved);
+  if (params.afterUpsertsInTransaction && !params.allowCanonicalRepair) {
+    throw new Error("Native lifecycle transfer requires explicit canonical repair");
+  }
   const useWorker =
     isMainThread &&
     !params.allowCanonicalRepair &&
-    !params.afterUpsertsInTransaction &&
-    !params.afterFreshUpsertsInTransaction &&
     supportsOpenClawAgentDatabaseExecution(databaseOptions);
   const reclamationOptions = useWorker
     ? resolveSessionReclamationDatabaseOptions(databaseOptions)
@@ -170,17 +172,13 @@ export async function applySessionEntryLifecycleMutation(
               }
             : {}),
           commit: async (assertSourceCurrent?: () => void) => {
-            const nativeMaintenance =
-              !reclamationOptions ||
-              (hasPreparedNativeSessionDeletion() &&
-                !captureNativeSessionWorkerDeletion(deletedOwners));
             const preparedPreservation = params.skipMaintenance
               ? undefined
               : await prepareSessionMaintenancePreservation(params.storePath, {
-                  native: nativeMaintenance,
+                  native: !reclamationOptions,
                 });
             try {
-              if (reclamationOptions && !nativeMaintenance) {
+              if (reclamationOptions) {
                 const maintenance: SessionEntryMaintenanceInput | null = preparedPreservation
                   ? {
                       activeSessionKey: params.activeSessionKey ?? "",
@@ -210,7 +208,11 @@ export async function applySessionEntryLifecycleMutation(
                     );
                   }
                 };
-                if (upserts.length > 0 && execution && !hasPreparedNativeSessionDeletion()) {
+                if (
+                  (upserts.length > 0 || removals.length === 0) &&
+                  execution &&
+                  !hasPreparedNativeSessionDeletion()
+                ) {
                   return withArchivePublication(
                     await commitSessionLifecycleProjectionInWorker({
                       database: reclamationOptions,
@@ -231,6 +233,7 @@ export async function applySessionEntryLifecycleMutation(
                         removalPlans: materializedRemovalPlans,
                         materializationFailed: removalArchiveMaterializationFailed,
                         allowCanonicalRepair: params.allowCanonicalRepair,
+                        creation: params.creation,
                         maintenance,
                       },
                     }),
@@ -256,6 +259,7 @@ export async function applySessionEntryLifecycleMutation(
                       projected,
                       materializationFailed: removalArchiveMaterializationFailed,
                       allowCanonicalRepair: params.allowCanonicalRepair,
+                      creation: params.creation,
                       maintenance,
                     },
                   },
@@ -325,7 +329,7 @@ export async function applySessionEntryLifecycleMutation(
             allowCanonicalRepair: params.allowCanonicalRepair,
             resetScope: resolved,
             afterUpsertsInTransaction: params.afterUpsertsInTransaction,
-            afterFreshUpsertsInTransaction: params.afterFreshUpsertsInTransaction,
+            creation: params.creation,
             applyMaintenance: (database) =>
               applySessionEntryMaintenance(database, {
                 activeSessionKey: params.activeSessionKey ?? "",
@@ -339,8 +343,6 @@ export async function applySessionEntryLifecycleMutation(
                 storePath: params.storePath,
               }),
           });
-          params.commitGuard?.();
-          assertSourceCurrent?.();
           return {
             ...result,
             publish: prepareLifecycleIdentityPublication({
@@ -406,24 +408,6 @@ export async function applySessionEntryLifecycleMutation(
     const archivedTranscriptDirectories = uniqueStrings(
       archivedTranscripts.map((transcript) => path.dirname(transcript.archivedPath)),
     ).toSorted();
-    if (archivedTranscriptDirectories.length > 0 && params.cleanupArchivedTranscripts) {
-      try {
-        const { cleanupArchivedSessionTranscripts } =
-          await import("../../gateway/session-archive.runtime.js");
-        await cleanupArchivedSessionTranscripts({
-          directories: archivedTranscriptDirectories,
-          rules: params.cleanupArchivedTranscripts.rules,
-          nowMs: params.cleanupArchivedTranscripts.nowMs,
-        });
-        await prunePublishedSessionArchivesByRetention({
-          scope: resolved,
-          rules: params.cleanupArchivedTranscripts.rules,
-          nowMs: params.cleanupArchivedTranscripts.nowMs,
-        });
-      } catch (error) {
-        captureArtifactCleanupError(error);
-      }
-    }
     return {
       beforeCount: committed.beforeCount,
       removedEntries: committed.removedSessionKeys.length,

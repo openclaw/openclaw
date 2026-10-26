@@ -9,6 +9,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
 import type { SessionEntryCreateWithTranscriptOptions } from "./session-accessor.types.js";
+import { composeSessionSourceAssertion } from "./session-source-authority.js";
 
 type PreparedSessionWrite<T> = {
   deletedEntries: Parameters<typeof withSqliteSessionDeletions>[1];
@@ -56,10 +57,7 @@ export async function runPreparedSqliteSessionWrite<T>(
     await write.beforeCommit?.();
     const runCommit = async (assertSourceCurrent?: () => void) => {
       const commitHeld = async () => {
-        const assertHeld = () => {
-          assertCurrent?.();
-          assertSourceCurrent?.();
-        };
+        const assertHeld = composeSessionSourceAssertion([assertCurrent, assertSourceCurrent]);
         assertHeld();
         return await write.commit(assertHeld);
       };

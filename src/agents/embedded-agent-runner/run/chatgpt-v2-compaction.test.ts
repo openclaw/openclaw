@@ -68,6 +68,11 @@ const compactEvents = (index: number) => [
   },
   terminal,
 ];
+const outputEvents = (item: Record<string, unknown>) => [
+  { type: "response.output_item.added", output_index: 0, item },
+  { type: "response.output_item.done", output_index: 0, item },
+  terminal,
+];
 const toolEvents = () => {
   const item = {
     type: "function_call",
@@ -77,11 +82,7 @@ const toolEvents = () => {
     arguments: "{}",
     status: "completed",
   };
-  return [
-    { type: "response.output_item.added", output_index: 0, item },
-    { type: "response.output_item.done", output_index: 0, item },
-    terminal,
-  ];
+  return outputEvents(item);
 };
 const textEvents = () => {
   const item = {
@@ -91,11 +92,7 @@ const textEvents = () => {
     status: "completed",
     content: [{ type: "output_text", text: "done", annotations: [] }],
   };
-  return [
-    { type: "response.output_item.added", output_index: 0, item },
-    { type: "response.output_item.done", output_index: 0, item },
-    terminal,
-  ];
+  return outputEvents(item);
 };
 type Body = {
   input: Array<Record<string, unknown>>;
@@ -136,10 +133,43 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const highUsageCompletion = {
+  ...terminal,
+  response: {
+    ...terminal.response,
+    usage: { ...terminal.response.usage, input_tokens: 465_668, total_tokens: 465_674 },
+  },
+};
+function requestAt(index: number) {
+  const request = requests[index];
+  if (!request) {
+    throw new Error(`Missing request ${index}`);
+  }
+  return request;
+}
+const persistedMessages = (manager: SessionManager) => manager.buildSessionContext().messages;
+const hasReplay = (manager: SessionManager) =>
+  persistedMessages(manager).some(
+    (message) => message.role === "assistant" && message.providerReplay,
+  );
+async function largeWindowFixture() {
+  const manager = SessionManager.inMemory();
+  manager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
+  manager.appendMessage(
+    createAssistant(model, [{ type: "text", text: "settled history" }], "stop", 465_674),
+  );
+  return fixture(manager, false, { contextTokenBudget: 500_000, contextWindow: 500_000 });
+}
+
 async function fixture(
   sessionManager = SessionManager.inMemory(),
   withHistory = true,
-  { asyncProvider = false, nativeProvider = false } = {},
+  {
+    asyncProvider = false,
+    nativeProvider = false,
+    contextTokenBudget = 8_000,
+    contextWindow = model.contextWindow,
+  } = {},
 ) {
   if (withHistory) {
     sessionManager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
@@ -152,7 +182,7 @@ async function fixture(
     details: {},
   }));
   const { session } = await createTestSession({
-    model,
+    model: { ...model, contextWindow },
     sessionManager,
     systemPrompt: "stable system",
     settingsManager: SettingsManager.inMemory({
@@ -227,7 +257,7 @@ async function fixture(
     withSessionManagerWrite(sessionManager, write);
   const boundaryParams = {
     session,
-    contextTokenBudget: 8_000,
+    contextTokenBudget,
     reserveTokens: 2_000,
     timeoutMs: 30_000,
     authProfileId: "fixture-profile",
@@ -242,14 +272,13 @@ async function fixture(
     submitEmbeddedAttemptPrompt({
       attempt: { sessionId: session.sessionId },
       activeSession: session,
-      contextTokenBudget: 8_000,
+      contextTokenBudget,
       compactBeforeRequest: boundary,
       onModelRequest,
       images: [],
       modelPrompt: prompt,
       transcriptPrompt: prompt,
       onFinalPromptText: () => {},
-      onSteeringAcknowledged: () => {},
       persistToolResultProjections: async () => {},
       withTranscriptWrite,
       runtimeOnly: false,
@@ -306,10 +335,10 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
           ).length,
       ),
     ).toEqual([0, 0, 1, 1, 1, 2]);
-    const [firstCompact, firstNormal, secondCompact, secondNormal] = requests;
-    if (!firstCompact || !firstNormal || !secondCompact || !secondNormal) {
-      throw new Error("Expected compaction and continuation at both boundaries");
-    }
+    const firstCompact = requestAt(0),
+      firstNormal = requestAt(1);
+    const secondCompact = requestAt(2),
+      secondNormal = requestAt(3);
     expect(firstCompact.hook_marker).toBe("normal-hook");
     expect(firstCompact.tools).toEqual(firstNormal.tools);
     expect(firstCompact.instructions).toBe(firstNormal.instructions);
@@ -342,10 +371,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     requests = [];
     await reopened.submit("after restart");
     expect(requests).toHaveLength(1);
-    const resumed = requests[0];
-    if (!resumed) {
-      throw new Error("Missing resumed request");
-    }
+    const resumed = requestAt(0);
     expect(
       resumed.input.some(
         (item) => item.type === "compaction" && item.encrypted_content === "opaque2",
@@ -357,6 +383,135 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       expect.stringContaining("per-turn developer context"),
     ]);
     expect(reopened.execute).not.toHaveBeenCalled();
+  });
+
+  it("compacts a settled 90% window before a large tool result reaches the next boundary", async () => {
+    const f = await largeWindowFixture();
+    const manager = f.sessionManager;
+    f.execute.mockResolvedValue({
+      content: [{ type: "text", text: "large tool output. ".repeat(16_000) }],
+      details: {},
+    });
+    let normal = 0;
+    let compacted = false;
+    respond = (body) => {
+      if (body.input.at(-1)?.type === "compaction_trigger") {
+        compacted = true;
+        return compactEvents(1);
+      }
+      if (++normal !== 1) {
+        return textEvents();
+      }
+      const events = toolEvents();
+      if (!compacted) {
+        events[events.length - 1] = highUsageCompletion;
+      }
+      return events;
+    };
+    await f.submit();
+    expect(f.onFallback).not.toHaveBeenCalled();
+    expect(f.execute).toHaveBeenCalledOnce();
+    expect(requests.map((body) => body.input.at(-1)?.type)).toEqual([
+      "compaction_trigger",
+      "compaction",
+      "function_call_output",
+    ]);
+    const compaction = requestAt(0),
+      firstNormal = requestAt(1),
+      afterTool = requestAt(2);
+    expect(JSON.stringify(compaction)).toContain("current request");
+    expect(realUserText(firstNormal)).toEqual(["remember copper", "current request"]);
+    expect(afterTool.input.filter((item) => item.type === "function_call_output")).toHaveLength(1);
+    expect(afterTool.input.filter((item) => item.type === "compaction")).toHaveLength(1);
+    const reopened = await fixture(
+      SessionManager.fromEntries([manager.getHeader(), ...manager.getEntries()]),
+      false,
+      { contextTokenBudget: 500_000, contextWindow: 500_000 },
+    );
+    requests = [];
+    await reopened.submit("after restart");
+    expect(requests).toHaveLength(1);
+    const resumed = requestAt(0);
+    expect(resumed.input.filter((item) => item.type === "function_call_output")).toHaveLength(1);
+    expect(resumed.input.filter((item) => item.type === "compaction")).toHaveLength(1);
+    expect(reopened.execute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { window: 500_000, reserve: 20_000, tokens: 449_000, compact: false },
+    { window: 500_000, reserve: 20_000, tokens: 450_000, compact: true },
+    { window: 32_000, reserve: 8_000, tokens: 23_900, compact: false },
+    { window: 32_000, reserve: 8_000, tokens: 24_000, compact: true },
+  ])("uses the earlier V2 threshold at $tokens / $window tokens", async (test) => {
+    const f = await fixture(SessionManager.inMemory(), false);
+    const boundary = createChatGPTV2CompactionBoundary({
+      ...f.boundaryParams,
+      contextTokenBudget: test.window,
+      reserveTokens: test.reserve,
+    });
+    const result = await boundary(
+      f.session.agent.streamFn,
+      { ...model, contextWindow: test.window },
+      { messages: [] },
+      { sessionId: f.session.sessionId },
+      { requestIndex: 1, messageCount: 0, contextTokens: test.tokens },
+    );
+    expect(Boolean(result)).toBe(test.compact);
+    expect(requests).toHaveLength(test.compact ? 1 : 0);
+    expect(f.onFallback).not.toHaveBeenCalled();
+  });
+
+  it("skips soft compaction while tools are pending without lowering the client threshold", async () => {
+    const f = await fixture(SessionManager.inMemory(), false);
+    const boundary = createChatGPTV2CompactionBoundary({
+      ...f.boundaryParams,
+      contextTokenBudget: 500_000,
+      reserveTokens: 20_000,
+    });
+    let normal = 0;
+    respond = () => (++normal === 1 ? toolEvents() : textEvents());
+    f.execute.mockImplementation(async () => {
+      expect(f.session.agent.state.pendingToolCalls.size).toBe(1);
+      await expect(
+        boundary(
+          f.session.agent.streamFn,
+          { ...model, contextWindow: 500_000 },
+          { messages: [] },
+          { sessionId: f.session.sessionId },
+          { requestIndex: 1, messageCount: 0, contextTokens: 465_674 },
+        ),
+      ).resolves.toBeUndefined();
+      return { content: [{ type: "text", text: "settled" }], details: {} };
+    });
+    await f.submit();
+    expect(f.execute).toHaveBeenCalledOnce();
+    expect(requests.map((body) => body.input.at(-1)?.type)).toEqual([
+      "message",
+      "function_call_output",
+    ]);
+    expect(f.onFallback).not.toHaveBeenCalled();
+  });
+
+  it("continues normal requests after a soft V2 failure without retrying or client compaction", async () => {
+    const f = await largeWindowFixture();
+    const manager = f.sessionManager;
+    const warn = vi.spyOn(log, "warn");
+    respond = (body) =>
+      body.input.at(-1)?.type === "compaction_trigger"
+        ? [terminal]
+        : textEvents().map((event) =>
+            event.type === "response.completed" ? highUsageCompletion : event,
+          );
+    await f.submit();
+    await f.submit("next request");
+    expect(requests.map((body) => body.input.at(-1)?.type)).toEqual([
+      "compaction_trigger",
+      "message",
+      "message",
+    ]);
+    expect(f.onFallback).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(hasReplay(manager)).toBe(false);
   });
 
   it("prices a matching measured prefix once before deciding to compact", async () => {
@@ -522,11 +677,9 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     const content = "PRIVATE_VALUE API_TOKEN = computeToken()";
     const messages: Context["messages"] = [
       { role: "user", content, timestamp: 1 },
-      ...f.sessionManager
-        .buildSessionContext()
-        .messages.filter(
-          (message) => message.role === "assistant" || message.role === "toolResult",
-        ),
+      ...persistedMessages(f.sessionManager).filter(
+        (message) => message.role === "assistant" || message.role === "toolResult",
+      ),
     ];
     await expect(
       boundary(f.session.agent.streamFn, model, { messages }, {}),
@@ -562,11 +715,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       ),
     ).rejects.toBe(failure);
     expect(f.onFallback).not.toHaveBeenCalled();
-    expect(
-      f.sessionManager
-        .buildSessionContext()
-        .messages.some((message) => message.role === "assistant" && message.providerReplay),
-    ).toBe(true);
+    expect(hasReplay(f.sessionManager)).toBe(true);
     const controller = new AbortController();
     controller.abort(new Error("cancelled"));
     await expect(
@@ -587,17 +736,11 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     };
     await f.submit();
     expect(f.onFallback).toHaveBeenCalledOnce();
+    expect(hasReplay(f.sessionManager)).toBe(false);
     expect(
-      f.sessionManager
-        .buildSessionContext()
-        .messages.some((message) => message.role === "assistant" && message.providerReplay),
-    ).toBe(false);
-    expect(
-      f.sessionManager
-        .buildSessionContext()
-        .messages.some(
-          (message) => message.role === "user" && message.content === "newly admitted input",
-        ),
+      persistedMessages(f.sessionManager).some(
+        (message) => message.role === "user" && message.content === "newly admitted input",
+      ),
     ).toBe(true);
   });
 

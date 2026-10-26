@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { gatewayCredentialScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOnboardingSetupTarget } from "../commands/onboard-agent-target.js";
 import * as firstAgentOnboarding from "../commands/onboard-first-agent.js";
@@ -8,6 +9,7 @@ import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-proven
 import { ConfigMutationConflictError } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { preserveGatewaySshRemotePort } from "../gateway/connection-details.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -36,6 +38,7 @@ import {
   hasQuickstartGatewayOverrides,
   formatQuickstartGatewaySummary,
   readSetupConfigFileSnapshot,
+  readSetupConfigAuthority,
   readValidSetupConfigFile,
   requireRiskAcknowledgement,
   requestTelemetryConsent,
@@ -71,7 +74,9 @@ async function runSetupWizardOnce(
   await onboardHelpers.printWizardHeader(runtime);
   await prompter.intro(t("wizard.setup.intro"));
 
-  const snapshot = await readSetupConfigFileSnapshot();
+  const initialAuthority = await readSetupConfigAuthority();
+  const snapshot = initialAuthority.snapshot;
+  let assertConfigCurrent = initialAuthority.assertCurrent;
   let currentSetupSnapshot = snapshot;
   let baseConfig: OpenClawConfig = snapshot.valid
     ? (snapshot.runtimeConfig ?? snapshot.config)
@@ -268,13 +273,15 @@ async function runSetupWizardOnce(
     }
     usedImportFlow = true;
     acknowledgeMigrationPromotion = migrationOutcome.acknowledgePromotion;
-    const migratedSnapshot = await readSetupConfigFileSnapshot();
+    const migratedAuthority = await readSetupConfigAuthority();
+    const migratedSnapshot = migratedAuthority.snapshot;
     if (!migratedSnapshot.valid) {
       throw new Error(
         "Migration produced an invalid OpenClaw config. Run `openclaw doctor --fix` to apply supported repairs.",
       );
     }
     currentSetupSnapshot = migratedSnapshot;
+    assertConfigCurrent = migratedAuthority.assertCurrent;
     baseConfig = migratedSnapshot.runtimeConfig ?? migratedSnapshot.config;
     setupConfigMergeBase = structuredClone(baseConfig);
     const importedModelRef = resolveAgentModelPrimaryValue(baseConfig.agents?.defaults?.model);
@@ -354,7 +361,9 @@ async function runSetupWizardOnce(
   const optionRemoteUrl = normalizeOptionalString(opts.remoteUrl);
   const optionRemoteToken = normalizeOptionalString(opts.remoteToken);
   const optionRemotePassword = normalizeOptionalString(opts.remotePassword);
-  const remoteUrlChanged = opts.remoteUrl !== undefined && optionRemoteUrl !== storedRemoteUrl;
+  const remoteUrlChanged =
+    opts.remoteUrl !== undefined &&
+    gatewayCredentialScope(optionRemoteUrl ?? "") !== gatewayCredentialScope(storedRemoteUrl ?? "");
   const remoteSeedConfig: OpenClawConfig =
     opts.remoteUrl === undefined &&
     opts.remoteToken === undefined &&
@@ -366,6 +375,9 @@ async function runSetupWizardOnce(
             ...baseConfig.gateway,
             remote: {
               ...baseConfig.gateway?.remote,
+              ...(!remoteUrlChanged && opts.remoteUrl !== undefined
+                ? preserveGatewaySshRemotePort(baseConfig, optionRemoteUrl, storedRemoteUrl)
+                : {}),
               ...(opts.remoteUrl !== undefined ? { url: optionRemoteUrl } : {}),
               ...(opts.remoteToken !== undefined
                 ? { token: optionRemoteToken }
@@ -407,7 +419,8 @@ async function runSetupWizardOnce(
   }
   const remoteProbe = remoteUrl
     ? await onboardHelpers.probeGatewayReachable({
-        url: remoteUrl,
+        // Keep saved transport trust attached to its configured endpoint.
+        url: !remoteUrlChanged && storedRemoteUrl ? storedRemoteUrl : remoteUrl,
         config: baseConfig,
         originScopedDeviceAuth: true,
         configuredRemote: !remoteUrlChanged,
@@ -519,6 +532,7 @@ async function runSetupWizardOnce(
       runtime,
       pendingAgent: firstAgent && { ...firstAgent, workspaceDir },
       preserveExistingModelSelection: keepExistingModelConfig,
+      assertCurrent: assertConfigCurrent,
     });
     nextConfig = stagedModelAuth.config;
   }
@@ -539,8 +553,21 @@ async function runSetupWizardOnce(
     preserveCandidateRoster: usedImportFlow && hasAuthoredRoster,
     // Pending setup choices must remain changes relative to the saved snapshot.
     baseConfig: setupConfigMergeBase,
+    ...(stagedModelAuth?.authProfiles.length
+      ? { expectedConfigHash: currentSetupSnapshot.hash ?? null }
+      : {}),
     ...(firstAgent ? { firstAgent } : {}),
   });
+  if (onboardingAgent.configHash) {
+    const createdAuthority = await readSetupConfigAuthority();
+    // Plugin validation can materialize different defaults from the same authored revision.
+    if (createdAuthority.snapshot.hash !== onboardingAgent.configHash) {
+      throw new ConfigMutationConflictError(
+        "config changed after first-agent creation; rerun setup",
+      );
+    }
+    assertConfigCurrent = createdAuthority.assertCurrent;
+  }
   nextConfig = onboardingAgent.config;
   setupConfigMergeBase = structuredClone(onboardingAgent.configBase);
   const migrationWarnings = onboardingAgent.sessionMigrationWarnings;
@@ -556,6 +583,7 @@ async function runSetupWizardOnce(
     usedImportFlow,
     keepExistingModelConfig,
     importedInferenceVerified,
+    assertCurrent: assertConfigCurrent,
     configTarget: createWizardInferenceConfigTarget(commitSetupConfigFile),
   });
   nextConfig = modelAuth.config;

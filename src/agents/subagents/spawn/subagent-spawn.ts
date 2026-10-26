@@ -57,6 +57,7 @@ import {
   createSubagentSpawnLifecycleEmitter,
   recordSubagentSessionSetup,
 } from "./subagent-spawn-lifecycle.js";
+import { applySubagentProfile } from "./subagent-spawn-profile.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 import { bindThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
@@ -65,21 +66,25 @@ import { buildSubagentSpawnEnvelope } from "./subagent-system-prompt.js";
 
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 
+const STRUCTURED_OUTPUT_INSTRUCTION =
+  'Call structured_output with {"result": <your final result>} until one payload is accepted, with at most one retry after a rejected attempt. The result value must match the requested JSON Schema. Do not call structured_output again after acceptance.';
+
 export async function spawnSubagentDirect(
-  params: SpawnSubagentParams,
-  ctx: SpawnSubagentContext,
+  input: SpawnSubagentParams,
+  context: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
+  const { params, ctx, profileReceipt, systemPrompt } = applySubagentProfile(input, context);
   let assertDelegationCurrent: (() => void) | undefined;
   const assertActive = composeSessionSourceAssertion([ctx.assertActive], (assertSource) => {
     assertSource();
     assertDelegationCurrent?.();
   });
   const promptedAt = Date.now();
-  const task = params.task;
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
-  const { gatewayContextResolver, operatorAuthority } = captureSubagentSpawnGatewayContext();
+  const { gatewayContextResolver, operatorAuthority, requester, creatorProfileId } =
+    captureSubagentSpawnGatewayContext();
   const requestResolution = await resolveSubagentSpawnRequest(params, ctx);
   if (!requestResolution.ok) {
     return requestResolution.result;
@@ -97,7 +102,6 @@ export async function spawnSubagentDirect(
     contextMode,
     requesterInternalKey,
     ownership,
-    requesterEntry,
     requesterAgentId,
     targetAgentId,
     swarmConfig,
@@ -113,6 +117,7 @@ export async function spawnSubagentDirect(
     childDepth,
     maxSpawnDepth,
     childIdem,
+    blind,
   } = requestResolution.resolved;
   let threadBindingReady = false;
   let hasBoundThreadDeliveryOrigin = false;
@@ -147,16 +152,17 @@ export async function spawnSubagentDirect(
       preparationHold.retainAuthority(operatorAuthority.retain?.());
     }
     const childPlan = await resolveSubagentChildPlan({
-      request: params,
+      request: { ...params, context: contextMode },
       ctx: { ...ctx, assertActive },
       cfg,
       requesterInternalKey,
       requesterAgentId,
       targetAgentId,
-      requesterEntry,
+      requesterEntry: requestResolution.resolved.requesterEntry,
       sandboxMode,
       swarmEnabled: swarmConfig.enabled,
       requesterSandboxed: ctx.sandboxed,
+      creatorProfileId,
     });
     if (!childPlan.ok) {
       return childPlan.result;
@@ -176,7 +182,6 @@ export async function spawnSubagentDirect(
       resolvedModelMetadata,
     } = childPlan.resolved;
     let { childSessionOrigin } = childPlan.resolved;
-    const { resolvedModel, thinkingOverride } = plan;
     const sessionError = (error: string): SpawnSubagentResult => ({
       status: "error",
       error,
@@ -192,7 +197,9 @@ export async function spawnSubagentDirect(
         label: label || undefined,
         incognito,
         requesterInternalKey,
+        parentTarget: requestResolution.resolved.requesterTarget,
         senderIsOwner: ctx.senderIsOwner,
+        gitContributorProfileId: ctx.gitContributorProfileId,
         expectedParentSessionId: ctx.expectedParentSessionId,
         creationPolicy,
         completionOwnerSessionKey: ownership.completionRequesterSessionKey,
@@ -208,7 +215,9 @@ export async function spawnSubagentDirect(
         modelPatch: plan.initialSessionPatch,
         swarmGroupId,
         collect: params.collect === true,
+        blind,
         outputSchema: params.outputSchema,
+        firstAdmission: childPlan.resolved.firstAdmission,
       }),
     );
     if (initialSession.status === "error") {
@@ -228,6 +237,7 @@ export async function spawnSubagentDirect(
         (!params.collect && cleanupContext && cleanupContext.localEmbedded !== true))
         ? bindSubagentSpawnCleanup({
             childSessionKey,
+            target: initialSession.controllerTarget,
             resolveGatewayContext: gatewayContextResolver,
             isCurrent: ownsCleanup,
             canAbortAcceptedRun: ownsAcceptedRun,
@@ -239,7 +249,6 @@ export async function spawnSubagentDirect(
     const cleanupCreatedSession = (emitLifecycleHooks = false) =>
       cleanupProvisionalSession(childSessionKey, {
         emitLifecycleHooks,
-        deleteTranscript: true,
         ...provisionalSessionIdentity,
         isCurrent: isCleanupCurrent,
         ...(cleanupOwner ? { callGateway: cleanupOwner.callGateway } : {}),
@@ -309,25 +318,21 @@ export async function spawnSubagentDirect(
       completionTarget: params.completionTarget,
       soleCollectorChild: soleImplicitMember,
       spawnMode,
-      task,
+      task: params.task,
       requesterSessionKey: ctx.agentSessionKey,
       requesterOrigin: childSessionOrigin,
       childSessionKey,
       label: label || undefined,
-      acpEnabled: isAcpRuntimeSpawnAvailable({
-        config: cfg,
-        sandboxed: childRuntimeSandboxed,
-      }),
-      nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
-        surface: "subagent",
-      }),
       childDepth,
       maxSpawnDepth,
+      blind,
+      acpEnabled: isAcpRuntimeSpawnAvailable({ config: cfg, sandboxed: childRuntimeSandboxed }),
+      nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({ surface: "subagent" }),
     });
-    let childSystemPrompt = envelope.systemPrompt;
-    if (params.outputSchema) {
-      childSystemPrompt = `${childSystemPrompt}\n\nCall structured_output with {"result": <your final result>} until one payload is accepted, with at most one retry after a rejected attempt. The result value must match the requested JSON Schema. Do not call structured_output again after acceptance.`;
-    }
+    const profiledSystemPrompt = systemPrompt(envelope.systemPrompt);
+    let childSystemPrompt = params.outputSchema
+      ? `${profiledSystemPrompt}\n\n${STRUCTURED_OUTPUT_INSTRUCTION}`
+      : profiledSystemPrompt;
 
     const materializedAttachments = await runWithAgentToolSourceExecutionScope(assertActive, () =>
       materializeSubagentAttachments({
@@ -342,40 +347,39 @@ export async function spawnSubagentDirect(
     );
     if (materializedAttachments && materializedAttachments.status !== "ok") {
       await cleanupCreatedSession(threadBindingReady);
-      return {
-        status: materializedAttachments.status,
-        error: materializedAttachments.error,
-      };
+      return materializedAttachments;
     }
     const attachmentId = materializedAttachments?.attachmentId;
     if (materializedAttachments) {
       childSystemPrompt = `${childSystemPrompt}\n\n${materializedAttachments.systemPromptSuffix}`;
     }
 
-    const { childLaunch, queuedLaunch, progressOrigin, spawnedMetadata } =
-      buildSubagentLaunchRequest({
-        completionMode,
-        spawnMode,
-        message: envelope.message,
-        spawnedByKey: requesterInternalKey,
-        toolSpawnMetadata,
-        spawnedWorkspaceDir: params.worktree ? undefined : spawnedWorkspaceDir,
-        childSessionKey,
-        childSessionOrigin,
-        childIdem,
-        outputSchema: params.outputSchema,
-        childSystemPrompt,
-        thinkingOverride,
-        runTimeoutSeconds,
-        lightContext: params.lightContext === true,
-        requesterOrigin,
-        currentMessagingTarget: ctx.currentMessagingTarget,
-        currentChannelId: ctx.currentChannelId,
-        currentMessageId: ctx.currentMessageId,
-        launchAuthorization,
-        swarmSchedulerGroupKey,
-        swarmMaxConcurrent: swarmConfig.maxConcurrent,
-      });
+    const launchContext = buildSubagentLaunchRequest({
+      completionMode,
+      spawnMode,
+      message: envelope.message,
+      spawnedByKey: requesterInternalKey,
+      toolSpawnMetadata,
+      spawnedWorkspaceDir: params.worktree ? undefined : spawnedWorkspaceDir,
+      childSessionKey,
+      childSession: { entry: childEntry, freshChild: initialSession.freshChild },
+      childSessionOrigin,
+      childIdem,
+      outputSchema: params.outputSchema,
+      childSystemPrompt,
+      runTimeoutSeconds,
+      lightContext: params.lightContext === true,
+      requesterOrigin,
+      currentMessagingTarget: ctx.currentMessagingTarget,
+      currentChannelId: ctx.currentChannelId,
+      currentMessageId: ctx.currentMessageId,
+      launchAuthorization,
+      requesterFacts: requester?.requesterOrigin,
+      operatorAuthority,
+      swarmSchedulerGroupKey,
+      swarmMaxConcurrent: swarmConfig.maxConcurrent,
+    });
+    const { childLaunch, queuedLaunch, progressOrigin, spawnedMetadata } = launchContext;
     const recordRequesterParticipation = await recordSubagentSessionSetup({
       cfg,
       childEntry,
@@ -414,16 +418,12 @@ export async function spawnSubagentDirect(
               parentExecutionIdentityToken: readParentExecutionIdentity(ctx),
             },
           ),
-          childLaunch.authorization,
-          gatewayContextResolver,
-          childEntry?.sessionId && childEntry.lifecycleRevision
-            ? {
-                sessionKey: childSessionKey,
-                sessionId: childEntry.sessionId,
-                lifecycleRevision: childEntry.lifecycleRevision,
-                runId: childIdem,
-              }
-            : undefined,
+          {
+            authorization: childLaunch.authorization,
+            gatewayContextResolver,
+            requester,
+            preparedLaunch: launchContext.preparedLaunch,
+          },
         ),
       );
       acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
@@ -450,7 +450,6 @@ export async function spawnSubagentDirect(
         ...childTarget,
         attachmentId,
         emitLifecycleHooks: threadBindingReady,
-        deleteTranscript: true,
         ...provisionalSessionIdentity,
         ...options,
         isCurrent: isCleanupCurrent,
@@ -466,9 +465,9 @@ export async function spawnSubagentDirect(
         canRetireReservation = scope.canRetireReservation;
       },
       async initialize() {
-        const result =
+        const preparation =
           params.lightContext && preparedSpawnContext.mode === "isolated"
-            ? ({ status: "ok", preparation: undefined } as const)
+            ? undefined
             : await runWithAgentToolSourceExecutionScope(assertActive, () =>
                 prepareContextEngineSubagentSpawn({
                   assertActive,
@@ -479,11 +478,8 @@ export async function spawnSubagentDirect(
                   runTimeoutSeconds,
                 }),
               );
-        if (result.status === "error") {
-          throw new Error(result.error);
-        }
-        contextEnginePreparation = result.preparation;
-        preparationHold.prepared(result.preparation, isCleanupCurrent);
+        contextEnginePreparation = preparation;
+        preparationHold.prepared(preparation, isCleanupCurrent);
         return { contextEnginePreparation };
       },
       async dispatchTurn() {
@@ -513,7 +509,6 @@ export async function spawnSubagentDirect(
             isCleanupCurrent,
             isAbortCurrent,
             cleanupOwner,
-            retainAdmission: params.collect ? undefined : admissionReservation?.retain,
           });
         }
         if (!isCleanupCurrent()) {
@@ -554,6 +549,8 @@ export async function spawnSubagentDirect(
         return {
           runId,
           requesterTurnRunId: ctx.requesterTurnRunId,
+          nativePluginOwner: params.collect ? ctx.nativePluginOwner : undefined,
+          subagentProfile: profileReceipt,
           ...childTarget,
           controllerSessionKey: ownership.controllerSessionKey,
           sessionEntry: childEntry,
@@ -561,12 +558,12 @@ export async function spawnSubagentDirect(
           requesterOrigin,
           progressOrigin,
           requesterDisplayKey: ownership.completionRequesterDisplayKey,
-          task,
+          task: params.task,
           taskName,
           requesterAgentId,
           cleanup,
           label: label || undefined,
-          model: resolvedModel,
+          model: plan.resolvedModel,
           agentDir: targetAgentDir,
           workspaceDir: spawnedMetadata.workspaceDir,
           runTimeoutSeconds,
@@ -593,23 +590,23 @@ export async function spawnSubagentDirect(
       },
     });
     if (!pipelineResult.ok) {
-      const runId = pipelineResult.runId ?? childIdem;
+      const { phase, error } = pipelineResult;
       const spawnStatus =
-        pipelineResult.error && typeof pipelineResult.error === "object"
-          ? (pipelineResult.error as { spawnStatus?: unknown }).spawnStatus
+        error && typeof error === "object" && "spawnStatus" in error
+          ? error.spawnStatus
           : undefined;
       return {
         status: spawnStatus === "forbidden" ? "forbidden" : "error",
         error: [
-          pipelineResult.phase === "register" && spawnStatus !== "forbidden"
-            ? `Failed to register subagent run: ${summarizeSpawnError(pipelineResult.error)}`
-            : summarizeSpawnError(pipelineResult.error),
+          phase === "register" && spawnStatus !== "forbidden"
+            ? `Failed to register subagent run: ${summarizeSpawnError(error)}`
+            : summarizeSpawnError(error),
           acceptedRunCleanupError,
         ]
           .filter(Boolean)
           .join(" "),
         childSessionKey,
-        ...(pipelineResult.phase === "initialize" ? {} : { runId }),
+        ...(phase === "initialize" ? {} : { runId: pipelineResult.runId ?? childIdem }),
       };
     }
     const childRunId = pipelineResult.runId;
@@ -624,8 +621,9 @@ export async function spawnSubagentDirect(
       }
       const canLaunch = pipelineResult.registrationScope?.canLaunch() !== false;
       if (swarmReservation?.isCurrent() !== false) {
+        const selection = { operatorAuthority, requesterOrigin: requester?.requesterOrigin };
         // The scheduler also settles registrations that have lost launch authority.
-        withGatewayToolOperatorContinuation(operatorAuthority, () =>
+        withGatewayToolOperatorContinuation(selection, () =>
           activateSwarmRun({
             groupId: swarmSchedulerGroupKey,
             runId: childRunId,
@@ -679,6 +677,8 @@ export async function spawnSubagentDirect(
     return {
       status: "accepted",
       childSessionKey,
+      ...(label ? { label } : {}),
+      ...(swarmGroupId ? { groupId: swarmGroupId } : {}),
       ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,

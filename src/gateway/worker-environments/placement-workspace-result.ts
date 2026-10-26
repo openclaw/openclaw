@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { ensureRepositoryWorkspacePendingResultSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
@@ -12,10 +12,7 @@ import { fromRow, getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { publishPlacementWorkspaceResultState } from "./placement-turn-authority.js";
 import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
-import {
-  matchesWorkspaceResultClaim,
-  isWorkerWorkspaceResultReconciling,
-} from "./placement-workspace-result-owner.js";
+import { matchesWorkspaceResultClaim } from "./placement-workspace-result-owner.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 export {
   matchesWorkspaceResultClaim,
@@ -27,7 +24,7 @@ type WorkspaceResultDatabase = Pick<
   "worker_session_placements" | "worker_workspace_pending_results" | "session_repository_workspaces"
 >;
 
-const query = (db: DatabaseSync) => getNodeSqliteKysely<WorkspaceResultDatabase>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<WorkspaceResultDatabase>(db);
 
 export function pendingResultFromRow(
   row: StateDatabase["worker_workspace_pending_results"],
@@ -62,7 +59,7 @@ export async function findPendingWorkerWorkspaceResult(
 }
 
 export function hasCurrentWorkspaceResultClaim(
-  db: DatabaseSync,
+  db: EngineConnection,
   claim: WorkerSessionTurnClaim,
 ): boolean {
   const placement = getRequired(db, claim.sessionId);
@@ -76,7 +73,7 @@ export function hasCurrentWorkspaceResultClaim(
   return Boolean(row && matchesWorkspaceResultClaim(placement, pendingResultFromRow(row), claim));
 }
 
-export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: string): void {
+export function clearWorkerWorkspacePendingResult(db: EngineConnection, sessionId: string): void {
   executeSqliteQuerySync(
     db,
     query(db).deleteFrom("worker_workspace_pending_results").where("session_id", "=", sessionId),
@@ -85,11 +82,10 @@ export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: s
 }
 
 export function readWorkerWorkspaceReconciliationFacts(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionIds: readonly string[],
 ): {
   placements: ReadonlyMap<string, WorkerSessionPlacementRecord>;
-  reconcilingSessionIds: ReadonlySet<string>;
   pendingResults: ReadonlyMap<string, WorkerWorkspacePendingResult>;
 } {
   const placements = new Map<string, WorkerSessionPlacementRecord>();
@@ -116,20 +112,13 @@ export function readWorkerWorkspaceReconciliationFacts(
       pendingResults.set(row.session_id, pendingResultFromRow(row));
     }
   }
-  const reconcilingSessionIds = new Set(
-    [...pendingResults.values()].flatMap((pending) => {
-      const placement = placements.get(pending.sessionId);
-      return isWorkerWorkspaceResultReconciling(placement, pending) ? [pending.sessionId] : [];
-    }),
-  );
   return {
     placements,
-    reconcilingSessionIds,
     pendingResults,
   };
 }
 
-export function hasWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: string): boolean {
+export function hasWorkerWorkspacePendingResult(db: EngineConnection, sessionId: string): boolean {
   return Boolean(
     executeSqliteQuerySync(
       db,
@@ -142,7 +131,7 @@ export function hasWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: str
 }
 
 export function hasAcceptedWorkerWorkspacePendingResult(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId: string,
 ): boolean {
   return Boolean(
@@ -158,7 +147,7 @@ export function hasAcceptedWorkerWorkspacePendingResult(
 }
 
 function publishPendingResult(
-  db: DatabaseSync,
+  db: EngineConnection,
   placement: WorkerSessionPlacementRecord,
   row: StateDatabase["worker_workspace_pending_results"],
 ): void {
@@ -170,7 +159,7 @@ function publishPendingResult(
 }
 
 export function insertWorkerWorkspacePendingResult(
-  db: DatabaseSync,
+  db: EngineConnection,
   claim: WorkerSessionTurnClaim,
   nowMs: number,
   gatewayInstanceId: string,
@@ -225,7 +214,7 @@ export function insertWorkerWorkspacePendingResult(
   return placement;
 }
 
-const assertPendingClaim = (db: DatabaseSync, claim: WorkerSessionTurnClaim) => {
+const assertPendingClaim = (db: EngineConnection, claim: WorkerSessionTurnClaim) => {
   const placement = getRequired(db, claim.sessionId);
   const row = executeSqliteQuerySync(
     db,
@@ -241,7 +230,7 @@ const assertPendingClaim = (db: DatabaseSync, claim: WorkerSessionTurnClaim) => 
 };
 
 export function recordStagedWorkerWorkspaceResult(
-  db: DatabaseSync,
+  db: EngineConnection,
   claim: WorkerSessionTurnClaim,
   stagedResultRef: string,
   repositoryWorkspaceId?: string,
@@ -303,7 +292,7 @@ export function recordStagedWorkerWorkspaceResult(
 }
 
 export function listPendingWorkerWorkspaceResultsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionId?: string,
 ): WorkerWorkspacePendingResult[] {
   let select = query(db).selectFrom("worker_workspace_pending_results").selectAll();

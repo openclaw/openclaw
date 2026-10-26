@@ -2,6 +2,7 @@ import { Type, type TSchema } from "typebox";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../../channels/plugins/message-action-names.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
+import { createCachedToolSchema } from "../schema/cached-schema.js";
 import {
   channelTargetSchema,
   channelTargetsSchema,
@@ -39,7 +40,7 @@ function buildRoutingSchema(options: { includeTeamId?: boolean }) {
   };
   if (options.includeTeamId) {
     props.teamId = optionalStringSchema(
-      "Team or workspace ID for channel-info, channel-list, or conversation-open.",
+      "Team or workspace ID for channel-create, channel-info, channel-list, or conversation-open.",
     );
   }
   return props;
@@ -495,11 +496,32 @@ export function buildMessageToolSchemaFromActions(
   actions: readonly string[],
   options: MessageToolSchemaOptions,
 ) {
+  return messageToolSchemas({ actions, options });
+}
+
+const messageToolSchemas = createCachedToolSchema({
+  key: ({ actions, options }: { actions: readonly string[]; options: MessageToolSchemaOptions }) =>
+    JSON.stringify([
+      actions,
+      options.includeClawHub === true,
+      options.includePresentation,
+      options.includeDeliveryPin,
+      options.includeBestEffort,
+      // Type.Object carries optional-property metadata into the JSON required list.
+      options.extraProperties ? Type.Object(options.extraProperties) : null,
+    ]),
+  build: ({ actions, options }) => buildMessageToolSchema(actions, options),
+});
+
+function buildMessageToolSchema(actions: readonly string[], options: MessageToolSchemaOptions) {
   const schemaOptions = {
     ...options,
     includeTeamId: actions.some(
       (action) =>
-        action === "channel-info" || action === "channel-list" || action === "conversation-open",
+        action === "channel-info" ||
+        action === "channel-list" ||
+        action === "channel-create" ||
+        action === "conversation-open",
     ),
   };
   // Keep one flat object: provider adapters reject per-action anyOf/oneOf schemas.
@@ -522,6 +544,12 @@ export function buildMessageToolSchemaFromActions(
     }),
     ...properties,
     ...schemaOptions.extraProperties,
+    final: Type.Optional(
+      Type.Boolean({
+        description:
+          "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true when adding a reaction to the current source message is your complete response; omit or set false when more work follows. A confirmed final source reply ends the turn.",
+      }),
+    ),
   });
 }
 

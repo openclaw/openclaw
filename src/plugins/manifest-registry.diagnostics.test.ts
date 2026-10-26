@@ -17,13 +17,18 @@ function makeTempDir() {
 }
 
 function writeManifest(dir: string, manifest: Record<string, unknown>) {
-  fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), JSON.stringify(manifest), "utf-8");
+  fs.writeFileSync(
+    path.join(dir, "openclaw.plugin.json"),
+    JSON.stringify({ configSchema: { type: "object" }, ...manifest }),
+    "utf-8",
+  );
 }
 
 function createPluginCandidate(
-  params: Pick<PluginCandidate, "idHint" | "rootDir" | "origin">,
+  rootDir: string,
+  origin: PluginCandidate["origin"],
 ): PluginCandidate {
-  return { ...params, source: path.join(params.rootDir, "index.ts") };
+  return { idHint: "external-chat", rootDir, origin, source: path.join(rootDir, "index.ts") };
 }
 
 function expectNoRegistryDiagnosticContains(
@@ -33,19 +38,11 @@ function expectNoRegistryDiagnosticContains(
   expect(registry.diagnostics.map((diag) => diag.message).join("\n")).not.toContain(fragment);
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
 describe("loadPluginManifestRegistry compatibility diagnostics", () => {
   it("reports only selected plugin compatibility diagnostics", () => {
     const globalDir = makeTempDir();
     const configDir = makeTempDir();
-    const manifest = {
-      id: "external-chat",
-      channels: ["external-chat"],
-      configSchema: { type: "object" },
-    };
+    const manifest = { id: "external-chat", channels: ["external-chat"] };
     writeManifest(globalDir, { ...manifest, uiCapabilities: "page" });
     writeManifest(configDir, {
       ...manifest,
@@ -55,16 +52,8 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
 
     const registry = loadPluginManifestRegistryCore({
       candidates: [
-        createPluginCandidate({
-          idHint: "external-chat",
-          rootDir: globalDir,
-          origin: "global",
-        }),
-        createPluginCandidate({
-          idHint: "external-chat",
-          rootDir: configDir,
-          origin: "config",
-        }),
+        createPluginCandidate(globalDir, "global"),
+        createPluginCandidate(configDir, "config"),
       ],
       diagnostics: [globalDir, configDir, globalDir].map((source) => ({
         level: "warn" as const,
@@ -79,110 +68,68 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
     expect(registry.diagnostics).toContainEqual(
       expect.objectContaining({ level: "info", code: "explicit-config-plugin-selection" }),
     );
-    expect(
+    const sources = (fragment: string) =>
       registry.diagnostics
-        .filter((diagnostic) => diagnostic.message.includes("extension entry unreadable"))
-        .map((diagnostic) => diagnostic.source),
-    ).toEqual([globalDir, configDir]);
-    expect(
-      registry.diagnostics
-        .filter((diagnostic) => diagnostic.message.includes("without channelConfigs metadata"))
-        .map((diagnostic) => diagnostic.source),
-    ).toEqual([]);
+        .filter((diagnostic) => diagnostic.message.includes(fragment))
+        .map((diagnostic) => diagnostic.source);
+    expect(sources("extension entry unreadable")).toEqual([globalDir, configDir]);
+    expect(sources("without channelConfigs metadata")).toEqual([]);
   });
 
   it("suppresses missing channel config diagnostics for inactive external channel plugins", () => {
     const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "external-chat",
-      channels: ["external-chat"],
-      configSchema: { type: "object" },
-    });
-    const candidate = createPluginCandidate({
-      idHint: "external-chat",
-      rootDir: dir,
-      origin: "global",
-    });
+    writeManifest(dir, { id: "external-chat", channels: ["external-chat"] });
+    const candidate = createPluginCandidate(dir, "global");
 
-    const disabledRegistry = loadPluginManifestRegistryCore({
-      config: { plugins: { entries: { "external-chat": { enabled: false } } } },
-      candidates: [candidate],
-    });
-    expectNoRegistryDiagnosticContains(disabledRegistry, "without channelConfigs metadata");
-
-    const allowlistRegistry = loadPluginManifestRegistryCore({
-      config: { plugins: { allow: ["other-plugin"] } },
-      candidates: [candidate],
-    });
-    expectNoRegistryDiagnosticContains(allowlistRegistry, "without channelConfigs metadata");
+    for (const plugins of [
+      { entries: { "external-chat": { enabled: false } } },
+      { allow: ["other-plugin"] },
+    ]) {
+      const registry = loadPluginManifestRegistryCore({
+        config: { plugins },
+        candidates: [candidate],
+      });
+      expectNoRegistryDiagnosticContains(registry, "without channelConfigs metadata");
+    }
   });
+});
+
+const authChoice = (provider: string, method = "api-key") => ({
+  provider,
+  method,
+  choiceId: `${provider}-${method}`,
 });
 
 it.each([
   {
     name: "drops non-HTTPS provider auth presentation URLs",
-    manifest: {
-      id: "unsafe-auth-artwork",
-      providerAuthChoices: [
-        {
-          provider: "unsafe",
-          method: "api-key",
-          choiceId: "unsafe-api-key",
-          icon: "http://example.com/icon.svg",
-          website: "javascript:alert(1)",
-          docsUrl: "javascript:alert(1)",
-        },
-        {
-          provider: "oversized",
-          method: "api-key",
-          choiceId: "oversized-api-key",
-          icon: `https://example.com/${"a".repeat(2048)}`,
-          docsUrl: `https://example.com/${"a".repeat(2048)}`,
-        },
-      ],
-      configSchema: { type: "object" },
-    },
-    expected: {
-      providerAuthChoices: [
-        {
-          provider: "unsafe",
-          method: "api-key",
-          choiceId: "unsafe-api-key",
-        },
-        {
-          provider: "oversized",
-          method: "api-key",
-          choiceId: "oversized-api-key",
-        },
-      ],
-    },
+    choices: [
+      {
+        ...authChoice("unsafe"),
+        icon: "http://example.com/icon.svg",
+        website: "javascript:alert(1)",
+        docsUrl: "javascript:alert(1)",
+      },
+      {
+        ...authChoice("oversized"),
+        icon: `https://example.com/${"a".repeat(2048)}`,
+        docsUrl: `https://example.com/${"a".repeat(2048)}`,
+      },
+    ],
+    expected: [authChoice("unsafe"), authChoice("oversized")],
   },
   ...[["not-a-platform"], "darwin"].map((platforms) => ({
     name: `preserves unavailable platform restriction ${JSON.stringify(platforms)}`,
-    manifest: {
-      id: "native-provider",
-      configSchema: { type: "object" },
-      providerAuthChoices: [
-        { provider: "native", method: "local", choiceId: "native-local", platforms },
-      ],
-    },
-    expected: {
-      providerAuthChoices: [
-        { provider: "native", method: "local", choiceId: "native-local", platforms: [] },
-      ],
-    },
+    choices: [{ ...authChoice("native", "local"), platforms }],
+    expected: [{ ...authChoice("native", "local"), platforms: [] }],
   })),
-])("$name", ({ manifest, expected }) => {
+])("$name", ({ choices, expected }) => {
   const rootDir = makeTempDir();
-  writeManifest(rootDir, manifest);
+  writeManifest(rootDir, { id: "auth", providerAuthChoices: choices });
   const registry = loadPluginManifestRegistryCore({
     candidates: [
-      { idHint: manifest.id, rootDir, origin: "bundled", source: path.join(rootDir, "index.ts") },
+      { idHint: "auth", rootDir, origin: "bundled", source: path.join(rootDir, "index.ts") },
     ],
   });
-  const plugin = registry.plugins[0];
-  expect(plugin).toBeDefined();
-  for (const [key, value] of Object.entries(expected)) {
-    expect(plugin && Reflect.get(plugin, key), key).toEqual(value);
-  }
+  expect(registry.plugins[0]?.providerAuthChoices).toEqual(expected);
 });

@@ -45,6 +45,11 @@ unchanged backlog counts do not repeat the warning every sweep. A count change
 at or above 25, or a return to that threshold after recovery, produces a new
 warning. The backlog size does not discard results or change their retention.
 
+When completion delivery expires while the requester is busy, OpenClaw hands
+the result to a later requester wake. If that wake also ends without delivering
+it, the delivery is recorded as failed right away instead of staying suspended;
+the result and the earlier blocked-delivery notice are kept.
+
 A suspended delivery expires after seven days. The warning records its run and
 session identifiers, original delivery error, and suspension time. Expiry ends
 automatic delivery; it does not turn a successful child execution into a failure.
@@ -68,6 +73,11 @@ whichever is longer). These retained counts govern `/subagents list`,
 status summaries, descendant completion gating, and per-session concurrency
 checks; they are not proof that an executor is live.
 
+After execution ownership ends, the sweeper can reconcile the child's persisted
+terminal state even if routing metadata remains in memory. The completed result
+then follows normal completion delivery and retry; retained routing metadata does
+not keep the child running.
+
 During a graceful restart or Gateway suspension, lifecycle events from
 already-admitted runs remain tracked through restart preservation and completion
 processing. An already-admitted replacement run can finish refreshing a deferred
@@ -79,12 +89,71 @@ Late cleanup recovery leaves retained state for the next Gateway instead of
 retrying against a closed store. Failed writes with an unknown outcome still
 report an error and remain fenced until recovery reads the stored state.
 
-After a Gateway restart, the parent owns continuation of the user's task.
-Interrupted sub-agents are finalized through their normal completion path instead
-of automatically relaunched. Their results tell the parent that execution was
-interrupted and that partially completed actions need checking. A parent waiting
-for its child batch receives the settled results, including children that finished
-before the restart, and decides what work remains.
+After a Gateway restart, unfinished sub-agents with a recorded restart interruption
+resume in their retained session once the original operator's current authority
+is restored. This includes visible dashboard children and interruptions saved in
+the session before the registry's shutdown listener finished. Automatic recovery
+uses the same owner as `sessions.recover`; it does not notify the parent that work
+settled while the child can still resume. They check uncertain tool outcomes before continuing. The registry
+keeps the original task and parent completion ownership, including late delivery
+when the parent's own turn already finished. Explicit Stop and cancellation remain
+terminal. Children without verifiable ownership or restorable authority report their
+interruption through the normal completion path.
+
+Previously settled restart interruptions are not replayed automatically. An operator
+can resume a retained interrupted child with `sessions.recover {"key":"<child-session-key>"}`
+after checking that the parent has not already replaced the work. The native registry
+interruption is sufficient; no main-session tombstone or database edit is needed.
+
+Detached orphan reads, restored requester wakes, and cleanup share a bounded
+background budget per Gateway. A large retained backlog waits there instead of
+filling the reader task limit needed by reconnecting clients. Queued cleanup stays
+tracked through restart drain and checks its original ownership before proceeding.
+Delivery releases that preparation budget when the Gateway accepts its input,
+while the registry keeps tracking the result. A queued completion never blocks
+the preparation of an earlier input in the same mailbox.
+
+Operator-admitted children retain bounded source evidence with their run record.
+Before continuing the requester after restart, the Gateway revalidates the current
+operator profile, role, authentication policy, device identity, and access grant,
+preserving the original scope restrictions. The saved evidence contains no credentials
+and cannot authorize execution by itself. Missing, invalid, or revoked evidence leaves
+the interrupted result available for inspection; recovery never substitutes system
+authority. Start a new authorized requester turn to continue that work.
+
+Children spawned by a recovered requester retain its authority after that requester
+yields or finishes. They remain subject to the original scope ceiling and current
+policy; credential rotation or other source revocation still stops them.
+
+Shared-token and password owner connections, including CLI/backend requests,
+retain this evidence too. Recovery requires the same shared authentication
+generation and method; rotating the credential or changing authentication mode
+refuses the old continuation. Nested requesters inherit the admitted owner's
+evidence and cannot widen its scope ceiling.
+
+Legacy completions without saved operator evidence record permanent non-delivery
+once, including requester-settle wakes and yielded runs without a final outcome.
+Recovery clears the unavailable wake while preserving execution results and any
+recorded delivery receipt. Successful settlement does not warn that authority
+restoration failed; later restarts do not attempt to restore the same missing
+authority again. Temporary worker overload,
+unavailable access policy, and failed settlement writes remain retryable.
+
+Visible and private requester-settle completions retain their processing outcome
+across restart. A replay of the same frozen child batch acknowledges an already
+completed requester turn without executing or delivering it again. Unfinished
+main-session turns continue through normal restart recovery with the original
+operator restrictions. If the original authority is unavailable, the task stays
+owed instead of running with broader permissions.
+
+If a recovered requester finishes without a durable final reply, completion
+delivery records the failure and keeps the child result. It does not queue another
+model turn just to report that failed recovery. Inspect the retained result and
+continue explicitly after resolving the original error.
+
+Completion replay uses the same captured requester identity as the original
+input. Optional fields absent from that identity stay absent after reload, so
+an already committed completion is reconciled without appending another notice.
 
 An already-admitted completion turn for a yielded nested requester is different
 from an orphaned child launch. Its frozen child-result batch retains the exact
@@ -98,6 +167,24 @@ transfers do not retry indefinitely. Registry hydration and startup transfer eac
 run once per attempt. A failed hydration logs its error and can be retried by the
 next registry access; an incomplete startup transfer remains recorded for the
 next activation or restart. Recovery does not keep a separate retry timer.
+Requester recovery selects each retained turn's children without repeatedly
+scanning unrelated run history. Completed children remain in saved batches when
+their delivery receipts are needed to prevent replaying an already delivered result.
+Binding restored runs to the new Gateway does not emit session activity updates
+for unchanged records. Recovery and cleanup still publish their actual changes.
+Startup activates only runs with unfinished execution, cleanup, or requester
+obligations. Settled history stays available for listing and result reads without
+reserving completion sources or resuming it. Retention still prunes finished Swarm
+groups, including when no runs need activation.
+Activation waits for source restoration and ordered completion reservations.
+Interrupted child settlement then runs in the background, with at most eight
+recoveries in flight across requester groups. Shutdown waits for accepted recovery
+work; a failed attempt remains available to the normal sweep. Startup trace
+subspans sum work across requester groups and can exceed activation wall time;
+`background.subagent-interrupted` reports the separate settlement work.
+Durably completed cleanup does not replay interrupted child-session effects on restart.
+The saved interruption still rejects late child results, and pending requester wakes
+continue through their existing settlement owner.
 
 Recovery handles both sessions marked `abortedLastRun: true` and hard kills that
 prevented the shutdown marker from being written. For a hard kill, the child
@@ -108,10 +195,11 @@ before cleanup, so retained child sessions do not leave phantom running activity
 If settlement fails, completion remains available for retry.
 
 Recovery remembers live session ownership without retaining saved prompt snapshots.
-Unchanged owned rows skip session reads; ownership release or a published session
-change requests another sweep within one second. Unavailable recovery reads retry
-per row with exponential backoff from one second to one minute. Registry lifecycle
-changes and session publications clear that backoff. Persisted rows without a live
+Unchanged owned rows skip session reads; release of the run context or its admitted
+session work requests another sweep within one second. If admission releases first,
+recovery still waits for the run context to finish cleanup. Unavailable recovery reads
+retry per row with exponential backoff from one second to one minute; other session
+publications are observed on the next bounded retry. Persisted rows without a live
 owner still require a fresh read before recovery can change their state.
 
 Startup session maintenance reports retained run/task owners in one informational
@@ -119,10 +207,17 @@ summary. Those rows remain with registry recovery; the session-only orphan repai
 does not compete for their ownership. Ownership changes during a repair and failed
 ownership checks still produce warnings.
 
+Main-session restart recovery excludes sub-agent sessions before resolving their
+stores; retained child recovery stays with the sub-agent registry owner.
+
 The parent can inspect a retained child transcript and use `sessions_send` to
 continue that session, or spawn a replacement after confirming the old execution
 has stopped. Reusing a child restores its conversation context; it does not replay
 an interrupted command. Existing cleanup and retention settings still apply.
+An accepted follow-up keeps its restored operator authority when the earlier
+completion settles; it does not depend on that completed run remaining active.
+Requester resets, Gateway shutdown, and operator access revocation still stop
+the retained authority.
 
 When a detached cleanup attempt logs `subagent cleanup finalize failed`, its
 retries use bounded backoff in the current Gateway process. If those retries are
@@ -165,6 +260,8 @@ run and their descendants, including ordinary sub-agents and [Swarm](/tools/swar
 collectors. Successful cancellation keeps selected queued collectors from
 starting while running children stop. Exact-run cancellation does not cancel
 unrelated turns or clear unrelated session-wide queues.
+Cancelling a queued follow-up by its `runId` removes only that follow-up; the
+active run and other queued follow-ups in the same session continue.
 
 Every new registration records its selected owning agent as `childAgentId`,
 including agent-qualified child keys, and the original child session identity.
@@ -191,7 +288,10 @@ original session identity or lifecycle revision. They can settle, deliver,
 finish cleanup bookkeeping, resume, and stop under the authorized requester.
 Legacy Stop cancels the exact task and its registered execution, when available;
 it does not guess which current session or successor to interrupt. OpenClaw
-warns once per retained run and suppresses child-session mutations, including
+warns once per Gateway process after registry restore, with a count of unique
+legacy run IDs with unfinished work and a few sample IDs. Completed cleanup and
+terminal runs with suppressed delivery are excluded unless a requester wake remains.
+OpenClaw suppresses child-session mutations, including
 deletion, reset, and transcript cleanup. Missing historical identity is never
 backfilled. A conflicting recorded identity remains a mismatch, not a legacy exception.
 
@@ -263,3 +363,9 @@ timeout. Those events do not automatically cancel them.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
 - Recursive spawning is enabled through depth `5` by default. Set `maxSpawnDepth` from `1` through `5` to lower the boundary.
 - `maxChildrenPerAgent` caps active children per session (default `5`, range `1-20`).
+
+Subagent lifecycle warnings retain the error name, message, code, and full stack
+in file logs; console output includes the first six stack lines. Direct announce
+and requester-settle retry warnings
+also include the requester and delivery idempotency key so retries can be traced
+without logging message content.

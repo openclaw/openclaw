@@ -34,15 +34,11 @@ vi.mock("./systemd-peer-native.js", () => ({
 
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { readGatewayServiceState, resolveGatewayService } from "./service.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
-const success = (stdout: string): ExecResult => ({
-  code: 0,
-  termination: "exit",
-  stdout,
-  stderr: "",
-});
+const success = (stdout: string): ExecResult => nativeExit(stdout);
 
 it("keeps strict legacy-user inspection on one admitted unit until its operation closes", async () => {
   mockProcessPlatform("linux");
@@ -104,8 +100,6 @@ it("keeps strict legacy-user inspection on one admitted unit until its operation
     ActiveState: "active",
     SubState: "running",
     StartLimitBurst: 5,
-    ActiveEnterTimestampMonotonic: 100,
-    InactiveEnterTimestampMonotonic: 0,
     UnitFileState: "enabled",
     RefuseManualStart: false,
     CanStart: true,
@@ -115,8 +109,6 @@ it("keeps strict legacy-user inspection on one admitted unit until its operation
     ExecMainStatus: 0,
     ExecMainCode: 0,
     KillMode: "control-group",
-    TasksCurrent: 1,
-    MemoryCurrent: 1024,
     ControlGroup: `/user.slice/${unitName}`,
   };
   const query = vi.fn(async (args: string[]) => {

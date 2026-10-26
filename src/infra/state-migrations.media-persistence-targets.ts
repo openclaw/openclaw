@@ -32,6 +32,8 @@ type CandidateTarget = Omit<AgentDatabaseMigrationTarget, "realPath">;
 
 export type PreparedAgentDatabaseMigrationDiscovery = {
   preparedTranscriptArchives?: Set<string>;
+  /** Earlier committed version steps defer historical content repair for this invocation. */
+  versionMigrations?: readonly { path: string; foundVersion: number }[];
   stateDir: string;
   configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
   registeredAgentDatabases: readonly { agentId: string; path: string }[];
@@ -42,7 +44,6 @@ export function prepareAgentDatabaseMigrationDiscovery(params: {
   env: NodeJS.ProcessEnv;
   configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
   registeredAgentDatabases?: readonly { agentId: string; path: string }[];
-  deletionJournal?: AgentDeletionJournalDisposition;
   preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
 }): PreparedAgentDatabaseMigrationDiscovery {
   const stateDir = resolveStateDir(params.env);
@@ -50,7 +51,7 @@ export function prepareAgentDatabaseMigrationDiscovery(params: {
     params.preparedDiscovery?.stateDir === stateDir &&
     params.preparedDiscovery.discovery.deletionJournal.status === "unavailable"
       ? params.preparedDiscovery.discovery.deletionJournal
-      : params.deletionJournal;
+      : undefined;
   const snapshot =
     params.registeredAgentDatabases && preparedJournal
       ? undefined
@@ -73,7 +74,10 @@ export function prepareAgentDatabaseMigrationDiscovery(params: {
       deletionJournal,
     }),
     ...(params.preparedDiscovery?.stateDir === stateDir
-      ? { preparedTranscriptArchives: params.preparedDiscovery.preparedTranscriptArchives }
+      ? {
+          preparedTranscriptArchives: params.preparedDiscovery.preparedTranscriptArchives,
+          versionMigrations: params.preparedDiscovery.versionMigrations,
+        }
       : {}),
   };
 }

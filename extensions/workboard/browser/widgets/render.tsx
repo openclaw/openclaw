@@ -36,6 +36,32 @@ function WidgetAvailability(props: WidgetProps) {
   );
 }
 
+function WidgetPagination(props: WidgetProps) {
+  const state = createMemo(() => {
+    void props.revision;
+    return {
+      more: props.model.hasMore,
+      count: props.model.loadedCardCount,
+      loading: props.model.loading,
+    };
+  });
+  return (
+    <Show when={state().more}>
+      <div class="workboard-widget__state workboard-widget__pagination" role="status">
+        <span>{t("workboard.widget.partialCards", { count: String(state().count) })}</span>{" "}
+        <button
+          class="btn btn--sm"
+          type="button"
+          disabled={state().loading}
+          onClick={() => void props.model.loadMore()}
+        >
+          {t("workboard.loadMoreCards")}
+        </button>
+      </div>
+    </Show>
+  );
+}
+
 function isAvailable(model: WorkboardWidgetModel) {
   return model.connected && model.loaded && !model.error;
 }
@@ -68,6 +94,7 @@ export function WorkboardMiniWidget(props: WidgetProps) {
             {t("workboard.widget.openBoard")}
           </a>
         </header>
+        <WidgetPagination {...props} />
         <div class="workboard-widget-mini__counts" aria-label={t("workboard.widget.statusCounts")}>
           <For each={WORKBOARD_STATUSES} keyed={(status) => status}>
             {(status) => (
@@ -86,7 +113,9 @@ export function WorkboardMiniWidget(props: WidgetProps) {
           >
             {(card) => (
               <div class="workboard-widget-mini__card">
-                <span class={`workboard-widget__status workboard-widget__status--${card().status}`}>
+                <span
+                  class={["workboard-widget__status", `workboard-widget__status--${card().status}`]}
+                >
                   {t(`workboard.status.${card().status}`)}
                 </span>
                 <strong>{card().title}</strong>
@@ -125,16 +154,28 @@ export function WorkboardCardWidget(props: WidgetProps) {
       }
     >
       <Show when={isAvailable(props.model)} fallback={<WidgetAvailability {...props} />}>
+        <WidgetPagination {...props} />
         <Show
           when={card()}
-          fallback={<p class="workboard-widget__state">{t("workboard.widget.cardMissing")}</p>}
+          fallback={
+            <p class="workboard-widget__state">
+              {t(
+                props.model.hasMore
+                  ? "workboard.widget.cardNotLoaded"
+                  : "workboard.widget.cardMissing",
+              )}
+            </p>
+          }
         >
           {(current) => (
             <article class="workboard-widget-card" data-test-id="workboard-card-widget">
               <div class="workboard-widget-card__heading">
                 <strong>{current().title}</strong>
                 <span
-                  class={`workboard-widget__status workboard-widget__status--${current().status}`}
+                  class={[
+                    "workboard-widget__status",
+                    `workboard-widget__status--${current().status}`,
+                  ]}
                 >
                   {t(`workboard.status.${current().status}`)}
                 </span>
@@ -219,6 +260,7 @@ export function WorkboardBoardWidget(props: WidgetProps) {
             {t("workboard.widget.openBoard")}
           </a>
         </header>
+        <WidgetPagination {...props} />
         <div class="workboard-board workboard-board--compact workboard-widget-board__columns">
           <For each={props.model.statuses} keyed={(status) => status}>
             {(status) => (

@@ -1,13 +1,5 @@
 export type CapabilityTransport = "local" | "gateway";
 
-type CapabilityMetadata = {
-  id: string;
-  description: string;
-  transports: Array<CapabilityTransport>;
-  flags: string[];
-  resultShape: string;
-};
-
 export type CapabilityEnvelope = {
   ok: boolean;
   capability: string;
@@ -39,7 +31,13 @@ const IMAGE_GENERATION_FLAGS = [
   "--json",
 ];
 
-export const CAPABILITY_METADATA: CapabilityMetadata[] = [
+export const CAPABILITY_METADATA: {
+  id: string;
+  description: string;
+  transports: Array<CapabilityTransport>;
+  flags: string[];
+  resultShape: string;
+}[] = [
   {
     id: "model.run",
     description: "Run a one-shot inference turn through the selected model provider.",
@@ -263,10 +261,10 @@ export const CAPABILITY_METADATA: CapabilityMetadata[] = [
   },
   {
     id: "web.fetch",
-    description: "Fetch URL content through configured web fetch providers.",
+    description: "Fetch URL content directly or through a selected web fetch provider.",
     transports: ["local"],
     flags: ["--url", "--provider", "--format", "--json"],
-    resultShape: "fetch provider result",
+    resultShape: "page content with fetch metadata",
   },
   {
     id: "web.providers",

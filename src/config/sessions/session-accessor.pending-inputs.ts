@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
+import { decodeRequesterOrigin, type RequesterOrigin } from "../../agents/requester-origin.js";
 import {
   normalizeMessageClientSources,
   readMessageClientSources,
@@ -10,10 +11,12 @@ import {
   getAgentEventLifecycleGeneration,
   assertAgentRunLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
+import { throwIfSettledRejected } from "../../infra/error-graph-internal.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import type { SessionInputLifecycleAdmission } from "./restart-resume.js";
 import {
   preparePendingInputRequest,
   resolveCommittedPendingInputRequestHash,
@@ -41,10 +44,9 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import {
-  getSessionActorStorageBinding,
+  captureSessionActorStorageOwner,
   runWithSessionActorStorage,
 } from "./session-actor-storage-binding.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import { getSessionInputActor } from "./session-input-actor.js";
 import {
   withCurrentPendingInputAuthority,
@@ -60,15 +62,32 @@ import {
   isFinalInputCompletion,
   parseSessionPendingInputMessage,
 } from "./session-pending-input-value.js";
+import {
+  runWithSessionSourceScope,
+  type SessionSourceAssertion,
+} from "./session-source-authority.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export { withSessionPendingInputRelocation };
+export { prepareForeignLiveSessionPendingInputEntries } from "./session-pending-input-live-read.js";
 export type { SessionPendingInput, SessionPendingInputPage };
 export type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
 
 const receiptOwners = new WeakMap<SessionPendingInputReceipt, SessionPendingInputOwner>();
 const withdrawnOwners = new WeakSet<SessionPendingInputOwner>();
+
+/** The private accepted bytes survive mutable receipt projections and replay preparation. */
+export function readSessionPendingInputRequesterOrigin(
+  receipt: SessionPendingInputReceipt,
+): RequesterOrigin | undefined {
+  const owner = receiptOwners.get(receipt);
+  if (!owner) {
+    return undefined;
+  }
+  assertSessionPendingInputLifetimeCurrent(owner);
+  return owner.requesterOrigin;
+}
 
 export function readWithdrawnSessionPendingInputId(
   receipt: SessionPendingInputReceipt | undefined,
@@ -77,15 +96,20 @@ export function readWithdrawnSessionPendingInputId(
   return owner && withdrawnOwners.has(owner) ? owner.inputId : undefined;
 }
 
-function ownerReceipt(owner: SessionPendingInputOwner): SessionPendingInputReceipt {
+function ownerReceipt(
+  owner: SessionPendingInputOwner,
+  queuedReplay?: true,
+): SessionPendingInputReceipt {
+  const message = parseSessionPendingInputMessage(owner.messageJson);
+  owner.requesterOrigin ??= decodeRequesterOrigin(message["__openclaw"]?.requesterOrigin);
   const receipt: SessionPendingInputReceipt = {
     get state() {
-      return owner.consumed || owner.sources?.every((source) => source.consumed)
+      return !queuedReplay && (owner.consumed || owner.sources?.every((source) => source.consumed))
         ? "consumed"
         : "queued";
     },
-    inputId: owner.inputId,
-    message: parseSessionPendingInputMessage(owner.messageJson),
+    inputId: queuedReplay ? owner.transcriptInputId : owner.inputId,
+    message,
     run: (operation) => runWithSessionPendingInput(owner, operation),
     runAsync: (operation) =>
       runWithSessionPendingInputPersistence(owner, () =>
@@ -113,6 +137,23 @@ export function withSessionPendingInputPersistence<T>(
   return owner ? runWithSessionPendingInputPersistence(owner, persist) : receipt.run(persist);
 }
 
+function finishPendingInputSources(
+  sources: readonly SessionPendingInputOwner[],
+  disposition: "cancelled" | "interrupted",
+): void {
+  const failures: unknown[] = [];
+  for (const source of sources) {
+    try {
+      source.finish(disposition);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) {
+    throw new AggregateError(failures, "Failed to finish collected input custody");
+  }
+}
+
 /** Bind one collected message to its private admitted sources without creating another durable queue. */
 export function bindSessionPendingInputSources(
   receipts: readonly SessionPendingInputReceipt[],
@@ -125,7 +166,8 @@ export function bindSessionPendingInputSources(
           throw new Error("Collected input has already been consumed");
         }
         const owner = receiptOwners.get(receipt);
-        return owner ? (owner.sources ?? [owner]) : [];
+        // Committed replays already have a transcript entry and cannot be collected again.
+        return owner && !owner.consumed ? (owner.sources ?? [owner]) : [];
       }),
     ),
   ];
@@ -165,45 +207,34 @@ export function bindSessionPendingInputSources(
   const aggregateInputId = randomUUID();
   const aggregate = ownerReceipt({
     ...first,
+    // Source owners release their admission closures when settlement completes.
+    assertCurrent: assertSessionPendingInputLifetimeCurrent.bind(undefined, first),
+    authority: undefined,
+    requesterOrigin: undefined,
     inputId: aggregateInputId,
     transcriptInputId: aggregateInputId,
     idempotencyKey,
     messageJson,
     sources,
-    finish: (disposition) => {
-      const failures: unknown[] = [];
-      for (const source of sources) {
-        try {
-          source.finish(disposition);
-        } catch (error) {
-          failures.push(error);
-        }
-      }
-      if (failures.length) {
-        throw new AggregateError(failures, "Failed to finish collected input custody");
-      }
-    },
+    finish: finishPendingInputSources.bind(undefined, sources),
   });
   aggregate.settled = async () => {
     const results = await Promise.allSettled(receipts.map(async (receipt) => receipt.settled?.()));
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length) {
-      throw new AggregateError(failures, "Failed to settle collected input custody");
-    }
+    throwIfSettledRejected(results, "Failed to settle collected input custody");
   };
   return aggregate;
 }
 
 type PendingInputStageOptions = PendingInputRequest & {
+  lifecycleAdmission?: SessionInputLifecycleAdmission;
   onCommitted?: (receipt: SessionPendingInputReceipt) => void;
   authority?: SessionPendingInputAuthority;
   trackCompletion?: boolean;
+  /** An idempotent pre-commit operation may reclaim interrupted custody in this process. */
+  retryInterrupted?: boolean;
   assertCurrent: () => void;
+  /** Fresh source acceptance only; recorded pending and transcript inputs keep their prior consent. */
+  assertFreshInputCurrent?: SessionSourceAssertion;
   assertAdmittedCurrent?: () => void;
   assertCompletionCurrent?: () => void;
 };
@@ -213,29 +244,36 @@ export function stageSessionPendingInput(
   scope: PendingInputScope,
   options: PendingInputStageOptions,
 ): Promise<SessionPendingInputReceipt | undefined> {
-  const memory = getSessionActorStorageBinding(scope);
-  const incognito = memory
-    ? undefined
-    : (scope.incognito ?? captureIncognitoSessionOperation(scope));
-  incognito?.admissionSignal?.throwIfAborted();
-  incognito?.actor.assertCurrent();
   const captured = {
     ...scope,
-    sessionActor: memory,
-    incognito: incognito && { ...incognito },
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
   const preparedRequest = preparePendingInputRequest(options);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  if (memory) {
-    return runWithSessionActorStorage(memory, () =>
-      preparePendingInputStore(
-        captured,
-        options.authority?.assertLifetimeCurrent ?? options.assertCurrent,
-      ).then((store) =>
-        stagePreparedPendingInput(captured, options, preparedRequest, lifecycleGeneration, store),
-      ),
-    );
+  if (
+    captureSessionActorStorageOwner(scope, {
+      assertCurrent: options.assertCurrent,
+      authorize: options.assertCurrent,
+    })
+  ) {
+    return preparePendingInputStore(
+      captured,
+      options.authority?.assertLifetimeCurrent ?? options.assertCurrent,
+    ).then((store) => {
+      const binding = store.sessionActor;
+      if (!binding) {
+        throw new Error("Incognito pending input omitted its actor");
+      }
+      return runWithSessionActorStorage(binding, () =>
+        stagePreparedPendingInput(
+          { ...captured, sessionActor: binding },
+          options,
+          preparedRequest,
+          lifecycleGeneration,
+          store,
+        ),
+      );
+    });
   }
   return getSessionInputActor(captured).then((inputActor) => {
     const admission = inputActor ? undefined : resolveSqliteWriteAdmissionScope(captured);
@@ -243,10 +281,11 @@ export function stageSessionPendingInput(
       const store = await preparePendingInputStore(
         captured,
         options.authority?.assertLifetimeCurrent ?? options.assertCurrent,
+        options.lifecycleAdmission,
       );
       const accept = () =>
         stagePreparedPendingInput(captured, options, preparedRequest, lifecycleGeneration, store);
-      // Actor commands own the physical FIFO and revalidate the prepared snapshot.
+      // Actor commands own the physical FIFO and check the admitted input's identity.
       // Holding the legacy reservation here would make native acceptance queue behind itself.
       return inputActor ? accept() : store.withAdmission(accept, admission !== undefined);
     };
@@ -304,6 +343,12 @@ async function stagePreparedPendingInput(
       return undefined;
     }
     const { existing, previous, committed } = snapshot;
+    const recovery =
+      (existing && existing.lifecycle_generation !== lifecycleGeneration) ||
+      (committed && !previous) ||
+      previous?.outcome.stopReason === "restart"
+        ? { interruptedByRestart: true as const }
+        : {};
     const replayRequest = resolvePendingInputReplayRequest(preparedRequest, previous ?? existing);
     const { message, stableMessage } = replayRequest;
     let requestHash = replayRequest.requestHash;
@@ -351,7 +396,9 @@ async function stagePreparedPendingInput(
       if (
         (!options.requestFingerprint && !options.trackCompletion) ||
         (existing.state !== "queued" && existing.state !== "interrupted") ||
-        (existing.lifecycle_generation === lifecycleGeneration && !options.trackCompletion)
+        (existing.lifecycle_generation === lifecycleGeneration &&
+          !options.trackCompletion &&
+          !(options.retryInterrupted && existing.state === "interrupted"))
       ) {
         throw new Error("Pending input ownership ended; submit a new turn to continue");
       }
@@ -476,132 +523,138 @@ async function stagePreparedPendingInput(
         if (!committedHash) {
           return undefined;
         }
-        requestHash = committedHash;
+        // A retained receipt owns the raw request hash, even when JSON storage
+        // normalized its message. Reconstruct identity only after receipt retirement.
+        if (!previous && !existing) {
+          requestHash = committedHash;
+        }
         await assertCurrent();
       }
-      retained = true;
-      const run = <T>(operation: () => T) => {
-        store.assertCurrent();
-        if (finished) {
-          throw new SessionPendingInputCustodyError("Pending input ownership ended");
-        }
-        scope.incognito?.authority.assertCurrent();
-        options.assertCurrent();
-        return scope.sessionActor
-          ? runWithSessionActorStorage(scope.sessionActor, operation)
-          : operation();
-      };
-      return {
-        state: "queued",
-        inputId: committed.messageId,
-        message: committed.message,
-        run,
-        assertLifetimeCurrent: () => {
+      owner = {
+        sessionActor: scope.sessionActor,
+        agentId: scope.agentId,
+        databaseAgentId: store.databaseAgentId,
+        inputId: randomUUID(),
+        transcriptInputId: committed.messageId,
+        sessionId: scope.sessionId,
+        sessionKey: store.sessionKey,
+        databasePath: store.path,
+        workerDatabasePath: store.workerDatabasePath,
+        idempotencyKey: identity.idempotencyKey,
+        lifecycleGeneration,
+        messageJson: JSON.stringify(committed.message),
+        config: options.config,
+        assertCurrent: () => {
           store.assertCurrent();
-          (options.authority?.assertLifetimeCurrent ?? options.assertCurrent)();
-        },
-        runAsync: <T>(operation: () => T): Promise<Awaited<T>> =>
-          withCurrentPendingInputAuthority(
-            options.authority ? [options.authority] : [],
-            () => {
-              store.assertCurrent();
-              options.authority?.assertLifetimeCurrent();
-            },
-            () => run(operation),
-          ),
-        finish,
-        ...completionMethods,
-      };
-    }
-    const prepareMessage = () => {
-      options.assertCurrent();
-      return options.prepareMessageAfterIdempotencyCheck!(message);
-    };
-    const prepared = existing
-      ? parseSessionPendingInputMessage(existing.message_json)
-      : options.prepareMessageAfterIdempotencyCheck
-        ? options.authority
-          ? await options.authority.withCurrent(prepareMessage)
-          : prepareMessage()
-        : message;
-    if (!prepared) {
-      return undefined;
-    }
-    const messageJson =
-      existing?.message_json ?? JSON.stringify(sanitizeTranscriptMessageForStorage(prepared));
-    if (Buffer.byteLength(messageJson, "utf8") > MAX_PAYLOAD_BYTES) {
-      throw new Error("Approved pending input exceeds the Gateway payload limit");
-    }
-    const inputId = existing?.input_id ?? randomUUID();
-    const assertAdmittedCurrent = options.assertAdmittedCurrent ?? options.assertCurrent;
-    await store.mutate(
-      {
-        ...settlementIdentity(),
-        kind: "stage",
-        expected: snapshot,
-        trackCompletion: options.trackCompletion === true,
-        inputId,
-        messageJson,
-      },
-      (_stage, facts) => {
-        assertPrepared(facts, () => {
           options.assertCurrent();
-          assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-          assertUnowned(facts?.candidate);
-        });
-      },
-      (facts, assertSourceCurrent) => {
-        const staged = facts?.receipt.stagedInput;
-        if (!staged) {
+        },
+        authority: options.authority,
+        consumed: true,
+        finish,
+      };
+      registerSessionPendingInputOwner(owner);
+      retained = true;
+      // Replays have committed bytes but still need execution and completion custody.
+      return Object.assign(ownerReceipt(owner, true), completionMethods, recovery);
+    }
+    return await runWithSessionSourceScope(
+      existing ? undefined : options.assertFreshInputCurrent,
+      async () => {
+        const prepareMessage = () => {
+          options.assertCurrent();
+          options.assertFreshInputCurrent?.();
+          return options.prepareMessageAfterIdempotencyCheck!(message);
+        };
+        const prepared = existing
+          ? parseSessionPendingInputMessage(existing.message_json)
+          : options.prepareMessageAfterIdempotencyCheck
+            ? options.authority
+              ? await options.authority.withCurrent(prepareMessage)
+              : prepareMessage()
+            : message;
+        if (!prepared) {
+          return undefined;
+        }
+        const messageJson =
+          existing?.message_json ?? JSON.stringify(sanitizeTranscriptMessageForStorage(prepared));
+        if (Buffer.byteLength(messageJson, "utf8") > MAX_PAYLOAD_BYTES) {
+          throw new Error("Approved pending input exceeds the Gateway payload limit");
+        }
+        const inputId = existing?.input_id ?? randomUUID();
+        const assertAdmittedCurrent = options.assertAdmittedCurrent ?? options.assertCurrent;
+        await store.mutate(
+          {
+            ...settlementIdentity(),
+            kind: "stage",
+            expected: snapshot,
+            trackCompletion: options.trackCompletion === true,
+            inputId,
+            messageJson,
+          },
+          (_stage, facts) => {
+            assertPrepared(facts, () => {
+              options.assertCurrent();
+              if (!existing) {
+                options.assertFreshInputCurrent?.();
+              }
+              assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+              assertUnowned(facts?.candidate);
+            });
+          },
+          (facts, assertSourceCurrent) => {
+            const staged = facts?.receipt.stagedInput;
+            if (!staged) {
+              throw new SessionPendingInputCustodyError(
+                "Pending input omitted its committed postimage",
+              );
+            }
+            owner = {
+              sessionActor: scope.sessionActor,
+              agentId: scope.agentId,
+              databaseAgentId: store.databaseAgentId,
+              inputId: staged.input_id,
+              transcriptInputId: staged.input_id,
+              sessionId: scope.sessionId,
+              sessionKey: store.sessionKey,
+              databasePath: store.path,
+              workerDatabasePath: store.workerDatabasePath,
+              idempotencyKey: identity.idempotencyKey,
+              lifecycleGeneration,
+              messageJson: staged.message_json,
+              config: options.config,
+              assertCurrent: () => {
+                store.assertCurrent();
+                assertAdmittedCurrent();
+              },
+              authority: options.authority,
+              ...(existing ? { restartRecovered: true as const } : {}),
+              finish,
+            };
+            // COMMIT already accepted this custody. Preserve it before fallible publication.
+            registerSessionPendingInputOwner(owner);
+            retained = true;
+            options.onCommitted?.(Object.assign(ownerReceipt(owner), completionMethods, recovery));
+            assertPrepared(
+              facts,
+              () => {
+                options.assertCurrent();
+                assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+              },
+              assertSourceCurrent,
+            );
+          },
+        );
+        if (!owner) {
           throw new SessionPendingInputCustodyError(
-            "Pending input omitted its committed postimage",
+            "Pending input did not publish its committed owner",
           );
         }
-        owner = {
-          sessionActor: scope.sessionActor,
-          agentId: scope.agentId,
-          databaseAgentId: store.databaseAgentId,
-          inputId: staged.input_id,
-          transcriptInputId: staged.input_id,
-          sessionId: scope.sessionId,
-          sessionKey: store.sessionKey,
-          databasePath: store.path,
-          workerDatabasePath: store.workerDatabasePath,
-          idempotencyKey: identity.idempotencyKey,
-          lifecycleGeneration,
-          messageJson: staged.message_json,
-          config: options.config,
-          assertCurrent: () => {
-            store.assertCurrent();
-            scope.incognito?.actor.assertCurrent();
-            scope.incognito?.authority.assertCurrent();
-            assertAdmittedCurrent();
-          },
-          authority: options.authority,
-          ...(existing ? { restartRecovered: true as const } : {}),
-          finish,
-        };
-        // COMMIT already accepted this custody. Preserve it before fallible publication.
-        registerSessionPendingInputOwner(owner);
         retained = true;
-        options.onCommitted?.(Object.assign(ownerReceipt(owner), completionMethods));
-        assertPrepared(
-          facts,
-          () => {
-            options.assertCurrent();
-            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-          },
-          assertSourceCurrent,
-        );
+        return Object.assign(ownerReceipt(owner), completionMethods, recovery);
       },
+      // Committed input now belongs to the receiver; the original source can retire.
+      { checkAfter: false },
     );
-    if (!owner) {
-      throw new SessionPendingInputCustodyError(
-        "Pending input did not publish its committed owner",
-      );
-    }
-    retained = true;
-    return Object.assign(ownerReceipt(owner), completionMethods);
   } finally {
     if (!retained) {
       await store.release();
@@ -636,16 +689,38 @@ export async function prepareSessionPendingInputDedupeRecovery(
 }
 
 /** Read one admitted source for explicit retry comparison; this never authorizes replay. */
+export function readSessionSubmittedInput(
+  scope: PendingInputScope,
+  idempotencyKey: string,
+  options: { includeSource: true },
+): Promise<
+  | { message: PersistedUserTurnMessage; source: "pending" | "transcript"; messageSeq?: number }
+  | undefined
+>;
+export function readSessionSubmittedInput(
+  scope: PendingInputScope,
+  idempotencyKey: string,
+): Promise<PersistedUserTurnMessage | undefined>;
 export async function readSessionSubmittedInput(
   scope: PendingInputScope,
   idempotencyKey: string,
-): Promise<PersistedUserTurnMessage | undefined> {
+  options?: { includeSource: true },
+) {
   const source = await readPendingInputSource(scope, idempotencyKey, false);
   if (!source?.snapshot.current) {
     return undefined;
   }
   source.assertCurrent();
-  const { pending, committed } = source.snapshot;
+  const { pending, committed, committedMessageSeq } = source.snapshot;
   const message = pending ? parseSessionPendingInputMessage(pending.message_json) : committed;
-  return message && readMessageIdempotencyKey(message) === idempotencyKey ? message : undefined;
+  if (!message || readMessageIdempotencyKey(message) !== idempotencyKey) {
+    return undefined;
+  }
+  return options?.includeSource
+    ? {
+        message,
+        source: pending ? ("pending" as const) : ("transcript" as const),
+        ...(committedMessageSeq !== undefined ? { messageSeq: committedMessageSeq } : {}),
+      }
+    : message;
 }

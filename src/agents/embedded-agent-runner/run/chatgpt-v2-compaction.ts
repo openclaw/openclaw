@@ -115,10 +115,24 @@ export function createChatGPTV2CompactionBoundary(params: {
     const outgoing = preflight
       ? (preflight.compactionReplay ?? preflight)
       : resolveProjectedRequestPressure({ ...budget, context, previousRequest: requestAnchor });
-    if (outgoing.route === "fits") {
+    // V2 must send the complete window plus its trigger. Leave room for the
+    // next tool result instead of waiting for the client's reserve-based limit.
+    const contextTokens = Math.min(
+      params.contextTokenBudget,
+      model.contextWindow ?? params.contextTokenBudget,
+    );
+    const softTriggerTokens = Math.min(
+      outgoing.promptBudgetBeforeReserve,
+      Math.max(1, Math.floor(contextTokens * 0.9)),
+    );
+    if (outgoing.estimatedPromptTokens < softTriggerTokens) {
       return undefined;
     }
-    const fallback = (reason: string) => {
+    const fallback = (reason: string, hardLimit = false) => {
+      // The early V2 trigger must not move the client's compaction threshold.
+      if (!hardLimit && outgoing.route === "fits") {
+        return undefined;
+      }
       log.warn(`ChatGPT V2 compaction unavailable; falling back to client compaction: ${reason}`);
       const request: MidTurnPrecheckRequest = {
         ...outgoing,
@@ -128,14 +142,14 @@ export function createChatGPTV2CompactionBoundary(params: {
       params.onFallback(request);
       throw new MidTurnPrecheckSignal(request);
     };
+    if (outgoing.estimatedPromptTokens > (model.contextWindow ?? params.contextTokenBudget)) {
+      return fallback("the outgoing request exceeds the model context window", true);
+    }
     if (failed) {
       return fallback("an earlier V2 attempt in this run failed");
     }
     if (params.session.agent.state.pendingToolCalls.size > 0) {
       return fallback("tool calls are still pending");
-    }
-    if (outgoing.estimatedPromptTokens > (model.contextWindow ?? params.contextTokenBudget)) {
-      return fallback("the outgoing request exceeds the model context window");
     }
     const manager = params.session.sessionManager;
     const coveredLeaf = manager.getLeafId();

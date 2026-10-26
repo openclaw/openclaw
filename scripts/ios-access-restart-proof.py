@@ -168,8 +168,9 @@ def main(simulator):
     destination = f"platform=iOS Simulator,id={simulator}"
     build = ["xcodebuild", "-project", "apps/ios/OpenClaw.xcodeproj", "-scheme", "OpenClaw",
              "-configuration", "Debug", "-destination", destination]
-    # Reuse the preceding lifecycle build products; the generated plist owns host paths and environment.
-    run(build + ["-parallel-testing-enabled", "NO", "build-for-testing"])
+    # CI carries this fact only after its build-for-testing succeeds. Standalone proof still builds.
+    if os.environ.get("IOS_TEST_BUILD_PREPARED") != "true":
+        run(build + ["-parallel-testing-enabled", "NO", "build-for-testing"])
     settings = json.loads(run(build + ["-showBuildSettings", "-json"], capture=True))
     hosts = [row["buildSettings"] for row in settings if row.get("target") == "OpenClaw"]
     require(len(hosts) == 1, "Expected one OpenClaw build target")

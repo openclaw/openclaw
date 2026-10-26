@@ -57,26 +57,19 @@ export const EXISTING_SESSION_LIMITS = {
     "emulate is not supported for existing-session profiles; use a managed browser profile for device, media, timezone, or locale settings.",
 } as const;
 
-type ExistingSessionAction = Exclude<BrowserActRequest, { kind: "batch" | "insertText" }>;
-
-type ExistingSessionActionAdmission =
-  | { ok: true; action: ExistingSessionAction }
-  | { ok: false; error: string };
-
 /** Validate existing-session support before admitting a narrowed action to dispatch. */
 export function admitExistingSessionAction(
   action: BrowserActRequest,
-): ExistingSessionActionAdmission {
+):
+  | { ok: true; action: Exclude<BrowserActRequest, { kind: "batch" | "insertText" }> }
+  | { ok: false; error: string } {
   let error: string | undefined;
   switch (action.kind) {
     case "click":
       if (action.selector) {
         return { ok: false, error: EXISTING_SESSION_LIMITS.act.clickSelector };
       }
-      if (
-        (action.button && action.button !== "left") ||
-        (Array.isArray(action.modifiers) && action.modifiers.length > 0)
-      ) {
+      if ((action.button && action.button !== "left") || action.modifiers?.length) {
         return { ok: false, error: EXISTING_SESSION_LIMITS.act.clickButtonOrModifiers };
       }
       break;

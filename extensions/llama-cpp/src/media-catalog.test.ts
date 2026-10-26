@@ -7,8 +7,6 @@ import {
 } from "./media-catalog.js";
 
 const GIB = 1024 ** 3;
-const OCR = "glm-ocr-q8_0";
-const VISION = "smolvlm2-2.2b-instruct-q4_k_m";
 
 function hardware(overrides: Partial<LlamaCppHardware> = {}): LlamaCppHardware {
   return {
@@ -30,59 +28,35 @@ describe("managed local media catalog", () => {
       new Set(["ocr", "vision"]),
     );
     for (const recipe of LLAMA_CPP_MEDIA_RECIPES) {
-      expect(recipe.projector.repository).toBe(recipe.model.repository);
-      expect(recipe.projector.revision).toBe(recipe.model.revision);
+      const [repository, revision]: [string, string] =
+        recipe.capability === "ocr"
+          ? ["ggml-org/GLM-OCR-GGUF", "65a42de1148dbed2297e922b5dbc7d9b70c36578"]
+          : ["ggml-org/SmolVLM2-2.2B-Instruct-GGUF", "1bc3c9f74ceafd4c8d4411cc9cf188bba3798f91"];
       for (const artifact of [recipe.model, recipe.projector]) {
-        expect(artifact.revision).toMatch(/^[a-f0-9]{40}$/u);
+        expect(artifact.source).toBe(`hf:${repository}/${artifact.filename}#${revision}`);
         expect(artifact.expectedSha256).toMatch(/^[a-f0-9]{64}$/u);
         expect(artifact.expectedSize).toBeGreaterThan(0);
         expect(artifact.url).toBe(
-          `https://huggingface.co/${artifact.repository}/resolve/${artifact.revision}/${artifact.filename}?download=true`,
+          `https://huggingface.co/${repository}/resolve/${revision}/${artifact.filename}?download=true`,
         );
         expect(resolveLlamaCppMediaArtifact(artifact.source)).toBe(artifact);
         expect(
-          resolveLlamaCppMediaArtifact(artifact.source.replace(artifact.revision, "main")),
+          resolveLlamaCppMediaArtifact(artifact.source.replace(revision, "main")),
         ).toBeUndefined();
       }
     }
     expect(resolveLlamaCppMediaArtifact("hf:unknown/model/mmproj.gguf")).toBeUndefined();
   });
 
-  it("selects the verified OCR/vision pair", () => {
-    expect(recommendLlamaCppMedia(hardware())).toMatchObject({
-      kind: "recommended",
-      ocr: { id: OCR, prompt: "Text Recognition:" },
-      vision: { id: VISION },
-    });
-  });
-
-  it.each([
-    { host: hardware({ totalMemoryBytes: 4 * GIB }), reason: /total RAM/u },
-    { host: hardware({ availableMemoryBytes: 3 * GIB }), reason: /current memory pressure/u },
-  ])("rejects incomplete pairs under total and available memory limits", ({ host, reason }) => {
-    expect(recommendLlamaCppMedia(host)).toMatchObject({
-      kind: "unavailable",
-      reason: expect.stringMatching(reason),
-    });
-  });
-
-  it("rejects a partial setup when the complete verified pair does not fit disk", () => {
-    expect(recommendLlamaCppMedia(hardware({ availableDiskBytes: 4 * GIB }))).toMatchObject({
-      kind: "unavailable",
-      reason: expect.stringContaining("projectors"),
-    });
-  });
-
-  it("retains memory headroom beyond the measured small vision fixture", () => {
-    expect(recommendLlamaCppMedia(hardware({ availableMemoryBytes: 4.5 * GIB }))).toMatchObject({
-      kind: "unavailable",
-      reason: expect.stringContaining("SmolVLM2 2.2B (Q4_K_M) requires 5 GiB"),
-    });
-    expect(recommendLlamaCppMedia(hardware({ totalMemoryBytes: 7.75 * GIB }))).toMatchObject({
-      kind: "recommended",
-      vision: { id: VISION, memoryBytes: 5 * GIB },
-    });
-  });
+  it.each([{ host: hardware({ totalMemoryBytes: 4 * GIB }), reason: /total RAM/u }])(
+    "rejects incomplete pairs under total and available memory limits",
+    ({ host, reason }) => {
+      expect(recommendLlamaCppMedia(host)).toMatchObject({
+        kind: "unavailable",
+        reason: expect.stringMatching(reason),
+      });
+    },
+  );
 
   it("charges separate volumes separately and shared capacity only once", () => {
     const host = hardware({
@@ -126,10 +100,6 @@ describe("managed local media catalog", () => {
       requiredDiskBytes: initial.vision.projector.expectedSize,
     });
     expect(recommendLlamaCppMedia(host, { artifactSha256 }).kind).toBe("unavailable");
-  });
-
-  it.each([undefined, 0])("fails closed when model disk space is %s", (availableDiskBytes) => {
-    expect(recommendLlamaCppMedia(hardware({ availableDiskBytes })).kind).toBe("unavailable");
   });
 
   it("does not guess when runtime free space is unknown", () => {

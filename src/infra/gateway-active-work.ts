@@ -5,7 +5,6 @@ import type {
 // Collects process activity shared by restart and host-suspension decisions.
 import { getActiveAcpTurnCount } from "../acp/control-plane/active-turns.js";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
-import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { getActiveMediaGenerationRunCount } from "../agents/media-generation-activity.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
@@ -16,20 +15,16 @@ import {
   getActiveGatewayRootWorkHolders,
 } from "../process/gateway-work-admission.js";
 import {
-  getActiveSessionLifecycleMutationCount,
-  getActiveSessionWorkAdmissionCount,
-} from "../sessions/session-lifecycle-admission.js";
+  getSessionMutationCount,
+  getSessionControllerWorkCount,
+} from "../sessions/session-controller.lifecycle.js";
+import { getActiveSessionRunCount } from "../sessions/session-controller.queries.js";
 import { getActiveAgentRunContextCount } from "./agent-run-registry.js";
 import { waitForGatewayDrain } from "./gateway-drain.js";
 import { readLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 
 export type GatewayActiveWorkBlocker = GatewaySuspendBlocker;
 export type GatewayActiveWorkSnapshot = ReturnType<typeof createGatewayActiveWorkSnapshot>;
-
-type GatewayActiveWorkWaitResult = {
-  drained: boolean;
-  snapshot: GatewayActiveWorkSnapshot;
-};
 
 export type GatewayActiveWorkInspectors = Omit<
   typeof defaultInspectors,
@@ -43,7 +38,7 @@ export type GatewayActiveWorkInspectors = Omit<
 const defaultInspectors = {
   getQueueSize: getTotalQueueSize,
   getPendingReplies: getTotalPendingReplies,
-  getEmbeddedRuns: getActiveEmbeddedRunCount,
+  getEmbeddedRuns: getActiveSessionRunCount,
   getBackgroundExecSessions: getActiveBackgroundExecSessionCount,
   getCronRuns: () => Math.max(getActiveCronJobCount(), getSuspensionVisibleCronTaskRunCount()),
   getAgentRuns: getActiveAgentRunContextCount,
@@ -51,8 +46,8 @@ const defaultInspectors = {
   getMediaRuns: getActiveMediaGenerationRunCount,
   getRootRequests: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }),
   getRootRequestHolders: () => getActiveGatewayRootWorkHolders({ excludeCurrent: true }),
-  getSessionAdmissions: getActiveSessionWorkAdmissionCount,
-  getSessionMutations: getActiveSessionLifecycleMutationCount,
+  getSessionAdmissions: getSessionControllerWorkCount,
+  getSessionMutations: getSessionMutationCount,
   getChatRuns: () => 0,
   getQueuedTurns: () => 0,
   getTerminalPersistence: () => 0,
@@ -188,7 +183,10 @@ const GATEWAY_ACTIVE_WORK_POLL_MS = 250;
 export async function waitForGatewayActiveWork(
   timeoutMs?: number,
   options: { onSnapshot?: (snapshot: GatewayActiveWorkSnapshot) => void } = {},
-): Promise<GatewayActiveWorkWaitResult> {
+): Promise<{
+  drained: boolean;
+  snapshot: GatewayActiveWorkSnapshot;
+}> {
   return waitForGatewayDrain(createGatewayActiveWorkSnapshot, timeoutMs, {
     ...options,
     pollMs: GATEWAY_ACTIVE_WORK_POLL_MS,

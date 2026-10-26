@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -94,7 +95,12 @@ async function releaseInRealWorker(
           {
             inputBytes: 512,
             signal: controller.signal,
-            transferList: (task) => [task.port],
+            transferList: (task) => [
+              task.port,
+              ...(task.coordination?.databaseAdmission
+                ? [task.coordination.databaseAdmission]
+                : []),
+            ],
           },
         );
         await pending;
@@ -168,6 +174,7 @@ describe("reconciliation cleanup transport native custody", () => {
                 databasePath: context.admission.databasePath,
                 payload: {
                   pid: process.pid,
+                  processNamespace: readGatewayLockProcessNamespace(),
                   createdAt: new Date().toISOString(),
                   configPath: state.configPath,
                   stateDir: state.stateDir,
@@ -252,6 +259,7 @@ it.each([false, true])(
               databasePath: context.admission.databasePath,
               payload: {
                 pid: process.pid,
+                processNamespace: readGatewayLockProcessNamespace(),
                 createdAt: new Date().toISOString(),
                 configPath: state.configPath,
                 stateDir: state.stateDir,

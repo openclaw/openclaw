@@ -26,11 +26,7 @@ export async function prepareGatewayRunLoop(
     "cli.bootstrap.lifecycle-runtime",
     () => lifecycleRuntimeLoader.load(),
   );
-  const supervisor = lifecycleRuntime.detectGatewayRespawnSupervisorIdentity(
-    process.env,
-    process.platform,
-    { includeLinuxOpenClawGatewayServiceMarker: true },
-  );
+  const supervisor = lifecycleRuntime.detectGatewayRespawnSupervisorIdentity();
   const supervisorMode = supervisor?.kind ?? null;
   const restartDecision = lifecycleRuntime.resolveGatewayRestartDecision();
   // Resolve the native deadline before acquiring custody that needs final settlement.
@@ -216,7 +212,7 @@ export async function prepareGatewayRestartIteration(
   // Rotation aborts rootless stale owners before reset pumps preserved queues.
   rotateAgentEventLifecycleGeneration();
   advanceCronActiveJobGeneration();
-  abortActiveCronTaskRuns("Gateway restarting.");
+  abortActiveCronTaskRuns();
   const cronTaskDrain = await waitForActiveCronTaskRuns(1_000);
   const cronDrain = await waitForActiveCronJobs(1_000);
   // A terminal decision made during these joins must not reopen root admission.

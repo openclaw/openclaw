@@ -1,8 +1,8 @@
-// Gateway readiness tests cover readiness checks, status details, and failure messages.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
-import { ensureDashboardGatewayReady } from "./gateway-readiness.js";
-import { createTestRuntime } from "./test-runtime-config-helpers.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
+import { dashboardCommand } from "./dashboard.js";
+import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const { gatherStatus, confirm, installGateway, startGateway } = vi.hoisted(() => ({
   gatherStatus: vi.fn(),
@@ -12,14 +12,40 @@ const { gatherStatus, confirm, installGateway, startGateway } = vi.hoisted(() =>
 }));
 vi.mock("../cli/daemon-cli/status.gather.js", () => ({ gatherDaemonStatus: gatherStatus }));
 vi.mock("../cli/prompt.js", () => ({ promptYesNo: confirm }));
-vi.mock("../cli/daemon-cli/install.runtime.js", () => ({ runDaemonInstall: installGateway }));
+vi.mock("../cli/daemon-cli/install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/daemon-cli/install.js")>()),
+  runDaemonInstall: installGateway,
+}));
 vi.mock("../cli/daemon-cli/lifecycle.js", () => ({ runDaemonStart: startGateway }));
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: async () => ({ ...baseConfigSnapshot, sourceConfig: {} }),
+}));
+vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./control-ui-handoff.js")>()),
+  resolveControlUiHandoffTarget: async () => ({
+    port: 18789,
+    bind: "loopback",
+    links: { httpUrl: "http://127.0.0.1:18789/", wsUrl: "ws://127.0.0.1:18789" },
+    authMode: "token",
+    includeTokenInUrl: false,
+    dashboardUrl: "http://127.0.0.1:18789/",
+    documentUrl: "http://127.0.0.1:18789/",
+    probeUrl: "ws://127.0.0.1:18789",
+  }),
+  waitForControlUiDocument: async () => ({ ready: true }),
+  issueControlUiBrowserHandoff: async () => ({ browserUrl: "http://127.0.0.1:18789/" }),
+}));
+vi.mock("../infra/clipboard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clipboard.js")>()),
+  copyToClipboard: async () => true,
+}));
 
 type StatusOverrides = Omit<Partial<DaemonStatus>, "service"> & {
   service?: Omit<DaemonStatus["service"], "loaded">;
 };
 
-function createStatus(overrides: StatusOverrides = {}): DaemonStatus {
+function createStatus(overrides: StatusOverrides = {}, port = 18789): DaemonStatus {
   const { service, ...rest } = overrides;
   const serviceStatus = service ?? {
     label: "systemd user",
@@ -40,19 +66,19 @@ function createStatus(overrides: StatusOverrides = {}): DaemonStatus {
     gateway: {
       bindMode: "loopback",
       bindHost: "127.0.0.1",
-      port: 18789,
+      port,
       portSource: "env/config",
-      probeUrl: "ws://127.0.0.1:18789",
+      probeUrl: `ws://127.0.0.1:${port}`,
     },
     port: {
-      port: 18789,
+      port,
       status: "free",
       listeners: [],
       hints: [],
     },
     rpc: {
       ok: false,
-      error: "connect ECONNREFUSED 127.0.0.1:18789",
+      error: `connect ECONNREFUSED 127.0.0.1:${port}`,
     },
     extraServices: [],
     ...rest,
@@ -60,178 +86,117 @@ function createStatus(overrides: StatusOverrides = {}): DaemonStatus {
 }
 
 const runtime = createTestRuntime();
-
-describe("ensureDashboardGatewayReady", () => {
-  beforeEach(() => {
-    vi.resetAllMocks();
-    runtime.log.mockClear();
-    runtime.error.mockClear();
-    runtime.exit.mockClear();
+const tty = createCliTtyMock();
+afterEach(() => tty.restore());
+const output = () => runtime.log.mock.calls.flat().join("\n");
+const check = (options: { yes?: boolean } = {}) =>
+  dashboardCommand(runtime, { noOpen: true, ...options });
+const installedService = (
+  overrides: Partial<NonNullable<StatusOverrides["service"]>> = {},
+): NonNullable<StatusOverrides["service"]> => ({
+  label: "systemd user",
+  loadState: { status: "loaded" },
+  loadedText: "enabled",
+  notLoadedText: "disabled",
+  command: { programArguments: ["openclaw", "gateway", "run"] },
+  runtime: { status: "running" },
+  ...overrides,
+});
+const runningStatus = () =>
+  createStatus({
+    service: installedService(),
+    port: { port: 18789, status: "busy", listeners: [], hints: [] },
+    rpc: { ok: true },
   });
 
-  it.each(["timeout"])(
-    "does not start over a busy listener after an inconclusive %s probe",
-    async (error) => {
-      const status = createStatus({
-        port: { port: 18789, status: "busy", listeners: [], hints: [] },
-        rpc: { ok: false, error },
-      });
-      confirm.mockResolvedValue(false);
-      gatherStatus.mockResolvedValue(status);
+describe("dashboard Gateway readiness", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
 
-      const result = await ensureDashboardGatewayReady({
-        runtime,
-        interactive: true,
-      });
+  it("does not start over a busy listener after an inconclusive timeout probe", async () => {
+    const status = createStatus({
+      port: { port: 18789, status: "busy", listeners: [], hints: [] },
+      rpc: { ok: false, error: "timeout" },
+    });
+    gatherStatus.mockResolvedValue(status);
 
-      expect(result).toMatchObject({ ready: false, recoverable: false });
-      expect(confirm).not.toHaveBeenCalled();
-      expect(installGateway).not.toHaveBeenCalled();
-      expect(startGateway).not.toHaveBeenCalled();
-      const output = runtime.log.mock.calls.flat().join("\n");
-      expect(output).toContain("Gateway check failed:");
-      expect(output).not.toContain("Gateway is not running");
-      expect(output).not.toContain("gateway start");
-    },
-  );
+    await check();
+
+    expect(output()).not.toContain("Dashboard URL:");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(installGateway).not.toHaveBeenCalled();
+    expect(startGateway).not.toHaveBeenCalled();
+    expect(output()).toContain("Gateway check failed:");
+    expect(output()).not.toContain("Gateway is not running");
+    expect(output()).not.toContain("gateway start");
+  });
 
   it("prints diagnosis and skips recovery when an interactive user declines", async () => {
+    tty.set(true);
     gatherStatus.mockResolvedValue(createStatus());
     confirm.mockResolvedValue(false);
 
-    const result = await ensureDashboardGatewayReady({
-      runtime,
-      interactive: true,
-    });
+    await check();
 
-    expect(result.ready).toBe(false);
+    expect(output()).not.toContain("Dashboard URL:");
     expect(confirm).toHaveBeenCalledWith(
       "No background Gateway service was detected for this profile. Install and start one to open the dashboard?",
       true,
     );
-    expect(runtime.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-      "Gateway is not running.",
-    );
+    expect(output()).toContain("Gateway is not running.");
   });
 
-  it("installs a missing service and waits for the gateway before returning ready", async () => {
-    const stopped = createStatus();
-    const running = createStatus({
-      service: {
-        label: "systemd user",
-        loadState: { status: "loaded" },
-        loadedText: "enabled",
-        notLoadedText: "disabled",
-        command: { programArguments: ["openclaw", "gateway", "run"] },
-        runtime: { status: "running" },
-      },
-      port: { port: 18789, status: "busy", listeners: [], hints: [] },
-      rpc: { ok: true },
-    });
-    gatherStatus.mockResolvedValueOnce(stopped).mockResolvedValueOnce(running);
-    installGateway.mockResolvedValue(undefined);
-    startGateway.mockResolvedValue(undefined);
+  it.each([false, true])("recovers a stopped gateway (installed=%s)", async (installed) => {
+    const stopped = installed
+      ? createStatus({
+          service: installedService({
+            loadState: { status: "not-loaded" },
+            runtime: { status: "stopped" },
+          }),
+        })
+      : createStatus();
+    gatherStatus.mockResolvedValueOnce(stopped).mockResolvedValueOnce(runningStatus());
 
-    const result = await ensureDashboardGatewayReady({
-      runtime,
-      yes: true,
-    });
+    await check({ yes: true });
 
-    expect(result).toMatchObject({ ready: true, recovered: true });
-    expect(installGateway).toHaveBeenCalledTimes(1);
-    expect(startGateway).not.toHaveBeenCalled();
-  });
-
-  it("starts an installed stopped service instead of reinstalling it", async () => {
-    const stopped = createStatus({
-      service: {
-        label: "systemd user",
-        loadState: { status: "not-loaded" },
-        loadedText: "enabled",
-        notLoadedText: "disabled",
-        command: { programArguments: ["openclaw", "gateway", "run"] },
-        runtime: { status: "stopped" },
-      },
-    });
-    const running = createStatus({
-      service: {
-        label: "systemd user",
-        loadState: { status: "loaded" },
-        loadedText: "enabled",
-        notLoadedText: "disabled",
-        command: { programArguments: ["openclaw", "gateway", "run"] },
-        runtime: { status: "running" },
-      },
-      port: { port: 18789, status: "busy", listeners: [], hints: [] },
-      rpc: { ok: true },
-    });
-    gatherStatus.mockResolvedValueOnce(stopped).mockResolvedValueOnce(running);
-    installGateway.mockResolvedValue(undefined);
-    startGateway.mockResolvedValue(undefined);
-
-    const result = await ensureDashboardGatewayReady({
-      runtime,
-      yes: true,
-    });
-
-    expect(result).toMatchObject({ ready: true, recovered: true });
-    expect(startGateway).toHaveBeenCalledTimes(1);
-    expect(installGateway).not.toHaveBeenCalled();
+    expect(output()).toContain("Dashboard URL: http://127.0.0.1:18789/");
+    expect(installGateway).toHaveBeenCalledTimes(installed ? 0 : 1);
+    expect(startGateway).toHaveBeenCalledTimes(installed ? 1 : 0);
   });
 
   it("does not recover a diagnostic-only native service for an active external target", async () => {
-    const status = createStatus({
-      service: {
-        label: "systemd user",
-        loadState: { status: "loaded" },
-        loadedText: "enabled",
-        notLoadedText: "disabled",
-        targetRole: "diagnostic-only",
-        command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
-        runtime: { status: "running" },
+    const status = createStatus(
+      {
+        service: installedService({
+          targetRole: "diagnostic-only",
+          command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
+        }),
+        rpc: {
+          ok: false,
+          error: "connect ECONNREFUSED 127.0.0.1:18900",
+          url: "ws://127.0.0.1:18900",
+        },
       },
-      gateway: {
-        bindMode: "loopback",
-        bindHost: "127.0.0.1",
-        port: 18900,
-        portSource: "env/config",
-        probeUrl: "ws://127.0.0.1:18900",
-      },
-      port: { port: 18900, status: "free", listeners: [], hints: [] },
-      rpc: {
-        ok: false,
-        error: "connect ECONNREFUSED 127.0.0.1:18900",
-        url: "ws://127.0.0.1:18900",
-      },
-    });
-    confirm.mockResolvedValue(false);
+      18900,
+    );
 
     gatherStatus.mockResolvedValue(status);
 
-    const result = await ensureDashboardGatewayReady({
-      runtime,
-      interactive: true,
-    });
+    await check();
 
-    expect(result).toMatchObject({ ready: false, recoverable: false });
+    expect(output()).not.toContain("Dashboard URL:");
     expect(confirm).not.toHaveBeenCalled();
     expect(installGateway).not.toHaveBeenCalled();
     expect(startGateway).not.toHaveBeenCalled();
-    expect(runtime.log.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
-      "owning environment or supervisor to start or repair",
-    );
+    expect(output()).toContain("owning environment or supervisor to start or repair");
   });
 
   it("can accept a reachable dashboard listener when authenticated RPC fails", async () => {
     const status = createStatus({
-      service: {
-        label: "systemd user",
-        loadState: { status: "loaded" },
-        loadedText: "enabled",
-        notLoadedText: "disabled",
+      service: installedService({
         command: { programArguments: ["openclaw", "gateway", "run", "--port", "18789"] },
-        runtime: { status: "running" },
-      },
+      }),
       port: { port: 18789, status: "free", listeners: [], hints: [] },
       portCli: { port: 49876, status: "busy", listeners: [], hints: [] },
       rpc: {
@@ -244,13 +209,12 @@ describe("ensureDashboardGatewayReady", () => {
 
     gatherStatus.mockResolvedValue(status);
 
-    const result = await ensureDashboardGatewayReady({
-      runtime,
-      interactive: true,
-    });
+    await check();
 
-    expect(result).toMatchObject({ ready: true, recovered: false });
+    expect(output()).toContain("Dashboard URL: http://127.0.0.1:18789/");
     expect(confirm).not.toHaveBeenCalled();
-    expect(runtime.log).not.toHaveBeenCalled();
+    expect(installGateway).not.toHaveBeenCalled();
+    expect(startGateway).not.toHaveBeenCalled();
+    expect(output()).not.toContain("Gateway check failed:");
   });
 });

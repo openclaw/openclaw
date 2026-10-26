@@ -45,7 +45,7 @@ const ACP_CRON_MCP_PROBE_VERIFY_POLLS = 5;
 const ACP_CRON_MCP_PROBE_VERIFY_POLL_MS = 1_000;
 const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.6-luna";
 const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
-type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "opencode";
+type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "grok-build" | "opencode";
 
 function snapshotAcpBindLiveEnv(): LiveEnvSnapshot {
   return snapshotLiveEnv(["CODEX_HOME"]);
@@ -97,6 +97,9 @@ function normalizeAcpAgent(raw: string | undefined): LiveAcpAgent {
   }
   if (normalized === "opencode") {
     return "opencode";
+  }
+  if (normalized === "grok-build") {
+    return "grok-build";
   }
   return "claude";
 }
@@ -767,7 +770,9 @@ describeLive("gateway live (ACP bind)", () => {
         const { mainAssistantTexts, spawnedSessionKey } = bindResult;
         logLiveStep("bind command completed");
         expect(mainAssistantTexts.join("\n\n")).toContain("Bound this conversation to");
-        expect(spawnedSessionKey).toMatch(new RegExp(`^agent:${liveAgent}:acp:`));
+        // Raw harness ids stay owned by the requesting `main` agent; this lane configures no agent
+        // named after the harness, which would keep its own namespace instead.
+        expect(spawnedSessionKey).toMatch(/^agent:main:acp:/);
         logLiveStep(`binding announced for session ${spawnedSessionKey ?? "missing"}`);
 
         let firstBoundHistory: Awaited<ReturnType<typeof waitForAssistantText>> | null = null;

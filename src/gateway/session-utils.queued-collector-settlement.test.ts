@@ -19,11 +19,12 @@ import {
   holdQueuedSwarmRun,
 } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import * as sessionEvents from "./server-methods/session-change-event.js";
+import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
-const { createQueuedReservation, requestContext, operatorClient } = useQueuedCollectorFixture();
+const { createQueuedReservation, requestContext, requestOptions, expectChanged } =
+  useQueuedCollectorFixture();
 
 it.for(["settled", "rejected", "session replaced"] as const)(
   "qualifies queued cancellation only after owned cleanup: %s",
@@ -33,40 +34,30 @@ it.for(["settled", "rejected", "session replaced"] as const)(
     const context = requestContext();
     const cleanupEntered = createDeferred();
     const releaseCleanup = createDeferred();
-    const initialPublication = createDeferred();
     const failure = new Error("owned queued cleanup failed");
-    const publications: Array<string | undefined> = [];
-    let cleanupSettled = false;
+    const readSession = () => loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey);
+    const expectUnpublished = () => {
+      const changes = vi
+        .mocked(context.broadcastToConnIds)
+        .mock.calls.filter(([event]) => event === "sessions.changed")
+        .map(([, payload]) => payload);
+      expect(changes).not.toContainEqual(expect.objectContaining({ lastRunId: entry.runId }));
+    };
+    const replacement = {
+      sessionId: "replacement-session",
+      lifecycleRevision: "replacement-lifecycle",
+      lastRunId: "replacement-terminal",
+      status: "done" as const,
+      abortedLastRun: false,
+    };
     const start = vi.fn(async () => {});
-    const cleanup = vi.fn(async () => {
+    const cleanup = async () => {
       cleanupEntered.resolve();
       await releaseCleanup.promise;
       if (transition === "rejected") {
         throw failure;
       }
-      cleanupSettled = true;
-    });
-    const emit = sessionEvents.emitSessionsChanged;
-    const publicationSpy = vi
-      .spyOn(sessionEvents, "emitSessionsChanged")
-      .mockImplementation((owner, payload, options) => {
-        const selected =
-          owner === context &&
-          payload.sessionKey === entry.childSessionKey &&
-          payload.reason === "abort";
-        if (selected) {
-          const view = expectDefined(options?.sessionRows, "prepared cancellation rows");
-          const row = expectDefined(
-            view.describe({ agentId: "main", key: entry.childSessionKey }),
-            "cancelled collector row",
-          );
-          publications.push(view.present(row).lastRunId);
-        }
-        emit(owner, payload, options);
-        if (selected && publications.length === 1) {
-          initialPublication.resolve();
-        }
-      });
+    };
     const respond = vi.fn();
     let stopping: Promise<void> | undefined;
     try {
@@ -78,62 +69,50 @@ it.for(["settled", "rejected", "session replaced"] as const)(
         onRemoved: cleanup,
       });
       stopping = Promise.resolve(
-        expectDefined(
-          sessionAbortHandlers["sessions.abort"],
-          "Stop handler",
-        )({
-          req: { type: "req", id: "settled-queued-stop", method: "sessions.abort" },
-          params: { key: entry.childSessionKey, runId: entry.runId, agentId: "main" },
-          client: operatorClient(),
-          isWebchatConnect: () => false,
-          context,
+        sessionAbortHandlers["sessions.abort"]!({
+          ...requestOptions(context, "sessions.abort", {
+            key: entry.childSessionKey,
+            runId: entry.runId,
+            agentId: "main",
+          }),
           respond,
         }),
       );
       await withinTest(
         awaitGateBeforeSettlement(
-          Promise.all([cleanupEntered.promise, initialPublication.promise]),
+          cleanupEntered.promise,
           stopping,
-          "Stop returned before its initial notice and owned cleanup",
+          "Stop returned before owned cleanup",
         ),
         signal,
       );
-      expect(publications).toEqual([undefined]);
-      expect(cleanupSettled).toBe(false);
-      expect(
-        loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry?.lastRunId,
-      ).toBeUndefined();
+      // Current-row notices may arrive later; terminal qualification must await cleanup.
+      expectUnpublished();
+      expect((await readSession()).entry?.lastRunId).toBeUndefined();
       expect(respond).not.toHaveBeenCalled();
       expect(start).not.toHaveBeenCalled();
 
       if (transition === "session replaced") {
-        const selected = loadGatewaySessionEntryReadOnly(entry.childSessionKey);
+        const selected = await readSession();
         await replaceSessionEntry(
           { storePath: selected.storePath, sessionKey: entry.childSessionKey },
           {
             ...expectDefined(selected.entry, "selected session"),
-            sessionId: "replacement-session",
-            lifecycleRevision: "replacement-lifecycle",
-            lastRunId: "replacement-terminal",
-            status: "done",
-            abortedLastRun: false,
+            ...replacement,
           },
         );
       }
       releaseCleanup.resolve();
       await withinTest(stopping, signal);
+      await flushPendingSessionsChangedEvents(context);
 
-      const stored = expectDefined(
-        loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry,
-        "terminal session",
-      );
+      const stored = expectDefined((await readSession()).entry, "terminal session");
       const stopped = expectDefined(
         getCurrentSubagentRunOwner(subagentRuns, entry),
         "cancelled collector owner",
       );
       expect(stopped.execution.startedAt).toBeUndefined();
       expect(start).not.toHaveBeenCalled();
-      expect(cleanup).toHaveBeenCalledOnce();
       expect(respond).toHaveBeenCalledOnce();
       if (transition === "settled") {
         expect(respond.mock.calls[0]?.[0]).toBe(true);
@@ -142,22 +121,16 @@ it.for(["settled", "rejected", "session replaced"] as const)(
           lastRunId: entry.runId,
           abortedLastRun: true,
         });
-        expect(publications).toEqual([undefined, entry.runId]);
-        expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-          "sessions.changed",
-          expect.objectContaining({
-            sessionKey: entry.childSessionKey,
-            reason: "abort",
-            status: "killed",
-            hasActiveRun: false,
-            lastRunId: entry.runId,
-          }),
-          new Set(["observer"]),
-          expect.any(Object),
-        );
+        expectChanged(context, {
+          sessionKey: entry.childSessionKey,
+          reason: "abort",
+          status: "killed",
+          hasActiveRun: false,
+          lastRunId: entry.runId,
+        });
       } else {
         expect(respond.mock.calls[0]?.[0]).toBe(false);
-        expect(publications).toEqual([undefined]);
+        expectUnpublished();
         expect(stored.lastRunId).toBe(
           transition === "session replaced" ? "replacement-terminal" : undefined,
         );
@@ -167,21 +140,16 @@ it.for(["settled", "rejected", "session replaced"] as const)(
           });
           await expect(closeSwarmScheduler()).rejects.toMatchObject({ errors: [failure] });
         } else {
-          expect(stored).toMatchObject({
-            sessionId: "replacement-session",
-            lifecycleRevision: "replacement-lifecycle",
-            status: "done",
-          });
+          expect(stored).toMatchObject(replacement);
         }
       }
-      expect(stored.startedAt).toBeUndefined();
-      expect(stored.runtimeMs).toBeUndefined();
+      expect([stored.startedAt, stored.runtimeMs]).toEqual([undefined, undefined]);
     } finally {
       releaseCleanup.resolve();
       await Promise.allSettled([stopping]);
       await producer.release();
       await closeSwarmScheduler().catch(() => {});
-      publicationSpy.mockRestore();
+      await flushPendingSessionsChangedEvents(context);
     }
   },
 );

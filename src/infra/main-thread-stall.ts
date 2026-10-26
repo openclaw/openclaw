@@ -1,148 +1,196 @@
-import { AsyncLocalStorage, createHook } from "node:async_hooks";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
-import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-const STALL_MS = 1_000;
+const STALL_MS = 250;
+const UNATTRIBUTED_STALL_MS = 1_000;
+const HEARTBEAT_MS = 20;
 const MAX_PENDING_STALLS = 8;
 
-type Stall = { elapsedMs: number; task: string; taskMs: number };
-type TaskObserver = { enter(name: string): () => void; stop(): void };
-type TaskScope = { name: string; active: boolean };
-type MainThreadTaskState = { context: AsyncLocalStorage<TaskScope>; observer?: TaskObserver };
+type TaskObserver = {
+  run<T>(name: string, run: () => T, phase?: string): T;
+  currentName(): string | undefined;
+  stop(): void;
+};
+type MainThreadTaskState = { observer?: TaskObserver; context: AsyncLocalStorage<string> };
 
 const taskState = resolveGlobalSingleton<MainThreadTaskState>(
   Symbol.for("openclaw.mainThreadTask"),
-  () => ({ context: new AsyncLocalStorage<TaskScope>() }),
+  () => ({ context: new AsyncLocalStorage<string>() }),
 );
 
-/** Name code-owned work only; request text, paths, and identifiers do not belong in labels. */
-export function runWithMainThreadTask<T>(name: string, run: () => Promise<T>): Promise<T>;
-export function runWithMainThreadTask<T>(name: string, run: () => T): T;
-export function runWithMainThreadTask(name: string, run: () => unknown): unknown {
-  const observer = taskState.observer;
-  if (!observer) {
-    return run();
-  }
-  const exit = observer.enter(name);
-  const scope: TaskScope = { name, active: true };
-  const finish = () => {
-    scope.active = false;
-  };
-  try {
-    const result = taskState.context.run(scope, run);
-    // Detached descendants keep the context, but no longer own a completed task's label.
-    if (isPromiseLike(result)) {
-      return Promise.resolve(result).finally(finish);
-    }
-    finish();
-    return result;
-  } catch (error) {
-    finish();
-    throw error;
-  } finally {
-    exit();
-  }
+/** Synchronous callers can enter a stored owner context without losing their enclosing task. */
+export function getMainThreadTaskName(): string | undefined {
+  return taskState.observer?.currentName() ?? taskState.context.getStore();
 }
 
-/** Measure callback execution, never the time an async operation spends awaiting I/O. */
+/**
+ * Name code-owned work only; request text, paths, and identifiers do not belong in labels.
+ * Phases label synchronous segments; only task boundaries establish an inherited async name.
+ */
+export function runWithMainThreadTask<T>(name: string, run: () => T, phase?: string): T {
+  const observer = taskState.observer;
+  return observer ? observer.run(name, run, phase) : run();
+}
+
+/** Measure explicit synchronous scopes; unscoped stalls rely on best-effort loop sampling. */
 export function createMainThreadStallMonitor(now: () => number = () => performance.now()) {
   taskState.observer?.stop();
-  const pending: Stall[] = [];
-  let stopped = false;
+  const pending: {
+    elapsedMs: number;
+    task: string;
+    taskMs: number;
+    startedAt: number;
+    endedAt: number;
+  }[] = [];
+  let heartbeat: NodeJS.Timeout | undefined;
+  let heartbeatAt = now();
   let dropped = 0;
+  let unattributedDropped = 0;
   let delayMaxMs = 0;
-  let depth = 0;
+  let active = false;
   let startedAt = 0;
   let segmentAt = 0;
   let task = "unattributed";
+  let phase: string | undefined;
   let longestTask = task;
+  let longestPhase: string | undefined;
   let longestMs = 0;
+  const observeLoop = () => {
+    const at = now();
+    const from = heartbeatAt;
+    heartbeatAt = at;
+    const elapsedMs = at - from;
+    if (
+      elapsedMs <= UNATTRIBUTED_STALL_MS ||
+      pending.some(
+        (stall) => stall.startedAt <= from + HEARTBEAT_MS && stall.endedAt >= at - HEARTBEAT_MS,
+      )
+    ) {
+      return;
+    }
+    if (pending.length < MAX_PENDING_STALLS) {
+      pending.push({
+        elapsedMs,
+        task: "unattributed",
+        taskMs: elapsedMs,
+        startedAt: from,
+        endedAt: at,
+      });
+    } else {
+      unattributedDropped++;
+    }
+  };
   const segment = (at: number) => {
     const elapsed = at - segmentAt;
     if (elapsed > longestMs) {
       longestTask = task;
+      longestPhase = phase;
       longestMs = elapsed;
     }
     segmentAt = at;
   };
-  const before = () => {
-    if (depth++ !== 0) {
-      return;
-    }
-    startedAt = segmentAt = now();
-    const scope = taskState.context.getStore();
-    task = longestTask = scope?.active ? scope.name : "unattributed";
-    longestMs = 0;
-  };
-  const after = () => {
-    if (depth === 0 || --depth !== 0) {
-      return;
-    }
-    const at = now();
-    segment(at);
-    const elapsedMs = at - startedAt;
-    delayMaxMs = Math.max(delayMaxMs, elapsedMs);
-    if (elapsedMs > STALL_MS) {
-      if (pending.length < MAX_PENDING_STALLS) {
-        pending.push({ elapsedMs, task: longestTask, taskMs: longestMs });
-      } else {
-        dropped++;
-      }
-    }
-  };
   const observer: TaskObserver = {
+    currentName: () => (active ? task : undefined),
     stop() {
-      if (stopped) {
-        return;
-      }
-      stopped = true;
-      hook.disable();
+      clearInterval(heartbeat);
+      heartbeat = undefined;
       if (taskState.observer === observer) {
         delete taskState.observer;
+        taskState.context.disable();
       }
       pending.length = 0;
       dropped = 0;
+      unattributedDropped = 0;
       delayMaxMs = 0;
     },
-    enter(name) {
-      // Activation can occur within an already-running callback, before its hook was enabled.
-      const ownsTurn = depth === 0;
+    run(name, run, taskPhase) {
+      const enteredAt = now();
+      const ownsTurn = !active;
       if (ownsTurn) {
-        before();
+        active = true;
+        startedAt = segmentAt = enteredAt;
+        task = longestTask = "unattributed";
+        phase = longestPhase = undefined;
+        longestMs = 0;
+      } else {
+        segment(enteredAt);
       }
-      segment(now());
       const previous = task;
+      const previousPhase = phase;
       task = name;
-      return () => {
-        segment(now());
+      phase = taskPhase;
+      try {
+        return taskPhase === undefined ? taskState.context.run(name, run) : run();
+      } finally {
+        const at = now();
+        segment(at);
         task = previous;
+        phase = previousPhase;
         if (ownsTurn) {
-          after();
+          active = false;
+          const elapsedMs = at - startedAt;
+          delayMaxMs = Math.max(delayMaxMs, elapsedMs);
+          if (elapsedMs >= STALL_MS) {
+            if (pending.length < MAX_PENDING_STALLS) {
+              pending.push({
+                elapsedMs,
+                task: longestPhase ? `${longestTask}:${longestPhase}` : longestTask,
+                taskMs: longestMs,
+                startedAt,
+                endedAt: at,
+              });
+            } else {
+              dropped++;
+            }
+          }
         }
-      };
+      }
     },
   };
-  // No init/destroy hooks or async-id map: each turn retains only its longest named segment.
-  const hook = createHook({ before, after });
   taskState.observer = observer;
-  hook.enable();
   return {
+    setEventLoopSampling(enabled: boolean) {
+      if (enabled === Boolean(heartbeat)) {
+        return;
+      }
+      clearInterval(heartbeat);
+      // Use a raw heartbeat: scheduler jobs allocate an async work scope per tick.
+      heartbeatAt = now();
+      heartbeat = enabled
+        ? runInDetachedAsyncContext(() => setInterval(observeLoop, HEARTBEAT_MS).unref())
+        : undefined;
+    },
     drain() {
+      // The health sampler may be the first timer to resume after a blocked loop.
+      if (heartbeat) {
+        observeLoop();
+      }
       const stalls = pending.splice(0);
       const omitted = dropped;
+      const omittedUnattributed = unattributedDropped;
       dropped = 0;
+      unattributedDropped = 0;
       const maximum = delayMaxMs;
       delayMaxMs = 0;
-      return { stalls, dropped: omitted, delayMaxMs: maximum };
+      return {
+        stalls,
+        dropped: omitted,
+        unattributedDropped: omittedUnattributed,
+        delayMaxMs: maximum,
+      };
     },
     reset() {
+      heartbeatAt = now();
       pending.length = 0;
       dropped = 0;
+      unattributedDropped = 0;
       delayMaxMs = 0;
       startedAt = segmentAt = now();
       longestMs = 0;
       longestTask = task;
+      longestPhase = phase;
     },
     stop: () => observer.stop(),
   };

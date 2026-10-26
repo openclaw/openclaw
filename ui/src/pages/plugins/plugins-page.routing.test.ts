@@ -3,6 +3,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
+import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { configMocks } from "../../e2e/plugins-settings-admin.test-support.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -203,7 +204,7 @@ it.each([true, false])("retries failed configuration recovery (write=%s)", async
   expect(refresh).toHaveBeenCalledTimes(write ? 0 : 1);
 });
 
-it("commits the focused numeric field before Escape dismisses settings", async () => {
+it("closes setting menus before Escape dismisses settings and commits a focused field", async () => {
   const result = createResult();
   const { harness } = pageGateway({
     "plugins.inspect": () => createInspectResult(),
@@ -225,10 +226,48 @@ it("commits the focused numeric field before Escape dismisses settings", async (
   const selector = 'input[aria-label="Refresh interval (minutes)"]';
   await waitForSolid(() => expect(page.querySelector(selector)).not.toBeNull());
   const input = page.querySelector<HTMLInputElement>(selector)!;
+  const row = input.closest(".plugin-editor__row")!;
+  const trigger = row.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+  const menuItem = row.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')!;
+  // JSDOM omits layout scrolling; the real menu still owns focus and Escape.
+  for (const item of row.querySelectorAll<HTMLElement>('[role="menuitem"]')) {
+    item.scrollIntoView = vi.fn();
+  }
+  vi.mocked(context.replace).mockClear();
+  for (const focus of [menuItem, trigger]) {
+    trigger.click();
+    await settlePlugins();
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(menuItem);
+    focus.focus();
+    focus.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await settlePlugins();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(page.querySelector(".plugin-editor")).not.toBeNull();
+    expect(context.replace).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(trigger);
+  }
   input.focus();
   input.value = "30";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   expect(runtimeConfig.runtimeConfig.patchForm).not.toHaveBeenCalled();
+  const drawer = document.createElement("div");
+  drawer.className = "shell-nav";
+  drawer.setAttribute("aria-modal", "true");
+  document.body.append(drawer);
+  const releaseDrawer = registerModalSurface(drawer);
+  try {
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(page.querySelector(".plugin-editor")).not.toBeNull();
+    expect(document.activeElement).toBe(input);
+    expect(runtimeConfig.runtimeConfig.patchForm).not.toHaveBeenCalled();
+    expect(context.replace).not.toHaveBeenCalled();
+  } finally {
+    releaseDrawer();
+    drawer.remove();
+  }
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   await page.updateComplete;
   expect(page.querySelector(".plugin-editor")).toBeNull();
@@ -670,5 +709,32 @@ it("reloads the missing schema after a failed schema read", async () => {
 
   expectAdvancedFields(harness.page);
   expect(attempts).toBe(2);
+  expect(harness.request.mock.calls.some(([method]) => method === "config.set")).toBe(false);
+});
+
+it("keeps settings navigation available during a held schema retry", async () => {
+  const first = deferred<(typeof configMocks)["config.schema"]>();
+  const retry = deferred<(typeof configMocks)["config.schema"]>();
+  let attempts = 0;
+  const harness = await mountAdvanced({
+    connected: true,
+    schema: () => (++attempts === 1 ? first.promise : retry.promise),
+  });
+  await harness.runtimeConfig.ensureLoaded();
+  first.reject(new Error("Schema temporarily unavailable"));
+  await harness.settle();
+  const alert = () => harness.page.querySelector('[role="alert"]');
+  expect(alert()?.textContent).toContain("Schema temporarily unavailable");
+  alert()?.querySelector<HTMLButtonElement>("button")?.click();
+  await waitForSolid(() => {
+    expect(attempts).toBe(2);
+    expect(alert()).toBeNull();
+    expect(harness.page.querySelector<HTMLButtonElement>('[aria-label="Reload"]')?.disabled).toBe(
+      true,
+    );
+  });
+  retry.resolve(configMocks["config.schema"]);
+  await harness.settle();
+  expectAdvancedFields(harness.page);
   expect(harness.request.mock.calls.some(([method]) => method === "config.set")).toBe(false);
 });

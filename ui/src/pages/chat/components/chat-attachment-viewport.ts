@@ -1,28 +1,10 @@
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { observeIntersection } from "../../../lib/reactive/observers.ts";
+
 const CHAT_ATTACHMENT_VIEWPORT_MARGIN = "240px 0px";
 
-export class ChatAttachmentViewportRef {
-  private element: HTMLElement | null = null;
-  private stopObserving: (() => void) | undefined;
-
-  constructor(private readonly onVisible: () => void) {}
-
-  readonly setElement = (element: Element | undefined): void => {
-    const target = element instanceof HTMLElement ? element : null;
-    if (this.element === target) {
-      return;
-    }
-    this.disconnect();
-    this.element = target;
-    if (target) {
-      this.stopObserving = observeChatAttachmentViewport(target, this.onVisible);
-    }
-  };
-
-  disconnect(): void {
-    this.stopObserving?.();
-    this.stopObserving = undefined;
-    this.element = null;
-  }
+export function createChatAttachmentViewportRef(onVisible: () => void) {
+  return elementRef((element: Element) => observeChatAttachmentViewport(element, onVisible));
 }
 
 // Start bounded media work just before its card or image enters view so decoding
@@ -36,7 +18,8 @@ export function observeChatAttachmentViewport(
     onVisible();
     return () => undefined;
   }
-  const observer = new IntersectionObserver(
+  const stop = observeIntersection(
+    [element],
     (entries) => {
       const entry = entries.at(-1);
       if (!entry) {
@@ -48,12 +31,11 @@ export function observeChatAttachmentViewport(
         return;
       }
       if (!onHidden) {
-        observer.disconnect();
+        stop();
       }
       onVisible();
     },
     { rootMargin: CHAT_ATTACHMENT_VIEWPORT_MARGIN },
   );
-  observer.observe(element);
-  return () => observer.disconnect();
+  return stop;
 }

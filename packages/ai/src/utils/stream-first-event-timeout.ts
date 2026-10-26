@@ -1,13 +1,11 @@
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
-type StreamStage = "responses" | "completions";
-
 export type FirstStreamEventTimeoutContext = {
   provider?: string;
   api?: string;
   model?: string;
   timeoutMs: number;
-  stage?: StreamStage;
+  stage?: "responses" | "completions";
   hint?: string;
   abort?: (reason: Error) => void;
   onTimeout?: (reason: Error) => void;
@@ -46,9 +44,12 @@ export function createFirstStreamEventTimeoutError(context: FirstStreamEventTime
     formatOptionalField("api", context.api),
     formatOptionalField("model", context.model),
   ].join("");
-  return new Error(
-    `${stage}HTTP stream opened but did not deliver a first SSE event within ${context.timeoutMs}ms after streaming headers (first-event timeout).${details}` +
-      (context.hint ? ` ${context.hint}` : ""),
+  return Object.assign(
+    new Error(
+      `${stage}HTTP stream opened but did not deliver a first SSE event within ${context.timeoutMs}ms after streaming headers (first-event timeout).${details}` +
+        (context.hint ? ` ${context.hint}` : ""),
+    ),
+    { name: "FirstStreamEventTimeoutError" },
   );
 }
 

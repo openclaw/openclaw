@@ -1,15 +1,16 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
+import { closeChatDetails, openChatTaskProgress } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { installColdLoadTitleTrace } from "./cold-load-title.test-support.ts";
 
 type ColdLoadFrame = {
+  title?: string | null;
   top: number;
   max: number;
   duration: boolean;
@@ -17,8 +18,6 @@ type ColdLoadFrame = {
   progress: boolean;
   threadTop: number;
   threadHeight: number;
-  cardTop: number | null;
-  cardHeight: number | null;
 };
 declare global {
   interface Window {
@@ -30,6 +29,18 @@ declare global {
 }
 
 const suite = createChatFlowE2eSuite();
+
+function expectFrames(frames: ColdLoadFrame[], title: string, progress = true) {
+  for (const frame of frames) {
+    expect(frame.title).toBe(title);
+    expect(Math.abs(frame.max - frame.top), JSON.stringify(frames)).toBeLessThanOrEqual(1);
+    expect(frame).toMatchObject({
+      duration: true,
+      reply: true,
+      ...(progress ? { progress: true } : {}),
+    });
+  }
+}
 
 suite.define(() => {
   it.each(["direct", "sidebar"])(
@@ -48,7 +59,13 @@ suite.define(() => {
           cases: [
             {
               match: { sessionKey },
-              response: { messages: historyMessages, sessionId: "uncached" },
+              response: {
+                messages: historyMessages,
+                sessionId: "uncached",
+                hasMore: true,
+                nextOffset: 40,
+                totalMessages: 2040,
+              },
             },
             {
               match: { sessionKey: sourceKey },
@@ -59,7 +76,7 @@ suite.define(() => {
             },
           ],
         };
-        await installMockGateway(page, {
+        const gateway = await installMockGateway(page, {
           sessionKey: navigation === "direct" ? sessionKey : sourceKey,
           methodResponses: {
             "chat.history": responses,
@@ -101,8 +118,6 @@ suite.define(() => {
                 progress: false,
                 threadTop: 0,
                 threadHeight: thread.clientHeight,
-                cardTop: null,
-                cardHeight: null,
               });
             }
             if (window.coldLoadSamples!.length < 24) {
@@ -125,11 +140,8 @@ suite.define(() => {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         }
         await page.waitForFunction(() => (window.coldLoadSamples?.length ?? 0) >= 24);
+        expect(await gateway.getRequests("chat.history", { offset: 40 })).toHaveLength(0);
         const frames = await page.evaluate(() => window.coldLoadSamples!);
-        await writeFile(
-          path.join(suite.artifactDir, "uncached-load-" + navigation + "-frames.json"),
-          JSON.stringify(frames),
-        );
         expect(frames[0]!.max).toBeGreaterThan(1000);
         expect(
           frames.every((frame) => Math.abs(frame.max - frame.top) <= 1),
@@ -139,12 +151,11 @@ suite.define(() => {
     },
   );
 
-  it("paints the cached tail, reply metadata, and progress before hello and reconciles in place", async () => {
+  it("paints the cached tail, title, reply metadata, and progress before hello and reconciles in place", async () => {
     await suite.withPage(
       {
         viewport: { width: 1200, height: 900 },
         serviceWorkers: "block",
-        recordVideo: { dir: suite.artifactDir, size: { width: 1200, height: 900 } },
       },
       async ({ page }) => {
         const sessionKey = "agent:main:dashboard:cold-load";
@@ -212,13 +223,31 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           sessionKey,
           authMethod: "trusted-proxy",
+          subscriptionInitialHistory: false,
           authMode: "trusted-proxy",
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
           heldMethods: ["connect"],
           sessions: [session],
           sessionInfo: session,
           historyMessages,
-          methodResponses: { "progressCard.get": { card: progressCard } },
+          methodResponses: {
+            "sessions.list": {
+              ...chatSessionListResponse(
+                Array.from({ length: 200 }, (_, index) => ({
+                  key: `agent:main:recent-${index}`,
+                  kind: "direct",
+                  label: `Recent conversation ${index}`,
+                  updatedAt: session.updatedAt + index + 1,
+                })),
+              ),
+              count: 300,
+            },
+            "progressCard.get": { card: progressCard },
+          },
+        });
+        await page.addInitScript(installColdLoadTitleTrace, {
+          sessionKey,
+          expectedTitle: session.label,
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await gateway.waitForRequest("connect");
@@ -228,10 +257,11 @@ suite.define(() => {
           .waitFor();
         await page.getByText("Worked for 3 minutes", { exact: true }).waitFor();
         await page.locator(".chat-reply-attribution__name").filter({ hasText: "Avery" }).waitFor();
-        await page
-          .locator('[data-progress-card-placement="details"]')
-          .filter({ hasText: "Review final report" })
-          .waitFor({ state: "attached" });
+        const progress = await openChatTaskProgress(page);
+        await progress
+          .locator(".task-progress-details__plan")
+          .getByText("Review final report", { exact: true })
+          .waitFor();
         await page.locator(".chat-pane-cache__pane--active").evaluate(async (element) => {
           const pane = element as HTMLElement & { sessionSnapshotStore?: SessionSnapshotStore };
           if (!pane.sessionSnapshotStore) {
@@ -252,9 +282,10 @@ suite.define(() => {
               return null;
             }
             const card = pane?.querySelector('[data-progress-card-placement="details"]');
-            const cardRect = card?.getBoundingClientRect();
             const threadRect = thread.getBoundingClientRect();
             return {
+              title:
+                pane?.querySelector(".chat-pane__session-title-text")?.textContent?.trim() ?? null,
               top: thread.scrollTop,
               max: thread.scrollHeight - thread.clientHeight,
               duration: thread.textContent.includes("Worked for 3 minutes"),
@@ -264,8 +295,6 @@ suite.define(() => {
               progress: card?.textContent?.includes("Review final report") === true,
               threadTop: threadRect.top,
               threadHeight: threadRect.height,
-              cardTop: cardRect?.top ?? null,
-              cardHeight: cardRect?.height ?? null,
             };
           };
           Object.assign(window, {
@@ -284,38 +313,69 @@ suite.define(() => {
           };
           requestAnimationFrame(sample);
         });
+        await page.addInitScript(() => window.coldLoadTitleTrace?.holdCacheRead());
         await page.reload();
+        await page.waitForFunction(() => window.coldLoadTitleTrace?.cacheReadPending);
+        const pendingTitles = await page.evaluate(async () => {
+          const titles: string[] = [];
+          for (let index = 0; index < 3; index++) {
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            });
+            titles.push(
+              document.querySelector(".chat-pane__session-title-text")?.textContent?.trim() ?? "",
+            );
+          }
+          return titles;
+        });
+        expect(pendingTitles).toEqual(["", "", ""]);
+        await page.evaluate(() => window.coldLoadTitleTrace?.releaseCacheRead());
         await page.waitForFunction(() => (window.coldLoadSamples?.length ?? 0) >= 20);
+        const firstFrames = await page.evaluate(() => window.coldLoadSamples!.slice(0, 20));
+        expectFrames(firstFrames, session.label, false);
+        // Details mounts on demand; its saved progress must still be readable before hello.
+        await openChatTaskProgress(page);
+        await progress
+          .locator(".task-progress-details__plan")
+          .getByText("Review final report", { exact: true })
+          .waitFor();
+        // Compare the same closed-inspector scene across authentication and roster hydration.
+        await closeChatDetails(page);
+        const closedStart = await page.evaluate(() => window.coldLoadSamples!.length);
+        await page.waitForFunction(
+          (start) => (window.coldLoadSamples?.length ?? 0) >= start + 20,
+          closedStart,
+        );
         const samples = await page.evaluate(() => {
           if (!window.coldLoadSamples) {
             throw new Error("Missing cold-load frame recorder");
           }
           window.coldLoadCard = document.querySelector('[data-progress-card-placement="details"]');
-          return window.coldLoadSamples.slice(0, 20);
+          return window.coldLoadSamples.slice(-20);
         });
-        await writeFile(
-          path.join(suite.artifactDir, "cold-load-cached-frames.json"),
-          JSON.stringify(samples),
-        );
-        await page.screenshot({ path: path.join(suite.artifactDir, "cold-load-cached.png") });
         expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
         expect(samples).toHaveLength(20);
-        for (const frame of samples) {
-          expect(Math.abs(frame.max - frame.top)).toBeLessThanOrEqual(1);
-          expect(frame).toMatchObject({ duration: true, reply: true, progress: true });
-        }
+        const titleWrites = await page.evaluate(() =>
+          window.coldLoadTitleTrace
+            ?.read()
+            .events.filter((event) => event.kind === "title-write" && event.title !== "absent"),
+        );
+        expect(titleWrites?.[0]?.title).toBe("expected-title");
+        expect(titleWrites?.some((event) => event.title === "New session")).toBe(false);
+        expectFrames(samples, session.label);
         await gateway.waitForRequest("connect");
         await page.evaluate(() => {
           window.coldLoadReconcileStart = window.coldLoadSamples?.length ?? 0;
+          window.coldLoadTitleTrace?.mark("reconcile");
         });
         await gateway.resolveDeferred("connect");
         await gateway.waitForRequest("chat.startup");
         await gateway.waitForRequest("progressCard.get");
         await page.waitForFunction(() => {
           const pane = document.querySelector(".chat-pane-cache__pane--active") as
-            | (HTMLElement & { state?: { connected: boolean; chatLoading: boolean } })
+            | (HTMLElement & { transcriptReady: boolean })
             | null;
-          return pane?.state?.connected && !pane.state.chatLoading;
+          return pane?.transcriptReady;
         });
         const reconciled = await page.evaluate(async () => {
           for (let index = 0; index < 20; index += 1) {
@@ -331,26 +391,13 @@ suite.define(() => {
               document.querySelector('[data-progress-card-placement="details"]'),
           };
         });
-        await writeFile(
-          path.join(suite.artifactDir, "cold-load-frames.json"),
-          JSON.stringify({ cached: samples, live: reconciled.frames }),
-        );
-        await page.screenshot({ path: path.join(suite.artifactDir, "cold-load-live.png") });
         expect(reconciled.retainedCard).toBe(true);
         expect(reconciled.frames.length).toBeGreaterThanOrEqual(20);
         const cached = samples[0]!;
+        expectFrames(reconciled.frames, session.label);
         for (const frame of [...samples, ...reconciled.frames]) {
-          expect(frame).toMatchObject({ duration: true, reply: true, progress: true });
-          expect(Math.abs(frame.max - frame.top)).toBeLessThanOrEqual(1);
-          for (const key of [
-            "top",
-            "threadTop",
-            "threadHeight",
-            "cardTop",
-            "cardHeight",
-          ] as const) {
-            expect(frame[key]).not.toBeNull();
-            expect(Math.abs(frame[key]! - cached[key]!)).toBeLessThanOrEqual(1);
+          for (const key of ["top", "threadTop", "threadHeight"] as const) {
+            expect(Math.abs(frame[key] - cached[key])).toBeLessThanOrEqual(1);
           }
         }
       },

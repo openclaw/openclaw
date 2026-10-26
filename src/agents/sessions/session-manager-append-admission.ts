@@ -5,12 +5,11 @@ import {
   getOwnedSessionTranscriptActor,
   SessionTranscriptWriterClaimReboundError,
 } from "../../config/sessions/transcript-write-context.js";
-import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import type { SessionManagerCore } from "./session-manager-core.js";
 import {
   captureSessionManagerWriteAssertion,
+  runSessionManagerWrite,
   withSessionManagerWrite,
   type SessionManagerWriteAdmission,
 } from "./session-manager-write-admission.js";
@@ -25,7 +24,7 @@ export type SessionManagerAppendAdmission =
   | SessionManagerActorAppendAdmission
   | SessionManagerWriteAdmission;
 
-/** Serialize preparation and view adoption without holding the actor's command FIFO. */
+/** The manager owns preparation and view adoption; the actor owns each database command. */
 export async function withSessionManagerAppend<T>(
   manager: Pick<SessionManagerCore, "getSessionTarget" | "getSessionId">,
   append: (admission?: SessionManagerAppendAdmission) => T | Promise<T>,
@@ -51,18 +50,12 @@ export async function withSessionManagerAppend<T>(
   };
   assertCurrent();
   const options = binding.database;
-  return trackAsyncWork(() =>
-    runOpenClawAgentWriteAdmission(
-      options,
-      () => {
-        assertCurrent();
-        return actor.withPhase(
-          "session-manager.append",
-          { assertCurrent, authorize: assertCurrent },
-          async () => append({ actor, options, assertCurrent }),
-        );
-      },
-      true,
-    ),
-  );
+  return runSessionManagerWrite(manager, () => {
+    assertCurrent();
+    return actor.withPhase(
+      "session-manager.append",
+      { assertCurrent, authorize: assertCurrent },
+      async () => append({ actor, options, assertCurrent }),
+    );
+  });
 }

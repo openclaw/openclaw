@@ -1,13 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
-import { CronService } from "../../cron/service.js";
-import { createNoopLogger } from "../../cron/service.test-harness.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { cronHistoryHandler } from "./cron-history.js";
+import { createReadService } from "./cron-read.test-support.js";
 import { cronHandlers } from "./cron.js";
 import { createCronCallerClient, createCronJob } from "./cron.validation.test-support.js";
 import type { RespondFn } from "./types.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 const publication = vi.hoisted(() => ({
   afterVerification: () => {},
@@ -52,15 +52,11 @@ it.each([
 ] as const)(
   "$method rechecks $change authority before final publication",
   async ({ method, change }) => {
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
+    const cron = createReadService({
       storePath: "/synthetic/cron",
       cronEnabled: false,
       defaultAgentId: "main",
-      log: createNoopLogger(),
       enqueueSystemEvent() {},
-      requestHeartbeat() {},
       runIsolatedAgentJob: async () => ({ status: "ok" }),
     });
     const job = createCronJob({
@@ -123,16 +119,13 @@ it.each([
       if (method === "cron.list") {
         await expect(invocation).rejects.toThrow("Cron list visibility changed");
         expect(respond).not.toHaveBeenCalled();
-        expect(publication.verified).toBe(true);
-        return;
+      } else {
+        await invocation;
+        expect(respond.mock.calls).toMatchObject([[false, undefined, { code: "UNAVAILABLE" }]]);
       }
-      await invocation;
       expect(publication.verified).toBe(true);
-      expect(respond.mock.calls).toHaveLength(1);
-      expect(respond.mock.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
     } finally {
       cron.stop();
-      vi.restoreAllMocks();
     }
   },
 );

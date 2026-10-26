@@ -13,6 +13,7 @@ import {
   runWithAgentToolSourceExecutionScope,
 } from "../../agent-tool-source-execution-guard.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { ToolInputError } from "../../tool-input-error.js";
 import { textResult } from "../../tools/tool-results.js";
 import { decodeUtf8File } from "../../utf8-file.js";
 import {
@@ -80,7 +81,7 @@ function prepareEditArguments(input: unknown): EditToolInput {
       }
     } catch {
       if (typeof args.oldText !== "string" || typeof args.newText !== "string") {
-        throw new Error(
+        throw new ToolInputError(
           "Could not parse edits as JSON. Provide a complete JSON array of replacements.",
         );
       }
@@ -118,9 +119,8 @@ function appendMismatchHint(error: Error, currentContent: string): Error {
     currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
       ? currentContent
       : `${truncateUtf16Safe(currentContent, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
-  const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`, {
-    cause: error,
-  });
+  const enhanced = new ToolInputError(`${error.message}\nCurrent file contents:\n${snippet}`);
+  enhanced.cause = error;
   enhanced.stack = error.stack;
   return enhanced;
 }
@@ -142,7 +142,9 @@ export function createEditTool(
     async execute(_toolCallId, input, signal, _onUpdate, _ctx) {
       const assertCurrent = captureAgentToolSourceExecutionGuard();
       if (!Array.isArray(input.edits) || input.edits.length === 0) {
-        throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
+        throw new ToolInputError(
+          "Edit tool input is invalid. edits must contain at least one replacement.",
+        );
       }
       const { path, edits: originalEdits } = input;
       const absolutePath = resolvePath(path, cwd);
@@ -208,17 +210,10 @@ export function createEditTool(
             { changed: true, ...plan.receipt },
           );
         } catch (error: unknown) {
+          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+            assertCurrent();
+          });
           const normalizedError = error instanceof Error ? error : new Error(String(error));
-          const currentContent = await runWithAgentToolSourceExecutionScope(
-            assertCurrent,
-            async () => {
-              assertCurrent();
-              return ops
-                .readFile(absolutePath)
-                .then((current) => current.toString("utf-8"))
-                .catch(() => rawContent);
-            },
-          );
           const recoveryContent = expectedContent;
           if (
             recoveryContent !== undefined &&
@@ -233,7 +228,7 @@ export function createEditTool(
             );
           }
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
-            throw appendMismatchHint(normalizedError, currentContent);
+            throw appendMismatchHint(normalizedError, rawContent);
           }
           throw normalizedError;
         }

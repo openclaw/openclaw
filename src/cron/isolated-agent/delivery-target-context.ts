@@ -8,6 +8,7 @@ import { foldedSessionKeyAliasCandidates } from "../../config/sessions/store-ent
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
 export type CronDeliveryContextRequest = { agentId: string; sessionKey?: string };
@@ -30,60 +31,71 @@ export async function readCronDeliveryTargetContexts(
   cfg: OpenClawConfig,
   requests: readonly CronDeliveryContextRequest[],
 ): Promise<Array<Result<CronDeliveryTargetContext, unknown>>> {
+  const readPlans = new Map<string, CronDeliveryReadPlan>();
   const planned = requests.map(({ agentId, sessionKey }): Result<CronDeliveryReadPlan, unknown> => {
     try {
       const rawSessionKey = sessionKey?.trim();
-      return ok({
-        agentId,
-        rawSessionKey,
-        mainSessionKey: resolveAgentMainSessionKey({ cfg, agentId }),
-        storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-        threadSessionKey: rawSessionKey
-          ? resolveCronAgentSessionKey({
-              sessionKey: rawSessionKey,
-              agentId,
-              mainKey: cfg.session?.mainKey,
-              cfg,
-            })
-          : undefined,
-      });
+      // Identical targets share preparation only within this request, never across route changes.
+      const key = JSON.stringify([agentId, rawSessionKey]);
+      let plan = readPlans.get(key);
+      if (!plan) {
+        plan = {
+          agentId,
+          rawSessionKey,
+          mainSessionKey: resolveAgentMainSessionKey({ cfg, agentId }),
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+          threadSessionKey: rawSessionKey
+            ? resolveCronAgentSessionKey({
+                sessionKey: rawSessionKey,
+                agentId,
+                mainKey: cfg.session?.mainKey,
+                cfg,
+              })
+            : undefined,
+        };
+        readPlans.set(key, plan);
+      }
+      return ok(plan);
     } catch (error) {
       return err(error);
     }
   });
   const recovered = await extractDeliveryInfoBatch(
-    planned.map((item) => (item.ok ? item.value.threadSessionKey : undefined)),
+    planned.map((item) =>
+      item.ok ? { sessionKey: item.value.threadSessionKey, agentId: item.value.agentId } : {},
+    ),
     { cfg },
   );
-  const targets: Array<{ index: number; plan: CronDeliveryReadPlan }> = [];
+  const targets = new Set<CronDeliveryReadPlan>();
   for (const [index, item] of planned.entries()) {
     if (item.ok && !recovered[index]?.deliveryContext) {
-      targets.push({ index, plan: item.value });
+      targets.add(item.value);
     }
   }
-  const rows = await Promise.all(
-    targets.map(
-      async ({
-        plan: { agentId, storePath, threadSessionKey, mainSessionKey },
-      }): Promise<Result<SessionEntrySummary[], unknown>> => {
-        try {
-          const result = await readSessionEntriesFromStoreInWorker({
-            agentId,
-            storePath,
-            projection: "list",
-            snapshotFields: [],
-            sessionKeys: [threadSessionKey, mainSessionKey].flatMap((key) =>
-              key ? [key].concat(foldedSessionKeyAliasCandidates(key)) : [],
-            ),
-          });
-          return ok(result.entries);
-        } catch (error) {
-          return err(error);
-        }
-      },
+  // Leave worker admission headroom for other session reads while listing large inventories.
+  const { results: rows } = await runTasksWithConcurrency({
+    limit: 8,
+    tasks: [...targets].map(
+      ({ agentId, storePath, threadSessionKey, mainSessionKey }) =>
+        async (): Promise<Result<SessionEntrySummary[], unknown>> => {
+          try {
+            const result = await readSessionEntriesFromStoreInWorker({
+              agentId,
+              storePath,
+              projection: "list",
+              snapshotFields: [],
+              sessionKeys: [threadSessionKey, mainSessionKey].flatMap((key) =>
+                key ? [key].concat(foldedSessionKeyAliasCandidates(key)) : [],
+              ),
+            });
+            return ok(result.entries);
+          } catch (error) {
+            return err(error);
+          }
+        },
     ),
-  );
-  const entries = new Map(targets.map(({ index }, offset) => [index, rows[offset]!]));
+  });
+  const entries = new Map([...targets].map((plan, offset) => [plan, rows[offset]!]));
   return planned.map((item, index) => {
     if (!item.ok) {
       return item;
@@ -95,7 +107,7 @@ export async function readCronDeliveryTargetContexts(
       recoveredContext && recoveredInfo?.threadId
         ? { ...recoveredContext, threadId: recoveredInfo.threadId }
         : recoveredContext;
-    const result = entries.get(index);
+    const result = context ? undefined : entries.get(item.value);
     if (result && !result.ok) {
       return result;
     }

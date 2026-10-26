@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   conversationIdentityFromSessionEntry,
@@ -49,9 +50,22 @@ export function syncSessionActorMemoryConversations(
   shared: SessionActorMemoryConversationOwner,
   previousEntry?: SessionEntry,
   observedContext?: ConversationRouteContext | null,
+  observeConversation = false,
 ): void {
   const entry = state.hot.entry;
   if (!entry) {
+    return;
+  }
+  if (
+    !observeConversation &&
+    observedContext === undefined &&
+    previousEntry?.sessionId === entry.sessionId &&
+    previousEntry.lifecycleRevision === entry.lifecycleRevision &&
+    isDeepStrictEqual(
+      conversationIdentityFromSessionEntry(entry),
+      conversationIdentityFromSessionEntry(previousEntry),
+    )
+  ) {
     return;
   }
   const routeContext =
@@ -239,7 +253,7 @@ export function selectSessionActorMemoryConversations(
 }
 
 export function readSessionActorMemoryConversation(
-  context: SessionActorMemoryStorageContext,
+  context: ConversationReadContext,
   query: Exclude<
     SessionActorMemoryConversationQuery,
     { type: "session.conversation.delivery.read" }
@@ -263,7 +277,8 @@ export function readSessionActorMemoryConversation(
 }
 
 export function writeSessionActorMemoryConversation(
-  context: SessionActorMemoryStorageContext,
+  context: ConversationReadContext &
+    Pick<SessionActorMemoryStorageContext, "admit" | "editConversations">,
   command: Extract<
     SessionActorMemoryConversationCommand,
     { type: "session.conversation.register" }

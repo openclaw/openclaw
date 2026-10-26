@@ -31,6 +31,7 @@ import {
   createTelegramSpooledReplayDeferredParticipant,
   getTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
+  resolveTelegramUpdateReceivedAtSeconds,
 } from "./bot-processing-outcome.js";
 import { withResolvedTelegramForumFlag } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
@@ -81,12 +82,11 @@ type LegacyApprovalCallback = NonNullable<ReturnType<typeof parseExecApprovalCom
 
 export function createTelegramCallbackApprovalRuntime(params: {
   accountId: RegisterTelegramHandlerParams["accountId"];
-  telegramDeps: RegisterTelegramHandlerParams["telegramDeps"];
   runtimeCfg: OpenClawConfig;
   senderId: string;
   actions: TelegramCallbackMessageActions;
 }) {
-  const { accountId, telegramDeps, runtimeCfg, senderId, actions } = params;
+  const { accountId, runtimeCfg, senderId, actions } = params;
   const { clearCallbackButtons, editCallbackMessage, replyToCallbackChat } = actions;
 
   const resolveAuthorizedApprovalKinds = (): ChannelApprovalKind[] => {
@@ -145,12 +145,10 @@ export function createTelegramCallbackApprovalRuntime(params: {
     receipt: Parameters<typeof buildTelegramLegacyApprovalTerminalText>[0],
   ) => await terminalizeApprovalMessage(buildTelegramLegacyApprovalTerminalText(receipt));
 
-  const resolveApproval = telegramDeps.resolveApproval ?? resolveApprovalOverGateway;
-
   const resolveCanonicalApproval = async (
     approvalCallback: TelegramApprovalCallback,
   ): Promise<ApprovalResolveResult> =>
-    (await resolveApproval({
+    await resolveApprovalOverGateway({
       cfg: runtimeCfg,
       approvalId: approvalCallback.approvalId,
       approvalKind: approvalCallback.approvalKind,
@@ -158,7 +156,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
       channel: "telegram",
       accountId,
       senderId,
-    })) as ApprovalResolveResult;
+    });
 
   const terminalizeCanonicalApproval = async (
     approvalCallback: TelegramApprovalCallback,
@@ -232,7 +230,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
       };
       try {
         // Legacy callbacks lack an owner. Probe only adapters this sender may use.
-        await resolveApproval({
+        await resolveApprovalOverGateway({
           cfg: runtimeCfg,
           approvalId: approvalCallback.approvalId,
           decision: approvalCallback.decision,
@@ -263,7 +261,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
               throw new TelegramRetryableCallbackError(canonicalError);
             }
             logVerbose(
-              `telegram: canonical approval lookup failed after stale legacy callback ` +
+              `telegram: recorded approval lookup failed after stale legacy callback ` +
                 `${approvalCallback.approvalId}: ${String(canonicalError)}`,
             );
             await terminalizeLegacyApproval({
@@ -344,7 +342,7 @@ const isMultiToggleButton = (button: TelegramCallbackButton): boolean =>
 export async function handleTelegramInteractiveCallback(params: {
   accountId: RegisterTelegramHandlerParams["accountId"];
   callback: CallbackQuery;
-  ctx: Pick<TelegramContext, "me" | "getFile">;
+  ctx: Pick<TelegramContext, "me" | "getFile" | "update">;
   callbackMessage: Message;
   data: string;
   pluginCallbackData: string;
@@ -390,6 +388,7 @@ export async function handleTelegramInteractiveCallback(params: {
       base: withResolvedTelegramForumFlag(callbackMessage, isForum),
       from: callback.from,
       text,
+      date: resolveTelegramUpdateReceivedAtSeconds(ctx.update),
     });
     return { ctx: buildSyntheticContext(ctx, message), message };
   };

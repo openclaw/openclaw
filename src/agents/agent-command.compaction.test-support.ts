@@ -72,7 +72,8 @@ vi.mock("../sessions/session-diff.js", async (importOriginal) => ({
     compactionTestState.captureSessionDiffBaselineMock(params),
 }));
 
-vi.mock("../config/io.js", () => ({
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
   getRuntimeConfig: () => compactionTestState.cfg,
   readConfigFileSnapshotForWrite: async () => ({ snapshot: { valid: false } }),
 }));
@@ -82,13 +83,12 @@ vi.mock("./agent-runtime-config.js", () => ({
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
-  const { rebasePluginMetadataSnapshotManifestRegistry } =
-    await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
+  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
   const { createPluginMetadataSnapshot } =
     await import("../config/plugin-auto-enable.test-helpers.js");
   return {
+    ...actual,
     isPluginMetadataSnapshotCompatible: () => false,
-    rebasePluginMetadataSnapshotManifestRegistry,
     resolvePluginMetadataSnapshot: () =>
       createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
     resolvePluginMetadataSnapshotAsync: async () =>

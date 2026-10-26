@@ -223,6 +223,7 @@ function startPrepublishArtifactServer() {
           createdAt: 0,
         },
         overview: "No security concerns found in the fixture release.",
+        verdict: "clean",
         securityAuditUrl: `http://${request.headers.host}${url.pathname}`,
         trust: {
           scanStatus: "clean",
@@ -737,6 +738,7 @@ async function main() {
     release: {
       version: fixture.version,
     },
+    verdict: "clean",
     trust: {
       scanStatus: "clean",
       moderationState: null,

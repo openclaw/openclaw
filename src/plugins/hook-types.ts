@@ -9,6 +9,7 @@ import type {
 import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import type { InstallPolicyRequestKind as PluginInstallRequestKind } from "../security/install-policy.js";
 import type {
   PluginHookAgentContext,
   PluginHookContextWindow,
@@ -29,14 +30,12 @@ import type {
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
 } from "./hook-gateway.types.js";
+import type { AsyncPluginHook } from "./hook-handler.types.js";
 import type {
+  PluginMessageHookHandlerMap,
+  PluginHookMessageContext,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
-  PluginHookMessageContext,
-  PluginHookMessageReceivedEvent,
-  PluginHookMessageSendingEvent,
-  PluginHookMessageSendingResult,
-  PluginHookMessageSentEvent,
 } from "./hook-message.types.js";
 import type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
 import type { PluginHookSkillChangedEvent, PluginHookSkillContext } from "./hook-skill.types.js";
@@ -95,50 +94,73 @@ export type {
   PluginHookSkillContext,
 } from "./hook-skill.types.js";
 
-const PLUGIN_HOOK_NAMES = [
-  "before_model_resolve",
-  "agent_turn_prepare",
-  "before_prompt_build",
-  "before_agent_reply",
-  "model_call_started",
-  "model_call_ended",
-  "llm_input",
-  "llm_output",
-  "before_agent_finalize",
-  "agent_end",
-  "before_compaction",
-  "after_compaction",
-  "before_reset",
-  "inbound_claim",
-  "channel_pairing_requested",
-  "message_received",
-  "message_sending",
-  "reply_payload_sending",
-  "message_sent",
-  "before_tool_call",
-  "after_tool_call",
-  "tool_result_persist",
-  "before_message_write",
-  "session_start",
-  "session_end",
-  "subagent_delivery_target",
-  "subagent_spawned",
-  "subagent_progress",
-  "subagent_ended",
-  "gateway_start",
-  "gateway_stop",
-  "heartbeat_prompt_contribution",
-  "cron_reconciled",
-  "cron_changed",
-  "skill_changed",
-  "before_dispatch",
-  "reply_dispatch",
-  "before_install",
-  "before_agent_run",
-  "resolve_exec_env",
-] as const;
+export type PluginHookName = keyof PluginHookHandlerMap;
 
-export type PluginHookName = (typeof PLUGIN_HOOK_NAMES)[number];
+type PluginHookMetadata = {
+  conversationAccess?: boolean;
+  promptInjection?: boolean;
+  voidTimeoutMs?: number;
+  modifyingTimeoutMs?: number;
+};
+
+export const PLUGIN_HOOK_METADATA: Readonly<Record<PluginHookName, PluginHookMetadata>> = {
+  before_model_resolve: { conversationAccess: true },
+  agent_turn_prepare: { conversationAccess: true, promptInjection: true },
+  before_prompt_build: {
+    conversationAccess: true,
+    promptInjection: true,
+    modifyingTimeoutMs: 15_000,
+  },
+  before_agent_reply: { conversationAccess: true },
+  model_call_started: {},
+  model_call_ended: {},
+  llm_input: { conversationAccess: true },
+  llm_output: { conversationAccess: true },
+  // Terminal finalization hooks sit on the runner's completion path. A hung
+  // handler must not freeze final delivery or keep compaction retry recovery
+  // unresolved; timeout fail-opens with the original final answer.
+  before_agent_finalize: { conversationAccess: true, modifyingTimeoutMs: 15_000 },
+  agent_end: { conversationAccess: true, voidTimeoutMs: 30_000 },
+  // Compaction hooks run on the serialized notification queue. Allow memory
+  // flushes the agent_end budget, then fail open so later notifications proceed.
+  before_compaction: { voidTimeoutMs: 30_000 },
+  after_compaction: { voidTimeoutMs: 30_000 },
+  before_reset: {},
+  before_channel_ingress: { conversationAccess: true, modifyingTimeoutMs: 15_000 },
+  inbound_claim: {},
+  channel_pairing_requested: { voidTimeoutMs: 2_000 },
+  message_received: {},
+  // Outbound modifying hooks run inside the serialized reply delivery lane.
+  // A hung plugin must fail open so later hooks and queued replies can settle.
+  message_sending: { modifyingTimeoutMs: 15_000 },
+  reply_payload_sending: { modifyingTimeoutMs: 15_000 },
+  message_sent: {},
+  // Policy hooks fail closed in the global runner. A bounded timeout turns a
+  // stalled policy process into a denial instead of freezing the operation.
+  before_tool_call: { modifyingTimeoutMs: 15_000 },
+  after_tool_call: {},
+  tool_result_persist: {},
+  before_message_write: {},
+  session_start: {},
+  session_end: {},
+  subagent_delivery_target: {},
+  subagent_spawned: {},
+  subagent_progress: {},
+  subagent_ended: {},
+  gateway_start: {},
+  // Shutdown hooks share the Gateway's five-second teardown budget. They fail
+  // open after logging so one plugin cannot consume the process watchdog.
+  gateway_stop: { voidTimeoutMs: 5_000 },
+  heartbeat_prompt_contribution: { promptInjection: true },
+  cron_reconciled: {},
+  cron_changed: {},
+  skill_changed: { voidTimeoutMs: 30_000 },
+  before_dispatch: {},
+  reply_dispatch: {},
+  before_install: { modifyingTimeoutMs: 15_000 },
+  before_agent_run: { conversationAccess: true, modifyingTimeoutMs: 15_000 },
+  resolve_exec_env: { modifyingTimeoutMs: 15_000 },
+};
 
 type PluginHookChannelPairingRequestedEvent = {
   /** Channel that created the pending pairing request. */
@@ -159,15 +181,11 @@ type PluginHookChannelPairingContext = {
   senderId: string;
 };
 
-const pluginHookNameSet = new Set<PluginHookName>(PLUGIN_HOOK_NAMES);
-
 export const isPluginHookName = (hookName: unknown): hookName is PluginHookName =>
-  typeof hookName === "string" && pluginHookNameSet.has(hookName as PluginHookName);
+  typeof hookName === "string" && Object.hasOwn(PLUGIN_HOOK_METADATA, hookName);
 
 export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
-  hookName === "agent_turn_prepare" ||
-  hookName === "before_prompt_build" ||
-  hookName === "heartbeat_prompt_contribution";
+  PLUGIN_HOOK_METADATA[hookName]?.promptInjection === true;
 
 const PLUGIN_HOOK_AGENT_TRIGGERS = ["cron", "heartbeat", "user"] as const;
 
@@ -405,9 +423,11 @@ export type PluginHookReplyDispatchContext = {
   dispatcher: ReplyDispatcher;
   abortSignal?: AbortSignal;
   onReplyStart?: () => Promise<void> | void;
-  /** @deprecated Use onPreparedAgentRunStart. */
+  /** @deprecated Use onPreparedAgentRunStart. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
   onPreparedAgentRunStart?: GetReplyOptions["onPreparedAgentRunStart"];
+  /** Host-owned input custody; adopt before backend submission and propagate refusal. */
+  turnAdoption?: { adopt: () => Promise<void>; assertCurrent: () => void };
   userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
   /** Host-owned display facts applied before the assistant transcript is published. */
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
@@ -729,13 +749,6 @@ type PluginHookSubagentEndedEvent = {
 };
 
 export type PluginInstallTargetType = "skill" | "plugin";
-type PluginInstallRequestKind =
-  | "skill-install"
-  | "plugin-dir"
-  | "plugin-archive"
-  | "plugin-file"
-  | "plugin-npm"
-  | "plugin-git";
 export type PluginInstallSourcePathKind = "file" | "directory";
 
 type PluginInstallFinding = {
@@ -752,6 +765,7 @@ export type PluginHookBeforeInstallRequest = {
   requestedSpecifier?: string;
 };
 
+/** @public Part of the stable native plugin contract facade. */
 export type PluginHookBeforeInstallBuiltinScan = {
   status: "ok" | "error";
   scannedFiles: number;
@@ -829,12 +843,7 @@ export type PluginHookResolveExecEnvEvent = {
 
 export type PluginHookResolveExecEnvContext = PluginHookAgentContext;
 
-type AsyncPluginHook<Event, Context, Result = void> = (
-  event: Event,
-  ctx: Context,
-) => Promise<Result | void> | Result | void;
-
-export type PluginHookHandlerMap = {
+export type PluginHookHandlerMap = PluginMessageHookHandlerMap & {
   agent_turn_prepare: AsyncPluginHook<
     PluginAgentTurnPrepareEvent,
     PluginHookAgentContext,
@@ -892,13 +901,6 @@ export type PluginHookHandlerMap = {
     PluginHookReplyPayloadSendingContext,
     PluginHookReplyPayloadSendingResult
   >;
-  message_received: AsyncPluginHook<PluginHookMessageReceivedEvent, PluginHookMessageContext>;
-  message_sending: AsyncPluginHook<
-    PluginHookMessageSendingEvent,
-    PluginHookMessageContext,
-    PluginHookMessageSendingResult
-  >;
-  message_sent: AsyncPluginHook<PluginHookMessageSentEvent, PluginHookMessageContext>;
   before_tool_call: AsyncPluginHook<
     PluginHookBeforeToolCallEvent,
     PluginHookToolContext,

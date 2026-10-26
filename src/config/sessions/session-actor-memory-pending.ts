@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { classifyAgentRunTerminalOutcome } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
@@ -133,13 +132,23 @@ export function createSessionActorMemoryPending(
         return snapshot;
       }
       const row = pending(input);
+      let committedEntryId: string | undefined;
       if (row) {
         if (Buffer.byteLength(row.message_json, "utf8") > MAX_PAYLOAD_BYTES) {
           throw new Error("Submitted input exceeds the Gateway payload limit");
         }
         snapshot.pending = structuredClone(row);
+        committedEntryId = row.consumed_event_id ?? undefined;
       } else if (!input.pendingOnly) {
-        snapshot.committed = committed(input, true)?.message;
+        const recorded = committed(input, true);
+        snapshot.committed = recorded?.message;
+        committedEntryId = recorded?.messageId;
+      }
+      const anchor = committedEntryId
+        ? state.hot.transcript.anchors.find(({ entryId }) => entryId === committedEntryId)
+        : undefined;
+      if (anchor) {
+        snapshot.committedMessageSeq = anchor.activeMessagePosition + 1;
       }
       return snapshot;
     },
@@ -150,7 +159,8 @@ export function createSessionActorMemoryPending(
           row.session_id === query.sessionId &&
           row.consumed_event_id === null,
       );
-      const total = query.id === undefined ? rows.length : undefined;
+      const total =
+        query.id === undefined && query.includeTotal !== false ? rows.length : undefined;
       if (total === 0) {
         return { rows: [], total };
       }
@@ -211,7 +221,7 @@ export function createSessionActorMemoryPending(
           row.session_key === input.sessionKey &&
           row.session_id === input.sessionId &&
           input.ids.includes(row.input_id) &&
-          row.state === "queued" &&
+          (row.state === "queued" || row.state === "interrupted") &&
           row.consumed_event_id === null,
       );
       const candidates = selected.map((row) => ({
@@ -260,7 +270,7 @@ export function createSessionActorMemoryPending(
       }
       const row = pending(input);
       if (input.kind === "stage") {
-        if (!isDeepStrictEqual(readStage(input), input.expected)) {
+        if (row?.input_id !== input.expected.existing?.input_id) {
           throw new SessionPendingInputCustodyError(
             "Pending input changed before staging committed",
           );

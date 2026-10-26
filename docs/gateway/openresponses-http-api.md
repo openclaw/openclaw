@@ -27,13 +27,18 @@ Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api)
 - Use `x-openclaw-session-key` for explicit session routing (rejected with `400 invalid_request_error` if it uses a reserved namespace: `subagent:`, `cron:`, `acp:`).
 - Use `x-openclaw-message-channel` for a non-default synthetic ingress channel context.
 
-For the canonical explanation of agent-target models, `openclaw/default`, embeddings pass-through, and backend model overrides, see [OpenAI Chat Completions](/gateway/openai-http-api#agent-first-model-contract).
+For the shared explanation of agent-target models, `openclaw/default`, embeddings pass-through, and backend model overrides, see [OpenAI Chat Completions](/gateway/openai-http-api#agent-first-model-contract).
 
 See [Operator scopes](/gateway/operator-scopes) and [Security](/gateway/security).
 
 ## Session behavior
 
 By default the endpoint is **stateless per request** (a new session key is generated each call).
+
+If a routed session is archived, non-streaming requests return HTTP `409` with
+`invalid_request_error` and guidance to restore it in the Control UI. Streaming
+requests report the same error in the stream. Unarchive the session before
+retrying; the rejected request preserves its archived state and history.
 
 If the request includes an OpenResponses `user` string, the Gateway derives a stable session key from it so repeated calls can share an agent session.
 
@@ -166,7 +171,8 @@ URL fetch defaults:
 
 ## File + image limits
 
-The endpoint uses a built-in 20 MB request-body limit. File and image source
+The endpoint uses a built-in 20 MB request-body limit and a 60-second body-read
+deadline. Uploads that exceed the deadline return HTTP `408`. File and image source
 policy remains configurable under `gateway.http.endpoints.responses`:
 
 ```json5
@@ -256,11 +262,15 @@ Failed agent runs, including whole-agent timeouts, return a failed response. Str
 
 A reply that ends because the agent reached its output-token budget is returned with `status: "incomplete"` and `incomplete_details: { "reason": "max_output_tokens" }`, and its final message item carries `status: "incomplete"`. Streaming emits these fields on the terminal `response.incomplete` event, so clients dispatching by event type also observe the truncation. This mirrors the `finish_reason: "length"` projection on `/v1/chat/completions`.
 
+When an output-limit stop leaves no visible answer after tool work, OpenClaw may recover a summary without tools. That recovery preserves the summary and cut-off warning but records an `incomplete_turn` failure with the original `length` stop reason. Responses returns `status: "failed"` with an incomplete assistant output item (HTTP `500` for JSON, `response.failed` for SSE); Chat Completions returns an error whose message includes the recovered text. Both use the error code `incomplete_turn`. A recovered summary does not certify that the interrupted task finished. Summary recovery after a normally completed turn remains successful.
+
 Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests. If the Gateway itself cancels the agent run while the client is still connected, the request returns a failed response (HTTP `500` when not streaming) with the message `agent run was cancelled`, not a provider timeout.
 
 ## Usage
 
 `usage` is populated when the underlying provider reports token counts. OpenClaw normalizes common OpenAI-style aliases before those counters reach downstream status/session surfaces, including `input_tokens` / `output_tokens` and `prompt_tokens` / `completion_tokens`.
+
+If a response ends before complete usage arrives, JSON responses and terminal streaming resources omit `usage` instead of presenting zero or provisional counts as complete. Stream completion does not depend on a usage report arriving.
 
 ## Errors
 

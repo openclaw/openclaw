@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError } from "./errors.js";
 import {
   hasQaGatewayChildExited,
@@ -29,7 +30,7 @@ async function fetchLocalGatewayProbe(params: {
   const { response, release } = await fetchWithSsrFGuard({
     url: `${params.baseUrl}/${params.kind === "health" ? "readyz" : "healthz"}`,
     init: {
-      method: "HEAD",
+      method: params.kind === "health" ? "GET" : "HEAD",
       headers: {
         connection: "close",
       },
@@ -39,7 +40,31 @@ async function fetchLocalGatewayProbe(params: {
     auditContext: `qa-lab-gateway-child-${params.kind}`,
   });
   try {
-    return params.kind === "listening" || response.ok;
+    if (params.kind === "listening") {
+      return true;
+    }
+    const readiness: unknown = await response.json();
+    const refused =
+      isRecord(readiness) && Array.isArray(readiness.agentDatabases)
+        ? readiness.agentDatabases.filter(
+            (entry) =>
+              isRecord(entry) &&
+              typeof entry.code === "string" &&
+              entry.code !== "agent-database-inspection-pending",
+          )
+        : [];
+    if (refused.length) {
+      throw new QaSuiteInfraError(
+        "gateway_startup_unhealthy",
+        `gateway agent database admission refused: ${JSON.stringify(refused)}`,
+      );
+    }
+    return (
+      response.ok &&
+      isRecord(readiness) &&
+      readiness.ready === true &&
+      (!Array.isArray(readiness.agentDatabases) || readiness.agentDatabases.length === 0)
+    );
   } finally {
     await release();
   }
@@ -98,7 +123,11 @@ async function waitForGatewayProbe(params: QaGatewayProbeParams, kind: "health" 
       ) {
         return;
       }
-    } catch {}
+    } catch (error) {
+      if (error instanceof QaSuiteInfraError) {
+        throw error;
+      }
+    }
     await sleep(kind === "health" ? Math.min(250, Math.max(0, deadline - Date.now())) : 100);
   }
   throw new QaSuiteInfraError(

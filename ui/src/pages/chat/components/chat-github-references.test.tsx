@@ -1,18 +1,12 @@
-import { render } from "lit";
 import { describe, expect, it } from "vitest";
-import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import { prepareChatMessageRender } from "./chat-message-markdown.ts";
+import { GroupedMessage } from "./chat-message-bubble-view.tsx";
+import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { StreamGroupParts } from "./chat-message-stream-view.tsx";
 import { SidebarPanel } from "./chat-sidebar-content.tsx";
 
 const text =
-  "Original ClawSweeper PR **#1558 merged**; Follow-up ClawSweeper PR **#1576 opened**; OpenClaw PR #1576.";
-const context: MarkdownRenderOptions = {
-  githubRepo: { owner: "openclaw", repo: "openclaw" },
-  githubRepositories: [{ owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] }],
-};
+  "PR openclaw/clawsweeper#1558; PR openclaw/clawsweeper#1576; PR openclaw/openclaw#1576; PR #1576.";
 
 describe("GitHub reference presentation parity", () => {
   it.each(["persisted", "streaming", "sidebar"] as const)(
@@ -25,7 +19,6 @@ describe("GitHub reference presentation parity", () => {
           () => (
             <SidebarPanel
               {...{
-                ...context,
                 content: { kind: "markdown", content: text },
                 showingRawText: false,
                 error: null,
@@ -33,7 +26,6 @@ describe("GitHub reference presentation parity", () => {
                 onRetry() {},
                 onClose() {},
                 onViewRawText() {},
-                onAttachmentUpdate() {},
                 onClick() {},
                 onKeydown() {},
               }}
@@ -46,20 +38,22 @@ describe("GitHub reference presentation parity", () => {
           () => (
             <StreamGroupParts
               parts={[{ kind: "stream", key: "live", text, isStreaming: true, startedAt: 1 }]}
-              options={context}
+              options={{}}
               presentation="standalone"
             />
           ),
           { container },
         );
       } else {
-        render(
-          renderGroupedMessage(prepareChatMessageRender(message), "reply", {
-            ...context,
-            isStreaming: false,
-            showReasoning: false,
-          }),
-          container,
+        mountSolid(
+          () => (
+            <GroupedMessage
+              preparation={prepareChatMessageRender(message)}
+              messageKey="reply"
+              options={{ isStreaming: false, showReasoning: false }}
+            />
+          ),
+          { container },
         );
       }
       expect(

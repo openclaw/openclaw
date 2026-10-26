@@ -70,7 +70,7 @@ on:
       startup_node_version:
         description: "Exact Node version for installed package probes"
         required: false
-        default: "26.9.0"
+        default: "26.12.1"
         type: string
       installed_startup_cpu_diagnostic:
         description: "Capture one established CPU profile after a fresh prime instead of a timing cohort"
@@ -354,7 +354,7 @@ jobs:
 
       - name: Download installed startup package
         if: ${{ inputs.installed_startup_package != '' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ steps.startup_input.outputs.artifact_id }}
           run-id: ${{ steps.startup_input.outputs.run_id }}
@@ -363,7 +363,7 @@ jobs:
 
       - name: Download comparison startup package
         if: ${{ steps.startup_input.outputs.comparison_artifact_id != '' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ steps.startup_input.outputs.comparison_artifact_id }}
           run-id: ${{ steps.startup_input.outputs.comparison_run_id }}
@@ -535,7 +535,7 @@ jobs:
         shell: bash
         env:
           NODE_OPTIONS: ${{ inputs.windows_ci_replay != '' && '--max-old-space-size=8192' || env.NODE_OPTIONS }}
-          REQUESTED_NODE_VERSION: ${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}
+          REQUESTED_NODE_VERSION: ${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.22.1' }}
         run: |
           set -euo pipefail
           source .github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -550,7 +550,7 @@ jobs:
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: restore
-          node-version: ${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}
+          node-version: ${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.22.1' }}
 
       - &windows_versions
         name: Runtime versions
@@ -728,7 +728,7 @@ jobs:
       - name: Upload verified package for the current native run
         id: native_package_upload
         if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-schtasks-package-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/native-package-handoff
@@ -776,7 +776,7 @@ jobs:
 
       - name: Upload installed startup evidence
         if: ${{ always() && inputs.installed_startup_package != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-installed-startup-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -885,7 +885,7 @@ jobs:
 
       - name: Upload exact Windows replay evidence
         if: ${{ always() && steps.replay_input.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-ci-replay-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.replay_input.outputs.evidence }}
@@ -983,7 +983,7 @@ jobs:
 
       - name: Download this run's verified native package
         if: ${{ inputs.installed_startup_package != '' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ env.NATIVE_PACKAGE_ID }}
           path: ${{ runner.temp }}/native-package-archive
@@ -1302,7 +1302,7 @@ jobs:
       - name: Retain installed cell proof fresh
         id: native_cell_proof_fresh
         if: ${{ always() && inputs.run_windows_ci && inputs.installed_startup_package != '' && contains(fromJSON('["success","failure","cancelled"]'), steps.native_prepare_fresh.outcome) }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-schtasks-cell-${{ github.run_id }}-${{ github.run_attempt }}-fresh
           path: |
@@ -1371,7 +1371,7 @@ jobs:
       - name: Retain installed cell proof 2026.9.3
         id: native_cell_proof_9_3
         if: ${{ always() && inputs.run_windows_ci && inputs.installed_startup_package != '' && contains(fromJSON('["success","failure","cancelled"]'), steps.native_prepare_9_3.outcome) }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-schtasks-cell-${{ github.run_id }}-${{ github.run_attempt }}-2026.9.3
           path: |
@@ -1440,7 +1440,7 @@ jobs:
       - name: Retain installed cell proof 2026.9.4
         id: native_cell_proof_9_4
         if: ${{ always() && inputs.run_windows_ci && inputs.installed_startup_package != '' && contains(fromJSON('["success","failure","cancelled"]'), steps.native_prepare_9_4.outcome) }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-schtasks-cell-${{ github.run_id }}-${{ github.run_attempt }}-2026.9.4
           path: |
@@ -1531,7 +1531,7 @@ jobs:
       - name: Upload native Scheduled Task proof
         id: native_proof_upload
         if: ${{ always() && inputs.run_windows_ci }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-schtasks-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

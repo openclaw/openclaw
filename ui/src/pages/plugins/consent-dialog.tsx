@@ -1,19 +1,21 @@
 import type { JSX } from "@solidjs/web";
-import { createSignal, onCleanup, Show, For } from "solid-js";
+import { createMemo, createSignal, onSettled, Show, For, Errored, Loading } from "solid-js";
 import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
   PLUGIN_DECLARED_SURFACE_GROUPS,
   type PluginDeclaredSurfaceGroup,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import {
+  RetryAction,
   SettingsRow,
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
 import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type {
   PluginDeclaredSurface,
   PluginHookGrant,
@@ -44,9 +46,13 @@ export type PluginConsentState = {
   details?: CapabilityConsentErrorDetails;
 };
 
+export type PluginConsentInspectionRead = { result: Promise<string | null> };
+
 type PluginConsentDialogProps = {
+  registerIcon?: (readId: () => string) => () => void;
   consent: PluginConsentState;
   inspection: PluginsInspectResult | null;
+  inspectionRead: PluginConsentInspectionRead | null;
   loading: boolean;
   error: string | null;
   iconUrl?: string;
@@ -59,50 +65,48 @@ type PluginConsentDialogProps = {
   onRetry: () => void;
 };
 
-type ArtTileOptions = {
+type ArtTileProps = {
+  registerIcon?: (readId: () => string) => () => void;
+  slug: string;
+  name: string;
   iconUrl?: string;
   onIconError?: () => void;
   authorIconUrl?: string;
   loading?: boolean;
-  className?: string;
+  class?: string;
   whiteBackground?: boolean;
 };
 
-export function renderArtTile(
-  slug: string,
-  name: string,
-  options: ArtTileOptions = {},
-): JSX.Element {
-  return <PluginArtTile slug={slug} name={name} options={options} />;
-}
-
-export function PluginArtTile(props: {
-  slug: string;
-  name: string;
-  options: ArtTileOptions;
-}): JSX.Element {
+export function PluginArtTile(props: ArtTileProps): JSX.Element {
+  const slug = () => props.slug;
+  let disposed = false;
+  onSettled(() => {
+    const unregister = props.registerIcon?.(slug);
+    return () => {
+      disposed = true;
+      unregister?.();
+    };
+  });
   type ImageState = { source: string | undefined; status: "loading" | "ready" | "failed" };
   const [packageImage, setPackageImage] = createSignal<ImageState>((previous) => {
-    const source = props.options.iconUrl;
+    const source = props.iconUrl;
     return previous && previous.source === source ? previous : { source, status: "loading" };
   });
   const [authorImage, setAuthorImage] = createSignal<ImageState>((previous) => {
-    const source = props.options.authorIconUrl;
+    const source = props.authorIconUrl;
     return previous && previous.source === source ? previous : { source, status: "loading" };
-  });
-  let disposed = false;
-  onCleanup(() => {
-    disposed = true;
   });
   const currentImage = () =>
     packageImage().source && packageImage().status !== "failed"
       ? { state: packageImage(), update: setPackageImage, package: true }
       : { state: authorImage(), update: setAuthorImage, package: false };
+  const gradient = () => pluginFallbackGradient(slug());
+  const monogram = createMemo(() => pluginMonogram(props.name));
   const source = () =>
     currentImage().state.status === "failed" ? undefined : currentImage().state.source;
   const pending = () =>
-    source() ? currentImage().state.status === "loading" : Boolean(props.options.loading);
-  const className = () => props.options.className ?? "plugins-tile";
+    source() ? currentImage().state.status === "loading" : Boolean(props.loading);
+  const className = () => props.class ?? "plugins-tile";
   const settle = (url: string, status: "ready" | "failed") => {
     const image = currentImage();
     if (disposed || image.state.source !== url) {
@@ -110,7 +114,7 @@ export function PluginArtTile(props: {
     }
     image.update({ ...image.state, status });
     if (status === "failed" && image.package) {
-      props.options.onIconError?.();
+      props.onIconError?.();
     }
   };
   // Only the displayed image is admitted; failed sources stay failed until their URL changes.
@@ -120,9 +124,9 @@ export function PluginArtTile(props: {
         <span
           class={[
             className(),
-            { "plugins-tile--white": props.options.whiteBackground, skeleton: pending() },
+            { "plugins-tile--white": props.whiteBackground, skeleton: pending() },
           ]}
-          data-plugin-icon-id={props.slug}
+          data-plugin-icon-id={slug()}
           aria-hidden="true"
         >
           <Show when={source()} keyed>
@@ -143,18 +147,14 @@ export function PluginArtTile(props: {
       ) : (
         <span
           class={[className(), `${className()}--fallback`]}
-          data-plugin-icon-id={props.slug}
+          data-plugin-icon-id={slug()}
           style={{
-            "--plugins-art-a": pluginFallbackGradient(props.slug)[0],
-            "--plugins-art-b": pluginFallbackGradient(props.slug)[1],
+            "--plugins-art-a": gradient()[0],
+            "--plugins-art-b": gradient()[1],
           }}
           aria-hidden="true"
         >
-          {pluginMonogram(props.name) ? (
-            <span>{pluginMonogram(props.name)}</span>
-          ) : (
-            <Icon name="plug" />
-          )}
+          {monogram() ? <span>{monogram()}</span> : <Icon name="plug" />}
         </span>
       )}
     </>
@@ -164,12 +164,10 @@ export function PluginArtTile(props: {
 function renderPluginMetaRow(label: string, value: JSX.Element | string, warning = false) {
   return (
     <SettingsRow
-      {...{
-        title: label,
-        control: <span class={warning ? "plugins-consent__row--warning" : ""}> {value}</span>,
-        stackedOnNarrow: true,
-        carapace: true,
-      }}
+      title={label}
+      control={<span class={{ "plugins-consent__row--warning": warning }}> {value}</span>}
+      stackedOnNarrow
+      carapace
     />
   );
 }
@@ -210,31 +208,21 @@ function renderPluginDeclaredCapabilities(declared: PluginDeclaredSurface): JSX.
   const rows = renderCapabilityRows(declared);
   return (
     <SettingsSection
-      {...{
-        title: t("pluginConsent.declaredTitle"),
-        description: t("pluginConsent.declaredDescription"),
-        carapace: true,
-      }}
+      title={t("pluginConsent.declaredTitle")}
+      description={t("pluginConsent.declaredDescription")}
+      carapace
     >
-      {
-        <>
-          {rows.length ? (
-            rows
-          ) : (
-            <SettingsRow {...{ title: t("pluginConsent.declaredEmpty"), carapace: true }} />
-          )}
-          {declared.hooks.length === 0
-            ? renderPluginMetaRow(t("pluginConsent.hooks"), t("pluginConsent.runtimeHooks"))
-            : undefined}
-          {declared.dangerousConfigFlags.length > 0
-            ? renderPluginMetaRow(
-                t("pluginConsent.dangerousFlags"),
-                renderCapabilityItems(declared.dangerousConfigFlags),
-                true,
-              )
-            : undefined}
-        </>
-      }
+      {rows.length ? rows : <SettingsRow title={t("pluginConsent.declaredEmpty")} carapace />}
+      {declared.hooks.length === 0
+        ? renderPluginMetaRow(t("pluginConsent.hooks"), t("pluginConsent.runtimeHooks"))
+        : undefined}
+      {declared.dangerousConfigFlags.length > 0
+        ? renderPluginMetaRow(
+            t("pluginConsent.dangerousFlags"),
+            renderCapabilityItems(declared.dangerousConfigFlags),
+            true,
+          )
+        : undefined}
     </SettingsSection>
   );
 }
@@ -300,50 +288,44 @@ function renderPluginGrants(grants: PluginOperatorGrants, origin?: string): JSX.
   const conversation = grants.hooks.allowConversationAccess;
   return (
     <SettingsSection
-      {...{
-        title: t("pluginConsent.grantsTitle"),
-        description: t("pluginConsent.grantsDescription"),
-        carapace: true,
-      }}
+      title={t("pluginConsent.grantsTitle")}
+      description={t("pluginConsent.grantsDescription")}
+      carapace
     >
-      {
+      {renderPluginMetaRow(
+        t("pluginConsent.promptInjection"),
+        grantValue(
+          grants.hooks.allowPromptInjection,
+          "pluginConsent.allowed",
+          "pluginConsent.blocked",
+        ),
+      )}
+      {renderPluginMetaRow(
+        t("pluginConsent.conversationAccess"),
         <>
-          {renderPluginMetaRow(
-            t("pluginConsent.promptInjection"),
-            grantValue(
-              grants.hooks.allowPromptInjection,
-              "pluginConsent.allowed",
-              "pluginConsent.blocked",
-            ),
-          )}
-          {renderPluginMetaRow(
-            t("pluginConsent.conversationAccess"),
-            <>
-              {grantValue(conversation, "pluginConsent.on", "pluginConsent.off")}
-              {!conversation.effective &&
-              conversation.configured === undefined &&
-              origin !== "bundled" ? (
-                <span class="plugins-consent__hint">{t("pluginConsent.externalAccessHint")}</span>
-              ) : undefined}
-            </>,
-          )}
-          <For each={["llm", "subagent"] as const}>
-            {(key) => {
-              const overrides = grants[key];
-              return overrides
-                ? renderPluginMetaRow(
-                    t(
-                      key === "llm"
-                        ? "pluginConsent.modelOverrides"
-                        : "pluginConsent.subagentModelOverrides",
-                    ),
-                    modelOverrideSummary(overrides),
-                  )
-                : undefined;
-            }}
-          </For>
-        </>
-      }
+          {grantValue(conversation, "pluginConsent.on", "pluginConsent.off")}
+          {!conversation.effective &&
+          conversation.configured === undefined &&
+          origin !== "bundled" ? (
+            <span class="plugins-consent__hint">{t("pluginConsent.externalAccessHint")}</span>
+          ) : undefined}
+        </>,
+      )}
+      <For each={["llm", "subagent"] as const}>
+        {(key) => {
+          const overrides = grants[key];
+          return overrides
+            ? renderPluginMetaRow(
+                t(
+                  key === "llm"
+                    ? "pluginConsent.modelOverrides"
+                    : "pluginConsent.subagentModelOverrides",
+                ),
+                modelOverrideSummary(overrides),
+              )
+            : undefined;
+        }}
+      </For>
     </SettingsSection>
   );
 }
@@ -426,7 +408,7 @@ function renderTrust(trust: PluginsInspectResult["trust"]) {
     trust.disposition === "clean" ? "ok" : trust.disposition === "blocked" ? "danger" : "warn";
   return (
     <section class="plugins-consent__trust">
-      {<SettingsStatus {...{ kind, label, carapace: true }} />}
+      <SettingsStatus kind={kind} label={label} carapace />
       {trust.reasons?.length ? (
         <ul>
           <For each={trust.reasons}>{(reason) => <li>{reason}</li>}</For>
@@ -444,6 +426,7 @@ function renderTrust(trust: PluginsInspectResult["trust"]) {
 export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.Element {
   const consent = () => props.consent;
   const inspection = () => props.inspection;
+  const receipt = createMemo(() => props.inspectionRead);
   const details = () => consent().details;
   const plugin = () => inspection()?.plugin;
   const fallback = () => consent().fallback;
@@ -473,39 +456,19 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
       {action()}
     </button>
   );
-  return (
-    <openclaw-modal-dialog
-      label={name()}
-      style={{ "--openclaw-modal-width": "min(560px, calc(100vw - 32px))" }}
-      onModal-cancel={() => props.onCancel()}
-    >
-      <section class="plugins-consent oc-card" data-plugin-consent={consent().intent.kind}>
-        <header class="plugins-consent__header">
-          {renderArtTile(slug(), name(), { iconUrl: props.iconUrl, loading: props.iconLoading })}
-          <div>
-            <div class="plugins-detail__title">
-              <h2>{name()}</h2>
-              {version() ? <span class="plugins-version">{`v${version()}`}</span> : undefined}
-            </div>
-            {meta() ? <p class="plugins-consent__description">{meta()}</p> : undefined}
-          </div>
-        </header>
-        {props.loading ? (
-          <p class="plugins-consent__hint" role="status">
-            {t("pluginConsent.loading")}
-          </p>
-        ) : props.error ? (
-          <div class="plugins-consent__error" role="alert">
-            <span>{props.error}</span>
-            <button
-              type="button"
-              class="btn btn--sm oc-action oc-action-secondary"
-              onClick={props.onRetry}
-            >
-              {t("pluginsPage.tryAgain")}
-            </button>
-          </div>
-        ) : inspection() ? (
+  function InspectionBody() {
+    const readiness = createMemo(() =>
+      receipt()?.result.then((error) => {
+        if (error) {
+          throw new Error(error);
+        }
+        return null;
+      }),
+    );
+    return (
+      <>
+        {readiness()}
+        {inspection() ? (
           <>
             {renderProvenance(inspection()!.source)} {renderTrust(inspection()!.trust)}
             {details() ? renderWidenedCapabilities(details()!) : undefined}
@@ -515,7 +478,60 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
         ) : (
           <p class="plugins-consent__description">{t("pluginConsent.fallback")}</p>
         )}
-        <footer class="plugins-consent__actions">
+      </>
+    );
+  }
+  return (
+    <openclaw-modal-dialog
+      label={name()}
+      style={{ "--openclaw-modal-width": "min(560px, calc(100vw - 32px))" }}
+      onModal-cancel={() => props.onCancel()}
+    >
+      <section class="plugins-consent oc-card" data-plugin-consent={consent().intent.kind}>
+        <header class="plugins-consent__header">
+          <PluginArtTile
+            registerIcon={props.registerIcon}
+            slug={slug()}
+            name={name()}
+            iconUrl={props.iconUrl}
+            loading={props.iconLoading}
+          />
+          <div>
+            <div class="plugins-detail__title">
+              <h2>{name()}</h2>
+              {version() ? <span class="plugins-version">{`v${version()}`}</span> : undefined}
+            </div>
+            {meta() ? <p class="plugins-consent__description">{meta()}</p> : undefined}
+          </div>
+        </header>
+        <Loading
+          on={receipt()}
+          fallback={
+            <p class="plugins-consent__hint" role="status">
+              {t("pluginConsent.loading")}
+            </p>
+          }
+        >
+          <Errored
+            fallback={(error, reset) => (
+              <div class="plugins-consent__error" role="alert">
+                <span>{formatUiError(error())}</span>
+                <RetryAction
+                  type="button"
+                  class="btn btn--sm oc-action oc-action-secondary"
+                  label={t("pluginsPage.tryAgain")}
+                  onRetry={() => {
+                    props.onRetry();
+                    reset();
+                  }}
+                />
+              </div>
+            )}
+          >
+            <InspectionBody />
+          </Errored>
+        </Loading>
+        <openclaw-modal-actions class="plugins-consent__actions">
           <button
             type="button"
             class="btn oc-action oc-action-secondary"
@@ -526,7 +542,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
           <ReasonedDisabledControl reason={props.mutationBlockedReason}>
             {confirm}
           </ReasonedDisabledControl>
-        </footer>
+        </openclaw-modal-actions>
       </section>
     </openclaw-modal-dialog>
   );

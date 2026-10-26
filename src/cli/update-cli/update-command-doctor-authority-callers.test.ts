@@ -6,6 +6,7 @@ import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
 import { createDoctorMaintenanceFixture } from "../../commands/doctor-maintenance.test-support.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as packageRoot from "../../infra/openclaw-root.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
@@ -307,6 +308,7 @@ describe("unproved Doctor authority callers", () => {
       databasePath,
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: state.configPath,
         role: "gateway",
@@ -434,7 +436,14 @@ describe("unproved Doctor authority callers", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: run.runId,
-        steps: [expect.objectContaining({ doctorLintFindings: [] })],
+        steps: [
+          expect.objectContaining({
+            name: "post-plugin doctor",
+            exitCode: 0,
+            deferredInspectionCheckIds: null,
+          }),
+          expect.objectContaining({ doctorLintFindings: [] }),
+        ],
       }),
     );
     expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);

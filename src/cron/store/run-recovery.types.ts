@@ -6,6 +6,7 @@ export type CronRunRecoveryInput = {
   storeKey: string;
   nowMs: number;
   cronConfig?: CronConfig;
+  failureRepairTimeoutMs?: number;
 };
 
 export type CronRunRecoveryOutcome = {

@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import {
-  findPersistedAuthProfileCredential,
   findPersistedAuthProfileCredentialAsync,
   isPendingOAuthRefreshFence,
   isSameOAuthRefreshGeneration,
@@ -95,10 +94,6 @@ export async function createCodexResponsesOAuth(params: {
   const persisted =
     Boolean(await findPersistedAuthProfileCredentialAsync(params)) ||
     params.store.runtimePersistedProfileIds?.includes(params.profileId) === true;
-  const readCredential = () =>
-    persisted
-      ? findPersistedAuthProfileCredential(params)
-      : params.store.profiles[params.profileId];
   const validate = (credential: AuthProfileCredential | undefined) => {
     if (fingerprintCodexResponsesOAuth(credential) !== params.fingerprint) {
       throw new Error("ChatGPT subscription sharing identity changed; reconnect before retrying.");
@@ -155,8 +150,12 @@ export async function createCodexResponsesOAuth(params: {
       const resolvedCredential = resolved.credential;
       validate(resolvedCredential);
       lastCredential = resolvedCredential;
+      if (persisted && !resolved.readCurrentCredential) {
+        throw new Error("ChatGPT subscription sharing credential authority is unavailable.");
+      }
+      const readCredential =
+        resolved.readCurrentCredential ?? (() => params.store.profiles[params.profileId]);
       const assertCurrent = () => validateCurrent(readCredential(), resolvedCredential);
-      assertCurrent();
       return { token: resolved.apiKey, assertCurrent };
     },
   };

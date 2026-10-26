@@ -6,6 +6,8 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveOpenClawCliInvocation, resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
+import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
 import {
   enableOpenClawCompileCache,
   resolveOpenClawCompileCacheDirectory,
@@ -18,6 +20,7 @@ import {
   isNativeHookRelayInvocation,
   recoverNodeRuntime,
   runRespawnedChild,
+  watchCliRespawnParent,
 } from "./node-runtime-recovery.mjs";
 import {
   canRunOpenClawNodeDiagnostics,
@@ -25,15 +28,16 @@ import {
   formatUnsupportedNodeDiagnosticWarning,
 } from "./node-version.mjs";
 
+watchCliRespawnParent();
+
 const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||
   existsSync(new URL("./src/entry.ts", import.meta.url));
 
-const { detectCurrentSqliteCapabilities, nodeRuntimeFailure, nodeRuntimeNote } =
-  await import("./node-sqlite.mjs");
+const { detectCurrentSqliteCapabilities, nodeRuntimeFailure } = await import("./node-sqlite.mjs");
 
 const RECOMMENDED_NODE_MAJOR = 26;
-const SUPPORTED_NODE_RANGE = ">=24.16.0 <25, or >=26.1.0";
+const SUPPORTED_NODE_RANGE = ">=24.22.1 <25, or >=26.12.1";
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
 const ensureSupportedRuntimeVersion = async () => {
@@ -59,10 +63,6 @@ const ensureSupportedRuntimeVersion = async () => {
   const probe = await detectCurrentSqliteCapabilities();
   const failure = nodeRuntimeFailure(process.versions.node, probe);
   if (!failure) {
-    const note = nodeRuntimeNote(process.versions.node, probe);
-    if (note) {
-      process.stderr.write(`${note}\n`);
-    }
     return false;
   }
   const unsupportedCommand = classifyUnsupportedNodeCommand(process.argv);
@@ -113,7 +113,7 @@ const resolveCompileCacheRespawnLauncher = () => {
 };
 
 const respawnWithoutCompileCacheIfNeeded = () => {
-  if (!isSourceCheckoutLauncher()) {
+  if (!isSourceCheckoutLauncher() || isForegroundGatewayRunArgv(process.argv)) {
     return false;
   }
   if (process.env[COMPILE_CACHE_DISABLED_RESPAWNED_ENV] === "1") {
@@ -129,21 +129,30 @@ const respawnWithoutCompileCacheIfNeeded = () => {
   };
   delete env.NODE_COMPILE_CACHE;
   return runRespawnedChild(
-    process.execPath,
-    [...process.execArgv, resolveCompileCacheRespawnLauncher(), ...process.argv.slice(2)],
-    env,
+    resolveOpenClawCliRespawn({
+      entryPath: resolveCompileCacheRespawnLauncher(),
+      env,
+    }),
   );
 };
 
 const respawnWithPackagedCompileCacheIfNeeded = (directory) => {
-  const env = resolveOpenClawCompileCacheRespawnEnv({ directory });
+  const foregroundGateway = isForegroundGatewayRunArgv(process.argv);
+  const env = resolveOpenClawCompileCacheRespawnEnv({ directory, foregroundGateway });
   if (!env) {
     return false;
   }
+  const { command, args } = resolveOpenClawCliInvocation({
+    entryPath: resolveCompileCacheRespawnLauncher(),
+  });
+  if (foregroundGateway && process.platform !== "win32" && process.execve) {
+    process.execve(command, [command, ...args], env);
+  }
   return runRespawnedChild(
-    process.execPath,
-    [...process.execArgv, resolveCompileCacheRespawnLauncher(), ...process.argv.slice(2)],
-    env,
+    resolveOpenClawCliRespawn({
+      entryPath: resolveCompileCacheRespawnLauncher(),
+      env,
+    }),
   );
 };
 
@@ -366,7 +375,9 @@ const resolveLauncherConfigPaths = () => {
 };
 
 const shouldDeferRootHelpToRuntimeEntry = () => {
+  const profile = process.env.OPENCLAW_PROFILE?.trim();
   if (
+    (profile && profile.toLowerCase() !== "default") ||
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim() ||
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS?.trim()
   ) {
@@ -675,10 +686,12 @@ async function runLauncher() {
     }
   }
 
+  const foregroundGateway = isForegroundGatewayRunArgv(process.argv);
   const compileCacheDirectory =
-    !waitingForNodeUpdateRespawn && !isSourceCheckoutLauncher()
+    !waitingForNodeUpdateRespawn && (foregroundGateway || !isSourceCheckoutLauncher())
       ? resolveOpenClawCompileCacheDirectory({
           installRoot: fileURLToPath(new URL(".", import.meta.url)),
+          foregroundGateway,
         })
       : undefined;
 
@@ -694,7 +707,7 @@ async function runLauncher() {
 
   // https://nodejs.org/api/module.html#module-compile-cache
   if (!waitingForCompileCacheRespawn && module.enableCompileCache) {
-    enableOpenClawCompileCache({ directory: compileCacheDirectory });
+    enableOpenClawCompileCache({ directory: compileCacheDirectory, foregroundGateway });
   }
 
   if (!waitingForCompileCacheRespawn) {

@@ -32,6 +32,7 @@ import type { ChannelMessageActionName } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type { ChannelId } from "./channel-id.types.js";
+export type { ChannelMeta } from "./channel-meta.types.js";
 export type { ChannelLegacyStateMigrationPlan } from "./legacy-state-migration.types.js";
 export type { ChannelSetupInput } from "./setup-input.js";
 
@@ -116,33 +117,6 @@ export type ChannelHeartbeatDeps = {
   hasActiveWebListener?: (accountId?: string) => boolean;
 };
 
-/** User-facing metadata used in docs, pickers, and setup surfaces. */
-export type ChannelMeta = {
-  id: ChannelId;
-  label: string;
-  selectionLabel: string;
-  docsPath: string;
-  docsLabel?: string;
-  blurb: string;
-  order?: number;
-  aliases?: readonly string[];
-  selectionDocsPrefix?: string;
-  selectionDocsOmitLabel?: boolean;
-  selectionExtras?: readonly string[];
-  detailLabel?: string;
-  systemImage?: string;
-  markdownCapable?: boolean;
-  exposure?: {
-    configured?: boolean;
-    setup?: boolean;
-    docs?: boolean;
-  };
-  quickstartAllowFrom?: boolean;
-  forceAccountBinding?: boolean;
-  preferSessionLookupForAnnounceTarget?: boolean;
-  preferOver?: readonly string[];
-};
-
 /** Snapshot row returned by channel status and lifecycle surfaces. */
 export type ChannelAccountSnapshot = SchemaContract<
   Omit<
@@ -224,6 +198,14 @@ export type ChannelGroupContext = {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
+};
+
+/** Authenticated direct-conversation facts evaluated against an admitted config snapshot. */
+export type ChannelDirectToolPolicyContext = Omit<
+  ChannelGroupContext,
+  "groupId" | "groupChannel" | "groupSpace"
+> & {
+  conversationId: string;
 };
 
 export type ChannelTtsVoiceDeliveryCapabilities = {
@@ -469,13 +451,6 @@ export type ChannelMessagingAdapter = {
     | { kind: "unavailable" }
     | null
     | undefined;
-  /** @deprecated Use prepareConversationRouteOwnersAsync for worker-backed route ownership. */
-  prepareConversationRouteOwners?: (
-    params: readonly Parameters<
-      NonNullable<ChannelMessagingAdapter["resolveConversationRouteOwner"]>
-    >[0][],
-    inspectBindings: (refs: readonly ConversationRef[]) => readonly SessionBindingInspection[],
-  ) => readonly NonNullable<ChannelMessagingAdapter["resolveConversationRouteOwner"]>[];
   /** Prepare binding facts in workers; returned resolvers run under the current effect grant. */
   prepareConversationRouteOwnersAsync?: (
     params: readonly Parameters<
@@ -646,6 +621,10 @@ export type ChannelMessagingAdapter = {
 };
 
 export type ChannelAgentPromptAdapter = {
+  /** Native controls that can present and resolve structured user questions. */
+  questionInputMode?: "buttons";
+  /** The channel supplies its own inline-button guidance through messageToolHints. */
+  customInlineButtonHint?: boolean;
   messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
   messageToolCapabilities?: (
     params: Parameters<NonNullable<ChannelAgentPromptAdapter["messageToolHints"]>>[0],

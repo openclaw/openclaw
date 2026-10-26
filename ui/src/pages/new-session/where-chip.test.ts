@@ -1,18 +1,51 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+import { expectDefined } from "@openclaw/normalization-core";
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
-import { deviceIcons } from "../../components/icons-devices.ts";
-import { readDraftCloudProfiles } from "./discovery.ts";
-import { renderPicker } from "./where-chip.test-support.ts";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { PopoverHandle } from "../../components/solid/popover.tsx";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import type { DraftEnvironment } from "./discovery.ts";
+import { pickerParams, renderPicker } from "./where-chip.test-support.ts";
+import { WhereChip } from "./where-chip.tsx";
+
+function device(id: string, label: string, overrides: Partial<DraftEnvironment> = {}) {
+  return {
+    id: `node:${id}`,
+    type: "node",
+    label,
+    status: "available",
+    sessionHost: true,
+    workerSlots: { total: 2, available: 1 },
+    ...overrides,
+  } satisfies DraftEnvironment;
+}
+
+function option(container: ParentNode, value: string) {
+  return container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`);
+}
+
+function fields(container: ParentNode) {
+  return {
+    trigger: expectDefined(
+      container.querySelector<HTMLButtonElement>("#new-session-where-trigger"),
+      "Where trigger",
+    ),
+    search: expectDefined(
+      container.querySelector<HTMLInputElement>('input[type="search"]'),
+      "environment search",
+    ),
+  };
+}
 
 function hoverDetails(row: Element | null | undefined) {
-  return [
-    ...(row
+  return Array.from(
+    row
       ?.closest("openclaw-tooltip")
-      ?.querySelectorAll('[slot="content"] > div, [slot="content"] > span') ?? []),
-  ]
-    .map((detail) => detail.textContent?.trim())
-    .join(" · ");
+      ?.querySelectorAll('[slot="content"] > div, [slot="content"] > span') ?? [],
+    (detail) => detail.textContent?.trim(),
+  ).join(" · ");
 }
 
 function capacityCaption(row: Element | null | undefined) {
@@ -23,119 +56,138 @@ function capacityCaption(row: Element | null | undefined) {
 }
 
 describe("Where chip", () => {
-  it("shows device and cloud skeletons while the catalog loads", () => {
-    const container = renderPicker(
+  it("loads the menu on first open, focuses its search, and retains it after closing", async () => {
+    const props = pickerParams(true);
+    vi.spyOn(props.params.place.browser, "popoverOpen").mockReturnValue(false);
+    const hostedEnvironments = vi.spyOn(props.params.place.modelControl, "hostedEnvironments");
+    hostedEnvironments.mockClear();
+    let picker: PopoverHandle | undefined;
+    const { container } = mountSolid(() =>
+      createComponent(WhereChip, {
+        ...props,
+        ref: (handle) => {
+          picker = handle;
+        },
+      }),
+    );
+    expect(container.querySelector(".new-session-page__environment-list")).toBeNull();
+    expect(hostedEnvironments).not.toHaveBeenCalled();
+    const trigger = expectDefined(
+      container.querySelector<HTMLButtonElement>("#new-session-where-trigger"),
+      "Where trigger",
+    );
+    trigger.focus();
+    trigger.click();
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(container.querySelector(".new-session-page__environment-list")).not.toBeNull(),
+    );
+    const { search } = fields(container);
+    expect(document.activeElement).toBe(search);
+    picker?.hide();
+    picker?.show();
+    expect(container.querySelector('input[type="search"]')).toBe(search);
+    expect(container.querySelector("#new-session-where-trigger")).toBe(trigger);
+  });
+
+  it("offers the suggested Cloud profile with its provider icon before adoption", async () => {
+    const onAdoptSuggestedProfile = vi.fn();
+    const container = await renderPicker(
       true,
       undefined,
-      { environments: null, cloudProfiles: [] },
-      { catalogLoading: true },
+      { cloudProfiles: [] },
+      {
+        suggestedProfile: { id: "cloud", providerId: "crabbox", providerDisplayId: "aws" },
+        onAdoptSuggestedProfile,
+      },
     );
-    expect(container.querySelectorAll(".new-session-page__environment-skeletons")).toHaveLength(2);
-    expect(container.querySelector('[data-section="devices"]')).not.toBeNull();
-    expect(container.querySelector('[data-section="cloud"]')).not.toBeNull();
+    const item = option(container, "suggested-cloud");
+    expect(item?.textContent?.trim()).toBe("Cloud");
+    expect(item?.querySelector('[data-provider-icon="aws"]')).not.toBeNull();
+    expect(container.querySelector('[data-action="manage-cloud-workers"]')).toBeNull();
+    item?.click();
+    expect(onAdoptSuggestedProfile).toHaveBeenCalledOnce();
   });
 
   it.each([
-    { label: "Office Mac-mini", platform: "darwin", icon: deviceIcons.macMini, form: "mini" },
-    { label: "Build Mac Studio", platform: "macOS", icon: deviceIcons.macStudio, form: "studio" },
+    { isAdmin: false, profiles: [] },
+    { isAdmin: true, profiles: [{ id: "configured", providerId: "crabbox" }] },
   ])(
-    "uses the same device outline in the selected row and trigger: $label / $platform",
-    ({ label, platform, icon, form }) => {
-      const container = renderPicker(true, undefined, {
-        deviceId: "model-device",
-        environments: [
-          {
-            id: "node:model-device",
-            type: "node",
-            label,
-            platform,
-            status: "available",
-            sessionHost: true,
-            workerSlots: { total: 2, available: 1 },
-          },
-        ],
-      });
-      const expected = document.createElement("div");
-      render(icon, expected);
-      const expectedSvg = expected.querySelector("svg")!;
+    "does not offer a suggestion without admin authority or beside configured profiles: %j",
+    async ({ isAdmin, profiles }) => {
+      const container = await renderPicker(
+        isAdmin,
+        undefined,
+        { cloudProfiles: profiles },
+        {
+          suggestedProfile: { id: "cloud", providerId: "crabbox", providerDisplayId: "aws" },
+        },
+      );
+      expect(option(container, "suggested-cloud")).toBeNull();
+    },
+  );
 
-      expect(
-        expectedSvg.isEqualNode(
-          container.querySelector('[data-value="device:model-device"] .session-menu__icon svg'),
-        ),
-      ).toBe(true);
-      expect(
-        expectedSvg.isEqualNode(
-          container.querySelector("#new-session-where-trigger .new-session-page__target-icon svg"),
-        ),
-      ).toBe(true);
+  it("keeps the trigger and focused search through a delayed first catalog read", async () => {
+    const completion = createDeferred();
+    const container = await renderPicker(
+      true,
+      undefined,
+      { environments: null, cloudProfiles: [] },
+      { catalogRead: completion.promise },
+    );
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".new-session-page__environment-skeletons")).toHaveLength(
+        2,
+      ),
+    );
+    expect(container.querySelector('[data-section="devices"]')).not.toBeNull();
+    expect(container.querySelector('[data-section="cloud"]')).not.toBeNull();
+    const { trigger, search } = fields(container);
+    expect(trigger.disabled).toBe(false);
+    expect(container.querySelector('[data-action="manage-cloud-workers"]')).toBeNull();
+    search.focus();
+    completion.resolve();
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".new-session-page__environment-skeletons")).toHaveLength(
+        0,
+      ),
+    );
+    expect(container.querySelector("#new-session-where-trigger")).toBe(trigger);
+    expect(container.querySelector('input[type="search"]')).toBe(search);
+    expect(document.activeElement).toBe(search);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it.each([
+    ["Work MacBook Pro", "darwin", "laptop"],
+    ["Office Mac-mini", "darwin", "mini"],
+    ["Build Mac Studio", "macOS", "studio"],
+  ] as const)(
+    "uses the same device outline in the selected row and trigger: %s / %s",
+    async (label, platform, form) => {
+      const container = await renderPicker(true, undefined, {
+        deviceId: "model-device",
+        environments: [device("model-device", label, { platform })],
+      });
+
       for (const selector of [
         '[data-value="device:model-device"] .session-menu__icon',
         "#new-session-where-trigger .new-session-page__target-icon",
       ]) {
         const marker = container.querySelector(`${selector} .new-session-page__device-icon`);
-        if (form) {
-          expect(marker?.getAttribute("data-form")).toBe(form);
-        } else {
-          expect(marker).toBeNull();
-        }
+        expect(marker?.getAttribute("data-form")).toBe(form);
+        expect(marker?.querySelector("svg path")).not.toBeNull();
       }
     },
   );
 
-  it.each([
-    { query: "device", expected: ["device:runner", "device:alpha-device", "device:beta-device"] },
-  ])("searches destination names, types, IDs and facts: $query", ({ query, expected }) => {
-    const container = renderPicker(
-      true,
-      undefined,
-      { cloudProfiles: [{ id: "aws", providerId: "crabbox", trust: "persistent" }] },
-      { gatewayName: "Build Studio", environmentQuery: query },
-    );
-
-    expect(
-      [
-        ...container.querySelectorAll(
-          '.new-session-page__environment-list [data-value]:not([data-value="auto-device"])',
-        ),
-      ].map((row) => row.getAttribute("data-value")),
-    ).toEqual(expected);
-  });
-
-  it("places usable devices before disabled devices while preserving each group's order", () => {
-    const container = renderPicker(true, undefined, {
+  it("places usable devices before disabled devices while preserving each group's order", async () => {
+    const container = await renderPicker(true, undefined, {
       environments: [
-        {
-          id: "node:offline",
-          type: "node",
-          label: "Offline",
-          status: "offline",
-          sessionHost: true,
-        },
-        {
-          id: "node:ready",
-          type: "node",
-          label: "Ready",
-          status: "available",
-          sessionHost: true,
-          workerSlots: { total: 2, available: 1 },
-        },
-        {
-          id: "node:busy",
-          type: "node",
-          label: "Busy",
-          status: "available",
-          sessionHost: true,
-          workerSlots: { total: 2, available: 0 },
-        },
-        {
-          id: "node:ready2",
-          type: "node",
-          label: "Ready two",
-          status: "available",
-          sessionHost: true,
-          workerSlots: { total: 2, available: 1 },
-        },
+        device("offline", "Offline", { status: "offline", workerSlots: undefined }),
+        device("ready", "Ready"),
+        device("busy", "Busy", { workerSlots: { total: 2, available: 0 } }),
+        device("ready2", "Ready two"),
       ],
     });
     expect(
@@ -145,32 +197,16 @@ describe("Where chip", () => {
     ).toEqual(["device:ready", "device:ready2", "device:busy", "device:offline"]);
   });
 
-  it("keeps matching Local, Devices and Cloud in order with device facts searchable", () => {
-    const container = renderPicker(
+  it("keeps matching Local, Devices and Cloud in order with device facts searchable", async () => {
+    const container = await renderPicker(
       true,
       undefined,
       {
         environments: [
-          {
-            id: "node:zulu",
-            type: "node",
-            label: "Zulu runner",
-            platform: "linux",
-            status: "available",
-            sessionHost: true,
-            workerSlots: { total: 2, available: 1 },
-          },
-          {
-            id: "node:alpha",
-            type: "node",
-            label: "Alpha runner",
-            platform: "linux",
-            status: "available",
-            sessionHost: true,
-            workerSlots: { total: 2, available: 1 },
-          },
+          device("zulu", "Zulu runner", { platform: "linux" }),
+          device("alpha", "Alpha runner", { platform: "linux" }),
         ],
-        cloudProfiles: [{ id: "linux-worker", providerId: "crabbox" }],
+        cloudProfiles: [{ id: "linux-worker", providerId: "crabbox", trust: "persistent" }],
       },
       { gatewayName: "Linux Studio", environmentQuery: "LINUX" },
     );
@@ -182,35 +218,40 @@ describe("Where chip", () => {
         ),
       ].map((row) => row.getAttribute("data-value")),
     ).toEqual(["gateway", "device:alpha", "device:zulu", "cloud:linux-worker"]);
-    expect(hoverDetails(container.querySelector('[data-value="device:alpha"]'))).toContain("Linux");
+    expect(hoverDetails(option(container, "device:alpha"))).toContain("Linux");
   });
 
-  it("keeps explicit destinations selectable while Auto is enabled", () => {
+  it("keeps explicit destinations selectable while Auto is enabled", async () => {
     const onSelectDevice = vi.fn();
     const onSelectCloudProfile = vi.fn();
+    const onApplyCloudDefaults = vi.fn();
     const onEnvironmentQueryInput = vi.fn();
     const onConnectMachine = vi.fn();
-    const container = renderPicker(
+    const container = await renderPicker(
       true,
       undefined,
       { autoDevice: true },
-      { onSelectDevice, onSelectCloudProfile, onEnvironmentQueryInput, onConnectMachine },
+      {
+        onSelectDevice,
+        onSelectCloudProfile,
+        onApplyCloudDefaults,
+        onEnvironmentQueryInput,
+        onConnectMachine,
+      },
     );
     const destinations = container.querySelectorAll<HTMLButtonElement>(
       '.new-session-page__environment-list [data-value]:not([data-value="auto-device"])',
     );
 
-    expect(destinations).toHaveLength(5);
     for (const destination of destinations) {
       expect(destination.disabled).toBe(false);
       destination.click();
     }
-    expect(onSelectDevice).toHaveBeenCalledTimes(4);
-    expect(onSelectCloudProfile).toHaveBeenCalledExactlyOnceWith("aws", true);
+    expect(onSelectDevice).toHaveBeenCalledWith("runner");
+    expect(onApplyCloudDefaults).toHaveBeenCalledExactlyOnceWith("aws");
+    expect(onSelectCloudProfile).toHaveBeenCalledExactlyOnceWith("aws");
 
-    expect(capacityCaption(container.querySelector('[data-value="device:runner"]'))).toBe(
-      "1 of 2 session slots in use",
-    );
+    expect(capacityCaption(option(container, "device:runner"))).toBe("1 of 2 session slots in use");
 
     const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
     expect(search.disabled).toBe(false);
@@ -224,402 +265,129 @@ describe("Where chip", () => {
     expect(onConnectMachine).toHaveBeenCalledOnce();
   });
 
-  it.each([true])("preserves destination eligibility with Auto set to %s", (autoDevice) => {
-    const container = renderPicker(
+  it("preserves aws while filtering its cloud card from search", async () => {
+    const container = await renderPicker(
       true,
       undefined,
       {
-        autoDevice,
-        environments: [
-          {
-            id: "node:ready",
-            type: "node",
-            label: "Ready runner",
-            status: "available",
-            sessionHost: true,
-            workerSlots: { total: 2, available: 1 },
-          },
-          {
-            id: "node:offline",
-            type: "node",
-            label: "Offline runner",
-            status: "unavailable",
-            sessionHost: true,
-            workerSlots: { total: 2, available: 1 },
-          },
-        ],
-        cloudProfiles: [
-          { id: "aws", providerId: "crabbox" },
-          { id: "blocked", providerId: "static-ssh" },
-        ],
-      },
-      {
-        cloudProfileDisabledReason: (profile) =>
-          profile.id === "blocked" ? "Runtime unavailable" : undefined,
-      },
-    );
-
-    for (const value of ["gateway", "device:ready", "cloud:aws"]) {
-      expect(
-        container
-          .querySelector<HTMLButtonElement>(`[data-value="${value}"]`)
-          ?.matches(':disabled, [aria-disabled="true"]'),
-      ).toBe(false);
-    }
-    for (const value of ["device:offline", "cloud:blocked"]) {
-      expect(
-        container
-          .querySelector<HTMLButtonElement>(`[data-value="${value}"]`)
-          ?.matches(':disabled, [aria-disabled="true"]'),
-      ).toBe(true);
-    }
-    expect(container.querySelector('[data-value="gateway"]')?.getAttribute("aria-pressed")).toBe(
-      String(!autoDevice),
-    );
-  });
-
-  it.each([
-    { isAdmin: true, cloudProfileId: "", blocked: false, shown: true },
-    { isAdmin: true, cloudProfileId: "aws", blocked: true, shown: false },
-  ])(
-    "gates the split configuration panel: $isAdmin / $cloudProfileId / $blocked",
-    ({ isAdmin, cloudProfileId, blocked, shown }) => {
-      const container = renderPicker(
-        isAdmin,
-        undefined,
-        {
-          cloudProfileId,
-          cloudProfiles: [
-            {
-              id: "aws",
-              providerId: "aws",
-              operatingSystems: [{ id: "linux", label: "Linux", default: true }],
-            },
-          ],
-        },
-        { cloudDisabledReason: blocked ? "Cloud unavailable" : undefined },
-      );
-      expect(Boolean(container.querySelector(".new-session-page__cloud-configuration"))).toBe(
-        shown,
-      );
-    },
-  );
-
-  it.each([
-    { cloudOs: "windows", cloudMachine: "large", expectedOs: "windows", expectedMachine: "large" },
-  ])(
-    "resolves split panel selected/default configuration: $expectedOs / $expectedMachine",
-    ({ cloudOs, cloudMachine, expectedOs, expectedMachine }) => {
-      const container = renderPicker(true, undefined, {
         cloudProfileId: "aws",
-        os: cloudOs,
-        machineClass: cloudMachine,
+        os: "windows/wsl2",
+        machineClass: "tiny",
         cloudProfiles: [
           {
             id: "aws",
-            providerId: "aws",
+            providerId: "crabbox",
             operatingSystems: [
               { id: "linux", label: "Linux", default: true },
-              { id: "windows", label: "Windows" },
+              { id: "windows/wsl2", label: "Windows (WSL2)" },
             ],
             machines: [
-              { id: "small", label: "Small", default: true },
-              { id: "large", label: "Large" },
+              { id: "tiny", label: "Tiny Linux", os: "linux", default: true },
+              { id: "tiny", label: "Tiny Windows", os: "windows/wsl2", default: true },
+              { id: "custom", label: "Custom" },
             ],
           },
         ],
-      });
-      const cloudRow = container.querySelector('[data-value="cloud:aws"]');
-      expect(cloudRow?.querySelector(".session-menu__text")?.textContent?.trim()).toMatch(/^aws/);
-      expect(cloudRow?.querySelector(".new-session-page__selected-summary")?.textContent).toBe(
-        expectedOs === "linux" ? "Linux · Small" : "Windows · Large",
-      );
-      expect(
-        container
-          .querySelector("#new-session-where-trigger")
-          ?.textContent?.replace(/\s+/g, " ")
-          .trim(),
-      ).toBe(expectedOs === "linux" ? "aws Linux · Small" : "aws Windows · Large");
-      expect(
-        container.querySelector(`[data-value="os:${expectedOs}"]`)?.getAttribute("aria-pressed"),
-      ).toBe("true");
-      expect(
-        container
-          .querySelector(`[data-value="machine:${expectedMachine}"]`)
-          ?.getAttribute("aria-pressed"),
-      ).toBe("true");
-    },
-  );
-
-  it("hides unavailable operating systems from cloud configuration", () => {
-    const reason = "Upgrade Crabbox to enable this operating system.";
-    const container = renderPicker(true, undefined, {
-      cloudProfileId: "aws",
-      cloudProfiles: readDraftCloudProfiles([
-        {
-          id: "aws",
-          providerId: "crabbox",
-          operatingSystems: [
-            { id: "linux", label: "Linux", default: true },
-            { id: "macos", label: "macOS", disabledReason: reason },
-            { id: "windows/wsl2", label: "Windows (WSL2)", disabledReason: reason },
-          ],
-        },
-      ]),
-    });
-    const panel = container.querySelector(".new-session-page__cloud-configuration");
-    expect(panel?.querySelector('[data-value="os:linux"]')).not.toBeNull();
-    expect(
-      panel?.querySelector('[data-value="os:macos"], [data-value="os:windows/wsl2"]'),
-    ).toBeNull();
-  });
-
-  it.each([
-    {
-      os: "windows/wsl2",
-      machineClass: "tiny",
-      label: "aws",
-      machine: "Tiny Windows",
-    },
-  ])(
-    "preserves $label while filtering its cloud card from search",
-    ({ os, machineClass, label, machine }) => {
-      const container = renderPicker(
-        true,
-        undefined,
-        {
-          cloudProfileId: "aws",
-          os,
-          machineClass,
-          cloudProfiles: [
-            {
-              id: "aws",
-              providerId: "crabbox",
-              operatingSystems: [
-                { id: "linux", label: "Linux", default: true },
-                { id: "windows/wsl2", label: "Windows (WSL2)" },
-              ],
-              machines: [
-                { id: "tiny", label: "Tiny Linux", os: "linux", default: true },
-                { id: "tiny", label: "Tiny Windows", os: "windows/wsl2", default: true },
-                { id: "custom", label: "Custom" },
-              ],
-            },
-          ],
-        },
-        { environmentQuery: "unmatched-environment" },
-      );
-      expect(container.querySelector('[data-value="cloud:aws"]')).toBeNull();
-      expect(container.querySelector(".new-session-page__trigger-label")?.textContent).toBe(label);
-      expect(container.querySelector(".new-session-page__trigger-summary")?.textContent).toBe(
-        `${os === "windows/wsl2" ? "Windows (WSL2)" : "Linux"} · ${machine}`,
-      );
-      expect(container.querySelector("openclaw-select-picker")).toBeNull();
-    },
-  );
-
-  it.each([
-    { id: "gcp", os: "windows/wsl2", osLabel: "Windows (WSL2)", size: "beast", sizeLabel: "Beast" },
-  ])(
-    "shows catalog labels for $id / $os / $size without provider-specific logic",
-    ({ id, os, osLabel, size, sizeLabel }) => {
-      const container = renderPicker(true, undefined, {
-        cloudProfileId: id,
-        cloudProfiles: [
-          {
-            id,
-            providerId: "test-provider",
-            operatingSystems: [{ id: os, label: osLabel }],
-            machines: [{ id: size, label: sizeLabel, os }],
-          },
-        ],
-      });
-      const trigger = container.querySelector("#new-session-where-trigger");
-      expect(trigger?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-        `${id} ${osLabel} · ${sizeLabel}`,
-      );
-      expect(trigger?.getAttribute("aria-label")).toContain(`${id}, ${osLabel} · ${sizeLabel}`);
-    },
-  );
-
-  it.each([
-    {
-      operatingSystems: undefined,
-      machines: [{ id: "small", label: "Small" }],
-      summary: "Small",
-    },
-  ])("shows only reported cloud metadata: $summary", ({ operatingSystems, machines, summary }) => {
-    const container = renderPicker(true, undefined, {
-      cloudProfileId: "custom",
-      cloudProfiles: [{ id: "custom", providerId: "test-provider", operatingSystems, machines }],
-    });
-    expect(container.querySelector(".new-session-page__trigger-label")?.textContent).toBe("custom");
-    expect(container.querySelector(".new-session-page__trigger-summary")?.textContent ?? null).toBe(
-      summary,
+      },
+      { environmentQuery: "unmatched-environment" },
     );
+    expect(option(container, "cloud:aws")).toBeNull();
+    expect(container.querySelector(".new-session-page__trigger-label")?.textContent).toBe("aws");
+    expect(container.querySelector(".new-session-page__trigger-summary")?.textContent).toBe(
+      "Windows (WSL2) · Tiny Windows",
+    );
+    expect(container.querySelector("openclaw-select-picker")).toBeNull();
   });
 
-  it("renders devices for writers while cloud and Connect remain admin-only", () => {
-    const writer = renderPicker(false);
-    const autoRow = writer.querySelector('[data-value="auto-device"]');
-    expect(autoRow?.querySelector(".session-menu__text")?.textContent).toBe("Any available device");
-    expect(autoRow?.tagName).toBe("BUTTON");
+  it("renders devices for writers while cloud and Connect remain admin-only", async () => {
+    const writer = await renderPicker(false);
+    const autoRow = option(writer, "auto-device");
     expect(autoRow?.getAttribute("aria-pressed")).toBe("false");
     expect(hoverDetails(autoRow)).toContain("Chooses the least-busy connected device");
-    const remoteExec = renderPicker(false, "eligible-order");
-    expect(hoverDetails(remoteExec.querySelector('[data-value="auto-device"]'))).toContain(
-      "Chooses the first eligible connected device",
-    );
-    expect(writer.querySelector('[data-value="device:runner"]')).not.toBeNull();
-    expect(writer.querySelector('[data-value="device:runner"] .session-menu__sub')).toBeNull();
-    expect(hoverDetails(writer.querySelector('[data-value="device:alpha-device"]'))).toContain(
-      "alpha-de",
-    );
-    expect(hoverDetails(writer.querySelector('[data-value="device:beta-device"]'))).toContain(
-      "beta-dev",
-    );
+    expect(option(writer, "device:runner")).not.toBeNull();
     expect(writer.querySelector(".session-menu__sub, .session-menu__description")).toBeNull();
-    expect(writer.querySelector('[data-value="cloud:aws"]')).toBeNull();
+    expect(option(writer, "cloud:aws")).toBeNull();
     expect(writer.querySelector('[data-action="connect-machine"]')).toBeNull();
 
-    const admin = renderPicker(true);
-    expect(admin.querySelector('[data-value="device:runner"]')).not.toBeNull();
-    expect(admin.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
+    const admin = await renderPicker(true);
+    expect(option(admin, "cloud:aws")).not.toBeNull();
     expect(admin.querySelector('[data-action="connect-machine"]')).not.toBeNull();
   });
 
-  it("disables device placements when the selected runtime cannot dispatch to devices", () => {
-    const container = renderPicker(true, undefined, {
-      environments: [
-        {
-          id: "node:macbook",
-          type: "node",
-          label: "MacBook",
-          status: "available",
-          sessionHost: true,
-          workerSlots: { total: 1, available: 1 },
-        },
-      ],
+  it("disables device placements when the selected runtime cannot dispatch to devices", async () => {
+    const container = await renderPicker(true, undefined, {
+      environments: [device("macbook", "MacBook", { workerSlots: { total: 1, available: 1 } })],
       cloudProfiles: [],
       deviceDisabledReason: "This runtime does not support paired devices",
     });
 
-    const device = container.querySelector<HTMLButtonElement>('[data-value="device:macbook"]');
-    expect(device?.matches(':disabled, [aria-disabled="true"]')).toBe(true);
-    expect(device?.querySelector(".session-menu__description")).toBeNull();
+    const row = option(container, "device:macbook");
+    expect(row?.matches(':disabled, [aria-disabled="true"]')).toBe(true);
+    expect(row?.querySelector(".session-menu__description")).toBeNull();
     // Unavailable cards show only the actionable reason.
-    expect(capacityCaption(device)).toBeUndefined();
-    expect(hoverDetails(device)).toContain("This runtime does not support paired devices");
+    expect(capacityCaption(row)).toBeUndefined();
+    expect(hoverDetails(row)).toContain("This runtime does not support paired devices");
   });
 
-  it.each([
-    {
-      name: "no paired device hosts sessions",
-      issues: undefined,
-      reason: /no devices have session hosting enabled/i,
-    },
-    {
-      name: "a paired node must be updated before it can advertise session hosting",
-      issues: [
+  it.each<[DraftEnvironment["issues"], RegExp]>([
+    [undefined, /no devices have session hosting enabled/i],
+    [
+      [
         {
           code: "update-required",
           action: "update-and-reconnect",
           updateCommand: "openclaw update",
           headlessReconnectCommand: "openclaw node restart",
-        } as const,
-      ],
-      reason: /openclaw update.*openclaw node restart/i,
-    },
-  ])("disables automatic selection with an actionable reason when $name", ({ issues, reason }) => {
-    const container = renderPicker(false, undefined, {
-      environments: [
-        { id: "node:other", type: "node", label: "Other", status: "offline", sessionHost: false },
-        {
-          id: "node:macbook",
-          type: "node",
-          label: "MacBook",
-          status: "available",
-          sessionHost: false,
-          ...(issues ? { issues } : {}),
         },
+      ],
+      /openclaw update.*openclaw node restart/i,
+    ],
+  ])("disables automatic selection with actionable remediation for %j", async (issues, reason) => {
+    const container = await renderPicker(false, undefined, {
+      environments: [
+        device("other", "Other", {
+          status: "offline",
+          sessionHost: false,
+          workerSlots: undefined,
+        }),
+        device("macbook", "MacBook", { sessionHost: false, workerSlots: undefined, issues }),
       ],
       cloudProfiles: [],
     });
 
-    const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]');
+    const automatic = option(container, "auto-device");
     expect(automatic?.disabled).toBe(true);
     expect(hoverDetails(automatic)).toMatch(reason);
     expect(automatic?.querySelector(".session-menu__description")).toBeNull();
   });
 
-  it.each([
-    {
-      name: "allows enabled remote execution without a free worker slot",
-      devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-        consumesWorkerSlot: false,
-      },
-      workerSlots: { total: 1, available: 0 },
-      invocableCommands: ["codex.exec-server.stdio.v1"],
-      commandState: "invocable" as const,
-      disabled: false,
-      label: "1 of 1 session slots in use",
-    },
-    {
-      name: "disables a declared remote command that the Gateway has not enabled",
-      devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-        consumesWorkerSlot: false,
-      },
-      workerSlots: { total: 1, available: 1 },
-      invocableCommands: [],
-      commandState: "unauthorized" as const,
-      disabled: true,
-      reason:
-        "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
-      label: "Slot utilization unavailable",
-    },
-  ])(
-    "$name in the New Session picker",
-    ({
-      devicePlacement,
-      workerSlots,
-      invocableCommands,
-      commandState,
-      disabled,
-      reason,
-      label,
-    }) => {
-      const container = renderPicker(true, undefined, {
+  it.each(["invocable", "unauthorized"] as const)(
+    "gates remote execution on %s command authority, not capacity",
+    async (state) => {
+      const disabled = state === "unauthorized";
+      const container = await renderPicker(true, undefined, {
         environments: [
-          {
-            id: "node:runner",
-            type: "node",
-            label: "Build runner",
-            status: "available",
-            sessionHost: true,
-            workerSlots,
+          device("runner", "Build runner", {
+            workerSlots: { total: 1, available: disabled ? 1 : 0 },
             capabilities: ["codex.exec-server.stdio.v1"],
-            invocableCommands,
-            ...(commandState
-              ? {
-                  requiredNodeCommand: {
-                    command: "codex.exec-server.stdio.v1",
-                    state: commandState,
-                  },
-                }
-              : {}),
-          },
+            invocableCommands: disabled ? [] : ["codex.exec-server.stdio.v1"],
+            requiredNodeCommand: { command: "codex.exec-server.stdio.v1", state },
+          }),
         ],
         cloudProfiles: [],
-        devicePlacement,
+        devicePlacement: {
+          requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+          consumesWorkerSlot: false,
+        },
       });
 
-      const device = container.querySelector<HTMLButtonElement>('[data-value="device:runner"]');
-      expect(device?.matches(':disabled, [aria-disabled="true"]')).toBe(disabled);
-      expect(capacityCaption(device)).toBe(disabled ? undefined : label);
-      if (reason) {
-        expect(hoverDetails(device)).toContain(reason);
+      const row = option(container, "device:runner");
+      expect(row?.matches(':disabled, [aria-disabled="true"]')).toBe(disabled);
+      expect(capacityCaption(row)).toBe(disabled ? undefined : "1 of 1 session slots in use");
+      if (disabled) {
+        expect(hoverDetails(row)).toContain(
+          "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
+        );
       }
     },
   );

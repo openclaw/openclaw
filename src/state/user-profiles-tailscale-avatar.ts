@@ -1,4 +1,3 @@
-import type { FetchLike } from "../media/fetch.js";
 import {
   MAX_USER_PROFILE_AVATAR_BYTES,
   USER_PROFILE_AVATAR_MIME_TYPES,
@@ -8,18 +7,10 @@ import type { UserProfileAvatarMime } from "./user-profiles.types.js";
 const TAILSCALE_AVATAR_FETCH_TIMEOUT_MS = 5_000;
 const TAILSCALE_AVATAR_MAX_REDIRECTS = 3;
 
-export type TailscaleAvatarFetchOptions = {
-  fetchImpl?: FetchLike;
-  timeoutMs?: number;
-};
-
 export async function fetchTailscaleAvatar(
   url: string,
-  options: TailscaleAvatarFetchOptions,
 ): Promise<{ bytes: Buffer; mime: UserProfileAvatarMime } | null> {
   try {
-    const timeoutMs = options.timeoutMs ?? TAILSCALE_AVATAR_FETCH_TIMEOUT_MS;
-    const fetchImpl = options.fetchImpl;
     // Keep the media runtime behind an actual avatar fetch.
     const [{ readRemoteMediaBuffer }, { fileTypeFromBuffer }] = await Promise.all([
       import("../media/fetch.js"),
@@ -27,12 +18,11 @@ export async function fetchTailscaleAvatar(
     ]);
     const loaded = await readRemoteMediaBuffer({
       url,
-      fetchImpl,
       maxBytes: MAX_USER_PROFILE_AVATAR_BYTES,
       maxRedirects: TAILSCALE_AVATAR_MAX_REDIRECTS,
-      timeoutMs,
-      responseHeaderTimeoutMs: timeoutMs,
-      readIdleTimeoutMs: timeoutMs,
+      timeoutMs: TAILSCALE_AVATAR_FETCH_TIMEOUT_MS,
+      responseHeaderTimeoutMs: TAILSCALE_AVATAR_FETCH_TIMEOUT_MS,
+      readIdleTimeoutMs: TAILSCALE_AVATAR_FETCH_TIMEOUT_MS,
       requestInit: { headers: { Accept: USER_PROFILE_AVATAR_MIME_TYPES.join(",") } },
     });
     const mime = USER_PROFILE_AVATAR_MIME_TYPES.find(

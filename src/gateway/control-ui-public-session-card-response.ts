@@ -17,7 +17,7 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
-/** Uses the document's admission/cache owner; PNG bytes are cached as base64 text. */
+/** Uses the document's admission/cache owner to retain the rendered PNG bytes. */
 export async function servePublicSessionCardRepresentation(params: {
   req: IncomingMessage;
   res: ServerResponse;
@@ -35,6 +35,7 @@ export async function servePublicSessionCardRepresentation(params: {
 }): Promise<true> {
   const { res, config, gate, locator, projection, card } = params;
   const result = await gate.run({
+    kind: "card",
     publicationKey: locator.shareId,
     sessionKey: locator.sessionKey,
     config,
@@ -58,43 +59,40 @@ export async function servePublicSessionCardRepresentation(params: {
           return entry?.role === "user" ? publicSessionMessageText(entry) : undefined;
         })
         .find((text) => text);
-      const png = await card.render({
+      return card.render({
         ...session.cardFacts,
         title: publicSessionTitle(session.title),
         quote,
         messageCount: session.totalMessages,
         host: params.host,
       });
-      return png.toString("base64");
     },
+    consume: (representation) =>
+      withReadySessionRows(
+        projection,
+        () => [{ key: locator.sessionKey, agentId: locator.agentId }],
+        () => {
+          if (
+            !representation ||
+            !Buffer.isBuffer(representation.body) ||
+            !isPublicSessionShareActive(config, locator, projection)
+          ) {
+            return "fallback" as const;
+          }
+          if (!representation.isCurrent()) {
+            return false as const;
+          }
+          const body = representation.body;
+          res.statusCode = 200;
+          res.setHeader("Cache-Control", "public, max-age=300");
+          res.setHeader("Content-Type", "image/png");
+          res.setHeader("Content-Length", body.byteLength);
+          res.end(body);
+          return "served" as const;
+        },
+      ),
   });
-  if (result.kind !== "ok") {
-    await card.fallback();
-    return true;
-  }
-  const served = await withReadySessionRows(
-    projection,
-    () => [{ key: locator.sessionKey, agentId: locator.agentId }],
-    () => {
-      const representation = result.value;
-      if (
-        !representation ||
-        typeof representation.body !== "string" ||
-        !representation.isCurrent() ||
-        !isPublicSessionShareActive(config, locator, projection)
-      ) {
-        return false;
-      }
-      const body = Buffer.from(representation.body, "base64");
-      res.statusCode = 200;
-      res.setHeader("Cache-Control", "public, max-age=300");
-      res.setHeader("Content-Type", "image/png");
-      res.setHeader("Content-Length", body.byteLength);
-      res.end(body);
-      return true as const;
-    },
-  );
-  if (!served) {
+  if (result.kind !== "ok" || result.value === "fallback") {
     await card.fallback();
   }
   return true;

@@ -1,3 +1,4 @@
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig, TtsConfig } from "../config/types.js";
 import { mergeDeep } from "../infra/deep-merge.js";
 import {
@@ -12,12 +13,7 @@ import { createSpeechProviderRegistry } from "./provider-registry-core.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "./provider-registry.js";
 import type { TtsDirectiveOverrides, TtsDirectiveParseResult } from "./provider-types.js";
 import { resolveTtsProvider, resolveTtsProviderAsync } from "./tts-provider-resolution.js";
-import {
-  resolveTtsConfig,
-  resolveTtsPrefsPath,
-  resolveTtsPrefsPathAsync,
-  resolveTtsRuntimeConfig,
-} from "./tts-settings.js";
+import { resolveTtsConfig, resolveTtsPrefsPath, resolveTtsPrefsPathAsync } from "./tts-settings.js";
 
 type PreparedTtsRequest = {
   cfg: OpenClawConfig;
@@ -81,7 +77,7 @@ type ExplicitTtsOverrideParams = {
 };
 
 function prepareExplicitTtsOverrides(params: ExplicitTtsOverrideParams) {
-  const cfg = resolveTtsRuntimeConfig(params.cfg);
+  const cfg = selectLiveRuntimeConfig(params.cfg);
   const providerInput = params.provider?.trim();
   const modelId = params.modelId?.trim();
   const voiceId = params.voiceId?.trim();
@@ -93,7 +89,7 @@ function prepareExplicitTtsOverrides(params: ExplicitTtsOverrideParams) {
   return { cfg, providerInput, modelId, voiceId, config };
 }
 
-/** @deprecated Use resolveExplicitTtsOverridesAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use resolveExplicitTtsOverridesAsync. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
 export function resolveExplicitTtsOverrides(
   params: ExplicitTtsOverrideParams,
 ): TtsDirectiveOverrides {

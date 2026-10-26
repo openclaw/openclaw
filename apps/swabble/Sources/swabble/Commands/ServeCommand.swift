@@ -38,21 +38,15 @@ struct ServeCommand: CLICommand {
         let logger = Logger(level: LogLevel(configValue: cfg.logging.level) ?? .info)
         logger.info("swabble serve starting (wake: \(cfg.wake.enabled ? cfg.wake.word : "disabled"))")
         let pipeline = SpeechPipeline()
-        do {
-            let stream = try await pipeline.start(
-                localeIdentifier: cfg.speech.localeIdentifier,
-                etiquette: cfg.speech.etiquetteReplacements)
-            try await Self.consumeTranscripts(stream, config: cfg, logger: logger)
-        } catch {
-            logger.error("serve error: \(error)")
-            throw error
-        }
+        let stream = try await pipeline.start(
+            localeIdentifier: cfg.speech.localeIdentifier,
+            etiquette: cfg.speech.etiquetteReplacements)
+        try await Self.consumeTranscripts(stream, config: cfg)
     }
 
     static func consumeTranscripts(
         _ stream: AsyncStream<SpeechSegment>,
-        config cfg: SwabbleConfig,
-        logger: Logger) async throws
+        config cfg: SwabbleConfig) async throws
     {
         let executor = HookExecutor(config: cfg)
         let triggers = [cfg.wake.word] + cfg.wake.aliases
@@ -67,11 +61,6 @@ struct ServeCommand: CLICommand {
             }
             if cfg.transcripts.enabled {
                 await TranscriptsStore.shared.append(text: stripped)
-            }
-            if seg.isFinal {
-                logger.info("final: \(stripped)")
-            } else {
-                logger.debug("partial: \(stripped)")
             }
         }
     }

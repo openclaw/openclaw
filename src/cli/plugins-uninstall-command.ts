@@ -1,4 +1,5 @@
 // Terminal preview and confirmation for the shared plugin uninstall owner.
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config.js";
 import type { PreparedPluginUninstall } from "../plugins/management-uninstall.js";
@@ -15,8 +16,6 @@ export type PluginUninstallOptions = {
   force?: boolean;
   dryRun?: boolean;
   invalidateRuntimeCache?: boolean;
-  /** True when a Claw lifecycle caller already owns the package lease. */
-  clawManaged?: boolean;
   /** Synchronous authority guard at each final plugin/config mutation. */
   beforePersistentApply?: () => void;
 };
@@ -29,17 +28,13 @@ export async function runPluginUninstallCommand(
   if (!opts.dryRun) {
     assertConfigWriteAllowedInCurrentMode();
   }
-  // Claw and system-agent callers retain their closure-bound owner and outer lease.
+  // System-agent callers retain their closure-bound owner and outer lease.
   const gateway =
-    opts.dryRun || opts.clawManaged || opts.beforePersistentApply
-      ? null
-      : await resolvePluginLifecycleGateway();
+    opts.dryRun || opts.beforePersistentApply ? null : await resolvePluginLifecycleGateway();
   const { preparePluginUninstall, uninstallPluginWithPolicy } =
     await import("../plugins/management-uninstall.js");
   const { formatUninstallActionLabels, resolveUninstallChannelConfigKeys } =
     await import("../plugins/uninstall.js");
-  const { collectClawPluginUninstallWarnings } =
-    await import("../plugins/uninstall-claw-references.js");
   const { PromptInputClosedError, promptYesNo } = await import("./prompt.js");
   const keepFiles = Boolean(opts.keepFiles || opts.keepConfig);
   const printPreview = async (preview: PreparedPluginUninstall) => {
@@ -54,7 +49,7 @@ export async function runPluginUninstallCommand(
       labels.push(`directory: ${shortenHomePath(preview.plan.directoryRemoval.target)}`);
     }
     runtime.log(
-      `Plugin: ${theme.command(preview.name)}${preview.name !== preview.pluginId ? theme.muted(` (${preview.pluginId})`) : ""}`,
+      `Plugin: ${theme.command(sanitizeTerminalText(preview.name))}${preview.name !== preview.pluginId ? theme.muted(` (${preview.pluginId})`) : ""}`,
     );
     if (preview.pluginIds.length > 1 || preview.requestedPluginId !== preview.pluginId) {
       runtime.log(
@@ -62,12 +57,6 @@ export async function runPluginUninstallCommand(
       );
     }
     runtime.log(`Will remove: ${labels.length ? labels.join(", ") : "(nothing)"}`);
-    for (const warning of await collectClawPluginUninstallWarnings({
-      pluginId: preview.pluginId,
-      installRecord: preview.installRecords[preview.pluginId],
-    })) {
-      runtime.log(theme.warn(warning));
-    }
   };
   const executeLocal = async (
     targetPluginId: string,
@@ -79,7 +68,6 @@ export async function runPluginUninstallCommand(
       pluginId: targetPluginId,
       keepFiles,
       caller: "cli",
-      clawManaged: opts.clawManaged,
       beforePersistentApply: () => {
         assertCurrent();
         opts.beforePersistentApply?.();

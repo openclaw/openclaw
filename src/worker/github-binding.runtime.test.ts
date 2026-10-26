@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolvePreparedExecEnvironment } from "../agents/bash-tools.exec-request-preparation.js";
 import * as exec from "../process/exec.js";
 import {
   disposeWorkerGitHubEnvironment,
@@ -132,13 +131,15 @@ describe("prepareWorkerGitHubEnvironment", () => {
     const controller = new AbortController();
     controller.abort(new Error("worker fenced: owner-epoch-mismatch"));
 
-    await prepareWorkerGitHubEnvironment({
-      binding,
-      stateDir: path.join(root, "state"),
-      turnId: "turn",
-      cwd,
-      signal: controller.signal,
-    });
+    await expect(
+      prepareWorkerGitHubEnvironment({
+        binding,
+        stateDir: path.join(root, "state"),
+        turnId: "turn",
+        cwd,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("worker fenced");
 
     expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
     expect(remoteHead).not.toBe(initialHead);
@@ -249,7 +250,7 @@ describe("prepareWorkerGitHubEnvironment", () => {
     // Project only fixture-owned keys so a failed assertion cannot dump the host environment.
     const expectedEnv = {
       ...prepared?.localIdentityEnv,
-      GH_TOKEN: binding.token,
+      GH_TOKEN: "",
       GITHUB_TOKEN: "",
     };
     const actualEnv = Object.fromEntries(
@@ -259,29 +260,34 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(JSON.stringify(prepared)).not.toContain(binding.token);
     expect(process.env.GH_TOKEN).toBe("inherited-synthetic-token");
     expect(process.env.GITHUB_TOKEN).toBe("inherited-synthetic-token");
-    const child = resolvePreparedExecEnvironment({
-      execParams: { command: "git config --get-regexp '^(maintenance.auto|gc.auto|user.name)$'" },
-      host: "gateway",
-      defaultPathPrepend: [],
-      ...prepared,
-      warnings: [],
-    });
-    const config = await exec.runExec(
-      "git",
-      ["-C", cwd, "config", "--get-regexp", "^(maintenance.auto|gc.auto|user.name)$"],
-      { env: child.env, timeoutMs: 10_000, logOutput: false },
-    );
-    expect(config.stdout.trim().split("\n")).toEqual([
-      `user.name ${binding.gitAuthor.name}`,
-      "maintenance.auto false",
-      "gc.auto 0",
-    ]);
     const profileDir = prepared?.localIdentityEnv?.GH_CONFIG_DIR;
     if (!profileDir) {
       throw new Error("Expected a turn-owned GitHub profile");
     }
     await disposeWorkerGitHubEnvironment(path.join(root, "state"), "turn");
     await expect(fs.access(profileDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rotates the retained profile and refuses writes after cancellation", async () => {
+    const controller = new AbortController();
+    const prepared = await prepareWorkerGitHubEnvironment({
+      binding,
+      stateDir: path.join(root, "state"),
+      turnId: "renewed",
+      cwd,
+      signal: controller.signal,
+    });
+    if (!prepared) {
+      throw new Error("Expected profile");
+    }
+    const hosts = path.join(prepared.localIdentityEnv.GH_CONFIG_DIR!, "hosts.yml");
+    await prepared.refresh({ generation: 1, token: "synthetic-renewed-token" }, () => {});
+    expect(await fs.readFile(hosts, "utf8")).toContain("synthetic-renewed-token");
+    controller.abort(new Error("revoked"));
+    await expect(
+      prepared.refresh({ generation: 2, token: "synthetic-denied-token" }, () => {}),
+    ).rejects.toThrow("revoked");
+    expect(await fs.readFile(hosts, "utf8")).not.toContain("synthetic-denied-token");
   });
 
   it("does not remove a newer profile when the previous turn finishes cleanup", async () => {

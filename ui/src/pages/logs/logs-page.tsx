@@ -1,5 +1,6 @@
 import "../../styles/logs.css";
-import { createEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import type { LogsTailResult } from "@openclaw/gateway-protocol";
+import { createSignal, createStore, onSettled } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
   beginPanelRefresh,
@@ -16,86 +17,93 @@ import {
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { useStreamAutoFollow } from "../../lib/reactive/stream-auto-follow.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import {
   DEFAULT_LOG_LEVEL_FILTERS,
   parseLogLine,
   type LogEntry,
   type LogLevel,
 } from "./log-lines.ts";
-import { LogsView } from "./view.tsx";
+import { LogsView, type LogsReadCompletion } from "./view.tsx";
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-logs-page": HTMLAttributes<HTMLElement>;
+    }
+  }
+}
 
 const LOG_BUFFER_LIMIT = 2000;
 const LOGS_POLL_INTERVAL_MS = 2000;
 
-type LogsPayload = {
-  file?: string;
-  cursor?: number;
-  lines?: unknown;
-  truncated?: boolean;
-  reset?: boolean;
-};
+export function renderSolid() {
+  return (
+    <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true, settingsWorkspace: true }}>
+      <LogsPage />
+    </ShellLayoutBoundary>
+  );
+}
 
-function LogsPageContent(props: { host: HTMLElement }) {
+function LogsPage() {
   const context = useApplication();
   const [status, setStatus] = createSignal(createPanelRefreshStatus(), { ownedWrite: true });
   const [file, setFile] = createSignal<string | null>(null, { ownedWrite: true });
-  const [entries, setEntries] = createSignal<LogEntry[]>([], { ownedWrite: true });
+  const [entries, setEntries] = createStore<LogEntry[]>([], { shallow: true });
   const [filterText, setFilterText] = createSignal("");
-  const [levelFilters, setLevelFilters] = createSignal<Record<LogLevel, boolean>>({
+  const [levelFilters, setLevelFilters] = createStore<Record<LogLevel, boolean>>({
     ...DEFAULT_LOG_LEVEL_FILTERS,
   });
   const [autoFollow, setAutoFollow] = createSignal(true);
   const [truncated, setTruncated] = createSignal(false, { ownedWrite: true });
-  const [requestState, setRequestState] = createSignal<"idle" | "quiet" | "visible">("idle", {
+  const [completion, setCompletion] = createSignal<LogsReadCompletion | null>(null, {
     ownedWrite: true,
   });
-  const [forceFollow, setForceFollow] = createSignal(0);
   let cursor: number | null = null;
-  let request: AbortController | null = null;
-  let pollTimer: ReturnType<typeof setInterval> | undefined;
-  let connected = false;
+  let cursorBootId: string | undefined;
+  let request:
+    | (LogsReadCompletion & {
+        controller: AbortController;
+        resolve: (status: ReturnType<typeof createPanelRefreshStatus> | null) => void;
+      })
+    | null = null;
   let disposed = false;
-  let atBottom = true;
   let stream: HTMLElement | undefined;
-  let followFrame: number | undefined;
 
   const cancelRequest = () => {
-    request?.abort();
+    request?.controller.abort();
+    request?.resolve(null);
     request = null;
-    setRequestState("idle");
+    setCompletion(null);
   };
-  const updatePolling = () => {
-    const shouldPoll = connected && document.visibilityState !== "hidden";
-    if (!shouldPoll && pollTimer !== undefined) {
-      clearInterval(pollTimer);
-      pollTimer = undefined;
-    } else if (shouldPoll && pollTimer === undefined) {
-      pollTimer = setInterval(() => void loadLogs({ quiet: true }), LOGS_POLL_INTERVAL_MS);
-      return true;
-    }
-    return false;
-  };
+  const polling = useVisiblePoll(LOGS_POLL_INTERVAL_MS, () => void loadLogs({ quiet: true }));
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: () => {
       cursor = null;
+      cursorBootId = undefined;
       setStatus(createPanelRefreshStatus());
       setFile(null);
-      setEntries([]);
+      setEntries(() => []);
       setTruncated(false);
-      atBottom = true;
+      follow.reset();
     },
     invalidateRequests: cancelRequest,
-    onSnapshot: (change) => {
-      connected = change.snapshot.phase === "connected" && change.snapshot.client !== null;
-      updatePolling();
+    onSnapshot: () => {
+      if (gateway.connected && gateway.client !== null) {
+        polling.start();
+      } else {
+        polling.stop();
+      }
     },
     ensureInitialData: (change) => {
-      const quiet = !change.identityChanged && untrack(status).hasLoaded;
-      void loadLogs({ reset: true, quiet }).then((current) => {
+      const quiet = !change.identityChanged && status().hasLoaded;
+      // A same-Gateway reconnect resumes the cursor; a full window costs a busy Gateway one
+      // file read and redaction pass per reconnect.
+      void loadLogs({ reset: !quiet || cursor === null, quiet }).then((current) => {
         if (current && !quiet) {
-          setForceFollow((revision) => revision + 1);
+          follow.schedule(true);
         }
       });
     },
@@ -108,135 +116,91 @@ function LogsPageContent(props: { host: HTMLElement }) {
       return false;
     }
     cancelRequest();
-    const current = new AbortController();
+    const result = Promise.withResolvers<ReturnType<typeof createPanelRefreshStatus> | null>();
+    const current = { controller: new AbortController(), quiet: Boolean(options.quiet), ...result };
     request = current;
-    setRequestState(options.quiet ? "quiet" : "visible");
+    setCompletion(current);
     setStatus((previous) => beginPanelRefresh(previous, { clearError: !options.quiet }));
-    const previousCursor = options.reset ? null : cursor;
-    const previousFile = untrack(file);
+    const bootId = gateway.snapshot?.hello?.server?.bootId;
+    const resetCursor = options.reset || bootId !== cursorBootId;
+    const previousCursor = resetCursor ? null : cursor;
+    const previousFile = file();
     const isCurrent = () =>
       !disposed && request === current && context.gateway === source && gateway.isCurrent(scope);
+    let accepted: ReturnType<typeof createPanelRefreshStatus> | null = null;
     try {
       const tail = (nextCursor?: number) =>
-        scope.client.request<LogsPayload>(
+        scope.client.request<LogsTailResult>(
           "logs.tail",
           { cursor: nextCursor, limit: 500, maxBytes: 250_000 },
-          { signal: current.signal },
+          { signal: current.controller.signal },
         );
       let payload = await tail(previousCursor ?? undefined);
       if (!isCurrent()) {
         return false;
       }
-      // Cursors belong to one file. Finish the reset before publishing a new source.
-      const sourceChanged =
-        !options.reset &&
-        previousFile !== null &&
-        payload.file !== undefined &&
-        payload.file !== previousFile;
+      // Cursors belong to one server boot and file. Finish the reset before publishing a new source.
+      const sourceChanged = !resetCursor && previousFile !== null && payload.file !== previousFile;
       if (sourceChanged) {
         payload = await tail();
         if (!isCurrent()) {
           return false;
         }
       }
-      const nextEntries = Array.isArray(payload.lines)
-        ? payload.lines.filter((line): line is string => typeof line === "string").map(parseLogLine)
-        : [];
-      const reset = options.reset || sourceChanged || payload.reset || previousCursor === null;
-      setEntries((previous) =>
-        reset ? nextEntries : [...previous, ...nextEntries].slice(-LOG_BUFFER_LIMIT),
+      const nextEntries = payload.lines.map(parseLogLine);
+      const reset = resetCursor || sourceChanged || payload.reset || previousCursor === null;
+      // Truncation belongs to the displayed history until a complete tail replaces it.
+      setTruncated(
+        Boolean(payload.truncated) ||
+          (!reset && truncated()) ||
+          (reset ? nextEntries.length : entries.length + nextEntries.length) > LOG_BUFFER_LIMIT,
       );
-      if (typeof payload.cursor === "number") {
-        cursor = payload.cursor;
-      }
-      if (typeof payload.file === "string") {
-        setFile(payload.file);
-      }
-      setTruncated(Boolean(payload.truncated));
-      setStatus(completePanelRefresh());
+      setEntries((draft) => {
+        if (reset) {
+          draft.length = 0;
+        }
+        draft.push(...nextEntries);
+        draft.splice(0, Math.max(0, draft.length - LOG_BUFFER_LIMIT));
+      });
+      cursor = payload.cursor;
+      cursorBootId = bootId;
+      setFile(payload.file);
+      accepted = completePanelRefresh();
+      setStatus(accepted);
+      follow.schedule();
       return true;
     } catch (error) {
       if (!isCurrent()) {
         return false;
       }
       if (isMissingOperatorReadScopeError(error)) {
-        setEntries([]);
+        setEntries(() => []);
+        setTruncated(false);
         const failed = failPanelRefresh(createPanelRefreshStatus(), error, gateway.snapshot);
-        setStatus(
-          failed.error
-            ? { ...failed, error: formatMissingOperatorReadScopeMessage("logs") }
-            : failed,
-        );
+        accepted = failed.error
+          ? { ...failed, error: formatMissingOperatorReadScopeMessage("logs") }
+          : failed;
       } else {
-        setStatus((previous) => failPanelRefresh(previous, error, gateway.snapshot));
+        accepted = failPanelRefresh(status(), error, gateway.snapshot);
       }
+      setStatus(accepted);
       return false;
     } finally {
       if (request === current) {
+        current.resolve(accepted);
         request = null;
-        setRequestState("idle");
       }
     }
   }
 
-  const scheduleFollow = (force = false) => {
-    if (followFrame !== undefined) {
-      cancelAnimationFrame(followFrame);
-      followFrame = undefined;
-    }
-    const scope = gateway.capture();
-    if (!scope || disposed) {
-      return;
-    }
-    followFrame = requestAnimationFrame(() => {
-      followFrame = undefined;
-      if (!stream || disposed || !gateway.isCurrent(scope)) {
-        return;
-      }
-      const distance = stream.scrollHeight - stream.scrollTop - stream.clientHeight;
-      if (!force && (!untrack(autoFollow) || (!atBottom && distance >= 120))) {
-        return;
-      }
-      stream.scrollTop = stream.scrollHeight;
-      atBottom = true;
-    });
-  };
-  createEffect(entries, () => {
-    if (untrack(autoFollow) && atBottom) {
-      scheduleFollow();
-    }
-  });
-  createEffect(autoFollow, (enabled) => {
-    if (enabled) {
-      scheduleFollow(true);
-    }
-  });
-  createEffect(forceFollow, (revision) => {
-    if (revision > 0) {
-      scheduleFollow(true);
-    }
-  });
-  const visibilityChanged = () => {
-    if (updatePolling()) {
-      void loadLogs({ quiet: true });
-    }
-  };
-  document.addEventListener("visibilitychange", visibilityChanged);
-  onCleanup(() => {
-    disposed = true;
-    cancelRequest();
-    if (pollTimer !== undefined) {
-      clearInterval(pollTimer);
-    }
-    if (followFrame !== undefined) {
-      cancelAnimationFrame(followFrame);
-    }
-    document.removeEventListener("visibilitychange", visibilityChanged);
+  const follow = useStreamAutoFollow({
+    container: () => stream,
+    enabled: autoFollow,
+    identity: () => gateway.epoch,
   });
   onSettled(() => {
-    stream = props.host.querySelector<HTMLElement>(".log-stream") ?? undefined;
     const resetContentScroll = () => {
-      const content = props.host.closest<HTMLElement>(".content");
+      const content = stream?.closest<HTMLElement>(".content");
       if (content) {
         content.scrollTop = 0;
         content.scrollLeft = 0;
@@ -244,55 +208,62 @@ function LogsPageContent(props: { host: HTMLElement }) {
     };
     resetContentScroll();
     const frame = requestAnimationFrame(resetContentScroll);
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      disposed = true;
+      request?.controller.abort();
+      request?.resolve(null);
+      request = null;
+      cancelAnimationFrame(frame);
+    };
   });
 
   return (
-    <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true }}>
-      <section class="content-header">
-        <div>
-          <div class="page-title">{t("tabs.logs")}</div>
-        </div>
-      </section>
-      <SettingsWorkspace fillHeight>
-        <LogsView
-          loading={requestState() === "visible"}
-          refreshDisabled={!gateway.connected || requestState() !== "idle"}
-          status={status()}
-          file={file()}
-          entries={entries()}
-          filterText={filterText()}
-          levelFilters={levelFilters()}
-          autoFollow={autoFollow()}
-          truncated={truncated()}
-          onFilterTextChange={setFilterText}
-          onLevelToggle={(level, enabled) =>
-            setLevelFilters((previous) => ({ ...previous, [level]: enabled }))
-          }
-          onToggleAutoFollow={setAutoFollow}
-          onRefresh={() =>
-            void loadLogs({ reset: true }).then((current) => {
-              if (current) {
-                setForceFollow((revision) => revision + 1);
+    <openclaw-logs-page>
+      <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true }}>
+        <section class="content-header">
+          <div>
+            <h1 class="page-title">{t("tabs.logs")}</h1>
+          </div>
+        </section>
+        <SettingsWorkspace fillHeight>
+          <LogsView
+            completion={completion()}
+            refreshDisabled={!gateway.connected}
+            status={status()}
+            file={file()}
+            entries={entries}
+            filterText={filterText()}
+            levelFilters={levelFilters}
+            autoFollow={autoFollow()}
+            truncated={truncated()}
+            onStreamRef={(element) => (stream = element)}
+            onFilterTextChange={setFilterText}
+            onLevelToggle={(level, enabled) =>
+              setLevelFilters((draft) => {
+                draft[level] = enabled;
+              })
+            }
+            onToggleAutoFollow={(enabled) => {
+              setAutoFollow(enabled);
+              if (enabled) {
+                follow.schedule(true);
               }
-            })
-          }
-          onExport={(lines, label) => {
-            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-            downloadTextFile(`openclaw-logs-${label}-${stamp}.log`, `${lines.join("\n")}\n`);
-          }}
-          onScroll={(event) => {
-            const target = event.currentTarget;
-            atBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 120;
-          }}
-        />
-      </SettingsWorkspace>
-    </ShellLayoutBoundary>
+            }}
+            onRefresh={() =>
+              void loadLogs({ reset: true }).then((current) => {
+                if (current) {
+                  follow.schedule(true);
+                }
+              })
+            }
+            onExport={(lines, label) => {
+              const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+              downloadTextFile(`openclaw-logs-${label}-${stamp}.log`, `${lines.join("\n")}\n`);
+            }}
+            onScroll={follow.handleScroll}
+          />
+        </SettingsWorkspace>
+      </ShellLayoutBoundary>
+    </openclaw-logs-page>
   );
 }
-
-export const LogsPage = defineSolidBridge(
-  "openclaw-logs-page",
-  (_props, host) => <LogsPageContent host={host} />,
-  { properties: {} },
-);

@@ -1,16 +1,35 @@
-import { isDeepStrictEqual } from "node:util";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agents/agent-run-terminal-outcome.js";
 import { inspectMainSessionRecoveryLifecycleEvent } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { captureMemoryExactSessionReader } from "../config/sessions/session-accessor.memory-exact-read.js";
 import {
   getAgentEventLifecycleGeneration,
   type AgentEventPayload,
   type AgentEventRuntimePayload,
 } from "../infra/agent-events.js";
-import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
+import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import type { ChatRunEntry } from "./server-chat-state.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
+
+/** Select progress for an already-authorized hidden session subscription. */
+export function shouldMirrorAgentEventToHiddenSessionMessages(
+  { stream, data }: Pick<AgentEventPayload, "stream" | "data">,
+  isAborted: boolean,
+): boolean {
+  return (
+    stream === "item" ||
+    stream === "thinking" ||
+    stream === "approval" ||
+    stream === "lifecycle" ||
+    (stream === "compaction" && (data.phase === "start" || data.phase === "end")) ||
+    (!isAborted &&
+      stream === "assistant" &&
+      ((typeof data.text === "string" && data.text.length > 0) ||
+        (typeof data.delta === "string" && data.delta.length > 0)) &&
+      resolveAssistantEventPhase(data) === "commentary")
+  );
+}
 
 /** Orders a handler's accepted events around fresh recovery reads, independently of display enrichment. */
 export function createAgentEventAdmission({
@@ -35,41 +54,25 @@ export function createAgentEventAdmission({
     event: AgentEventPayload,
     previous?: Promise<void>,
   ): Promise<{ suppress: boolean; assertCurrent?: () => void }> => {
-    const cfg = getRuntimeConfig();
-    const read = () =>
-      loadGatewaySessionEntryReadOnlyInWorker({
-        cfg,
-        key: sessionKey,
-        ...(agentId ? { agentId } : {}),
-      }).catch(() => undefined);
-    let loaded = await read();
-    const source = loaded?.capturedReadSource;
-    const assertCurrent = () => {
-      if (source && typeof source.databaseIdentity === "string") {
-        assertExistingDatabaseIdentity(
-          source.path,
-          `file:${source.databaseIdentity}`,
-          source.databaseBirthtime,
-        );
-      }
-    };
-    if (previous && loaded) {
-      await previous.catch(() => undefined);
-      assertCurrent();
-      const refreshed = await read();
-      if (refreshed && !isDeepStrictEqual(refreshed.capturedReadSource, source)) {
-        throw new Error("Session recovery source changed while awaiting earlier events");
-      }
-      loaded = refreshed;
+    const memory = captureMemoryExactSessionReader({ sessionKey, agentId });
+    if (memory) {
+      // Incognito state cannot survive a restart; only its live memory owner applies.
+      return { suppress: false, assertCurrent: () => memory.assertCurrent() };
     }
-    assertCurrent();
+    if (previous) {
+      await previous.catch(() => undefined);
+    }
+    const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+      cfg: getRuntimeConfig(),
+      key: sessionKey,
+      ...(agentId ? { agentId } : {}),
+    }).catch(() => undefined);
     return {
       suppress: inspectMainSessionRecoveryLifecycleEvent({
         currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
         entry: loaded?.entry,
         event,
       }).suppress,
-      assertCurrent,
     };
   };
 
@@ -95,8 +98,8 @@ export function createAgentEventAdmission({
     const sessionKey = source.eventSessionKey ?? source.sessionKey;
     const agentId = evt.agentId ?? source.sessionAgentId;
     const previous = pendingEvents.get(evt.runId);
-    // Capture the physical reader before waiting for earlier events. Only the
-    // mandatory recovery read delays this run; display enrichment stays separate.
+    // Capture live memory ownership now; durable recovery reads wait for earlier
+    // events and then read once. Display enrichment stays separate.
     const prepared =
       needsRecoveryRead && sessionKey
         ? resolveRestartRecoveryLifecycleState(sessionKey, agentId, evt, previous)

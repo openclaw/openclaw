@@ -18,9 +18,8 @@ afterEach(() => {
 
 describe("EmbeddedPluginApprovalBroker", () => {
   it("lists, emits, and resolves pending approvals", async () => {
-    const broker = new EmbeddedPluginApprovalBroker();
     const events: Array<{ event: string; payload: unknown }> = [];
-    broker.subscribe((event) => {
+    const broker = new EmbeddedPluginApprovalBroker((event) => {
       events.push(event);
     });
 
@@ -79,32 +78,10 @@ describe("EmbeddedPluginApprovalBroker", () => {
     await expect(resultPromise).resolves.toMatchObject({ decision: "deny" });
   });
 
-  it("times out pending approvals", async () => {
+  it.each(["timeout", "abort"])("removes pending approvals on %s", async (cause) => {
     vi.useFakeTimers();
-    const broker = new EmbeddedPluginApprovalBroker();
     const events: Array<{ event: string; payload: unknown }> = [];
-    broker.subscribe((event) => {
-      events.push(event);
-    });
-    const resultPromise = broker.request({
-      request: requestPayload(),
-      timeoutMs: 5_000,
-    });
-
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    await expect(resultPromise).resolves.toMatchObject({ decision: null });
-    expect(broker.listPending()).toEqual([]);
-    expect(events.at(-1)).toMatchObject({
-      event: "plugin.approval.removed",
-      payload: { id: expect.stringMatching(/^plugin:/) },
-    });
-  });
-
-  it("removes approvals when the embedded run is aborted", async () => {
-    const broker = new EmbeddedPluginApprovalBroker();
-    const events: Array<{ event: string; payload: unknown }> = [];
-    broker.subscribe((event) => {
+    const broker = new EmbeddedPluginApprovalBroker((event) => {
       events.push(event);
     });
     const controller = new AbortController();
@@ -114,9 +91,13 @@ describe("EmbeddedPluginApprovalBroker", () => {
       signal: controller.signal,
     });
 
-    controller.abort(new Error("run aborted"));
-
-    await expect(resultPromise).rejects.toThrow("run aborted");
+    if (cause === "timeout") {
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(resultPromise).resolves.toMatchObject({ decision: null });
+    } else {
+      controller.abort(new Error("run aborted"));
+      await expect(resultPromise).rejects.toThrow("run aborted");
+    }
     expect(broker.listPending()).toEqual([]);
     expect(events.at(-1)).toMatchObject({
       event: "plugin.approval.removed",
@@ -124,18 +105,13 @@ describe("EmbeddedPluginApprovalBroker", () => {
     });
   });
 
-  it("isolates failed listeners while stopping every pending request", async () => {
+  it("isolates presentation failure while stopping every pending request", async () => {
     vi.useFakeTimers();
-    const broker = new EmbeddedPluginApprovalBroker();
     const removedIds: string[] = [];
-    broker.subscribe((event) => {
-      if (event.event === "plugin.approval.removed") {
-        throw new Error("removal listener failed");
-      }
-    });
-    broker.subscribe((event) => {
+    const broker = new EmbeddedPluginApprovalBroker((event) => {
       if (event.event === "plugin.approval.removed") {
         removedIds.push(event.payload.id);
+        throw new Error("removal listener failed");
       }
     });
     const first = broker.request({

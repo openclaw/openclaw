@@ -10,6 +10,8 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { resolveBootstrapContextForRun } from "./bootstrap-files.js";
+import * as workspaceFiles from "./workspace-file-read.js";
+import { loadPersonalUserBootstrapFile } from "./workspace-personal-bootstrap.js";
 vi.mock("../plugins/memory-runtime.js", () => ({
   classifyActiveMemoryWorkspacePaths: vi.fn(async () => ({ status: "unavailable" })),
 }));
@@ -26,6 +28,27 @@ afterEach(async () => {
   await state.cleanup();
 });
 describe("personal bootstrap", () => {
+  it("rejects a retired profile's overlay after worker preparation and a merge during the file read", async () => {
+    const workspaceDir = tempDirs.make("bootstrap-profile-retired-");
+    const alice = ensureProfileForEmail("alice@example.test");
+    const bob = ensureProfileForEmail("bob@example.test");
+    ensureProfileForEmail("third@example.test");
+    const personalDir = path.join(workspaceDir, "users", alice.id);
+    await fs.mkdir(personalDir, { recursive: true });
+    await fs.writeFile(path.join(personalDir, "USER.md"), "Alice private preferences");
+    const read = workspaceFiles.readWorkspaceFileWithGuards;
+    using intercepted = vi
+      .spyOn(workspaceFiles, "readWorkspaceFileWithGuards")
+      .mockImplementationOnce(async (params) => {
+        const loaded = await read(params);
+        linkEmail("alice@example.test", bob.id);
+        return loaded;
+      });
+
+    expect(await loadPersonalUserBootstrapFile(workspaceDir, alice.id)).toBeUndefined();
+    expect(intercepted).toHaveBeenCalledOnce();
+  });
+
   it("refreshes the selected overlay without retaining a previous selection", async () => {
     const workspaceDir = path.join(tempDirs.make("bootstrap-people-"), "users", "arbitrary");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -39,6 +62,10 @@ describe("personal bootstrap", () => {
     await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared defaults");
     await writePersonal(alice.id, "Alice preferences");
     await writePersonal(bob.id, "Bob preferences");
+    expect((await loadPersonalUserBootstrapFile(workspaceDir, alice.id))?.origin).toEqual({
+      kind: "personal",
+      rootPath: path.join(workspaceDir, "users", alice.id),
+    });
     const load = async (bootstrapUserProfileId?: string) => {
       const context = await resolveBootstrapContextForRun({
         workspaceDir,

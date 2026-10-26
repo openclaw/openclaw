@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
@@ -9,7 +8,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Chat side panel helper" });
 
 suite.define(() => {
-  it("keeps Subagents open when a batch starts during Layout opening, when visible, and after reopening", async () => {
+  it("keeps Subagents open when a batch starts during Panels opening, when visible, and after reopening", async () => {
     await suite.withPage({}, async ({ page }) => {
       const parentKey = "agent:main:helper-parent";
       const parent = {
@@ -46,12 +45,12 @@ suite.define(() => {
         ({ parentRow, childRow }) => {
           const revealBatch = (event: Event) => {
             if (
-              !(event.target instanceof HTMLElement) ||
-              !event.target.matches(".chat-pane__layout-menu")
+              !(event.target instanceof Element) ||
+              !event.target.closest(".sidebar-region__panels-toggle button")
             ) {
               return;
             }
-            document.removeEventListener("wa-show", revealBatch);
+            document.removeEventListener("click", revealBatch, true);
             (window as MockGatewayWindow).openclawControlUiE2eGateway?.emit("sessions.changed", {
               sessionKey: childRow.key,
               reason: "run-start",
@@ -60,7 +59,7 @@ suite.define(() => {
               ancestorSessions: [parentRow],
             });
           };
-          document.addEventListener("wa-show", revealBatch);
+          document.addEventListener("click", revealBatch, true);
         },
         { parentRow: runningParent, childRow: child },
       );
@@ -70,7 +69,7 @@ suite.define(() => {
       await openChatSidePanelType(page, "Subagents");
       expect(await panel.isVisible()).toBe(true);
 
-      await selectChatLayoutAction(page, "Subagents");
+      await page.getByRole("button", { name: "Close Subagents", exact: true }).click();
       await panel.waitFor({ state: "hidden" });
       await openChatSidePanelType(page, "Subagents");
       await panel.waitFor({ state: "visible" });

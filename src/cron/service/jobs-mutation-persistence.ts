@@ -11,23 +11,27 @@ import {
   resolveCronAuthenticatedCallerOrigin,
   resolveCronAuthenticatedChannelRequester,
 } from "../tools-allow-provenance.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronStoredJob } from "../types.js";
 import { findJobOrThrow, isJobEnabled } from "./jobs-scheduling.js";
 import {
   cronJobMessageActionAuthorityInputsEqual,
   cronJobMessageToolAuthorityInputsEqual,
 } from "./jobs-tool-policy.js";
 import { publishCronRunReceiptMutation } from "./run-receipts.js";
-import { emit, type CronServiceState } from "./state.js";
+import { emit, type CronServiceState, type CronAddOptions } from "./state.js";
 import { persistCronJobMutation, type captureCronJobMutationSource } from "./store.js";
 
 export async function persistUpdatedJob(params: {
   state: CronServiceState;
-  previousJob: CronJob;
-  nextJob: CronJob;
+  previousJob: CronStoredJob;
+  nextJob: CronStoredJob;
   source: ReturnType<typeof captureCronJobMutationSource>;
   mutationMethod: "cron.add" | "cron.update";
   commitGuard?: () => void;
+  streamAuthority?: Pick<
+    CronAddOptions,
+    "execPolicy" | "sessionEntryCurrent" | "streamExecApproval"
+  >;
   agentId?: string;
   preconditionJob?: CronJob;
   jobMutation: CronJobMutation;
@@ -50,6 +54,7 @@ export async function persistUpdatedJob(params: {
     (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) ||
     !cronJobMessageToolAuthorityInputsEqual(previousJob, nextJob);
   const messageSourceAuthorityChanged =
+    !isDeepStrictEqual(previousJob.operatorSource, nextJob.operatorSource) ||
     !cronJobMessageActionAuthorityInputsEqual(previousJob, nextJob) ||
     (triggerStateChanged &&
       Boolean(
@@ -70,6 +75,7 @@ export async function persistUpdatedJob(params: {
       resolveCronJobEffectiveAgentId(previousJob, currentDefaultAgentId);
       resolveCronJobEffectiveAgentId(nextJob, currentDefaultAgentId);
     },
+    streamAuthority: params.streamAuthority,
     agentId: params.agentId,
     preconditionJob: params.preconditionJob,
     expectedJob: { id: previousJob.id, configRevision: resolveCronJobConfigRevision(previousJob) },
@@ -89,7 +95,11 @@ export async function persistUpdatedJob(params: {
         scheduleChanged,
       });
       try {
-        if (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) {
+        if (
+          params.jobMutation.kind === "update"
+            ? params.jobMutation.patch.enabled === false
+            : isJobEnabled(previousJob) && !isJobEnabled(nextJob)
+        ) {
           requestActiveCronJobCancellation(nextJob.id, "Cron job disabled by operator.");
         }
       } finally {

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type {
   WorkerOperationHandlers,
   WorkerWriteOperationContext,
@@ -23,13 +22,14 @@ import {
   snapshotFromExecApprovalsRow,
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 
 function applyAuthorizationBatch(
-  db: DatabaseSync,
+  db: EngineConnection,
   initial: ExecApprovalsSnapshot,
   items: readonly ExecAuthorizationCommitInput[],
 ) {
@@ -37,20 +37,27 @@ function applyAuthorizationBatch(
   const outcomes = items.map((item): ExecAuthorizationCommitOutcome => {
     let next: ReturnType<typeof applyExecAuthorizationCommit>;
     try {
-      next = applyExecAuthorizationCommit(structuredClone(current.file), item);
+      next = applyExecAuthorizationCommit(current.file, item);
     } catch (error) {
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     }
-    if (next !== null) {
-      assertExecApprovalsHostPolicyUnchanged(current.file, next);
+    if (next !== null || item.requireCommit) {
       try {
-        assertExecApprovalsMutationAllowed({ db, current: current.file, next });
+        assertExecApprovalsMutationAllowed({
+          db,
+          current: current.file,
+          next: next ?? current.file,
+          ...(item.requireCommit ? { agentId: item.agentId } : {}),
+        });
       } catch (error) {
         if (!(error instanceof ExecApprovalsMutationFencedError)) {
           throw error;
         }
         return { ok: false, message: error.message };
       }
+    }
+    if (next !== null) {
+      assertExecApprovalsHostPolicyUnchanged(current.file, next);
       const raw = serializeExecApprovals(next);
       if (!current.exists || current.raw !== raw) {
         current = snapshotFromExecApprovalsRow({ path: current.path, row: { raw_json: raw } });
@@ -71,6 +78,7 @@ export function commitExecAuthorizationsInWorker(
   const mayWrite = input.items.some(
     (item) =>
       item.matches.length > 0 ||
+      item.requireCommit === true ||
       (item.allowAlwaysDecision !== undefined && item.allowAlwaysDecision.kind !== "one-shot"),
   );
   if (!mayWrite) {

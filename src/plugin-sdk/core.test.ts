@@ -1,27 +1,26 @@
-/**
- * Tests core plugin SDK exports and channel plugin construction.
- */
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import type { OpenClawPluginApi, PluginRegistrationMode } from "../plugins/types.js";
+import type { OpenClawPluginApi } from "../plugins/types.js";
 import {
   createChannelPluginBase,
   createChatChannelPlugin,
   defineChannelPluginEntry,
   type ChannelPlugin,
 } from "./channel-core.js";
+import {
+  createChannelEntryApi as createApi,
+  expectLazyChannelSchema,
+  registerChannelEntryTestTool,
+} from "./channel-entry.test-support.js";
 
+function channelMeta(id: string) {
+  return { label: id, selectionLabel: id, docsPath: `/channels/${id}`, blurb: `${id} channel` };
+}
 function createChannelPlugin(id: string): ChannelPlugin {
   return {
     id,
-    meta: {
-      id,
-      label: id,
-      selectionLabel: id,
-      docsPath: `/channels/${id}`,
-      blurb: `${id} channel`,
-    },
+    meta: { id, ...channelMeta(id) },
     capabilities: { chatTypes: ["direct"] },
     config: {
       listAccountIds: () => [],
@@ -31,262 +30,141 @@ function createChannelPlugin(id: string): ChannelPlugin {
   };
 }
 
-function createApi(registrationMode: PluginRegistrationMode): OpenClawPluginApi {
-  return {
-    registrationMode,
-    runtime: { registrationMode } as unknown as PluginRuntime,
-    registerChannel: vi.fn(),
-    registerTool: vi.fn(),
-  } as unknown as OpenClawPluginApi;
+function createEntry() {
+  const hooks = {
+    setRuntime: vi.fn<(runtime: PluginRuntime) => void>(),
+    registerCliMetadata: vi.fn<(api: OpenClawPluginApi) => void>(),
+    registerCapabilities: vi.fn<(api: OpenClawPluginApi) => void>(),
+    registerFull: vi.fn<(api: OpenClawPluginApi) => void>(),
+  };
+  const entry = defineChannelPluginEntry({
+    id: "runtime-test",
+    name: "Runtime Test",
+    description: "registration test",
+    plugin: createChannelPlugin("runtime-test"),
+    ...hooks,
+  });
+  return { entry, ...hooks };
 }
 
 describe("defineChannelPluginEntry", () => {
   it("defers and memoizes config schema factories", () => {
-    const configSchema = {
-      schema: { type: "object" as const, additionalProperties: false },
-    };
-    const createConfigSchema = vi.fn(() => configSchema);
-    const entry = defineChannelPluginEntry({
-      id: "lazy-config-schema",
-      name: "Lazy Config Schema",
-      description: "lazy config schema test",
-      plugin: createChannelPlugin("lazy-config-schema"),
-      configSchema: createConfigSchema,
-    });
-
-    expect(createConfigSchema).not.toHaveBeenCalled();
-    expect(entry.configSchema).toBe(configSchema);
-    expect(entry.configSchema).toBe(configSchema);
-    expect(createConfigSchema).toHaveBeenCalledTimes(1);
+    expectLazyChannelSchema((configSchema) =>
+      defineChannelPluginEntry({
+        id: "lazy-config-schema",
+        name: "Lazy Config Schema",
+        description: "lazy config schema test",
+        plugin: createChannelPlugin("lazy-config-schema"),
+        configSchema,
+      }),
+    );
   });
 
-  it("runs tool registrations without channel runtime wiring during tool discovery", () => {
-    const setRuntime = vi.fn<(runtime: PluginRuntime) => void>();
-    const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerFull = vi.fn<(api: OpenClawPluginApi) => void>((api) => {
-      api.registerTool(
-        {
-          name: "channel_tool",
-          label: "Channel Tool",
-          description: "channel tool",
-          parameters: {},
-          execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
-        },
-        { name: "channel_tool" },
-      );
-    });
-    const entry = defineChannelPluginEntry({
-      id: "runtime-tool-discovery",
-      name: "Runtime Tool Discovery",
-      description: "runtime tool discovery test",
-      plugin: createChannelPlugin("runtime-tool-discovery"),
-      setRuntime,
-      registerCliMetadata,
-      registerFull,
-      registerCapabilities,
-    });
-
-    const api = createApi("tool-discovery");
+  it.each([
+    ["cli-metadata", 0, 1, 0, 0],
+    ["tool-discovery", 0, 0, 1, 1],
+    ["discovery", 1, 1, 0, 1],
+    ["setup-runtime", 1, 0, 0, 0],
+    ["full", 1, 1, 1, 1],
+  ] as const)("registers only the hooks for %s", (mode, runtime, cli, full, capabilities) => {
+    const { entry, setRuntime, registerCliMetadata, registerCapabilities, registerFull } =
+      createEntry();
+    registerFull.mockImplementation(registerChannelEntryTestTool);
+    const api = createApi(mode);
     entry.register(api);
-
-    expect(api.registerChannel).not.toHaveBeenCalled();
-    expect(setRuntime).not.toHaveBeenCalled();
-    expect(registerCliMetadata).not.toHaveBeenCalled();
-    expect(registerFull).toHaveBeenCalledWith(api);
-    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(api);
-    expect(api.registerTool).toHaveBeenCalledTimes(1);
-  });
-
-  it("wires runtime helpers during discovery registration", () => {
-    const setRuntime = vi.fn<(runtime: PluginRuntime) => void>();
-    const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
-    const entry = defineChannelPluginEntry({
-      id: "runtime-discovery",
-      name: "Runtime Discovery",
-      description: "runtime discovery test",
-      plugin: createChannelPlugin("runtime-discovery"),
-      setRuntime,
-      registerCliMetadata,
-      registerFull,
-      registerCapabilities,
-    });
-
-    const api = createApi("discovery");
-    entry.register(api);
-
-    expect(api.registerChannel).toHaveBeenCalledTimes(1);
-    expect(registerCliMetadata).toHaveBeenCalledTimes(1);
-    expect(setRuntime).toHaveBeenCalledWith(api.runtime);
-    expect(registerFull).not.toHaveBeenCalled();
-    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(api);
-  });
-
-  it("keeps setup-runtime and full registration wired to runtime helpers", () => {
-    const setRuntime = vi.fn<(runtime: PluginRuntime) => void>();
-    const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
-    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
-    const entry = defineChannelPluginEntry({
-      id: "runtime-activation",
-      name: "Runtime Activation",
-      description: "runtime activation test",
-      plugin: createChannelPlugin("runtime-activation"),
-      setRuntime,
-      registerCliMetadata,
-      registerFull,
-      registerCapabilities,
-    });
-
-    const cliApi = createApi("cli-metadata");
-    entry.register(cliApi);
-    expect(registerCliMetadata).toHaveBeenCalledWith(cliApi);
-    expect(registerCapabilities).not.toHaveBeenCalled();
-    registerCliMetadata.mockClear();
-
-    entry.register(createApi("setup-only"));
-    expect(registerCapabilities).not.toHaveBeenCalled();
-
-    const setupApi = createApi("setup-runtime");
-    entry.register(setupApi);
-    expect(setRuntime).toHaveBeenCalledWith(setupApi.runtime);
-    expect(registerCliMetadata).not.toHaveBeenCalled();
-    expect(registerFull).not.toHaveBeenCalled();
-    expect(registerCapabilities).not.toHaveBeenCalled();
-
-    setRuntime.mockClear();
-    const fullApi = createApi("full");
-    entry.register(fullApi);
-    expect(setRuntime).toHaveBeenCalledWith(fullApi.runtime);
-    expect(registerCliMetadata).toHaveBeenCalledWith(fullApi);
-    expect(registerFull).toHaveBeenCalledWith(fullApi);
-    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(fullApi);
+    expect(api.registerChannel).toHaveBeenCalledTimes(runtime);
+    expect(setRuntime.mock.calls).toEqual(runtime ? [[api.runtime]] : []);
+    expect(registerCliMetadata.mock.calls).toEqual(cli ? [[api]] : []);
+    expect(registerFull.mock.calls).toEqual(full ? [[api]] : []);
+    expect(registerCapabilities.mock.calls).toEqual(capabilities ? [[api]] : []);
+    expect(api.registerTool).toHaveBeenCalledTimes(full);
   });
 });
 
-describe("createChannelPluginBase", () => {
-  it("keeps meta id aligned with the channel id", () => {
-    const plugin = createChannelPluginBase({
-      id: "metadata-id-channel",
-      meta: {
-        label: "Metadata ID Channel",
-        selectionLabel: "Metadata ID Channel",
-        docsPath: "/channels/metadata-id-channel",
-        blurb: "metadata id channel",
-      },
-      setup: {} as NonNullable<ChannelPlugin["setup"]>,
-    });
-
-    expect(plugin.meta.id).toBe("metadata-id-channel");
+it("createChannelPluginBase keeps meta id aligned with the channel id", () => {
+  const plugin = createChannelPluginBase({
+    id: "metadata-id-channel",
+    meta: channelMeta("metadata-id-channel"),
+    setup: {} as NonNullable<ChannelPlugin["setup"]>,
   });
+
+  expect(plugin.meta.id).toBe("metadata-id-channel");
 });
 
 describe("createChatChannelPlugin", () => {
-  describe.each(["sendText", "sendMedia", "sendPoll"] as const)(
-    "attached outbound %s",
-    (method) => {
-      function createSend() {
-        if (method === "sendPoll") {
-          const context = {
-            cfg: {},
-            to: "recipient",
-            poll: { question: "Choose", options: ["one", "two"] },
-          };
-          return {
-            context,
-            run: (outbound: NonNullable<ChannelPlugin["outbound"]>) => outbound.sendPoll!(context),
-          };
-        }
-        const context = {
-          cfg: {},
-          to: "recipient",
-          text: "body",
-          ...(method === "sendMedia" ? { mediaUrl: "https://example.com/image.png" } : {}),
-        };
-        return {
-          context,
-          run: (outbound: NonNullable<ChannelPlugin["outbound"]>) => outbound[method]!(context),
-        };
-      }
-
-      it("stamps the configured channel over a stale provider channel", async () => {
-        const send = createSend();
-        const extra = { correlation: "retained" };
-        const providerResult = Object.freeze({
-          messageId: "message-1",
-          meta: extra,
-          channel: "stale-provider-channel",
-        });
-        const sender = vi.fn(function (this: unknown, _context: unknown) {
-          return providerResult;
-        });
-        const attachedResults = { channel: "configured-channel", [method]: sender };
-        const chunker = vi.fn((text: string) => [text]);
-        const plugin = createChatChannelPlugin({
-          base: createChannelPlugin("configured-channel"),
-          outbound: {
-            base: { deliveryMode: "direct", chunker, textChunkLimit: 500 },
-            attachedResults,
-          },
-        });
-
-        expect(sender).not.toHaveBeenCalled();
-        const result = await send.run(plugin.outbound!);
-        expect(result).toEqual({
-          channel: "configured-channel",
-          messageId: "message-1",
-          meta: { correlation: "retained" },
-        });
-        expect(result).not.toBe(providerResult);
-        expect("meta" in result && result.meta).toBe(extra);
-        expect(sender).toHaveBeenCalledExactlyOnceWith(send.context);
-        expect(sender.mock.contexts[0]).toBe(attachedResults);
-        expect(plugin.outbound?.chunker).toBe(chunker);
-        expect(plugin.outbound?.textChunkLimit).toBe(500);
-        expect(chunker).not.toHaveBeenCalled();
+  it.each(["sendText", "sendMedia", "sendPoll"] as const)(
+    "%s captures channel before sending and copies the resolved result without mutation",
+    async (method) => {
+      const events: string[] = [];
+      const extra = { correlation: "retained" };
+      const providerResult = Object.freeze({
+        get messageId() {
+          events.push("result");
+          return "message-1";
+        },
+        meta: extra,
+        channel: "stale-provider-channel",
       });
-
-      it("captures the channel before awaiting the sender and copies result fields afterward", async () => {
-        const send = createSend();
-        const events: string[] = [];
-        let channel = "configured-channel";
-        const deferred = createDeferred<{ readonly messageId: string }>();
-        const sender = vi.fn(() => {
-          events.push("send");
-          return deferred.promise;
-        });
-        const attachedResults = {
-          get channel() {
-            events.push("channel");
-            return channel;
-          },
-          [method]: sender,
-        };
-        const plugin = createChatChannelPlugin({
-          base: createChannelPlugin("configured-channel"),
-          outbound: { base: { deliveryMode: "direct" }, attachedResults },
-        });
-
-        expect(events).toEqual([]);
-        const result = send.run(plugin.outbound!);
-        expect(events).toEqual(["channel", "send"]);
-        channel = "later-channel";
-        events.push("resolve");
-        deferred.resolve({
-          get messageId() {
-            events.push("result");
-            return "message-1";
-          },
-        });
-        await expect(result).resolves.toEqual({
-          channel: "configured-channel",
-          messageId: "message-1",
-        });
-        expect(events).toEqual(["channel", "send", "resolve", "result"]);
-        expect(sender).toHaveBeenCalledExactlyOnceWith(send.context);
-        expect(sender.mock.contexts[0]).toBe(attachedResults);
+      const deferred = createDeferred<typeof providerResult>();
+      let synchronous = false;
+      const sender = vi.fn(() => {
+        events.push("send");
+        return synchronous ? providerResult : deferred.promise;
+      });
+      let channel = "configured-channel";
+      const attachedResults = {
+        get channel() {
+          events.push("channel");
+          return channel;
+        },
+        [method]: sender,
+      };
+      const chunker = vi.fn((text: string) => [text]);
+      const plugin = createChatChannelPlugin({
+        base: createChannelPlugin(channel),
+        outbound: {
+          base: { deliveryMode: "direct", chunker, textChunkLimit: 500 },
+          attachedResults,
+        },
+      });
+      const context = {
+        cfg: {},
+        to: "recipient",
+        text: "body",
+        ...(method === "sendMedia" ? { mediaUrl: "https://example.com/image.png" } : {}),
+      };
+      const pollContext = {
+        cfg: {},
+        to: "recipient",
+        poll: { question: "Choose", options: ["one", "two"] },
+      };
+      expect(events).toEqual([]);
+      const send = () =>
+        method === "sendPoll"
+          ? plugin.outbound!.sendPoll!(pollContext)
+          : plugin.outbound![method]!(context);
+      const pending = send();
+      expect(events).toEqual(["channel", "send"]);
+      channel = "later-channel";
+      events.push("resolve");
+      deferred.resolve(providerResult);
+      const result = await pending;
+      expect(result).toEqual({
+        channel: "configured-channel",
+        messageId: "message-1",
+        meta: extra,
+      });
+      expect(events).toEqual(["channel", "send", "resolve", "result"]);
+      expect(result).not.toBe(providerResult);
+      expect("meta" in result && result.meta).toBe(extra);
+      expect(sender).toHaveBeenCalledExactlyOnceWith(method === "sendPoll" ? pollContext : context);
+      expect(sender.mock.contexts[0]).toBe(attachedResults);
+      expect(plugin.outbound).toMatchObject({ chunker, textChunkLimit: 500 });
+      expect(chunker).not.toHaveBeenCalled();
+      synchronous = true;
+      await expect(send()).resolves.toMatchObject({
+        channel: "later-channel",
+        messageId: "message-1",
       });
     },
   );

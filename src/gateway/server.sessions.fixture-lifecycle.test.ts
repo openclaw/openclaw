@@ -1,7 +1,10 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { vi } from "vitest";
+import { vi, type TestContext } from "vitest";
+import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -11,28 +14,43 @@ import {
 import { captureEnv } from "../test-utils/env.js";
 import { createGatewayFixtureFork } from "./server.fixture-lifetime.test-support.js";
 
-// Run the actual fixture hooks with controlled setup/teardown overlap instead
-// of waiting for the runner's 180s timeout. Consumer test bodies stay uncalled.
+type FixtureHookContext = Pick<TestContext, "signal">;
+type FixtureHook = (context: FixtureHookContext) => unknown;
 const hooks = vi.hoisted(() => ({
-  setup: [] as Array<() => unknown>,
-  cleanup: [] as Array<() => unknown>,
+  setup: [] as FixtureHook[],
+  cleanup: [] as FixtureHook[],
 }));
+const caseHooks = vi.hoisted(() => ({
+  setup: [] as FixtureHook[],
+  cleanup: [] as FixtureHook[],
+}));
+const startupPreparation = vi.hoisted(() => ({
+  held: false,
+  entered: Promise.withResolvers<void>(),
+  release: Promise.withResolvers<void>(),
+}));
+// mock-isolation: Fake server acquisition owns this fixture; gate preparation without loading Gateway state.
+vi.mock("./server-start.js", async () => {
+  startupPreparation.entered.resolve();
+  if (startupPreparation.held) {
+    await startupPreparation.release.promise;
+  }
+  return {};
+});
 vi.mock("vitest", async (importOriginal) => ({
   ...(await importOriginal<typeof import("vitest")>()),
-  beforeAll: (fn: () => unknown) => hooks.setup.push(fn),
-  afterAll: (fn: () => unknown) => hooks.cleanup.push(fn),
-  beforeEach: () => {},
-  afterEach: () => {},
+  beforeAll: (fn: FixtureHook) => hooks.setup.push(fn),
+  afterAll: (fn: FixtureHook) => hooks.cleanup.push(fn),
+  beforeEach: (fn: FixtureHook) => caseHooks.setup.push(fn),
+  afterEach: (fn: FixtureHook) => caseHooks.cleanup.push(fn),
   test: Object.assign(() => {}, { each: () => () => {} }),
 }));
 vi.mock("../agents/prepared-model-runtime.test-support.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/prepared-model-runtime.test-support.js")>()),
-  resetPreparedGatewayModelCatalogForTest: async () => {},
+  resetPreparedModelCatalogStateForTest: async () => {},
 }));
 
 const listeners = vi.hoisted(() => new Set<import("node:net").Server>());
-// The fixture owns a disposable server, not Gateway business logic. Keep its
-// real port, socket, harness and environment lifetime; fork tests cover RPC boot.
 vi.mock("./server-runtime-state.js", () => ({
   createGatewayHttpTransport: async (params: { testListener?: import("node:http").Server }) => {
     if (!params.testListener) {
@@ -66,15 +84,29 @@ vi.mock("./server.js", async (importOriginal) => ({
 
 const { afterAll, afterEach, beforeEach, expect, test } =
   await vi.importActual<typeof import("vitest")>("vitest");
-const runGatewayFixtureFork = createGatewayFixtureFork(afterAll);
+const takeHooks = (registered = hooks) => ({
+  setup: registered.setup.splice(0),
+  cleanup: registered.cleanup.splice(0),
+});
 await import("./server.sessions.create.worktrees.test.js");
-const consumerHooks = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
+const consumerHooks = takeHooks();
 const sessions = await import("./test/server-sessions.test-helpers.js");
 const serverHarness = await import("./server.e2e-ws-harness.js");
 const gatewayHelpers = await import("./test-helpers.server.js");
+const fixtureWorkers = createVitestWorkerRun();
+afterAll(() => fixtureWorkers.dispose());
+try {
+  await fixtureWorkers.prepare();
+} catch (error) {
+  await fixtureWorkers.dispose();
+  throw error;
+}
+const runGatewayFixtureFork = createGatewayFixtureFork(fixtureWorkers, afterAll);
 const startHarness = serverHarness.startGatewayServerHarness;
 let env: ReturnType<typeof captureEnv>;
 beforeEach(() => {
+  caseHooks.setup.length = 0;
+  caseHooks.cleanup.length = 0;
   env = captureEnv([
     "HOME",
     "USERPROFILE",
@@ -107,73 +139,108 @@ afterEach(async () => {
   env.restore();
 });
 
+const uninterruptedContext: FixtureHookContext = { signal: new AbortController().signal };
+
 async function setup(fixture: typeof hooks) {
   for (const hook of fixture.setup) {
-    await hook();
+    await hook(uninterruptedContext);
   }
 }
 
-async function cleanup(fixture: typeof hooks) {
+async function cleanup(fixture: typeof hooks, context = uninterruptedContext) {
   for (const hook of fixture.cleanup.toReversed()) {
-    await hook();
+    await hook(context);
   }
 }
 
 // Red runs still release resources if the broken consumer aborts teardown.
-async function emergencyCleanup(fixture: typeof hooks) {
+async function emergencyCleanup(fixture: typeof hooks, context = uninterruptedContext) {
   for (const hook of fixture.cleanup.toReversed()) {
     await Promise.resolve()
-      .then(hook)
+      .then(() => hook(context))
       .catch(() => {});
   }
 }
 
+function interceptSessionDirectories(observe: (prefix: string, dir?: string) => void) {
+  const mkdtemp = fs.mkdtemp.bind(fs);
+  const mkdtempSync = fsSync.mkdtempSync.bind(fsSync);
+  vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
+    observe(prefix);
+    const dir = await mkdtemp(prefix, options);
+    if (typeof dir === "string") {
+      observe(prefix, dir);
+    }
+    return dir;
+  });
+  vi.spyOn(fsSync, "mkdtempSync").mockImplementation((prefix, options) => {
+    observe(prefix);
+    const dir = mkdtempSync(prefix, options);
+    observe(prefix, dir);
+    return dir;
+  });
+}
+
+test("suite setup joins Gateway implementation preparation before releasing its home", async () => {
+  startupPreparation.held = true;
+  gatewayHelpers.installGatewayTestHooks({ scope: "suite" });
+  const fixture = takeHooks();
+  const pendingSetup = setup(fixture);
+  let pendingCleanup: Promise<void> | undefined;
+  try {
+    await awaitGateBeforeSettlement(
+      startupPreparation.entered.promise,
+      pendingSetup,
+      "fixture setup completed before Gateway implementation preparation",
+    );
+    const home = process.env.HOME!;
+    expect(fsSync.existsSync(home)).toBe(true);
+    pendingCleanup = cleanup(fixture);
+    startupPreparation.release.resolve();
+    await Promise.all([pendingSetup, pendingCleanup]);
+    expect(fsSync.existsSync(home)).toBe(false);
+  } finally {
+    startupPreparation.held = false;
+    startupPreparation.release.resolve();
+    await Promise.allSettled([pendingSetup, pendingCleanup]);
+    await emergencyCleanup(fixture);
+  }
+});
+
 test("shared setup failure skips consumer acquisition without adding an invalid-path error", async () => {
   const failure = new Error("injected shared setup failure");
-  const start = vi.spyOn(serverHarness, "startGatewayServerHarness").mockRejectedValue(failure);
+  vi.spyOn(serverHarness, "startGatewayServerHarness").mockRejectedValue(failure);
   try {
     await expect(setup(consumerHooks)).rejects.toBe(failure);
     await expect(cleanup(consumerHooks)).resolves.toBeUndefined();
   } finally {
     await emergencyCleanup(consumerHooks);
-    start.mockRestore();
   }
 });
 
 test("partial session setup closes its acquired server before removing its environment", async () => {
   sessions.setupGatewaySessionsTestHarness();
-  const fixture = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
+  const fixture = takeHooks();
   const failure = new Error("injected session directory acquisition failure");
-  const mkdtemp = fs.mkdtemp.bind(fs);
-  const mkdtempSync = fsSync.mkdtempSync.bind(fsSync);
-  const asyncTemp = vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
+  interceptSessionDirectories((prefix) => {
     if (prefix.includes("openclaw-sessions-")) {
       throw failure;
     }
-    return await mkdtemp(prefix, options);
-  });
-  const syncTemp = vi.spyOn(fsSync, "mkdtempSync").mockImplementation((prefix, options) => {
-    if (prefix.includes("openclaw-sessions-")) {
-      throw failure;
-    }
-    return mkdtempSync(prefix, options);
   });
   let acquired: Awaited<ReturnType<typeof startHarness>> | undefined;
   let closeCalls = 0;
-  const start = vi
-    .spyOn(serverHarness, "startGatewayServerHarness")
-    .mockImplementation(async () => {
-      acquired = await startHarness();
-      const home = process.env.HOME!;
-      const closeHarness = acquired.close;
-      acquired.close = async () => {
-        closeCalls++;
-        expect(process.env.HOME).toBe(home);
-        expect(fsSync.existsSync(home)).toBe(true);
-        await closeHarness();
-      };
-      return acquired;
-    });
+  vi.spyOn(serverHarness, "startGatewayServerHarness").mockImplementation(async () => {
+    acquired = await startHarness();
+    const home = process.env.HOME!;
+    const closeHarness = acquired.close;
+    acquired.close = async () => {
+      closeCalls++;
+      expect(process.env.HOME).toBe(home);
+      expect(fsSync.existsSync(home)).toBe(true);
+      await closeHarness();
+    };
+    return acquired;
+  });
   try {
     await expect(setup(fixture)).rejects.toBe(failure);
     await cleanup(fixture);
@@ -183,49 +250,33 @@ test("partial session setup closes its acquired server before removing its envir
       await acquired.server.close();
     }
     await emergencyCleanup(fixture);
-    start.mockRestore();
-    asyncTemp.mockRestore();
-    syncTemp.mockRestore();
   }
 });
 
 test("teardown joins delayed server acquisition before cleaning session directories and environment", async () => {
   sessions.setupGatewaySessionsTestHarness();
-  const fixture = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
+  const fixture = takeHooks();
   const acquired = createDeferredCore();
   const release = createDeferredCore();
   let server: Awaited<ReturnType<typeof startHarness>> | undefined;
   let closeCalls = 0;
   const roots = new Set<string>();
-  const mkdtemp = fs.mkdtemp.bind(fs);
-  const mkdtempSync = fsSync.mkdtempSync.bind(fsSync);
-  const asyncTemp = vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
-    const dir = await mkdtemp(prefix, options);
-    if (typeof dir === "string" && path.basename(dir).startsWith("openclaw-sessions-")) {
+  interceptSessionDirectories((_prefix, dir) => {
+    if (dir && path.basename(dir).startsWith("openclaw-sessions-")) {
       roots.add(dir);
     }
-    return dir;
   });
-  const syncTemp = vi.spyOn(fsSync, "mkdtempSync").mockImplementation((prefix, options) => {
-    const dir = mkdtempSync(prefix, options);
-    if (typeof dir === "string" && path.basename(dir).startsWith("openclaw-sessions-")) {
-      roots.add(dir);
-    }
-    return dir;
+  vi.spyOn(serverHarness, "startGatewayServerHarness").mockImplementation(async () => {
+    server = await startHarness();
+    const closeServer = server.close;
+    server.close = async () => {
+      closeCalls++;
+      await closeServer();
+    };
+    acquired.resolve();
+    await release.promise;
+    return server;
   });
-  const start = vi
-    .spyOn(serverHarness, "startGatewayServerHarness")
-    .mockImplementation(async () => {
-      server = await startHarness();
-      const closeServer = server.close;
-      server.close = async () => {
-        closeCalls++;
-        await closeServer();
-      };
-      acquired.resolve();
-      await release.promise;
-      return server;
-    });
   const pendingSetup = setup(fixture);
   let pendingCleanup: Promise<void> | undefined;
   try {
@@ -245,9 +296,6 @@ test("teardown joins delayed server acquisition before cleaning session director
     for (const root of roots) {
       await fs.rm(root, { recursive: true, force: true });
     }
-    start.mockRestore();
-    asyncTemp.mockRestore();
-    syncTemp.mockRestore();
   }
 });
 
@@ -312,13 +360,13 @@ test("teardown leaves delayed template initialization alive until its writes set
 
 test("teardown joins pending home acquisition before restoring the environment", async () => {
   gatewayHelpers.installGatewayTestHooks({ scope: "suite" });
-  const fixture = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
+  const fixture = takeHooks();
   const homeBefore = process.env.HOME;
   const acquired = createDeferredCore();
   const release = createDeferredCore();
   const mkdtemp = fs.mkdtemp.bind(fs);
   let home: string | undefined;
-  const temp = vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
+  vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
     const dir = await mkdtemp(prefix, options);
     if (prefix.includes("openclaw-gateway-home-")) {
       home = dir;
@@ -339,7 +387,6 @@ test("teardown joins pending home acquisition before restoring the environment",
   } finally {
     release.resolve();
     await Promise.allSettled([pendingSetup, pendingCleanup]);
-    temp.mockRestore();
     await emergencyCleanup(fixture);
     if (home) {
       await fs.rm(home, { recursive: true, force: true });
@@ -349,21 +396,24 @@ test("teardown joins pending home acquisition before restoring the environment",
 
 test("a server cleanup error does not skip session directory or environment cleanup", async () => {
   const fixtureApi = sessions.setupGatewaySessionsTestHarness();
-  const fixture = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
+  const fixture = takeHooks();
   const homeBefore = process.env.HOME;
   const failure = new Error("injected server cleanup failure");
   let restoreClose: (() => void) | undefined;
-  const databases: ReturnType<typeof openOpenClawAgentDatabase>[] = [];
+  let database: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
+  let memoryOwner: ReturnType<typeof memorySessionActorOwners.get> | undefined;
   try {
     await setup(fixture);
     const home = process.env.HOME!;
     const { dir } = await fixtureApi.createSessionStoreDir();
-    for (const databasePath of [
-      path.join(dir, "openclaw-agent.sqlite"),
-      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    ]) {
-      databases.push(openOpenClawAgentDatabase({ agentId: "main", path: databasePath }));
-    }
+    database = openOpenClawAgentDatabase({
+      agentId: "main",
+      path: path.join(dir, "openclaw-agent.sqlite"),
+    });
+    memoryOwner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
     const server = fixtureApi.getHarness();
     const closeServer = server.close;
     const close = vi.spyOn(server, "close").mockImplementation(async () => {
@@ -372,14 +422,19 @@ test("a server cleanup error does not skip session directory or environment clea
     });
     restoreClose = () => close.mockRestore();
     await expect(cleanup(fixture)).rejects.toBe(failure);
-    expect(databases.map(({ db }) => db.isOpen)).toEqual([false, false]);
+    expect(database.db.isOpen).toBe(false);
+    expect(memorySessionActorOwners.read(memoryOwner)).toBeUndefined();
+    expect(memoryOwner.assertCurrent).toThrow("closed");
     expect(fsSync.existsSync(dir)).toBe(false);
     expect(fsSync.existsSync(home)).toBe(false);
     expect(process.env.HOME).toBe(homeBefore);
   } finally {
     restoreClose?.();
-    for (const database of databases) {
+    if (database) {
       closeOpenClawAgentDatabaseByPath(database.path);
+    }
+    if (memoryOwner) {
+      memorySessionActorOwners.closeDatabase(memoryOwner);
     }
     await emergencyCleanup(fixture);
   }
@@ -387,9 +442,9 @@ test("a server cleanup error does not skip session directory or environment clea
 
 test("skipped environment setup does not release an enclosing suite's home", async () => {
   gatewayHelpers.installGatewayTestHooks({ scope: "suite" });
-  const parent = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
+  const parent = takeHooks();
   gatewayHelpers.installGatewayTestHooks({ scope: "suite" });
-  const skipped = { setup: hooks.setup.splice(0), cleanup: hooks.cleanup.splice(0) };
+  const skipped = takeHooks();
   try {
     await setup(parent);
     const home = process.env.HOME!;
@@ -415,7 +470,7 @@ vi.mock("vitest", async (importOriginal) => ({
   beforeEach: (fn) => hooks.reset.push(fn),
   afterEach: (fn) => hooks.afterEach.push(fn),
 }));
-const { test } = await vi.importActual("vitest");
+const { test, expect } = await vi.importActual("vitest");
 fs.writeFileSync(${JSON.stringify(path.join(root, "worker.pid"))}, String(process.pid));
 const sessions = await import(${source("src/gateway/test/server-sessions.test-helpers.ts")});
 const gatewayHelpers = await import(${source("src/gateway/test-helpers.server.ts")});
@@ -425,7 +480,8 @@ const takeHooks = () => Object.fromEntries(
   Object.entries(hooks).map(([name, callbacks]) => [name, callbacks.splice(0)]),
 );
 async function runHooks(callbacks) {
-  for (const callback of callbacks) await callback();
+  const context = { signal: new AbortController().signal };
+  for (const callback of callbacks) await callback(context);
 }
 const fault = new Error("synthetic received-connection cleanup failure");
 function containsFault(error) {
@@ -434,13 +490,8 @@ function containsFault(error) {
     (error instanceof AggregateError && error.errors.some(containsFault))
   ));
 }
-async function observeFailure(run) {
-  try {
-    await run();
-    return { rejected: false, faultPreserved: false };
-  } catch (error) {
-    return { rejected: true, faultPreserved: containsFault(error) };
-  }
+async function expectRefusal(run, preserveFault = false) {
+  await expect(run()).rejects.toSatisfy(error => !preserveFault || containsFault(error));
 }
 
 test("observes retained Gateway owners through fixture teardown", async () => {
@@ -478,15 +529,13 @@ test("observes retained Gateway owners through fixture teardown", async () => {
     })),
     selectorsIntact: [...selectors].every(([key, value]) => process.env[key] === value),
   });
+  const retained = { home: true, state: true, sessions: true, selectorsIntact: true };
   const releaseProducer = createDeferredCore();
   let phase = "before-cleanup";
   const producer = releaseProducer.promise.then(() => {
-    const observation = { ...readState(), phase, writeSucceeded: false };
-    try {
-      fs.writeFileSync(path.join(dir, "late-producer.txt"), "joined");
-      observation.writeSucceeded = true;
-    } catch { /* The outer assertion reports a lost producer input, not a cleanup substitute. */ }
-    return observation;
+    expect(readState()).toEqual(retained);
+    expect(phase).toBe("after-cleanup");
+    fs.writeFileSync(path.join(dir, "late-producer.txt"), "joined");
   });
   let stopCalls = 0;
   // This independent producer belongs to the generic owner, not the connection scope.
@@ -505,44 +554,35 @@ test("observes retained Gateway owners through fixture teardown", async () => {
     }),
   );
   try {
-    const close = await observeFailure(() => harness.close());
-    const afterClose = readState();
-    const afterEach = await observeFailure(() => runHooks(fixture.afterEach));
-    let successorCaseStarted = false;
-    const caseReset = await observeFailure(async () => {
-      await runHooks(fixture.reset);
-      successorCaseStarted = true;
-    });
-    const afterCaseReset = readState();
-    const cleanup = await observeFailure(() => runHooks(fixture.cleanup.toReversed()));
-    const repeatedCleanup = await observeFailure(() => runHooks(fixture.cleanup.toReversed()));
-    const afterCleanup = readState();
-    let harnessRetained = false;
-    try { harnessRetained = fixtureApi.getHarness() === harness; } catch { /* Observe release. */ }
+    await expectRefusal(() => harness.close(), true);
+    expect(readState()).toEqual(retained);
+    await expectRefusal(() => runHooks(fixture.afterEach));
+    await expectRefusal(() => runHooks(fixture.reset));
+    expect(readState()).toEqual(retained);
+    await expectRefusal(() => runHooks(fixture.cleanup.toReversed()), true);
+    await expectRefusal(() => runHooks(fixture.cleanup.toReversed()), true);
+    expect(readState()).toEqual(retained);
+    expect(fixtureApi.getHarness()).toBe(harness);
     phase = "after-cleanup";
     releaseProducer.resolve();
-    const producerObservation = await producer;
+    await producer;
+    expect(connectionCleanupFinished).toBe(true);
+    expect(stopCalls).toBe(0);
     // Retained ownership must outlive the module that originally acquired the Gateway.
     vi.resetModules();
     const freshHelpers = await import(${source("src/gateway/test-helpers.server.ts")});
     freshHelpers.installGatewayTestHooks({ scope: "suite" });
     const successor = takeHooks();
-    let successorSuiteStarted = false;
-    const suiteSetup = await observeFailure(async () => {
-      await runHooks(successor.setup);
-      successorSuiteStarted = true;
-    });
-    fs.writeFileSync(${JSON.stringify(path.join(root, "journal.json"))}, JSON.stringify({
-      close, afterEach, caseReset, cleanup, repeatedCleanup, suiteSetup,
-      afterClose, afterCaseReset, afterCleanup, afterModuleReset: readState(),
-      producer: producerObservation, connectionCleanupFinished, stopCalls,
-      harnessRetained, successorCaseStarted, successorSuiteStarted,
-    }));
+    await expectRefusal(() => runHooks(successor.setup));
+    expect(readState()).toEqual(retained);
   } finally {
     releaseProducer.resolve();
-    await producer;
-    ws.terminate();
-    factory.mockRestore();
+    try {
+      await producer;
+    } finally {
+      ws.terminate();
+      factory.mockRestore();
+    }
     // No unpoison/reset escape hatch: native Vitest owns this disposable fork's exit.
   }
 });
@@ -550,23 +590,105 @@ test("observes retained Gateway owners through fixture teardown", async () => {
 }
 
 test("retains fixture state and fences successors after a required Gateway close failure", (context) =>
-  runGatewayFixtureFork(context, retainedGatewayFixtureSource, (journal, text) => {
-    const retained = { home: true, state: true, sessions: true, selectorsIntact: true };
-    expect(journal, text).toMatchObject({
-      close: { rejected: true, faultPreserved: true },
-      caseReset: { rejected: true },
-      cleanup: { rejected: true, faultPreserved: true },
-      repeatedCleanup: { rejected: true, faultPreserved: true },
-      suiteSetup: { rejected: true },
-      connectionCleanupFinished: true,
-      stopCalls: 0,
-      harnessRetained: true,
-      successorCaseStarted: false,
-      successorSuiteStarted: false,
-      afterClose: retained,
-      afterCaseReset: retained,
-      afterCleanup: retained,
-      afterModuleReset: retained,
-      producer: { ...retained, phase: "after-cleanup", writeSucceeded: true },
+  runGatewayFixtureFork(context, retainedGatewayFixtureSource));
+
+test.each([
+  { scope: "test", interrupted: false },
+  { scope: "test", interrupted: true },
+  { scope: "suite", interrupted: false },
+  { scope: "suite", interrupted: true },
+] as const)(
+  "$scope teardown closes a late test-body startup and reports leaks (interrupted=$interrupted)",
+  async ({ scope, interrupted }) => {
+    gatewayHelpers.installGatewayTestHooks({ scope });
+    const registered = scope === "suite" ? hooks : caseHooks;
+    const fixture = takeHooks(registered);
+    const suiteCase = scope === "suite" ? takeHooks(caseHooks) : undefined;
+    const controller = new AbortController();
+    const context: FixtureHookContext = { signal: controller.signal };
+    const serverModule = await import("./server.js");
+    const entered = createDeferredCore();
+    const releaseStartup = createDeferredCore();
+    const closeEntered = createDeferredCore();
+    const releaseClose = createDeferredCore();
+    const homeBefore = process.env.HOME;
+    let closeCalls = 0;
+    let home: string | undefined;
+    const server = {
+      startupSettled: Promise.resolve(),
+      getTailscaleIngressEndpoint: () => undefined,
+      close: async () => {
+        closeCalls++;
+        closeEntered.resolve();
+        await releaseClose.promise;
+        expect(process.env.HOME).toBe(home);
+        expect(fsSync.existsSync(home!)).toBe(true);
+      },
+    } satisfies import("./server.js").GatewayServer;
+    vi.spyOn(serverModule, "startGatewayServer").mockImplementation(async () => {
+      entered.resolve();
+      await releaseStartup.promise;
+      return server;
     });
-  }));
+    const releaseClaim = vi.fn(async () => {});
+    let starting: Promise<import("./server.js").GatewayServer> | undefined;
+    let pendingCleanup: Promise<void> | undefined;
+    try {
+      await setup(fixture);
+      if (suiteCase) {
+        await setup(suiteCase);
+      }
+      home = process.env.HOME!;
+      starting = gatewayHelpers.startTestGatewayServer({ port: 12345, release: releaseClaim });
+      await awaitGateBeforeSettlement(entered.promise, starting, "startup settled before its gate");
+      if (interrupted) {
+        controller.abort(new Error("synthetic test interruption"));
+      }
+      pendingCleanup = (async () => {
+        if (suiteCase) {
+          await cleanup(suiteCase, context);
+        }
+        await cleanup(fixture, context);
+      })();
+      void pendingCleanup.catch(() => {});
+      releaseStartup.resolve();
+      await awaitGateBeforeSettlement(
+        closeEntered.promise,
+        pendingCleanup,
+        "teardown released state before closing the acquired Gateway",
+      );
+      expect(process.env.HOME).toBe(home);
+      expect(fsSync.existsSync(home)).toBe(true);
+      releaseClose.resolve();
+      await starting;
+      if (interrupted) {
+        await expect(pendingCleanup).resolves.toBeUndefined();
+      } else {
+        await expect(pendingCleanup).rejects.toThrow(
+          `${scope} left a Gateway open; closed during teardown`,
+        );
+      }
+      expect(closeCalls).toBe(1);
+      expect(releaseClaim).toHaveBeenCalledTimes(1);
+      expect(process.env.HOME).toBe(homeBefore);
+      expect(fsSync.existsSync(home)).toBe(false);
+
+      gatewayHelpers.installGatewayTestHooks({ scope: "suite" });
+      const successor = takeHooks();
+      try {
+        await setup(successor);
+        expect(fsSync.existsSync(process.env.HOME!)).toBe(true);
+      } finally {
+        await cleanup(successor);
+      }
+    } finally {
+      releaseStartup.resolve();
+      releaseClose.resolve();
+      await Promise.allSettled([starting, pendingCleanup]);
+      if (starting) {
+        await (await starting).close();
+      }
+      await emergencyCleanup(fixture, context);
+    }
+  },
+);

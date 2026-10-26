@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
+import { prepareAgentRunTerminalReply } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 type SteeringAssistantPrefix = {
   itemId: string;
@@ -33,16 +33,16 @@ export class CodexSteeringAssistantSegments {
     this.pending.clear();
   }
 
-  recordStream(itemId: string, knownFinalAnswer: boolean) {
+  recordStream(itemId: string, knownStableAnswer: boolean) {
     const replace =
       this.streamedPartialAssistantItemId !== undefined &&
       this.streamedPartialAssistantItemId !== itemId;
-    // Codex defines final_answer as terminal text. Replacement mode is for
+    // Codex partial_answer and final_answer text is stable. Replacement mode is for
     // phase-unknown/provisional items; append-only consumers cannot retract bytes.
-    if (replace && (!knownFinalAnswer || this.streamedPartialAssistantItemReplaceable)) {
+    if (replace && (!knownStableAnswer || this.streamedPartialAssistantItemReplaceable)) {
       this.streamedPartialAssistantItemReplaceable = true;
     } else if (this.streamedPartialAssistantItemId === undefined) {
-      this.streamedPartialAssistantItemReplaceable = !knownFinalAnswer;
+      this.streamedPartialAssistantItemReplaceable = !knownStableAnswer;
     }
     this.streamedPartialAssistantItemId = itemId;
     const replaceable = this.streamedPartialAssistantItemReplaceable;
@@ -135,7 +135,9 @@ export class CodexSteeringAssistantSegments {
       return undefined;
     }
     const remainder = this.remainingText(itemId, text);
-    if (!remainder.trim() || isSilentReplyPayloadText(remainder)) {
+    if (
+      prepareAgentRunTerminalReply({ rawText: remainder }).terminalReply.disposition !== "visible"
+    ) {
       return undefined;
     }
     const prefix = this.persisted.get(itemId);

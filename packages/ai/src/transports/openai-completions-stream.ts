@@ -7,7 +7,10 @@ import type {
   ToolCall,
 } from "@openclaw/llm-core";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import type { ChatCompletion, ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
@@ -19,12 +22,15 @@ import {
 } from "../providers/openai-completions-tool-calls.js";
 import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
 import {
+  appendAssistantMessageDiagnostic,
+  recordSuppressedReasoning,
+} from "../utils/diagnostics.js";
+import {
   createToolArgumentPreviewSchedule,
   parseStreamingJson,
   type ToolArgumentPreviewSchedule,
 } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
-import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { createDsmlRecoverer } from "./openai-completions-dsml.js";
@@ -40,33 +46,24 @@ import {
   type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
   type OpenAICompletionsTextSource,
   type OpenAIModeModel,
+  detachPartialSnapshot,
 } from "./openai-transport-shared.js";
 import type { RecoveredTextToolCall, TextToolCallRecoveryPart } from "./text-tool-call-recovery.js";
 import { iterateModelStream, throwIfModelStreamAborted } from "./transport-stream-shared.js";
 
-type OpenAICompatibleChoice = ChatCompletionChunk["choices"][number] & {
-  // Some compatible providers attach usage per choice instead of per chunk.
-  usage?: ChatCompletionChunk["usage"];
-  // Some compatible providers stream a complete message in place of delta.
-  message?: ChatCompletionChunk["choices"][number]["delta"];
-};
+let reasoningParserModule:
+  | Promise<typeof import("../utils/reasoning-tag-text-partitioner.js")>
+  | undefined;
 
 type OpenAICompatibleChatCompletionChunk = Omit<ChatCompletionChunk, "choices"> & {
-  choices: OpenAICompatibleChoice[];
+  choices: (ChatCompletionChunk["choices"][number] & {
+    // Some compatible providers attach usage per choice instead of per chunk.
+    usage?: ChatCompletionChunk["usage"];
+    // Some compatible providers stream a complete message in place of delta.
+    message?: ChatCompletionChunk["choices"][number]["delta"];
+  })[];
+  timings?: { prompt_ms?: number; predicted_ms?: number };
 };
-
-type CompletionsStreamOptions = {
-  signal?: AbortSignal;
-  emitReasoning?: boolean;
-  strictReasoningTags?: boolean;
-  sawStreamDONE?: () => boolean;
-} & (
-  | {
-      mode: "direct";
-      beforeContentBlock: (nextType: "text" | "thinking" | "toolCall") => void;
-    }
-  | { mode?: "managed"; beforeContentBlock?: never }
-);
 
 function extractToolCallThoughtSignature(toolCall: unknown): string | undefined {
   const tc = toolCall as Record<string, unknown> | undefined;
@@ -131,17 +128,30 @@ export async function processCompletionsStream(
   output: MutableAssistantOutput,
   model: Model,
   stream: { push(event: AssistantMessageEvent): void },
-  options?: CompletionsStreamOptions,
+  options?: {
+    signal?: AbortSignal;
+    emitReasoning?: boolean;
+    strictReasoningTags?: boolean;
+    sawStreamDONE?: () => boolean;
+  } & (
+    | {
+        mode: "direct";
+        beforeContentBlock: (nextType: "text" | "thinking" | "toolCall") => void;
+      }
+    | { mode?: "managed"; beforeContentBlock?: never }
+  ),
 ) {
+  const { createReasoningTagTextPartitioner } = await (reasoningParserModule ??=
+    import("../utils/reasoning-tag-text-partitioner.js"));
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const directMode = options?.mode === "direct";
   const emitReasoning = options?.emitReasoning ?? true;
   const openAIModel = model as OpenAIModeModel;
   const compat = getCompat(openAIModel);
   const visibleReasoningDetailTypes = new Set(compat.visibleReasoningDetailTypes);
-  const shouldFilterDeepSeekDsmlText = !directMode && compat.thinkingFormat === "deepseek";
-  const deepSeekTextFilter = shouldFilterDeepSeekDsmlText ? createDeepSeekTextFilter() : null;
-  const deepSeekToolCallRecoverer = shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
+  const deepSeekTextFilter = compat.emitsDsmlToolCalls ? createDeepSeekTextFilter() : null;
+  const deepSeekToolCallRecoverer =
+    !directMode && compat.emitsDsmlToolCalls ? createDsmlRecoverer() : null;
   const gemmaToolCallRecoverer =
     !directMode && /gemma-?4/i.test(model.id) ? createGemmaToolCallRecoverer() : null;
   const reasoningTagTextPartitioner = createReasoningTagTextPartitioner();
@@ -153,6 +163,7 @@ export async function processCompletionsStream(
   const directContent: { block: TextBlock | ThinkingBlock | null } = { block: null };
   let currentTextSource: OpenAICompletionsTextSource | undefined;
   let sawReasoning = false;
+  let suppressedReasoning = false;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
   let pendingPostToolCallBytes = 0;
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
@@ -171,7 +182,7 @@ export async function processCompletionsStream(
   let chunkPushedEvent = false;
   const pushStreamEvent = (event: AssistantMessageEvent) => {
     chunkPushedEvent = true;
-    stream.push(event);
+    stream.push(detachPartialSnapshot(event));
   };
   const appendToolCallBlock = (block: ToolCallBlock) => {
     output.content.push(block);
@@ -288,6 +299,7 @@ export async function processCompletionsStream(
       );
     }
   };
+  const recoveredToolCallBlocks = new Set<ToolCall>();
   const appendRecoveredToolCall = (toolCall: RecoveredTextToolCall) => {
     if (currentBlock?.type === "toolCall") {
       currentBlock = null;
@@ -302,6 +314,7 @@ export async function processCompletionsStream(
       arguments: toolCall.arguments,
       partialJson: toolCall.partialJson,
     };
+    recoveredToolCallBlocks.add(block);
     currentBlock = block;
     appendToolCallBlock(block);
     pushStreamEvent({
@@ -392,6 +405,7 @@ export async function processCompletionsStream(
   };
   const events = directMode ? responseStream : iterateModelStream(responseStream, options?.signal);
   let maxReasoningTokens = 0;
+  let providerProcessingMs: number | undefined;
   for await (const rawChunk of events) {
     throwIfModelStreamAborted(options?.signal);
     chunkPushedEvent = false;
@@ -408,6 +422,19 @@ export async function processCompletionsStream(
     }
     const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
     const usage = chunk.usage || choice?.usage;
+    // llama.cpp attaches final timings to the usage-only chunk when requested.
+    if (
+      chunk.timings !== undefined &&
+      (choice?.finish_reason ||
+        (Array.isArray(chunk.choices) && chunk.choices.length === 0 && chunk.usage))
+    ) {
+      const promptMs = asNonNegativeFiniteNumber(chunk.timings?.prompt_ms);
+      const predictedMs = asNonNegativeFiniteNumber(chunk.timings?.predicted_ms);
+      providerProcessingMs =
+        promptMs !== undefined && predictedMs !== undefined
+          ? asNonNegativeFiniteNumber(promptMs + predictedMs)
+          : undefined;
+    }
     const reasoningTokens =
       asPositiveFiniteNumber(usage?.completion_tokens_details?.reasoning_tokens) ?? 0;
     const hasReasoningUsageActivity = reasoningTokens > maxReasoningTokens;
@@ -416,6 +443,15 @@ export async function processCompletionsStream(
       output.usage = parseOpenAICompletionsUsage(usage, model, {
         includeReasoningTokens: !directMode,
       });
+      const terminalUsage = Boolean(
+        finishReason || choice?.finish_reason || chunk.choices?.length === 0,
+      );
+      const completeCounts = [usage.prompt_tokens, usage.completion_tokens].every(
+        (value) => typeof value === "number" && Number.isFinite(value) && value >= 0,
+      );
+      output.usage.usageReport = {
+        state: terminalUsage && completeCounts ? "available" : "unavailable",
+      };
     }
     const rawChoiceDelta = choice?.delta ?? choice?.message;
     if (!choice) {
@@ -445,6 +481,10 @@ export async function processCompletionsStream(
       );
       const reasoningDeltas = reasoningBatch.deltas;
       const hasReasoningThinking = reasoningBatch.hasThinking;
+      if (hasReasoningThinking && !model.reasoning && !emitReasoning && !suppressedReasoning) {
+        suppressedReasoning = true;
+        recordSuppressedReasoning(output);
+      }
       // Share the content/refusal owner to avoid duplicate mirrored refusals.
       const contentDeltas = readOpenAICompletionsContentDeltas(
         choiceDelta.content,
@@ -583,6 +623,12 @@ export async function processCompletionsStream(
   }
   currentBlock = null;
   flushPendingPostToolCallDeltas();
+  // Native calls supersede recovered previews before any toolcall_end authorizes execution.
+  if (sawNativeToolCallDelta && recoveredToolCallBlocks.size > 0) {
+    output.content = output.content.filter(
+      (block) => block.type !== "toolCall" || !recoveredToolCallBlocks.has(block),
+    );
+  }
   // Only an explicit stop or observed SSE terminal may authorize silent tool calls.
   finalizeOpenAICompletionsToolCalls(output, {
     allowSilentToolCallPromotion:
@@ -599,8 +645,9 @@ export async function processCompletionsStream(
       });
     },
   });
+  output.usage.usageReport ??= { state: "unavailable" };
   if (
-    !output.usage.contextUsage &&
+    (!output.usage.contextUsage || output.usage.usageReport.state === "unavailable") &&
     !options?.signal?.aborted &&
     output.stopReason !== "error" &&
     output.stopReason !== "aborted"
@@ -608,6 +655,19 @@ export async function processCompletionsStream(
     output.usage.contextUsage = { state: "unavailable" };
     if (!compat.supportsUsageInStreaming) {
       warnMissingStreamingUsage(openAIModel);
+    }
+  }
+  if (providerProcessingMs !== undefined) {
+    appendAssistantMessageDiagnostic(output, {
+      type: "provider_timing",
+      timestamp: Date.now(),
+      details: { processingMs: providerProcessingMs },
+    });
+  }
+  if (suppressedReasoning) {
+    const error = recordSuppressedReasoning(output);
+    if (error) {
+      throw error;
     }
   }
 }

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDoctorPrompter } from "../commands/doctor-prompter.js";
+import { showDoctorHealthSummary } from "./doctor-health-contribution.js";
 import {
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
@@ -27,7 +28,7 @@ vi.mock("node:child_process", async () => {
   );
 });
 // Do not mock doctor-whatsapp-responsiveness: its actual owner reads mocked ps
-// and builds the advisory note through the real contribution runner.
+// and queues the advisory through the real contribution runner.
 
 describe("Doctor responsiveness contribution flow", () => {
   beforeEach(() => {
@@ -79,12 +80,19 @@ describe("Doctor responsiveness contribution flow", () => {
       expect(ctx.gatewayStatus).toEqual(maintenance ? undefined : status);
       expect(mocks.checkGatewayHealth).toHaveBeenCalledTimes(maintenance ? 0 : 1);
       expect(mocks.probeGatewayMemoryStatus).not.toHaveBeenCalled();
-      const notes = mocks.note.mock.calls.filter(
-        ([, title]) => title === "WhatsApp responsiveness",
-      );
+      const findings =
+        ctx.healthFindings?.filter(
+          (finding) => finding.checkId === "core/doctor/whatsapp-responsiveness",
+        ) ?? [];
+      showDoctorHealthSummary(ctx);
+      const output = vi
+        .mocked(ctx.runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
       if (maintenance || process.platform === "win32") {
         expect(mocks.ps).not.toHaveBeenCalled();
-        expect(notes).toEqual([]);
+        expect(findings).toEqual([]);
+        expect(output).not.toContain("Gateway reports pressure");
       } else {
         expect(mocks.ps).toHaveBeenCalledTimes(1);
         expect(mocks.ps).toHaveBeenCalledWith("ps", ["-axo", "pid=,command="], {
@@ -92,14 +100,19 @@ describe("Doctor responsiveness contribution flow", () => {
           killSignal: "SIGKILL",
           timeout: 1_000,
         });
-        expect(notes).toEqual([
-          [
-            "Gateway reports pressure, and local TUI clients were detected. This snapshot does not identify the source of the pressure.\n" +
-              `Local TUI pids: ${fakePid}\n` +
+        expect(findings).toEqual([
+          expect.objectContaining({
+            category: "recommended",
+            target: String(fakePid),
+            message:
+              "Gateway reports pressure, and local TUI clients were detected. This snapshot does not identify the source of the pressure.",
+            fixHint:
               "Inspect Gateway diagnostics with openclaw gateway diagnostics export before deciding whether to close clients.",
-            "WhatsApp responsiveness",
-          ],
+          }),
         ]);
+        expect(output).not.toContain("Recommended improvements:");
+        expect(output).not.toContain("This snapshot does not identify the source of the pressure.");
+        expect(output).not.toContain("Gateway reports pressure");
       }
       expect(kill).not.toHaveBeenCalled();
       expect(mocks.note.mock.calls.filter(([, title]) => title === "Doctor warnings")).toEqual([]);

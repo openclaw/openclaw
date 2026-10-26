@@ -54,19 +54,19 @@ Vendor plugins register capability metadata (which provider supports which media
 
 Per-capability (`image`/`audio`/`video`) keys:
 
-| Key              | Type      | Default                                | Notes                                                                |
-| ---------------- | --------- | -------------------------------------- | -------------------------------------------------------------------- |
-| `enabled`        | `boolean` | auto (`false` disables)                | Set `false` to turn off auto-detect for this capability              |
-| `preferredModel` | `string`  | first compatible entry                 | Prefer `provider/model`, model id, `provider:<id>`, or `cli:command` |
-| `prompt`         | `string`  | capability default                     | Default prompt when an entry does not override it                    |
-| `maxChars`       | `number`  | `500` image/video, unset audio         | Default output limit                                                 |
-| `maxBytes`       | `number`  | 10MB image, 20MB audio, 50MB video     | Default input limit                                                  |
-| `timeoutSeconds` | `number`  | `60` image/audio, `120` video          | Default request timeout                                              |
-| `language`       | `string`  | unset                                  | Audio transcription hint                                             |
-| `scope`          | object    | unset                                  | Gate by channel/chat type/source key                                 |
-| `attachments`    | object    | `{ mode: "first", maxAttachments: 1 }` | Select which matching attachments are processed                      |
-| `echoTranscript` | `boolean` | `false`                                | Audio only: echo the transcript before agent processing              |
-| `echoFormat`     | `string`  | `'📝 "{transcript}"'`                  | Audio only: format for the echoed transcript                         |
+| Key              | Type      | Default                                | Notes                                                                                                                                                 |
+| ---------------- | --------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`        | `boolean` | auto (`false` disables)                | Set `false` to turn off auto-detect for this capability                                                                                               |
+| `preferredModel` | `string`  | first compatible entry                 | Prefer `provider/model`, model id, `provider:<id>`, or `cli:command`                                                                                  |
+| `prompt`         | `string`  | capability default                     | Default prompt when an entry does not override it                                                                                                     |
+| `maxChars`       | `number`  | `500` image/video, unset audio         | Default output limit                                                                                                                                  |
+| `maxBytes`       | `number`  | 10MB image, 20MB audio, 50MB video     | Default input limit                                                                                                                                   |
+| `timeoutSeconds` | `number`  | `60` image/audio, `120` video          | Default request timeout                                                                                                                               |
+| `language`       | `string`  | unset                                  | Audio transcription hint                                                                                                                              |
+| `scope`          | object    | unset                                  | Gate by channel/chat type/source key                                                                                                                  |
+| `attachments`    | object    | `{ mode: "first", maxAttachments: 1 }` | Select which matching attachments are processed                                                                                                       |
+| `echoTranscript` | `boolean` | `false`                                | Audio only: echo the transcript before agent processing (outbound on deliverable channels; persisted into the WebChat user turn for internal clients) |
+| `echoFormat`     | `string`  | `'📝 "{transcript}"'`                  | Audio only: format for the echoed transcript                                                                                                          |
 
 Prompts, limits, language hints, request overrides, and provider options can be set as capability defaults or overridden on individual `tools.media.models[]` entries. Capability defaults also cover auto-detected providers when no explicit model is configured. A model list selects which entries run; it does not hide other enabled providers from provider discovery.
 
@@ -119,7 +119,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
 
 CLI entries need a nonblank `command` and a nonempty `args` list. Arguments remain literal strings with optional template interpolation; existing literal file paths and custom wrapper arguments are supported. Pass the attachment through a template such as `{{AttachmentPath}}` or your command's existing input contract. Empty argument lists are not supported because OpenClaw does not feed attachments to CLI stdin. `openclaw doctor` reports missing commands or args with the exact config path and a manual fix; it does not invent commands or rewrite these entries. At runtime, an incomplete entry records a failure without launching the binary, and the next configured model is tried. If none succeeds, the attachment gets a failure outcome and a warning is logged. Config validation remains permissive for these fields so an existing config can still start the Gateway after an update.
 
-Remote attachments are staged as temporary files only when a CLI needs a file path. The media-understanding run owns those files and removes them after processing; a failed staging attempt leaves other staged attachments available. Existing local attachments are read in place and retained.
+Remote attachments are staged as temporary files only when a CLI needs a file path. The media-understanding run owns those files and removes them after processing; a failed staging attempt leaves other staged attachments available. If temporary-file removal fails, a warning names the file so you can remove it manually if it remains after processing. CLI scratch directories containing converted audio or transcript output are also removed after each attempt; if removal fails, a warning names the directory for manual removal without replacing the transcript or original processing error. Existing local attachments are read in place and retained.
 
 ### Provider credentials
 
@@ -143,6 +143,7 @@ See [Tools and custom providers](/gateway/config-tools) for profiles, env vars, 
 - Media exceeding `maxBytes` skips that model and tries the next one.
 - Audio files under 1024 bytes are treated as empty/corrupt and skipped before transcription; the agent gets a fixed placeholder transcript instead.
 - If the active primary image model already supports vision natively, OpenClaw skips the `[Image]` summary block and passes the original image into the model directly. MiniMax is an exception: `minimax`, `minimax-cn`, `minimax-portal`, and `minimax-portal-cn` always route image understanding through the plugin-owned `MiniMax-VL-01` media provider, even if legacy MiniMax M2.x chat metadata claims image input (only `MiniMax-M3` and later are treated as natively vision-capable).
+- Chat Completions models configured with `input: ["text", "image", "video"]` can receive local video attachments directly when the server supports `video_url` content parts. If no separate video-understanding model is selected, OpenClaw hands the clip to that reply model. History replay keeps each clip on its original user turn, and preflight estimates video separately from its base64 text.
 - If a Gateway/WebChat primary model is text-only, image attachments are preserved as offloaded `media://inbound/*` refs so image/PDF tools or a configured image model can still inspect them instead of losing the attachment.
 - Explicit `openclaw infer image describe --file <path> --model <provider/model>` (alias: `openclaw capability image describe`) runs that image-capable provider/model directly, including Ollama refs such as `ollama/qwen2.5vl:7b` when a matching image-capable model is configured under `models.providers.ollama.models[]`.
 - If `<capability>.enabled` is not `false` but no models are configured, OpenClaw tries the active reply model when its provider supports the capability.

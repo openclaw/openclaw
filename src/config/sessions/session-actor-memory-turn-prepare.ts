@@ -5,7 +5,10 @@ import { createSessionActorMemoryGoals } from "./session-actor-memory-goals.js";
 import { createSessionActorMemoryMessages } from "./session-actor-memory-messages.js";
 import type { SessionActorMemoryStorageContext } from "./session-actor-memory-storage-context.js";
 import type { SessionActorMemoryTurnReads } from "./session-actor-memory-turn-contract.js";
-import { prepareSessionTranscriptTurnEntry } from "./session-transcript-turn-state.js";
+import {
+  buildRestartRecoveryExpectedState,
+  prepareSessionTranscriptTurnEntry,
+} from "./session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
@@ -81,6 +84,11 @@ export function prepareSessionActorMemoryTurn(
         }),
     coldArchive: undefined,
     version: events.version(),
+    expectedSessionState:
+      expectedEntry &&
+      buildRestartRecoveryExpectedState(
+        selected?.entry ?? { sessionId: scope.sessionId, updatedAt: 0 },
+      ),
     goalId:
       mutation && !result && expectedEntry && input.options.messages.length
         ? applySessionGoalOperation(expectedEntry, mutation.operation, Date.now())?.id

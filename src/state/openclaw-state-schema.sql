@@ -36,9 +36,6 @@ CREATE TABLE IF NOT EXISTS skill_usage (
   last_agent_id TEXT
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_skill_usage_key
-  ON skill_usage(skill_key, skill_file);
-
 -- Profile-owned skill library: additive, absent until first publication/import.
 CREATE TABLE IF NOT EXISTS skill_library_entries (
   skill_id TEXT NOT NULL PRIMARY KEY,
@@ -81,6 +78,7 @@ CREATE TABLE IF NOT EXISTS skill_library_uploads (
 -- End profile-owned skill library.
 
 CREATE TABLE IF NOT EXISTS skill_workshop_changes (
+  cursor_id INTEGER NOT NULL,
   change_id TEXT NOT NULL PRIMARY KEY,
   agent_id TEXT NOT NULL,
   skill_name TEXT NOT NULL,
@@ -92,6 +90,9 @@ CREATE TABLE IF NOT EXISTS skill_workshop_changes (
   run_id TEXT,
   created_at_ms INTEGER NOT NULL
 ) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS skill_workshop_changes_cursor_id_idx
+  ON skill_workshop_changes(cursor_id);
 
 CREATE INDEX IF NOT EXISTS idx_skill_workshop_changes_agent_time
   ON skill_workshop_changes(agent_id, created_at_ms);
@@ -224,6 +225,7 @@ CREATE INDEX IF NOT EXISTS execution_identity_contexts_run_created_idx
   ON execution_identity_contexts (run_id, created_at, execution_id);
 
 CREATE TABLE IF NOT EXISTS execution_decision_facts (
+  cursor_id INTEGER NOT NULL,
   receipt_id TEXT NOT NULL PRIMARY KEY CHECK (length(receipt_id) BETWEEN 1 AND 256),
   context_id TEXT NOT NULL CHECK (length(context_id) BETWEEN 1 AND 256),
   execution_id TEXT NOT NULL CHECK (length(execution_id) BETWEEN 1 AND 256),
@@ -244,6 +246,9 @@ CREATE TABLE IF NOT EXISTS execution_decision_facts (
   receipt_json TEXT NOT NULL CHECK (length(receipt_json) > 0),
   UNIQUE (occurred_at, receipt_id)
 ) STRICT;
+CREATE UNIQUE INDEX IF NOT EXISTS execution_decision_facts_cursor_id_idx
+  ON execution_decision_facts(cursor_id);
+
 CREATE INDEX IF NOT EXISTS execution_decision_facts_context_occurred_idx
   ON execution_decision_facts (context_id, occurred_at, receipt_id);
 CREATE INDEX IF NOT EXISTS execution_decision_facts_run_occurred_idx
@@ -287,7 +292,7 @@ CREATE TABLE IF NOT EXISTS session_state_heads (
   pruned_max_sequence INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (session_key, agent_id)
-) STRICT;
+) STRICT, WITHOUT ROWID;
 
 -- Notifiable watcher identity is the bare session key, matching the process-local
 -- system-event queue it feeds. Provenance distinguishes explicit immediate-wake
@@ -346,7 +351,7 @@ CREATE INDEX IF NOT EXISTS idx_state_leases_expiry
   WHERE expires_at IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_state_leases_owner
-  ON state_leases(owner, updated_at DESC);
+  ON state_leases(owner);
 
 CREATE TABLE IF NOT EXISTS exec_approvals_config (
   config_key TEXT NOT NULL PRIMARY KEY,
@@ -363,6 +368,7 @@ CREATE TABLE IF NOT EXISTS exec_approvals_config (
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS operator_approvals (
+  cursor_id INTEGER NOT NULL,
   approval_id TEXT NOT NULL PRIMARY KEY CHECK (
     length(approval_id) > 0 AND approval_id NOT IN ('.', '..')
   ),
@@ -467,6 +473,9 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
     )
   )
 ) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_approvals_cursor_id
+  ON operator_approvals(cursor_id);
 
 CREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry
   ON operator_approvals(status, expires_at_ms, approval_id);
@@ -630,40 +639,6 @@ CREATE TABLE IF NOT EXISTS device_pairing_join_codes (
   payload_json TEXT,
   created_at_ms INTEGER,
   expires_at_ms INTEGER
-) STRICT;
-
-CREATE TABLE IF NOT EXISTS device_identities (
-  identity_key TEXT NOT NULL PRIMARY KEY,
-  device_id TEXT NOT NULL,
-  public_key_pem TEXT NOT NULL,
-  private_key_pem TEXT NOT NULL,
-  created_at_ms INTEGER NOT NULL,
-  updated_at_ms INTEGER NOT NULL
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_device_identities_device
-  ON device_identities(device_id, updated_at_ms DESC);
-
-CREATE TABLE IF NOT EXISTS device_auth_tokens (
-  device_id TEXT NOT NULL,
-  role TEXT NOT NULL,
-  token TEXT NOT NULL,
-  scopes_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (device_id, role)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_device_auth_tokens_updated
-  ON device_auth_tokens(updated_at_ms DESC, device_id, role);
-
-CREATE TABLE IF NOT EXISTS gateway_origin_device_tokens (
-  gateway_scope TEXT NOT NULL,
-  device_id TEXT NOT NULL,
-  role TEXT NOT NULL,
-  token TEXT NOT NULL,
-  scopes_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (gateway_scope, device_id, role)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
@@ -1149,6 +1124,8 @@ CREATE TABLE IF NOT EXISTS acp_sessions (
   agent TEXT NOT NULL,
   runtime_session_name TEXT NOT NULL,
   identity_json TEXT,
+  resume_agent_session_id TEXT,
+  resume_acpx_session_id TEXT,
   mode TEXT NOT NULL,
   runtime_options_json TEXT,
   cwd TEXT,
@@ -1165,12 +1142,10 @@ CREATE INDEX IF NOT EXISTS idx_acp_sessions_agent_activity
   ON acp_sessions(agent, last_activity_at DESC, session_key);
 
 CREATE INDEX IF NOT EXISTS idx_acp_sessions_resume_agent
-  ON acp_sessions(trim(json_extract(CASE WHEN json_valid(identity_json) THEN identity_json END, '$.agentSessionId'),
-    char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)));
+  ON acp_sessions(resume_agent_session_id);
 
 CREATE INDEX IF NOT EXISTS idx_acp_sessions_resume_acpx
-  ON acp_sessions(trim(json_extract(CASE WHEN json_valid(identity_json) THEN identity_json END, '$.acpxSessionId'),
-    char(9,10,11,12,13,32,160,5760,8192,8193,8194,8195,8196,8197,8198,8199,8200,8201,8202,8232,8233,8239,8287,12288,65279)));
+  ON acp_sessions(resume_acpx_session_id);
 
 CREATE TABLE IF NOT EXISTS acp_replay_sessions (
   session_id TEXT NOT NULL PRIMARY KEY,
@@ -1203,9 +1178,6 @@ CREATE TABLE IF NOT EXISTS acp_replay_events (
   PRIMARY KEY (session_id, seq),
   FOREIGN KEY (session_id) REFERENCES acp_replay_sessions(session_id) ON DELETE CASCADE
 ) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_acp_replay_events_session_seq
-  ON acp_replay_events(session_id, seq);
 
 CREATE TABLE IF NOT EXISTS agent_databases (
   agent_id TEXT NOT NULL,
@@ -1430,6 +1402,35 @@ CREATE INDEX IF NOT EXISTS idx_sandbox_registry_last_used
   ON sandbox_registry_entries(registry_kind, last_used_at_ms DESC, container_name)
   WHERE last_used_at_ms IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS sandbox_persistent_execs (
+  owner_key TEXT NOT NULL PRIMARY KEY,
+  source_identity TEXT NOT NULL,
+  attempt_id TEXT NOT NULL UNIQUE,
+  owner_json TEXT NOT NULL,
+  backend_id TEXT NOT NULL CHECK (backend_id = 'docker'),
+  backend_target_json TEXT NOT NULL,
+  workspace_binding_json TEXT NOT NULL,
+  container_id TEXT NOT NULL,
+  container_name TEXT NOT NULL,
+  container_started_at TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  phase TEXT NOT NULL CHECK (phase IN ('reserved', 'prepared', 'running', 'stopping', 'uncertain', 'stopped')),
+  receipt_json TEXT,
+  error TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  CHECK (phase NOT IN ('prepared', 'running') OR receipt_json IS NOT NULL)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_persistent_execs_container
+  ON sandbox_persistent_execs(container_id, owner_key);
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_persistent_execs_container_name
+  ON sandbox_persistent_execs(container_name, owner_key);
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_persistent_execs_source
+  ON sandbox_persistent_execs(source_identity, owner_key);
+
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
@@ -1458,6 +1459,7 @@ CREATE INDEX IF NOT EXISTS idx_cron_jobs_store_order
 -- One owner-native receipt is also the durable execution fence. Receipts
 -- survive job deletion so operators can distinguish a run from log inference.
 CREATE TABLE IF NOT EXISTS cron_run_receipts (
+  cursor_id INTEGER NOT NULL,
   receipt_id TEXT PRIMARY KEY,
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
@@ -1478,6 +1480,9 @@ CREATE TABLE IF NOT EXISTS cron_run_receipts (
     (status != 'running' AND finished_at_ms IS NOT NULL)
   )
 ) STRICT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS cron_run_receipts_cursor_id_idx
+  ON cron_run_receipts(cursor_id);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_run_receipts_active_job
   ON cron_run_receipts(store_key, job_id)
@@ -1609,19 +1614,12 @@ CREATE TABLE IF NOT EXISTS task_runs (
   detail_json TEXT
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_task_runs_run_id ON task_runs(run_id);
-CREATE INDEX IF NOT EXISTS idx_task_runs_status ON task_runs(status);
-CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_status ON task_runs(runtime, status);
-CREATE INDEX IF NOT EXISTS idx_task_runs_cleanup_after ON task_runs(cleanup_after);
-CREATE INDEX IF NOT EXISTS idx_task_runs_last_event_at ON task_runs(last_event_at);
-CREATE INDEX IF NOT EXISTS idx_task_runs_owner_key ON task_runs(owner_key);
-CREATE INDEX IF NOT EXISTS idx_task_runs_parent_flow_id ON task_runs(parent_flow_id);
-CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);
-CREATE INDEX IF NOT EXISTS idx_task_runs_requester_session_key ON task_runs(requester_session_key);
-CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_source_ended
-  ON task_runs(runtime, source_id, ended_at, created_at, task_id);
-CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_ended
-  ON task_runs(runtime, ended_at, created_at, task_id);
+CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_run
+  ON task_runs(runtime, run_id, source_id, created_at, task_id);
+CREATE INDEX IF NOT EXISTS idx_task_runs_cron_runtime_order
+  ON task_runs(runtime, created_at, task_id) WHERE runtime = 'cron';
+CREATE INDEX IF NOT EXISTS idx_task_runs_cron_source_order
+  ON task_runs(source_id, created_at, task_id) WHERE runtime = 'cron';
 
 CREATE TABLE IF NOT EXISTS subagent_runs (
   run_id TEXT NOT NULL PRIMARY KEY,
@@ -1715,6 +1713,7 @@ CREATE INDEX IF NOT EXISTS idx_flow_runs_updated_at ON flow_runs(updated_at);
 -- Durable meeting-capture sessions are gateway-global rather than agent-session
 -- transcripts. JSON/JSONL files are doctor import inputs or explicit CLI exports.
 CREATE TABLE IF NOT EXISTS meeting_transcript_sessions (
+  started_at_ms INTEGER,
   session_id TEXT NOT NULL,
   started_at TEXT NOT NULL,
   selector TEXT NOT NULL UNIQUE,
@@ -1742,6 +1741,9 @@ CREATE TABLE IF NOT EXISTS meeting_transcript_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_started
   ON meeting_transcript_sessions(started_at DESC, session_id);
+
+CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_chronology
+  ON meeting_transcript_sessions(started_at_ms DESC, session_id ASC, started_at ASC);
 
 CREATE INDEX IF NOT EXISTS idx_meeting_transcript_sessions_id
   ON meeting_transcript_sessions(session_id, started_at DESC);
@@ -2129,6 +2131,7 @@ CREATE TABLE IF NOT EXISTS github_repository_publication_requests (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   reported_at_ms INTEGER,
+  draft INTEGER,
   CHECK ((identity_source = 'personal' AND owner_profile_id IS NOT NULL AND connection_generation IS NOT NULL)
     OR (identity_source <> 'personal' AND owner_profile_id IS NULL AND connection_generation IS NULL)),
   CHECK ((checkpoint_ref IS NULL AND checkpoint_digest IS NULL) OR (checkpoint_ref IS NOT NULL AND checkpoint_digest IS NOT NULL)),
@@ -2358,8 +2361,20 @@ CREATE TABLE IF NOT EXISTS local_workspace_projections (
   journal_pack BLOB CHECK (journal_pack IS NULL OR length(journal_pack) <= 268435456),
   revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
   created_at_ms INTEGER NOT NULL,
-  CHECK ((baseline_json IS NULL) = (baseline_ref IS NULL)),
+  checkpoint_json TEXT,
+  CHECK (baseline_json IS NULL OR baseline_ref IS NOT NULL),
   CHECK ((journal_json IS NULL) = (journal_pack IS NULL))
+) STRICT;
+
+-- The projection owner advances changed nodes and its root in one acceptance.
+-- Legacy baseline_json remains only until that owner's resumable conversion.
+CREATE TABLE IF NOT EXISTS local_workspace_manifest_nodes (
+  worktree_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  node_json TEXT NOT NULL,
+  PRIMARY KEY (worktree_id, path),
+  FOREIGN KEY (worktree_id)
+    REFERENCES local_workspace_projections(worktree_id) ON DELETE CASCADE
 ) STRICT;
 
 -- A reconciliation journal is written before managed-worktree mutation. The
@@ -2440,6 +2455,7 @@ CREATE TABLE IF NOT EXISTS github_publication_requests (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   reported_at_ms INTEGER,
+  draft INTEGER,
   UNIQUE (session_id, idempotency_key),
   CHECK (
     (claim_id IS NULL AND run_id IS NULL AND environment_id IS NULL
@@ -2512,6 +2528,7 @@ CREATE TABLE IF NOT EXISTS github_personal_publication_requests (
   created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
   updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
   reported_at_ms INTEGER,
+  draft INTEGER,
   UNIQUE (owner_profile_id, session_id, idempotency_key),
   CHECK ((status = 'publishing' AND gateway_instance_id IS NOT NULL AND execution_id IS NOT NULL) OR status <> 'publishing'),
   CHECK ((last_effect IS NULL AND effect_state IS NULL) OR (last_effect IS NOT NULL AND effect_state IS NOT NULL)),
@@ -2701,6 +2718,8 @@ CREATE TABLE IF NOT EXISTS user_profile_identities (
   subject TEXT NOT NULL,
   profile_id TEXT NOT NULL,
   canonical_login TEXT,
+  -- Host-scoped verified credit evidence; current profile bindings govern attribution.
+  verified_email_json TEXT,
   created_at INTEGER NOT NULL,
   authorization_id TEXT,
   authorization_basis_json TEXT,

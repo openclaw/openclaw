@@ -2,6 +2,7 @@ import type {
   SessionArtifactReadQuery,
   SessionArtifactReadResult,
 } from "../../gateway/session-artifact-read.js";
+import type { SessionTranscriptUsageSnapshot } from "../../gateway/session-transcript-derived-readers.js";
 import type {
   ReadRecentSessionMessagesResult,
   ReadSessionMessageByIdResult,
@@ -71,6 +72,7 @@ export type ChatHistoryPageAnchor = Pick<ChatHistoryPageCursor, "sessionId" | "s
 
 export type ChatHistoryPage = {
   encodedResponse?: ChatHistoryResponsePage<Uint8Array<ArrayBuffer>>;
+  encodedMessagesDeflate?: Uint8Array<ArrayBuffer>;
   windowReset?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
@@ -90,6 +92,8 @@ export type ChatHistoryPage = {
 
 export type ChatHistoryPageParams = {
   encodeResponse?: boolean;
+  deflateResponse?: boolean;
+  includePluginSteering?: boolean;
   compactionMetrics?: LegacyCompactionMetrics;
   entry: InternalSessionEntry | undefined;
   provider: string | undefined;
@@ -113,6 +117,7 @@ type SessionHistoryTranscriptMeta = {
   idempotencyKey?: string;
   seq?: number;
   turnBoundary?: boolean;
+  pluginSteering?: { pluginId: string; pluginName?: string; displayText?: string };
 };
 
 export type SessionHistoryMessage = Record<string, unknown> & {
@@ -184,6 +189,10 @@ export type ChatHistoryDisplayResult =
   | { kind: "rpc-message"; result: ReadSessionMessageByIdResult };
 
 export type SessionHistoryWorkerRequest =
+  | {
+      kind: "recent-usage";
+      params: { target: SessionTranscriptReadScope; maxBytes: number };
+    }
   | {
       kind: "history-event-page";
       params: {
@@ -289,6 +298,7 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "recent-usage"; result: SessionTranscriptUsageSnapshot | null }
   | { kind: "history-event-page"; result: SessionTranscriptMessageEventPage }
   | { kind: "recent-text"; result: SessionRecentConversationText[] }
   | { kind: "active-accounting"; result: SessionTranscriptAccountingSnapshot }

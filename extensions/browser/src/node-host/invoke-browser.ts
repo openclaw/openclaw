@@ -1,5 +1,4 @@
 import fsPromises from "node:fs/promises";
-import { toUSVString } from "node:util";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import {
   asNullableRecord,
@@ -89,7 +88,7 @@ const BROWSER_PROXY_STATUS_TIMEOUT_MS = 750;
 const BROWSER_PROXY_MAX_ENCODED_PAYLOAD_BYTES = 24 * 1024 * 1024;
 
 function countBrowserProxyEncodedPayloadBytes(serialized: string): number {
-  // Native JSON serialization has already escaped C0 units; raw JSON cannot contain them.
+  // Native JSON serialization has already escaped C0 units and lone surrogates.
   let bytes = Buffer.byteLength(serialized, "utf8") + 2;
   for (const character of '"\\') {
     const code = character.charCodeAt(0);
@@ -103,19 +102,6 @@ function countBrowserProxyEncodedPayloadBytes(serialized: string): number {
         }
       }
       index = serialized.indexOf(character, index);
-    }
-  }
-  const wellFormed = toUSVString(serialized);
-  if (wellFormed !== serialized) {
-    // Raw JSON may preserve lone surrogates. Replacement keeps UTF-16 positions intact.
-    for (
-      let index = wellFormed.indexOf("\ufffd");
-      index !== -1;
-      index = wellFormed.indexOf("\ufffd", index + 1)
-    ) {
-      if (serialized.charCodeAt(index) !== 0xfffd) {
-        bytes += 3;
-      }
     }
   }
   return bytes;
@@ -133,48 +119,14 @@ function resolveBrowserProxyConfig(cfg = loadBrowserConfigForRuntimeRefresh()) {
   };
 }
 
-let browserControlReady: Promise<void> | null = null;
-let admittedBrowserControlState: ReturnType<typeof getBrowserControlState> = null;
-
 export function hasBrowserNodeHostWork(): boolean {
   return hasBrowserControlWork() || hasBrowserProxyUploadWork();
-}
-
-async function ensureBrowserControlService(): Promise<void> {
-  const current = getBrowserControlState();
-  // Admission survives config refresh only for this exact live runtime generation.
-  if (current && current === admittedBrowserControlState) {
-    return;
-  }
-  if (browserControlReady) {
-    return browserControlReady;
-  }
-  const startup = (async () => {
-    const cfg = loadBrowserConfigForRuntimeRefresh();
-    const resolved = resolveBrowserConfig(cfg.browser, cfg);
-    if (!resolved.enabled) {
-      throw new Error(await describeBrowserControlUnavailable(cfg));
-    }
-    const started = await startBrowserControlServiceFromConfig();
-    if (!started) {
-      throw new Error(await describeBrowserControlUnavailable(cfg));
-    }
-    admittedBrowserControlState = started;
-  })();
-  const sharedStartup = startup.finally(() => {
-    // Share pending failures, but never keep settled startup as runtime authority.
-    if (browserControlReady === sharedStartup) {
-      browserControlReady = null;
-    }
-  });
-  browserControlReady = sharedStartup;
-  return sharedStartup;
 }
 
 function collectBrowserProxyPaths(payload: unknown): string[] {
   const paths = new Set<string>();
   visitBrowserProxyFilePaths(payload, (filePath) => {
-    paths.add(filePath.trim());
+    paths.add(filePath);
     assertBrowserProxyFileCountWithinLimit(paths.size);
   });
   return [...paths];
@@ -330,7 +282,9 @@ export async function runBrowserProxyCommand(
     throw new Error("INVALID_REQUEST: owned tab close requires POST");
   }
 
-  await ensureBrowserControlService();
+  if (!(await startBrowserControlServiceFromConfig())) {
+    throw new Error(await describeBrowserControlUnavailable());
+  }
   invocationSignal?.throwIfAborted();
   const cfg = loadBrowserConfigForRuntimeRefresh();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);

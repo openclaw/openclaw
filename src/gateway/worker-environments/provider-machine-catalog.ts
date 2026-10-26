@@ -5,7 +5,7 @@ import type {
   WorkerOperatingSystem,
   WorkerProfile,
 } from "../../plugins/types.js";
-import { notifyListeners, registerListener } from "../../shared/listeners.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import {
   normalizeWorkerMachineOptions,
@@ -17,20 +17,22 @@ import type { WorkerEnvironmentRecord } from "./store.js";
 export function createWorkerMachineCatalog(
   options: Pick<WorkerProviderLifecycleOptions, "getConfig" | "resolveProvider" | "warn">,
 ) {
+  type CatalogValues = {
+    machines: readonly WorkerMachineOption[] | undefined;
+    systems: readonly WorkerOperatingSystem[] | undefined;
+  };
   type MachineCatalog = {
     providerId: string;
     settings: WorkerProfile;
-    machines?: readonly WorkerMachineOption[];
-    systems?: readonly WorkerOperatingSystem[];
-    warmup?: Promise<void>;
-  };
+    requests: Partial<Record<keyof CatalogValues, Promise<CatalogValues[keyof CatalogValues]>>>;
+  } & Partial<CatalogValues>;
   const machineCatalogs = new Map<string, MachineCatalog>();
-  const machineShapeListeners = new Set<(profileId: string) => void>();
+  const machineShapeNotifications = { onChanged: (_profileId: string) => {} };
   let machineShapeVersion = 0;
 
   const machineCatalogChanged = (profileId: string) => {
     machineShapeVersion += 1;
-    notifyListeners(machineShapeListeners, profileId, () => {
+    notifyListeners([machineShapeNotifications.onChanged], profileId, () => {
       options.warn("Worker machine metadata change reporting failed");
     });
   };
@@ -47,63 +49,62 @@ export function createWorkerMachineCatalog(
       catalog.providerId !== profile.provider ||
       !isDeepStrictEqual(catalog.settings, settings)
     ) {
-      catalog = { providerId: profile.provider, settings: structuredClone(settings) };
+      catalog = {
+        providerId: profile.provider,
+        settings: structuredClone(settings),
+        requests: {},
+      };
       machineCatalogs.set(profileId, catalog);
       machineCatalogChanged(profileId);
     }
     return catalog;
   };
 
-  const listMachineOptions = async (profileId: string) => {
+  const listCatalog = async (profileId: string, section: keyof CatalogValues) => {
     const catalog = machineCatalogFor(profileId);
-    if (!catalog) {
-      return undefined;
+    const pending = catalog?.requests[section];
+    if (!catalog || pending) {
+      return pending;
     }
-    const machines = normalizeWorkerMachineOptions(
-      await options.resolveProvider(catalog.providerId)?.listMachineOptions?.(catalog.settings),
-    );
-    if (!isDeepStrictEqual(catalog.machines, machines)) {
-      catalog.machines = machines;
-      machineCatalogChanged(profileId);
+    const request = (async () => {
+      const provider = options.resolveProvider(catalog.providerId);
+      const choices =
+        section === "machines"
+          ? normalizeWorkerMachineOptions(await provider?.listMachineOptions?.(catalog.settings))
+          : normalizeWorkerOperatingSystems(
+              await provider?.listOperatingSystems?.(catalog.settings),
+            );
+      if (!isDeepStrictEqual(catalog[section], choices)) {
+        catalog[section] = choices;
+        machineCatalogChanged(profileId);
+      }
+      return choices;
+    })();
+    catalog.requests[section] = request;
+    try {
+      return await request;
+    } finally {
+      delete catalog.requests[section];
     }
-    return machines;
   };
-
-  const listOperatingSystems = async (profileId: string) => {
-    const catalog = machineCatalogFor(profileId);
-    if (!catalog) {
-      return undefined;
-    }
-    const systems = normalizeWorkerOperatingSystems(
-      await options.resolveProvider(catalog.providerId)?.listOperatingSystems?.(catalog.settings),
-    );
-    if (!isDeepStrictEqual(catalog.systems, systems)) {
-      catalog.systems = systems;
-      machineCatalogChanged(profileId);
-    }
-    return systems;
-  };
+  const listMachineOptions = (profileId: string): Promise<CatalogValues["machines"]> =>
+    listCatalog(profileId, "machines");
+  const listOperatingSystems = (profileId: string): Promise<CatalogValues["systems"]> =>
+    listCatalog(profileId, "systems");
 
   const loadMachineShape = async (profileId: string): Promise<void> => {
     const catalog = machineCatalogFor(profileId);
-    if (!catalog || catalog.warmup) {
-      return catalog?.warmup;
+    if (!catalog) {
+      return;
     }
-    const warmup = Promise.allSettled([
+    const results = await Promise.allSettled([
       catalog.machines === undefined ? listMachineOptions(profileId) : undefined,
       catalog.systems === undefined ? listOperatingSystems(profileId) : undefined,
-    ])
-      .then((results) => {
-        const failure = results.find((result) => result.status === "rejected");
-        if (failure) {
-          throw failure.reason;
-        }
-      })
-      .finally(() => {
-        catalog.warmup = undefined;
-      });
-    catalog.warmup = warmup;
-    return warmup;
+    ]);
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure) {
+      throw failure.reason;
+    }
   };
 
   const readMachineShape = (
@@ -149,9 +150,7 @@ export function createWorkerMachineCatalog(
         const catalog = machineCatalogFor(profileId);
         const displayId =
           catalog &&
-          options
-            .resolveProvider(catalog.providerId)
-            ?.resolveDisplayId?.(structuredClone(catalog.settings));
+          options.resolveProvider(catalog.providerId)?.resolveDisplayId?.(catalog.settings);
         return typeof displayId === "string" && /^[a-z][a-z0-9-]{0,63}$/.test(displayId)
           ? displayId
           : undefined;
@@ -168,9 +167,7 @@ export function createWorkerMachineCatalog(
         options.warn(`Worker machine catalog warmup failed for profile ${profileId}`),
       );
     },
-    subscribeMachineShapeChanged: (listener: (profileId: string) => void) =>
-      registerListener(machineShapeListeners, listener),
-    clearMachineShapeListeners: () => machineShapeListeners.clear(),
+    machineShapeNotifications,
     machineShapeVersion: () => machineShapeVersion,
   };
 }

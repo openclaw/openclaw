@@ -2,9 +2,9 @@
 import { iterateProjectedAgentRunSessionKeys } from "../../infra/agent-run-projection.js";
 import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import {
-  collectActiveSessionWorkAdmissions,
-  collectActiveSessionLifecycleMutationIdentities,
-} from "../../sessions/session-lifecycle-admission.js";
+  collectSessionControllerTargets,
+  collectSessionMutationIdentities,
+} from "../../sessions/session-controller.lifecycle.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
   addSessionMaintenancePreserveKeys,
@@ -53,7 +53,7 @@ export function collectActiveSessionWorkAdmissionKeys(params: {
   store: Record<string, SessionEntry>;
 }): Set<string> | undefined {
   const keys = collectSessionWorkAdmissionKeysFromSnapshot(params.store, [
-    ...(collectActiveSessionWorkAdmissions().get(params.storePath) ?? []),
+    ...(collectSessionControllerTargets(undefined, params.storePath).get(params.storePath) ?? []),
   ]);
   return keys.size > 0 ? keys : undefined;
 }
@@ -108,8 +108,10 @@ export async function prepareSessionMaintenancePreservation(
       assertProvidersCurrent();
       return {
         providerKeys: [...keys].toSorted(),
-        workIdentities: [...(collectActiveSessionWorkAdmissions().get(storePath) ?? [])].toSorted(),
-        lifecycleIdentities: collectActiveSessionLifecycleMutationIdentities(storePath),
+        workIdentities: [
+          ...(collectSessionControllerTargets(undefined, storePath).get(storePath) ?? []),
+        ].toSorted(),
+        lifecycleIdentities: collectSessionMutationIdentities(storePath),
       };
     };
     return {

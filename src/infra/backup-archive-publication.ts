@@ -3,6 +3,7 @@ import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import {
   removePreparedBackupArchive,
   type BackupArchiveCleanupReceipt,
@@ -15,6 +16,7 @@ import {
   requireDirectorySync,
   syncDirectoryIfSupported,
 } from "./directory-durability.js";
+import { pathEntryExists } from "./path-existence.js";
 
 type BackupArchiveLogger = (message: string) => void;
 
@@ -36,18 +38,6 @@ function pathsEqual(left: string, right: string): boolean {
   return process.platform === "win32"
     ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase()
     : resolvedLeft === resolvedRight;
-}
-
-async function assertTargetAbsent(targetPath: string): Promise<void> {
-  try {
-    await fs.lstat(targetPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return;
-    }
-    throw error;
-  }
-  throw new Error(`Refusing to overwrite existing backup archive: ${targetPath}`);
 }
 
 async function removeDirectoryIfOwned(
@@ -83,7 +73,9 @@ export async function createBackupArchivePublication(
     throw new Error(`Backup output parent is not a directory: ${requestedParentPath}`);
   }
   const canonicalOutputPath = path.join(canonicalParentPath, path.basename(requestedOutputPath));
-  await assertTargetAbsent(canonicalOutputPath);
+  if (await pathEntryExists(canonicalOutputPath)) {
+    throw new Error(`Refusing to overwrite existing backup archive: ${canonicalOutputPath}`);
+  }
   const stagingDir = await fs.mkdtemp(
     path.join(canonicalParentPath, `.openclaw-backup-publish-${randomUUID()}-`),
   );
@@ -185,6 +177,8 @@ export async function publishPreparedBackupArchive(params: {
   let publicationFailure: { error: unknown } | undefined;
   try {
     try {
+      // A cancelled operation retires prepared bytes through this same owner.
+      resolveCommandProcessSignal()?.throwIfAborted();
       const publication = await publishFileExclusive({
         sourcePath: prepared.archivePath,
         targetPath: plan.canonicalOutputPath,

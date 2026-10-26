@@ -1,19 +1,18 @@
 // Exercise the provider, shared factory, and guarded HTTP transport together.
-import { once } from "node:events";
 import fs from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  saveAuthProfileStore,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { buffer as consumeBuffer } from "node:stream/consumers";
+import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createRemoteEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { createOpenAiEmbeddingProvider } from "./embedding-provider.js";
 
 type EmbeddingBody = {
@@ -49,15 +48,12 @@ async function startEmbeddingServer(onRequest = respondWithEmbeddings) {
   const server = createServer((request, response) => {
     void (async () => {
       try {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
+        const bodyBuffer = await consumeBuffer(request);
         const captured: CapturedRequest = {
           url: request.url,
           authorization: request.headers.authorization,
           alias: request.headers["x-alias"],
-          body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as EmbeddingBody,
+          body: JSON.parse(bodyBuffer.toString("utf8")) as EmbeddingBody,
           response,
           closed: false,
         };
@@ -72,13 +68,8 @@ async function startEmbeddingServer(onRequest = respondWithEmbeddings) {
     })();
   });
   servers.push(server);
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback TCP address");
-  }
-  return { baseUrl: `http://127.0.0.1:${address.port}/tenant/v1`, requests };
+  const port = await listenOnLoopback(server);
+  return { baseUrl: `http://127.0.0.1:${port}/tenant/v1`, requests };
 }
 
 function createOptions(
@@ -134,50 +125,52 @@ describe("OpenAI embedding provider HTTP contract", () => {
       vi.stubEnv("OPENAI_API_KEY", "");
       try {
         const server = custom ? await startEmbeddingServer() : undefined;
-        saveAuthProfileStore(
-          {
-            version: 1,
-            profiles: {
-              "openai:siwc": {
-                type: "oauth",
-                provider: "openai",
-                authFlow: "chatgpt-token-sharing",
-                access: "fixture-siwc-access",
-                refresh: "fixture-siwc-refresh",
-                expires: Date.now() + 3_600_000,
-              },
-              ...(additional === "api-key"
-                ? {
-                    "openai:api": {
-                      type: "api_key" as const,
-                      provider: "openai",
-                      key: "fixture-embedding-api-key",
-                    },
-                  }
-                : additional === "codex"
+        await expect(
+          updateAuthProfileStoreWithLock({
+            agentDir,
+            saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+            updater(store) {
+              store.profiles = {
+                "openai:siwc": {
+                  type: "oauth",
+                  provider: "openai",
+                  authFlow: "chatgpt-token-sharing",
+                  access: "fixture-siwc-access",
+                  refresh: "fixture-siwc-refresh",
+                  expires: Date.now() + 3_600_000,
+                },
+                ...(additional === "api-key"
                   ? {
                       "openai:api": {
-                        type: "oauth" as const,
+                        type: "api_key" as const,
                         provider: "openai",
-                        access: "fixture-codex-access",
-                        refresh: "fixture-codex-refresh",
-                        expires: Date.now() + 3_600_000,
+                        key: "fixture-embedding-api-key",
                       },
                     }
-                  : additional === "token"
+                  : additional === "codex"
                     ? {
                         "openai:api": {
-                          type: "token" as const,
+                          type: "oauth" as const,
                           provider: "openai",
-                          token: "fixture-embedding-token",
+                          access: "fixture-codex-access",
+                          refresh: "fixture-codex-refresh",
+                          expires: Date.now() + 3_600_000,
                         },
                       }
-                    : {}),
+                    : additional === "token"
+                      ? {
+                          "openai:api": {
+                            type: "token" as const,
+                            provider: "openai",
+                            token: "fixture-embedding-token",
+                          },
+                        }
+                      : {}),
+              };
+              return true;
             },
-          },
-          agentDir,
-          { filterExternalAuthProfiles: false, syncExternalCli: false },
-        );
+          }),
+        ).resolves.not.toBeNull();
         const result = createOpenAiEmbeddingProvider(
           createOptions({
             agentDir,
@@ -202,7 +195,7 @@ describe("OpenAI embedding provider HTTP contract", () => {
           });
         } else if (additional === "codex") {
           await expect(result).resolves.toMatchObject({
-            client: { headers: { Authorization: "Bearer fixture-codex-access" } },
+            client: { resolveRequestHeaders: expect.any(Function) },
           });
         } else if (server && additional === "token") {
           const { provider } = await result;
@@ -219,12 +212,63 @@ describe("OpenAI embedding provider HTTP contract", () => {
         }
       } finally {
         clearRuntimeAuthProfileStoreSnapshots();
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync();
         fs.rmSync(agentDir, { recursive: true, force: true });
         vi.unstubAllEnvs();
       }
     },
   );
+
+  it("uses the newly stored OAuth bearer on the next embedding request after re-login", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedding-relogin-"));
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("OPENAI_OAUTH_TOKEN", "");
+    const publishBearer = async (access: string) => {
+      await expect(
+        updateAuthProfileStoreWithLock({
+          agentDir,
+          saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
+          updater(store) {
+            store.profiles["openai:embedding"] = {
+              type: "oauth",
+              provider: "openai",
+              access,
+              refresh: "fixture-refresh",
+              expires: Date.now() + 3_600_000,
+            };
+            return true;
+          },
+        }),
+      ).resolves.not.toBeNull();
+    };
+    try {
+      const server = await startEmbeddingServer();
+      await publishBearer("fixture-before-login");
+      const { provider, client } = await createOpenAiEmbeddingProvider(
+        createOptions({
+          agentDir,
+          config: {
+            auth: { order: { openai: ["openai:embedding"] } },
+            models: { providers: { openai: { baseUrl: server.baseUrl, models: [] } } },
+          },
+          remote: { apiKey: undefined },
+        }),
+      );
+      await expect(provider.embed("first")).resolves.toEqual([5, 1]);
+      await publishBearer("fixture-after-login");
+      await expect(provider.embedBatch(["second"])).resolves.toEqual([[6, 1]]);
+      expect(server.requests.map((request) => request.authorization)).toEqual([
+        "Bearer fixture-before-login",
+        "Bearer fixture-after-login",
+      ]);
+      expect(client.headers).not.toHaveProperty("Authorization");
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      await closeOpenClawAgentDatabasesAsync();
+      fs.rmSync(agentDir, { recursive: true, force: true });
+      vi.unstubAllEnvs();
+    }
+  });
 
   it.each([
     {

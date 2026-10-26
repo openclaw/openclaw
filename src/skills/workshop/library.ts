@@ -3,9 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import {
   dispatchCommittedSkillChangeBestEffort,
@@ -20,7 +23,6 @@ import {
   readWorkspaceSupportFile,
 } from "../lifecycle/workspace-skill-write.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
-import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { scanSkillFile, scanSupportFilePath } from "../security/skill-bundle-scan.js";
 import { recordWorkshopChange } from "./changes.js";
 import type { WorkshopActor, WorkshopChange } from "./changes.kernel.js";
@@ -76,13 +78,7 @@ const MAX_DESCRIPTION_BYTES = 1024;
 const NEW_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 const EXISTING_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,254}$/;
 const skillLocks = new KeyedAsyncQueue();
-
-function emptyForMissingDirectory(error: unknown): never[] {
-  if (hasErrnoCode(error, "ENOENT")) {
-    return [];
-  }
-  throw error;
-}
+const log = createSubsystemLogger("skills/workshop");
 
 function resolveSkillPaths(config: OpenClawConfig, agentId: string, name: string): SkillPaths {
   if (!EXISTING_SKILL_NAME_PATTERN.test(name)) {
@@ -122,15 +118,17 @@ async function readSkillFile(skillDir: string, filePath: string): Promise<string
 async function listSkillFiles(
   skillDir: string,
 ): Promise<{ files: string[]; sizeBytes: number; updatedAtMs: number }> {
-  const entries = await fs.readdir(skillDir, { recursive: true, withFileTypes: true });
+  const entries = await listDirectoryTreeStrict(skillDir, {
+    // Dependencies and hidden metadata are not support files; never spend the inventory budget on them.
+    skipDirectory: ({ dirent }) => dirent.name.startsWith(".") || dirent.name === "node_modules",
+  });
   const files: string[] = [];
   let sizeBytes = 0;
   let updatedAtMs = 0;
-  for (const entry of entries) {
+  for (const { relativePath: relative, dirent: entry } of entries) {
     if (!entry.isFile()) {
       continue;
     }
-    const relative = path.relative(skillDir, path.join(entry.parentPath, entry.name));
     const segments = relative.split(path.sep);
     if (segments.some((segment) => segment.startsWith("."))) {
       continue;
@@ -196,6 +194,11 @@ function validateSkillFile(
   filePath: string,
   content: string,
 ): string | undefined {
+  if (filePath.split("/").includes("node_modules")) {
+    throw new WorkshopWriteError(
+      "node_modules is not a skill support directory. Put authored files in scripts/ or references/ instead.",
+    );
+  }
   if (filePath !== SKILL_FILE && scanSupportFilePath(filePath).length > 0) {
     throw new WorkshopWriteError(
       `Refused: a file path in "${name}" looks like it contains a credential. Name the file after its topic (e.g. "references/api.md"); never store real secrets in skills.`,
@@ -233,11 +236,8 @@ async function readRestorableVersion(
   }
   const versionRoot = await root(versionDir);
   const files: Array<[string, Buffer]> = [];
-  for (const entry of await fs.readdir(versionDir, { recursive: true, withFileTypes: true })) {
-    const filePath = path
-      .relative(versionDir, path.join(entry.parentPath, entry.name))
-      .split(path.sep)
-      .join("/");
+  for (const { relativePath, dirent: entry } of await listDirectoryTreeStrict(versionDir)) {
+    const filePath = relativePath.split(path.sep).join("/");
     // Dot entries (e.g. .DS_Store) are not part of a skill and are never restored.
     if (entry.isDirectory() || filePath.split("/").some((segment) => segment.startsWith("."))) {
       continue;
@@ -254,7 +254,7 @@ async function readRestorableVersion(
       }
       // Restored files must stay addressable by view/patch, which use the canonical path.
       if (canonical !== filePath) {
-        throw refuse(`${filePath} is not a canonical skill file path.`);
+        throw refuse(`${filePath} is not a valid skill file path.`);
       }
     }
     let content: Buffer;
@@ -318,7 +318,7 @@ async function withSkillLocks<T>(keys: readonly string[], run: () => Promise<T>)
     : await skillLocks.enqueue(first, () => withSkillLocks(rest, run));
 }
 
-/** Serializes one skill's mutation, then publishes the snapshot bump and change row. */
+/** Serializes one skill's mutation, then refreshes discovery and records the change. */
 async function mutateSkill(
   ctx: WorkshopMutationContext,
   name: string,
@@ -345,10 +345,12 @@ async function mutateSkill(
     const { summary, versionId } = await apply({ ...paths, assertLive: () => ctx.assertLive?.() });
     const after = await snapshotArtifact();
     await pruneVersions(paths.versionsDir);
-    bumpSkillsSnapshotVersion({
-      reason: "workshop",
-      changedPath: path.join(paths.skillDir, SKILL_FILE),
-    });
+    try {
+      const { refreshSkillsDiscovery } = await import("../runtime/refresh.js");
+      await refreshSkillsDiscovery({ config: ctx.config, reason: "workshop" });
+    } catch (error) {
+      log.warn(`Skill changed, but discovery refresh failed: ${formatErrorMessage(error)}`);
+    }
     const change: WorkshopChange = {
       id: randomUUID(),
       agentId: ctx.agentId,
@@ -382,14 +384,14 @@ export async function listWorkshopSkills(
   const skillsRoot = resolveWorkshopSkillsDir(config, agentId);
   const entries = await fs
     .readdir(skillsRoot, { withFileTypes: true })
-    .catch(emptyForMissingDirectory);
+    .catch((error: unknown) => ignoreMissingPath(error) ?? []);
   const skills: WorkshopSkillSummary[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !EXISTING_SKILL_NAME_PATTERN.test(entry.name)) {
       continue;
     }
     const skillDir = path.join(skillsRoot, entry.name);
-    const content = await readWorkspaceSkillFile(path.join(skillDir, SKILL_FILE)).catch(() => null);
+    const content = await readWorkspaceSkillFile(path.join(skillDir, SKILL_FILE));
     if (content === null) {
       continue;
     }
@@ -411,7 +413,7 @@ export async function listWorkshopArchive(
   const skillsRoot = resolveWorkshopSkillsDir(config, agentId);
   const names: string[] = await fs
     .readdir(path.join(skillsRoot, ARCHIVE_DIR))
-    .catch(emptyForMissingDirectory);
+    .catch((error: unknown) => ignoreMissingPath(error) ?? []);
   const archived: WorkshopArchivedSkill[] = [];
   for (const name of names.toSorted()) {
     if (!EXISTING_SKILL_NAME_PATTERN.test(name)) {
@@ -504,7 +506,11 @@ export async function patchWorkshopSkill(
         `${file} does not exist in "${params.name}". Use action=write_file to add it.`,
       );
     }
-    const matches = current.split(params.oldText).length - 1;
+    const { oldText } = params;
+    let matches = 0;
+    for (let at = current.indexOf(oldText); at !== -1; at = current.indexOf(oldText, at + 1)) {
+      matches++;
+    }
     if (matches !== 1) {
       throw new WorkshopWriteError(
         matches === 0
@@ -662,6 +668,8 @@ export async function restoreWorkshopSkill(
         }
         throw error;
       }
+      // Only successful publication may discard the original live copy.
+      await fs.rm(previous, { recursive: true, force: true });
       const summary =
         params.summary ??
         (target.action === "archive"
@@ -672,7 +680,6 @@ export async function restoreWorkshopSkill(
       return { summary, versionId };
     } finally {
       await fs.rm(staging, { recursive: true, force: true });
-      await fs.rm(previous, { recursive: true, force: true });
     }
   });
 }

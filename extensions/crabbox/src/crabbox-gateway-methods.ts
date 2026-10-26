@@ -12,10 +12,10 @@ import {
   resolveCrabboxWarmImageProfile,
 } from "./crabbox-worker-profile.js";
 import type { CrabboxSnapshotActions } from "./crabbox-worker-snapshot-actions.js";
+import { crabboxWarmImageRecoveryHint } from "./crabbox-worker-warm-image-records.js";
 import {
   type CrabboxState,
   CrabboxWarmImageRequestError,
-  crabboxWarmImageRecoveryHint,
   isCrabboxWarmImageHeld,
   listCrabboxLegacyWarmLeases,
   listCrabboxWarmImages,
@@ -82,7 +82,7 @@ function sendError(respond: Request["respond"], error: unknown, invalidRequest =
 function profileStatus(settings: Readonly<Record<string, unknown>>) {
   try {
     const configured = parseCrabboxProfile(settings);
-    // Resolve the provider's default without reading forwarded environment values.
+    // Snapshot status uses secret references without opening the secret store.
     const profile = resolveCrabboxWarmImageProfile(configured);
     const warmImages = profile.warmImage && profile.class ? "on" : "off";
     const reason =
@@ -90,13 +90,11 @@ function profileStatus(settings: Readonly<Record<string, unknown>>) {
         ? "Disabled in this profile."
         : profile.target !== "linux"
           ? "Warm images require Linux."
-          : configured.warmImage !== true && configured.setupEnv?.length
-            ? "Forwarded setup environment keeps warm images off by default."
-            : !profile.class
-              ? "Requires a configured or placement machine class."
-              : configured.warmImage === true
-                ? "Explicitly enabled in this profile."
-                : "Enabled by default for Linux with a known machine class and no setup environment.";
+          : !profile.class
+            ? "Requires a configured or placement machine class."
+            : configured.warmImage === true
+              ? "Explicitly enabled in this profile."
+              : "Enabled by default for Linux with a known machine class.";
     return {
       backend: configured.provider,
       machineClass: configured.class,

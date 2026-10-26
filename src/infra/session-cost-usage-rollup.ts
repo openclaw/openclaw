@@ -311,6 +311,9 @@ function addQuarterHourTokens(
   target: SessionUtcQuarterHourTokenUsage,
   source: SessionUtcQuarterHourTokenUsage,
 ): void {
+  if (source.usageReport?.state === "unavailable") {
+    target.usageReport = { state: "unavailable" };
+  }
   target.input += source.input;
   target.output += source.output;
   target.cacheRead += source.cacheRead;
@@ -320,6 +323,9 @@ function addQuarterHourTokens(
 }
 
 function addDailyModelUsage(target: SessionDailyModelUsage, source: SessionDailyModelUsage): void {
+  if (source.usageReport?.state === "unavailable") {
+    target.usageReport = { state: "unavailable" };
+  }
   target.tokens += source.tokens;
   target.cost += source.cost;
   target.count += source.count;
@@ -579,9 +585,10 @@ export function buildSessionCostSummaryFromRollup(params: {
 
     dailyMessages.add([{ date: dayKey, ...bucket.messageCounts }]);
     quarterMessages.add([{ ...quarter, ...bucket.messageCounts }]);
-    const { input, output, cacheRead, cacheWrite, totalTokens, totalCost } = bucket.totals;
+    const { input, output, cacheRead, cacheWrite, totalTokens, totalCost, usageReport } =
+      bucket.totals;
     quarterTokens.add([
-      { ...quarter, input, output, cacheRead, cacheWrite, totalTokens, totalCost },
+      { ...quarter, input, output, cacheRead, cacheWrite, totalTokens, totalCost, usageReport },
     ]);
     dailyModels.add(
       bucket.models.map((model) => ({
@@ -591,6 +598,7 @@ export function buildSessionCostSummaryFromRollup(params: {
         tokens: model.totals.totalTokens,
         cost: model.totals.totalCost,
         count: model.count,
+        usageReport: model.totals.usageReport,
       })),
     );
 
@@ -648,7 +656,7 @@ export function addRollupToCostUsageSummary(params: {
   totals: CostUsageTotals;
 }): void {
   for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
-    const dayKey = params.formatDay(new Date(bucket.timestampMs));
+    const dayKey = params.formatDay(new Date(bucket.firstTimestampMs ?? bucket.timestampMs));
     const daily = params.daily.get(dayKey) ?? createEmptyCostUsageTotals();
     addCostUsageTotals(daily, bucket.totals);
     params.daily.set(dayKey, daily);

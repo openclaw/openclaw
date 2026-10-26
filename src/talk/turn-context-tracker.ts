@@ -17,10 +17,7 @@ type RealtimeVoiceTurnContextTrackerOptions = {
 /**
  * Mutable handle for a single realtime voice turn and caller-owned per-turn metadata.
  */
-export type RealtimeVoiceTurnContextHandle<
-  TContext,
-  TExtra extends object = Record<never, never>,
-> = TExtra & {
+export type RealtimeVoiceTurnContextHandle<TContext, TExtra extends object = object> = TExtra & {
   id: string;
   context: TContext;
   hasAudio: boolean;
@@ -36,10 +33,9 @@ type RealtimeVoiceTurnContextOpenArgs<TExtra extends object> = keyof TExtra exte
 /**
  * Tracks which realtime voice turn context should be attached to the next audio-bearing response.
  */
-export type RealtimeVoiceTurnContextTracker<
-  TContext,
-  TExtra extends object = Record<never, never>,
-> = ReturnType<typeof createRealtimeVoiceTurnContextTracker<TContext, TExtra>>;
+export type RealtimeVoiceTurnContextTracker<TContext, TExtra extends object = object> = ReturnType<
+  typeof createRealtimeVoiceTurnContextTracker<TContext, TExtra>
+>;
 
 // Ignored context is kept outside the turn queue so one discarded response can still be
 // correlated if provider audio arrives just after the response was cancelled.
@@ -48,10 +44,9 @@ type RecentIgnoredContext<TContext> = {
   createdAt: number;
 };
 
-export function createRealtimeVoiceTurnContextTracker<
-  TContext,
-  TExtra extends object = Record<never, never>,
->(options: RealtimeVoiceTurnContextTrackerOptions = {}) {
+export function createRealtimeVoiceTurnContextTracker<TContext, TExtra extends object = object>(
+  options: RealtimeVoiceTurnContextTrackerOptions = {},
+) {
   const turns: RealtimeVoiceTurnContextHandle<TContext, TExtra>[] = [];
   let recentIgnoredContext: RecentIgnoredContext<TContext> | undefined;
   let nextId = 0;

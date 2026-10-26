@@ -1,27 +1,27 @@
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import * as pluginLoader from "../plugins/loader.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { createPluginRegistry } from "../plugins/registry.js";
+import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { linkEmail, syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createFixture } from "./control-ui-session-pr-access.test-support.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
+import { heldWork } from "./server-plugin-reload.fixture-tools.test-support.js";
 import { loadGatewayPlugins } from "./server-plugins.js";
 
 it.each(["caller", "plugin", "gateway", "role"] as const)(
   "keeps registered profile preparation bound to its original targets and %s lifetime",
-  async (closedOwner) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  (closedOwner) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const fixture = await createFixture("operator.read");
       const registry = createRequestGatewayMethodRegistry();
       fixture.context.getGatewayMethodRegistry = () => registry;
-      const logger = { info() {}, warn() {}, error() {}, debug() {} };
       let runtime = createPluginRuntime();
       let retireGateway: (() => void) | undefined;
       const resolveGatewayContext = vi.fn(() => fixture.context);
@@ -49,11 +49,7 @@ it.each(["caller", "plugin", "gateway", "role"] as const)(
           loader.mockRestore();
         }
       }
-      const plugins = createPluginRegistry({
-        runtime,
-        logger,
-        activateGlobalSideEffects: false,
-      });
+      const plugins = createTestPluginRegistry(runtime);
       const record = createPluginRecord({ id: "visitor-access", origin: "bundled" });
       const untrustedRecord = createPluginRecord({ id: "untrusted-profile", origin: "workspace" });
       const api = plugins.createApi(record, { config: fixture.cfg });
@@ -71,6 +67,8 @@ it.each(["caller", "plugin", "gateway", "role"] as const)(
         pluginId: "visitor-access",
         pluginOrigin: "bundled" as const,
       };
+      const scoped: typeof withProfile = (params, run) =>
+        withPluginRuntimeGatewayRequestScope(scope, () => withProfile(params, run));
       const selected = "selected@example.test";
       const unselected = "unselected@example.test";
       const profile = ensureProfileForEmail(selected);
@@ -87,36 +85,25 @@ it.each(["caller", "plugin", "gateway", "role"] as const)(
         await expect(
           withPluginRuntimeGatewayRequestScope(scope, () => untrusted(params, callback)),
         ).rejects.toThrow();
-        await expect(
-          withPluginRuntimeGatewayRequestScope(scope, () =>
-            withProfile({ ...params, emails: ["other@example.test"] }, callback),
-          ),
-        ).rejects.toThrow("user profile not found");
-        await expect(
-          withPluginRuntimeGatewayRequestScope(scope, () =>
-            withProfile({ ...params, githubAccountIds: [84] }, callback),
-          ),
-        ).rejects.toThrow("user profile not found");
+        for (const invalid of [{ emails: ["other@example.test"] }, { githubAccountIds: [84] }]) {
+          await expect(scoped({ ...params, ...invalid }, callback)).rejects.toThrow(
+            "user profile not found",
+          );
+        }
         expect(callback).not.toHaveBeenCalled();
         let retained: (() => void) | undefined;
         resolveGatewayContext.mockClear();
-        const mutable = {
-          ...params,
-          emails: [...params.emails],
-          githubAccountIds: [...params.githubAccountIds],
-        };
-        const preparing = withPluginRuntimeGatewayRequestScope(scope, () =>
-          withProfile(mutable, async (assertCurrent) => {
-            assertCurrent();
-            linkEmail(unselected, other.id);
-            assertCurrent();
-            linkEmail(selected, other.id);
-            expect(assertCurrent).toThrow("user profile not found");
-            linkEmail(selected, profile.id);
-            expect(assertCurrent).toThrow("user profile not found");
-            return "checked";
-          }),
-        );
+        const mutable = structuredClone(params);
+        const preparing = scoped(mutable, async (assertCurrent) => {
+          assertCurrent();
+          linkEmail(unselected, other.id);
+          assertCurrent();
+          linkEmail(selected, other.id);
+          expect(assertCurrent).toThrow("user profile not found");
+          linkEmail(selected, profile.id);
+          expect(assertCurrent).toThrow("user profile not found");
+          return "checked";
+        });
         mutable.profileId = other.id;
         mutable.emails.length = 0;
         mutable.githubAccountIds[0] = 84;
@@ -124,33 +111,25 @@ it.each(["caller", "plugin", "gateway", "role"] as const)(
         if (retireGateway) {
           expect(resolveGatewayContext).toHaveBeenCalled();
         }
-        await withPluginRuntimeGatewayRequestScope(scope, () =>
-          withProfile(params, async (assertCurrent) => {
-            assertCurrent();
-            retained = assertCurrent;
-          }),
-        );
-        expect(retained).toBeDefined();
+        await scoped(params, async (assertCurrent) => {
+          assertCurrent();
+          retained = assertCurrent;
+        });
         expect(retained).toThrow();
 
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
+        const gate = heldWork();
         let applied = false;
-        const pending = withPluginRuntimeGatewayRequestScope(scope, () =>
-          withProfile(params, async (assertCurrent) => {
-            entered.resolve();
-            await release.promise;
-            assertCurrent();
-            applied = true;
-          }),
-        );
+        const pending = scoped(params, async (assertCurrent) => {
+          await gate.run();
+          assertCurrent();
+          applied = true;
+        });
         try {
-          await Promise.race([
-            entered.promise,
-            pending.then(() => {
-              throw new Error("Profile callback was not reached");
-            }),
-          ]);
+          await awaitGateBeforeSettlement(
+            gate.entered,
+            pending,
+            "Profile callback was not reached",
+          );
           if (closedOwner === "caller") {
             fixture.access.abort(new Error("Synthetic caller grant retired"));
           } else if (closedOwner === "gateway") {
@@ -160,11 +139,11 @@ it.each(["caller", "plugin", "gateway", "role"] as const)(
           } else {
             plugins.rollbackPluginGlobalSideEffects(record.id, record);
           }
-          release.resolve();
+          gate.release();
           await expect(pending).rejects.toThrow();
           expect(applied).toBe(false);
         } finally {
-          release.resolve();
+          gate.release();
           await pending.catch(() => undefined);
         }
       } finally {
@@ -174,6 +153,5 @@ it.each(["caller", "plugin", "gateway", "role"] as const)(
         await fixture.close();
         await fixture.removeSessions();
       }
-    });
-  },
+    }),
 );

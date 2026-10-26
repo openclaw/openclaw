@@ -1,5 +1,4 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
-import { createDedupeCache } from "../../../infra/dedupe.js";
 import { isValidAgentId, normalizeAgentIdStrict } from "../../../routing/session-key.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -96,20 +95,42 @@ export function resolveSubagentChildAuthority(
   };
 }
 
-const legacyWarnings = createDedupeCache({ ttlMs: 0, maxSize: 4096 });
+// New runs record ownership; report unsettled legacy work once per process.
+let warnedLegacyAuthority = false;
 export function warnLegacySubagentAuthority(
-  entry: SubagentRunRecord,
+  entries: Iterable<SubagentRunRecord>,
   warn: (message: string, meta?: Record<string, unknown>) => void,
 ): void {
-  if (
-    resolveSubagentChildAuthority(entry).status !== "legacy-unverified" ||
-    legacyWarnings.check(JSON.stringify([entry.runId, entry.createdAt, entry.generation]))
-  ) {
+  if (warnedLegacyAuthority) {
     return;
   }
+  const runIds = new Set<string>();
+  const sampleRunIds: string[] = [];
+  for (const entry of entries) {
+    if (
+      !entry.requesterSettleWake &&
+      (entry.cleanupCompletedAt !== undefined ||
+        (entry.execution.status === "terminal" && entry.suppressCompletionDelivery))
+    ) {
+      continue;
+    }
+    if (
+      !runIds.has(entry.runId) &&
+      resolveSubagentChildAuthority(entry).status === "legacy-unverified"
+    ) {
+      runIds.add(entry.runId);
+      if (sampleRunIds.length < 3) {
+        sampleRunIds.push(entry.runId);
+      }
+    }
+  }
+  if (runIds.size === 0) {
+    return;
+  }
+  warnedLegacyAuthority = true;
   warn(
     "Subagent original session identity or lifecycle revision is unavailable; requester work continues with child-session effects suppressed.",
-    { runId: entry.runId },
+    { count: runIds.size, sampleRunIds },
   );
 }
 

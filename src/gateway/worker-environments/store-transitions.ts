@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import {
@@ -36,6 +36,7 @@ import {
   normalizeWorkerSshEndpoint,
   requireWorkerEnvironmentString,
 } from "./store-validation.js";
+import { executeWorkerEnvironmentWrite } from "./store-write.js";
 import type { WorkerEnvironmentMutationInput } from "./store.types.js";
 
 function resolveNullablePatch<T>(
@@ -46,7 +47,7 @@ function resolveNullablePatch<T>(
   return patch === undefined ? current : patch === null ? null : normalize(patch);
 }
 
-export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () => number) {
+export function createWorkerEnvironmentTransitionOps(db: EngineConnection, now: () => number) {
   return {
     refreshBootstrapReceipt(
       input: WorkerEnvironmentMutationInput<"refreshBootstrapReceipt">,
@@ -118,7 +119,7 @@ export function createWorkerEnvironmentTransitionOps(db: DatabaseSync, now: () =
         ) {
           throw new Error("Cannot refresh a worker runtime while its session is moving");
         }
-        executeSqliteQuerySync(
+        executeWorkerEnvironmentWrite(
           db,
           queryWorkerEnvironmentStore(db)
             .updateTable("worker_session_placements")

@@ -34,14 +34,14 @@ export function deriveSessionOrigin(
     label: normalizeOptionalString(resolveConversationLabel(ctx)),
     provider: normalizeMessageChannel(providerRaw),
     surface: normalizeOptionalLowercaseString(ctx.Surface),
-    chatType: normalizeChatType(ctx.ChatType) ?? undefined,
+    chatType: normalizeChatType(ctx.ChatType),
     from: normalizeOptionalString(ctx.From),
     to: normalizeOptionalString(typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To),
     nativeChannelId: normalizeOptionalString(ctx.NativeChannelId),
     nativeDirectUserId: normalizeOptionalString(ctx.NativeDirectUserId),
     avatar: normalizeOptionalString(ctx.ConversationAvatar),
     accountId: normalizeOptionalString(ctx.AccountId),
-    threadId: ctx.MessageThreadId ?? undefined,
+    threadId: ctx.MessageThreadId,
   });
 }
 
@@ -83,7 +83,6 @@ export function deriveSessionMetaPatch(params: {
   sessionKey: string;
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
-  preserveExistingDeliveryRoute?: boolean;
   skipSystemEventOrigin?: boolean;
 }): Partial<SessionEntry> | null {
   return projectSessionMetaPatch({
@@ -101,8 +100,26 @@ export function prepareSessionMetaPatch(params: {
   const sourceChannel = normalizeMessageChannel(
     params.ctx.Provider ?? params.ctx.Surface ?? params.ctx.OriginatingChannel,
   );
+  // WebChat is also the internal routing sentinel; provenance distinguishes wakes.
+  const clientChannel = normalizeMessageChannel(
+    params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
+  );
   return {
+    clientCapabilities:
+      params.ctx.InternalTurnSource === undefined &&
+      (params.ctx.InputProvenance === undefined ||
+        params.ctx.InputProvenance.kind === "external_user") &&
+      clientChannel !== undefined &&
+      !isInternalNonDeliveryChannel(clientChannel)
+        ? [...new Set(params.ctx.GatewayClientCaps ?? [])].toSorted()
+        : undefined,
     group: prepareGroupSessionPatch(params),
+    privateTelegramTopicName:
+      params.ctx.ChatType === "direct" &&
+      params.ctx.MessageThreadId != null &&
+      sourceChannel === "telegram"
+        ? normalizeOptionalString(params.ctx.ThreadLabel)
+        : undefined,
     clearAvatar: params.ctx.ConversationAvatar === "",
     origin: deriveSessionOrigin(params.ctx, {
       skipSystemEventOrigin: params.skipSystemEventOrigin,

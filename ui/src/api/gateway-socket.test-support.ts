@@ -13,6 +13,7 @@ type HandlerMap = {
 type MockWebSocketHandler = (ev?: { code?: number; data?: string; reason?: string }) => void;
 
 export class MockWebSocket {
+  static CONNECTING = 0;
   static OPEN = 1;
 
   readonly handlers: HandlerMap = {
@@ -24,7 +25,8 @@ export class MockWebSocket {
 
   readonly sent: string[] = [];
   lastClose: { code?: number; reason?: string } | null = null;
-  readyState = MockWebSocket.OPEN;
+  // Browsers keep a socket CONNECTING until the Gateway answers the upgrade.
+  readyState = MockWebSocket.CONNECTING;
 
   constructor(_url: string) {
     wsInstances.push(this);
@@ -44,12 +46,14 @@ export class MockWebSocket {
   }
 
   emitClose(code = 1000, reason = "") {
+    this.readyState = 3;
     for (const handler of this.handlers.close) {
       handler({ code, reason });
     }
   }
 
   emitOpen() {
+    this.readyState = MockWebSocket.OPEN;
     for (const handler of this.handlers.open) {
       handler();
     }
@@ -60,6 +64,10 @@ export class MockWebSocket {
     for (const handler of this.handlers.message) {
       handler({ data: payload });
     }
+  }
+
+  emitConnectChallenge(payload: unknown) {
+    this.emitMessage({ type: "event", event: "connect.challenge", payload });
   }
 }
 

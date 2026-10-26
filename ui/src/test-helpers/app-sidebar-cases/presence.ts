@@ -11,20 +11,23 @@ import {
 } from "../app-sidebar.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
 import { settleLitElement } from "../lit-settle.ts";
-import "../../components/app-sidebar.ts";
+import { flush } from "../solid-settle.ts";
+import "../../components/app-sidebar.tsx";
 
-await import("../../components/viewer-facepile.ts");
+await import("../../components/solid/viewer-facepile.tsx");
 
 async function mountOnlineSidebar(...args: Parameters<typeof mountSidebar>) {
   const mounted = await mountSidebar(...args);
   await selectSidebarView(mounted.sidebar, "online");
+  await vi.dynamicImportSettled();
+  await mounted.sidebar.updateComplete;
   return mounted;
 }
 
 describe("AppSidebar viewer presence", () => {
   it.each([
     ["profile-bob", "bob"],
-    ["gateway-owner", "Shared owner"],
+    ["gateway-owner", "bob · Shared owner"],
   ])("shows presence and offline owner %s while excluding self", async (ownerId, ownerName) => {
     const client = { instanceId: "self-instance" } as GatewayBrowserClient;
     const gateway = createGatewayHarness(client);
@@ -362,13 +365,14 @@ describe("AppSidebar viewer presence", () => {
     vi.useFakeTimers();
     const now = Date.now();
     const project = presenceUsers.presenceViewerActivity;
+    gateway.publishEvent("presence", {
+      presence: [{ user: { id: "alice", name: "Alice" }, ts: now, lastActivityAt: now - 119_999 }],
+    });
+    // Event admission may read activity too; advance the clock only in the queued render.
     vi.spyOn(presenceUsers, "presenceViewerActivity").mockImplementationOnce((user) => {
       const state = project(user);
       vi.setSystemTime(now + 2);
       return state;
-    });
-    gateway.publishEvent("presence", {
-      presence: [{ user: { id: "alice", name: "Alice" }, ts: now, lastActivityAt: now - 119_999 }],
     });
     await sidebar.updateComplete;
     const row = sidebar.querySelector<HTMLElement>('[data-online-user-id="alice"]')!;
@@ -376,6 +380,13 @@ describe("AppSidebar viewer presence", () => {
     await vi.advanceTimersByTimeAsync(2);
     await settleLitElement(sidebar);
     expect(row.dataset.presenceActivity).toBe("idle");
+    gateway.publishEvent("presence", {
+      presence: [
+        { user: { id: "alice", name: "Alice" }, ts: Date.now(), lastActivityAt: Date.now() },
+      ],
+    });
+    await settleLitElement(sidebar);
+    expect(row.dataset.presenceActivity).toBe("active");
   });
 
   it("ages rows and an open card into idle without another presence event", async () => {
@@ -408,6 +419,7 @@ describe("AppSidebar viewer presence", () => {
     expect(row.dataset.presenceActivity).toBe("active");
     provider.remove();
     await Promise.resolve();
+    flush();
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -440,7 +452,6 @@ describe("AppSidebar viewer presence", () => {
         expect(document.querySelector("openclaw-elapsed-time")?.textContent).toBeTruthy(),
       );
       const elapsed = document.querySelector("openclaw-elapsed-time")!;
-      await elapsed.updateComplete;
       const cardIntervals = scheduleInterval.mock.results
         .filter((result) => result.type === "return")
         .map((result) => result.value);
@@ -470,7 +481,7 @@ describe("AppSidebar viewer presence", () => {
       await vi.waitFor(() =>
         expect(document.querySelector(".person-activity-hovercard")).toBeNull(),
       );
-      // The bridge waits one microtask before disposing a disconnected view.
+      // The hovercard waits one microtask before disposing a disconnected view.
       await Promise.resolve();
       expect(elapsed.isConnected).toBe(false);
       for (const interval of cardIntervals) {
@@ -531,7 +542,7 @@ describe("AppSidebar viewer presence", () => {
     expect(sidebar.querySelector(".sidebar-online__list")).not.toBeNull();
     expect(sidebar.querySelectorAll(".sidebar-online__person")).toHaveLength(5);
     expect(localStorage.getItem("openclaw:sidebar:sessions:collapsed-sections")).toBe(
-      JSON.stringify([]),
+      JSON.stringify(["online"]),
     );
     await selectSidebarView(sidebar, "sessions");
     expect(sidebar.querySelector(".sidebar-online")).toBeNull();

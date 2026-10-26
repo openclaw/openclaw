@@ -20,7 +20,7 @@ export function createStaleWhileRevalidateCache<T>(options: {
   return {
     async read(
       key: string,
-      load: () => Promise<T>,
+      load: (previous: T | undefined) => Promise<T>,
       readOptions: { allowStale?: boolean; refresh?: boolean } = {},
     ): Promise<{ value: T; stale: boolean }> {
       const entries = values;
@@ -54,7 +54,7 @@ export function createStaleWhileRevalidateCache<T>(options: {
         () => {
           active += 1;
           // Start synchronously; settle only after the promise is installed in the map.
-          return (async () => load())()
+          return (async () => load(cached?.kind === "value" ? cached.value : undefined))()
             .then((value) => {
               if (loads.get(key) !== refresh) {
                 return value;
@@ -96,6 +96,14 @@ export function createStaleWhileRevalidateCache<T>(options: {
         return { value: stale.value, stale: true };
       }
       return { value: await refresh, stale: false };
+    },
+    deleteValue(value: T) {
+      // Retire these facts without superseding an already-running replacement.
+      for (const [key, entry] of values) {
+        if (entry.kind === "value" && entry.value === value) {
+          values.delete(key);
+        }
+      }
     },
     clear() {
       // Existing loads may settle, but only into the retired maps they captured.

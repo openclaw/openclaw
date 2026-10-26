@@ -1,7 +1,6 @@
-// Exercise overlapping completion callbacks against real registry and SQLite state.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 import "./subagent-registry.persistence.mocks.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -34,187 +33,166 @@ vi.mock("../announce/subagent-announce.js", async (importOriginal) => ({
   captureSubagentCompletionReply: vi.fn(async () => undefined),
 }));
 
-describe("subagent timing completion", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  let stateDir: string;
-  let logFile: string;
-  let settleRootWork: ReturnType<typeof observeRootWork>;
+const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let stateDir: string;
+let logFile: string;
+let settleRootWork: ReturnType<typeof observeRootWork>;
 
-  beforeEach(() => {
-    setRuntimeConfigSnapshot({});
-    stateDir = tempDirs.make("openclaw-subagent-timing-reproduction-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    logFile = path.join(stateDir, "reproduction.log");
-    setLoggerOverride({ level: "warn", file: logFile, consoleLevel: "silent" });
-    announce.mockClear();
-    vi.mocked(callGateway).mockReset();
-    vi.mocked(onAgentEvent).mockReset();
-    vi.mocked(onAgentEvent).mockReturnValue(() => undefined);
-    settleRootWork = observeRootWork();
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+  stateDir = tempDirs.make("openclaw-subagent-timing-reproduction-");
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  logFile = path.join(stateDir, "reproduction.log");
+  setLoggerOverride({ level: "warn", file: logFile, consoleLevel: "silent" });
+  announce.mockClear();
+  vi.mocked(callGateway).mockReset();
+  vi.mocked(onAgentEvent)
+    .mockReset()
+    .mockReturnValue(() => undefined);
+  settleRootWork = observeRootWork();
+});
+
+afterEach(async () => {
+  await cleanupSubagentRegistryPersistenceTest({
+    stateDir,
+    resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
+    settleOwnedWork: () => settleRootWork(),
+  });
+  setLoggerOverride(null);
+  clearRuntimeConfigSnapshot();
+  envSnapshot.restore();
+});
+
+it("persists overlapping completion timing without warnings or duplicate announcements", async ({
+  signal,
+}) => {
+  const runId = "timing-repro-overlap";
+  const childSessionKey = "agent:main:subagent:overlap";
+  const requesterSessionKey = "agent:main:main";
+  const seededAt = Date.now();
+  const terminalReply = { disposition: "visible" as const, text: "Synthetic completed result." };
+  const waiting = createDeferred<{
+    status: string;
+    startedAt: number;
+    endedAt: number;
+    terminalReply: typeof terminalReply;
+  }>();
+  const waitEntered = createDeferred();
+  const waitReturned = createDeferred();
+  vi.mocked(callGateway).mockImplementation(async (request) => {
+    expect(request.method).toBe("agent.wait");
+    waitEntered.resolve();
+    const result = await waiting.promise;
+    waitReturned.resolve();
+    return result;
   });
 
-  afterEach(async () => {
-    await cleanupSubagentRegistryPersistenceTest({
-      stateDir,
-      resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
-      closeDatabases: () => {},
-      settleOwnedWork: () => settleRootWork(),
-    });
-    setLoggerOverride(null);
-    clearRuntimeConfigSnapshot();
-    envSnapshot.restore();
-  });
-
-  it("persists overlapping completion timing without warnings or duplicate announcements", async ({
-    signal,
-  }) => {
-    const runId = "timing-repro-overlap";
-    const childSessionKey = "agent:main:subagent:overlap";
-    const requesterSessionKey = "agent:main:main";
-    const seededAt = Date.now();
-    const terminalReply = { disposition: "visible" as const, text: "Synthetic completed result." };
-    const waiting = createDeferred<{
-      status: string;
-      startedAt: number;
-      endedAt: number;
-      terminalReply: typeof terminalReply;
-    }>();
-    const waitEntered = createDeferred();
-    const waitReturned = createDeferred();
-    vi.mocked(callGateway).mockImplementation(async (request) => {
-      expect(request.method).toBe("agent.wait");
-      waitEntered.resolve();
-      const result = await waiting.promise;
-      waitReturned.resolve();
-      return result;
-    });
-
-    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    // Seed through the real accessor, suppressing only setup maintenance so
-    // pending FIFO work below belongs to terminal timing publication.
-    for (const [sessionKey, sessionId] of [
-      [childSessionKey, "session-overlap"],
-      [requesterSessionKey, "requester-overlap"],
-    ] as const) {
-      const entry = {
-        sessionId,
-        lifecycleRevision: `${sessionId}-revision`,
-        updatedAt: seededAt - 1,
-      };
-      await patchSessionEntryCore({ storePath, sessionKey }, () => entry, {
-        fallbackEntry: entry,
-        replaceEntry: true,
-        skipMaintenance: true,
-      });
-    }
-    await registerSubagentRun({
-      runId,
-      childSessionKey,
-      childAgentId: "main",
-      sessionEntry: { sessionId: "session-overlap", lifecycleRevision: "session-overlap-revision" },
-      requesterSessionKey,
-      requesterDisplayKey: "main",
-      task: "Synthetic timing reproduction",
-      cleanup: "keep",
-      expectsCompletionMessage: true,
-    });
-    await waitEntered.promise;
-    const readRun = () => loadSubagentRegistryFromSqlite().get(runId);
-    const startedAt = readRun()?.sessionStartedAt;
-    if (typeof startedAt !== "number") {
-      throw new Error("registration did not persist sessionStartedAt");
-    }
-    const endedAt = startedAt + 500;
-    const terminal = { status: "ok", startedAt, endedAt, terminalReply };
-
-    // Deliver through the callbacks installed by the production event listener.
-    const emitTerminal = () => {
-      const event = {
-        runId,
-        seq: 1,
-        stream: "lifecycle",
-        ts: endedAt,
-        sessionKey: childSessionKey,
-        data: { phase: "end", startedAt, endedAt, stopReason: "stop", terminalReply },
-      };
-      for (const [listener] of vi.mocked(onAgentEvent).mock.calls) {
-        listener(event);
-      }
+  const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+  // Exclude setup maintenance from the FIFO interleaving below.
+  for (const [sessionKey, sessionId] of [
+    [childSessionKey, "session-overlap"],
+    [requesterSessionKey, "requester-overlap"],
+  ] as const) {
+    const entry = {
+      sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
+      updatedAt: seededAt - 1,
     };
-    const entered = createDeferred();
-    const released = createDeferred();
-    // Hold the real FIFO with a no-op patch. There is no open SQLite
-    // transaction during this await and no production function is replaced.
-    const blocker = patchSessionEntryCore(
-      { storePath, sessionKey: childSessionKey },
-      async () => {
-        entered.resolve();
-        await released.promise;
-        return null;
-      },
-      { skipMaintenance: true },
-    );
-    try {
-      await entered.promise;
-      const queue = SQLITE_SESSION_WRITER_QUEUES.get(storePath);
-      if (!queue) {
-        throw new Error("session writer did not retain its queue");
-      }
-      const lifecycleQueued = createDeferred();
-      const push = queue.pending.push.bind(queue.pending);
-      // Task finalization awaits a worker before these writes reach the FIFO.
-      const enqueueObserver = vi.spyOn(queue.pending, "push").mockImplementation((...tasks) => {
-        const depth = push(...tasks);
-        if (depth === 1) {
-          lifecycleQueued.resolve();
-        }
-        return depth;
-      });
-      try {
-        expect(queue.pending.length).toBe(0);
-        emitTerminal();
-        await racePromiseWithAbortSignal(lifecycleQueued.promise, signal);
-        expect(queue.pending.length).toBe(1);
-        // The wait result overlaps the blocked lifecycle callback. The owner may
-        // coalesce equivalent terminal writes without changing this contract.
-        waiting.resolve(terminal);
-        await waitReturned.promise;
-      } finally {
-        enqueueObserver.mockRestore();
-      }
-    } finally {
-      waiting.resolve(terminal);
-      released.resolve();
-      await blocker;
-    }
-    await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
-    expect(readRun()?.cleanupCompletedAt).toEqual(expect.any(Number));
-
-    // Read the durable projection, not a mock return or the registry's memory.
-    const session = (await readSubagentSessionStore(storePath))[childSessionKey];
-    const registry = readRun();
-    expect(session).toMatchObject({ status: "done", startedAt, endedAt, runtimeMs: 500 });
-    expect(registry?.execution).toMatchObject({
-      status: "terminal",
-      outcome: { status: "ok" },
-      endedAt,
+    await patchSessionEntryCore({ storePath, sessionKey }, () => entry, {
+      fallbackEntry: entry,
+      replaceEntry: true,
+      skipMaintenance: true,
     });
-    expect(registry?.delivery?.status).toBe("delivered");
-    expect(announce).toHaveBeenCalledTimes(1);
-    await flushLogger();
-    const text = await fs.readFile(logFile, "utf8").catch(() => "");
-    const records = text
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line));
-    const warnings = records.filter((record) =>
-      Object.values(record).includes("failed to persist subagent session timing"),
-    );
-    const errors = records.filter((record) =>
-      Object.values(record).includes("SQLite session write failed"),
-    );
-    expect(warnings).toEqual([]);
-    expect(errors).toEqual([]);
+  }
+  await registerSubagentRun({
+    runId,
+    childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId: "session-overlap", lifecycleRevision: "session-overlap-revision" },
+    requesterSessionKey,
+    requesterDisplayKey: "main",
+    task: "Synthetic timing reproduction",
+    cleanup: "keep",
+    expectsCompletionMessage: true,
   });
+  await waitEntered.promise;
+  const readRun = () => loadSubagentRegistryFromSqlite().get(runId);
+  const startedAt = readRun()?.sessionStartedAt;
+  if (typeof startedAt !== "number") {
+    throw new Error("registration did not persist sessionStartedAt");
+  }
+  const endedAt = startedAt + 500;
+  const terminal = { status: "ok", startedAt, endedAt, terminalReply };
+
+  const emitTerminal = () => {
+    const event = {
+      runId,
+      seq: 1,
+      stream: "lifecycle",
+      ts: endedAt,
+      sessionKey: childSessionKey,
+      data: { phase: "end", startedAt, endedAt, stopReason: "stop", terminalReply },
+    };
+    for (const [listener] of vi.mocked(onAgentEvent).mock.calls) {
+      listener(event);
+    }
+  };
+  const entered = createDeferred();
+  const released = createDeferred();
+  // Hold the real FIFO without keeping a SQLite transaction open.
+  const blocker = patchSessionEntryCore(
+    { storePath, sessionKey: childSessionKey },
+    async () => {
+      entered.resolve();
+      await released.promise;
+      return null;
+    },
+    { skipMaintenance: true },
+  );
+  try {
+    await entered.promise;
+    const queue = SQLITE_SESSION_WRITER_QUEUES.get(storePath);
+    if (!queue) {
+      throw new Error("session writer did not retain its queue");
+    }
+    const lifecycleQueued = createDeferred();
+    const push = queue.pending.push.bind(queue.pending);
+    using _ = vi.spyOn(queue.pending, "push").mockImplementation((...tasks) => {
+      const depth = push(...tasks);
+      if (depth === 1) {
+        lifecycleQueued.resolve();
+      }
+      return depth;
+    });
+
+    expect(queue.pending.length).toBe(0);
+    emitTerminal();
+    await racePromiseWithAbortSignal(lifecycleQueued.promise, signal);
+    expect(queue.pending.length).toBe(1);
+    // Overlap the wait result with the blocked lifecycle callback.
+    waiting.resolve(terminal);
+    await waitReturned.promise;
+  } finally {
+    waiting.resolve(terminal);
+    released.resolve();
+    await blocker;
+  }
+  await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
+  const session = (await readSubagentSessionStore(storePath))[childSessionKey];
+  expect(session).toMatchObject({ status: "done", startedAt, endedAt, runtimeMs: 500 });
+  expect(readRun()).toMatchObject({
+    cleanupCompletedAt: expect.any(Number),
+    execution: { status: "terminal", outcome: { status: "ok" }, endedAt },
+    delivery: { status: "delivered" },
+  });
+  expect(announce).toHaveBeenCalledTimes(1);
+  await flushLogger();
+  const text = await fs.readFile(logFile, "utf8").catch(() => "");
+  const values = text
+    .split("\n")
+    .filter(Boolean)
+    .flatMap((line) => Object.values(JSON.parse(line)));
+  expect(values).not.toContain("failed to persist subagent session timing");
+  expect(values).not.toContain("SQLite session write failed");
 });

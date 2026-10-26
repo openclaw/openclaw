@@ -11,13 +11,11 @@ import {
   decodeSandboxHostCsp,
   SANDBOX_HOST_PATH,
 } from "../agents/sandbox-host.js";
-import type { PluginBoardWidgetContentKind } from "../plugins/board-widget-content-kind.types.js";
-import type { PluginRegistry } from "../plugins/registry-types.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
-
-type PublicResourceReader = NonNullable<
-  PluginBoardWidgetContentKind["resources"]["readPublicResource"]
->;
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
 
 function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerResponse): boolean {
   const url = URL.parse(req.url ?? "/", "http://localhost");
@@ -37,7 +35,12 @@ function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerRespons
     return true;
   }
 
-  const { html, headers, version } = buildSandboxHostDocument(csp);
+  const ingress = getRemoteControlUiIngressContext(req);
+  assertRemoteControlUiIngressCurrent(ingress);
+  const { html, headers, version } = buildSandboxHostDocument(
+    csp,
+    ingress ? [ingress.publicOrigin, ...ingress.frameAncestors] : undefined,
+  );
   res.statusCode = 200;
   for (const [name, value] of Object.entries(headers)) {
     res.setHeader(name, value);
@@ -54,58 +57,24 @@ function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerRespons
   return true;
 }
 
-/** Dedicated listener: only the proxy and explicitly public renderer assets, never Gateway data. */
-export function createSandboxHostHttpServer(
-  tlsOptions?: TlsOptions,
-  resolvePluginRegistry?: () => PluginRegistry,
-): HttpServer {
-  // Public static assets may finish an in-flight read across plugin reloads.
-  const readersByRegistry = new WeakMap<PluginRegistry, Map<string, PublicResourceReader>>();
-  const serveResource = async (req: IncomingMessage, res: ServerResponse) => {
-    const registry = resolvePluginRegistry?.();
-    if (!registry || (req.method !== "GET" && req.method !== "HEAD")) {
-      respondPlainText(res, 404, "Not Found");
-      return;
-    }
-    let readers = readersByRegistry.get(registry);
-    if (!readers) {
-      readers = new Map();
-      for (const { definition } of registry.boardWidgetContentKinds.values()) {
-        const read = definition.resources.readPublicResource;
-        if (read) {
-          for (const resourcePath of definition.resources.paths) {
-            readers.set(resourcePath, read);
-          }
-        }
-      }
-      readersByRegistry.set(registry, readers);
-    }
-    const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-    const reader = readers.get(pathname);
-    const resource = reader ? await reader(pathname) : undefined;
-    if (!resource) {
-      respondPlainText(res, 404, "Not Found");
-      return;
-    }
-    res.statusCode = 200;
-    res.setHeader("Content-Type", resource.contentType);
-    res.setHeader("Content-Length", String(resource.body.byteLength));
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.end(req.method === "HEAD" ? undefined : resource.body);
+/** Dedicated listener for the sandbox proxy, never Gateway data. */
+export function createSandboxHostHttpServer(tlsOptions?: TlsOptions): HttpServer {
+  const handler = createSandboxHostHttpRequestHandler();
+  const listener = (req: IncomingMessage, res: ServerResponse) => {
+    void handler(req, res);
   };
-  const handler = (req: IncomingMessage, res: ServerResponse) => {
-    if (handleMcpAppSandboxHttpRequest(req, res)) {
-      return;
-    }
-    if (!resolvePluginRegistry) {
+  return tlsOptions ? createHttpsServer(tlsOptions, listener) : createHttpServer(listener);
+}
+
+/** Shared dedicated-surface owner for listener and virtual ingress transports. */
+export function createSandboxHostHttpRequestHandler(): (
+  req: IncomingMessage,
+  res: ServerResponse,
+) => Promise<void> {
+  return async (req: IncomingMessage, res: ServerResponse) => {
+    assertRemoteControlUiIngressCurrent(getRemoteControlUiIngressContext(req));
+    if (!handleMcpAppSandboxHttpRequest(req, res)) {
       respondPlainText(res, 404, "Not Found");
-      return;
     }
-    void serveResource(req, res).catch(() =>
-      respondPlainText(res, 503, "Renderer resource unavailable"),
-    );
   };
-  return tlsOptions ? createHttpsServer(tlsOptions, handler) : createHttpServer(handler);
 }

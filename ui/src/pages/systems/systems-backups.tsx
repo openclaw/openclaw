@@ -1,8 +1,10 @@
 import type { BackupStatusResult } from "@openclaw/gateway-protocol";
-import { For } from "solid-js";
+import { Errored, For, Loading, Show, latest as latestRead } from "solid-js";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatByteSize, formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { SystemsController } from "./systems-controller.ts";
+import { createSystemsRead } from "./systems-read.ts";
+import type { Systems } from "./systems-state.ts";
 
 const byteFormat = {
   style: "legacy-binary",
@@ -89,32 +91,53 @@ function renderTarget(target: BackupStatusResult["targets"][number], status: Bac
   );
 }
 
-export function SystemsBackups(props: { controller: SystemsController }) {
-  const status = () => props.controller.backups;
+export function SystemsBackups(props: { controller: Systems }) {
+  const status = () => props.controller.state.backups;
+  const read = createSystemsRead(() => props.controller.backupsRead);
+  const readStatus = () => {
+    latestRead(read.read);
+    return null;
+  };
+  const initial = () =>
+    !status() ? (
+      <p class="systems-backups__hint" role="status">
+        {t(props.controller.connected() ? "systems.backups.loading" : "systems.offlineGateway")}
+      </p>
+    ) : null;
+  const failure = (message: string) => (
+    <p class="systems-backup__error" role="alert">
+      {message}
+      <button
+        class="systems-backups__check"
+        disabled={read.pending() || !props.controller.connected()}
+        onClick={() => void props.controller.refreshBackups()}
+      >
+        {t("common.retry")}
+      </button>
+    </p>
+  );
   return (
     <section
       class="systems-backups"
       aria-label={t("systems.backups.title")}
-      aria-busy={props.controller.backupsLoading ? "true" : "false"}
+      aria-busy={read.pending() ? "true" : "false"}
     >
       <h2>{t("systems.backups.title")}</h2>
-      {props.controller.backupsError ? (
-        <p class="systems-backup__error" role="alert">
-          {props.controller.backupsError}
-          <button
-            class="systems-backups__check"
-            disabled={props.controller.backupsLoading || !props.controller.connected}
-            onClick={() => void props.controller.refreshBackups()}
-          >
-            {t("common.retry")}
-          </button>
-        </p>
-      ) : null}
-      {!status() && !props.controller.backupsError ? (
-        <p class="systems-backups__hint" role="status">
-          {t(props.controller.connected ? "systems.backups.loading" : "systems.offlineGateway")}
-        </p>
-      ) : null}
+      <Show
+        when={!props.controller.state.backupsError}
+        fallback={failure(props.controller.state.backupsError!)}
+      >
+        <Show when={read.receipt()} keyed fallback={initial()}>
+          {(receipt) => (
+            <Errored fallback={(error) => failure(formatUiError(error()))}>
+              <Loading on={receipt} fallback={initial()}>
+                {readStatus()}
+                {initial()}
+              </Loading>
+            </Errored>
+          )}
+        </Show>
+      </Show>
       {status() ? (
         <>
           {status()!.targets.length ? (
@@ -159,9 +182,23 @@ export function SystemsBackups(props: { controller: SystemsController }) {
                 <For each={status()!.locations}>
                   {(location) => {
                     const probe = () => props.controller.storageProbes.get(location.name);
-                    const busy = () => props.controller.storageProbeBusy(location.name);
+                    const probeRead = createSystemsRead(() =>
+                      props.controller.storageProbeRead(location.name),
+                    );
+                    const busy = probeRead.pending;
+                    const readProbe = () => {
+                      latestRead(probeRead.read);
+                      return null;
+                    };
                     return (
                       <li class="systems-storage-location">
+                        <Show when={probeRead.receipt()} keyed>
+                          {(receipt) => (
+                            <Errored fallback={null}>
+                              <Loading on={receipt}>{readProbe()}</Loading>
+                            </Errored>
+                          )}
+                        </Show>
                         <div>
                           <strong>{location.name}</strong>
                           <span class="systems-backup__destination">
@@ -170,7 +207,7 @@ export function SystemsBackups(props: { controller: SystemsController }) {
                         </div>
                         <button
                           class="systems-backups__check"
-                          disabled={busy() || !props.controller.connected}
+                          disabled={busy() || !props.controller.connected()}
                           aria-label={t("systems.backups.checkLocation", { name: location.name })}
                           onClick={() => void props.controller.probeStorage(location.name)}
                         >
@@ -178,11 +215,10 @@ export function SystemsBackups(props: { controller: SystemsController }) {
                         </button>
                         {probe() ? (
                           <p
-                            class={
-                              probe()!.state === "ok"
-                                ? "systems-backups__hint"
-                                : "systems-backup__error"
-                            }
+                            class={{
+                              "systems-backups__hint": probe()!.state === "ok",
+                              "systems-backup__error": probe()!.state !== "ok",
+                            }}
                             role="status"
                           >
                             {t("systems.backups.probe." + probe()!.state)}

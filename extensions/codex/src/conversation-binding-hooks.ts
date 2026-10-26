@@ -26,7 +26,6 @@ type CodexConversationRunOptions = {
   bindingStore: CodexAppServerBindingStore;
   pluginConfig?: unknown;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
-  timeoutMs?: number;
   resumeCodexCliSessionOnNode?: (
     params: Omit<Parameters<typeof resumeCodexCliSessionOnNode>[0], "runtime">,
   ) => ReturnType<typeof resumeCodexCliSessionOnNode>;
@@ -76,14 +75,16 @@ export async function handleCodexConversationInboundClaim(
       const text = await getNodeConversationState().queue.enqueue(
         `${data.nodeId}:${data.sessionId}`,
         async () => {
-          const { resolveCodexNativeSandboxBlock } = await import("./app-server/sandbox-guard.js");
-          const blocked = resolveCodexNativeSandboxBlock({
+          const { prepareCodexNativeSandboxBlock } = await import("./app-server/sandbox-guard.js");
+          const sandbox = await prepareCodexNativeSandboxBlock({
             config: options.config,
             sessionKey,
             surface: "Codex CLI node conversation binding",
           });
-          if (blocked) {
-            return blocked;
+          using cleanup = { [Symbol.dispose]: sandbox.release };
+          void cleanup;
+          if (sandbox.block) {
+            return sandbox.block;
           }
           const resume = options.resumeCodexCliSessionOnNode;
           if (!resume) {
@@ -91,6 +92,7 @@ export async function handleCodexConversationInboundClaim(
           }
           const { inspectConversationBinding } =
             await import("openclaw/plugin-sdk/conversation-binding-inspection-runtime");
+          await sandbox.assertCurrent();
           if (!isCurrentPublicBinding(publicBinding, inspectConversationBinding)) {
             return "This Codex conversation was detached or changed before its message could run.";
           }
@@ -101,7 +103,6 @@ export async function handleCodexConversationInboundClaim(
             sessionKey,
             prompt,
             cwd: data.cwd,
-            timeoutMs: options.timeoutMs,
           });
           return resumed.text.trim() || "Codex completed without a text reply.";
         },
@@ -119,7 +120,7 @@ export async function handleCodexConversationInboundClaim(
       const { runBoundTurnWithMissingThreadRecovery } = await import("./conversation-binding.js");
       const { inspectConversationBinding } =
         await import("openclaw/plugin-sdk/conversation-binding-inspection-runtime");
-      const current = options.bindingStore.read(identity);
+      const current = await options.bindingStore.readAsync(identity);
       if (
         !isCurrentPublicBinding(publicBinding, inspectConversationBinding) ||
         (expected &&
@@ -144,7 +145,6 @@ export async function handleCodexConversationInboundClaim(
           data.source?.sessionKey ?? (data.legacyBinding ? sessionKey : undefined),
         ),
         pluginConfig: options.pluginConfig,
-        timeoutMs: options.timeoutMs,
       });
     });
     return { handled: true, reply: result };

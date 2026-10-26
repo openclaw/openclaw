@@ -1,15 +1,19 @@
-/** Gateway request surface and bound replies used by the node-host runtime. */
+import type { NodePermissionDetails } from "../../packages/gateway-protocol/src/node-permissions.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { NodeInvokeRequestPayload } from "./invoke-types.js";
 
-export type NodeHostClient = Pick<GatewayClient, "request">;
+/** Gateway request surface and bound replies used by the node-host runtime. */
+export type NodeHostClient = Pick<GatewayClient, "request"> & {
+  readonly serverCapabilities?: ReadonlySet<string>;
+};
 
 export function createNodeInvokeResponder(client: NodeHostClient, frame: NodeInvokeRequestPayload) {
   const send = async (result: {
     ok: boolean;
     payload?: unknown;
     payloadJSON?: string | null;
-    error?: { code?: string; message?: string } | null;
+    error?: { code?: string; message?: string; details?: NodePermissionDetails } | null;
   }) => {
     try {
       await client.request("node.invoke.result", {
@@ -18,7 +22,13 @@ export function createNodeInvokeResponder(client: NodeHostClient, frame: NodeInv
         ok: result.ok,
         ...(result.payload !== undefined ? { payload: result.payload } : {}),
         ...(typeof result.payloadJSON === "string" ? { payloadJSON: result.payloadJSON } : {}),
-        ...(result.error ? { error: result.error } : {}),
+        ...(result.error
+          ? {
+              error: client.serverCapabilities?.has(GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS)
+                ? result.error
+                : { code: result.error.code, message: result.error.message },
+            }
+          : {}),
       });
     } catch {
       // Node invoke responses are best-effort.

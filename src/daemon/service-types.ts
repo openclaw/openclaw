@@ -68,6 +68,8 @@ export type GatewayServiceManageArgs = {
 };
 
 export type GatewayServiceControlArgs = {
+  /** One caller-owned budget for native activation and its recovery. */
+  deadline?: { remainingMs: () => number; signal: AbortSignal };
   /** Retained POSIX recovery observes attempts before a native restart can accept writes. */
   onRestartAttempted?: () => void;
   /** Correlation only: native stop needs live update authority and transferred helpers also revalidate their lease. */
@@ -207,6 +209,8 @@ export type GatewayServiceReadOptions = {
   systemdReadBinding?: SystemdServiceReadBinding;
   timeoutMs?: number;
   requireEffective?: boolean;
+  /** Reinstall may replace an absent LaunchAgent plist; existing definitions still require strict reads. */
+  allowMissingDefinition?: boolean;
   /** Carry the command reader's verdict into runtime inspection without repeating it. */
   commandInspection?: GatewayServiceCommandInspection;
   onCommandInspection?: (inspection: GatewayServiceCommandInspection) => void;
@@ -439,7 +443,6 @@ export type GatewayServiceState = {
 };
 
 export type GatewayServiceStartRepairIssue = {
-  code: "missing-program" | "port-mismatch" | "temporary-program";
   message: string;
 };
 

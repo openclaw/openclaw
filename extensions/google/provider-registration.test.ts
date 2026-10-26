@@ -1,4 +1,3 @@
-// Google tests cover provider registration plugin behavior.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleProvider } from "./provider-registration.js";
@@ -29,41 +28,48 @@ function model(overrides: Partial<Model> = {}): Model {
   } as Model;
 }
 
+const provider = buildGoogleProvider();
+function createStream(overrides: Partial<Model> = {}) {
+  return provider.createStreamFn?.({
+    provider: "google-vertex",
+    modelId: "gemini-2.5-flash",
+    model: model(overrides),
+  } as never);
+}
+function normalizeVideo(overrides: Partial<Model>) {
+  const entry = model({
+    provider: "google",
+    input: ["text", "image", "video"] as never,
+    ...overrides,
+  });
+  return provider.normalizeResolvedModel?.({
+    provider: entry.provider,
+    modelId: entry.id,
+    model: entry,
+  } as never);
+}
+
 describe("buildGoogleProvider createStreamFn", () => {
   beforeEach(() => {
     streamFns.createGenerativeAi.mockClear();
     streamFns.createVertex.mockClear();
   });
 
-  it("routes native Vertex hosts through the Vertex transport", () => {
-    const provider = buildGoogleProvider();
-
-    provider.createStreamFn?.({
-      provider: "google-vertex",
-      modelId: "gemini-2.5-flash",
-      model: model(),
-    } as never);
-
-    expect(streamFns.createVertex).toHaveBeenCalledTimes(1);
+  it.each([false, true])("routes Vertex with OpenAI compatibility=%s", (compatible) => {
+    const result = createStream(
+      compatible
+        ? {
+            api: "openai-completions",
+            baseUrl:
+              "https://aiplatform.googleapis.com/v1/projects/test/locations/us-central1/endpoints/openapi",
+          }
+        : {},
+    );
+    expect(streamFns.createVertex).toHaveBeenCalledTimes(compatible ? 0 : 1);
     expect(streamFns.createGenerativeAi).not.toHaveBeenCalled();
-  });
-
-  it("preserves explicit OpenAI-compatible Vertex endpoint configs", () => {
-    const provider = buildGoogleProvider();
-
-    const result = provider.createStreamFn?.({
-      provider: "google-vertex",
-      modelId: "gemini-2.5-flash",
-      model: model({
-        api: "openai-completions",
-        baseUrl:
-          "https://aiplatform.googleapis.com/v1/projects/test/locations/us-central1/endpoints/openapi",
-      }),
-    } as never);
-
-    expect(result).toBeUndefined();
-    expect(streamFns.createVertex).not.toHaveBeenCalled();
-    expect(streamFns.createGenerativeAi).not.toHaveBeenCalled();
+    if (compatible) {
+      expect(result).toBeUndefined();
+    }
   });
 
   it.each([
@@ -78,54 +84,35 @@ describe("buildGoogleProvider createStreamFn", () => {
     ["gemini-2.5-flash", "https://generativelanguage.googleapis.com:8443/v1beta", false],
     ["gemini-2.5-flash", "https://generativelanguage.googleapis.com/v1beta/openai", false],
   ])("normalizes native-video input for exact AI Studio route %s", (modelId, baseUrl, expected) => {
-    const provider = buildGoogleProvider();
-    const normalized = provider.normalizeResolvedModel?.({
-      provider: "google",
-      modelId,
-      model: model({
-        id: modelId,
-        provider: "google",
-        api: "google-generative-ai",
-        baseUrl,
-        input: ["text", "image", "video"] as never,
-      }),
-    } as never);
+    const normalized = normalizeVideo({ id: modelId, baseUrl });
 
     expect(((normalized?.input ?? []) as string[]).includes("video")).toBe(expected);
   });
 
   it("strips inherited video for Vertex and non-Google provider routes", () => {
-    const provider = buildGoogleProvider();
     for (const [providerId, api] of [
       ["google-vertex", "google-vertex"],
       ["custom-google", "google-generative-ai"],
     ] as const) {
-      const normalized = provider.normalizeResolvedModel?.({
-        provider: providerId,
-        modelId: "gemini-2.5-flash",
-        model: model({ provider: providerId, api, input: ["text", "image", "video"] as never }),
-      } as never);
+      const normalized = normalizeVideo({ provider: providerId, api });
       expect(normalized?.input).toEqual(["text", "image"]);
     }
   });
 
-  it.each(["google-vertex"])(
-    "does not resolve AI Studio credentials for %s-only catalog scope",
-    async (providerId) => {
-      const resolveProviderApiKey = vi.fn(() => {
-        throw new Error("unselected Google credential read");
-      });
+  it("does not resolve AI Studio credentials for Vertex-only catalog scope", async () => {
+    const resolveProviderApiKey = vi.fn(() => {
+      throw new Error("unselected Google credential read");
+    });
 
-      await expect(
-        buildGoogleProvider().catalog?.run({
-          providerIds: [providerId],
-          config: {},
-          env: {},
-          resolveProviderApiKey,
-          resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
-        }),
-      ).resolves.toBeNull();
-      expect(resolveProviderApiKey).not.toHaveBeenCalled();
-    },
-  );
+    await expect(
+      provider.catalog?.run({
+        providerIds: ["google-vertex"],
+        config: {},
+        env: {},
+        resolveProviderApiKey,
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      }),
+    ).resolves.toBeNull();
+    expect(resolveProviderApiKey).not.toHaveBeenCalled();
+  });
 });

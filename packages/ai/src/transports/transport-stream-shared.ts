@@ -1,6 +1,7 @@
 import type {
   AssistantMessage,
   Model,
+  ModelRequestHeaders,
   ProviderResponse,
   StreamOptions,
   Usage,
@@ -17,18 +18,49 @@ import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { headersToRecord } from "../utils/headers.js";
 import { repairJson } from "../utils/json-parse.js";
-import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
+import {
+  projectProviderError,
+  readTransportDiagnosticLabel,
+  type ProviderErrorProjection,
+} from "../utils/provider-error.js";
 import { isTransientNetworkError } from "../utils/retryable-network-errors.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createZeroUsage } from "../utils/usage.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
-type TransportUsage = Pick<
-  Usage,
-  "input" | "output" | "cacheRead" | "cacheWrite" | "contextUsage" | "totalTokens"
-> & {
-  cost: Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite" | "total">;
-};
+/** Decodes frame boundaries; callers retain reader lifetime and protocol admission. */
+export async function* iterateSseFrames(
+  read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
+  assertWithinLimit?: (pending: string) => void,
+): AsyncGenerator<{ frame: string; terminated: boolean }> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  // CRLF remains one line ending even when the delimiter expression backtracks.
+  const delimiter = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
+  let scanOffset = 0;
+  for (;;) {
+    const { done, value } = await read();
+    buffer += decoder.decode(value, { stream: !done });
+    delimiter.lastIndex = scanOffset;
+    for (;;) {
+      const boundary = delimiter.exec(buffer);
+      if (!boundary && (!done || !buffer)) {
+        break;
+      }
+      const frameEnd = boundary?.index ?? buffer.length;
+      const frame = buffer.slice(0, frameEnd);
+      assertWithinLimit?.(frame);
+      buffer = boundary ? buffer.slice(frameEnd + boundary[0].length) : "";
+      delimiter.lastIndex = 0;
+      yield { frame, terminated: boundary !== null };
+    }
+    assertWithinLimit?.(buffer);
+    if (done) {
+      return;
+    }
+    scanOffset = Math.max(0, buffer.length - 3);
+  }
+}
 
 export type WritableTransportStream = Pick<
   ReturnType<typeof createAssistantMessageEventStream>,
@@ -77,38 +109,6 @@ export class IncompleteToolCallError extends Error {
 const MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE = "malformed_tool_call_arguments";
 
 /**
- * Bounded, content-free diagnostics for a rejected terminal argument buffer. Carried as the
- * error `cause` and mirrored onto the error's `errorCode` / `errorBody` fields so
- * `projectProviderError` surfaces them on the terminal assistant message.
- */
-type MalformedToolCallArgumentsDiagnostics = {
-  code: typeof MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE;
-  argumentChars: number;
-  argumentHash: string;
-  repairAttempted: boolean;
-};
-
-function createMalformedToolCallArgumentsError(
-  value: unknown,
-  errorMessage: string,
-  repairAttempted: boolean,
-): Error {
-  const text = typeof value === "string" ? value : undefined;
-  const diagnostics: MalformedToolCallArgumentsDiagnostics = {
-    code: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
-    argumentChars: text?.length ?? 0,
-    argumentHash: text === undefined ? "" : shortHash(text),
-    repairAttempted,
-  };
-  const error = new Error(errorMessage, { cause: diagnostics });
-  Object.assign(error, {
-    errorCode: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
-    errorBody: JSON.stringify(diagnostics),
-  });
-  return error;
-}
-
-/**
  * Repair a complete-but-invalid terminal argument buffer. Anthropic fine-grained tool
  * streaming skips server-side JSON validation, so a finished tool_use block can carry raw
  * control characters or invalid escapes inside string values. Only string-literal repairs
@@ -144,7 +144,29 @@ export function parseTerminalToolCallArguments(
       return repaired;
     }
   }
-  throw createMalformedToolCallArgumentsError(value, errorMessage, repairStringLiterals);
+  const text = typeof value === "string" ? value : undefined;
+  /**
+   * Bounded, content-free diagnostics for a rejected terminal argument buffer. Carried as the
+   * error `cause` and mirrored onto the error's `errorCode` / `errorBody` fields so
+   * `projectProviderError` surfaces them on the terminal assistant message.
+   */
+  const diagnostics: {
+    code: typeof MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE;
+    argumentChars: number;
+    argumentHash: string;
+    repairAttempted: boolean;
+  } = {
+    code: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
+    argumentChars: text?.length ?? 0,
+    argumentHash: text === undefined ? "" : shortHash(text),
+    repairAttempted: repairStringLiterals,
+  };
+  const error = new Error(errorMessage, { cause: diagnostics });
+  Object.assign(error, {
+    errorCode: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
+    errorBody: JSON.stringify(diagnostics),
+  });
+  throw error;
 }
 
 /** Validate a complete sibling set before mutating any call into executable state. */
@@ -164,9 +186,9 @@ export function finalizeTerminalToolCallArguments<T extends { arguments: Record<
 }
 
 export function mergeTransportHeaders(
-  ...headerSources: Array<Record<string, string> | undefined>
-): Record<string, string> | undefined {
-  const merged: Record<string, string> = {};
+  ...headerSources: Array<ModelRequestHeaders | undefined>
+): ModelRequestHeaders | undefined {
+  const merged: ModelRequestHeaders = {};
   const namesByLowercase = new Map<string, string>();
   for (const headers of headerSources) {
     for (const [name, value] of Object.entries(headers ?? {})) {
@@ -184,7 +206,12 @@ export function mergeTransportHeaders(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-export function createEmptyTransportUsage(): TransportUsage {
+export function createEmptyTransportUsage(): Pick<
+  Usage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "contextUsage" | "totalTokens"
+> & {
+  cost: Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite" | "total">;
+} {
   return createZeroUsage();
 }
 
@@ -213,12 +240,13 @@ export function transportAbortError(signal?: AbortSignal): Error {
     : new Error("Request was aborted");
 }
 
-const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
-const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
-
-type ModelStreamCooperativeScheduler = {
-  afterEvent: () => Promise<void>;
-};
+const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 6;
+const MODEL_STREAM_COOPERATIVE_YIELD_BUDGET = 64;
+// Readiness fans out lifecycle state; body events can share a larger batch.
+const MODEL_STREAM_START_WORK = 8;
+let streamWorkThisTurn = 0;
+let streamTurnStartedAt = 0;
+let nextStreamTurn: Promise<void> | undefined;
 
 export function throwIfModelStreamAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
@@ -226,31 +254,29 @@ export function throwIfModelStreamAborted(signal?: AbortSignal): void {
   }
 }
 
-export function createModelStreamCooperativeScheduler(
-  signal?: AbortSignal,
-): ModelStreamCooperativeScheduler {
-  let lastYieldedAt = Date.now();
-  let eventsSinceYield = 0;
-  return {
-    async afterEvent() {
-      throwIfModelStreamAborted(signal);
-      eventsSinceYield += 1;
-      const now = Date.now();
-      if (
-        eventsSinceYield < MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS &&
-        now - lastYieldedAt < MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS
-      ) {
-        return;
-      }
-      eventsSinceYield = 0;
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-      throwIfModelStreamAborted(signal);
-      // Time waiting for the yield does not consume the next work budget.
-      lastYieldedAt = Date.now();
-    },
-  };
+function waitForModelStreamTurn(signal?: AbortSignal, work = 1): Promise<void> | undefined {
+  throwIfModelStreamAborted(signal);
+  // All streams share the main loop. Recheck after waking so a swarm cannot
+  // spend a fresh per-stream budget in the same microtask burst.
+  if (
+    nextStreamTurn &&
+    (streamWorkThisTurn + work > MODEL_STREAM_COOPERATIVE_YIELD_BUDGET ||
+      Date.now() - streamTurnStartedAt >= MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS)
+  ) {
+    return nextStreamTurn.then(() => waitForModelStreamTurn(signal, work));
+  }
+  if (!nextStreamTurn) {
+    streamTurnStartedAt = Date.now();
+    nextStreamTurn = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        streamWorkThisTurn = 0;
+        nextStreamTurn = undefined;
+        resolve();
+      }, 0);
+    });
+  }
+  streamWorkThisTurn += work;
+  return undefined;
 }
 
 /** Keep ready provider events from monopolizing the main loop, including ignored events. */
@@ -258,11 +284,13 @@ export async function* iterateModelStream<T>(
   events: AsyncIterable<T> | Iterable<T>,
   signal?: AbortSignal,
 ): AsyncGenerator<T> {
-  const scheduler = createModelStreamCooperativeScheduler(signal);
   for await (const event of events) {
-    throwIfModelStreamAborted(signal);
+    const wait = waitForModelStreamTurn(signal);
+    if (wait) {
+      await wait;
+    }
     yield event;
-    await scheduler.afterEvent();
+    throwIfModelStreamAborted(signal);
   }
 }
 
@@ -462,6 +490,11 @@ export function withProviderResponseHook<T = never>(params: {
     async *[Symbol.asyncIterator]() {
       try {
         await awaitProviderLifecycleCallback(params.hook, params.signal);
+        // Hooks may finish together after waiting through earlier work budgets.
+        const wait = waitForModelStreamTurn(params.signal, MODEL_STREAM_START_WORK);
+        if (wait) {
+          await wait;
+        }
       } catch (error) {
         params.abort(error instanceof Error ? error : new Error(String(error)));
         throw error;
@@ -499,8 +532,43 @@ export function assignTransportErrorDetails(
   error: unknown,
   signal?: AbortSignal,
 ): ProviderErrorProjection {
+  if (!signal?.aborted) {
+    // Provider prose and response bodies can echo prompts and tool results.
+    try {
+      const record = asOptionalRecord(error);
+      const response = asOptionalRecord(record?.response);
+      const cause = asOptionalRecord(record?.cause);
+      const detail =
+        asOptionalRecord(record?.error) ??
+        asOptionalRecord(response?.error) ??
+        asOptionalRecord(asOptionalRecord(record?.payload)?.error);
+      getAiTransportHost().logWarn("provider-error", "Model request failed", {
+        provider: output.provider,
+        model: output.model,
+        status: readTransportDiagnosticLabel(
+          record?.status ?? record?.statusCode ?? response?.status,
+        ),
+        code: readTransportDiagnosticLabel(record?.errorCode ?? record?.code ?? detail?.code),
+        type: readTransportDiagnosticLabel(record?.errorType ?? detail?.type ?? record?.type),
+        causeName: readTransportDiagnosticLabel(cause?.name),
+        causeCode: readTransportDiagnosticLabel(cause?.code),
+        requestId: readTransportDiagnosticLabel(record?.request_id ?? record?.requestId),
+        responseId: readTransportDiagnosticLabel(
+          record?.responseId ?? response?.id ?? output.responseId,
+        ),
+      });
+    } catch {
+      // Diagnostic accessors and log sinks cannot replace the original failure.
+    }
+  }
   const projection = projectProviderError(error, signal);
   Object.assign(output, projection);
+  // A failure after terminal accounting cannot erase it. Earlier cumulative
+  // snapshots and initial zeros never establish a complete response total.
+  if (output.usage.usageReport?.state !== "available") {
+    output.usage.usageReport = { state: "unavailable" };
+    output.usage.contextUsage = { state: "unavailable" };
+  }
   if (
     projection.stopReason === "error" &&
     output.content.length === 0 &&

@@ -1,20 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../routing/session-key.js";
-import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { ConversationReadQuery } from "./conversation-registry.types.js";
 import type {
+  SessionActor,
   SessionActorAuthority,
   SessionActorFactory,
   SessionActorLifetime,
   SessionActorOutcome,
   SessionActorPhaseResults,
+  SessionActorStorage,
 } from "./session-actor-contract.js";
 import { createSessionActorWithExecutor } from "./session-actor-executor.js";
 import {
   createSessionActorMemoryConversations,
   cloneSessionActorMemoryConversations,
 } from "./session-actor-memory-conversation-contract.js";
+import { createSessionActorMemoryConversationOwner } from "./session-actor-memory-conversation-owner.js";
 import {
   selectSessionActorMemoryConversations,
   syncSessionActorMemoryConversations,
@@ -37,12 +40,27 @@ import {
   type SessionActorMutation,
 } from "./session-actor-phase.js";
 import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
+import type { SessionActorStorageReads } from "./session-actor-storage-contract.js";
+import {
+  attachSessionEntrySnapshots,
+  type SessionEntryProjection,
+} from "./session-entry-snapshot-values.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
 
 function errorFacts(error: unknown) {
   return error instanceof Error
     ? { name: error.name, message: error.message }
     : { name: "Error", message: "Session actor command failed" };
+}
+
+const actorOwners = resolveGlobalSingleton(
+  Symbol.for("openclaw.memorySessionActorHandles"),
+  () => new WeakMap<SessionActor, ReturnType<typeof createMemorySessionActorOwner>>(),
+);
+
+/** A selected handle retains its actual owner, including directly constructed owners. */
+export function readMemorySessionActorOwner(actor: SessionActor) {
+  return actorOwners.get(actor);
 }
 
 /** Memory is authoritative until session close; it is never evicted into a database. */
@@ -58,14 +76,17 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
   const prepareInstall = (
     state: import("./session-actor-memory-state.js").SessionActorMemoryState,
   ) => {
-    state.events = state.events.map((row) =>
-      row.searchOrder === undefined
-        ? { ...row, createdAt: row.createdAt ?? Date.now(), searchOrder: nextSearchOrder++ }
-        : row,
-    );
+    for (const window of [state, ...state.historicalWindows.values()]) {
+      for (const row of window.events) {
+        if (row.searchOrder === undefined) {
+          row.createdAt ??= Date.now();
+          row.searchOrder = nextSearchOrder++;
+        }
+      }
+    }
   };
   let queue = Promise.resolve();
-  const enqueue = <T>(run: () => T): Promise<T> => {
+  const enqueue = <T>(run: () => T | Promise<T>): Promise<T> => {
     const result = queue.then(run);
     queue = result.then(
       () => {},
@@ -89,11 +110,10 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
       }
       const { sessionKey } = requestedTarget;
       if (
-        !isIncognitoSessionKey(sessionKey) ||
         parseAgentSessionKey(sessionKey)?.agentId !== options.agentId ||
         toAgentStoreSessionKey({ agentId: options.agentId, requestKey: sessionKey }) !== sessionKey
       ) {
-        throw new Error("Memory session actors require an incognito session key");
+        throw new Error("Memory session actors require a canonical session key for their agent");
       }
       const target = structuredClone(requestedTarget);
       let selected = sessions.get(sessionKey);
@@ -109,7 +129,7 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
         }
         return session.state;
       };
-      return createSessionActorWithExecutor({
+      const actor = createSessionActorWithExecutor({
         target,
         lifetime: {
           ...lifetime,
@@ -232,7 +252,7 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
                     phase,
                     command: input,
                     before: before.hot,
-                    after: working.hot,
+                    after: structuredClone(working.hot),
                     applied,
                   });
                   session.state = working;
@@ -268,6 +288,8 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
           };
         },
       });
+      actorOwners.set(actor, owner);
+      return actor;
     },
   };
   const readSession = (sessionKey: string, authority: SessionActorAuthority) => {
@@ -281,11 +303,68 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
     authority.assertCurrent();
     return hot;
   };
-  return {
+  const owner = {
+    ...createSessionActorMemoryConversationOwner({
+      conversations: () => conversations,
+      installConversations: (value) => {
+        conversations = value;
+      },
+      *entries() {
+        for (const [key, record] of sessions) {
+          yield [key, record.state];
+        }
+      },
+      get: (key) => sessions.get(key)?.state,
+      enqueue,
+      assertCurrent: assertOpen,
+    }),
     ...options,
     identity,
+    assertCurrent: assertOpen,
     ...factory,
     readSession,
+    captureSessionReadGuard(sessionKey: string) {
+      const record = sessions.get(sessionKey);
+      return () => {
+        assertOpen();
+        if (record?.closed) {
+          throw new Error("Memory session owner closed");
+        }
+      };
+    },
+    readStorage<Key extends keyof SessionActorStorageReads>(
+      sessionKey: string,
+      query: { type: Key; input: SessionActorStorageReads[Key]["input"] },
+      authority: Parameters<SessionActorStorage["readCurrent"]>[1],
+    ): SessionActorStorageReads[Key]["output"] | undefined {
+      assertOpen();
+      const record = sessions.get(sessionKey);
+      if (!record || record.closed) {
+        return undefined;
+      }
+      const target = record.state.hot.target;
+      return createSessionActorMemoryStorage({
+        ...options,
+        target,
+        sessions,
+        current: () => record.state,
+        enqueue,
+        guards: { target, assertAccepted: assertOpen, assertReadable: assertOpen },
+        acquire: (key, lifetime) =>
+          factory.acquire(
+            { database: identity, sessionKey: key },
+            lifetime ?? {
+              assertCurrent: assertOpen,
+              assertReadable: assertOpen,
+            },
+          ),
+        prepareInstall,
+        conversations: () => conversations,
+        installConversations: (value) => {
+          conversations = value;
+        },
+      }).readCurrent(query, authority);
+    },
     readConversations(query: ConversationReadQuery, authority: SessionActorAuthority) {
       assertOpen();
       const rows = selectSessionActorMemoryConversations(
@@ -306,29 +385,69 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
       authority.assertCurrent();
       return structuredClone(rows);
     },
-    readSessionById(sessionId: string, authority: SessionActorAuthority) {
+    readSessionById(
+      sessionId: string,
+      authority: SessionActorAuthority,
+      selection?: { currentOnly?: boolean; orderBy?: "updatedAt" },
+    ) {
       assertOpen();
-      for (const [sessionKey, record] of sessions) {
+      const requestedId = sessionId.trim();
+      const candidates = [...sessions].flatMap(([sessionKey, record]) => {
         if (record.closed) {
-          continue;
+          return [];
         }
         const window =
-          record.state.hot.entry?.sessionId === sessionId
+          record.state.hot.entry?.sessionId.trim() === requestedId
             ? record.state
-            : record.state.historicalWindows.get(sessionId);
-        if (!window?.hot.entry) {
-          continue;
-        }
-        authority.authorize("commit", structuredClone(record.state.hot));
-        authority.assertCurrent();
-        return { sessionKey, entry: structuredClone(window.hot.entry) };
+            : selection?.currentOnly
+              ? undefined
+              : record.state.historicalWindows.get(requestedId);
+        return window?.hot.entry ? [{ sessionKey, record, entry: window.hot.entry }] : [];
+      });
+      candidates.sort((left, right) => {
+        const priority =
+          selection?.orderBy === "updatedAt"
+            ? right.entry.updatedAt - left.entry.updatedAt
+            : Number(right.entry.sessionId === sessionId) -
+              Number(left.entry.sessionId === sessionId);
+        return (
+          priority ||
+          (left.sessionKey < right.sessionKey ? -1 : left.sessionKey > right.sessionKey ? 1 : 0)
+        );
+      });
+      const selected = candidates[0];
+      if (!selected) {
+        return undefined;
       }
-      return undefined;
+      authority.authorize("commit", structuredClone(selected.record.state.hot));
+      authority.assertCurrent();
+      return { sessionKey: selected.sessionKey, entry: structuredClone(selected.entry) };
     },
     listSessions(authority: SessionActorAuthority) {
       return [...sessions.keys()].flatMap((key) => readSession(key, authority) ?? []);
     },
-    acquireExisting(sessionKey: string, lifetime: SessionActorLifetime) {
+    listSessionEntries(authority: SessionActorAuthority, projection?: SessionEntryProjection) {
+      assertOpen();
+      return [...sessions].flatMap(([sessionKey, record]) => {
+        if (record.closed || !record.state.hot.entry) {
+          return [];
+        }
+        authority.authorize("commit", structuredClone(record.state.hot));
+        authority.assertCurrent();
+        return [
+          {
+            sessionKey,
+            entry: structuredClone(
+              attachSessionEntrySnapshots({ ...record.state.hot.entry }, {}, projection),
+            ),
+          },
+        ];
+      });
+    },
+    acquireExisting(
+      sessionKey: string,
+      lifetime: SessionActorLifetime,
+    ): Promise<SessionActor | undefined> {
       assertOpen();
       const record = sessions.get(sessionKey);
       return !record || record.closed
@@ -353,4 +472,5 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
       conversations = createSessionActorMemoryConversations();
     },
   };
+  return owner;
 }

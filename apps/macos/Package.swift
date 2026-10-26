@@ -19,7 +19,7 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.15.1"),
         .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
-        .package(url: "https://github.com/openclaw/Peekaboo.git", exact: "4.9.1"),
+        .package(url: "https://github.com/openclaw/Peekaboo.git", exact: "4.9.5"),
         .package(url: "https://github.com/pointfreeco/swift-concurrency-extras", from: "1.4.1"),
         .package(path: "../shared/OpenClawKit"),
         .package(path: "../shared/OpenClawMLXTTSProtocol"),
@@ -36,7 +36,7 @@ let package = Package(
             ]),
         .target(
             name: "OpenClawIPC",
-            dependencies: [],
+            dependencies: [.product(name: "OpenClawNativeState", package: "OpenClawKit")],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
@@ -89,6 +89,7 @@ let package = Package(
             dependencies: [
                 "OpenClawIPC",
                 "OpenClawDiscovery",
+                .product(name: "OpenClawNativeState", package: "OpenClawKit"),
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
                 .product(name: "OpenClawProtocol", package: "OpenClawKit"),
             ],
@@ -107,6 +108,7 @@ let package = Package(
             name: "OpenClawIPCTests",
             dependencies: [
                 "OpenClawIPC",
+                .product(name: "OpenClawNativeState", package: "OpenClawKit"),
                 "OpenClaw",
                 "OpenClawMacCLI",
                 "OpenClawDiscovery",

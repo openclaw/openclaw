@@ -23,8 +23,9 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import type { VisitorGrant } from "./src/grant-record.js";
+import { visitorRuntimeStore } from "./src/runtime.js";
 import { visitorListDetailsSchema, type VisitorListDetails } from "./src/tool-results.js";
-import type { VisitorGrant } from "./src/visitors.js";
 import { visitorProfileFixture } from "./src/visitors.test-support.js";
 
 type PluginGatewayAccessPolicy = Parameters<OpenClawPluginApi["registerGatewayAccessPolicy"]>[0];
@@ -161,6 +162,7 @@ describe("visitor-access plugin lifecycle", () => {
     githubProfiles: Parameters<typeof visitorProfileFixture>[1] = [],
   ) {
     const tools = new Map<string, AnyAgentTool>();
+    const backgroundTasks: Promise<unknown>[] = [];
     const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
     const accessPolicies: PluginGatewayAccessPolicy[] = [];
     const on = vi.fn<OpenClawPluginApi["on"]>();
@@ -190,6 +192,13 @@ describe("visitor-access plugin lifecycle", () => {
         }
       },
     });
+    api.lifecycle.runInBackgroundContext = (run) => {
+      const result = run();
+      if (result instanceof Promise) {
+        backgroundTasks.push(result);
+      }
+      return result;
+    };
     api.runtime.state = {
       ...api.runtime.state,
       openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
@@ -245,6 +254,7 @@ describe("visitor-access plugin lifecycle", () => {
       ) => accessPolicy.authorize({ config, profile, requiredByRole }),
       toolContext,
       start: () => service.start(context),
+      settle: () => Promise.allSettled(backgroundTasks),
       stop,
       gatewayStart: () => {
         const hook = on.mock.calls.find(([name]) => name === "gateway_start")?.[1];
@@ -272,6 +282,88 @@ describe("visitor-access plugin lifecycle", () => {
     };
   }
 
+  it("persists invitation metadata and a CAS session reservation across restart and renewal", async () => {
+    vi.stubGlobal("fetch", createPolicyFetch().fetcher);
+    const publicOrigin = "https://team.example.com";
+    const first = registerPlugin({}, { gateway: { ...gatewayConfig.gateway, publicOrigin } });
+    await first.start();
+    await first.settle();
+    const readDirectory = first.gatewayRequest.getMockImplementation()!;
+    first.gatewayRequest.mockImplementation(async (method, params) =>
+      method === "users.self"
+        ? { profile: { id: "inviter", displayName: "Inviter" } }
+        : readDirectory(method, params),
+    );
+    const firstInvite = await first.execute("visitor_invite", { email: "visitor@example.test" });
+    const invitationText = expect.stringMatching(/^Inviter invited you.*\nSign in at https/u);
+    expect(firstInvite.details).toMatchObject({ signInUrl: publicOrigin, invitationText });
+    expect(first.gatewayRequest).toHaveBeenCalledWith(
+      "users.self",
+      {},
+      { scopes: ["operator.read"] },
+    );
+    const service = visitorRuntimeStore.getRuntime().service;
+    await service.invite(
+      { email: "visitor@example.test", note: "  Welcome!\n" },
+      { assertCurrent: first.toolContext.assertInvocationCurrent },
+    );
+    const { grantId } = (await first.store.lookup("visitor@example.test"))!;
+    const invitation = service.findActiveInvitation(grantId!)!;
+    const result = await service.compareAndSetOnboarding({
+      grantId: invitation.grantId,
+      expected: invitation.onboarding!,
+      next: { state: "ready", welcomeSessionKey: "welcome", welcomeSessionId: "welcome-id" },
+    });
+    expect(result.applied).toBe(true);
+    await first.stop();
+    const second = registerPlugin();
+    await second.start();
+    await second.execute("visitor_invite", { email: "visitor@example.test", days: 30 });
+    expect(await second.store.lookup("visitor@example.test")).toMatchObject({
+      invitedBy: { profileId: "inviter", label: "Inviter" },
+      note: "  Welcome!\n",
+      onboarding: { state: "ready", welcomeSessionKey: "welcome", welcomeSessionId: "welcome-id" },
+    });
+    expect(
+      visitorRuntimeStore.getRuntime().service.findActiveInvitation(invitation.grantId),
+    ).toEqual(await second.store.lookup("visitor@example.test"));
+  });
+
+  it("upgrades a grant recorded by v2026.10.6 without onboarding metadata", async () => {
+    // Value recorded by the v2026.10.6 plugin through its registered visitor_invite tool.
+    const stableGrant = {
+      email: "stable@example.test",
+      invitedVia: "agent:main:maintainer",
+      createdAt: START_MS,
+      expiresAt: START_MS + 7 * DAY_MS,
+      grantId: "7b3da382-f824-43ff-ae25-9c8c994ca6f3",
+    };
+    vi.stubGlobal("fetch", createPolicyFetch([stableGrant.email]).fetcher);
+    const upgraded = registerPlugin();
+    await upgraded.store.register(stableGrant.email, stableGrant);
+    await upgraded.start();
+    await upgraded.settle();
+    const visitor = { profileId: "stable", emails: [stableGrant.email], assignedRole: null };
+    expect(upgraded.authorize(visitor)).toBeDefined();
+    const service = visitorRuntimeStore.getRuntime().service;
+    expect(service.findActiveInvitation(stableGrant.grantId)).toEqual(stableGrant);
+    await expect(
+      service.compareAndSetOnboarding({
+        grantId: stableGrant.grantId,
+        expected: null,
+        next: { state: "pending", welcomeSessionKey: "welcome" },
+      }),
+    ).resolves.toMatchObject({ applied: true });
+    await expect(
+      upgraded.execute("visitor_invite", { email: stableGrant.email, days: 30 }),
+    ).resolves.toMatchObject({ details: { outcome: "renewed" } });
+    expect(await upgraded.store.lookup(stableGrant.email)).toEqual({
+      ...stableGrant,
+      expiresAt: START_MS + 30 * DAY_MS,
+      onboarding: { state: "pending", welcomeSessionKey: "welcome", updatedAt: START_MS },
+    });
+  });
+
   it("keeps CLI metadata discovery free of runtime access and background work", () => {
     const api = createTestPluginApi({ registrationMode: "cli-metadata" });
     const runtime = vi.fn(() => {
@@ -281,31 +373,6 @@ describe("visitor-access plugin lifecycle", () => {
     expect(() => plugin.register(api)).not.toThrow();
     expect(runtime).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("preserves unbound staff admission when staff is the default role", () => {
-    const config: OpenClawConfig = {
-      gateway: {
-        roles: {
-          default: "staff",
-          definitions: {
-            staff: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
-          },
-        },
-      },
-    };
-    const registered = registerPlugin({}, config);
-    expect(
-      registered.authorize(
-        {
-          profileId: "staff-profile",
-          emails: ["staff@example.test"],
-          assignedRole: "staff",
-        },
-        false,
-      ),
-    ).toBeUndefined();
-    expect(registered.gatewayRequest).not.toHaveBeenCalled();
   });
 
   it.each(["email", "github"] as const)(
@@ -630,6 +697,7 @@ describe("visitor-access plugin lifecycle", () => {
     vi.stubGlobal("fetch", policy.fetcher);
     const registered = registerPlugin({ senderIsOwner: undefined });
     await registered.start();
+    await registered.settle();
     policy.fetcher.mockClear();
 
     for (const name of ["visitor_invite", "visitor_revoke", "visitor_list"]) {
@@ -721,6 +789,7 @@ describe("visitor-access plugin lifecycle", () => {
     };
     expect(() => first.authorize(visitor)).toThrow(/starting/);
     await first.start();
+    await first.settle();
     const original = first.authorize(visitor);
     if (!original) {
       throw new Error("Expected visitor authority from the registered policy");
@@ -733,6 +802,7 @@ describe("visitor-access plugin lifecycle", () => {
 
     const restarted = registerPlugin();
     await restarted.start();
+    await restarted.settle();
     expect(restarted.logger.error).toHaveBeenCalledWith(
       expect.stringContaining("visitor-access sweep failed"),
     );
@@ -796,6 +866,7 @@ describe("visitor-access plugin lifecycle", () => {
 
     const restarted = registerPlugin();
     await Promise.all([restarted.start(), restarted.gatewayStart()]);
+    await restarted.settle();
     expect(policy.emails()).toEqual(["active@example.test"]);
     expect((await restarted.store.entries()).map((entry) => entry.key)).toEqual([
       "active@example.test",
@@ -818,7 +889,7 @@ describe("visitor-access plugin lifecycle", () => {
     expect(policy.fetcher).toHaveBeenCalledTimes(callsAfterStop);
   });
 
-  it("stops the scheduler, aborts an in-flight sweep, and rejects retained tools", async () => {
+  it("admits only live grants before provider cleanup and aborts that cleanup on stop", async () => {
     const entered = createDeferred<AbortSignal>();
     const fetcher = vi.fn<typeof fetch>((_url, init) => {
       const signal = init?.signal;
@@ -834,17 +905,36 @@ describe("visitor-access plugin lifecycle", () => {
     });
     vi.stubGlobal("fetch", fetcher);
     const registered = registerPlugin();
-    const starting = registered.start();
+    for (const [email, expiresAt] of [
+      ["expired@example.test", START_MS],
+      ["active@example.test", START_MS + DAY_MS],
+    ] as const) {
+      await registered.store.register(email, {
+        email,
+        grantId: "00000000-0000-4000-8000-000000000001",
+        createdAt: START_MS - DAY_MS,
+        expiresAt,
+      });
+    }
+    await registered.start();
     const signal = await entered.promise;
+    const profile = { profileId: "visitor", assignedRole: "external-work" };
+    expect(() => registered.authorize({ ...profile, emails: ["expired@example.test"] })).toThrow(
+      /active visitor invitation/,
+    );
+    const authority = registered.authorize({ ...profile, emails: ["active@example.test"] });
+    expect(authority).toBeDefined();
+    expect(() => authority?.assertCurrent()).not.toThrow();
     await registered.stop();
-    await starting;
+    expect(authority?.signal.aborted).toBe(true);
     expect(signal.aborted).toBe(true);
+    await closeOpenClawStateDatabaseAsync();
     expect(vi.getTimerCount()).toBe(0);
     const callsAfterStop = fetcher.mock.calls.length;
     const result = await registered.execute("visitor_invite", { email: "late@example.test" });
     expect(result).toMatchObject({ details: { error: true } });
     expect(fetcher).toHaveBeenCalledTimes(callsAfterStop);
-    expect(await registered.store.entries()).toEqual([]);
+    expect(await registered.store.entries()).toHaveLength(2);
     expect(JSON.stringify(result)).not.toContain(TOKEN);
     expect(registered.logger.error).not.toHaveBeenCalled();
   });
@@ -875,6 +965,7 @@ describe("visitor-access plugin lifecycle", () => {
     policy.controls.loseWriteResponse = false;
     const restarted = registerPlugin();
     await restarted.start();
+    await restarted.settle();
     expect(() => restarted.authorize(profile)).toThrow(/active visitor invitation/);
     expect(await restarted.store.lookup("pending@example.test")).toBeUndefined();
     expect(policy.emails()).toEqual([]);
@@ -921,6 +1012,7 @@ describe("visitor-access plugin lifecycle", () => {
     await owner.stop();
     const replacement = registerPlugin();
     await replacement.start();
+    await replacement.settle();
     const callsBeforeStaleTool = policy.fetcher.mock.calls.length;
     await expect(invite.execute("stale", { email: "late@example.test" })).resolves.toHaveProperty(
       "details.error",

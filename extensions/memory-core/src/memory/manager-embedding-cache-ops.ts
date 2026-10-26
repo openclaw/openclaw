@@ -16,11 +16,8 @@ import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheMutation,
 } from "./manager-publication-task.js";
-import {
-  MemoryManagerSyncOps,
-  type MemoryIndexWorkItem,
-  type MemorySemanticProviderGeneration,
-} from "./manager-sync-ops.js";
+import type { MemoryIndexWorkItem, MemorySemanticProviderGeneration } from "./manager-sync-base.js";
+import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
 
@@ -30,6 +27,12 @@ export type MemoryEmbeddingCacheCandidate = {
   source: MemorySource;
 };
 
+export type MemoryCachedEmbeddings = {
+  embeddings: number[][];
+  missing: number[];
+  missingCandidates: MemoryEmbeddingCacheCandidate[];
+};
+
 export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOps {
   protected abstract embedBatchWithRetry(
     inputs: Array<string | EmbeddingInput>,
@@ -37,18 +40,27 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     cacheCandidates?: MemoryEmbeddingCacheCandidate[],
   ): Promise<number[][]>;
 
-  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {
+  protected async pruneEmbeddingCacheIfNeeded(recount = false): Promise<void> {
     const max = this.cache.maxEntries;
     if (!this.cache.enabled || !max || max <= 0) {
       return;
     }
     const database = this.database;
     const assertCurrent = () => {
-      if (this.closed || database.closed || !database.db.isOpen || this.database !== database) {
+      // Shutdown discards suspended rebuilds before releasing this database owner.
+      if ((this.closed && !this.closing) || !database.isOpen || this.database !== database) {
         throw new Error("Memory database owner closed or changed before write admission");
       }
     };
-    while (await database.pruneEmbeddingCache(max, assertCurrent)) {
+    const unreferencedFirst = {
+      identities: this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities(),
+    };
+    while (
+      await database.pruneEmbeddingCache(
+        { maxEntries: max, unreferencedFirst, ...(recount ? { recount: true } : {}) },
+        assertCurrent,
+      )
+    ) {
       await yieldToEventLoop();
     }
   }
@@ -65,10 +77,22 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
             input: {
               providerIdentities: generation.identities,
               hashes,
+              ...(this.reindexProgress
+                ? {
+                    rebuild: {
+                      chunks: candidates.map(({ source, entry, chunk }) => ({
+                        source,
+                        path: entry.path,
+                        hash: chunk.hash,
+                      })),
+                      dimensions: generation.embeddingDimensions,
+                    },
+                  }
+                : {}),
             },
           },
           () => {
-            if (!generation.database.db.isOpen) {
+            if (!generation.database.isOpen) {
               throw new Error("Memory database owner is closed");
             }
           },
@@ -95,11 +119,10 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     candidates: MemoryEmbeddingCacheCandidate[],
     generation: MemorySemanticProviderGeneration,
     maxTokens: number,
+    prepared?: MemoryCachedEmbeddings,
   ): Promise<number[][]> {
-    const { embeddings, missing, missingCandidates } = await this.collectCachedEmbeddings(
-      candidates,
-      generation,
-    );
+    const { embeddings, missing, missingCandidates } =
+      prepared ?? (await this.collectCachedEmbeddings(candidates, generation));
 
     if (missing.length === 0) {
       return embeddings;
@@ -143,7 +166,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
         if (
           this.closed ||
           generation.database.closed ||
-          !generation.database.db.isOpen ||
+          !generation.database.isOpen ||
           this.database !== generation.database
         ) {
           throw new Error("Memory database owner closed or changed before write admission");
@@ -189,8 +212,8 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
             embedding.length !== generation.embeddingDimensions,
         )
       ) {
-        // Separate successful batches can disagree. Neither dimension is authoritative;
-        // discard this identity's ambiguous cache so retries can recover after restart.
+        // Conflicting batches cannot share an identity's cache. Discard it so
+        // retries can recover after restart, using the declared size when available.
         await withMemoryWorkspaceLock(this.workspaceDir, async () => {
           try {
             await this.withGeneratedEmbeddingCacheWrite(generation, {
@@ -247,13 +270,23 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       if (accepted.length === 0) {
         return;
       }
+      const reindex = this.reindexProgress;
+      if (reindex) {
+        reindex.cachePrunePending = true;
+      }
       await this.withGeneratedEmbeddingCacheWrite(generation, {
         kind: "upsert",
         header: {
           agentId: this.agentId,
           provider: { id: generation.provider.id, model: generation.provider.model },
           providerKey: generation.providerKey,
-          maxEntries: this.cache.maxEntries,
+          // During a full rebuild the embedding cache may temporarily hold up to 2×
+          // maxEntries rows; it is pruned to the cap after publication or abort.
+          maxEntries:
+            this.cache.maxEntries === undefined
+              ? undefined
+              : this.cache.maxEntries * (this.reindexProgress ? 2 : 1),
+          unreferencedFirst: { identities: generation.identities },
         },
         entries: accepted,
       });

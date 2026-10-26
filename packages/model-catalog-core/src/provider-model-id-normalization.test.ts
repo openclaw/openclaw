@@ -1,26 +1,48 @@
 import { describe, expect, it } from "vitest";
 import {
   collectManifestModelIdNormalizationPolicies,
+  type ManifestModelIdNormalizationProvider,
   normalizeConfiguredProviderCatalogModelId,
   normalizeStaticProviderModelIdWithPolicies,
   stripSelfProviderModelPrefix,
 } from "./provider-model-id-normalization.js";
 
+function policiesFor(provider: string, policy: ManifestModelIdNormalizationProvider) {
+  return collectManifestModelIdNormalizationPolicies([
+    { modelIdNormalization: { providers: { [provider]: policy } } },
+  ]);
+}
+
 describe("provider model id policy normalization", () => {
+  const prototypeLikeModels = ["constructor", "__proto__", "toString"];
+  const aliasProviders = ["anthropic", "vercel-ai-gateway", "xai", "fixture"];
+
+  it.each(
+    aliasProviders.flatMap((provider) => prototypeLikeModels.map((model) => ({ provider, model }))),
+  )("preserves unaliased $provider model ID $model as a string", ({ provider, model }) => {
+    const policies = policiesFor("fixture", { aliases: {} });
+
+    expect(normalizeConfiguredProviderCatalogModelId(provider, model, policies)).toBe(model);
+  });
+
+  it.each(prototypeLikeModels)("honors explicitly owned alias %s", (model) => {
+    for (const provider of aliasProviders) {
+      const policies = policiesFor(provider, {
+        aliases: Object.fromEntries([[model.toLowerCase(), "custom-model"]]),
+      });
+
+      expect(normalizeConfiguredProviderCatalogModelId(provider, model, policies)).toBe(
+        "custom-model",
+      );
+    }
+  });
+
   it("applies manifest policies before built-in provider normalization", () => {
-    const policies = collectManifestModelIdNormalizationPolicies([
-      {
-        modelIdNormalization: {
-          providers: {
-            "Google-Vertex": {
-              aliases: {
-                pro: "gemini-3-pro",
-              },
-            },
-          },
-        },
+    const policies = policiesFor("Google-Vertex", {
+      aliases: {
+        pro: "gemini-3-pro",
       },
-    ]);
+    });
 
     expect(normalizeStaticProviderModelIdWithPolicies("google-vertex", "pro", policies)).toBe(
       "gemini-3.1-pro-preview",
@@ -114,15 +136,7 @@ describe("provider model id policy normalization", () => {
 
 describe("manifest stripPrefixes matches and slices on the same normalized value", () => {
   function stripWith(stripPrefixes: string[], modelId: string): string {
-    const policies = collectManifestModelIdNormalizationPolicies([
-      {
-        modelIdNormalization: {
-          providers: {
-            openai: { stripPrefixes },
-          },
-        },
-      },
-    ]);
+    const policies = policiesFor("openai", { stripPrefixes });
     return normalizeStaticProviderModelIdWithPolicies("openai", modelId, policies);
   }
 

@@ -1,6 +1,6 @@
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
-import { requestXaiCodeExecution } from "./src/code-execution-shared.js";
+import { createCodeExecutionTool } from "./code-execution.js";
 import { requestXaiWebSearch } from "./src/web-search-shared.js";
 import { requestXaiXSearch } from "./src/x-search-shared.js";
 
@@ -35,7 +35,25 @@ const callers = [
   {
     name: "code_execution",
     grok43Effort: "low",
-    run: (model: string) => requestXaiCodeExecution({ ...connection, model, task: "fixture" }),
+    run: (model: string) => {
+      const config = {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: { apiKey: connection.apiKey },
+                codeExecution: { model, timeoutSeconds: connection.timeoutSeconds },
+              },
+            },
+          },
+        },
+      };
+      const tool = createCodeExecutionTool({ config, runtimeConfig: config });
+      if (!tool) {
+        throw new Error("Expected xAI code execution tool");
+      }
+      return tool.execute("code-execution:policy-fixture", { task: "fixture" });
+    },
   },
 ];
 

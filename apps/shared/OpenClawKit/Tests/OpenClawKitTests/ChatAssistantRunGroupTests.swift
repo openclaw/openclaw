@@ -5,6 +5,25 @@ import Testing
 @Suite("Assistant run presentation")
 struct ChatAssistantRunGroupTests {
     @Test
+    func `queued followup leaves the current response in its existing frame`() throws {
+        let user = Self.message("user", at: 1)
+        let narration = Self.message("assistant", at: 2, phase: "commentary")
+        let tool = Self.tool("read", at: 3)
+        let initial = ChatAssistantRunGroup.build(
+            ChatTranscriptRow.build(from: [user, narration]), tools: [tool],
+            liveRunID: "run", hasLiveContent: true, searchActive: false)
+        let activeFrame = try #require(initial.first { $0.includesLive })
+        let followup = Self.message("user", at: 4, run: "followup")
+        let withFollowup = ChatAssistantRunGroup.build(
+            ChatTranscriptRow.build(from: [user, narration, followup]), tools: [tool],
+            liveRunID: "run", hasLiveContent: true, searchActive: false)
+        let continuingFrame = try #require(withFollowup.first { $0.includesLive })
+        #expect(continuingFrame.id == activeFrame.id)
+        #expect(continuingFrame.parts.map(\.id) == activeFrame.parts.map(\.id))
+        #expect(withFollowup.last?.parts.first?.boundaryID == followup.id)
+    }
+
+    @Test
     func `one frame survives narration tools and completed work`() throws {
         let user = Self.message("user", at: 1)
         let narration = Self.message("assistant", at: 2, phase: "commentary")

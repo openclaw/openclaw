@@ -57,9 +57,11 @@ export type ToolRenderOptions = {
   sessionKey?: string;
   agentId?: string;
   presented?: boolean;
+  mediaReadAllowed?: boolean;
   runActive?: boolean;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+  onPermissionRetry?: (message: string) => void;
   /** Lets a subagent's launch row show its session's state and open it. */
   subagents?: SubagentRowContext;
 };

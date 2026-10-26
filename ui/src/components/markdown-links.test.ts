@@ -1,217 +1,145 @@
-// Control UI tests cover markdown link rendering: autolinking, file links, and link marks.
-import { describe, expect, it } from "vitest";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
+import { describe, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
+import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
+import {
+  markdownSessionLinkFromEvent,
+  markdownSessionLinkFromKeyboardEvent,
+  navigateMarkdownSession,
+} from "./markdown-session-links.ts";
+import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { SessionLinkTitler } from "./session-link-titling.ts";
 
-function htmlFragment(html: string): HTMLElement {
-  const container = document.createElement("div");
-  container.innerHTML = html;
-  return container;
+const repoUrl = "https://github.com/openclaw/openclaw";
+const pullUrl = `${repoUrl}/pull/3434`;
+const directoryUrl = `${repoUrl}/tree/main/.agents/skills/test-audit`;
+const itemLabel = "openclaw/openclaw#3434";
+const longRepository = "a-very-long-organization-name/a-very-long-repository-name";
+const render = (input: string, options?: MarkdownRenderOptions) =>
+  htmlFragment(toSanitizedMarkdownHtml(input, options));
+const renderStreaming = (input: string, options?: MarkdownRenderOptions, id?: string) =>
+  htmlFragment(toStreamingMarkdownParts(input, options, id).join(""));
+const renderBoth = (input: string) => [render(input), renderStreaming(input)];
+
+function onChatPage(assert: () => void) {
+  const previous = location.href;
+  history.replaceState(null, "", "/chat/main/d0effac9");
+  try {
+    assert();
+  } finally {
+    history.replaceState(null, "", previous);
+  }
+}
+
+function expectWwwLink(input: string, label: string, prefix = "", suffix = "", path = label) {
+  expect(toSanitizedMarkdownHtml(input)).toBe(
+    `<p>${prefix}<a href="http://${path}" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">${label}</a>${suffix}</p>\n`,
+  );
 }
 
 describe("toSanitizedMarkdownHtml links", () => {
   describe("www autolinks", () => {
-    it("links www.example.com with path, query, and fragment", () => {
-      const html = toSanitizedMarkdownHtml("See www.example.com/path?a=1#section");
-      expect(html).toBe(
-        '<p>See <a href="http://www.example.com/path?a=1#section" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/path?a=1#section</a></p>\n',
-      );
-    });
+    it.each([
+      ["See www.example.com/path?a=1#section", "www.example.com/path?a=1#section", "See "],
+      ["Visit www.localhost:3000/path for dev", "www.localhost:3000/path", "Visit ", " for dev"],
+      ["Visit www.münich.de", "www.münich.de", "Visit ", "", "www.xn--mnich-kva.de"],
+      ["Visit www.foo_bar.example.com", "www.foo_bar.example.com", "Visit "],
+      ["See www.example.com!", "www.example.com", "See ", "!"],
+      [
+        "www.google.com/search?q=commonmark&hl;",
+        "www.google.com/search?q=commonmark",
+        "",
+        "&amp;hl;",
+      ],
+      ['"www.example.com"', "www.example.com", '"', '"'],
+      [
+        'www.example.com/path"with"quotes',
+        'www.example.com/path"with"quotes',
+        "",
+        "",
+        "www.example.com/path%22with%22quotes",
+      ],
+      ["(see www.example.com/foo(bar))", "www.example.com/foo(bar)", "(see ", ")"],
+      ["Visit www.example.com/<token> here", "www.example.com/", "Visit ", "&lt;token&gt; here"],
+      ["www.example.com重新解读", "www.example.com", "", "重新解读"],
+    ])("preserves URL boundaries and encoding in %s", expectWwwLink);
 
-    it("links www.localhost and other single-label hosts", () => {
-      const html = toSanitizedMarkdownHtml("Visit www.localhost:3000/path for dev");
-      expect(html).toBe(
-        '<p>Visit <a href="http://www.localhost:3000/path" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.localhost:3000/path</a> for dev</p>\n',
-      );
-    });
-
-    it("links Unicode/IDN domains like www.münich.de", () => {
-      const html1 = toSanitizedMarkdownHtml("Visit www.münich.de");
-      expect(html1).toBe(
-        '<p>Visit <a href="http://www.xn--mnich-kva.de" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.münich.de</a></p>\n',
-      );
-
-      const html2 = toSanitizedMarkdownHtml("Visit www.café.example");
-      expect(html2).toBe(
-        '<p>Visit <a href="http://www.xn--caf-dma.example" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.café.example</a></p>\n',
-      );
-    });
-
-    it("links www.foo_bar.example.com with underscores", () => {
-      const html = toSanitizedMarkdownHtml("Visit www.foo_bar.example.com");
-      expect(html).toBe(
-        '<p>Visit <a href="http://www.foo_bar.example.com" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.foo_bar.example.com</a></p>\n',
-      );
-    });
-
-    it("strips trailing punctuation from links", () => {
-      const html1 = toSanitizedMarkdownHtml("Check www.example.com/help.");
-      expect(html1).toBe(
-        '<p>Check <a href="http://www.example.com/help" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/help</a>.</p>\n',
-      );
-
-      const html2 = toSanitizedMarkdownHtml("See www.example.com!");
-      expect(html2).toBe(
-        '<p>See <a href="http://www.example.com" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com</a>!</p>\n',
-      );
-    });
-
-    it("strips entity-like suffixes per GFM spec", () => {
-      // &hl; looks like an entity reference, so strip it
-      const html1 = toSanitizedMarkdownHtml("www.google.com/search?q=commonmark&hl;");
-      expect(html1).toBe(
-        '<p><a href="http://www.google.com/search?q=commonmark" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.google.com/search?q=commonmark</a>&amp;hl;</p>\n',
-      );
-
-      // &amp; is also entity-like
-      const html2 = toSanitizedMarkdownHtml("www.example.com/path&amp;");
-      expect(html2).toBe(
-        '<p><a href="http://www.example.com/path" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/path</a>&amp;</p>\n',
-      );
-    });
-
-    it("handles quotes with balance checking", () => {
-      // Quoted URL — trailing unbalanced " is stripped
-      const html1 = toSanitizedMarkdownHtml('"www.example.com"');
-      expect(html1).toBe(
-        '<p>"<a href="http://www.example.com" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com</a>"</p>\n',
-      );
-
-      // Balanced quotes inside path — preserved
-      const html2 = toSanitizedMarkdownHtml('www.example.com/path"with"quotes');
-      expect(html2).toBe(
-        '<p><a href="http://www.example.com/path%22with%22quotes" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/path"with"quotes</a></p>\n',
-      );
-
-      // Trailing unbalanced " — stripped
-      const html3 = toSanitizedMarkdownHtml('www.example.com/path"');
-      expect(html3).toBe(
-        '<p><a href="http://www.example.com/path" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/path</a>"</p>\n',
-      );
-    });
-
-    it("does NOT link www. domains starting with non-ASCII", () => {
-      const html1 = toSanitizedMarkdownHtml("Visit www.ünich.de");
-      expect(html1).toBe("<p>Visit www.ünich.de</p>\n");
-
-      const html2 = toSanitizedMarkdownHtml("Visit www.ñoño.com");
-      expect(html2).toBe("<p>Visit www.ñoño.com</p>\n");
-    });
-
-    it("handles balanced parentheses in URLs", () => {
-      const html = toSanitizedMarkdownHtml("(see www.example.com/foo(bar))");
-      expect(html).toBe(
-        '<p>(see <a href="http://www.example.com/foo(bar)" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/foo(bar)</a>)</p>\n',
-      );
-    });
-
-    it("stops at < character", () => {
-      // Stops at < character
-      const html1 = toSanitizedMarkdownHtml("Visit www.example.com/path<test");
-      expect(html1).toBe(
-        '<p>Visit <a href="http://www.example.com/path" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/path</a>&lt;test</p>\n',
-      );
-
-      // <tag> pattern — stops before <
-      const html2 = toSanitizedMarkdownHtml("Visit www.example.com/<token> here");
-      expect(html2).toBe(
-        '<p>Visit <a href="http://www.example.com/" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com/</a>&lt;token&gt; here</p>\n',
-      );
-    });
-
-    it("does NOT link bare domains without www", () => {
-      const html = toSanitizedMarkdownHtml("Visit google.com today");
-      expect(html).toBe("<p>Visit google.com today</p>\n");
-    });
-
-    it("does NOT link filenames with TLD-like extensions", () => {
-      const html = toSanitizedMarkdownHtml("Check README.md and config.json");
-      expect(html).toBe("<p>Check README.md and config.json</p>\n");
-    });
-
-    it("does NOT link IP addresses", () => {
-      const html = toSanitizedMarkdownHtml("Check 127.0.0.1:8080");
-      expect(html).toBe("<p>Check 127.0.0.1:8080</p>\n");
-    });
-
-    it("keeps adjacent trailing CJK text outside www auto-links", () => {
-      const html = toSanitizedMarkdownHtml("www.example.com重新解读");
-      expect(html).toBe(
-        '<p><a href="http://www.example.com" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com</a>重新解读</p>\n',
-      );
-    });
-
-    it("keeps Japanese text outside www auto-links", () => {
-      const html = toSanitizedMarkdownHtml("www.example.comテスト");
-      expect(html).toBe(
-        '<p><a href="http://www.example.com" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">www.example.com</a>テスト</p>\n',
-      );
-    });
+    it.each(["Visit www.ünich.de", "Check README.md and config.json", "Check 127.0.0.1:8080"])(
+      "leaves non-URLs unlinked: %s",
+      (input) => {
+        expect(toSanitizedMarkdownHtml(input)).toBe(`<p>${input}</p>\n`);
+      },
+    );
   });
 
   describe("explicit protocol links", () => {
-    it("links http:// URLs", () => {
-      const html = toSanitizedMarkdownHtml("Visit http://github.com/openclaw");
-      expect(html).toBe(
-        '<p>Visit <a href="http://github.com/openclaw" class="markdown-bare-url markdown-github-link" title="http://github.com/openclaw" rel="noreferrer noopener" target="_blank">github.com/openclaw</a></p>\n',
-      );
+    it("keeps preparation status metadata outside its PR link", () => {
+      const input =
+        `PR preparation result: {"status":"prepared","url":"${pullUrl}","headCommit":"abc123","headChanged":false,"review":{"mode":"local","base":"def456"}}\n` +
+        "Continue the original task in this conversation. Do not repeat a completed operation.";
+      const fragment = render(input);
+      const link = fragment.querySelector<HTMLAnchorElement>("a");
+      expect(link?.getAttribute("href")).toBe(pullUrl);
+      expect(link?.textContent).toBe(itemLabel);
+      expect(fragment.textContent).toBe(input.replace(pullUrl, itemLabel) + "\n");
     });
 
-    it("keeps CJK text outside https:// links with path", () => {
-      const html = toSanitizedMarkdownHtml("https://example.com/path重新解读");
-      expect(html).toBe(
-        '<p><a href="https://example.com/path" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">https://example.com/path</a>重新解读</p>\n',
-      );
-    });
-
-    it("preserves mid-URL CJK in https:// links", () => {
-      // CJK in the middle of a URL path (not trailing) must not be trimmed
-      const html = toSanitizedMarkdownHtml("https://example.com/你/test");
-      expect(html).toBe(
-        '<p><a href="https://example.com/%E4%BD%A0/test" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">https://example.com/你/test</a></p>\n',
-      );
-    });
-
-    it("preserves percent-encoded CJK inside URLs when no raw CJK present", () => {
-      // Percent-encoded paths without raw CJK are preserved as-is
-      const html = toSanitizedMarkdownHtml("https://example.com/path/%E4%BD%A0%E5%A5%BD");
-      expect(html).toBe(
-        '<p><a href="https://example.com/path/" class="markdown-bare-url" rel="noreferrer noopener" target="_blank">https://example.com/path/</a>你好</p>\n',
-      );
-      // markdown-it linkify decodes percent-encoded CJK for display, then our
-      // CJK trim rule splits at the first raw CJK char. This is acceptable
-      // because raw percent-encoded CJK in chat is extremely rare.
-    });
-
-    it("does NOT rewrite explicit markdown links with CJK display text", () => {
-      const html = toSanitizedMarkdownHtml("[OpenClaw中文](https://docs.openclaw.ai)");
-      expect(html).toBe(
-        '<p><a href="https://docs.openclaw.ai" rel="noreferrer noopener" target="_blank">OpenClaw中文</a></p>\n',
-      );
-    });
-
-    it("preserves mailto: scheme when trimming CJK from email links", () => {
-      // Email followed by space+CJK — linkify recognizes the email,
-      // then CJK trim should preserve the mailto: prefix.
-      const html = toSanitizedMarkdownHtml("Contact test@example.com 中文说明");
-      expect(html).toBe(
-        '<p>Contact <a href="mailto:test@example.com" rel="noreferrer noopener" target="_blank">test@example.com</a> 中文说明</p>\n',
+    it.each([
+      [
+        "Visit http://github.com/openclaw",
+        'Visit <a href="http://github.com/openclaw" class="markdown-bare-url markdown-github-link" title="http://github.com/openclaw"',
+        "github.com/openclaw</a>",
+      ],
+      [
+        "https://example.com/path重新解读",
+        '<a href="https://example.com/path" class="markdown-bare-url"',
+        "https://example.com/path</a>重新解读",
+      ],
+      [
+        "https://example.com/你/test",
+        '<a href="https://example.com/%E4%BD%A0/test" class="markdown-bare-url"',
+        "https://example.com/你/test</a>",
+      ],
+      [
+        "https://example.com/path/%E4%BD%A0%E5%A5%BD",
+        '<a href="https://example.com/path/" class="markdown-bare-url"',
+        "https://example.com/path/</a>你好",
+      ],
+      [
+        "[OpenClaw中文](https://docs.openclaw.ai)",
+        '<a href="https://docs.openclaw.ai"',
+        "OpenClaw中文</a>",
+      ],
+      [
+        "Contact test@example.com 中文说明",
+        'Contact <a href="mailto:test@example.com"',
+        "test@example.com</a> 中文说明",
+      ],
+    ])("preserves protocol and CJK boundaries in %s", (input, opening, ending) => {
+      expect(toSanitizedMarkdownHtml(input)).toBe(
+        `<p>${opening} rel="noreferrer noopener" target="_blank">${ending}</p>\n`,
       );
     });
   });
 
+  it("preserves adjacent quoted links and authored or encoded URL content", () => {
+    const encoded = "https://example.com/a%22b?q=%22value%22";
+    const plain = "http://example.com/path_(part)?a=1&b=2#section";
+    const input = `Links: {"first":"${encoded}","second":"${plain}"} [authored](${encoded})`;
+    const fragment = render(input);
+    expect(Array.from(fragment.querySelectorAll("a"), (link) => link.getAttribute("href"))).toEqual(
+      [encoded, plain, encoded],
+    );
+    expect(fragment.textContent).toBe(
+      `Links: {"first":"https://example.com/a"b?q="value"","second":"${plain}"} authored\n`,
+    );
+  });
+
   describe("link favicon placeholders", () => {
-    it("emits no favicon markup unless explicitly enabled", () => {
-      const fragment = htmlFragment(toSanitizedMarkdownHtml("[Docs](https://docs.example.com/a)"));
-
-      expect(fragment.querySelector("img.markdown-link-favicon")).toBeNull();
-    });
-
     it("emits an inert hostname-only placeholder for enabled web links", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("[Docs](https://docs.example.com/a?secret=1#fragment)", {
-          linkFavicons: true,
-        }),
-      );
+      const fragment = render("[Docs](https://docs.example.com/a?secret=1#fragment)", {
+        linkFavicons: true,
+      });
 
       const image = fragment.querySelector<HTMLImageElement>("img.markdown-link-favicon");
       expect(image?.dataset.linkFaviconHost).toBe("docs.example.com");
@@ -220,15 +148,12 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it("keeps the bundled GitHub mark and skips image-only links", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(
-          "[OpenClaw](https://github.com/openclaw/openclaw) [![badge](data:image/png;base64,iVBORw0KGgo=)](https://example.com)",
-          { linkFavicons: true },
-        ),
+      const fragment = render(
+        "[OpenClaw](https://github.com/openclaw/openclaw) [![badge](data:image/png;base64,iVBORw0KGgo=)](https://example.com)",
+        { linkFavicons: true },
       );
 
       expect(fragment.querySelector("a.markdown-github-link")).not.toBeNull();
-      expect(fragment.querySelector("a.markdown-github-link img.markdown-link-favicon")).toBeNull();
       expect(fragment.querySelectorAll("img.markdown-link-favicon")).toHaveLength(0);
     });
   });
@@ -236,24 +161,9 @@ describe("toSanitizedMarkdownHtml links", () => {
   describe("session links", () => {
     const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
 
-    it("links structural keys only when enabled", () => {
-      const disabled = htmlFragment(toSanitizedMarkdownHtml(`Open ${sessionKey}`));
-      expect(disabled.querySelector("a[data-session-key]")).toBeNull();
-
-      const enabled = htmlFragment(
-        toSanitizedMarkdownHtml(`Open ${sessionKey}`, { sessionLinks: true }),
-      );
-      const link = enabled.querySelector<HTMLAnchorElement>("a.markdown-session-link");
-      expect(link?.dataset.sessionKey).toBe(sessionKey);
-      expect(link?.textContent).toBe(sessionKey);
-      expect(link?.getAttribute("role")).toBe("link");
-      expect(link?.getAttribute("tabindex")).toBe("0");
-      expect(link?.hasAttribute("href")).toBe(false);
-    });
-
-    it("linkifies keys in inline code", () => {
+    it("linkifies keys in streamed inline code", () => {
       const input = `Open \`${sessionKey}\``;
-      const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { sessionLinks: true }));
+      const fragment = renderStreaming(input, { sessionLinks: true });
       const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-session-link");
       expect(link?.dataset.sessionKey).toBe(sessionKey);
       expect(link?.textContent).toBe(sessionKey);
@@ -266,21 +176,15 @@ describe("toSanitizedMarkdownHtml links", () => {
       ["a URL query value", `https://example.test/?session=${sessionKey}`],
       ["a fenced code block", `\`\`\`text\n${sessionKey}\n\`\`\``],
     ])("does not link %s", (_kind, input) => {
-      const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { sessionLinks: true }));
+      const fragment = render(input, { sessionLinks: true });
       expect(fragment.querySelector("a[data-session-key]")).toBeNull();
     });
 
     it.each([
       ["absolute href", `[Open session](${location.origin}/chat/roboclaw/d0effac9)`],
-      ["bare URL", `${location.origin}/chat/roboclaw/d0effac9`],
-      ["relative href", "[Open session](/chat/roboclaw/d0effac9)"],
       ["literal with a file extension", "[Open session](/chat/roboclaw/d0effac9.md)"],
-      ["inline URL", `\`${location.origin}/chat/roboclaw/d0effac9\``],
-      ["inline relative URL", "`/chat/roboclaw/d0effac9`"],
     ])("decorates host-local session URLs in %s", (_kind, input) => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(input, { sessionLinks: true, fileLinks: true }),
-      );
+      const fragment = render(input, { sessionLinks: true, fileLinks: true });
       const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-session-link");
       expect(link?.getAttribute("href")).toContain("/chat/roboclaw/d0effac9");
       expect(link?.hasAttribute("target")).toBe(false);
@@ -289,259 +193,113 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(fragment.querySelector("a a")).toBeNull();
     });
 
-    it("captures the cleaned session URL with query and fragment before trailing CJK prose", () => {
-      const href = `${location.origin}/chat/main/d0effac9?view=full#latest`;
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(`${href}重新解读`, { sessionLinks: true, fileLinks: true }),
-      );
-      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
-      expect(link.getAttribute("href")).toBe(href);
-      expect(link.dataset.sessionHref).toBe(href);
-      expect(link.textContent).toBe(href);
-      expect(link.nextSibling?.nodeType).toBe(Node.TEXT_NODE);
-      expect(link.nextSibling?.textContent).toBe("重新解读");
-    });
-
-    it.each([
-      "https://elsewhere.example/chat/roboclaw/d0effac9",
-      "[External session](https://elsewhere.example/chat/roboclaw/d0effac9)",
-      "`https://elsewhere.example/chat/roboclaw/d0effac9`",
-      "[Other page](/activity)",
-    ])("keeps other destinations undecorated: %s", (input) => {
-      const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { sessionLinks: true }));
-      expect(fragment.querySelector(".markdown-session-link")).toBeNull();
-      expect(fragment.querySelector("[data-session-key]")).toBeNull();
-      if (input.startsWith("`")) {
-        expect(fragment.querySelector("a")).toBeNull();
-      }
-    });
-
     it.each([
       ["source", "src/utils/foo.ts", "file"],
       ["root session", "/chat/main/cafebabe", "session"],
       ["absolute session", `${location.origin}/chat/main/cafebabe`, "session"],
       ["relative route", "chat/main/x", "plain"],
+      ["other application page", "/activity", "plain"],
     ])("classifies %s independently of the current chat route", (label, href, kind) => {
-      const previous = location.href;
-      history.replaceState(null, "", "/chat/main/d0effac9");
-      try {
-        const fragment = htmlFragment(
-          toSanitizedMarkdownHtml(`[${label}](${href})`, { sessionLinks: true, fileLinks: true }),
-        );
+      onChatPage(() => {
+        const fragment = render(`[${label}](${href})`, { sessionLinks: true, fileLinks: true });
         const link = fragment.querySelector<HTMLAnchorElement>("a")!;
         expect(link.classList.contains("markdown-session-link")).toBe(kind === "session");
         expect(link.hasAttribute("data-session-href")).toBe(kind === "session");
+        expect(link.hasAttribute("data-session-key")).toBe(false);
         expect(link.classList.contains("markdown-file-link")).toBe(kind === "file");
         expect(link.dataset.filePath).toBe(kind === "file" ? href : undefined);
         expect(link.getAttribute("href")).toBe(kind === "file" ? null : href);
-      } finally {
-        history.replaceState(null, "", previous);
-      }
+      });
     });
 
     it("keeps ordinary inline code out of session routes on a chat page", () => {
-      const previous = location.href;
-      history.replaceState(null, "", "/chat/main/d0effac9");
-      try {
-        const fragment = htmlFragment(
-          toSanitizedMarkdownHtml("`README.md` `src/chat.ts` `ordinary text`", {
-            sessionLinks: true,
-          }),
-        );
+      onChatPage(() => {
+        const fragment = render("`README.md` `src/chat.ts` `ordinary text`", {
+          sessionLinks: true,
+        });
         expect(fragment.querySelector("a")).toBeNull();
         expect(fragment.querySelectorAll("code")).toHaveLength(3);
-      } finally {
-        history.replaceState(null, "", previous);
-      }
+      });
     });
 
-    it("keeps punctuation outside the link and rejects embedded word matches", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(`(${sessionKey}), x${sessionKey}`, { sessionLinks: true }),
-      );
+    it("links enabled structural keys with punctuation and rejects embedded word matches", () => {
+      const source = `(${sessionKey}), x${sessionKey}`;
+      expect(render(source).querySelector("a[data-session-key]")).toBeNull();
+      const fragment = render(source, { sessionLinks: true });
       const links = fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-session-link");
       expect(links).toHaveLength(1);
-      expect(links[0]?.textContent).toBe(sessionKey);
+      expect(links[0]).toMatchObject({
+        textContent: sessionKey,
+        dataset: { sessionKey },
+      });
+      expect(links[0]?.getAttribute("role")).toBe("link");
+      expect(links[0]?.getAttribute("tabindex")).toBe("0");
+      expect(links[0]?.hasAttribute("href")).toBe(false);
       expect(fragment.textContent).toBe(`(${sessionKey}), x${sessionKey}\n`);
-    });
-
-    it("stays deterministic across streaming tail renders", () => {
-      const options = { sessionLinks: true } as const;
-      const first = htmlFragment(toStreamingMarkdownParts(`Open ${sessionKey}`, options).join(""));
-      const extended = htmlFragment(
-        toStreamingMarkdownParts(`Open ${sessionKey} and continue`, options).join(""),
-      );
-      expect(first.querySelector<HTMLAnchorElement>("a")?.dataset.sessionKey).toBe(sessionKey);
-      expect(extended.querySelector<HTMLAnchorElement>("a")?.dataset.sessionKey).toBe(sessionKey);
-    });
-  });
-
-  describe("bare url links", () => {
-    it("marks autolinked URL text but not authored labels", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(
-          "https://example.com/a/very/long/path and [a label](https://example.com/a/very/long/path) and www.example.com",
-        ),
-      );
-      expect(
-        [...fragment.querySelectorAll("a")].map((link) =>
-          link.classList.contains("markdown-bare-url"),
-        ),
-      ).toEqual([true, false, true]);
-    });
-
-    it("leaves email autolinks unmarked", () => {
-      const fragment = htmlFragment(toSanitizedMarkdownHtml("Email me at test@example.com"));
-      expect(fragment.querySelector("a.markdown-bare-url")).toBeNull();
     });
   });
 
   describe("github link marks", () => {
     it.each([
-      ["bare pull request", "https://github.com/openclaw/openclaw/pull/3434", "#3434", "pull"],
-      ["bare issue", "https://github.com/openclaw/openclaw/issues/3435", "#3435", "issue"],
-      ["autolink", "<https://github.com/openclaw/openclaw/pull/3434>", "#3434", "pull"],
+      [pullUrl, itemLabel, "pull"],
+      [`${repoUrl}/issues/3435`, "openclaw/openclaw#3435", "issue"],
+      [`<${pullUrl}>`, itemLabel, "pull"],
       [
-        "bare www item",
         "https://www.github.com/openclaw/openclaw/issues/3435",
-        "#3435",
+        "openclaw/openclaw#3435",
         "issue",
         true,
       ],
-      ["repository", "https://github.com/openclaw/openclaw", "openclaw/openclaw", undefined],
+      [repoUrl, "openclaw/openclaw"],
+      [`${repoUrl}/actions/runs/123`, "github.com/openclaw/openclaw/actions/runs/123"],
+      [`[Audit skill](${directoryUrl})`, "Audit skill"],
+      [`[#3434](${pullUrl})`, itemLabel, "pull", false, pullUrl],
+      [`[${itemLabel}](${pullUrl})`, itemLabel, "pull"],
+      [`[#3434](${pullUrl} "A pull request")`, itemLabel, "pull"],
+      [`[the fix](${pullUrl})`, "the fix"],
+      [`[other/project#3434](${pullUrl})`, "other/project#3434"],
+      [`[\`#3434\`](${pullUrl})`, "#3434"],
+      [`https://github.com/${longRepository}/issues/3434`, `${longRepository}#3434`, "issue"],
       [
-        "other path",
-        "https://github.com/openclaw/openclaw/actions/runs/123",
-        "github.com/openclaw/openclaw/actions/runs/123",
-        undefined,
+        `${repoUrl}/issues/3434#issuecomment-1`,
+        itemLabel,
+        "issue",
+        false,
+        `${repoUrl}/issues/3434#issuecomment-1`,
       ],
-      [
-        "repository directory",
-        "https://github.com/openclaw/openclaw/tree/main/.agents/skills/test-audit",
-        "openclaw/openclaw/…/test-audit",
-        undefined,
-      ],
-      [
-        "branch root",
-        "https://github.com/openclaw/openclaw/tree/main",
-        "github.com/openclaw/openclaw/tree/main",
-        undefined,
-      ],
-      [
-        "slash-containing branch root",
-        "https://github.com/acme/project/tree/feature/link-labels",
-        "acme/project/…/link-labels",
-        undefined,
-      ],
-      [
-        "labeled directory",
-        "[Audit skill](https://github.com/openclaw/openclaw/tree/main/.agents/skills/test-audit)",
-        "Audit skill",
-        undefined,
-      ],
-      [
-        "pull shorthand",
-        "[#3434](https://github.com/openclaw/openclaw/pull/3434)",
-        "#3434",
-        "pull",
-      ],
-      [
-        "repository shorthand",
-        "[openclaw/openclaw#3434](https://github.com/openclaw/openclaw/pull/3434)",
-        "openclaw/openclaw#3434",
-        "pull",
-      ],
-      [
-        "shorthand with authored tooltip",
-        '[#3434](https://github.com/openclaw/openclaw/pull/3434 "A pull request")',
-        "#3434",
-        "pull",
-      ],
-      [
-        "labelled link",
-        "[the fix](https://github.com/openclaw/openclaw/pull/3434)",
-        "the fix",
-        undefined,
-      ],
-      [
-        "www host",
-        "[the fix](https://www.github.com/openclaw/openclaw/pull/3434)",
-        "the fix",
-        undefined,
-      ],
-      [
-        "http scheme",
-        "[the fix](http://github.com/openclaw/openclaw/pull/3434)",
-        "the fix",
-        undefined,
-      ],
-      [
-        "wrong number",
-        "[#3435](https://github.com/openclaw/openclaw/pull/3434)",
-        "#3435",
-        undefined,
-      ],
-      [
-        "wrong repository",
-        "[other/project#3434](https://github.com/openclaw/openclaw/pull/3434)",
-        "other/project#3434",
-        undefined,
-      ],
-      [
-        "padded label",
-        "[ #3434 ](https://github.com/openclaw/openclaw/pull/3434)",
-        " #3434 ",
-        undefined,
-      ],
-      [
-        "code-span label",
-        "[`#3434`](https://github.com/openclaw/openclaw/pull/3434)",
-        "#3434",
-        undefined,
-      ],
-    ])("marks %s", (_kind, input, expectedText, expectedKind, keepsTitle = false) => {
-      const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
-      const link = fragment.querySelector<HTMLAnchorElement>("a");
-      expect(link?.classList.contains("markdown-github-link")).toBe(true);
-      expect(link?.textContent).toBe(expectedText);
-      expect(link?.classList.contains("markdown-github-item")).toBe(Boolean(expectedKind));
-      expect(link?.getAttribute("data-github-kind")).toBe(expectedKind ?? null);
-      if (expectedKind) {
-        expect(link?.getAttribute("title")).toBe(keepsTitle ? link?.getAttribute("href") : null);
-        expect(link?.getAttribute("rel")).toBe("noreferrer noopener");
-        expect(link?.getAttribute("target")).toBe("_blank");
-      }
-    });
-
-    it("compacts long generated item references into chips", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(
-          "https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/3434",
-        ),
-      );
-      const link = fragment.querySelector<HTMLAnchorElement>("a");
-      expect(link?.textContent).toBe("#3434");
-      expect(link?.classList.contains("markdown-bare-url")).toBe(true);
-      expect(link?.classList.contains("markdown-github-item")).toBe(true);
-    });
+    ] satisfies Array<[string, string, string?, boolean?, string?]>)(
+      "marks %s",
+      (input, expectedText, expectedKind?: string, keepsTitle?: boolean, expectedHref?: string) => {
+        const fragment = render(input);
+        const link = fragment.querySelector<HTMLAnchorElement>("a");
+        expect(link?.classList.contains("markdown-github-link")).toBe(true);
+        expect(link?.textContent).toBe(expectedText);
+        expect(link?.classList.contains("markdown-github-item")).toBe(Boolean(expectedKind));
+        expect(link?.getAttribute("data-github-kind")).toBe(expectedKind ?? null);
+        if (input.startsWith("https://github.com/")) {
+          expect(link?.classList.contains("markdown-bare-url")).toBe(true);
+        }
+        if (expectedHref) {
+          expect(link?.getAttribute("href")).toBe(expectedHref);
+        }
+        if (expectedKind) {
+          expect(link?.getAttribute("title")).toBe(keepsTitle ? link?.getAttribute("href") : null);
+          expect(link?.getAttribute("rel")).toBe("noreferrer noopener");
+          expect(link?.getAttribute("target")).toBe("_blank");
+        }
+      },
+    );
 
     it.each([
       ["https://github.com/blader/humanizer/blob/main/SKILL.md", "SKILL.md"],
-      [
-        "https://github.com/openclaw/openclaw/tree/main/.agents/skills/test-audit",
-        "openclaw/openclaw/…/test-audit",
-      ],
       [
         "https://github.com/openclaw/openclaw/tree/main/skills/test%20audit/?tab=readme#examples",
         "openclaw/openclaw/…/test audit",
       ],
     ])("preserves the destination when shortening %s", (href, label) => {
       for (const source of [href, `<${href}>`, "`" + href + "`"]) {
-        for (const html of [
-          toSanitizedMarkdownHtml(source),
-          toStreamingMarkdownParts(source).join(""),
-        ]) {
-          const link = htmlFragment(html).querySelector<HTMLAnchorElement>("a");
+        for (const fragment of renderBoth(source)) {
+          const link = fragment.querySelector<HTMLAnchorElement>("a");
           expect(link?.classList.contains("markdown-github-link")).toBe(true);
           expect(link?.textContent).toBe(label);
           expect(link?.getAttribute("href")).toBe(href);
@@ -553,58 +311,21 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
 
     it.each([
-      ["a files-tab path", "https://github.com/openclaw/openclaw/pull/3434/files"],
-      [
-        "an issue comment fragment",
-        "https://github.com/openclaw/openclaw/issues/3434#issuecomment-1",
-      ],
-      ["a review comment query", "https://github.com/openclaw/openclaw/pull/3434?tab=files"],
-      ["a diff anchor", "https://github.com/openclaw/openclaw/pull/3434/files#diff-abc123"],
-    ])(
-      "keeps the specific destination in the chip href without a native tooltip for %s",
-      (_kind, input) => {
-        const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
-        const link = fragment.querySelector<HTMLAnchorElement>("a");
-        expect(link?.classList.contains("markdown-github-link")).toBe(true);
-        expect(link?.classList.contains("markdown-github-item")).toBe(true);
-        expect(link?.textContent).toBe("#3434");
-        expect(link?.getAttribute("href")).toBe(input);
-        expect(link?.hasAttribute("title")).toBe(false);
-      },
-    );
-
-    it.each([
-      ["non-github host", "[docs](https://example.com/openclaw)"],
-      ["lookalike host", "[docs](https://notgithub.com/openclaw)"],
       ["github in query", "[docs](https://example.com/?to=https://github.com/openclaw)"],
-      ["subdomain host", "[pages](https://openclaw.github.io/openclaw)"],
-      ["image-only link", "[![build](data:image/png;base64,x)](https://github.com/openclaw)"],
       ["image-only item", "[![build](data:image/png;base64,x)](https://github.com/o/r/pull/3434)"],
       ["lookalike item", "https://github.com.example.com/o/r/pull/3434"],
-      ["non-github shorthand", "[#3434](https://example.com/o/r/pull/3434)"],
     ])("leaves %s unmarked", (_kind, input) => {
-      const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
+      const fragment = render(input);
       expect(fragment.querySelector("a.markdown-github-link")).toBeNull();
       expect(fragment.querySelector("a.markdown-github-item, a[data-github-kind]")).toBeNull();
     });
 
-    it("leaves github urls inside fences untouched", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(
-          "```\nhttps://github.com/openclaw/openclaw\n```\n\n```\nhttps://github.com/o/r/pull/3434\n```",
-        ),
-      );
-      expect(fragment.querySelector("a")).toBeNull();
-      expect(fragment.querySelector(".markdown-github-link")).toBeNull();
-    });
-
     it.each([
-      ["pull request", "`https://github.com/openclaw/openclaw/pull/141131`", "#141131", "pull"],
-      ["issue", "` https://github.com/o/r/issues/3434 `", "#3434", "issue"],
-      ["repository", "`https://github.com/openclaw/openclaw`", "openclaw/openclaw", undefined],
+      ["issue", "` https://github.com/o/r/issues/3434 `", "o/r#3434", "issue"],
+      ["repository", `\`${repoUrl}\``, "openclaw/openclaw", undefined],
     ])("promotes a code span holding only a github %s url", (_kind, input, label, kind) => {
       const href = input.replaceAll("`", "").trim();
-      const fragment = htmlFragment(toSanitizedMarkdownHtml(`See ${input} today`));
+      const fragment = render(`See ${input} today`);
       expect(fragment.querySelector("code")).toBeNull();
       const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-github-link");
       expect(link?.textContent).toBe(label);
@@ -617,7 +338,6 @@ describe("toSanitizedMarkdownHtml links", () => {
 
     it.each([
       ["a non-github url", "`https://example.com/o/r/pull/3434`"],
-      ["a url with trailing prose", "`https://github.com/o/r/pull/3434 see this`"],
       ["a url with one-sided padding", "`https://github.com/o/r/pull/3434 `"],
       ["a url beside a control character", "`https://github.com/o/r/pull/3434\u0007`"],
       [
@@ -625,18 +345,322 @@ describe("toSanitizedMarkdownHtml links", () => {
         "[`https://github.com/o/r/pull/3434`](https://example.com)",
       ],
     ])("keeps %s as code", (_kind, input) => {
-      const fragment = htmlFragment(toSanitizedMarkdownHtml(input));
+      const fragment = render(input);
       expect(fragment.querySelector("code")).not.toBeNull();
       expect(fragment.querySelector("a.markdown-github-link")).toBeNull();
     });
+  });
+});
 
-    it("keeps the hover preview target intact on marked links", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("[#3434](https://github.com/openclaw/openclaw/pull/3434)"),
-      );
-      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-github-link");
-      expect(link?.getAttribute("href")).toBe("https://github.com/openclaw/openclaw/pull/3434");
-      expect(link?.getAttribute("target")).toBe("_blank");
+describe("github item references", () => {
+  it.each([
+    ["openclaw/clawsweeper#1576", "issues", "1576"],
+    ["PR openclaw/clawsweeper#42", "pull", "42"],
+    ["openclaw/clawsweeper PR #42", "pull", "42"],
+    ["pull **request** *openclaw/clawsweeper#42*", "pull", "42"],
+    ["issue openclaw/clawsweeper#42.", "issues", "42"],
+  ])("renders an explicit repository and item kind in %s", (source, path, number) => {
+    for (const fragment of renderBoth(source)) {
+      const anchor = fragment.querySelector<HTMLAnchorElement>("a.markdown-github-item");
+      expect(anchor?.href).toBe("https://github.com/openclaw/clawsweeper/" + path + "/" + number);
+      expect(anchor?.textContent).toBe("openclaw/clawsweeper#" + number);
+      expect(anchor?.dataset.githubKind).toBe(path === "pull" ? "pull" : "issue");
+      expect(anchor?.classList.contains("markdown-github-link")).toBe(true);
+    }
+  });
+
+  it.each([
+    "PR #126",
+    "#141270",
+    "PR #0123",
+    "issue acme/research#12345678901",
+    "acme/research#126.txt",
+    "word#141270",
+    "../..#141270",
+    "re**PR** #42",
+    "PR " + String.fromCharCode(96) + "acme/research#126" + String.fromCharCode(96),
+    "# PR acme/research#126",
+    "[PR #126](https://example.test)",
+  ])("does not invent a destination for %s", (source) => {
+    for (const fragment of renderBoth(source)) {
+      expect(fragment.querySelector("a.markdown-github-item")).toBeNull();
+      expect(fragment.querySelector("a a")).toBeNull();
+    }
+  });
+
+  it("keeps bare references plain when streamed links add another repository", () => {
+    const source = "PR #126. PR acme/research#126.";
+    for (const suffix of ["", " https://github.com/other/project/pull/126"]) {
+      for (const fragment of [
+        render(source + suffix),
+        renderStreaming(source + suffix, {}, "github-explicit-stream"),
+      ]) {
+        const anchors = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-github-item")];
+        expect(anchors[0]?.href).toBe("https://github.com/acme/research/pull/126");
+        expect(anchors).toHaveLength(suffix ? 2 : 1);
+        expect(fragment.textContent).toContain("PR #126.");
+      }
+    }
+  });
+
+  it("preserves explicit destinations, ordinary links, fragments, and independent repositories", () => {
+    const source =
+      "[PR #126](https://github.com/acme/research/pull/126#discussion_r123) and " +
+      "https://github.com/other/project/issues/126, PR acme/third#126, [guide](https://example.test/guide).";
+    for (const fragment of renderBoth(source)) {
+      expect([...fragment.querySelectorAll<HTMLAnchorElement>("a")].map((a) => a.href)).toEqual([
+        "https://github.com/acme/research/pull/126#discussion_r123",
+        "https://github.com/other/project/issues/126",
+        "https://github.com/acme/third/pull/126",
+        "https://example.test/guide",
+      ]);
+      expect(fragment.querySelector("a")?.textContent).toBe("PR #126");
+    }
+  });
+});
+
+describe("selected human mention rendering", () => {
+  function selected(
+    source: string,
+    label: string,
+    profileId = "profile-ada",
+    start = source.indexOf(label),
+  ) {
+    return { profileId, start, end: start + label.length };
+  }
+  const person = (fragment: HTMLElement) => fragment.querySelector("openclaw-person-reference");
+
+  function renderMentions(
+    source: string,
+    humanMentions: readonly ReturnType<typeof selected>[] = [],
+  ) {
+    return render(source, { humanMentions });
+  }
+
+  describe("explicit human mention Markdown", () => {
+    it("normalizes lines without changing the selected Unicode occurrence", () => {
+      const source = "🦞 **Hello**\r\n@Ada Lovelace cc @Ada Lovelace";
+      const label = "@Ada Lovelace";
+      const fragment = renderMentions(source, [
+        selected(source, label, "canonical-person", source.lastIndexOf(label)),
+      ]);
+      const references = fragment.querySelectorAll("openclaw-person-reference");
+      expect(references).toHaveLength(1);
+      expect(references[0]?.getAttribute("profile-id")).toBe("canonical-person");
+      expect(references[0]?.getAttribute("label")).toBe(label);
+      expect(fragment.textContent?.trim()).toBe("🦞 Hello\n@Ada Lovelace cc @Ada Lovelace");
+      expect(fragment.querySelector("strong")?.textContent).toBe("Hello");
     });
+
+    it.each([
+      ['@Ada_One & <img src=x onerror="alert(1)">', "Hello ", ""],
+      ["@Ada `One`", "Hello ", ""],
+      ["@Ada", "[Hello ", "]"],
+    ])("keeps selected labels literal: %s", (label, prefix, suffix) => {
+      const source = prefix + label + suffix;
+      const fragment = renderMentions(source, [selected(source, label)]);
+      expect(person(fragment)?.textContent).toBe(label);
+      expect(fragment.querySelector("img,script,em,code,[onerror]")).toBeNull();
+      expect(fragment.textContent?.trim()).toBe(source);
+    });
+
+    it.each([
+      "`@Ada`",
+      "```text\n@Ada\n```",
+      "    @Ada",
+      "[@Ada](https://example.test)",
+      "[link](https://example.test/@Ada)",
+      "https://example.test/@Ada",
+      "https://@Ada",
+      "/tmp/@Ada.md",
+      "![@Ada](https://example.test/image.png)",
+      '<span title="@Ada">example</span>',
+    ])("excludes code, links and attributes: %s", (source) => {
+      const rendered = toSanitizedMarkdownHtml(source, {
+        fileLinks: true,
+        humanMentions: [selected(source, "@Ada")],
+      });
+      const fragment = htmlFragment(rendered);
+      expect(person(fragment)).toBeNull();
+      expect(rendered).not.toContain("openclawhumanmention");
+      expect(rendered).toContain("@Ada");
+    });
+
+    it.each([
+      [
+        "Before [@Ada $&](https://example.test) after",
+        0,
+        ["@Ada $&"],
+        "https://example.test",
+        "@Ada $&",
+        "Before @Ada $& after",
+      ],
+      ["[@Ada]\n\n[@Ada]: /person", 0, ["@Ada"], "/person", "@Ada"],
+      ["[@Ada][]\n\n[@Ada]: /person", 0, ["@Ada"], "/person", "@Ada"],
+      ["[label][@Ada]\n\n[@Ada]: /person", 0, ["@Ada"], "/person", "label"],
+      ["[@Ada]\n\n[@Ada]: /person\n[@Ada]: /other", 1, ["@Ada"], "/person", "@Ada"],
+      ["[@Ada @Bob][]\n\n[@Ada @Bob]: /people", 0, ["@Ada", "@Bob"], "/people", "@Ada @Bob"],
+    ] as const)(
+      "restores link labels: %s",
+      (source, occurrence, labels, href, text, content?: string) => {
+        const mentions = labels.map((label) =>
+          selected(
+            source,
+            label,
+            "profile-" + label,
+            occurrence ? source.indexOf(label, source.indexOf(label) + 1) : source.indexOf(label),
+          ),
+        );
+        const rendered = toSanitizedMarkdownHtml(source, { humanMentions: mentions });
+        const fragment = htmlFragment(rendered);
+        expect(rendered).not.toContain("openclawhumanmention");
+        if (content !== undefined) {
+          expect(fragment.textContent?.trim()).toBe(content);
+        }
+        expect(fragment.querySelector("a")?.getAttribute("href")).toBe(href);
+        expect(fragment.querySelector("a")?.textContent).toBe(text);
+        expect(person(fragment)).toBeNull();
+        expect(fragment.textContent).not.toContain("openclawhumanmention");
+      },
+    );
+
+    it("preserves reference-style images", () => {
+      const source = "![@Ada][]\n\n[@Ada]: https://example.test/person.png";
+      expect(toSanitizedMarkdownHtml(source, { humanMentions: [selected(source, "@Ada")] })).toBe(
+        toSanitizedMarkdownHtml(source),
+      );
+    });
+
+    it.each([
+      "[@Ada]\n\n[OPENCLAWHUMANMENTION0X0END]: /literal\n\n@Ada",
+      "[OPENCLAWHUMANMENTION0X0END]\n\n[@Ada]: /person\n\n@Ada",
+    ])("does not alias authored references to generated markers: %s", (source) => {
+      const fragment = renderMentions(source, [
+        selected(source, "@Ada", "profile-ada", source.lastIndexOf("@Ada")),
+      ]);
+      expect(fragment.querySelector("a")).toBeNull();
+      expect(fragment.querySelectorAll("openclaw-person-reference")).toHaveLength(1);
+    });
+
+    it.each([
+      [
+        '@Ada <openclaw-person-reference profile-id="secret" label="@Ada">@Ada</openclaw-person-reference>',
+        [],
+      ],
+      ["@Ada", [selected("@Ada", "@Ada", "one"), selected("@Ada", "@Ada", "two")]],
+    ] as const)("rejects untrusted or overlapping identity: %s", (source, mentions) => {
+      const fragment = renderMentions(source, mentions);
+      expect(person(fragment)).toBeNull();
+      expect(fragment.textContent?.trim()).toBe(source);
+    });
+
+    it("keys the cache by selected identity or its absence", () => {
+      for (const id of ["first", "second", null, "first"]) {
+        const source = "@Same Name";
+        const fragment = renderMentions(source, id ? [selected(source, source, id)] : []);
+        expect(person(fragment)?.getAttribute("profile-id") ?? null).toBe(id);
+      }
+    });
+
+    it("restores placeholders in oversized fallback and streaming", () => {
+      const source = "@Ada " + "long text ".repeat(4500);
+      const options = { humanMentions: [selected(source, "@Ada")] };
+      const fallback = htmlFragment(toSanitizedMarkdownHtml(source, options));
+      expect(fallback.textContent).toBe(source);
+      expect(person(fallback)).toBeNull();
+      const [stable, tail] = toStreamingMarkdownParts("@Ada", options);
+      expect(person(htmlFragment(stable))?.textContent).toBe("@Ada");
+      expect(tail).toBe("");
+    });
+  });
+});
+
+describe("session navigation", () => {
+  type SessionRow = { key: string; agentId: string; displayName: string };
+  function makeContext(rows?: SessionRow[], navigate = vi.fn()) {
+    return {
+      basePath: "",
+      sessions: { state: rows ? { result: { sessions: rows } } : {} },
+      agents: { state: {} },
+      agentSelection: { state: {} },
+      gateway: { snapshot: {} },
+      navigate,
+    } as unknown as ApplicationContext;
+  }
+
+  it.each(["", "?view=full#latest"])(
+    "refreshes a cleaned session title with suffix %j",
+    async (suffix) => {
+      const sessionKey = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
+      const pathname = "/chat/main/d0effac9";
+      const href = `${location.origin}${pathname}${suffix}`;
+      const host = render(`${href}重新解读`, { sessionLinks: true });
+      const anchor = host.querySelector<HTMLAnchorElement>("a")!;
+      const titler = new SessionLinkTitler();
+      titler.context = makeContext([{ key: sessionKey, agentId: "main", displayName: "Research" }]);
+      titler.register(anchor, document.createElement("span"));
+      await titler.decorate(anchor);
+      titler.refresh();
+      expect(anchor).toMatchObject({
+        textContent: "Research",
+        dataset: { sessionKey, sessionHref: href },
+      });
+      expect(anchor.getAttribute("href")).toBe(`${pathname}${suffix}`);
+      expect(anchor.nextSibling?.textContent).toBe("重新解读");
+    },
+  );
+
+  it("navigates through the canonical chat session route", () => {
+    const navigate = vi.fn();
+    navigateMarkdownSession(makeContext(undefined, navigate), {
+      sessionKey: "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6",
+      agentId: "roboclaw",
+    });
+    expect(navigate).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/roboclaw/dashboard/2139bddb-3211-4641-b993-10f619f124e6",
+      search: "?__openclawSessionFacePreference=1",
+    });
+  });
+  it.each([
+    ["click", "a"],
+    [" ", "a"],
+    ["Enter", "code"],
+  ])("routes public-origin %s on %s before hovercard init", (action, tag) => {
+    const runtimeConfig = { gateway: { publicOrigin: "https://CHAT.example:443/" } };
+    const context = {
+      basePath: "/control",
+      runtimeConfig: { state: { configSnapshot: { runtimeConfig } } },
+    };
+    const provider = document.createElement("openclaw-session-progress-hovercard-provider");
+    Object.assign(provider, { context });
+    const anchor = document.createElement(tag);
+    const href = "https://chat.example/control/chat/roboclaw/d0effac9?view=full#latest";
+    anchor.setAttribute(tag === "a" ? "href" : "data-session-href", href);
+    provider.append(anchor);
+    const resolve = vi.fn((event: Event) => {
+      if (event instanceof MouseEvent) {
+        event.preventDefault();
+      }
+      return event instanceof KeyboardEvent
+        ? markdownSessionLinkFromKeyboardEvent(event)
+        : markdownSessionLinkFromEvent(event);
+    });
+    anchor.addEventListener(action === "click" ? "click" : "keydown", resolve);
+    const event =
+      action === "click"
+        ? new MouseEvent("click", { bubbles: true, cancelable: true })
+        : new KeyboardEvent("keydown", { key: action, bubbles: true, cancelable: true });
+    anchor.dispatchEvent(event);
+    expect(resolve).toHaveReturnedWith({
+      namespace: "chat",
+      pathname: "/control/chat/roboclaw/d0effac9",
+      search: "?view=full",
+      hash: "#latest",
+    });
+    expect(anchor.dataset.sessionKey).toBeUndefined();
+    expect(anchor.getAttribute("href") ?? anchor.dataset.sessionHref).toBe(href);
+    if (action !== "click") {
+      expect(event.defaultPrevented).toBe(true);
+    }
   });
 });

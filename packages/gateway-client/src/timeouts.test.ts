@@ -1,5 +1,5 @@
 // Gateway Client tests cover timeouts behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   addSafeTimeoutDelayGraceMs,
   getConnectChallengeTimeoutMsFromEnv,
@@ -8,9 +8,17 @@ import {
   resolveFiniteTimeoutDelayMs,
   resolvePreauthHandshakeTimeoutMs,
   resolveSafeTimeoutDelayMs,
+  startGatewayConnectTimeout,
 } from "./timeouts.js";
 
 describe("resolveSafeTimeoutDelayMs", () => {
+  it.each([
+    [12_345_678_901_000, 0, 60_000, 2_147_483_647],
+    [1_000, 900, 60_000, 60_000],
+  ])("keeps refresh deadline %i within safe timer bounds", (refreshAt, now, minMs, expected) => {
+    expect(resolveSafeTimeoutDelayMs(refreshAt - now, { minMs })).toBe(expected);
+  });
+
   it("preserves callers that intentionally allow zero-delay timers", () => {
     expect(resolveSafeTimeoutDelayMs(Number.NaN, { minMs: 0 })).toBe(0);
     expect(resolveSafeTimeoutDelayMs(-5, { minMs: 0 })).toBe(0);
@@ -39,6 +47,22 @@ describe("resolveFiniteTimeoutDelayMs", () => {
 });
 
 describe("gateway client handshake timeouts", () => {
+  it("allows a busy host 30 seconds without extending a stalled handshake", () => {
+    vi.useFakeTimers();
+    try {
+      const expired = vi.fn();
+      startGatewayConnectTimeout(expired);
+      expect(resolvePreauthHandshakeTimeoutMs({ env: {} })).toBe(30_000);
+      expect(resolveConnectChallengeTimeoutMs(undefined, { env: {} })).toBe(30_000);
+      vi.advanceTimersByTime(15_000);
+      expect(expired).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(15_000);
+      expect(expired).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("caps preauth handshake timeout env and config values to the safe timer range", () => {
     expect(
       resolvePreauthHandshakeTimeoutMs({

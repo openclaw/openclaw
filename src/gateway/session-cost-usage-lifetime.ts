@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { registerPreparedModelRuntimePublicationListener } from "../agents/prepared-model-runtime.publication-events.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
@@ -20,7 +21,12 @@ export function startSessionCostUsageProjectionLifetime(params: {
   // Publications can borrow startup admission; projection work keeps its own context.
   const inOwnerContext = AsyncLocalStorage.snapshot();
   const work = new AsyncWorkScope();
-  const refreshAgent = (agentId: string, storePath?: string, sessionFiles?: string[]) =>
+  const refreshAgent = (
+    agentId: string,
+    storePath?: string,
+    sessionFiles?: string[],
+    coalesce = false,
+  ) =>
     inOwnerContext(() => {
       if (work.isClosing || readAgentDatabaseAdmissionRefusal(agentId)) {
         return;
@@ -32,10 +38,11 @@ export function startSessionCostUsageProjectionLifetime(params: {
           agentId,
           storePath: storePath ?? resolveSessionStorePathForScope({ agentId }, config),
           sessionFiles,
+          coalesce,
         }),
       );
     });
-  const refreshAll = () =>
+  const refreshAgents = (agentId?: string) =>
     inOwnerContext(() => {
       if (work.isClosing) {
         return;
@@ -44,7 +51,9 @@ export function startSessionCostUsageProjectionLifetime(params: {
         .track(async () => {
           const { agents } = await listGatewayAgentsBasic(params.getConfig());
           for (const agent of agents) {
-            refreshAgent(agent.id);
+            if (agentId === undefined || agent.id === agentId) {
+              refreshAgent(agent.id);
+            }
           }
         })
         .catch((error: unknown) => {
@@ -58,15 +67,26 @@ export function startSessionCostUsageProjectionLifetime(params: {
     if (!target || isIncognitoSessionKey(target.sessionKey)) {
       return;
     }
+    // User/metadata rows join the next usage scan; unqualified publications can
+    // represent rewrites or compaction and must still invalidate the projection.
+    if (isRecord(update.message) && !update.message.usage) {
+      const role = update.message.role;
+      if (role === "user" || role === "system" || role === "toolResult" || role === "custom") {
+        return;
+      }
+    }
     const storePath =
       target.storePath ??
       resolveSessionStorePathForScope(
         { agentId: target.agentId, sessionKey: target.sessionKey },
         params.getConfig(),
       );
-    refreshAgent(target.agentId, storePath, [
-      update.sessionFile ?? formatSqliteSessionFileMarker({ ...target, storePath }),
-    ]);
+    refreshAgent(
+      target.agentId,
+      storePath,
+      [update.sessionFile ?? formatSqliteSessionFileMarker({ ...target, storePath })],
+      true,
+    );
   });
   const offRows = sessionChanges.subscribeFacts((change) => {
     if ("all" in change) {
@@ -75,29 +95,43 @@ export function startSessionCostUsageProjectionLifetime(params: {
         change.scope === "stores" ||
         typeof change.scope === "object"
       ) {
-        refreshAll();
+        const scope = change.scope;
+        // Default stores are agent-local; custom selectors can share physical storage.
+        const agentId =
+          !change.factsInvalidated &&
+          typeof scope === "object" &&
+          scope.topology === true &&
+          scope.storePath === undefined &&
+          !params.getConfig().session?.store
+            ? scope.agentId
+            : undefined;
+        refreshAgents(agentId);
       }
-    } else if (change.facts?.kind === "removed" && !isIncognitoSessionKey(change.sessionKey)) {
+    } else if (
+      change.facts?.kind === "removed" &&
+      !change.facts.transcriptInventoryUnchanged &&
+      !isIncognitoSessionKey(change.sessionKey)
+    ) {
       if (change.agentId) {
         refreshAgent(change.agentId, change.storePath);
       } else {
-        refreshAll();
+        refreshAgents();
       }
     }
   });
-  let pricingRevision = getActiveRemoteModelCatalog(params.getConfig(), false)?.revision;
+  let pricingRevision = getActiveRemoteModelCatalog(params.getConfig())?.revision;
   const offModels = registerPreparedModelRuntimePublicationListener((event) => {
     if (event.phase === "published" || event.phase === "catalog-published") {
-      const next = getActiveRemoteModelCatalog(params.getConfig(), false)?.revision;
+      const next = getActiveRemoteModelCatalog(params.getConfig())?.revision;
       if (next === pricingRevision) {
         return;
       }
       pricingRevision = next;
-      refreshAll();
+      refreshAgents();
     }
   });
   // The same queue bounds startup and incremental batches and publishes partial progress.
-  refreshAll();
+  refreshAgents();
   return {
     async stop() {
       offTranscript();

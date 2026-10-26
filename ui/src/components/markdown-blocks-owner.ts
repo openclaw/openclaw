@@ -1,36 +1,38 @@
 // One lifecycle owner for interactive Markdown in transcripts and previews.
 import { t } from "../i18n/index.ts";
+import { registerCodeBlocksEnglish } from "../i18n/locales/en-code-blocks.ts";
 import { updateCodeBlockWidthOverflow } from "./markdown-code-blocks.ts";
+import { MarkdownCodeHighlights } from "./markdown-code-highlight.ts";
 import { enhanceMarkdownTables, releaseMarkdownTables } from "./markdown-tables.ts";
+
+registerCodeBlocksEnglish();
 
 let codeBlockRegionSequence = 0;
 const blockSelector = ".code-block-wrapper, .markdown-mermaid";
 export class MarkdownBlocks {
-  private observedRoot: HTMLElement | undefined;
+  private observing = false;
   private scanPending = false;
   private active = true;
   private disposed = false;
+  private codeHighlights: MarkdownCodeHighlights | undefined;
 
   constructor(private readonly root: HTMLElement) {}
 
   private readonly pendingBlocks = new Set<HTMLElement>();
   private readonly observedNodes = new Set<HTMLElement>();
-  private readonly resizeObserver =
-    typeof ResizeObserver === "undefined"
-      ? null
-      : new ResizeObserver((entries) => {
-          if (!this.active || this.disposed) {
-            return;
-          }
-          const wrappers = new Set(
-            entries.map(({ target }) => target.closest<HTMLElement>(".code-block-wrapper")),
-          );
-          for (const wrapper of wrappers) {
-            if (wrapper) {
-              updateCodeBlockWidthOverflow(wrapper);
-            }
-          }
-        });
+  private readonly resizeObserver = new ResizeObserver((entries) => {
+    if (!this.active || this.disposed) {
+      return;
+    }
+    const wrappers = new Set(
+      entries.map(({ target }) => target.closest<HTMLElement>(".code-block-wrapper")),
+    );
+    for (const wrapper of wrappers) {
+      if (wrapper) {
+        updateCodeBlockWidthOverflow(wrapper);
+      }
+    }
+  });
   private readonly mutationObserver = new MutationObserver((records) => {
     this.collectMutations(records);
     if (this.pendingBlocks.size) {
@@ -51,22 +53,24 @@ export class MarkdownBlocks {
         }
       }
       for (const node of record.removedNodes) {
-        if (!(node instanceof HTMLElement) || this.root?.contains(node)) {
+        if (!(node instanceof HTMLElement) || this.root.contains(node)) {
           continue;
         }
         const removed = [node, ...node.querySelectorAll<HTMLElement>(".code-block-viewport, code")];
         for (const observed of removed) {
           if (this.observedNodes.delete(observed)) {
-            this.resizeObserver?.unobserve(observed);
+            this.resizeObserver.unobserve(observed);
           }
         }
       }
     }
+    this.codeHighlights?.prune();
   }
 
   update(active: boolean): void {
     this.active = active;
     if (active) {
+      this.codeHighlights?.resume();
       this.scheduleScan();
     } else {
       this.release();
@@ -76,18 +80,18 @@ export class MarkdownBlocks {
   dispose(): void {
     this.disposed = true;
     this.release();
+    this.codeHighlights?.dispose();
   }
 
   private release(): void {
     // Hidden retained DOM keeps its controls, but must release foreground observers.
     this.mutationObserver.disconnect();
-    this.observedRoot = undefined;
+    this.observing = false;
     this.pendingBlocks.clear();
-    this.resizeObserver?.disconnect();
+    this.resizeObserver.disconnect();
     this.observedNodes.clear();
-    if (this.root) {
-      releaseMarkdownTables(this.root);
-    }
+    this.codeHighlights?.pause();
+    releaseMarkdownTables(this.root);
   }
 
   private scheduleScan(): void {
@@ -99,7 +103,7 @@ export class MarkdownBlocks {
     // and fence queued scans when the host is removed before the microtask runs.
     queueMicrotask(() => {
       this.scanPending = false;
-      if (this.active && !this.disposed && this.root?.isConnected) {
+      if (this.active && !this.disposed && this.root.isConnected) {
         this.scan(this.root);
       }
     });
@@ -109,32 +113,26 @@ export class MarkdownBlocks {
     // Session retirement can independently release the table owner. Reacquire it
     // after commit; an existing owner returns without walking retained history.
     enhanceMarkdownTables(root);
-    if (this.observedRoot !== root) {
+    if (!this.observing) {
       this.collectBlocks(root);
       this.mutationObserver.observe(root, {
         childList: true,
         subtree: true,
-        characterData: !this.resizeObserver,
       });
-      this.observedRoot = root;
+      this.observing = true;
     }
     // A post-commit scan can precede observer delivery. Wire new controls
     // from this commit's records before consumers observe the rendered result.
     this.collectMutations(this.mutationObserver.takeRecords());
-    const blocks = [...this.pendingBlocks];
-    this.pendingBlocks.clear();
-    for (const wrapper of blocks) {
+    for (const wrapper of this.pendingBlocks) {
+      this.pendingBlocks.delete(wrapper);
       if (!root.contains(wrapper)) {
         continue;
       }
       if (wrapper.matches(".markdown-mermaid")) {
         if (!wrapper.querySelector("openclaw-mermaid") && wrapper.querySelector("pre code")) {
           const isCurrent = () =>
-            this.active &&
-            !this.disposed &&
-            this.root === root &&
-            root.isConnected &&
-            root.contains(wrapper);
+            this.active && !this.disposed && root.isConnected && root.contains(wrapper);
           void import("./markdown-mermaid.tsx").then(
             ({ mountMermaidBlocks }) => {
               if (isCurrent()) {
@@ -157,6 +155,9 @@ export class MarkdownBlocks {
       if (!viewport || !code) {
         continue;
       }
+      if (code.hasAttribute("data-code-highlight")) {
+        (this.codeHighlights ??= new MarkdownCodeHighlights(root)).sync(wrapper, viewport, code);
+      }
       // Short streaming fences gain an Expand control without replacing their
       // wrapper. Bind the control when it appears, not only on the first scan.
       const expandButton = wrapper.querySelector<HTMLButtonElement>(".code-block-expand");
@@ -172,11 +173,8 @@ export class MarkdownBlocks {
       for (const node of [viewport, code]) {
         if (!this.observedNodes.has(node)) {
           this.observedNodes.add(node);
-          this.resizeObserver?.observe(node);
+          this.resizeObserver.observe(node);
         }
-      }
-      if (!this.resizeObserver) {
-        updateCodeBlockWidthOverflow(wrapper);
       }
     }
   }

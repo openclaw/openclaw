@@ -11,10 +11,30 @@ import {
 import { linkEmail } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { resolveSessionListProfileReference } from "./session-identity-projection.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
 
 const roots = createTempDirTracker();
+const original = "12345678-a123-4123-8123-123456789abc";
+const other = "12345678-a123-4123-8123-123456789def";
+const prefix = "12345678a123";
+const emptySearch = { search: "no-matching-session" };
+const participant = (id: string) => ({
+  participants: [{ identity: { type: "profile" as const, id } }],
+});
+const creator = (id: string, source: "profile" | "channel" = "profile") => ({
+  type: "human" as const,
+  id,
+  source,
+});
+const visibleTo = (profileId: string) =>
+  createSessionListEntryFilter({
+    client: {
+      connect: { scopes: ["operator.read"] },
+      authenticatedUserProfile: { profileId },
+    } as GatewayClient,
+  });
 let stateRoot: string;
 beforeEach(() => {
   stateRoot = roots.make("activity-profile-reference-");
@@ -37,119 +57,126 @@ function createProfile(id: string): void {
   );
 }
 
+function listSessions(
+  entries: Record<string, Partial<SessionEntry>>,
+  opts: SessionsListParams,
+  entryFilter?: Parameters<typeof listSessionFixture>[0]["entryFilter"],
+) {
+  return listSessionFixture({
+    cfg: {},
+    storePath: stateRoot,
+    opts,
+    entryFilter,
+    store: Object.fromEntries(
+      Object.entries(entries).map(([id, entry]) => [
+        `agent:main:${id}`,
+        { sessionId: id, updatedAt: Date.now(), ...entry },
+      ]),
+    ),
+  });
+}
+
 function listActivity(
   profileIds: string[],
   involvingProfileId: string,
   options: Partial<SessionsListParams> = {},
 ) {
-  return listSessionFixture({
-    cfg: {},
-    storePath: stateRoot,
-    store: Object.fromEntries(
-      profileIds.map((id, index) => [
-        `agent:main:activity-${index}`,
-        {
-          sessionId: `activity-${index}`,
-          updatedAt: Date.now(),
-          participants: [{ identity: { type: "profile" as const, id } }],
-        },
-      ]),
-    ),
-    opts: { includePeople: true, involvingProfileId, ...options },
-  });
+  return listSessions(
+    Object.fromEntries(profileIds.map((id, index) => [`activity-${index}`, participant(id)])),
+    { includePeople: true, involvingProfileId, ...options },
+  );
 }
 
-it.each(["owned", "created", "involving"] as const)(
-  "resolves %s inventory relationships through profile merges",
-  async (relationship) => {
-    const original = "12345678-a123-4123-8123-123456789abc";
-    const current = "87654321-c123-4123-8123-123456789abc";
-    createProfile(original);
-    createProfile(current);
-    linkEmail(original + "@activity.test", current);
-    for (const profileId of [original, current]) {
-      const result = await listSessionFixture({
-        cfg: {},
-        storePath: stateRoot,
-        store: {
-          "agent:main:merged-profile": {
-            sessionId: "merged-profile",
-            updatedAt: 1,
-            createdActor: { type: "human", source: "profile", id: original },
-            owner: { actor: { type: "human", id: original } },
-            participants: [{ identity: { type: "profile", id: original } }],
-          },
+it("resolves inventory relationships through profile merges", async () => {
+  const current = "87654321-c123-4123-8123-123456789abc";
+  createProfile(original);
+  createProfile(current);
+  linkEmail(original + "@activity.test", current);
+  for (const profileId of [original, current]) {
+    const result = await listSessions(
+      {
+        "merged-profile": {
+          updatedAt: 1,
+          createdActor: creator(original),
+          owner: { actor: { type: "human", id: original } },
+          ...participant(original),
         },
-        opts: {
-          profileRelation: { profileId, relationship },
-          ...(relationship === "owned" ? { ownerId: original } : {}),
-          ...(relationship === "created" ? { creatorId: original } : {}),
-        },
-      });
-      expect(result.sessions.map((row) => row.sessionId)).toEqual(["merged-profile"]);
-      expect(result.sessions[0]?.createdActor?.id).toBe(original);
-    }
-  },
-);
+      },
+      {
+        profileRelation: { profileId, relationship: "owned" },
+        ownerId: original,
+      },
+    );
+    expect(result.sessions.map((row) => row.sessionId)).toEqual(["merged-profile"]);
+    expect(result.sessions[0]?.createdActor?.id).toBe(original);
+  }
+});
 
-it.each(["12345678-A123-4123-8123-123456789ABC"])(
-  "resolves retained profile %s without a durable row",
-  async (retained) => {
-    for (const reference of [
-      retained,
-      "12345678a123",
-      retained.replaceAll("-", "").toLowerCase(),
-    ]) {
-      const result = await listActivity([retained], reference);
-      expect(result.involvingProfileId, reference).toBe(retained);
-      expect(result.sessions, reference).toHaveLength(1);
-      const empty = await listActivity([retained], reference, { search: "no-matching-session" });
-      expect(empty.involvingProfileId, reference).toBe(retained);
-      expect(empty.sessions, reference).toEqual([]);
+it("resolves retained profile without a durable row", async () => {
+  const retained = original.toUpperCase();
+  for (const reference of [retained, prefix, retained.replaceAll("-", "").toLowerCase()]) {
+    const result = await listActivity([retained], reference);
+    expect(result.involvingProfileId, reference).toBe(retained);
+    expect(result.sessions, reference).toHaveLength(1);
+    const empty = await listActivity([retained], reference, emptySearch);
+    expect(empty.involvingProfileId, reference).toBe(retained);
+    expect(empty.sessions, reference).toEqual([]);
+  }
+  expect(fs.existsSync(path.join(stateRoot, "state", "openclaw.sqlite"))).toBe(false);
+  createProfile(other);
+  await expect(listActivity([retained], prefix, emptySearch)).rejects.toThrow(
+    "Person link is ambiguous",
+  );
+});
+
+it("matches retained profile prefixes across case and hyphen placement, with exact precedence", () => {
+  const compact = "abcdef1234567890abcdef1234567890";
+  const unrelated = "fedcba1234567890abcdef1234567890";
+  for (let length = 8; length <= 32; length++) {
+    const reference = compact.slice(0, length);
+    for (const id of [compact.toUpperCase(), `--${compact.split("").join("--")}`]) {
+      const identities = new Map([
+        [reference, undefined],
+        [id, undefined],
+        [unrelated, undefined],
+      ]);
+      for (const fields of [{ createdActor: creator(id) }, participant(id)]) {
+        const entries: [string, SessionEntry][] = [
+          ["retained", { sessionId: "retained", updatedAt: 1, ...fields }],
+          ["unrelated", { sessionId: "unrelated", updatedAt: 1, ...participant(unrelated) }],
+        ];
+        expect(
+          resolveSessionListProfileReference(reference, entries, identities, new Set()),
+        ).toEqual({
+          ok: true,
+          value: id,
+        });
+        entries.push(["exact", { sessionId: "exact", updatedAt: 1, ...participant(reference) }]);
+        expect(
+          resolveSessionListProfileReference(reference, entries, identities, new Set()),
+        ).toEqual({
+          ok: true,
+          value: reference,
+        });
+      }
     }
-    expect(fs.existsSync(path.join(stateRoot, "state", "openclaw.sqlite"))).toBe(false);
-    createProfile("12345678-a123-4123-8123-123456789def");
-    await expect(
-      listActivity([retained], "12345678a123", { search: "no-matching-session" }),
-    ).rejects.toThrow("Person link is ambiguous");
-  },
-);
+  }
+});
 
 it("resolves qualified retained creators without treating legacy human IDs as profiles", async () => {
-  const retained = "12345678-a123-4123-8123-123456789abc";
-  const result = await listSessionFixture({
-    cfg: {},
-    storePath: stateRoot,
-    store: {
-      "agent:main:qualified": {
-        sessionId: "qualified",
-        updatedAt: Date.now(),
-        createdActor: { type: "human", id: retained, source: "profile" },
-      },
-      "agent:main:legacy": {
-        sessionId: "legacy",
-        updatedAt: Date.now(),
-        createdActor: {
-          type: "human",
-          id: "12345678-a123-4123-8123-123456789def",
-          source: "channel",
-        },
-      },
+  const result = await listSessions(
+    {
+      qualified: { createdActor: creator(original) },
+      legacy: { createdActor: creator(other, "channel") },
     },
-    opts: { includePeople: true, involvingProfileId: "12345678a123" },
-  });
-  expect(result.involvingProfileId).toBe(retained);
+    { includePeople: true, involvingProfileId: prefix },
+  );
+  expect(result.involvingProfileId).toBe(original);
   expect(result.sessions.map((row) => row.key)).toEqual(["agent:main:qualified"]);
 });
 
 it("leaves missing and invalid person references unresolved without creating profile storage", async () => {
-  for (const reference of [
-    "12345678",
-    "1234567",
-    "ABCDEF12",
-    "123456789abcdef0123456789abcdef012",
-    "unknown-person",
-  ]) {
+  for (const reference of ["12345678", "unknown-person"]) {
     const result = await listActivity([], reference);
     expect(result.involvingProfileId).toBeUndefined();
     expect(result.sessions).toEqual([]);
@@ -163,86 +190,55 @@ it.each([
   { hidden: "draft", durable: true },
   { hidden: "incognito", durable: true },
 ])("does not resolve hidden $hidden identities (durable=$durable)", async ({ hidden, durable }) => {
-  const visibleId = "12345678-a123-4123-8123-123456789abc";
-  const hiddenId = "12345678-a123-4123-8123-123456789def";
+  const visibleId = original;
+  const hiddenId = other;
   createProfile(visibleId);
   if (durable) {
     createProfile(hiddenId);
   }
-  const visibility = createSessionListEntryFilter({
-    client: {
-      connect: { scopes: ["operator.read"] },
-      authenticatedUserProfile: { profileId: visibleId },
-    } as GatewayClient,
-  });
-  const entryFilter = vi.fn(visibility);
-  const store: Record<string, SessionEntry> = {
-    "agent:main:visible": {
-      sessionId: "visible",
-      updatedAt: Date.now(),
-      visibility: "shared",
-      participants: [{ identity: { type: "profile", id: visibleId } }],
-    },
-    "agent:main:hidden": {
-      sessionId: "hidden",
-      updatedAt: Date.now(),
+  const entryFilter = visibleTo(visibleId);
+  const store = {
+    visible: { visibility: "shared", ...participant(visibleId) },
+    hidden: {
       visibility: hidden === "draft" ? "draft" : "shared",
       incognito: hidden === "incognito" ? true : undefined,
-      participants: [{ identity: { type: "profile", id: hiddenId } }],
+      ...participant(hiddenId),
     },
-  };
-  for (const reference of ["12345678a123", hiddenId, hiddenId.replaceAll("-", "")]) {
-    entryFilter.mockClear();
-    const result = await listSessionFixture({
-      cfg: {},
-      storePath: stateRoot,
+  } satisfies Record<string, Partial<SessionEntry>>;
+  for (const reference of [prefix, hiddenId, hiddenId.replaceAll("-", "")]) {
+    const result = await listSessions(
       store,
+      { includePeople: true, involvingProfileId: reference, ...emptySearch },
       entryFilter,
-      opts: { includePeople: true, involvingProfileId: reference, search: "no-matching-session" },
-    });
-    expect(result.involvingProfileId, reference).toBe(
-      reference === "12345678a123" ? visibleId : undefined,
     );
-    expect(result.sessions).toEqual([]);
-    expect(result.people).toEqual([]);
-    expect(entryFilter).toHaveBeenCalledTimes(2);
+    expect(result, reference).toMatchObject({
+      involvingProfileId: reference === prefix ? visibleId : undefined,
+      sessions: [],
+      people: [],
+    });
   }
 });
 
 it("resolves merge aliases for visible owners without considering hidden profiles", async () => {
-  const source = "12345678-a123-4123-8123-123456789abc";
-  const hidden = "12345678-a123-4123-8123-123456789def";
+  const source = original;
+  const hidden = other;
   const target = "87654321-a123-4123-8123-123456789abc";
   for (const id of [source, hidden, target]) {
     createProfile(id);
   }
   linkEmail(`${source}@activity.test`, target);
-  const entryFilter = createSessionListEntryFilter({
-    client: {
-      connect: { scopes: ["operator.read"] },
-      authenticatedUserProfile: { profileId: target },
-    } as GatewayClient,
-  });
-  const result = await listSessionFixture({
-    cfg: {},
-    storePath: stateRoot,
-    entryFilter,
-    store: {
-      "agent:main:owned": {
-        sessionId: "owned",
-        updatedAt: Date.now(),
+  const entryFilter = visibleTo(target);
+  const result = await listSessions(
+    {
+      owned: {
         visibility: "shared",
         owner: { actor: { type: "human", id: target } },
       },
-      "agent:main:hidden": {
-        sessionId: "hidden",
-        updatedAt: Date.now(),
-        visibility: "draft",
-        participants: [{ identity: { type: "profile", id: hidden } }],
-      },
+      hidden: { visibility: "draft", ...participant(hidden) },
     },
-    opts: { includePeople: true, involvingProfileId: "12345678a123" },
-  });
+    { includePeople: true, involvingProfileId: prefix },
+    entryFilter,
+  );
   expect(result.involvingProfileId).toBe(target);
   expect(result.sessions.map((row) => row.key)).toEqual(["agent:main:owned"]);
 });

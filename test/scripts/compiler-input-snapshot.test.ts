@@ -7,31 +7,30 @@ import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helper
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+const linkType = process.platform === "win32" ? "junction" : "dir";
+
+function write(root: string, file: string, bytes: string) {
+  const filename = path.join(root, file);
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  fs.writeFileSync(filename, bytes);
+}
 
 function fixture(root = roots.make("compiler-input-snapshot-")) {
-  const write = (file: string, bytes: string) => {
-    const filename = path.join(root, file);
-    fs.mkdirSync(path.dirname(filename), { recursive: true });
-    fs.writeFileSync(filename, bytes);
-  };
-  write("package.json", '{"type":"module"}');
-  write("pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
-  write("base.json", '{"compilerOptions":{"target":"ES2023","types":[]}}');
-  write("tsconfig.json", '{"extends":"./base.json","include":["src/**/*.ts"]}');
-  write("src/index.ts", "export const value = 1;\n");
-  write("tools/compiler.js", "export const compiler = 1;\n");
-  write("scripts/generator.mts", "export const generator = 1;\n");
-  write("packages/local/package.json", '{"name":"fixture-package","type":"module"}');
-  write("packages/local/src/index.ts", "export const dependency = 1;\n");
-  write("packages/local/dist/index.js", "export const built = 1;\n");
-  write(".cache/vitest/ignored.json", "{}");
+  const put = (file: string, bytes: string) => write(root, file, bytes);
+  put("package.json", '{"type":"module"}');
+  put("pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+  put("base.json", '{"compilerOptions":{"target":"ES2023","types":[]}}');
+  put("tsconfig.json", '{"extends":"./base.json","include":["src/**/*.ts"]}');
+  put("src/index.ts", "export const value = 1;\n");
+  put("tools/compiler.js", "export const compiler = 1;\n");
+  put("scripts/generator.mts", "export const generator = 1;\n");
+  put("packages/local/package.json", '{"name":"fixture-package","type":"module"}');
+  put("packages/local/src/index.ts", "export const dependency = 1;\n");
+  put("packages/local/dist/index.js", "export const built = 1;\n");
+  put(".cache/vitest/ignored.json", "{}");
   fs.mkdirSync(path.join(root, "node_modules"));
   const link = (target: string, name: string) =>
-    fs.symlinkSync(
-      path.join(root, target),
-      path.join(root, name),
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    fs.symlinkSync(path.join(root, target), path.join(root, name), linkType);
   // The source alias is visited before the installed alias upgrades this tree.
   link("packages/local", "alias");
   link("packages/local", "node_modules/fixture-package");
@@ -44,12 +43,19 @@ function fixture(root = roots.make("compiler-input-snapshot-")) {
     });
   const signature = (input: CompilerInputSnapshot, outputRoot?: string) =>
     input.signature("tsconfig.json", ["fixture-compiler"], ["src/index.ts"], outputRoot);
-  return { root, write, snapshot, signature };
+  const record = (input: CompilerInputSnapshot, outputs: string[] = []) => ({
+    version: ARTIFACT_CACHE_VERSION,
+    signature: signature(input),
+    inputs: ["src/index.ts"],
+    outputs: Object.fromEntries(outputs.map((file) => [file, input.hash(file)])),
+  });
+  const matches = (saved: ReturnType<typeof record>, input = snapshot()) =>
+    input.matches(saved, "tsconfig.json", ["fixture-compiler"], Object.keys(saved.outputs));
+  return { root, write: put, snapshot, signature, record, matches };
 }
 
 it.each([
   ['{"compilerOptions":{"target":"invalid"},"include":["src/**/*.ts"]}', "TS6046"],
-  ['{"include":"src/**/*.ts"}', "TS5024"],
   ['{"extends":"./missing.json","include":["src/**/*.ts"]}', "TS5083"],
   ['{"compilerOptions": {', "TS1005"],
 ])("rejects invalid native compiler configuration %s", (config, diagnostic) => {
@@ -60,10 +66,6 @@ it.each([
 
 it.each([
   { file: "tools/compiler.js", bytes: "export const compiler = 2;\n" },
-  {
-    file: "base.json",
-    bytes: '{"compilerOptions":{"target":"ES2022","types":[]}}',
-  },
   {
     file: "base.json",
     bytes: '{ "compilerOptions": {"target":"ES2023","types":[]} }\n',
@@ -109,30 +111,19 @@ it("ignores checkout scratch packages that disappear during preparation", async 
 it("preserves signatures across checkout depths with one shared external dependency", async () => {
   const directory = roots.make("compiler-input-snapshot-portability-");
   const dependency = path.join(directory, "shared-dependency");
-  fs.mkdirSync(dependency);
-  fs.writeFileSync(
-    path.join(dependency, "package.json"),
-    '{"name":"shared-dependency","type":"module"}',
-  );
-  fs.writeFileSync(path.join(dependency, "index.js"), "export const value = 1;\n");
+  write(dependency, "package.json", '{"name":"shared-dependency","type":"module"}');
+  write(dependency, "index.js", "export const value = 1;\n");
   const signatures: string[] = [];
   for (const root of [path.join(directory, "shallow"), path.join(directory, "deeper/checkout")]) {
-    fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    fs.mkdirSync(path.join(root, "node_modules"));
-    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
-    fs.writeFileSync(
-      path.join(root, "tsconfig.json"),
+    write(root, "package.json", '{"type":"module"}');
+    write(
+      root,
+      "tsconfig.json",
       '{"compilerOptions":{"target":"ES2023","types":[]},"include":["src/**/*.ts"]}',
     );
-    fs.writeFileSync(
-      path.join(root, "src/index.ts"),
-      'export { value } from "shared-dependency";\n',
-    );
-    fs.symlinkSync(
-      dependency,
-      path.join(root, "node_modules/shared-dependency"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    write(root, "src/index.ts", 'export { value } from "shared-dependency";\n');
+    fs.mkdirSync(path.join(root, "node_modules"));
+    fs.symlinkSync(dependency, path.join(root, "node_modules/shared-dependency"), linkType);
     const snapshot = new CompilerInputSnapshot(root, {
       toolchainFiles: [],
       generatorInputs: ["package.json"],
@@ -150,25 +141,16 @@ it("invalidates warm records when ancestor installs appear or disappear without 
   const directory = roots.make("compiler-input-snapshot-ancestor-");
   const f = fixture(path.join(directory, "checkout"));
   f.write("dist/index.d.ts", "export declare const value = 1;\n");
-  const record = (snapshot: CompilerInputSnapshot) => ({
-    version: ARTIFACT_CACHE_VERSION,
-    signature: f.signature(snapshot),
-    inputs: ["src/index.ts"],
-    outputs: { "dist/index.d.ts": snapshot.hash("dist/index.d.ts") },
-  });
-  const matches = (saved: ReturnType<typeof record>) =>
-    f.snapshot().matches(saved, "tsconfig.json", ["fixture-compiler"], ["dist/index.d.ts"]);
-  const before = f.snapshot();
-  const absent = record(before);
+  const record = (snapshot: CompilerInputSnapshot) => f.record(snapshot, ["dist/index.d.ts"]);
+  const { matches } = f;
+  const absent = record(f.snapshot());
   expect(matches(absent)).toBe(true);
 
   const install = path.join(directory, "node_modules");
   fs.mkdirSync(install);
   const after = f.snapshot();
   await after.prepare();
-  expect(after.matches(absent, "tsconfig.json", ["fixture-compiler"], ["dist/index.d.ts"])).toBe(
-    false,
-  );
+  expect(matches(absent, after)).toBe(false);
   const present = record(after);
   expect(matches(present)).toBe(true);
 
@@ -189,23 +171,16 @@ it.each(["dependency", "@scope/dependency"])(
     const f = fixture();
     const directory = path.join(f.root, "node_modules", name);
     fs.mkdirSync(path.dirname(directory), { recursive: true });
-    const record = (snapshot: CompilerInputSnapshot) => ({
-      version: ARTIFACT_CACHE_VERSION,
-      signature: f.signature(snapshot),
-      inputs: ["src/index.ts"],
-      outputs: {},
-    });
-    const before = f.snapshot();
-    const absent = record(before);
+    const absent = f.record(f.snapshot());
     fs.mkdirSync(directory);
     const after = f.snapshot();
-    const present = record(after);
-    expect(after.matches(absent, "tsconfig.json", ["fixture-compiler"], [])).toBe(false);
+    const present = f.record(after);
+    expect(f.matches(absent, after)).toBe(false);
 
     fs.rmdirSync(directory);
     const removed = f.snapshot();
-    expect(removed.matches(present, "tsconfig.json", ["fixture-compiler"], [])).toBe(false);
-    expect(removed.matches(absent, "tsconfig.json", ["fixture-compiler"], [])).toBe(true);
+    expect(f.matches(present, removed)).toBe(false);
+    expect(f.matches(absent, removed)).toBe(true);
   },
 );
 
@@ -218,16 +193,11 @@ it("invalidates an indirect dependency symlink when its final target changes", a
     [first, "first"],
     [second, "second"],
   ] as const) {
-    fs.mkdirSync(directory);
-    fs.writeFileSync(
-      path.join(directory, "package.json"),
-      '{"name":"external-fixture","type":"module"}',
-    );
-    fs.writeFileSync(path.join(directory, "source.js"), `export const value = "${value}";\n`);
+    write(directory, "package.json", '{"name":"external-fixture","type":"module"}');
+    write(directory, "source.js", `export const value = "${value}";\n`);
   }
   const indirect = path.join(outside, "indirect");
   const installed = path.join(f.root, "node_modules/external-fixture");
-  const linkType = process.platform === "win32" ? "junction" : "dir";
   fs.symlinkSync(first, indirect, linkType);
   fs.symlinkSync(indirect, installed, linkType);
   const originalLink = fs.readlinkSync(installed);

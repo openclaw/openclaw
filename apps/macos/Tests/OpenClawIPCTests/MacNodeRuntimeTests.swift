@@ -1,6 +1,7 @@
 import CoreLocation
 import Dispatch
 import Foundation
+import OpenClawIPC
 import OpenClawKit
 import Testing
 @testable import OpenClaw
@@ -159,14 +160,26 @@ struct MacNodeRuntimeTests {
     final class MainActorServicesProbe: MacNodeRuntimeMainActorServices, @unchecked Sendable {
         typealias SnapshotInspection = (Int?, Int?, Double?, OpenClawScreenSnapshotFormat?) -> Void
 
+        private let desktopDefaultsSuiteName = "MacNodeRuntimeTests.\(UUID().uuidString)"
         let desktopPlatform = DesktopPlatformProbe()
         lazy var desktopAvailability: MacDesktopAvailabilityCoordinator = {
-            let defaults = UserDefaults(suiteName: "MacNodeRuntimeTests.\(UUID().uuidString)")!
+            let defaults = UserDefaults(suiteName: self.desktopDefaultsSuiteName)!
             let owner = MacDesktopAvailabilityCoordinator(defaults: defaults, platform: self.desktopPlatform)
             owner.setRoute(generation: 1, connected: true, hostingEnabled: false)
             return owner
         }()
 
+        var permissionStates: [Capability: OpenClawPermissionState] = [:]
+
+        func missingPermissions(_ capabilities: [Capability], disabled: [Capability]) async -> OpenClawNodeError? {
+            PermissionManager.missingPermission(capabilities.compactMap { capability in
+                if disabled.contains(capability) { return (capability, .disabledInOpenClaw) }
+                return self.permissionStates[capability].map { (capability, $0) }
+            })
+        }
+
+        var recordingBytes = 2
+        var recordingPaths: [String] = []
         var snapshotCallCount = 0
         var receivedSnapshotParams: MacNodeScreenSnapshotParams?
         var snapshotResult: ScreenSnapshotResult
@@ -209,6 +222,10 @@ struct MacNodeRuntimeTests {
             self.allowPerformGate = allowPerformGate
         }
 
+        deinit {
+            UserDefaults.standard.removePersistentDomain(forName: self.desktopDefaultsSuiteName)
+        }
+
         func snapshotScreen(
             screenIndex: Int?,
             maxWidth: Int?,
@@ -239,7 +256,8 @@ struct MacNodeRuntimeTests {
         {
             let url = FileManager().temporaryDirectory
                 .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
-            try Data("ok".utf8).write(to: url)
+            try Data(repeating: 0x41, count: self.recordingBytes).write(to: url)
+            self.recordingPaths.append(url.path)
             return (path: url.path, hasAudio: false)
         }
 
@@ -493,12 +511,29 @@ struct MacNodeRuntimeTests {
         #expect(!overlay.model.isVisible)
     }
 
-    @Test func `handle invoke camera list requires enabled camera`() async {
+    @Test func `camera enumeration requires only the OpenClaw toggle`() async {
         await TestIsolation.withUserDefaultsValues([cameraEnabledKey: false]) {
-            let runtime = MacNodeRuntime()
+            let services = await MainActor.run {
+                let services = MainActorServicesProbe()
+                services.permissionStates = [.camera: .denied]
+                return services
+            }
+            let runtime = await MacNodeRuntime(
+                desktopAvailability: services.desktopAvailability,
+                makeMainActorServices: { services })
             let response = await self.invoke(runtime, "req-4", OpenClawCameraCommand.list.rawValue)
             #expect(response.ok == false)
-            #expect(response.error?.message.contains("CAMERA_DISABLED") == true)
+            #expect(response.error?.details == .init(capabilities: ["cameraEnabled"], state: .disabledInOpenClaw))
+            let disabledCapture = await self.invoke(runtime, "req-camera-disabled", OpenClawCameraCommand.snap.rawValue)
+            #expect(disabledCapture.error?.details == .init(
+                capabilities: ["cameraEnabled", "camera"], state: .disabledInOpenClaw))
+
+            await MainActor.run { AppDefaults.standard.set(true, forKey: cameraEnabledKey) }
+            let enabled = await self.invoke(runtime, "req-camera-list-enabled", OpenClawCameraCommand.list.rawValue)
+            #expect(enabled.ok)
+            #expect(enabled.error == nil)
+            let capture = await self.invoke(runtime, "req-camera-denied", OpenClawCameraCommand.snap.rawValue)
+            #expect(capture.error?.details == .init(capabilities: ["camera"], state: .denied))
         }
     }
 
@@ -527,7 +562,7 @@ struct MacNodeRuntimeTests {
 
                 #expect(response.ok == testCase.accepted)
                 if testCase.mode == .off {
-                    #expect(response.error?.message == "LOCATION_DISABLED: enable Location in Settings")
+                    #expect(response.error?.details == .init(capabilities: ["location"], state: .disabledInOpenClaw))
                 }
             }
         }
@@ -552,6 +587,58 @@ struct MacNodeRuntimeTests {
         let payload = try JSONDecoder().decode(Payload.self, from: Data(payloadJSON.utf8))
         #expect(payload.format == "mp4")
         #expect(!payload.base64.isEmpty)
+    }
+
+    @Test(arguments: [19_660_800, 19_660_801])
+    func `handle invoke screen record rejects recordings exceeding the frame budget`(recordingBytes: Int) async throws {
+        let services = await MainActor.run {
+            let services = MainActorServicesProbe()
+            services.recordingBytes = recordingBytes
+            return services
+        }
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services })
+
+        let response = try await invoke(
+            runtime,
+            "req-screen-record-too-large",
+            OpenClawScreenCommand.record.rawValue,
+            params: OpenClawScreenRecordParams(durationMs: 60000))
+
+        #expect(response.ok == false)
+        let hasPayload = response.payloadJSON != nil
+        #expect(!hasPayload)
+        #expect(response.error?.code == .unavailable)
+        #expect(response.error?.message == "UNAVAILABLE: screen.record payload too large; reduce durationMs or fps")
+        let path = try #require(await MainActor.run { services.recordingPaths.first })
+        #expect(!FileManager().fileExists(atPath: path))
+    }
+
+    @Test func `handle invoke screen record accepts near-limit recordings that fit the frame`() async throws {
+        let services = await MainActor.run {
+            let services = MainActorServicesProbe()
+            services.recordingBytes = 19_660_100
+            return services
+        }
+        let runtime = await MacNodeRuntime(
+            desktopAvailability: services.desktopAvailability,
+            makeMainActorServices: { services })
+
+        let response = try await invoke(
+            runtime,
+            "req-screen-record-fit",
+            OpenClawScreenCommand.record.rawValue,
+            params: OpenClawScreenRecordParams(durationMs: 60000),
+            nodeId: "node-fit")
+
+        #expect(response.ok == true)
+        let payloadJSON = try #require(response.payloadJSON)
+        let projected = try MacNodeRuntime.projectedOuterFrameBytes(
+            forPayloadJSON: payloadJSON,
+            requestId: "req-screen-record-fit",
+            nodeId: "node-fit")
+        #expect(projected <= 25 * 1024 * 1024)
     }
 
     @Test func `handle invoke screen snapshot uses injected services`() async throws {
@@ -599,9 +686,8 @@ struct MacNodeRuntimeTests {
         #expect(payload.width == 800)
         #expect(payload.height == 450)
         #expect(payload.capturedAtMs > 0)
-        let snapshotCalledAtMs = await MainActor.run { services.snapshotCalledAtMs }
-        #expect(snapshotCalledAtMs != nil)
-        #expect(payload.capturedAtMs <= snapshotCalledAtMs!)
+        let snapshotCalledAtMs = try #require(await MainActor.run { services.snapshotCalledAtMs })
+        #expect(payload.capturedAtMs <= snapshotCalledAtMs)
     }
 
     @Test func `handle invoke screen snapshot rejects malformed params before capture`() async {
@@ -646,8 +732,8 @@ struct MacNodeRuntimeTests {
             runtime, "req-computer-disabled", OpenClawComputerCommand.act.rawValue, params: params)
 
         #expect(response.ok == false)
-        #expect(response.error?.code == .unavailable)
-        #expect(response.error?.message == "COMPUTER_DISABLED: enable Computer Control in Settings")
+        #expect(response.error?.code == .permissionMissing)
+        #expect(response.error?.details?.capabilities.contains("computerControl") == true)
         let received = await MainActor.run { services.receivedParams }
         #expect(received == nil)
     }
@@ -959,7 +1045,7 @@ extension MacNodeRuntimeTests {
         let factoryGate = AsyncTestGate()
         defer { factoryGate.open() }
         let factoryCalls = LockedCounter()
-        let admissionCalls = LockedCounter()
+        let secondAdmission = AsyncTestGate()
         let runtime = await MacNodeRuntime(
             desktopAvailability: services.desktopAvailability,
             makeMainActorServices: {
@@ -967,10 +1053,8 @@ extension MacNodeRuntimeTests {
                 await factoryGate.wait()
                 return services
             },
-            computerControlEnabled: {
-                admissionCalls.increment()
-                return true
-            })
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
         let params = OpenClawComputerActParams(action: .leftClick, x: 12, y: 34, refWidth: 1280)
         let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
 
@@ -978,11 +1062,14 @@ extension MacNodeRuntimeTests {
             await self.invoke(runtime, "req-computer-single-flight-1", OpenClawComputerCommand.act.rawValue, json)
         }
         try #require(try await waitForCount(1, counter: factoryCalls, "services factory call"))
+        await MainActor.run {
+            services.desktopPlatform.onConsoleStateRead = { secondAdmission.open() }
+        }
         let second = Task {
             await self.invoke(runtime, "req-computer-single-flight-2", OpenClawComputerCommand.act.rawValue, json)
         }
-        try #require(try await waitForCount(2, counter: admissionCalls, "second invoke admission"))
-        // The actor barrier proves the second invoke reached its first suspension.
+        try await secondAdmission.wait("second desktop admission")
+        // Permission evaluation runs after service initialization; observe desktop admission instead.
         await runtime.updateMainSessionKey("single-flight-barrier")
 
         #expect(factoryCalls.value() == 1)
@@ -991,6 +1078,7 @@ extension MacNodeRuntimeTests {
         let secondResponse = await second.value
         #expect(firstResponse.ok)
         #expect(secondResponse.ok)
+        #expect(factoryCalls.value() == 1)
     }
 
     @MainActor
@@ -1140,7 +1228,7 @@ extension MacNodeRuntimeTests {
         #expect(generations.release == [1])
     }
 
-    @Test func `handle invoke maps accessibility denial to unavailable`() async throws {
+    @Test func `handle invoke preserves a late accessibility denial as typed permission missing`() async throws {
         let services = await MainActor.run {
             MainActorServicesProbe(actError: ComputerActionService.ComputerActionError.accessibilityNotTrusted)
         }
@@ -1154,8 +1242,8 @@ extension MacNodeRuntimeTests {
             runtime, "req-computer-ax", OpenClawComputerCommand.act.rawValue, params: params)
 
         #expect(response.ok == false)
-        #expect(response.error?.code == .unavailable)
-        #expect(response.error?.message == "ACCESSIBILITY_REQUIRED: grant Accessibility permission to OpenClaw")
+        #expect(response.error?.code == .permissionMissing)
+        #expect(response.error?.details == .init(capabilities: ["accessibility"], state: .notDetermined))
     }
 
     @Test func `handle invoke rejects malformed computer act params`() async {

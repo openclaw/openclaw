@@ -11,7 +11,13 @@ import {
 } from "../../gateway/session-transcript-source-pages.js";
 import { hasInterSessionUserProvenance } from "../../sessions/input-provenance.js";
 import { NESTED_TOOL_ACTIVITY_CUSTOM_TYPE } from "../../sessions/nested-tool-activity.js";
-import { matchesTranscriptEvent } from "../../sessions/transcript-visible-record.js";
+import { resolveSessionTitleSource } from "../../sessions/session-title-source.js";
+import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
+import {
+  createVisibleAssistantResultEventMatcher,
+  matchesTranscriptEvent,
+} from "../../sessions/transcript-visible-record.js";
+import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.metadata.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
 import type {
   SessionTranscriptBoundedMessageTailOptions,
@@ -30,7 +36,11 @@ import {
 } from "./session-actor-memory-history-navigation.js";
 import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
 import { readSessionActorMemoryTranscriptStats } from "./session-actor-memory-usage.js";
-import { isIndexedSessionEntry } from "./session-entry-codec.js";
+import {
+  assertCurrentSessionTranscriptHeader,
+  findSessionTranscriptHeader,
+  isIndexedSessionEntry,
+} from "./session-entry-codec.js";
 import { extractSessionBranchHeadline } from "./session-message-cut-content.js";
 import { readSessionTranscriptAccountingTail } from "./session-transcript-accounting-policy.js";
 import { SQLITE_USAGE_TAIL_MAX_EVENTS } from "./session-transcript-accounting.types.js";
@@ -39,6 +49,8 @@ import type {
   SessionTranscriptMaintenanceRead,
 } from "./session-transcript-hydration.types.js";
 import { transcriptEventContextEligibility } from "./session-transcript-projection-append.js";
+import { projectSessionTranscriptReportFacts } from "./session-transcript-report-facts.js";
+import { TranscriptReportNavigation } from "./session-transcript-report-policy.js";
 import { projectAssistantTranscriptText } from "./transcript-assistant-delivery-read.js";
 import {
   selectSessionTranscriptTreePathNodes,
@@ -149,10 +161,40 @@ function contextAccountingRows(navigation: Navigation): SessionActorMemoryHistor
 
 function maintenance(
   window: SessionActorMemoryWindow,
-  navigation: Navigation,
   request: SessionTranscriptMaintenanceRead,
 ): SessionTranscriptMaintenanceFacts {
   const kind = "transcript-maintenance";
+  if (request.operation === "custom-branch") {
+    const events = new Map<number, unknown>();
+    let header: ReturnType<typeof findSessionTranscriptHeader>;
+    const navigation = new TranscriptReportNavigation(
+      (function* () {
+        for (const row of window.events) {
+          if (!header) {
+            header = findSessionTranscriptHeader([row.event]);
+            if (header) {
+              assertCurrentSessionTranscriptHeader(header);
+            }
+          }
+          const facts = projectSessionTranscriptReportFacts(row.event);
+          if (facts.kind === "canonical" && facts.entry.type === "custom") {
+            events.set(row.rawSeq, row.event);
+          }
+          yield { seq: row.rawSeq, facts };
+        }
+      })(),
+    );
+    if (window.events.length > 0) {
+      assertCurrentSessionTranscriptHeader(header);
+    }
+    return {
+      kind: "transcript-maintenance",
+      events: navigation.readCustomBranch(request.leafEntryId, request.customType, (seq) =>
+        asOptionalRecord(events.get(seq)),
+      ),
+    };
+  }
+  const navigation = createSessionActorMemoryHistoryNavigation(window);
   switch (request.operation) {
     case "previous":
       return {
@@ -263,6 +305,8 @@ export function readSessionActorMemoryHistoryFacts(
   query: SessionActorMemoryHistoryFactsQuery,
 ): SessionActorMemoryHistoryFactsReads[keyof SessionActorMemoryHistoryFactsReads]["output"] {
   switch (query.type) {
+    case "session.history.maintenance":
+      return maintenance(window, query.input.request);
     case "session.history.stats":
       return readSessionActorMemoryTranscriptStats(window);
     case "session.history.watermark":
@@ -291,14 +335,56 @@ export function readSessionActorMemoryHistoryFacts(
   }
   const navigation = createSessionActorMemoryHistoryNavigation(window);
   switch (query.type) {
-    case "session.history.title": {
-      const first = navigation.visibleMessages.slice(0, 100).find(({ event }) => {
+    case "session.history.visibility-inputs": {
+      const runIds = new Set(query.input.runIds);
+      const inputKeys = new Set(query.input.runIds.map(buildRunUserTurnIdempotencyKey));
+      return navigation.visibleHistory.flatMap(({ event }, index) => {
         const message = asOptionalRecord(asOptionalRecord(event)?.message);
-        return (
-          projectSessionDisplayMessage(message)?.role === "user" &&
-          (query.input.includeInterSession === true || !hasInterSessionUserProvenance(message))
-        );
+        const meta = asOptionalRecord(message?.["__openclaw"]);
+        const runId = readSessionTranscriptRunId(message);
+        const inputKey = message?.idempotencyKey ?? meta?.idempotencyKey;
+        if (
+          message?.role !== "user" ||
+          !(
+            (typeof runId === "string" && runIds.has(runId)) ||
+            (typeof meta?.steerTargetRunId === "string" && runIds.has(meta.steerTargetRunId)) ||
+            (typeof inputKey === "string" && inputKeys.has(inputKey))
+          )
+        ) {
+          return [];
+        }
+        return [
+          {
+            seq: index + 1,
+            message: {
+              role: "user" as const,
+              idempotencyKey: message.idempotencyKey,
+              provenance: message.provenance,
+              __openclaw: {
+                runId,
+                steerTargetRunId: meta?.steerTargetRunId,
+                idempotencyKey: meta?.idempotencyKey,
+              },
+            },
+          },
+        ];
       });
+    }
+    case "session.history.title": {
+      let firstUserMessage: string | null = null;
+      for (const { event } of navigation.visibleMessages.slice(0, 100)) {
+        const message = asOptionalRecord(asOptionalRecord(event)?.message);
+        const projected = projectSessionDisplayMessage(message);
+        if (
+          projected?.role === "user" &&
+          (query.input.includeInterSession === true || !hasInterSessionUserProvenance(message))
+        ) {
+          firstUserMessage = resolveSessionTitleSource(projected.text, query.input.skillCommands);
+        }
+        if (firstUserMessage !== null) {
+          break;
+        }
+      }
       let lastMessagePreview: string | null = null;
       const tail = navigation.visibleMessages.slice(-100);
       for (let index = tail.length - 1; index >= 0 && lastMessagePreview === null; index -= 1) {
@@ -310,8 +396,7 @@ export function readSessionActorMemoryHistoryFacts(
       return {
         kind: "session-title-fields",
         fields: {
-          firstUserMessage:
-            projectSessionDisplayMessage(asOptionalRecord(first?.event)?.message)?.text ?? null,
+          firstUserMessage,
           lastMessagePreview,
         },
       };
@@ -372,13 +457,21 @@ export function readSessionActorMemoryHistoryFacts(
             : undefined,
       };
     }
-    case "session.history.maintenance":
-      return maintenance(window, navigation, query.input.request);
     case "session.history.match": {
       const match = query.input.match;
+      if (match.kind === "canvas-widget") {
+        const row = navigation.active.findLast(({ event }) => matchesTranscriptEvent(event, match));
+        return { kind: "transcript-match", result: row ? { event: row.event } : undefined };
+      }
+      const matchesVisibleFinal =
+        match.kind === "visible-final"
+          ? createVisibleAssistantResultEventMatcher(match.runId)
+          : undefined;
       const row = window.events.findLast(
         ({ event }) =>
-          matchesTranscriptEvent(event, match) &&
+          (matchesVisibleFinal
+            ? matchesVisibleFinal(event)
+            : matchesTranscriptEvent(event, match)) &&
           (match.kind !== "active-assistant" ||
             window.hot.transcript.anchors.some(
               (anchor) => anchor.entryId === asOptionalRecord(event)?.id,

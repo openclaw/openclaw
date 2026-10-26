@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import type { GatewayOwnerSupervisor } from "../../infra/gateway-owner-lease.types.js";
 import {
@@ -14,13 +15,13 @@ import {
   type GatewayRestartIntent,
 } from "../../infra/restart-intent.js";
 import * as processOwners from "../../infra/state-lease-process-owner.js";
-import * as existingWrites from "../../state/openclaw-state-db-existing-write.js";
 import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { beforeIntentWriteAdmission } from "./lifecycle.restart-intent.test-support.js";
 import {
   createGatewayServiceRunArgs,
   lifecycleTestRuntime,
@@ -73,23 +74,12 @@ function acquireServingStateOwner(env: NodeJS.ProcessEnv = process.env) {
     databasePath: resolveOpenClawStateSqlitePath(env),
     payload: {
       pid: process.pid,
+      processNamespace: readGatewayLockProcessNamespace(),
       createdAt: new Date().toISOString(),
       configPath: resolveConfigPath(env),
       role: "gateway",
     },
   });
-}
-
-function beforeIntentWriteAdmission(operation: () => void) {
-  const write = existingWrites.runExistingOpenClawStateWriteTransaction;
-  vi.spyOn(existingWrites, "runExistingOpenClawStateWriteTransaction").mockImplementation(
-    (mutate, options, contract) => {
-      if (contract.operationLabel === "gateway.restart-intent.write") {
-        operation();
-      }
-      return write(mutate, options, contract);
-    },
-  );
 }
 
 function publishServingOwner(
@@ -203,10 +193,10 @@ it.each([
 
 it("targets the replacement at write admission despite stopped native status", async () => {
   service.readRuntime.mockResolvedValue({ status: "stopped" });
+  const coordinator = acquireServingStateOwner();
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   // Synthetic process identities isolate the race; lease storage and intent consumption are real.
   vi.spyOn(processOwners, "readStateLeaseProcessOwnerStatus").mockReturnValue("live");
-  const coordinator = acquireServingStateOwner();
   try {
     publishServingOwner(process.pid + 2);
     let publications = 0;

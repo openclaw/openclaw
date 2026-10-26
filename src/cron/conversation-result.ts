@@ -16,7 +16,7 @@ import {
 } from "../gateway/server-methods/chat-assistant-content.js";
 import { bindOutboundSessionEntry } from "../infra/outbound/outbound-session.js";
 import {
-  createOutboundPayloadPlan,
+  createStructuredOutboundPayloadPlan,
   projectOutboundPayloadPlanForMirror,
   resolveOutboundPayloadMirrorText,
 } from "../infra/outbound/payloads.js";
@@ -127,7 +127,9 @@ async function resolveCronResultConversationEntry(
       accountId: params.delivery.accountId,
       route,
       sourceSessionKey: params.sourceSessionKey,
-      assertCommitAllowed: () => params.deliveryAttemptFence?.assertCurrent(),
+      workerGuard: {
+        assertMutationAllowed: () => params.deliveryAttemptFence?.assertCurrent(),
+      },
     });
   }
   const entry = await readSessionEntryInWorker({
@@ -182,9 +184,10 @@ export async function commitCronConversationResult(
       mediaUrls,
     });
   });
-  const mirror = projectOutboundPayloadPlanForMirror(createOutboundPayloadPlan(transcriptPayloads));
-  const completionText =
-    resolveMirroredTranscriptText(mirror) ?? normalizeOptionalString(params.text);
+  const mirror = projectOutboundPayloadPlanForMirror(
+    createStructuredOutboundPayloadPlan(transcriptPayloads),
+  );
+  const completionText = resolveMirroredTranscriptText(mirror);
   if (!completionText) {
     if (transcriptPayloads.some((payload) => hasReplyChannelData(payload.channelData))) {
       return {

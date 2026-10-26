@@ -17,6 +17,7 @@ import {
   readOperatorModelPolicyMembership,
   resolveOperatorModelDefault,
 } from "../agents/operator-model-policy.js";
+import type { PreparedOperatorModelPolicy } from "../agents/operator-model-policy.types.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
@@ -30,10 +31,14 @@ import { projectModelFastModeCatalog } from "./session-fast-mode-presentation.js
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "./session-utils.types.js";
 
-/** Inventory/auth changes do not retire choices; changed selection authority does. */
+/**
+ * Inventory/auth changes do not retire choices; changed selection authority does.
+ * Commit listeners pass the published inventory; reload's lease cache cannot see it.
+ */
 export function modelSelectionPoliciesMatch(
   previous: OpenClawConfig,
   next: OpenClawConfig,
+  publishedMetadata?: PluginMetadataSnapshot,
 ): boolean {
   if (
     (previous.models?.mode ?? "merge") !== (next.models?.mode ?? "merge") ||
@@ -41,7 +46,7 @@ export function modelSelectionPoliciesMatch(
   ) {
     return false;
   }
-  const manifestPlugins = getGatewayPluginMetadataSnapshot() ?? [];
+  const manifestPlugins = publishedMetadata ?? getGatewayPluginMetadataSnapshot() ?? [];
   for (const role of Object.values(next.gateway?.roles?.definitions ?? {})) {
     const before = prepareOperatorModelPolicy({
       cfg: previous,
@@ -64,7 +69,7 @@ export function modelSelectionPoliciesMatch(
   ]);
   for (const agentId of agentIds) {
     const policy = (cfg: OpenClawConfig) => {
-      const model = resolveDefaultModelForAgent({ cfg, agentId });
+      const model = resolveDefaultModelForAgent({ cfg, agentId, manifestPlugins });
       return createModelVisibilityPolicy({
         cfg,
         agentId,
@@ -169,9 +174,20 @@ export function prepareOperatorModelPresentation(params: {
     policy: modelPolicy,
     manifestPlugins,
   });
+  return prepareOperatorModelPolicyPresentation({ cfg, policy, metadataSnapshot });
+}
+
+/** Same projection for a host-admitted requester without synthesizing a Gateway client. */
+export function prepareOperatorModelPolicyPresentation(params: {
+  cfg: OpenClawConfig;
+  policy?: PreparedOperatorModelPolicy;
+  metadataSnapshot?: PluginMetadataSnapshot | null;
+}) {
+  const { cfg, policy, metadataSnapshot } = params;
   if (!policy) {
     return undefined;
   }
+  const manifestPlugins = metadataSnapshot ?? [];
   const filterModels = <T extends { provider: string; id: string }>(models: T[]) =>
     models.filter((model) => policy.allows({ provider: model.provider, model: model.id }));
   const hidden = (provider: unknown, model: unknown) =>
@@ -179,13 +195,32 @@ export function prepareOperatorModelPresentation(params: {
     (typeof provider !== "string" ||
       typeof model !== "string" ||
       !policy.allows({ provider, model }));
-  const projectSession = <T extends HistoricalModelFields>(row: T): T => {
+  // Variants belong to this exact immutable row; visibility is still evaluated on every read.
+  const projectSession = <T extends HistoricalModelFields>(row: T, variants?: T[]): T => {
     const hideModel = hidden(row.modelProvider, row.model);
     const hideActiveModel = hidden(row.activeModelProvider, row.activeModel);
     const budget = asOptionalRecord(row.contextBudgetStatus);
     const hideBudget = budget && hidden(budget.provider, budget.model);
     if (!hideModel && !hideActiveModel && !hideBudget) {
       return row;
+    }
+    if (variants) {
+      for (const existing of variants) {
+        if (
+          existing.modelProvider ===
+            (hideModel && row.modelProvider != null ? undefined : row.modelProvider) &&
+          existing.model === (hideModel && row.model != null ? undefined : row.model) &&
+          existing.activeModelProvider ===
+            (hideActiveModel && row.activeModelProvider != null
+              ? undefined
+              : row.activeModelProvider) &&
+          existing.activeModel ===
+            (hideActiveModel && row.activeModel != null ? undefined : row.activeModel) &&
+          existing.contextBudgetStatus === (hideBudget ? undefined : row.contextBudgetStatus)
+        ) {
+          return existing;
+        }
+      }
     }
     const projected = { ...row };
     // Nulls clear merge-event state; omit identifiers without replacing those clearing facts.
@@ -201,6 +236,10 @@ export function prepareOperatorModelPresentation(params: {
     }
     if (hideBudget) {
       delete projected.contextBudgetStatus;
+    }
+    if (variants) {
+      Object.freeze(projected);
+      variants.push(projected);
     }
     return projected;
   };

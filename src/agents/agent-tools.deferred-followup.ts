@@ -19,8 +19,8 @@ const TOOL_FOLLOWUPS = [
   [
     "gateway",
     "openclaw",
-    "Never via shell.",
-    "Never via shell. Other system changes: use openclaw tool.",
+    "Use runtime-owned actions.",
+    "Use runtime-owned actions. Other system changes: use openclaw tool.",
   ],
   [
     "sessions_search",
@@ -37,9 +37,21 @@ const TOOL_FOLLOWUPS = [
   ["sessions_spawn", "agents_list", "configured agent;", "configured agent (see agents_list);"],
   [
     "sessions_yield",
+    "sessions_send",
+    "Does not message other sessions.",
+    "Does not message other sessions; use sessions_send.",
+  ],
+  [
+    "sessions_yield",
     "agents_wait",
     "Collector runs require explicit collection instead.",
     "Collector runs require agents_wait instead.",
+  ],
+  [
+    "nodes",
+    "exec",
+    "fs.listDir returns sub-directories only)",
+    "fs.listDir returns sub-directories only; use the exec tool with host=node to list files)",
   ],
 ] as const;
 
@@ -58,8 +70,8 @@ function describeAvailableTool(tool: AnyAgentTool, availableTools: ReadonlySet<s
     if (availableTools.has("conversations_list") && deliveryTools.length > 0) {
       const guidance = `For an exact external destination, use \`conversations_list\` plus ${deliveryTools.map((name) => `\`${name}\``).join("/")}.`;
       description = description.replace(
-        " Thread chats rejected:",
-        ` ${guidance} Thread chats rejected:`,
+        / (?=Thread chats rejected:|Missing configured-agent main created\.)/,
+        ` ${guidance} `,
       );
     }
   }

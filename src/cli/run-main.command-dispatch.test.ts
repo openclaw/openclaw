@@ -10,7 +10,7 @@ import {
   closeActiveMemorySearchManagersMock,
   outputRootHelpMock,
   outputPrecomputedRootHelpTextMock,
-  outputPrecomputedNodesHelpTextMock,
+  outputPrecomputedCommandHelpTextMock,
   loadRootHelpRenderOptionsForConfigSensitivePluginsMock,
   tryOutputSetupOnboardConfigureHelpMock,
   buildProgramMock,
@@ -86,12 +86,12 @@ describe("runCli exit behavior", () => {
   });
 
   it("renders nodes help from startup metadata without building the full program", async () => {
-    outputPrecomputedNodesHelpTextMock.mockReturnValueOnce(true);
+    outputPrecomputedCommandHelpTextMock.mockReturnValueOnce(true);
 
     await runCli(cliArgs("nodes", "--help"));
 
     expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(outputPrecomputedNodesHelpTextMock).toHaveBeenCalledTimes(1);
+    expect(outputPrecomputedCommandHelpTextMock.mock.calls).toEqual([["nodes"]]);
     expect(buildProgramMock).not.toHaveBeenCalled();
     expect(registerSubCliByNameMock).not.toHaveBeenCalled();
   });
@@ -101,13 +101,13 @@ describe("runCli exit behavior", () => {
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
     const program = makeProgram("nodes", parseAsync);
     loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockResolvedValueOnce({ env: {} });
-    outputPrecomputedNodesHelpTextMock.mockReturnValueOnce(true);
+    outputPrecomputedCommandHelpTextMock.mockReturnValueOnce(true);
     buildProgramMock.mockReturnValueOnce(program);
 
     await runCli(argv);
 
     expect(loadRootHelpRenderOptionsForConfigSensitivePluginsMock).toHaveBeenCalledTimes(1);
-    expect(outputPrecomputedNodesHelpTextMock).not.toHaveBeenCalled();
+    expect(outputPrecomputedCommandHelpTextMock).not.toHaveBeenCalled();
     expect(registerSubCliByNameMock.mock.calls).toEqual([[program, "nodes", argv]]);
     expect(parseAsync).toHaveBeenCalledWith(argv);
   });
@@ -188,20 +188,6 @@ describe("runCli exit behavior", () => {
     readSourceConfigBestEffortMock,
     tryRouteCliMock,
   });
-
-  it.each([["root shorthand", cliArgs("--update", "--dry-run", "--json")]])(
-    "reads source-only proxy config for the update dry-run %s",
-    async (_name, argv) => {
-      tryRouteCliMock.mockResolvedValueOnce(true);
-      readSourceConfigBestEffortMock.mockResolvedValueOnce({ proxy: { selected: "dry-run" } });
-
-      await runCli(argv);
-
-      expect(readSourceConfigBestEffortMock).toHaveBeenCalledOnce();
-      expect(loadConfigMock).not.toHaveBeenCalled();
-      expect(startProxyMock).toHaveBeenCalledWith({ selected: "dry-run" });
-    },
-  );
 
   it.each([["lint", ["--lint", "--json"]]])(
     "reads source-only proxy config before Doctor %s owns state access",

@@ -3,11 +3,14 @@ import net from "node:net";
 import os from "node:os";
 import {
   isCanonicalDottedDecimalIPv4,
-  isIpInCidr,
+  isParsedIpInCidr,
   isLoopbackIpAddress,
   isPrivateOrLoopbackIpAddress,
   isRfc8215LocalUseNat64Ipv6Address,
   normalizeIpAddress,
+  parseIpAddressOrCidr,
+  parseNormalizedIpAddress,
+  type ParsedIpAddress,
 } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseHostForAddressChecks } from "../../packages/gateway-client/src/client-address-utils.js";
@@ -16,7 +19,6 @@ import { isContainerEnvironment } from "../infra/container-environment.js";
 import {
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
-  type NetworkInterfacesSnapshot,
 } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { firstHeaderValue } from "./http-header-value.js";
@@ -79,15 +81,12 @@ export function isLocalDirectRequest(req?: IncomingMessage): boolean {
   );
 }
 
-export function resolveLocalInterfaceAddressMatch(
-  ip: string | undefined,
-  snapshot?: NetworkInterfacesSnapshot,
-): boolean | undefined {
+export function resolveLocalInterfaceAddressMatch(ip: string | undefined): boolean | undefined {
   const normalized = normalizeIpAddress(ip);
   if (!normalized) {
     return false;
   }
-  const effectiveSnapshot = arguments.length >= 2 ? snapshot : safeNetworkInterfaces();
+  const effectiveSnapshot = safeNetworkInterfaces();
   if (!effectiveSnapshot) {
     return undefined;
   }
@@ -132,65 +131,55 @@ function stripOptionalPort(ip: string): string {
   return ip;
 }
 
-function parseIpLiteral(raw: string | undefined): string | undefined {
+function parseIpLiteral(raw: string | undefined): ParsedIpAddress | undefined {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return undefined;
   }
   const stripped = stripOptionalPort(trimmed);
-  const normalized = normalizeIpAddress(stripped);
-  if (!normalized || net.isIP(normalized) === 0) {
+  const normalized = parseNormalizedIpAddress(stripped);
+  if (!normalized || net.isIP(normalized.toString()) === 0) {
     return undefined;
   }
   return normalized;
 }
 
-function resolveForwardedClientIp(params: {
-  forwardedFor?: string;
-  trustedProxies?: string[];
-}): string | undefined {
-  const { forwardedFor, trustedProxies } = params;
-  if (!trustedProxies?.length) {
+type ProxyRanges = ReturnType<typeof parseIpAddressOrCidr>[];
+const trustedProxyRanges = new WeakMap<string[], { source: string[]; ranges: ProxyRanges }>();
+
+function getTrustedProxyRanges(proxies: string[] | undefined): ProxyRanges | undefined {
+  if (!proxies?.length) {
     return undefined;
   }
+  const cached = trustedProxyRanges.get(proxies);
+  // Callers may edit a config array in place. Its complete string generation,
+  // not array identity alone, owns the prepared trust policy.
+  if (cached && cached.source.length === proxies.length) {
+    let index = 0;
+    while (index < proxies.length && cached.source[index] === proxies[index]) {
+      index++;
+    }
+    if (index === proxies.length) {
+      return cached.ranges;
+    }
+  }
+  const ranges = proxies.map(parseIpAddressOrCidr);
+  trustedProxyRanges.set(proxies, { source: proxies.slice(), ranges });
+  return ranges;
+}
 
-  const forwardedChain: string[] = [];
-  for (const entry of forwardedFor?.split(",") ?? []) {
-    const normalized = parseIpLiteral(entry);
-    if (normalized) {
-      forwardedChain.push(normalized);
-    }
-  }
-  if (forwardedChain.length === 0) {
-    return undefined;
-  }
-
-  // Walk right-to-left and return the first untrusted hop.
-  for (let index = forwardedChain.length - 1; index >= 0; index -= 1) {
-    const hop = forwardedChain[index];
-    if (isLoopbackAddress(hop)) {
-      continue;
-    }
-    if (!isTrustedProxyAddress(hop, trustedProxies)) {
-      return hop;
-    }
-  }
-  return undefined;
+function isTrustedParsedProxyAddress(
+  ip: ParsedIpAddress,
+  ranges: ProxyRanges | undefined,
+): boolean {
+  return ranges?.some((range) => isParsedIpInCidr(ip, range)) ?? false;
 }
 
 export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: string[]): boolean {
-  const normalized = normalizeIpAddress(ip);
-  if (!normalized || !trustedProxies || trustedProxies.length === 0) {
-    return false;
-  }
-
-  return trustedProxies.some((proxy) => {
-    const candidate = proxy.trim();
-    if (!candidate) {
-      return false;
-    }
-    return isIpInCidr(normalized, candidate);
-  });
+  const normalized = parseNormalizedIpAddress(ip);
+  return normalized
+    ? isTrustedParsedProxyAddress(normalized, getTrustedProxyRanges(trustedProxies))
+    : false;
 }
 
 export function resolveClientIp(params: {
@@ -201,25 +190,27 @@ export function resolveClientIp(params: {
   /** Default false: only trust X-Real-IP when explicitly enabled. */
   allowRealIpFallback?: boolean;
 }): string | undefined {
-  const remote = normalizeIpAddress(params.remoteAddr);
+  const remote = parseNormalizedIpAddress(params.remoteAddr);
   if (!remote) {
     return undefined;
   }
-  if (!isTrustedProxyAddress(remote, params.trustedProxies)) {
-    return remote;
+  const ranges = getTrustedProxyRanges(params.trustedProxies);
+  if (!isTrustedParsedProxyAddress(remote, ranges)) {
+    return remote.toString();
   }
   // Fail closed when traffic comes from a trusted proxy but client-origin headers
   // are missing or invalid. Falling back to the proxy's own IP can accidentally
   // treat unrelated requests as local/trusted.
-  const forwardedIp = resolveForwardedClientIp({
-    forwardedFor: params.forwardedFor,
-    trustedProxies: params.trustedProxies,
-  });
-  if (forwardedIp) {
-    return forwardedIp;
+  // Parse only the hops needed by the right-to-left trust walk.
+  const forwardedChain = params.forwardedFor?.split(",") ?? [];
+  for (let index = forwardedChain.length - 1; index >= 0; index--) {
+    const hop = parseIpLiteral(forwardedChain[index]);
+    if (hop && hop.range() !== "loopback" && !isTrustedParsedProxyAddress(hop, ranges)) {
+      return hop.toString();
+    }
   }
   if (params.allowRealIpFallback) {
-    return parseIpLiteral(params.realIp);
+    return parseIpLiteral(params.realIp)?.toString();
   }
   return undefined;
 }
@@ -318,10 +309,7 @@ async function canBindToHost(host: string): Promise<boolean> {
   });
 }
 
-export async function resolveGatewayListenHosts(
-  bindHost: string,
-  opts?: { canBindToHost?: (host: string) => Promise<boolean> },
-): Promise<string[]> {
+export async function resolveGatewayListenHosts(bindHost: string): Promise<string[]> {
   const requiredHosts = resolveGatewayRequiredListenHosts(bindHost);
   if (bindHost !== "127.0.0.1") {
     return requiredHosts;
@@ -332,8 +320,7 @@ export async function resolveGatewayListenHosts(
   if (process.platform === "win32") {
     return [bindHost];
   }
-  const canBind = opts?.canBindToHost ?? canBindToHost;
-  if (await canBind("::1")) {
+  if (await canBindToHost("::1")) {
     return [bindHost, "::1"];
   }
   return [bindHost];

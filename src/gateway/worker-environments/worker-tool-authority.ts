@@ -1,12 +1,13 @@
 import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
-import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   prepareExecDefaults,
   resolvePreparedExecDefaultsAsync,
 } from "../../agents/exec-defaults.js";
 import { prepareInstalledSkillCatalog } from "../../agents/installed-skill-runtime.js";
+import { resolveExecToolConfig } from "../../agents/lazy-exec-tool.js";
 import { supportsModelTools } from "../../agents/model-tool-support.js";
 import { prepareCoreToolPolicy } from "../../agents/prepared-tool-surface.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
@@ -44,7 +45,7 @@ export async function resolveWorkerToolAuthority(params: {
     { cfg: turn.config, sessionKey: sandboxSessionKey, agentId: turn.agentId },
     { env: process.env, cwd: process.cwd(), assertCurrent: params.assertCurrent },
     async (sandbox) => {
-      const capabilityProfile = resolveConversationCapabilityProfile({
+      const capabilityProfile = await prepareConversationCapabilityProfile({
         ...turn,
         sandboxSessionKey,
         sessionKey: sandboxSessionKey,
@@ -98,24 +99,29 @@ export async function resolveWorkerToolAuthority(params: {
       );
       const policy = projectEffectiveExecPolicy({
         base: { ...defaults, host: defaults.effectiveHost },
+        permissionPolicy: turn.permissionMode ? { mode: turn.permissionMode } : undefined,
         scheduledExecTarget: turn.scheduledToolPolicy?.execTarget,
       });
-      // A captured target cannot create the worker's missing host/approval transport.
+      // Node/sandbox execution remains outside the worker-local exec transport.
       const execUnavailable =
-        policy.ask === "always" ||
-        (turn.scheduledToolPolicy?.execTarget !== undefined &&
-          defaults.effectiveHost !== "gateway");
+        turn.scheduledToolPolicy?.execTarget !== undefined && defaults.effectiveHost !== "gateway";
       const { effectiveHost: host, security, node: configuredNode } = defaults;
       const node = configuredNode?.trim();
+      const strictInlineEval = resolveExecToolConfig({
+        cfg: turn.config,
+        agentId: params.placement.agentId,
+      }).strictInlineEval;
       const exec: NonNullable<WorkerToolAuthority["exec"]> = {
-        security,
+        ...(policy.mode !== undefined ? { mode: policy.mode } : {}),
+        ...(strictInlineEval !== undefined ? { strictInlineEval } : {}),
+        security: policy.security ?? security,
         ask: policy.ask ?? defaults.ask,
         safeBins: [],
         ...(host === "node" ? { host, ...(node ? { node } : {}) } : { host }),
       };
       if (execUnavailable) {
         logWarn(
-          "Worker exec/process withheld: captured exec policy requires local host or interactive approval. Run this turn locally.",
+          "Worker exec/process withheld: captured exec policy requires another execution host. Run this turn locally.",
         );
       }
       const presentation = prepareAgentToolSurfacePresentation({

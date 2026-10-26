@@ -51,7 +51,8 @@ call is active before acting.
 
 Voice Call uses the same Gateway-owned GPT-Live bridge as Discord and Talk.
 Select `gpt-live-1-codex` with `cove` to use the ChatGPT OAuth route; it tries
-the routed agent's OpenClaw ChatGPT profile first, then the configured Platform
+the routed agent's OpenClaw ChatGPT profile (an OAuth sign-in or a pasted
+ChatGPT access token) first, then the configured Platform
 key, API-key profile, and `OPENAI_API_KEY`. Select `gpt-live-1` with `marin` for
 the public Platform API route. Leaving the model unset preserves Voice Call's
 provider default.
@@ -188,6 +189,11 @@ preventing a second message from the model.
 Notify calls wait for detection before playing their opening message to a human
 or their voicemail message to a machine. `onMachine: "hang-up"` ends machine calls immediately.
 The mock provider can simulate detection; other carriers are unchanged.
+
+If detected-call cleanup fails, OpenClaw logs a warning with the affected call ID.
+The failure can come from carrier hangup or local finalization after hangup succeeds.
+Inspect that call's status and logs before retrying; an active local record does not
+necessarily mean the carrier call is still connected.
 
 ### Hangup detection
 
@@ -402,6 +408,7 @@ Runtime behavior:
 - Bundled realtime transcription providers: Deepgram (`deepgram`), ElevenLabs (`elevenlabs`), Mistral (`mistral`), OpenAI (`openai`), and xAI (`xai`), registered by their provider plugins.
 - Provider-owned raw config lives under `streaming.providers.<providerId>`.
 - After Twilio sends an accepted stream `start` message, Voice Call registers the stream immediately, queues inbound media through the transcription provider while the provider connects, and starts the initial greeting only after realtime transcription is ready.
+- Frames with non-string audio payloads, playback-mark names, or start identifiers and tokens are discarded before dispatch. Valid base64 and base64url audio continue normally on the same stream.
 - If `streaming.provider` points at an unregistered provider, or none is registered, Voice Call logs a warning and skips media streaming instead of failing the whole plugin.
 
 ### Streaming provider examples

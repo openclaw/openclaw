@@ -5,14 +5,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { reloadControlUiDocument } from "../../ui/src/app/stale-chunk-reload.ts";
 import { sessionNavigationTarget } from "../../ui/src/lib/sessions/route-navigation.ts";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { computeInlineScriptHashes } from "./control-ui-csp.js";
 import { AUTH_TOKEN, createTestGatewayServer, sendRequest } from "./server-http.test-harness.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-const { resolveSession, reader, active, mediaToken } = vi.hoisted(() => ({
+const { resolveSession, reader, active, mediaToken, widgetToken } = vi.hoisted(() => ({
   resolveSession: vi.fn(),
   reader: vi.fn(),
   active: vi.fn(),
   mediaToken: vi.fn(),
+  widgetToken: vi.fn(),
 }));
 vi.mock(import("./control-ui-session-path-resolve.js"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -26,27 +31,20 @@ vi.mock(import("./control-ui-public-session-read.js"), async (importOriginal) =>
 vi.mock(import("./control-ui-public-session-token.js"), async (importOriginal) => ({
   ...(await importOriginal()),
   mintExistingPublicSessionShareToken: mediaToken,
+  mintPublicSessionWidgetToken: widgetToken,
 }));
 vi.mock(import("./session-row-projection-access.js"), async (importOriginal) => ({
   ...(await importOriginal()),
   getSessionRowProjection: () => projection,
 }));
 const key = "agent:main:dashboard:12345678-aaaa-4000-8000-000000000001";
-const projection = createSessionRowProjectionFixture({
-  cfg: { agents: { entries: { main: {} } } },
-  store: {
-    [key]: {
-      sessionId: "generation",
-      updatedAt: 1,
-      publicShare: { id: "a".repeat(48), sessionId: "generation", createdAt: 1 },
-    },
-  },
-});
+let projection: ReturnType<typeof createSessionRowProjectionFixture>;
 const route = "/control/chat/main/launch-12345678aaaa40008000000000000001";
 const servers: Server[] = [];
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 function server(mode: "token" | "password" = "token") {
   const cfg = { gateway: { publicOrigin: "https://example.test", trustedProxies: ["127.0.0.1"] } };
+  setRuntimeConfigSnapshot(cfg);
   const root = dirs.make("chat-deeplink-");
   fs.writeFileSync(
     path.join(root, "index.html"),
@@ -79,6 +77,18 @@ function request(
   });
 }
 beforeEach(() => {
+  setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
+  projection = createSessionRowProjectionFixture({
+    cfg: { agents: { entries: { main: {} } } },
+    store: {
+      [key]: {
+        sessionId: "generation",
+        updatedAt: 1,
+        publicShare: { id: "a".repeat(48), sessionId: "generation", createdAt: 1 },
+      },
+    },
+  });
+
   resolveSession.mockReset().mockResolvedValue({ key, agentId: "main" });
   reader.mockReset().mockResolvedValue({
     title: "Public launch notes",
@@ -87,25 +97,30 @@ beforeEach(() => {
   });
   active.mockReset().mockReturnValue(true);
   mediaToken.mockReset().mockResolvedValue(`v1.${"a".repeat(96)}`);
+  widgetToken.mockReset().mockResolvedValue("v1.document-only");
 });
 afterEach(() => {
   for (const instance of servers.splice(0)) {
     instance.emit("close");
   }
+  projection.dispose();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("canonical anonymous HTTP entry", () => {
-  it("uses a per-publication preview URL in canonical public chat metadata", async () => {
+  it("renders widgets with document-scoped links on the canonical chat route", async () => {
+    reader.mockResolvedValue({
+      title: "Public chart",
+      messages: [{ role: "assistant", content: '[embed ref="chart" /]' }],
+      truncated: false,
+    });
     const response = await request(server());
     expect(response.res.statusCode).toBe(200);
+    expect(widgetToken).toHaveBeenCalledWith(expect.objectContaining({ sessionKey: key }), "chart");
     expect(response.getBody()).toContain(
-      `https://example.test/control/share/session/card.png?token=v1.${"a".repeat(96)}`,
-    );
-    expect(response.getBody()).toContain(
-      'name="twitter:image:alt" content="Public launch notes · OpenClaw public session"',
+      'src="/control/share/session/media?widget=v1.document-only"',
     );
   });
-
   it("keeps published text available when no token identity is present", async () => {
     mediaToken.mockResolvedValue(undefined);
     const response = await request(server());
@@ -113,15 +128,18 @@ describe("canonical anonymous HTTP entry", () => {
     expect(response.getBody()).toContain("Published answer");
   });
 
-  it("reloads the exact Incognito address produced by in-app navigation", async () => {
-    const sessionKey = "agent:main:dashboard:incognito-12345678-aaaa-4000-8000-000000000001";
+  it("reloads the exact short-session address produced by new-session navigation", async () => {
+    const sessionKey = "agent:main:dashboard:12345678-aaaa-4000-8000-000000000001";
     const target = sessionNavigationTarget({
       face: "chat",
       sessionKey,
       navigationKey: sessionKey,
+      focusComposer: true,
       fallbackAgentId: "main",
       basePath: "/control",
     });
+    expect(target.options.search).toContain("__openclawSessionKey=");
+    expect(target.options.search).toContain("__openclawComposerFocus=1");
     const response = await sendRequest(server(), {
       path: target.options.pathname + (target.options.search ?? ""),
       host: "gateway.lan:18789",
@@ -130,6 +148,38 @@ describe("canonical anonymous HTTP entry", () => {
     expect(response.res.statusCode).toBe(200);
     expect(response.getBody()).toContain("<openclaw-app>");
     expect(resolveSession).not.toHaveBeenCalled();
+    expect(reader).not.toHaveBeenCalled();
+  });
+
+  it("reloads a new bot while its preferred chat face is still resolving", async () => {
+    const agentId = "bot-11111111-2222-4333-8444-555555555555";
+    const target = sessionNavigationTarget({
+      face: "chat",
+      sessionKey: `agent:${agentId}:main`,
+      fallbackAgentId: agentId,
+      basePath: "/control",
+      preferenceDerivedFace: true,
+    });
+    const requestPath = target.options.pathname + (target.options.search ?? "");
+    resolveSession.mockResolvedValue(null);
+    const instance = server();
+    const local = await sendRequest(instance, {
+      path: requestPath,
+      host: "gateway.lan:18789",
+      remoteAddress: "192.168.1.25",
+    });
+    expect(local.res.statusCode).toBe(200);
+    expect(local.getBody()).toContain("<openclaw-app>");
+    expect(resolveSession).not.toHaveBeenCalled();
+    const privateChat = await request(instance, requestPath);
+    expect(privateChat.res.statusCode).toBe(404);
+    expect(privateChat.getBody()).toContain('data-gateway-path="/control"');
+    expect(privateChat.getBody()).not.toContain("Published answer");
+    const entry = `/control/__openclaw__/session-entry?${new URLSearchParams({ path: requestPath })}`;
+    expect((await request(instance, `${entry}&probe=1`)).res.statusCode).toBe(401);
+    const app = await request(instance, entry);
+    expect(app.res.statusCode).toBe(200);
+    expect(app.getBody()).toContain("<openclaw-app>");
     expect(reader).not.toHaveBeenCalled();
   });
 
@@ -165,22 +215,6 @@ describe("canonical anonymous HTTP entry", () => {
     expect(nonSecureApp.getBody()).toContain("<openclaw-app>");
     expect(reader).not.toHaveBeenCalled();
   });
-
-  it.each(["token", "password"] as const)(
-    "serves the %s app on non-secure ingress without reading a transcript",
-    async (mode) => {
-      const response = await sendRequest(server(mode), {
-        path: route,
-        host: "gateway.lan:18789",
-        remoteAddress: "192.168.1.25",
-      });
-      expect(response.res.statusCode).toBe(200);
-      expect(response.getBody()).toContain("<openclaw-app>");
-      expect(response.getBody()).not.toContain("Published answer");
-      expect(resolveSession).not.toHaveBeenCalled();
-      expect(reader).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([
     { mode: "token", secureProxy: false },
@@ -234,6 +268,12 @@ describe("canonical anonymous HTTP entry", () => {
     });
     expect(response.res.statusCode).toBe(200);
     expect(response.getBody()).toContain("Published answer");
+    expect(response.getBody()).toContain(
+      `https://example.test/control/share/session/card.png?token=v1.${"a".repeat(96)}`,
+    );
+    expect(response.getBody()).toContain(
+      'name="twitter:image:alt" content="Public launch notes · OpenClaw public session"',
+    );
     expect(response.getBody()).toContain(
       "/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Flaunch-",
     );

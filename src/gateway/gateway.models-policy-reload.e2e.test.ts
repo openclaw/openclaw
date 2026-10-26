@@ -8,8 +8,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as policy from "../plugins/provider-policy-surface.js";
 import * as artifacts from "../plugins/public-surface-loader.js";
-import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
-import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { connectUserModelAccountAsync } from "../state/user-model-account-operations.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -107,13 +106,25 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
     artifacts,
     "loadBundledPluginPublicArtifactModuleFromCandidatesSync",
   );
-  const versions = new Set<number | undefined>();
+  let requesterProfileId: string | undefined;
+  let measuredLoads = 0;
+  let measuredLookups = 0;
   const original = policy.resolveDirectBundledProviderPolicySurface;
   const resolvePolicy = vi
     .spyOn(policy, "resolveDirectBundledProviderPolicySurface")
     .mockImplementation((id) => {
-      versions.add(getPluginRegistryVersion(getPluginRegistryForContext()));
-      return original(id);
+      const client = getPluginRuntimeGatewayRequestScope()?.client;
+      // Watcher validation owns fresh caches; measure only this authenticated requester.
+      const measured =
+        requesterProfileId !== undefined &&
+        client?.authenticatedUserProfile?.profileId === requesterProfileId;
+      const beforeLoads = candidateLoads.mock.calls.length;
+      const surface = original(id);
+      if (measured) {
+        measuredLoads += candidateLoads.mock.calls.length - beforeLoads;
+        measuredLookups += 1;
+      }
+      return surface;
     });
   let authProfileId: string;
   let requestIndex = 0;
@@ -126,52 +137,41 @@ it("reuses provider policy artifacts after a model config hot reload", async () 
       .join("");
     return { agentId: "main", authProfileId, provider };
   };
-  const measure = async (label: string) => {
+  const measure = async () => {
     await gateway.client.request("models.list", nextRequest());
     candidateLoads.mockClear();
     resolvePolicy.mockClear();
-    versions.clear();
-    const timings: number[] = [];
+    measuredLoads = 0;
+    measuredLookups = 0;
     for (let i = 0; i < 12; i++) {
-      const started = performance.now();
+      const beforeLookups = measuredLookups;
       const result = await gateway.client.request<{
         models: { id: string }[];
         accountSelection?: { kind: string };
       }>("models.list", nextRequest());
       expect(result.models.some((model) => model.id === "model-0")).toBe(true);
       expect(result.accountSelection?.kind).toBe("personal");
-      timings.push(performance.now() - started);
+      expect(measuredLookups).toBeGreaterThan(beforeLookups);
     }
-    timings.sort((a, b) => a - b);
-    console.log(
-      JSON.stringify({
-        label,
-        p50: timings[5],
-        p95: timings[11],
-        loads: candidateLoads.mock.calls.length,
-        lookups: resolvePolicy.mock.calls.length,
-        versions: [...versions],
-      }),
-    );
-    expect(resolvePolicy.mock.calls.length).toBeGreaterThan(0);
-    return candidateLoads.mock.calls.length;
+    return measuredLoads;
   };
   try {
     await gateway.server.startupSettled;
     const self = await gateway.client.request<{ profile: { id: string } }>("users.self", {});
+    requesterProfileId = self.profile.id;
     ({ authProfileId } = await connectUserModelAccountAsync({
       ownerProfileId: self.profile.id,
       credential: { type: "api_key", provider: "openai", key: "fixture-personal-key" },
       assertCurrent() {},
     }));
-    await measure("before-reload");
+    await measure();
     const before = await gateway.client.request<{ hash: string }>("config.get", {});
     await gateway.client.request("config.patch", {
       baseHash: before.hash,
       raw: JSON.stringify({ agents: { defaults: { model: { primary: "openai/model-1" } } } }),
     });
     expect(getRuntimeConfig().agents?.defaults?.model).toEqual({ primary: "openai/model-1" });
-    const afterLoads = await measure("after-reload");
+    const afterLoads = await measure();
     expect(afterLoads).toBe(0);
   } finally {
     resolvePolicy.mockRestore();

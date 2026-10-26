@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   loadTranscriptEventsSync,
   readActiveTranscriptEntryAnchor,
@@ -104,6 +108,8 @@ async function withAdmittedInput(
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ label: "memory-checkpoint" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const scope = {
       agentId: "main",
       sessionId: "foreground-session",
@@ -248,6 +254,8 @@ it("preserves empty transcript header handling during detached acquisition", asy
 
 it("rejects a partial bounded checkpoint instead of silently starting with less history", async () => {
   await withOpenClawTestState({ label: "bounded-memory-checkpoint" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    onTestFinished(() => clearRuntimeConfigSnapshot());
     const scope = {
       agentId: "main",
       sessionId: "bounded-checkpoint",

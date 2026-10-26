@@ -1,31 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { AssistantMessage, ThinkingContent } from "../types.js";
-import {
-  appendAssistantThinking,
-  AssistantMessageEventStream,
-  readAssistantThinkingAppend,
-} from "./event-stream.js";
+import type { ThinkingContent } from "../types.js";
+import { appendAssistantThinking, readAssistantThinkingAppend } from "./event-stream.js";
+import { assistantStream } from "./stream.test-support.js";
 
 function fixture() {
   const block: ThinkingContent = { type: "thinking", thinking: "before" };
-  const message: AssistantMessage = {
-    role: "assistant",
-    content: [block],
-    api: "openai-completions",
-    provider: "synthetic",
-    model: "reasoning-fixture",
-    stopReason: "stop",
-    timestamp: 1,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-  };
-  const stream = new AssistantMessageEventStream();
+  const { message, stream } = assistantStream([block]);
   const append = (delta: string) => {
     appendAssistantThinking(block, delta);
     stream.push({ type: "thinking_delta", contentIndex: 0, delta, partial: message });
@@ -63,33 +43,27 @@ describe("native reasoning append facts", () => {
       const { block, message, stream, append } = fixture();
       append(" after");
       expect(readAssistantThinkingAppend(block, "before")).toBe(" after");
-      switch (boundary) {
-        case "thinking_end":
+      await {
+        thinking_end: () =>
           stream.push({
             type: "thinking_end",
             contentIndex: 0,
             content: block.thinking,
             partial: message,
-          });
-          break;
-        case "done":
-          stream.push({ type: "done", reason: "stop", message });
-          break;
-        case "error":
+          }),
+        done: () => stream.push({ type: "done", reason: "stop", message }),
+        error: () =>
           stream.push({
             type: "error",
             reason: "error",
             error: { ...message, stopReason: "error" },
-          });
-          break;
-        case "end":
-          stream.end(message);
-          break;
-        case "bare_end":
+          }),
+        end: () => stream.end(message),
+        bare_end: async () => {
           stream.end();
           await expect(stream.result()).rejects.toThrow("without a terminal event");
-          break;
-      }
+        },
+      }[boundary]();
       expect(message.content[0]).toBe(block);
       expect(readAssistantThinkingAppend(block, "before")).toBeUndefined();
       if (boundary !== "thinking_end") {

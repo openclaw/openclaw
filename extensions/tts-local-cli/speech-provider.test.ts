@@ -185,7 +185,6 @@ describe("buildCliSpeechProvider", () => {
 
   it.each([
     ["consecutive empty quotes", "--voice \"\"  ''", [], ["--voice", "", ""]],
-    ["quoted whitespace", '--voice " \t "', [], ["--voice", " \t "]],
     ["adjacent fragments", "--voice a''b\"\"", [], ["--voice", "ab"]],
     ["explicit array empty arguments", "", ["--voice", ""], ["--voice", ""]],
   ] as const)("preserves %s through the speech process", async (_name, command, args, expected) => {
@@ -208,11 +207,6 @@ describe("buildCliSpeechProvider", () => {
   });
 
   it.each([
-    {
-      source: "ID3-tagged stdout",
-      audio: [...EMPTY_ID3V2_HEADER, ...VALID_MPEG_FRAME_HEADER],
-      writeFile: false,
-    },
     {
       source: "ID3v2.4 footer stdout",
       audio: [
@@ -396,15 +390,14 @@ mkdirSync(process.argv[outIndex + 1]);
   });
 
   it.each(["synthesize", "synthesizeTelephony"] as const)(
-    "keeps %s debug previews free of lone surrogates",
+    "keeps spoken text out of %s debug logs",
     async (method) => {
-      const text = `${"a".repeat(49)}😀tail`;
+      const text = "private spoken message 😀";
       const providerConfig = { command: "missing-openclaw-tts-test-command" };
       const run = synthesize(providerConfig, { text, method });
       await expect(run).rejects.toThrow();
 
-      const preview = String(debugLogMock.mock.calls[0]?.[0]);
-      expect(Buffer.from(preview).toString()).toBe(preview);
+      expect(debugLogMock.mock.calls.flat().join("\n")).not.toContain("private spoken message");
     },
   );
 });

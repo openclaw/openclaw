@@ -1,13 +1,16 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { attachPluginApiFacades } from "./api-facades.js";
+import { proxyPluginApiMethods, type OpenClawPluginApiWithoutFacades } from "./api-facades.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import type { OpenClawPluginApi, OpenClawPluginDefinition } from "./types.js";
 
-const LATE_CALLABLE_PLUGIN_API_METHODS: ReadonlySet<string> = new Set<keyof OpenClawPluginApi>([
+const LATE_CALLABLE_PLUGIN_API_METHODS: ReadonlySet<string> = new Set<
+  keyof OpenClawPluginApiWithoutFacades
+>([
   "clearRunContext",
   "emitAgentEvent",
   "enqueueNextTurnInjection",
+  "steerActiveRun",
   "getRunContext",
   "sendSessionAttachment",
   "scheduleSessionTurn",
@@ -21,32 +24,30 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
 } {
   let closed = false;
   const owner = getPluginValueInstance(api);
-  const guardedApi = attachPluginApiFacades(
-    new Proxy(api, {
-      get(target, prop, receiver) {
-        const value = Reflect.get(target, prop, receiver);
-        if (typeof value !== "function") {
-          return value;
+  const guardedApi = proxyPluginApiMethods(api, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value !== "function") {
+        return value;
+      }
+      if (typeof prop === "string" && LATE_CALLABLE_PLUGIN_API_METHODS.has(prop)) {
+        return (...args: unknown[]) => Reflect.apply(value, target, args);
+      }
+      return (...args: unknown[]) => {
+        // A retained module may now hold another generation's API.
+        const caller = pluginInstanceInvocation.getStore()?.instance;
+        if (caller && owner && caller !== owner) {
+          throw new Error(
+            `Plugin ${owner.pluginId} API registration does not belong to the calling workspace generation`,
+          );
         }
-        if (typeof prop === "string" && LATE_CALLABLE_PLUGIN_API_METHODS.has(prop)) {
-          return (...args: unknown[]) => Reflect.apply(value, target, args);
+        if (closed) {
+          return undefined;
         }
-        return (...args: unknown[]) => {
-          // A retained module may now hold another generation's API.
-          const caller = pluginInstanceInvocation.getStore()?.instance;
-          if (caller && owner && caller !== owner) {
-            throw new Error(
-              `Plugin ${owner.pluginId} API registration does not belong to the calling workspace generation`,
-            );
-          }
-          if (closed) {
-            return undefined;
-          }
-          return Reflect.apply(value, target, args);
-        };
-      },
-    }),
-  );
+        return Reflect.apply(value, target, args);
+      };
+    },
+  });
   return {
     api: guardedApi,
     close: () => {

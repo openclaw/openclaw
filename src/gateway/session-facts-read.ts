@@ -4,7 +4,7 @@ import type {
   RuntimeSessionFactsSelectionResult,
 } from "../plugins/runtime/types-session-facts.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { stripMarkdown } from "../shared/text/strip-markdown.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
 import {
@@ -81,8 +81,10 @@ export function prepareFactsRead(
         ?.has(identityId) ?? false,
   });
   const active = createVisibleActiveSessionRunProjector(
-    resolved.context,
     rowContext.projectedAgentRuns,
+    undefined,
+    resolved.context.resolveGatewayContext,
+    read.physicalPaths,
   );
   const currentRows = { ...rowContext, subagentRuns: rowContext.subagentRuns.atTime(now) };
   const prOwner = resolved.context.controlUiSessionPullRequests;
@@ -108,6 +110,7 @@ export function prepareFactsRead(
       }
       const row = record.materialized.row;
       const live = active({
+        storePath: record.storeTarget.storePath,
         requestedKey: record.key,
         canonicalKey: record.key,
         sessionId: record.entry.sessionId,
@@ -177,7 +180,7 @@ export function prepareFactsRead(
       const digest = row.observerDigest ? record.entry.observerDigest : undefined;
       const facts: RuntimeSessionFacts =
         cached?.facts ??
-        freezeJsonSnapshot({
+        freezeTrustedJsonSnapshot({
           key: record.key,
           sessionId: record.entry.sessionId,
           ...(record.entry.lifecycleRevision

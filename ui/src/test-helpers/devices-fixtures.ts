@@ -31,10 +31,10 @@ export function createOfflineDeviceNode(nowMs = Date.now()) {
       memoryTotalBytes: 192 * 1024 ** 3,
       memoryFreeBytes: 41 * 1024 ** 3,
       diskTotalBytes: 2 * 1024 ** 4,
-      diskAvailableBytes: 1.2 * 1024 ** 4,
+      diskAvailableBytes: Math.round(1.2 * 1024 ** 4),
       updatedAtMs: nowMs - 27 * 86_400_000,
     },
-  };
+  } satisfies DevicesProps["nodes"][number];
 }
 
 export const deviceDesktopEnvironments: EnvironmentSummary[] = [
@@ -43,7 +43,13 @@ export const deviceDesktopEnvironments: EnvironmentSummary[] = [
 
 export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): DevicesProps {
   return {
+    connected: true,
     loading: false,
+    configRead: { scope: () => undefined, value: () => undefined },
+    execApprovalsRead: { scope: () => undefined, value: () => undefined },
+    inventoryRead: () => undefined,
+    inventoryScope: {},
+    onReloadInventory: () => undefined,
     nodes: [],
     presence: [],
     gatewayVersion: null,
@@ -55,6 +61,7 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
       pending: [],
       paired: [],
     },
+    devicesDeciding: [],
     canPairDevice: true,
     canManagePairing: true,
     canAdmin: true,
@@ -93,4 +100,20 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
     onSaveExecApprovals: () => undefined,
     ...overrides,
   };
+}
+
+export function createWaitingNodePairSetup() {
+  return {
+    phase: "waiting",
+    access: "node",
+    setup: {
+      setupId: "setup-node",
+      setupCode: "AbC_123",
+      gatewayUrl: "wss://gateway.example",
+      auth: "token",
+      urlSource: "test",
+      access: "node",
+      expiresAtMs: 70_000,
+    },
+  } as const;
 }

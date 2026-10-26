@@ -6,7 +6,7 @@ import {
 } from "../../../../src/agents/agent-bundle-mcp-manager-api.js";
 import { createAuditEventRecorder } from "../../../../src/audit/audit-recorder.js";
 import { configureExecutionIdentityAdmissionSink } from "../../../../src/audit/execution-identity-admission.js";
-import { getRuntimeConfig } from "../../../../src/config/io.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../../src/config/io.js";
 import { GatewayScheduler } from "../../../../src/infra/gateway-scheduler.js";
 import { agentCommandFromIngress } from "../../../../src/plugin-sdk/agent-runtime.js";
 
@@ -15,6 +15,8 @@ async function main() {
   if (!sessionId) {
     throw new Error("session id is required");
   }
+  // This standalone ingress fixture owns the config bootstrap normally done by the Gateway.
+  await captureRuntimeConfigAsyncReader()();
   const scheduler = new GatewayScheduler();
   const recorder = createAuditEventRecorder({ scheduler, getConfig: getRuntimeConfig });
   const clearSink = configureExecutionIdentityAdmissionSink(recorder.recordExecutionIdentity);

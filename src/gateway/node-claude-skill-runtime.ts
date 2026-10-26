@@ -11,10 +11,9 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
-import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import {
   composeSessionSourceAssertion,
   runWithSessionSourceScope,
@@ -34,8 +33,8 @@ import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
 import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
 import { createPluginToolsMcpHandlers } from "../mcp/plugin-tools-handlers.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { prepareSkillResourceDelivery } from "../skills/runtime/resources.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeRegistry, NodeSession } from "./node-registry.js";
@@ -91,36 +90,50 @@ export async function prepareNodeClaudeSkillRuntime(
   const connectionId = node.connId;
   const pairingGeneration = node.pairingGeneration;
   const caller = getGatewayToolCallerIdentity();
-  const memory = getSessionActorStorageBinding(sessionScope);
-  const binding = memory ? undefined : captureIncognitoSessionBinding(sessionScope);
-  const sessionClaim = binding?.actor.sessions.captureCurrent(sessionKey);
-  let releaseSource = async () => {};
-  const session = memory
-    ? memory.actor.snapshot(memory.authority)?.entry
-    : binding
-      ? await (() => {
-          const ready = createDeferredCore<ReturnType<typeof loadSessionEntryReadOnly>>();
-          const done = createDeferredCore();
-          const lifetime = binding.actor.sessions.withSharedState(async () => {
-            const read = await binding.actor.sessions.read(
-              { assertCurrent: assertRun },
-              {
-                sessionKey,
+  const memory = captureSessionEntryMetadataRead(sessionScope, assertRun);
+  let sourceActive = true;
+  let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
+  let unregisterSource = () => {};
+  const releaseSource = async () => {
+    sourceActive = false;
+    retained?.release();
+    unregisterSource();
+  };
+  const readSession = async () =>
+    memory
+      ? memory.readCurrent()
+      : await withSessionEntryReadOnlyInWorker(sessionScope, assertRun, async (read, owner) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          const entry = read.value;
+          if (owner.kind === "file" && typeof owner.source?.databaseIdentity === "string") {
+            retained = retainPreparedSessionEntryPredicate({
+              databaseIdentity: `file:${owner.source.databaseIdentity}`,
+              sessionKey: owner.scope?.sessionKey ?? sessionKey,
+              entry,
+              matches: (before, after) =>
+                before?.sessionId === after?.sessionId &&
+                before?.lifecycleRevision === after?.lifecycleRevision &&
+                before?.execHost === after?.execHost &&
+                before?.execNode === after?.execNode &&
+                before?.execCwd === after?.execCwd,
+            });
+            unregisterSource = registerOpenClawAgentDatabaseAsyncResource({
+              agentId: owner.source.agentId,
+              path: owner.source.path,
+              revoke: () => {
+                void releaseSource();
               },
-              binding.admissionSignal,
-            );
-            read.snapshot.assertCurrent();
-            ready.resolve(read.entry);
-            await done.promise;
-          });
-          releaseSource = () => {
-            done.resolve();
-            return lifetime;
-          };
-          void lifetime.catch(ready.reject);
-          return ready.promise;
-        })()
-      : await readSessionEntryReadOnlyInWorker(sessionScope);
+              close: releaseSource,
+            });
+          }
+          return entry;
+        });
+  const session = await readSession().catch(async (error: unknown) => {
+    await releaseSource();
+    throw error;
+  });
   const placements = gateway.workerSessionPlacementService;
   const readPlacement = () => placements?.getMany([run.sessionId]).get(run.sessionId);
   const placement = await readSessionWorkerPlacementAsync({
@@ -162,9 +175,7 @@ export async function prepareNodeClaudeSkillRuntime(
         })
       : undefined;
   const combinedSignal = AbortSignal.any([signal, controller.signal]);
-  let closed = false;
   const close = () => {
-    closed = true;
     stop();
     stopClaim?.();
     controller.abort();
@@ -182,17 +193,11 @@ export async function prepareNodeClaudeSkillRuntime(
     (assertSources) => {
       assertSources();
       combinedSignal.throwIfAborted();
-      binding?.admissionSignal?.throwIfAborted();
-      sessionClaim?.assertCurrent();
-      const nativeCurrent = memory || binding ? undefined : loadSessionEntryReadOnly(sessionScope);
-      const current = memory
-        ? memory.actor.snapshot(memory.authority)?.entry
-        : binding
-          ? binding.actor.sessions.readPolicy(sessionKey)
-          : nativeCurrent;
+      const current = memory ? memory.readCurrent() : session;
       const currentPlacement = readPlacement();
       if (
-        closed ||
+        !sourceActive ||
+        (!memory && !retained?.isCurrent()) ||
         gateway.nodeRegistry.get(node.nodeId) !== node ||
         node.connId !== connectionId ||
         node.pairingGeneration !== pairingGeneration ||
@@ -212,8 +217,7 @@ export async function prepareNodeClaudeSkillRuntime(
           session.lifecycleRevision !==
             (run.expectedLifecycleRevision ?? run.sessionEntry?.lifecycleRevision)) ||
         current?.sessionId !== session.sessionId ||
-        (memory && current?.lifecycleRevision !== session.lifecycleRevision) ||
-        (!memory && !binding && nativeCurrent?.lifecycleRevision !== session.lifecycleRevision) ||
+        current?.lifecycleRevision !== session.lifecycleRevision ||
         current.execHost !== "node" ||
         current.execNode?.trim() !== node.nodeId ||
         (current.execCwd?.trim() || undefined) !==
@@ -280,12 +284,10 @@ export async function invokeNodeClaudeSkillRuntime(params: {
   const controller = new AbortController();
   const signal = AbortSignal.any([runtime.signal, controller.signal]);
   let invokeId: string | undefined;
-  let open = true;
   const assertCurrent = composeSessionSourceAssertion([runtime.assertCurrent], (assertSource) => {
     assertSource();
     signal.throwIfAborted();
     if (
-      !open ||
       !invokeId ||
       !registry.isInvokeCurrent(invokeId, runtime.node.nodeId, runtime.node.connId)
     ) {
@@ -394,7 +396,6 @@ export async function invokeNodeClaudeSkillRuntime(params: {
     });
   } finally {
     // Revoke synchronously before awaiting any callback or artifact cleanup.
-    open = false;
     controller.abort();
     signal.removeEventListener("abort", abort);
     endpoint.close();

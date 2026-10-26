@@ -24,7 +24,7 @@ const tokenProvider = { getAccessToken: vi.fn(async () => "graph-token") };
 
 afterEach(() => vi.unstubAllGlobals());
 
-type FetchCall = [string, { method?: string; headers?: Record<string, string> } | undefined];
+type FetchCall = [string, RequestInit | undefined];
 
 function requireFetchCall(fetchFn: ReturnType<typeof vi.fn>, index = 0): FetchCall {
   const call = fetchFn.mock.calls[index] as unknown as FetchCall | undefined;
@@ -40,11 +40,12 @@ function expectGraphUploadFetch(
   contentType = "application/octet-stream",
 ): void {
   const [url, init] = requireFetchCall(fetchFn);
+  const headers = new Headers(init?.headers);
   expect(url).toBe(expectedUrl);
   expect(init?.method).toBe("PUT");
-  expect(init?.headers?.Authorization).toBe("Bearer graph-token");
-  expect(init?.headers?.["Content-Type"]).toBe(contentType);
-  expect(init?.headers?.["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
+  expect(headers.get("Authorization")).toBe("Bearer graph-token");
+  expect(headers.get("Content-Type")).toBe(contentType);
+  expect(headers.get("User-Agent")).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
 }
 
 function bodyOnlyErrorResponse(body: string, status = 500): Response {
@@ -236,7 +237,7 @@ async function uploadToSharePoint(params: UploadToSharePointParams = {}) {
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     onPlatformSendDispatch: params.onPlatformSendDispatch,
   });
-  return { id: result.itemId, webUrl: result.webUrl, name: result.name };
+  return { id: result.itemId };
 }
 
 async function startTimedUpload(
@@ -296,21 +297,23 @@ describe("graph upload helpers", () => {
       );
       expect(result).toEqual({
         id: "item-2",
-        webUrl: "https://example.com/2",
-        name: "b.txt",
       });
     },
   );
 
-  it("uploads with conflictBehavior=rename and surfaces the name SharePoint assigns", async () => {
+  it("uploads with conflictBehavior=rename and resolves the assigned file name by id", async () => {
     // Regression: openclaw-runtime image assets reuse names (image-1.png). Graph's default
     // replace overwrote the prior file and Teams (caching cards by driveItem URL) showed the
-    // stale image; rename mints a distinct item, so callers use the returned name, not the request.
-    const fetchFn = vi.fn(async () =>
-      Response.json({ id: "item-9", webUrl: "https://example.com/9", name: "image-1 1.png" }),
+    // stale image; rename mints a distinct item, whose properties supply the file card's name.
+    const fetchFn = vi.fn(async (url: string) =>
+      Response.json(
+        url.includes("/drive/items/item-9?")
+          ? { ...DEFAULT_DRIVE_PROPERTIES, name: "image-1 1.png" }
+          : { id: "item-9" },
+      ),
     );
 
-    const result = await uploadToSharePoint({
+    const uploaded = await uploadToSharePoint({
       buffer: Buffer.from("img"),
       filename: "image-1.png",
       fetchFn: withFetchPreconnect(fetchFn),
@@ -320,11 +323,16 @@ describe("graph upload helpers", () => {
       fetchFn,
       "https://graph.microsoft.com/v1.0/sites/site-123/drive/root:/OpenClawShared/image-1.png:/content?@microsoft.graph.conflictBehavior=rename",
     );
+    const result = await getDriveItemProperties({
+      siteId: "site-123",
+      itemId: uploaded.id,
+      tokenProvider,
+    });
     expect(result.name).toBe("image-1 1.png");
   });
 
-  it("rejects upload responses missing required fields", async () => {
-    const fetchFn = vi.fn(async () => Response.json({ id: "item-3" }));
+  it("rejects upload responses missing the item id", async () => {
+    const fetchFn = vi.fn(async () => Response.json({}));
 
     await expect(
       uploadToSharePoint({
@@ -413,7 +421,7 @@ describe("graph upload request timeouts", () => {
     expect(signal.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1_000);
 
-    await expect(upload).resolves.toEqual(uploadResponse);
+    await expect(upload).resolves.toEqual({ id: uploadResponse.id });
     expect(vi.getTimerCount()).toBe(timersBeforeUpload);
     await vi.advanceTimersByTimeAsync(timeoutMs);
     expect(vi.getTimerCount()).toBe(timersBeforeUpload);
@@ -476,7 +484,7 @@ describe("graph upload request timeouts", () => {
     );
 
     await expect(uploadWithPerUserSharing(fetchFn)).resolves.toMatchObject({
-      shareUrl: "https://example.com/private",
+      itemId: DEFAULT_UPLOAD_RESULT.id,
     });
     const [createLinkUrl, createLinkInit] = requireFetchCall(fetchFn, 2);
     expect(createLinkUrl).toContain("/beta/");
@@ -626,7 +634,7 @@ describe("graph upload send authority", () => {
     {
       step: "sharing",
       finalRoute: "/createLink",
-      expected: { shareUrl: "https://example.com/private" },
+      expected: { itemId: DEFAULT_UPLOAD_RESULT.id },
     },
     { step: "properties", finalRoute: "/drive/items/item-1?", expected: DEFAULT_DRIVE_PROPERTIES },
   ])(
@@ -711,7 +719,6 @@ describe("graph upload send authority", () => {
 
           await expect(runGraphUpload(fetchFn, authority.handoff)).resolves.toMatchObject({
             itemId: DEFAULT_UPLOAD_RESULT.id,
-            shareUrl: "https://example.com/private",
           });
           const firstUpload = {
             path: uploadPath,

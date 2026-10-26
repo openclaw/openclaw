@@ -80,13 +80,27 @@ async function saveBrowserMedia(buffer: Buffer, contentType: string, maxBytes: n
 async function saveBrowserScreenshot(capture: ScreenshotCapture, type: "png" | "jpeg") {
   const normalized = await normalizeBrowserScreenshot(capture.buffer, {
     maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-    maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   });
-  const annotations = await rescaleAnnotationsForNormalization({
-    annotations: capture.annotations,
-    originalBuffer: capture.buffer,
-    normalized,
-  });
+  let annotations = capture.annotations;
+  const originalBuffer = capture.buffer;
+  if (annotations?.length) {
+    const orig = normalized.sourceDimensions;
+    // Preserve coordinates when dimensions are unavailable or identical bytes cannot rescale boxes.
+    if (originalBuffer !== normalized.buffer && orig?.width && orig?.height) {
+      const next = await getImageMetadata(normalized.buffer);
+      if (
+        next?.width &&
+        next?.height &&
+        (next.width !== orig.width || next.height !== orig.height)
+      ) {
+        annotations = scaleAnnotations(
+          annotations,
+          next.width / orig.width,
+          next.height / orig.height,
+        );
+      }
+    }
+  }
   const imagePath = await saveBrowserMedia(
     normalized.buffer,
     normalized.contentType ?? `image/${type}`,
@@ -100,30 +114,6 @@ async function saveBrowserScreenshot(capture: ScreenshotCapture, type: "png" | "
     ...(capture.truncated ? { truncated: true } : {}),
     ...(annotations?.length ? { annotations } : {}),
   };
-}
-
-// Preserve original coordinates when image dimensions cannot be recovered.
-async function rescaleAnnotationsForNormalization(params: {
-  annotations?: AnnotationItem[];
-  originalBuffer: Buffer;
-  normalized: Awaited<ReturnType<typeof normalizeBrowserScreenshot>>;
-}): Promise<AnnotationItem[] | undefined> {
-  if (!params.annotations || params.annotations.length === 0) {
-    return params.annotations;
-  }
-  const orig = params.normalized.sourceDimensions;
-  // The normalizer already owns the source dimensions; identical bytes cannot rescale boxes.
-  if (params.originalBuffer === params.normalized.buffer || !orig?.width || !orig?.height) {
-    return params.annotations;
-  }
-  const next = await getImageMetadata(params.normalized.buffer);
-  if (!next?.width || !next?.height) {
-    return params.annotations;
-  }
-  if (next.width === orig.width && next.height === orig.height) {
-    return params.annotations;
-  }
-  return scaleAnnotations(params.annotations, next.width / orig.width, next.height / orig.height);
 }
 
 export function registerBrowserAgentSnapshotRoutes(
@@ -182,6 +172,7 @@ export function registerBrowserAgentSnapshotRoutes(
             targetId: tab.targetId,
             url,
             timeoutMs,
+            signal,
             ...(assertCurrent ? { assertCurrent } : {}),
             ...(resolveRelayTarget
               ? {
@@ -341,7 +332,7 @@ export function registerBrowserAgentSnapshotRoutes(
               ? await pw.snapshotRoleViaPlaywright({
                   cdpUrl,
                   targetId: tab.targetId,
-                  ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                  ...browserNavigationPolicyForProfile(ctx, profileCtx),
                   timeoutMs,
                   signal,
                 })
@@ -430,9 +421,9 @@ export function registerBrowserAgentSnapshotRoutes(
               ...snapshot,
             });
           const snapshotOptions = {
-            interactive: plan.interactive ?? undefined,
-            compact: plan.compact ?? undefined,
-            maxDepth: plan.depth ?? undefined,
+            interactive: plan.interactive,
+            compact: plan.compact,
+            maxDepth: plan.depth,
           };
           const deltaFamily: SnapshotDeltaFamily | undefined =
             plan.format === "ai"
@@ -509,7 +500,7 @@ export function registerBrowserAgentSnapshotRoutes(
             ? await pwModule
                 .getObservedBrowserStateViaPlaywright({
                   ...playwrightTarget,
-                  ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+                  ...browserNavigationPolicyForProfile(ctx, profileCtx),
                 })
                 .catch(() => undefined)
             : undefined;
@@ -589,7 +580,7 @@ export function registerBrowserAgentSnapshotRoutes(
           if (plan.format === "ai") {
             const roleSnapshotArgs = {
               ...playwrightTarget,
-              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+              ...browserNavigationPolicyForProfile(ctx, profileCtx),
               urls: plan.urls,
               timeoutMs: plan.timeoutMs,
               signal,
@@ -694,7 +685,7 @@ export function registerBrowserAgentSnapshotRoutes(
               ...playwrightTarget,
               limit: plan.limit,
               timeoutMs: plan.timeoutMs,
-              ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+              ...browserNavigationPolicyForProfile(ctx, profileCtx),
               signal,
             });
           } else {
@@ -724,4 +715,3 @@ export function registerBrowserAgentSnapshotRoutes(
     }
   });
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

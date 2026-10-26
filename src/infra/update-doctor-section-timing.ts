@@ -18,7 +18,7 @@ const SLOWEST_CONTRIBUTIONS = 5;
 export type UpdateDoctorSectionTiming = {
   /** Enables the Doctor's existing trace phases in the child it is merged into. */
   readonly env: Readonly<Record<string, string>>;
-  /** Observe one complete output line; never throws. */
+  /** Observe one complete output line. */
   observeLine: (line: string) => void;
   /** Wrap a Doctor runner: observe stderr as it streams and drop trace lines from the result. */
   wrap: <R extends { stderr: string }>(
@@ -32,7 +32,7 @@ export type UpdateDoctorSectionTiming = {
   annotate: <T extends Pick<UpdateStepResult, "diagnostics">>(step: T) => T;
 };
 
-/** Best effort: bookkeeping failures yield no line and never affect the Doctor. */
+/** Collects bounded diagnostics from the Doctor's existing startup trace. */
 export function createUpdateDoctorSectionTiming(
   parentEnv: NodeJS.ProcessEnv = process.env,
 ): UpdateDoctorSectionTiming {
@@ -43,47 +43,39 @@ export function createUpdateDoctorSectionTiming(
   let droppingLine = false;
 
   const observeLine = (line: string) => {
-    try {
-      const match = DOCTOR_TRACE.exec(line);
-      if (!match) {
-        return;
-      }
-      const [, name, value] = match;
-      const milliseconds = Number(value);
-      if (!name || !Number.isFinite(milliseconds)) {
-        return;
-      }
-      const previous = phases.get(name);
-      if (previous !== undefined || phases.size < MAX_PHASES) {
-        phases.set(name, (previous ?? 0) + milliseconds);
-      }
-    } catch {
-      // Timing is diagnostic only.
+    const match = DOCTOR_TRACE.exec(line);
+    if (!match) {
+      return;
+    }
+    const [, name, value] = match;
+    const milliseconds = Number(value);
+    if (!name || !Number.isFinite(milliseconds)) {
+      return;
+    }
+    const previous = phases.get(name);
+    if (previous !== undefined || phases.size < MAX_PHASES) {
+      phases.set(name, (previous ?? 0) + milliseconds);
     }
   };
 
   const observeStderr = (chunk: Buffer) => {
-    try {
-      let text = decoder.write(chunk);
-      if (droppingLine) {
-        const newline = text.indexOf("\n");
-        if (newline < 0) {
-          return;
-        }
-        text = text.slice(newline + 1);
-        droppingLine = false;
+    let text = decoder.write(chunk);
+    if (droppingLine) {
+      const newline = text.indexOf("\n");
+      if (newline < 0) {
+        return;
       }
-      const lines = `${pending}${text}`.split("\n");
-      pending = lines.pop() ?? "";
-      for (const line of lines) {
-        observeLine(line);
-      }
-      if (pending.length > MAX_PENDING_CHARS) {
-        pending = "";
-        droppingLine = true;
-      }
-    } catch {
-      // Timing is diagnostic only.
+      text = text.slice(newline + 1);
+      droppingLine = false;
+    }
+    const lines = `${pending}${text}`.split("\n");
+    pending = lines.pop() ?? "";
+    for (const line of lines) {
+      observeLine(line);
+    }
+    if (pending.length > MAX_PENDING_CHARS) {
+      pending = "";
+      droppingLine = true;
     }
   };
 
@@ -97,40 +89,36 @@ export function createUpdateDoctorSectionTiming(
           .join("\n");
 
   const diagnostic = () => {
-    try {
-      if (pending) {
-        observeLine(pending);
-        pending = "";
+    if (pending) {
+      observeLine(pending);
+      pending = "";
+    }
+    const sections: string[] = [];
+    const contributions: Array<[string, number]> = [];
+    for (const [name, milliseconds] of phases) {
+      if (name.startsWith(CONTRIBUTION_PREFIX)) {
+        contributions.push([
+          name.slice(CONTRIBUTION_PREFIX.length).replace(/^doctor:/u, ""),
+          milliseconds,
+        ]);
+      } else {
+        sections.push(`${name} ${(milliseconds / 1000).toFixed(1)} s`);
       }
-      const sections: string[] = [];
-      const contributions: Array<[string, number]> = [];
-      for (const [name, milliseconds] of phases) {
-        if (name.startsWith(CONTRIBUTION_PREFIX)) {
-          contributions.push([
-            name.slice(CONTRIBUTION_PREFIX.length).replace(/^doctor:/u, ""),
-            milliseconds,
-          ]);
-        } else {
-          sections.push(`${name} ${(milliseconds / 1000).toFixed(1)} s`);
-        }
-      }
-      const slowest = contributions
-        .toSorted((left, right) => right[1] - left[1])
-        .slice(0, SLOWEST_CONTRIBUTIONS)
-        .map(([id, milliseconds]) => `${id} ${(milliseconds / 1000).toFixed(1)} s`);
-      if (!sections.length && !slowest.length) {
-        return undefined;
-      }
-      const line = [
-        `Doctor sections: ${sections.length ? sections.join(", ") : "none"}`,
-        ...(slowest.length ? [`slowest contributions: ${slowest.join(", ")}`] : []),
-      ].join("; ");
-      return line.length > UPDATE_RUN_TEXT_LIMIT
-        ? `${line.slice(0, UPDATE_RUN_TEXT_LIMIT - 1)}…`
-        : line;
-    } catch {
+    }
+    const slowest = contributions
+      .toSorted((left, right) => right[1] - left[1])
+      .slice(0, SLOWEST_CONTRIBUTIONS)
+      .map(([id, milliseconds]) => `${id} ${(milliseconds / 1000).toFixed(1)} s`);
+    if (!sections.length && !slowest.length) {
       return undefined;
     }
+    const line = [
+      `Doctor sections: ${sections.length ? sections.join(", ") : "none"}`,
+      ...(slowest.length ? [`slowest contributions: ${slowest.join(", ")}`] : []),
+    ].join("; ");
+    return line.length > UPDATE_RUN_TEXT_LIMIT
+      ? `${line.slice(0, UPDATE_RUN_TEXT_LIMIT - 1)}…`
+      : line;
   };
 
   return {

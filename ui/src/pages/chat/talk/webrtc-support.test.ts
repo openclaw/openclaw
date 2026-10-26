@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeStallingStream } from "../../../../../src/infra/http-body.test-support.js";
 import { RealtimeTalkWebRtcOfferExchange } from "./webrtc-support.ts";
 
 const OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES = 256 * 1024;
@@ -81,13 +82,10 @@ describe("RealtimeTalkWebRtcOfferExchange", () => {
 
   it("cancels a streamed SDP answer exceeding a custom provider's 256 KiB limit", async () => {
     const cancel = vi.fn(() => Promise.resolve());
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES));
-        controller.enqueue(new Uint8Array(1));
-      },
+    const body = makeStallingStream(
+      [new Uint8Array(OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES), new Uint8Array(1)],
       cancel,
-    });
+    );
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => ({

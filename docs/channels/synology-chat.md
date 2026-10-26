@@ -103,7 +103,7 @@ Config values override env vars.
 
 ## Outbound delivery
 
-Use numeric Synology Chat user IDs as targets. The `synology-chat:`, `synology_chat:`, and `synology:` prefixes are accepted.
+Use numeric Synology Chat user IDs as targets. The `synology-chat:`, `synology_chat:`, and `synology:` prefixes are accepted. Invalid recipients are rejected before sending.
 
 Examples:
 
@@ -113,7 +113,9 @@ openclaw message send --channel synology-chat --target synology-chat:123456 --me
 openclaw message send --channel synology-chat --target synology:123456 --message "Short prefix"
 ```
 
-Outbound text is chunked at 2000 characters, and ordinary links remain intact. Keep **Hide URL previews in conversations and channels** enabled in Synology Chat Admin Console on a supported Chat Server release.
+Outbound text is chunked at 2000 characters, and ordinary links remain intact. Attachment captions share the same limit; longer captions continue as text messages after the attachment. Keep **Hide URL previews in conversations and channels** enabled in Synology Chat Admin Console on a supported Chat Server release.
+
+When Synology returns the recipient's post ID in `data.succ.user_id_post_map`, OpenClaw uses it to confirm text and attachment delivery. Split text is confirmed only when every chunk has an ID. Acknowledgments without usable recipient-matched IDs remain unconfirmed even if the message appears in Chat; OpenClaw does not invent message IDs.
 
 For attachments, OpenClaw loads the source under its guarded outbound-media policy, freezes the resulting bytes in bounded plugin-scoped SQLite state, and gives Synology a short-lived opaque HTTPS capability on the configured webhook route. The NAS receives only this OpenClaw-hosted URL, never the original remote or local media reference. Capabilities are account- and route-scoped, reusable for delayed `GET` or `HEAD` requests during their ten-minute lifetime, and expire automatically. Files are limited to 32 MB. Each account can serve at most four attachment responses concurrently and 128 MB per minute; stalled responses are closed after two minutes. Byte-range responses are not advertised.
 
@@ -131,6 +133,9 @@ Multiple Synology Chat accounts are supported under `channels.synology-chat.acco
 Each account can override token, incoming URL, public webhook URL, webhook path, DM policy, and limits.
 Direct-message sessions are isolated per account and user, so the same numeric `user_id`
 on two different Synology accounts does not share transcript state.
+Outbound sends are paced independently for each incoming webhook URL, including its token.
+Text and attachments sent to the same webhook share the 500 ms minimum interval;
+a burst on one webhook does not delay another.
 Give each enabled account a distinct `webhookPath`. OpenClaw rejects duplicate exact paths
 and refuses to start named accounts that only inherit a shared webhook path in multi-account setups.
 If you intentionally need legacy inheritance for a named account, set

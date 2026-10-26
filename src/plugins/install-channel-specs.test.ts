@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
@@ -8,269 +8,187 @@ import {
 } from "./install-channel-specs.js";
 
 vi.mock("../infra/install-source-utils.js", () => ({ resolveNpmSpecMetadata: vi.fn() }));
-
 beforeEach(() => {
   vi.mocked(resolveNpmSpecMetadata).mockReset();
 });
 
-describe("installWithSourceFallback", () => {
-  it.each(["notarget", "etarget"])(
-    "keeps an integrity refusal terminal for package %s",
-    async (name) => {
-      const spec = `@synthetic/${name}@1.0.0`;
-      const refusal = await resolveNpmIntegrityDriftWithDefaultMessage({
-        spec,
-        expectedIntegrity: `sha512-${Buffer.alloc(64, 1).toString("base64")}`,
-        resolution: {
-          resolvedSpec: spec,
-          integrity: `sha512-${Buffer.alloc(64, 2).toString("base64")}`,
-        },
-        onIntegrityDrift: () => false,
-      });
-      expect(refusal.error).toContain("aborted: npm package integrity drift");
-      const attempted: string[] = [];
-      const result = await installWithSourceFallback({
-        sources: [
-          { source: "npm", spec },
-          { source: "clawhub", spec: `clawhub:${name}@1.0.0` },
-        ],
-        install: async ({ source }) => {
-          attempted.push(source);
-          return source === "npm" ? { ok: false, error: refusal.error } : { ok: true };
-        },
-        result: (attempt) => attempt,
-        onFallback: () => {},
-      });
-      expect(result.attempt).toEqual({ ok: false, error: refusal.error });
-      expect(attempted).toEqual(["npm"]);
-    },
-  );
-});
+const npmName = "@openclaw/codex";
+const clawHubName = "@openclaw/discord";
+const missingPackage = { ok: false as const, error: "Package not found on npm" };
+function npmMetadata(version: string) {
+  const resolvedSpec = npmName + "@" + version;
+  return { name: npmName, version, resolvedSpec, integrity: "sha512-" + version };
+}
+type NpmParams = Parameters<typeof resolveNpmInstallSpecsForUpdateChannel>[0];
+async function expectNpm(params: NpmParams, installSpec = params.spec) {
+  const result = await resolveNpmInstallSpecsForUpdateChannel(params);
+  expect(result).toEqual({ installSpec, recordSpec: params.spec });
+}
+function officialNpm(
+  spec: string,
+  options: Omit<NpmParams, "spec" | "officialPackageName">,
+): NpmParams {
+  return { spec, officialPackageName: npmName, ...options };
+}
 
-describe("resolveNpmInstallSpecsForUpdateChannel", () => {
-  it.each([
-    {
-      channel: "extended-stable" as const,
-      versionBoundToCore: false,
-      coreVersion: "2026.7.33",
-      expectedVersion: "2026.7.33",
-    },
-    {
-      channel: "stable" as const,
-      versionBoundToCore: true,
-      coreVersion: "2026.8.1",
-      expectedVersion: "2026.8.1",
-    },
-    {
-      channel: "stable" as const,
-      versionBoundToCore: true,
-      coreVersion: "2026.7.1-2",
-      expectedVersion: "2026.7.1",
-    },
-    {
-      channel: "extended-stable" as const,
-      versionBoundToCore: true,
-      coreVersion: "2026.7.1-2",
-      expectedVersion: "2026.7.1",
-    },
-  ])(
-    "preserves the $channel release-cohort contract for $coreVersion",
-    async ({ channel, versionBoundToCore, coreVersion, expectedVersion }) => {
-      for (const spec of ["@openclaw/codex", "@openclaw/codex@latest"]) {
-        expect(
-          await resolveNpmInstallSpecsForUpdateChannel({
-            spec,
-            updateChannel: channel,
-            officialPackageName: "@openclaw/codex",
-            coreVersion,
-            versionBoundToCore,
-          }),
-        ).toEqual({ installSpec: `@openclaw/codex@${expectedVersion}`, recordSpec: spec });
-      }
-      expect(resolveNpmSpecMetadata).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["2026.6.33", "next", "^2026.6.0"])(
-    "preserves an explicit selector %s on beta",
-    async (selector) => {
-      const spec = `@openclaw/codex@${selector}`;
-      expect(
-        await resolveNpmInstallSpecsForUpdateChannel({
-          spec,
-          updateChannel: "beta",
-          officialPackageName: "@openclaw/codex",
-          coreVersion: "2026.8.1-beta.3",
-        }),
-      ).toEqual({ installSpec: spec, recordSpec: spec });
-      expect(resolveNpmSpecMetadata).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not rewrite a third-party extended-stable package", async () => {
-    expect(
-      await resolveNpmInstallSpecsForUpdateChannel({
-        spec: "@acme/discord",
-        updateChannel: "extended-stable",
-        officialPackageName: "@openclaw/discord",
-        coreVersion: "2026.7.33",
-      }),
-    ).toEqual({ installSpec: "@acme/discord", recordSpec: "@acme/discord" });
-  });
-
-  it("fails closed without an authoritative extended-stable core version", async () => {
-    await expect(
-      resolveNpmInstallSpecsForUpdateChannel({
-        spec: "@openclaw/codex",
-        updateChannel: "extended-stable",
-        officialPackageName: "@openclaw/codex",
-      }),
-    ).rejects.toThrow("requires an exact core version");
-  });
-
-  it.each([
-    {
-      beta: "2026.9.1-beta.1",
-      latest: "2026.9.2",
-      expected: "2026.9.2",
-      tag: "latest",
-      reason: "tag-behind-latest",
-    },
-    { beta: "2026.9.3-beta.1", latest: "2026.9.2", expected: "2026.9.3-beta.1", tag: "beta" },
-    { beta: "2026.9.2", latest: "2026.9.2", expected: "2026.9.2", tag: "beta" },
-    { beta: null, latest: "2026.9.2", expected: "2026.9.2", tag: "latest" },
-    { beta: "2026.9.3-beta.1", latest: null, expected: "2026.9.3-beta.1", tag: "beta" },
-  ])(
-    "selects $expected from beta=$beta latest=$latest before installation",
-    async ({ beta, latest, expected, tag, reason }) => {
-      vi.mocked(resolveNpmSpecMetadata).mockImplementation(async ({ spec }) => {
-        const version = spec.endsWith("@beta") ? beta : latest;
-        return version
-          ? {
-              ok: true,
-              metadata: {
-                name: "@openclaw/codex",
-                version,
-                resolvedSpec: `@openclaw/codex@${version}`,
-                integrity: `sha512-${version}`,
-              },
-            }
-          : { ok: false, error: "Package not found on npm" };
-      });
-      for (const spec of ["@openclaw/codex", "@openclaw/codex@latest", "@openclaw/codex@beta"]) {
-        const result = await resolveNpmInstallSpecsForUpdateChannel({
-          spec,
-          updateChannel: "beta",
-          officialPackageName: "@openclaw/codex",
-          coreVersion: "2026.9.1-beta.1",
-          versionBoundToCore: true,
-        });
-        expect(result).toEqual({
-          installSpec: `@openclaw/codex@${expected}`,
-          recordSpec: spec,
-          npmResolution: {
-            name: "@openclaw/codex",
-            version: expected,
-            resolvedSpec: `@openclaw/codex@${expected}`,
-            integrity: `sha512-${expected}`,
-          },
-          channelTag: tag,
-          ...(reason ? { channelReason: reason } : {}),
-        });
-      }
-    },
-  );
-
-  it("leaves missing packages to the install owner's declared-source fallback", async () => {
-    vi.mocked(resolveNpmSpecMetadata).mockResolvedValue({
-      ok: false,
-      error: "Package not found on npm",
+it.each(["notarget", "etarget"])(
+  "keeps integrity refusal terminal for package %s",
+  async (name) => {
+    const spec = "@synthetic/" + name + "@1.0.0";
+    const refusal = await resolveNpmIntegrityDriftWithDefaultMessage({
+      spec,
+      expectedIntegrity: "sha512-" + Buffer.alloc(64, 1).toString("base64"),
+      resolution: {
+        resolvedSpec: spec,
+        integrity: "sha512-" + Buffer.alloc(64, 2).toString("base64"),
+      },
+      onIntegrityDrift: () => false,
     });
-    expect(
-      await resolveNpmInstallSpecsForUpdateChannel({
-        spec: "@openclaw/codex@beta",
-        updateChannel: "beta",
-      }),
-    ).toEqual({ installSpec: "@openclaw/codex@latest", recordSpec: "@openclaw/codex@beta" });
-  });
+    expect(refusal.error).toContain("aborted: npm package integrity drift");
+    const attempted: string[] = [];
+    const result = await installWithSourceFallback({
+      sources: [
+        { source: "npm", spec },
+        { source: "clawhub", spec: "clawhub:" + name + "@1.0.0" },
+      ],
+      install: async ({ source }) => {
+        attempted.push(source);
+        return source === "npm" ? { ok: false, error: refusal.error } : { ok: true };
+      },
+      result: (attempt) => attempt,
+      onFallback: () => {},
+    });
+    expect(result.attempt).toEqual({ ok: false, error: refusal.error });
+    expect(attempted).toEqual(["npm"]);
+  },
+);
 
-  it.each(["beta", "latest"] as const)(
-    "does not install the other tag when %s metadata fails",
-    async (failedTag) => {
-      vi.mocked(resolveNpmSpecMetadata).mockImplementation(async ({ spec }) =>
-        spec.endsWith(`@${failedTag}`)
-          ? { ok: false, category: "metadata-env", error: "Registry unavailable" }
-          : { ok: true, metadata: { name: "@openclaw/codex", version: "2026.9.1-beta.1" } },
+it.each([
+  ["extended-stable", false, "2026.7.33", "2026.7.33"],
+  ["stable", true, "2026.8.1", "2026.8.1"],
+  ["stable", true, "2026.7.1-2", "2026.7.1"],
+  ["extended-stable", true, "2026.7.1-2", "2026.7.1"],
+] as const)(
+  "pins %s (bound=%s, core=%s) to %s",
+  async (updateChannel, versionBoundToCore, coreVersion, version) => {
+    for (const spec of [npmName, npmName + "@latest"]) {
+      await expectNpm(
+        officialNpm(spec, { updateChannel, versionBoundToCore, coreVersion }),
+        npmName + "@" + version,
       );
-      await expect(
-        resolveNpmInstallSpecsForUpdateChannel({ spec: "@openclaw/codex", updateChannel: "beta" }),
-      ).rejects.toThrow("Registry unavailable");
-    },
+    }
+    expect(resolveNpmSpecMetadata).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  [npmName + "@2026.6.33", "beta", npmName, "2026.8.1-beta.3"],
+  [npmName + "@next", "beta", npmName, "2026.8.1-beta.3"],
+  [npmName + "@^2026.6.0", "beta", npmName, "2026.8.1-beta.3"],
+  ["@acme/discord", "extended-stable", clawHubName, "2026.7.33"],
+] as const)(
+  "preserves explicit or third-party %s on %s",
+  async (spec, updateChannel, officialPackageName, coreVersion) => {
+    await expectNpm({ spec, updateChannel, officialPackageName, coreVersion });
+    expect(resolveNpmSpecMetadata).not.toHaveBeenCalled();
+  },
+);
+
+it("requires an authoritative extended-stable core version", async () => {
+  const params = officialNpm(npmName, { updateChannel: "extended-stable" });
+  await expect(resolveNpmInstallSpecsForUpdateChannel(params)).rejects.toThrow(
+    "requires an exact core version",
   );
 });
 
-describe("resolveClawHubInstallSpecsForUpdateChannel", () => {
-  it.each([
-    ["stable", false, "2026.7.33", undefined, false],
-    ["stable", false, "2026.7.33", "2026.7.33", true],
-    ["stable", true, "2026.7.33", "2026.7.33", false],
-    ["beta", false, "2026.8.1-beta.3", "beta", false],
-    ["extended-stable", false, "2026.7.33", "2026.7.33", false],
-  ] as const)(
-    "resolves ClawHub defaults: channel=%s, bound=%s, core=%s, selector=%s, preferCore=%s",
-    (updateChannel, versionBoundToCore, coreVersion, selector, preferCoreVersion) => {
-      for (const spec of ["clawhub:@openclaw/discord", "clawhub:@openclaw/discord@latest"]) {
-        const installSpec = selector ? `clawhub:@openclaw/discord@${selector}` : spec;
-        expect(
-          resolveClawHubInstallSpecsForUpdateChannel({
-            spec,
-            updateChannel,
-            officialPackageName: "@openclaw/discord",
-            coreVersion,
-            versionBoundToCore,
-            preferCoreVersion,
-          }),
-        ).toEqual({
-          installSpec,
-          recordSpec: spec,
-          ...(updateChannel === "beta" || (updateChannel === "stable" && preferCoreVersion)
-            ? { fallbackSpec: spec, fallbackLabel: installSpec }
-            : {}),
-        });
-      }
-    },
-  );
+it.each([
+  ["2026.9.1-beta.1", "2026.9.2", "2026.9.2", "latest", "tag-behind-latest"],
+  ["2026.9.3-beta.1", "2026.9.2", "2026.9.3-beta.1", "beta", undefined],
+  ["2026.9.2", "2026.9.2", "2026.9.2", "beta", undefined],
+  [null, "2026.9.2", "2026.9.2", "latest", undefined],
+  ["2026.9.3-beta.1", null, "2026.9.3-beta.1", "beta", undefined],
+] as const)(
+  "selects beta=%s latest=%s -> %s (%s, %s)",
+  async (beta, latest, version, tag, reason) => {
+    vi.mocked(resolveNpmSpecMetadata).mockImplementation(async ({ spec }) => {
+      const selected = spec.endsWith("@beta") ? beta : latest;
+      return selected ? { ok: true, metadata: npmMetadata(selected) } : missingPackage;
+    });
+    for (const spec of [npmName, npmName + "@latest", npmName + "@beta"]) {
+      const params = officialNpm(spec, {
+        updateChannel: "beta",
+        coreVersion: "2026.9.1-beta.1",
+        versionBoundToCore: true,
+      });
+      expect(await resolveNpmInstallSpecsForUpdateChannel(params)).toEqual({
+        installSpec: npmName + "@" + version,
+        recordSpec: spec,
+        npmResolution: npmMetadata(version),
+        channelTag: tag,
+        ...(reason ? { channelReason: reason } : {}),
+      });
+    }
+  },
+);
 
-  it.each(["stable", "beta", "extended-stable"] as const)(
-    "preserves exact and non-latest ClawHub selectors on %s",
-    (updateChannel) => {
-      for (const selector of ["2026.6.33", "next", "beta"]) {
-        const spec = `clawhub:@openclaw/discord@${selector}`;
-        expect(
-          resolveClawHubInstallSpecsForUpdateChannel({
-            spec,
-            updateChannel,
-            officialPackageName: "@openclaw/discord",
-            coreVersion: updateChannel === "beta" ? "2026.8.1-beta.3" : "2026.7.33",
-            versionBoundToCore: true,
-          }),
-        ).toEqual({ installSpec: spec, recordSpec: spec });
-      }
-    },
-  );
+it("leaves missing packages to the install owner's source fallback", async () => {
+  vi.mocked(resolveNpmSpecMetadata).mockResolvedValue(missingPackage);
+  await expectNpm({ spec: npmName + "@beta", updateChannel: "beta" }, npmName + "@latest");
+});
 
-  it.each(["stable", "extended-stable"] as const)(
-    "does not rewrite non-official ClawHub on %s",
-    (updateChannel) => {
+it.each(["beta", "latest"] as const)(
+  "does not install the other tag when %s metadata fails",
+  async (failedTag) => {
+    vi.mocked(resolveNpmSpecMetadata).mockImplementation(async ({ spec }) =>
+      spec.endsWith("@" + failedTag)
+        ? { ok: false, category: "metadata-env", error: "Registry unavailable" }
+        : { ok: true, metadata: { name: npmName, version: "2026.9.1-beta.1" } },
+    );
+    await expect(
+      resolveNpmInstallSpecsForUpdateChannel({ spec: npmName, updateChannel: "beta" }),
+    ).rejects.toThrow("Registry unavailable");
+  },
+);
+const clawSpec = "clawhub:" + clawHubName;
+it.each([
+  ["stable", false, false, true, undefined, undefined, false],
+  ["stable", false, true, true, undefined, "2026.7.33", true],
+  ["stable", true, false, true, undefined, "2026.7.33", false],
+  ["beta", false, false, true, undefined, "beta", true],
+  ["extended-stable", false, false, true, undefined, "2026.7.33", false],
+  ["stable", true, false, true, "2026.6.33", "2026.6.33", false],
+  ["beta", true, false, true, "next", "next", false],
+  ["extended-stable", true, false, true, "next", "next", false],
+  ["stable", false, false, false, undefined, undefined, false],
+  ["extended-stable", false, false, false, undefined, undefined, false],
+] as const)(
+  "ClawHub %s (bound=%s, preferCore=%s, official=%s, selector=%s) -> %s",
+  (
+    updateChannel,
+    versionBoundToCore,
+    preferCoreVersion,
+    official,
+    selector,
+    expected,
+    fallback,
+  ) => {
+    for (const suffix of selector ? [selector] : [undefined, "latest"]) {
+      const spec = suffix ? clawSpec + "@" + suffix : clawSpec;
+      const installSpec = expected ? clawSpec + "@" + expected : spec;
       expect(
         resolveClawHubInstallSpecsForUpdateChannel({
-          spec: "clawhub:@openclaw/discord",
+          spec,
           updateChannel,
+          versionBoundToCore,
+          preferCoreVersion,
+          officialPackageName: official ? clawHubName : undefined,
+          coreVersion: "2026.7.33",
         }),
       ).toEqual({
-        installSpec: "clawhub:@openclaw/discord",
-        recordSpec: "clawhub:@openclaw/discord",
+        installSpec,
+        recordSpec: spec,
+        ...(fallback ? { fallbackSpec: spec, fallbackLabel: installSpec } : {}),
       });
-    },
-  );
-});
+    }
+  },
+);

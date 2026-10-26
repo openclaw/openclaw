@@ -27,6 +27,7 @@ import type { TranscriptReadWindowOptions } from "../sessions/transcript-read-wi
 import {
   createChatHistoryRecoveryProjection,
   isPendingAssistantError,
+  projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
@@ -90,6 +91,7 @@ function projectSqliteHistoryEvents(entries: readonly SessionTranscriptMessageEv
   return messages;
 }
 
+// Raw admission bounds decoding; this cap also accounts for projected event metadata.
 function capAnchorEventsByBytes(
   events: SessionTranscriptMessageEvent[],
   maxBytes: number | undefined,
@@ -142,14 +144,12 @@ function filterSessionMessagesMatchingId(messages: unknown[], messageId: string)
 }
 
 /** Select and format one admitted projection; acquisition and archive fallback stay outside. */
-export function selectSessionTranscriptProjection<
-  Selection extends SessionTranscriptProjectionSelection,
->(
+function selectSessionTranscriptProjection<Selection extends SessionTranscriptProjectionSelection>(
   projection: CurrentTranscriptProjection,
   selection: Selection,
   sessionFile?: string,
 ): SessionTranscriptProjectionSelectionResults[Selection["kind"]];
-export function selectSessionTranscriptProjection(
+function selectSessionTranscriptProjection(
   projection: CurrentTranscriptProjection,
   selection: SessionTranscriptProjectionSelection,
   sessionFile?: string,
@@ -360,15 +360,33 @@ export async function filterSessionMessageHistoryVisibility(
       sessionStartedAt: visibility.sessionStartedAt,
     });
     // The scanner may stop at a user boundary before appending its final chunk.
-    const projected = createRecovery();
-    projected.append([result.message, ...context]);
-    if (
-      !projected
-        .result()
-        .messages.some((message) => readChatHistoryMessageId(message) === messageId)
-    ) {
+    const projected = projectChatDisplayMessagesWithState([result.message, ...context], {
+      maxChars: MAX_PAYLOAD_BYTES,
+      subagentCoordination: readers.subagentCoordination,
+      // Visibility does not need names; the response owner prepares forwarded labels.
+      resolveCronJobName: () => undefined,
+    });
+    const projectedMessage = projected.messages.find(
+      (message) => readChatHistoryMessageId(message) === messageId,
+    );
+    if (!projectedMessage) {
       return { found: false, oversized: false, historyHidden: true };
     }
+    return { ...result, message: projectedMessage };
+  }
+  if (visibility.requireVisible) {
+    const projected = projectChatDisplayMessagesWithState([result.message], {
+      maxChars: MAX_PAYLOAD_BYTES,
+      includeCommentaryFallbacks: true,
+      subagentCoordination: readers.subagentCoordination,
+      resolveCronJobName: () => undefined,
+    });
+    const message = projected.messages.find(
+      (entry) => readChatHistoryMessageId(entry) === messageId,
+    );
+    return message
+      ? { ...result, message }
+      : { found: false, oversized: false, historyHidden: true };
   }
   return result;
 }

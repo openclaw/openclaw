@@ -8,35 +8,28 @@ function preview(
   senderLabel: string,
   props: Partial<Parameters<typeof createReplyPreviewResolver>[1]> = {},
 ) {
-  return createReplyPreviewResolver(
-    new Map<string, LoadedReplySource>(
-      location === "loaded"
-        ? [["source", { message: source, messageId: "source-row", senderLabel }]]
-        : [],
-    ),
-    {
-      assistantName: "OpenClaw",
-      ...props,
-      replyMessageAccess: { read: () => (location === "fetched" ? source : undefined) },
-    },
-  )("source");
+  const loaded = new Map<string, LoadedReplySource>();
+  if (location === "loaded") {
+    loaded.set("source", { message: source, messageId: "source-row", senderLabel });
+  }
+  return createReplyPreviewResolver(loaded, {
+    assistantName: "OpenClaw",
+    ...props,
+    replyMessageAccess: { read: () => (location === "fetched" ? source : undefined) },
+  })("source");
 }
 
 const identity = { type: "profile", id: "mira" } as const;
+const attachment = {
+  kind: "document",
+  url: "https://files.example.test/report.pdf",
+  label: "report.pdf",
+  mimeType: "application/pdf",
+};
 const documentSource = {
   role: "assistant",
   __openclaw: { id: "source" },
-  content: [
-    {
-      type: "attachment",
-      attachment: {
-        kind: "document",
-        url: "https://files.example.test/report.pdf",
-        label: "report.pdf",
-        mimeType: "application/pdf",
-      },
-    },
-  ],
+  content: [{ type: "attachment", attachment }],
 };
 const photoSource = {
   role: "user",
@@ -45,45 +38,37 @@ const photoSource = {
 };
 it.each([
   ...(["loaded", "fetched"] as const).flatMap((location) => [
-    {
-      location,
-      source: documentSource,
-      senderLabel: "OpenClaw",
-      expected: {
-        sourceMessageId: "source",
-        senderLabel: "OpenClaw",
-        text: "report.pdf",
-      },
-    },
-    {
-      location,
-      source: photoSource,
-      senderLabel: "Mira",
-      expected: {
-        sourceMessageId: "source",
-        senderLabel: "Mira",
-        sender: { id: "mira", name: "Mira", identity },
-        text: "",
-      },
-    },
+    [location, documentSource, "OpenClaw", "report.pdf"] as const,
+    [location, photoSource, "Mira", ""] as const,
   ]),
-  {
-    location: "fetched" as const,
-    source: { role: "user", content: [] },
-    senderLabel: "",
-    expected: undefined,
-  },
-])(
-  "describes a textless source only with persisted content or identity ($location, $senderLabel)",
-  ({ location, source, senderLabel, expected }) => {
-    const actual = preview(source, location, senderLabel);
-    if (expected) {
-      expect(actual).toMatchObject(expected);
-    } else {
-      expect(actual).toBeUndefined();
-    }
-  },
-);
+  ["fetched", { role: "user", content: [] }, "", undefined] as const,
+])("keeps textless persisted sources (%s, %j, %s)", (location, source, senderLabel, text) => {
+  const actual = preview(source, location, senderLabel);
+  if (text === undefined) {
+    expect(actual).toBeUndefined();
+  } else {
+    expect(actual).toMatchObject({
+      sourceMessageId: "source",
+      senderLabel,
+      text,
+      ...(source === photoSource ? { sender: { id: "mira", name: "Mira", identity } } : {}),
+    });
+  }
+});
+
+function agentSource(agentId?: string, metadata: Record<string, unknown> = {}) {
+  return {
+    role: "assistant",
+    content: "The original answer",
+    ...(agentId ? { senderSession: { sessionKey: `agent:${agentId}:main`, agentId } } : {}),
+    __openclaw: { id: "source", ...metadata },
+  };
+}
+const reviewer = {
+  senderId: "reviewer",
+  senderName: "Source author",
+  senderIdentity: { type: "profile", id: "reviewer" },
+} as const;
 
 it.each([
   ["loaded", "main", "image", "/avatars/current.png", null],
@@ -98,56 +83,31 @@ it.each([
 ] as const)(
   "preserves the source owner's identity and avatar (%s, %s, %s)",
   (location, agentId, kind, avatar, textAvatar) => {
-    const typedIdentity = { type: "profile", id: "reviewer" } as const;
-    const source = {
-      role: "assistant",
-      content: "The original answer",
-      ...(agentId ? { senderSession: { sessionKey: `agent:${agentId}:main`, agentId } } : {}),
-      __openclaw: {
-        id: "source",
-        ...(kind === "profile"
-          ? {
-              senderId: typedIdentity.id,
-              senderName: "Source author",
-              senderIdentity: typedIdentity,
-            }
-          : {}),
-      },
-    };
-    const actual = preview(
-      source,
-      location,
-      kind === "profile" ? "Source author" : "Source agent",
-      {
-        assistantName: "Current agent",
-        currentAgentId: "main",
-        assistantAvatar: kind === "image" ? "/avatars/current.png" : "🦀",
-        assistantAvatarUrl: kind === "image" || kind === "profile" ? "/avatars/current.png" : null,
-        agents:
-          kind === "missing" || (!agentId && kind !== "profile")
-            ? []
-            : [
-                { id: "main", identity: {} },
-                {
-                  id: "research",
-                  identity:
-                    kind === "text" || kind === "profile"
-                      ? { emoji: "🌙" }
-                      : {
-                          avatarUrl:
-                            location === "fetched"
-                              ? "/avatars/research.png"
-                              : "/avatars/roster.png",
-                        },
-                },
-              ],
-        senderAgentAvatars: new Map([
-          ["research", kind === "image" || kind === "profile" ? "/avatars/research.png" : null],
-        ]),
-      },
-    );
-    if (kind === "profile") {
-      expect(actual).toMatchObject({ sender: { identity: typedIdentity, name: "Source author" } });
+    const profile = kind === "profile";
+    const image = kind === "image" || profile;
+    const source = agentSource(agentId, profile ? reviewer : {});
+    const rosterAvatar = location === "fetched" ? "/avatars/research.png" : "/avatars/roster.png";
+    const researchIdentity =
+      kind === "text" || profile ? { emoji: "🌙" } : { avatarUrl: rosterAvatar };
+    const label = profile ? "Source author" : "Source agent";
+    const actual = preview(source, location, label, {
+      assistantName: "Current agent",
+      currentAgentId: "main",
+      assistantAvatar: kind === "image" ? "/avatars/current.png" : "🦀",
+      assistantAvatarUrl: image ? "/avatars/current.png" : null,
+      agents:
+        kind === "missing" || (!agentId && !profile)
+          ? []
+          : [
+              { id: "main", identity: {} },
+              { id: "research", identity: researchIdentity },
+            ],
+      senderAgentAvatars: new Map([["research", image ? "/avatars/research.png" : null]]),
+    });
+    if (profile) {
+      expect(actual).toMatchObject({
+        sender: { identity: reviewer.senderIdentity, name: "Source author" },
+      });
     } else {
       expect(actual).toMatchObject({
         sender: { identity: { type: "agent", id: agentId ?? "main" } },
@@ -165,20 +125,14 @@ it.each([
   { roster: { name: "Research" }, name: "Research" },
   { roster: {}, name: undefined },
 ])("names a fetched source by its own agent, never the viewing one ($name)", ({ roster, name }) => {
-  const actual = preview(
-    {
-      role: "assistant",
-      content: "Findings",
-      senderSession: { sessionKey: "agent:research:main", agentId: "research" },
-      __openclaw: { id: "source" },
-    },
-    "fetched",
-    "",
-    { currentAgentId: "main", agents: [{ id: "research", identity: roster }] },
-  );
-  expect(actual).toMatchObject({ sender: { identity: { type: "agent", id: "research" } } });
+  const actual = preview(agentSource("research"), "fetched", "", {
+    currentAgentId: "main",
+    agents: [{ id: "research", identity: roster }],
+  });
+  expect(actual).toMatchObject({
+    sender: { identity: { type: "agent", id: "research" } },
+    agentAvatar: { id: "research" },
+  });
   const named = actual && "sender" in actual ? actual : undefined;
-  expect(named?.senderLabel ?? undefined).toBe(name);
-  expect(named?.sender?.name).toBe(name);
-  expect(named?.agentAvatar).toMatchObject({ id: "research" });
+  expect([named?.senderLabel ?? undefined, named?.sender?.name]).toEqual([name, name]);
 });

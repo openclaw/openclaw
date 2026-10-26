@@ -8,9 +8,10 @@ import {
   mountSidebar,
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
+import { sessionListResult } from "../chat-model.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 async function selectOwner(sidebar: SidebarLifecycleState, ownerId: string, involvingMe = false) {
   await activateSessionMenuValue(sidebar, involvingMe ? "involving-me" : `owner:${ownerId}`);
@@ -203,8 +204,8 @@ describe("AppSidebar session ownership filtering", () => {
         );
       const everyoneSections = sectionIds();
       if (grouping === "category") {
-        expect(everyoneSections).toContain("category:Empty");
-        expect(everyoneSections).toContain("groups");
+        expect(everyoneSections).not.toContain("category:Empty");
+        expect(everyoneSections).not.toContain("groups");
       }
 
       await selectOwner(sidebar, "profile-ada", filter === "involving-me");
@@ -460,12 +461,8 @@ describe("AppSidebar session ownership filtering", () => {
       { type: "human", id: "profile-ada", label: "Ada" },
       { type: "human", id: "profile-bob", label: "Bob" },
     ];
-    harness.list.mockResolvedValue({
-      ts: 2,
-      path: "",
-      count: 1,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [
+    harness.list.mockResolvedValue(
+      sessionListResult(2, [
         {
           key: childKey,
           spawnedBy: parentKey,
@@ -476,8 +473,8 @@ describe("AppSidebar session ownership filtering", () => {
           createdActor: { type: "human", id: "profile-bob", label: "Bob" },
           owner: { actor: { type: "human", id: "profile-bob", label: "Bob" } },
         },
-      ],
-    });
+      ]),
+    );
 
     const { sidebar } = await mountSidebar(
       createGateway({} as GatewayBrowserClient),
@@ -517,38 +514,26 @@ describe("AppSidebar session ownership filtering", () => {
     const harness = createSessionsHarness("main", [navigationParentKey]);
     harness.list.mockImplementation(async (options) => {
       const sessions = options?.spawnedBy === navigationParentKey ? [child] : [];
-      return {
-        ts: 3,
-        path: "",
-        count: sessions.length,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions,
-      };
+      return sessionListResult(3, sessions);
     });
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
     harness.publishList({
-      result: {
-        ts: 3,
-        path: "",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [
-          {
-            key: navigationParentKey,
-            kind: "direct",
-            label: "Dashboard parent",
-            updatedAt: 2,
-            childSessions: [childKey],
-          },
-        ],
-      },
+      result: sessionListResult(3, [
+        {
+          key: navigationParentKey,
+          kind: "direct",
+          label: "Dashboard parent",
+          updatedAt: 2,
+          childSessions: [childKey],
+        },
+      ]),
     });
     await settleLitElement(sidebar);
-    expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
-
-    sidebar
-      .querySelector<HTMLButtonElement>(`[data-child-session-toggle="${navigationParentKey}"]`)
-      ?.click();
+    expect(
+      sidebar
+        .querySelector(`[data-child-session-toggle="${navigationParentKey}"]`)
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
     await waitForFast(() =>
       expect(harness.list).toHaveBeenCalledWith(
         expect.objectContaining({ spawnedBy: navigationParentKey }),

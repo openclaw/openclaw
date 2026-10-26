@@ -1,3 +1,4 @@
+import { floorPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
@@ -8,6 +9,10 @@ import type { CodexAppServerStartOptions } from "./config.js";
 import { assertCodexModelListResponse } from "./protocol-validators.js";
 import type { CodexModel } from "./protocol.js";
 import type { CodexAppServerScopedRequest } from "./request.js";
+
+type CyberAccessProgram = NonNullable<
+  import("openclaw/plugin-sdk/provider-catalog-shared").ProviderCatalogOutcome["modelAccessPrograms"]
+>[number]["cyber"][number];
 
 // Allow Codex's five-second remote catalog refresh to finish or fall back,
 // with headroom for client acquisition, response transit, and account/read.
@@ -23,6 +28,7 @@ export type CodexAppServerModel = {
   inputModalities: string[];
   supportedReasoningEfforts: string[];
   serviceTiers?: string[];
+  availableAccessPrograms?: { cyber: CyberAccessProgram[] };
   defaultReasoningEffort?: string;
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
 };
@@ -58,7 +64,7 @@ export async function listCodexAppServerModels(
 export async function listAllCodexAppServerModels(
   options: CodexAppServerListModelsOptions & { maxPages?: number } = {},
 ): Promise<CodexAppServerModelListResult> {
-  const maxPages = normalizeMaxPages(options.maxPages);
+  const maxPages = floorPositiveFiniteNumber(options.maxPages) ?? 20;
   return await withCodexAppServerModelRequest(options, async (request) => {
     const models: CodexAppServerModel[] = [];
     let nextCursor: string | undefined;
@@ -125,7 +131,7 @@ async function requestModelListPage(
 export function readModelListResult(value: unknown): CodexAppServerModelListResult {
   const response = assertCodexModelListResponse(value);
   const models = response.data.map(readCodexModel);
-  const nextCursor = response.nextCursor ?? undefined;
+  const nextCursor = response.nextCursor;
   return { models, ...(nextCursor ? { nextCursor } : {}) };
 }
 
@@ -146,8 +152,21 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
     ...(displayName ? { displayName } : {}),
     ...(description ? { description } : {}),
     hidden: value.hidden,
+    ...(value.availableAccessPrograms
+      ? {
+          availableAccessPrograms: {
+            cyber: value.availableAccessPrograms.cyber.map((program) =>
+              program === "daybreakBlue"
+                ? "daybreak_blue"
+                : program === "daybreakRed"
+                  ? "daybreak_red"
+                  : "standard",
+            ),
+          },
+        }
+      : {}),
     isDefault: value.isDefault,
-    inputModalities: value.inputModalities,
+    inputModalities: value.inputModalities ?? ["text", "image"],
     serviceTiers: normalizeUniqueTrimmedStringList(
       (value.serviceTiers ?? []).map((tier) => tier.id),
     ),
@@ -159,8 +178,4 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
       ? { multiAgentVersion: value.multiAgentVersion }
       : {}),
   };
-}
-
-function normalizeMaxPages(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 20;
 }

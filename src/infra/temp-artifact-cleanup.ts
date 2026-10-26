@@ -9,6 +9,7 @@ import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { runBestEffortCleanup } from "./non-fatal-cleanup.js";
+import { isPathInside } from "./path-guards.js";
 
 const log = createSubsystemLogger("infra:temp-artifacts");
 const retainedRuntimes = resolveGlobalSingleton(
@@ -30,6 +31,30 @@ export function reportRetainedUpdateRuntime(directory: string, reason: string): 
     // The caller still records the warning.
   }
   return message;
+}
+
+/** Placement and discovery share the climb outside the enclosing module owner. */
+export function resolveRetainedUpdateRuntimeParents(
+  packageRoot: string,
+  mutationRoots: readonly string[] = [],
+): string[] {
+  const parts = packageRoot.split(path.sep);
+  const modules = parts.indexOf("node_modules");
+  const boundaries = [
+    parts.slice(0, modules >= 0 ? modules + 1 : parts.length).join(path.sep),
+    ...mutationRoots,
+  ];
+  let parent = path.dirname(packageRoot);
+  const parents = [parent];
+  while (boundaries.some((root) => isPathInside(root, parent))) {
+    const ancestor = path.dirname(parent);
+    if (ancestor === parent) {
+      break;
+    }
+    parent = ancestor;
+    parents.push(parent);
+  }
+  return parents;
 }
 
 async function isRetainedRuntimeMarker(marker: string): Promise<boolean> {
@@ -98,7 +123,7 @@ export async function maintainRetainedUpdateRuntimes(params: {
     [
       os.tmpdir(),
       ...(params.temporaryDirectories ?? []),
-      ...packages.map((root) => path.dirname(root)),
+      ...packages.flatMap((root) => resolveRetainedUpdateRuntimeParents(root)),
     ].map(resolveIdentityPathViaExistingAncestorSync),
   );
   for (const parent of roots) {
@@ -143,9 +168,14 @@ export async function maintainRetainedUpdateRuntimes(params: {
             throw new Error("directory identity or custody changed");
           }
           params.assertCurrent();
-          const census = inspectOtherOpenClawProcesses();
+          const census = inspectOtherOpenClawProcesses(directory);
           if ("error" in census) {
             throw new Error(census.error);
+          }
+          for (const warning of census.warnings ?? []) {
+            if (!messages.includes(warning)) {
+              messages.push(warning);
+            }
           }
           if (census.pids.length) {
             throw new Error(

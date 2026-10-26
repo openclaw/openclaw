@@ -4,13 +4,11 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { captureDeletedAgentDatabaseFences } from "./agent-database-readers.js";
+import { getDatabaseEngineSelection } from "./database-engine/context.js";
+import { createPostgresPoolEndpoints, postgresPoolTransferList } from "./postgres-sync/pool.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
-import {
-  captureSqliteDatabaseAdmissions,
-  createSqliteDatabaseAdmissionCursor,
-  trackSqliteDatabaseAdmissionWorker,
-  type SqliteDatabaseAdmissionCursor,
-} from "./sqlite-database-admission.js";
+import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
+import { readSqliteDatabaseAdmissionDeadline } from "./sqlite-worker-database-admission-relay.js";
 import {
   createSqliteDatabaseAdmissionRelay,
   type SqliteWorkerOperationAdmission,
@@ -18,9 +16,12 @@ import {
 import {
   attributeWorkerToPool,
   createCpuTrackedWorker,
+  flushWorkerDiagnostics,
   markWorkerRetirement,
   receiveWorkerMemoryPort,
+  isWorkerGcObservationEnabled,
 } from "./worker-cpu.js";
+import { recordWorkerMessage } from "./worker-message-metrics.js";
 import {
   captureRetainedNativeWorkerSource,
   createRetainedNativeWorker,
@@ -33,6 +34,23 @@ import { liveWorkerTaskPools } from "./worker-task-pool-registry.js";
 import type { WorkerTaskPoolOwnerOptions } from "./worker-task-pool.types.js";
 import type { WorkerTaskContext } from "./worker-task-transport.js";
 
+// Diagnostics project a closed vocabulary, not arbitrary SDK task fields.
+const diagnosticTaskKinds = new Set([
+  "prepare",
+  "prepare-session",
+  "transcript-stats",
+  "session-entry",
+  "session-entries",
+  "session-cleanup",
+  "session-memory-capture",
+  "history-page",
+  "historical-eviction-candidates",
+  "usage-cost",
+  "model-context",
+  "context-messages",
+  "transcript-search",
+]);
+
 const prepareResources = createLazyRuntimeModule(() => import("./temp-artifact-cleanup.js"));
 const admissions = resolveGlobalSingleton(
   Symbol.for("openclaw.workerTaskDatabaseAdmissionChannels"),
@@ -41,9 +59,9 @@ const admissions = resolveGlobalSingleton(
       Parameters<WorkerTaskHost["captureTaskContext"]>[0],
       {
         owner: SqliteWorkerOperationAdmission;
-        cursor: SqliteDatabaseAdmissionCursor;
         sent: boolean;
         retiring: boolean;
+        postgresSent?: boolean;
       }
     >(),
 );
@@ -107,7 +125,6 @@ export function createWorkerTaskHost(
               }
             }),
           ),
-          cursor: createSqliteDatabaseAdmissionCursor(),
           sent: false,
           retiring: false,
         };
@@ -118,18 +135,29 @@ export function createWorkerTaskHost(
           admissions.delete(worker);
         });
       }
+      // The retained relay supplies current facts on demand; global snapshots grow with sessions.
+      const selection = getDatabaseEngineSelection();
       const context: WorkerTaskContext = {
+        collectWorkerMetrics: isWorkerGcObservationEnabled(),
+        ...(selection ? { databaseEngineSelection: selection } : {}),
         deletedAgentDatabaseFences: captureDeletedAgentDatabaseFences(),
-        databaseAdmissions: captureSqliteDatabaseAdmissions(admission.cursor),
+        databaseAdmissionDeadlineAtMs: readSqliteDatabaseAdmissionDeadline(),
         ...(!admission.sent ? { databaseAdmissionPort: admission.owner.port } : {}),
       };
+      if (!admission.postgresSent) {
+        context.postgresPool = createPostgresPoolEndpoints();
+        admission.postgresSent = context.postgresPool !== undefined;
+      }
       admission.sent = true;
       return context;
     },
     taskContextTransferList(context) {
       // SAFETY: The pool passes the context returned by this host's capture method.
       const captured = context as WorkerTaskContext;
-      return captured.databaseAdmissionPort ? [captured.databaseAdmissionPort] : [];
+      return [
+        ...(captured.databaseAdmissionPort ? [captured.databaseAdmissionPort] : []),
+        ...postgresPoolTransferList(captured.postgresPool),
+      ];
     },
     createTaskObserver(url) {
       const kind = workerRequestKind(url);
@@ -139,10 +167,22 @@ export function createWorkerTaskHost(
           operation === undefined ? "task" : classifyWorkerRequest(operation),
         );
     },
+    describeTask(url, input) {
+      // Inspect a data property only: diagnostics must not execute an input getter.
+      const kind: unknown =
+        input !== null && typeof input === "object"
+          ? Object.getOwnPropertyDescriptor(input, "kind")?.value
+          : undefined;
+      const operation = typeof kind === "string" && diagnosticTaskKinds.has(kind) ? kind : "task";
+      return `${workerRequestKind(url)}.${operation}`;
+    },
     receiveMessage: receiveWorkerMemoryPort,
+    observeResourceReply: () => recordWorkerMessage("resource", "from_worker"),
     workerStarted(worker, pool) {
-      trackSqliteDatabaseAdmissionWorker(worker);
-      attributeWorkerToPool(worker, pool);
+      if (owner.databaseAccess !== "read-only") {
+        trackSqliteDatabaseAdmissionWorker(worker);
+      }
+      attributeWorkerToPool(worker, pool, workerClass);
     },
     workerRetiring(worker, reason) {
       const admission = admissions.get(worker);
@@ -152,6 +192,7 @@ export function createWorkerTaskHost(
       }
       markWorkerRetirement(worker, reason);
     },
+    flushWorkerDiagnostics,
     computeCapacity: getWorkerComputeCapacity(),
     pools: liveWorkerTaskPools,
   };

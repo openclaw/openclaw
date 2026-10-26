@@ -12,4 +12,8 @@ export function isUiTestTarget(relative: string): boolean;
 export function resolveUiTypeScriptPath(file: string, cwd?: string): string;
 export function uiTypeScriptPathGlob(file: string): string;
 
-export function getRepositoryFileInventory(cwd?: string): ReadonlySet<string> | null;
+export function getRepositoryFileInventory(
+  cwd?: string,
+  files?: string[],
+  pathspecMode?: "literal" | "glob",
+): ReadonlySet<string> | null;

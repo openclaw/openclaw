@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -39,10 +40,7 @@ async function fixture() {
   const archivedContents = async (
     directory = path.join(root, "backups", "heartbeat-migration"),
   ) => {
-    const entries = await fs.readdir(directory, {
-      recursive: true,
-      withFileTypes: true,
-    });
+    const entries = (await listDirectoryTreeStrict(directory)).map((walkEntry) => walkEntry.dirent);
     return Promise.all(
       entries
         .filter((entry) => entry.isFile())
@@ -199,11 +197,8 @@ it.each(["before", "after"])(
       await writer.sync();
       expect((await writer.stat()).nlink).toBeGreaterThan(0);
       await f.migrate();
-      if (phase === "after") {
-        expect(await f.archivedContents()).toContain("Late edit after interruption");
-      } else {
-        expect(await fs.readFile(f.sourcePath, "utf8")).toBe("Late edit after interruption");
-      }
+      expect(await f.archivedContents()).toContain("Late edit after interruption");
+      await expect(fs.access(f.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await writer.close();
     }

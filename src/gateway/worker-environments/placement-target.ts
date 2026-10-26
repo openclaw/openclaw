@@ -47,6 +47,20 @@ export function isWorkerEnvironmentAttachedTo<
   );
 }
 
+export function assertWorkerSandboxEnvironment(
+  environment: WorkerEnvironmentRecord | undefined,
+  placement: Pick<WorkerSessionPlacementRecord, "sessionId" | "activeOwnerEpoch" | "environmentId">,
+  sandbox: { backendId: string; placementNodeId?: string },
+): void {
+  if (
+    !isWorkerEnvironmentAttachedTo(environment, placement) ||
+    environment.environmentId !== placement.environmentId ||
+    (sandbox.backendId === "node" && environment.nodeDeviceId !== sandbox.placementNodeId)
+  ) {
+    throw new Error("Remote-exec environment changed while preparing its sandbox");
+  }
+}
+
 export function isCurrentActiveWorkerEnvironment(
   placement: Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>,
   environment: WorkerEnvironmentRecord | undefined,

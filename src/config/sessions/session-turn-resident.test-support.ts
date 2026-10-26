@@ -1,0 +1,287 @@
+import { expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import type {
+  createSessionActorWorkerFixture,
+  Mutation,
+} from "./session-actor-worker.test-support.js";
+import { readPendingInput } from "./session-pending-input-operations.kernel.js";
+import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import type { SessionTurnPlan } from "./session-turn.types.js";
+
+type Fixture = ReturnType<typeof createSessionActorWorkerFixture>;
+type AcceptInput = Extract<Mutation, { type: "session.actor.acceptInput" }>["input"];
+type Acceptance = { pending: NonNullable<AcceptInput["pending"]> } | { turn: SessionTurnPlan };
+
+function turn(f: Fixture, key = "next-input", content = key): SessionTurnPlan {
+  return {
+    agentId: "main",
+    sessionKey: f.scope.sessionKey,
+    options: {
+      expectedSessionId: f.scope.sessionId,
+      resolveRuntimeTarget: true,
+      sessionFile: f.scope.sessionKey,
+      messages: [{ message: { role: "user", content, idempotencyKey: key } }],
+    },
+  };
+}
+
+function countReads(f: Fixture) {
+  const database = f.database.db;
+  if (isPostgresSqlConnection(database)) {
+    const counts = { read: 0 };
+    const query = database.query.bind(database);
+    // Preserve driver-specific query arguments, including readBigInts.
+    const spy = vi.spyOn(database, "query").mockImplementation(
+      new Proxy(query, {
+        apply(target, receiver, args) {
+          if (/^\s*(?:select|with)\b/iu.test(args[0])) {
+            counts.read += 1;
+          }
+          return Reflect.apply(target, receiver, args);
+        },
+      }),
+    );
+    return { counts, restore: () => spy.mockRestore() };
+  }
+  return trackSqliteStatementExecutions(database, ["read"], (sql) =>
+    /^\s*(?:select|with)\b/iu.test(sql) ? "read" : null,
+  );
+}
+
+function withReads(f: Fixture, run: (counts: { read: number }) => void) {
+  withEngineStoreAdmission(() => {
+    const reads = countReads(f);
+    try {
+      run(reads.counts);
+    } finally {
+      reads.restore();
+    }
+  });
+}
+
+async function accept(
+  f: Fixture,
+  input: Acceptance,
+  runId: string,
+  before = withEngineStoreAdmission(() => f.read()),
+) {
+  const command: Mutation = {
+    type: "session.actor.acceptInput",
+    input: {
+      target: f.target,
+      commandId: "pending" in input ? "stage-input" : "append-input",
+      phaseId: "input",
+      expectedState: buildRestartRecoveryExpectedState(before.entry!),
+      lifecycle: { restartRecoveryDeliveryRunId: runId },
+      ...input,
+    },
+  };
+  await f.prepare(command);
+  return withEngineStoreAdmission(() => f.mutate(command));
+}
+
+function append(
+  f: Fixture,
+  events: Parameters<typeof appendTranscriptEventsInTransaction>[2],
+  options?: Parameters<typeof appendTranscriptEventsInTransaction>[3],
+) {
+  runSqliteImmediateTransactionSync(f.database.db, () =>
+    appendTranscriptEventsInTransaction(f.database, f.scope, events, options),
+  );
+}
+
+function message(content: string, key: string, id?: string, role = "user") {
+  return {
+    type: "message",
+    ...(id ? { id } : {}),
+    message: { role, content, idempotencyKey: key },
+  };
+}
+
+async function stage(f: Fixture, plan: SessionTurnPlan) {
+  const before = withEngineStoreAdmission(() => f.read());
+  const pending = {
+    kind: "stage" as const,
+    sessionKey: plan.sessionKey,
+    sessionId: f.scope.sessionId,
+    idempotencyKey: "next-input",
+    inputId: `${f.scope.sessionId}:next-input`,
+    runId: "next-run",
+    requestHash: "next-request",
+    lifecycleGeneration: "next-generation",
+    trackCompletion: true,
+    messageJson: JSON.stringify(plan.options.messages[0]!.message),
+  };
+  const expected = withEngineStoreAdmission(() => readPendingInput(f.database, pending));
+  if (expected.kind !== "stage") {
+    throw new Error("Expected pending input stage");
+  }
+  const outcome = await accept(f, { pending: { ...pending, expected } }, "next-run", before);
+  return { outcome, pending };
+}
+
+export function runSessionTurnResidentTests(
+  withActor: (run: (fixture: Fixture) => void | Promise<void>) => Promise<void>,
+) {
+  const withResident = (run: (fixture: Fixture) => void) =>
+    withActor((f) => withEngineStoreAdmission(() => run(f)));
+  it("prepares a fresh input from complete committed actor facts without reads", () =>
+    withActor(async (f) => {
+      const plan = turn(f);
+      const { outcome, pending } = await stage(f, plan);
+      expect(outcome.kind).toBe("committed");
+      plan.custody = {
+        ...pending,
+        agentId: "main",
+        databaseAgentId: "main",
+        databasePath: f.database.path,
+        transcriptInputId: pending.inputId,
+      };
+      withReads(f, (reads) => {
+        expect(f.prepareTurn(plan)).toMatchObject({
+          runtimeTarget: { sessionKey: f.scope.sessionKey, selectedSessionId: f.scope.sessionId },
+          expectedSessionState: { restartRecoveryDeliveryRunId: "next-run" },
+          messages: [{ pending: true, existing: undefined }],
+          version: { rawSeq: null },
+        });
+        expect(reads.read).toBe(0);
+        // Resident pending rows are facts, never permission to consume another input.
+        expect(() => f.prepareTurn({ ...plan, custody: undefined })).toThrow(
+          "Pending input cannot be appended outside its admitted turn",
+        );
+      });
+    }));
+
+  it("keeps the committed preimage when pending and lifecycle writes roll back", () =>
+    withActor(async (f) => {
+      const plan = turn(f);
+      f.hooks.withCommit = () => {
+        throw new Error("rollback staged input");
+      };
+      expect((await stage(f, plan)).outcome.kind).toBe("rolled-back");
+      delete f.hooks.withCommit;
+      withEngineStoreAdmission(() => {
+        const prepared = f.prepareTurn(plan);
+        expect(prepared.messages).toEqual([{ pending: false, existing: undefined }]);
+        expect(prepared.expectedSessionState?.restartRecoveryDeliveryRunId).toBeUndefined();
+        expect(f.nativeEntry()?.restartRecoveryDeliveryRunId).toBeUndefined();
+      });
+    }));
+
+  it("sees native in-process entry and transcript writes before the next preparation", () =>
+    withResident((f) => {
+      f.read();
+      f.writeEntry({ ...f.nativeEntry()!, restartRecoveryDeliveryRunId: "native-run" });
+      append(f, [message("native write", "next-input", "native")]);
+      expect(f.prepareTurn(turn(f))).toMatchObject({
+        expectedSessionState: { restartRecoveryDeliveryRunId: "native-run" },
+        version: { rawSeq: 0 },
+        messages: [{ existing: { messageId: "native", message: { content: "native write" } } }],
+      });
+    }));
+
+  it.each(["reset", "move"] as const)("uses canonical selection after session %s", (change) =>
+    withResident((f) => {
+      f.read();
+      if (change === "reset") {
+        f.writeEntry({ sessionId: "successor", updatedAt: 2 });
+        expect(f.prepareTurn(turn(f)).result).toMatchObject({
+          rejectedReason: "session-rebound",
+          sessionEntry: { sessionId: "successor" },
+        });
+      } else {
+        const destination = "agent:main:moved";
+        f.writeEntry(
+          { ...f.nativeEntry()!, restartRecoveryDeliveryRunId: "moved-run" },
+          destination,
+        );
+        expect(f.prepareTurn(turn(f))).toMatchObject({
+          runtimeTarget: { sessionKey: destination, selectedSessionId: f.scope.sessionId },
+          expectedSessionState: { restartRecoveryDeliveryRunId: "moved-run" },
+        });
+      }
+    }),
+  );
+
+  it.each(["eviction", "restart"] as const)(
+    "falls back without rehydrating after owner %s",
+    (change) =>
+      withResident((f) => {
+        f.read();
+        if (change === "restart") {
+          f.restartActor();
+        } else {
+          for (let index = 0; index < 128; index += 1) {
+            f.read({ ...f.target, sessionKey: `agent:main:other-${index}` });
+          }
+        }
+        withReads(f, (reads) => {
+          expect(f.prepareTurn(turn(f))).toMatchObject({
+            runtimeTarget: {
+              sessionKey: f.scope.sessionKey,
+              selectedSessionId: f.scope.sessionId,
+            },
+            messages: [{ pending: false, existing: undefined }],
+          });
+          expect(reads.read).toBeGreaterThan(1);
+        });
+      }),
+  );
+
+  it("uses committed identities for fresh inputs and returns stored bytes on retry", () =>
+    withActor(async (f) => {
+      expect((await accept(f, { turn: turn(f, "committed-input") }, "append-run")).kind).toBe(
+        "committed",
+      );
+      withReads(f, (reads) => {
+        expect(f.prepareTurn(turn(f))).toMatchObject({
+          version: { rawSeq: 1 },
+          expectedSessionState: { restartRecoveryDeliveryRunId: "append-run" },
+        });
+        expect(reads.read).toBe(0);
+        const retry = turn(f, "committed-input", "different retry bytes");
+        expect(f.prepareTurn(retry).messages?.[0]?.existing).toMatchObject({
+          message: { content: "committed-input" },
+        });
+      });
+    }));
+
+  it("returns canonical retry bytes beyond the actor's 512-event window", () =>
+    withResident((f) => {
+      const events = Array.from({ length: 514 }, (_, index) => ({
+        ...message(`stored-${index}`, `input-${index}`, `message-${index}`),
+        parentId: index ? `message-${index - 1}` : null,
+      }));
+      append(f, events, { scheduleProjectionReconcile: false });
+      f.read();
+      for (const index of [0, 513]) {
+        const plan = turn(f, `input-${index}`);
+        const prepared = f.prepareTurn(plan);
+        expect(prepared.messages?.[0]?.existing).toMatchObject({
+          messageId: `message-${index}`,
+          message: { content: `stored-${index}` },
+        });
+        expect(f.prepareTurn(plan).messages).toEqual(prepared.messages);
+      }
+      withReads(f, (reads) => {
+        expect(f.prepareTurn(turn(f)).messages?.[0]?.existing).toBeUndefined();
+        expect(reads.read).toBe(1);
+      });
+    }));
+
+  it("scans assistant bodies without an indexed event identity", () =>
+    withResident((f) => {
+      append(f, [message("stored answer", "answer", undefined, "assistant")]);
+      f.read();
+      const plan = turn(f, "answer");
+      plan.options.messages[0]!.idempotencyLookup = "scan-assistant";
+      expect(f.prepareTurn(plan).messages?.[0]?.existing).toMatchObject({
+        messageId: "answer",
+        message: { content: "stored answer" },
+      });
+    }));
+}

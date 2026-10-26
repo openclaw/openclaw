@@ -11,6 +11,7 @@ import {
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createBuzzRelayInfoFetchMock } from "./buzz-bus.test-helpers.js";
 import type { BuzzInboundMessage } from "./message-event.js";
 import type { ResolvedBuzzAccount } from "./types.js";
 
@@ -95,7 +96,7 @@ vi.mock("nostr-tools", async (importOriginal) => {
             handlers.onevent(event);
           }
         }
-        handlers.oneose?.();
+        queueMicrotask(() => handlers.oneose?.());
         if (carriesMessages && relayMocks.dropSubscriptionReason) {
           const reason = relayMocks.dropSubscriptionReason;
           relayMocks.dropSubscriptionReason = undefined;
@@ -119,6 +120,13 @@ const inboundMocks = vi.hoisted(() => ({
 
 vi.mock("./inbound.js", () => ({
   handleBuzzInbound: inboundMocks.handleBuzzInbound,
+}));
+
+// Reconnect scenarios wait on produced state; the real 1-1.2s backoff would spend
+// most of waitForSettled's budget before the reconnect even starts.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  computeBackoff: () => 0,
 }));
 
 import { startBuzzGatewayAccount } from "./gateway.js";
@@ -158,15 +166,8 @@ function advanceSeconds(seconds: number): void {
 }
 
 function gateHandler(text: string): { settle: () => void; fail: (error: Error) => void } {
-  let settle = () => {};
-  let fail = (_error: Error) => {};
-  gates.set(
-    text,
-    new Promise<void>((resolve, reject) => {
-      settle = resolve;
-      fail = reject;
-    }),
-  );
+  const { promise, resolve: settle, reject: fail } = Promise.withResolvers<void>();
+  gates.set(text, promise);
   return { settle, fail };
 }
 
@@ -320,12 +321,7 @@ beforeEach(() => {
         createPluginStateKeyedStoreForTests<T>("buzz", options),
     },
   } as never);
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () =>
-      Response.json({ self: RELAY_PUBLIC_KEY, software: "https://github.com/block/buzz" }),
-    ),
-  );
+  vi.stubGlobal("fetch", createBuzzRelayInfoFetchMock(RELAY_PUBLIC_KEY));
 });
 
 afterEach(async () => {

@@ -2,6 +2,12 @@ import { selectApplicableRuntimeConfig } from "../config/config.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  hasMultipleSessionSharingIdentities,
+  isUserProfileCatalogReady,
+  prepareUserProfileCatalog,
+} from "../state/user-profile-list.js";
 import { prepareWebSearchConfiguration } from "../web-search/runtime.js";
 import {
   resolveAgentDir,
@@ -9,9 +15,12 @@ import {
   resolveSessionAgentIds,
 } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "./auth-profiles/store-runtime.js";
+import { resolveSessionToolListingClientCaps } from "./openclaw-tools.client-caps.js";
 import { resolveOptionalMediaToolFactoryPlan } from "./openclaw-tools.media-factory-plan.js";
+import { prepareProgressCardToolForOpenClawTools } from "./openclaw-tools.registration.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import type { PreparedToolConstruction } from "./tool-construction-preparation.js";
 import { hasGenerationToolAvailabilityAsync } from "./tools/media-tool-shared.js";
 import { createOpenClawDelegateToolsForRunAsync } from "./tools/openclaw-delegate-tool.js";
@@ -22,6 +31,9 @@ export async function prepareOpenClawTools(
   shared: PreparedToolConstruction,
 ) {
   const captured = { ...options, config: shared.config };
+  captured.listingClientCaps ??= await withPreparedSessionCapabilityRead(() =>
+    resolveSessionToolListingClientCaps(captured),
+  );
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
     config: captured.config,
@@ -87,20 +99,34 @@ export async function prepareOpenClawTools(
       agentDir: captured.agentDir,
       workspaceDir,
       authStore: captured.authProfileStore,
-      authProfileStoreSource: captured.authProfileStoreSource,
       modelConfig: availabilityConfig?.agents?.defaults?.mediaModels?.[kind],
       providerKey,
       providers: captured.preparedModelRuntime?.mediaCapabilityProviders?.[providerKey],
     }));
-  const [imageGenerate, videoGenerate, musicGenerate] = await Promise.all([
+  const [imageGenerate, videoGenerate, musicGenerate, progressCardAvailable] = await Promise.all([
     prepareMediaAvailability("imageGenerate", "imageGenerationProviders", "image"),
     prepareMediaAvailability("videoGenerate", "videoGenerationProviders", "video"),
     prepareMediaAvailability("musicGenerate", "musicGenerationProviders", "music"),
+    prepareProgressCardToolForOpenClawTools({ ...captured, agentId: sessionAgentId }),
   ]);
+  let personalInstructionsEnabled = false;
+  if (!isEmbeddedMode()) {
+    const profileOptions = { env: shared.env };
+    const catalog = isUserProfileCatalogReady(resolveOpenClawStateSqlitePath(shared.env))
+      ? undefined
+      : await prepareUserProfileCatalog(profileOptions);
+    try {
+      personalInstructionsEnabled = hasMultipleSessionSharingIdentities(profileOptions);
+    } finally {
+      catalog?.release();
+    }
+  }
   return {
     captured,
     delegated,
     webSearchConfigured,
+    personalInstructionsEnabled,
     mediaTools: { ...mediaPlan, imageGenerate, videoGenerate, musicGenerate },
+    progressCardAvailable,
   };
 }

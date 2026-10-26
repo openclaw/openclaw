@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import { installSessionActorMemoryEntry } from "./session-actor-memory-entry-install.js";
 import { createSessionActorMemoryEvents } from "./session-actor-memory-events.js";
 import { initializeSessionActorMemoryEntry } from "./session-actor-memory-initialize.js";
@@ -11,6 +12,7 @@ import { createSessionActorMemoryTranscript } from "./session-actor-memory-trans
 import { isReadableSessionMessage } from "./session-entry-codec.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
 import type { SessionMetadataOperations } from "./session-manager-write-contract.js";
+import { appendSessionPriorWorkspaceCopies } from "./session-prior-workspace-boundary.js";
 import { sessionMatchesExpectedTranscriptTurn } from "./session-transcript-turn-state.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 import { canonicalizeTranscriptEventMedia } from "./transcript-event-media.js";
@@ -26,7 +28,8 @@ export function createSessionActorMemoryMetadata(context: SessionActorMemoryStor
     if (
       (scope.agentId !== undefined && scope.agentId !== agentId) ||
       (scope.storePath !== undefined && scope.storePath !== path) ||
-      (scope.sessionKey !== undefined && scope.sessionKey !== state.hot.target.sessionKey)
+      (scope.sessionKey !== undefined &&
+        resolveSqliteSessionKey(scope.sessionKey, agentId) !== state.hot.target.sessionKey)
     ) {
       throw new SessionTranscriptWriterClaimReboundError();
     }
@@ -222,28 +225,32 @@ export function createSessionActorMemoryMetadata(context: SessionActorMemoryStor
         ) {
           throw new Error("Session transcript changed before rewrite publication");
         }
-        const original = new Map(sources);
-        for (const source of original.values()) {
+        const original = new Map<string, { source: (typeof sources)[number][1]; rawSeq: number }>();
+        for (const [copyId, source] of sources) {
           const row = state.events.find(({ event }) => isRecord(event) && event.id === source.id);
           if (!row || !isDeepStrictEqual(row.event, source)) {
             throw new Error("Session transcript changed before rewrite publication");
           }
+          original.set(copyId, { source, rawSeq: row.rawSeq });
         }
+        const copies: { sourceSeq: number; seq: number }[] = [];
         const entries = structuredClone(command.input.entries);
         const messages = createSessionActorMemoryMessages(context, events);
         let pendingInputReceipt;
         for (const entry of entries) {
           if (entry.type === "message") {
-            const source = original.get(entry.id);
-            if (!source) {
+            const found = original.get(entry.id);
+            if (!found) {
               throw new Error("Transcript rewrite message has no source entry");
             }
+            const { source } = found;
             const appended = messages.appendMessage({
               eventId: entry.id,
               parentId: entry.parentId,
               now: Date.parse(entry.timestamp),
               message: entry.message,
               appendMode: entry.appendMode,
+              supersedesEntryId: source.id,
               idempotencyLookup: "caller-checked",
               custody: pendingInput ? { ...pendingInput, relocation: source.id } : undefined,
             });
@@ -254,10 +261,23 @@ export function createSessionActorMemoryMetadata(context: SessionActorMemoryStor
               throw new Error("Transcript rewrite produced an invalid message");
             }
             entry.message = appended.result.message;
+            // The returned view must match the stored row for later source comparisons.
+            entry.supersedesEntryId = source.id;
             pendingInputReceipt = appended.receipt ?? pendingInputReceipt;
+            const seq = events.version().rawSeq;
+            if (seq !== null) {
+              copies.push({ sourceSeq: found.rawSeq, seq });
+            }
           } else if (!events.appendRaw(entry).appended) {
             throw new Error("Transcript rewrite entry was not appended");
           }
+        }
+        if (state.hot.entry) {
+          state.hot.entry = appendSessionPriorWorkspaceCopies(
+            state.hot.entry,
+            events.version().generation,
+            copies,
+          );
         }
         return {
           version: events.version(),
@@ -305,11 +325,17 @@ export function createSessionActorMemoryMetadata(context: SessionActorMemoryStor
           ...state.hot.entry!,
           ...projectCompactionAccountingPatch(state.hot.entry!, {
             compactionKind: "context-engine",
+            tokensAfter: command.input.tokensAfter,
             transcriptByteCompactionLatch: command.input.transcriptByteCompactionLatch,
           }),
         };
         return {
-          committed: { result: event, before, after: events.version() },
+          committed: {
+            entry: state.hot.entry,
+            result: event,
+            before,
+            after: events.version(),
+          },
           initialEntry,
           projectionNeedsReconcile: false,
         };

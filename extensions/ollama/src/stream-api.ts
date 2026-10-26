@@ -1,4 +1,4 @@
-export { convertToOllamaMessages } from "./stream-messages.js";
+export { parseNdjsonStream } from "./stream-ndjson.js";
 export {
   createConfiguredOllamaCompatStreamWrapper,
   isOllamaCompatProvider,
@@ -12,7 +12,6 @@ export const {
   resolveOllamaBaseUrlForRun,
   buildOllamaChatRequest,
   buildAssistantMessage,
-  parseNdjsonStream,
   createOllamaStreamFn,
   createConfiguredOllamaStreamFn,
 } = await import("./stream.runtime.js");

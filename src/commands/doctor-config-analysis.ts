@@ -1,4 +1,3 @@
-/** Doctor analysis helpers for config schema cleanup and ambiguous model fallback shapes. */
 import path from "node:path";
 import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -13,6 +12,7 @@ import { CONFIG_PATH } from "../config/config.js";
 import { INCLUDE_KEY } from "../config/includes.js";
 import { logConfigWarningsOnce } from "../config/io.warnings.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { getAuthoredConfigSecretRef, hasUnresolvedConfigPath } from "../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -111,6 +111,21 @@ function collectUnsupportedInternalHookEntryWarnings(cfg: OpenClawConfig): strin
 }
 
 export function noteDoctorHookConfigWarnings(cfg: OpenClawConfig, configPath: string): void {
+  if (
+    cfg.hooks?.enabled === true &&
+    (hasUnresolvedConfigPath(cfg, "hooks.token") || getAuthoredConfigSecretRef(cfg, "hooks.token"))
+  ) {
+    note(
+      [
+        "hooks.token has an unresolved environment reference in the current Doctor environment.",
+        "External HTTP hooks are disabled on Gateway startup if its environment cannot resolve the secret; an invalid hot reload keeps the previous valid hooks configuration.",
+        "Supply the configured secret to the Gateway service environment, then reload or restart. The CLI and service environments may differ.",
+        `To leave hooks disabled explicitly, run ${formatCliCommand("openclaw config set hooks.enabled false")}.`,
+        "Doctor does not generate a replacement secret or overwrite the configured reference.",
+      ].join("\n"),
+      "Doctor warnings",
+    );
+  }
   for (const warnings of [
     collectInvalidHookTransformsDirWarnings(cfg, configPath),
     collectUnsupportedInternalHookEntryWarnings(cfg),
@@ -168,18 +183,15 @@ function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number
 /**
  * Removes unknown config keys reported by schema validation.
  *
- * Doctor skips this while an update is in progress so partially written upgrade state is not
- * stripped before its migration can finish.
+ * Runs after migrations; retained plugin inputs must survive until their owner can finish.
  */
-export function stripUnknownConfigKeys(config: OpenClawConfig): {
+export function stripUnknownConfigKeys(
+  config: OpenClawConfig,
+  preservedPaths: readonly (readonly string[])[] = [],
+): {
   config: OpenClawConfig;
   removed: string[];
 } {
-  const updating = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-  if (updating === "1" || updating === "true") {
-    return { config, removed: [] };
-  }
-
   const parsed = OpenClawSchema.safeParse(config);
   if (parsed.success) {
     return { config, removed: [] };
@@ -203,6 +215,16 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       // $include is authored parser syntax at every object depth, not a schema field.
       // Doctor validates raw source, so stripping it would destroy include-owned config.
       if (key === INCLUDE_KEY) {
+        continue;
+      }
+      const keyPath = [...issuePath, key].map(String);
+      if (
+        (key === "heartbeat" && issuePath[0] === "agents") ||
+        (key === "heartbeatVisibility" && issuePath[0] === "channels") ||
+        preservedPaths.some((retained) =>
+          retained.slice(0, keyPath.length).every((part, index) => keyPath[index] === part),
+        )
+      ) {
         continue;
       }
       delete target[key];

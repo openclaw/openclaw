@@ -1,33 +1,34 @@
 import { randomUUID } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { legacyCodexConversationBindingId } from "../conversation-binding-data.js";
 import {
-  claimCodexAppServerLiveThread,
-  consumeCodexAppServerLiveThread,
+  claimCodexAppServerLiveThread as claimThread,
+  consumeCodexAppServerLiveThread as consumeThread,
   ensureCodexAppServerClientRuntime,
-  hasCodexAppServerLiveThread,
-  isCodexAppServerLiveThreadClaimed,
+  hasCodexAppServerLiveThread as hasLiveThread,
+  isCodexAppServerLiveThreadClaimed as isThreadClaimed,
 } from "./client-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   bindingStoreKey,
-  createCodexAppServerBindingStore,
-  type CodexAppServerBindingStore,
-  type StoredCodexAppServerBinding,
+  createCodexAppServerBindingStore as createBindingStore,
+  type CodexAppServerBindingStore as BindingStore,
+  type StoredCodexAppServerBinding as StoredBinding,
 } from "./session-binding.js";
-import { createCodexTestBindingStateStore } from "./session-binding.test-helpers.js";
+import { createCodexTestBindingStateStore as createStateStore } from "./session-binding.test-helpers.js";
 import {
-  withCodexAppServerSessionDeletion,
-  withCodexAppServerSessionContextReset,
+  withCodexAppServerSessionDeletion as withSessionDeletion,
+  withCodexAppServerSessionContextReset as withContextReset,
 } from "./session-retirement.js";
 import * as sharedClients from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import {
-  retainCodexAppServerBindingSubscription,
-  withCodexAppServerThreadMutation,
-  withExclusiveCodexAppServerThread,
+  retainCodexAppServerBindingSubscription as retainSubscription,
+  withCodexAppServerThreadMutation as withThreadMutation,
+  withExclusiveCodexAppServerThread as withExclusiveThread,
 } from "./thread-ownership.js";
 import { withTimeout } from "./timeout.js";
 
@@ -37,334 +38,279 @@ const session = {
   sessionKey: "agent:main:dashboard:retirement",
   sessionId: "session-before-deletion",
 };
+const successor = { ...session, sessionId: "session-after-deletion" };
+const wait = <T>(promise: Promise<T>, message: string) => withTimeout(promise, 5_000, message);
+async function expectCompleted(completion: Promise<PromiseSettledResult<void>[]>) {
+  expect(await wait(completion, "native deletion cleanup did not settle")).toEqual([
+    { status: "fulfilled", value: undefined },
+    { status: "fulfilled", value: undefined },
+  ]);
+}
 
-describe("Codex session deletion subscriptions", () => {
-  const clients: ReturnType<typeof createClientHarness>[] = [];
+const clients: ReturnType<typeof createClientHarness>[] = [];
 
-  afterEach(() => {
-    for (const harness of clients) {
-      harness.client.close();
-      harness.emitExit();
-    }
-    clients.length = 0;
-    vi.restoreAllMocks();
-  });
-
-  function createFixture(operation: "deletion" | "context reset" = "deletion") {
-    const retire =
-      operation === "deletion"
-        ? withCodexAppServerSessionDeletion
-        : withCodexAppServerSessionContextReset;
-    const harness = createClientHarness();
-    clients.push(harness);
-    const { client } = harness;
-    const values = new Map<string, StoredCodexAppServerBinding>();
-    const storedBindings = createCodexAppServerBindingStore(
-      createCodexTestBindingStateStore(values),
-    );
-    // These cases own subscription ordering. The host native-binding suite owns
-    // real worker deletion, compensation, and exact persisted-row authority.
-    const bindingStore: CodexAppServerBindingStore = {
-      ...storedBindings,
-      async withSessionDeletion(identity, assertCurrent, run) {
-        assertCurrent();
-        const key = bindingStoreKey(identity);
-        const record = values.get(key);
-        return run(storedBindings.read(identity), {
-          commit() {
-            assertCurrent();
-            values.delete(key);
-          },
-          rollback() {
-            assertCurrent();
-            if (record) {
-              values.set(key, record);
-            }
-          },
-        });
-      },
-    };
-    const binding = {
-      threadId: `thread-${randomUUID()}`,
-      clientId: client.getInstanceId(),
-      cwd: "/repo",
-    };
-    const request = vi.spyOn(client, "request").mockResolvedValue({ status: "unsubscribed" });
-    const releaseClientLease = vi.fn();
-    vi.spyOn(sharedClients, "retainSharedCodexAppServerClientByInstanceId").mockImplementation(
-      async (clientId) =>
-        clientId === binding.clientId ? { client, release: releaseClientLease } : undefined,
-    );
-    ensureCodexAppServerClientRuntime(client, {
-      agentDir: "/tmp/codex-retirement-agent",
-      authMode: "prepared-api-key",
-    });
-
-    const seed = async (identity = session) => {
-      await bindingStore.mutate(identity, { kind: "set", binding });
-    };
-    const remove = (
-      identity = session,
-      run: Parameters<typeof withCodexAppServerSessionDeletion<void>>[2] = async (mutation) => {
-        mutation.commit();
-      },
-    ) => retire(bindingStore, { ...identity, assertCurrent: () => {} }, run);
-    const resume = async (identity: typeof session) => {
-      await bindingStore.withLease(identity, async () => {
-        await client.request("thread/resume", { threadId: binding.threadId });
-        await retainCodexAppServerBindingSubscription(client, binding.threadId);
-        if (!(await bindingStore.mutate(identity, { kind: "set", binding }))) {
-          throw new Error("resumed binding did not commit");
-        }
-      });
-    };
-    return { bindingStore, binding, client, remove, request, resume, seed, releaseClientLease };
+afterEach(() => {
+  for (const harness of clients) {
+    harness.client.close();
+    harness.emitExit();
   }
+  clients.length = 0;
+  vi.restoreAllMocks();
+});
 
-  it.each(["context reset"] as const)(
-    "%s rejects a claimed native thread before invoking the session transaction",
-    async (operation) => {
-      const fixture = createFixture(operation);
-      await fixture.seed();
-      await claimCodexAppServerLiveThread(fixture.client, fixture.binding.threadId);
-      const transaction = vi.fn(async () => {});
-
-      await expect(fixture.remove(session, transaction)).rejects.toThrow("claimed by active work");
-
-      expect(transaction).not.toHaveBeenCalled();
-      expect(fixture.bindingStore.read(session)).toEqual(fixture.binding);
-      expect(isCodexAppServerLiveThreadClaimed(fixture.client, fixture.binding.threadId)).toBe(
-        true,
-      );
-      expect(fixture.request).not.toHaveBeenCalled();
+async function fixture(retire = withSessionDeletion, initialIdentity = session, subscribed = true) {
+  const harness = createClientHarness();
+  clients.push(harness);
+  const { client } = harness;
+  const values = new Map<string, StoredBinding>();
+  const storedBindings = createBindingStore(createStateStore(values));
+  // These cases own subscription ordering. The host native-binding suite owns
+  // real worker deletion, compensation, and exact persisted-row authority.
+  const store: BindingStore = {
+    ...storedBindings,
+    async withSessionDeletion(identity, assertCurrent, run) {
+      assertCurrent();
+      const key = bindingStoreKey(identity);
+      const record = values.get(key);
+      return run(storedBindings.read(identity), {
+        commit() {
+          assertCurrent();
+          values.delete(key);
+        },
+        rollback() {
+          assertCurrent();
+          if (record) {
+            values.set(key, record);
+          }
+        },
+      });
     },
+  };
+  const binding = {
+    threadId: `thread-${randomUUID()}`,
+    clientId: client.getInstanceId(),
+    cwd: "/repo",
+  };
+  const request = vi.spyOn(client, "request").mockResolvedValue({ status: "unsubscribed" });
+  const release = vi.fn();
+  vi.spyOn(sharedClients, "retainSharedCodexAppServerClientByInstanceId").mockImplementation(
+    async (clientId) => (clientId === binding.clientId ? { client, release } : undefined),
   );
-
-  it.each(["context reset"] as const)(
-    "%s joins native child settlement before releasing its subscription and client lease",
-    async (operation) => {
-      const fixture = createFixture(operation);
-      await fixture.seed();
-      await retainCodexAppServerBindingSubscription(fixture.client, fixture.binding.threadId);
-      const retiring = createDeferred<void>();
-      const childSettlement = createDeferred<void>();
-      const retire = vi
-        .spyOn(codexNativeSubagentMonitorRuntime, "retireParent")
-        .mockImplementation(async () => {
-          retiring.resolve();
-          await childSettlement.promise;
-        });
-      const deletion = fixture.remove();
-      const settled = Promise.allSettled([deletion]);
-      try {
-        await withTimeout(
-          retiring.promise,
-          5_000,
-          "session cleanup did not retire native children",
-        );
-        await nextTurn();
-        expect(retire).toHaveBeenCalledExactlyOnceWith(fixture.client, fixture.binding.threadId);
-        expect(fixture.bindingStore.read(session)).toBeUndefined();
-        expect(hasCodexAppServerLiveThread(fixture.client, fixture.binding.threadId)).toBe(true);
-        expect(fixture.request).not.toHaveBeenCalled();
-        expect(fixture.releaseClientLease).not.toHaveBeenCalled();
-
-        childSettlement.resolve();
-        await withTimeout(deletion, 5_000, "session cleanup did not join native child settlement");
-        expect(fixture.request).toHaveBeenCalledExactlyOnceWith(
-          "thread/unsubscribe",
-          { threadId: fixture.binding.threadId },
-          { timeoutMs: 5_000, assertCurrent: expect.any(Function) },
-        );
-        expect(hasCodexAppServerLiveThread(fixture.client, fixture.binding.threadId)).toBe(false);
-        expect(fixture.releaseClientLease).toHaveBeenCalledOnce();
-      } finally {
-        childSettlement.resolve();
-        await withTimeout(settled, 5_000, "native retirement test cleanup did not settle");
-      }
-    },
-  );
-
-  it("removes a migrated session binding without unsubscribing its surviving legacy conversation", async () => {
-    const fixture = createFixture();
-    const conversation = {
-      kind: "conversation" as const,
-      bindingId: legacyCodexConversationBindingId("/repo/legacy-session.jsonl"),
-    };
-    await fixture.seed();
-    await fixture.bindingStore.mutate(conversation, { kind: "set", binding: fixture.binding });
-    await retainCodexAppServerBindingSubscription(fixture.client, fixture.binding.threadId);
-
-    await fixture.remove();
-
-    expect(fixture.bindingStore.read(session)).toBeUndefined();
-    expect(fixture.bindingStore.read(conversation)).toEqual(fixture.binding);
-    expect(
-      await consumeCodexAppServerLiveThread(fixture.client, fixture.binding.threadId),
-    ).toBeDefined();
-    expect(fixture.request).not.toHaveBeenCalled();
+  ensureCodexAppServerClientRuntime(client, {
+    agentDir: "/tmp/codex-retirement-agent",
+    authMode: "prepared-api-key",
   });
 
-  it("preserves a same-key successor when resume owns the native queue before deletion cleanup", async () => {
-    const fixture = createFixture();
-    await fixture.seed();
-    await retainCodexAppServerBindingSubscription(fixture.client, fixture.binding.threadId);
-    const successor = { ...session, sessionId: "session-after-deletion" };
-    const resumeEntered = createDeferred<void>();
-    const allowResume = createDeferred<void>();
-    const committed = createDeferred<void>();
-    const resuming = withCodexAppServerThreadMutation(fixture.binding.threadId, async () => {
-      resumeEntered.resolve();
-      await allowResume.promise;
-      await fixture.resume(successor);
-    });
-    await withTimeout(resumeEntered.promise, 5_000, "resume did not enter the native queue");
-    const deletion = fixture.remove(session, async (mutation) => {
+  const seed = async (identity = session) => {
+    await store.mutate(identity, { kind: "set", binding });
+  };
+  const remove = (
+    identity = session,
+    run: Parameters<typeof withSessionDeletion<void>>[2] = async (mutation) => {
       mutation.commit();
-      committed.resolve();
+    },
+    previousSessionId?: string,
+  ) => {
+    const params = { ...identity, previousSessionId, assertCurrent: () => {} };
+    return retire(store, params, run);
+  };
+  const resume = (identity: typeof session) =>
+    store.withLease(identity, async () => {
+      await client.request("thread/resume", { threadId: binding.threadId });
+      await retainSubscription(client, binding.threadId);
+      if (!(await store.mutate(identity, { kind: "set", binding }))) {
+        throw new Error("resumed binding did not commit");
+      }
     });
-    const completion = Promise.allSettled([resuming, deletion]);
-    try {
-      await withTimeout(committed.promise, 5_000, "native resume queue blocked session deletion");
-      allowResume.resolve();
-      expect(
-        await withTimeout(completion, 5_000, "native deletion cleanup did not settle"),
-      ).toEqual([
-        { status: "fulfilled", value: undefined },
-        { status: "fulfilled", value: undefined },
-      ]);
-      expect(fixture.bindingStore.read(successor)).toEqual(fixture.binding);
-      expect(
-        await consumeCodexAppServerLiveThread(fixture.client, fixture.binding.threadId),
-      ).toBeDefined();
-      expect(fixture.request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
-    } finally {
-      allowResume.resolve();
-      await withTimeout(completion, 5_000, "resume and deletion cleanup did not settle");
-    }
-  });
+  await seed(initialIdentity);
+  if (subscribed) {
+    await retainSubscription(client, binding.threadId);
+  }
+  const expectUnsubscribe = () =>
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "thread/unsubscribe",
+      { threadId: binding.threadId },
+      { timeoutMs: 5_000, assertCurrent: expect.any(Function) },
+    );
+  return { store, binding, client, remove, request, resume, seed, release, expectUnsubscribe };
+}
 
-  it.each(["context reset"] as const)(
-    "%s holds the native queue through unsubscribe acknowledgement before a successor resumes",
-    async (operation) => {
-      const fixture = createFixture(operation);
-      await fixture.seed();
-      await retainCodexAppServerBindingSubscription(fixture.client, fixture.binding.threadId);
-      const unsubscribeStarted = createDeferred<void>();
-      const unsubscribeAcknowledged = createDeferred<void>();
-      fixture.request.mockImplementation(async (method) => {
+it("context reset rejects a claimed native thread before invoking the session transaction", async () => {
+  const f = await fixture(withContextReset, session, false);
+  await claimThread(f.client, f.binding.threadId);
+  const transaction = vi.fn(async () => {});
+
+  const deletion = f.remove(session, transaction);
+  await expect(deletion).rejects.toBeInstanceOf(AgentHarnessPreflightError);
+  await expect(deletion).rejects.toThrow("claimed by active work");
+
+  expect(transaction).not.toHaveBeenCalled();
+  expect(f.store.read(session)).toEqual(f.binding);
+  expect(isThreadClaimed(f.client, f.binding.threadId)).toBe(true);
+  expect(f.request).not.toHaveBeenCalled();
+});
+
+it("context reset joins native child settlement before releasing its subscription and client lease", async () => {
+  const f = await fixture(withContextReset);
+  const retiring = createDeferred<void>();
+  const childSettlement = createDeferred<void>();
+  const retire = vi
+    .spyOn(codexNativeSubagentMonitorRuntime, "retireParent")
+    .mockImplementation(async () => {
+      retiring.resolve();
+      await childSettlement.promise;
+    });
+  const deletion = f.remove();
+  const settled = Promise.allSettled([deletion]);
+  try {
+    await wait(retiring.promise, "session cleanup did not retire native children");
+    await nextTurn();
+    expect(retire).toHaveBeenCalledExactlyOnceWith(f.client, f.binding.threadId);
+    expect(f.store.read(session)).toBeUndefined();
+    expect(hasLiveThread(f.client, f.binding.threadId)).toBe(true);
+    expect(f.request).not.toHaveBeenCalled();
+    expect(f.release).not.toHaveBeenCalled();
+
+    childSettlement.resolve();
+    await wait(deletion, "session cleanup did not join native child settlement");
+    f.expectUnsubscribe();
+    expect(hasLiveThread(f.client, f.binding.threadId)).toBe(false);
+    expect(f.release).toHaveBeenCalledOnce();
+  } finally {
+    childSettlement.resolve();
+    await wait(settled, "native retirement test cleanup did not settle");
+  }
+});
+
+it("removes a migrated session binding without unsubscribing its surviving legacy conversation", async () => {
+  const f = await fixture();
+  const conversation = {
+    kind: "conversation" as const,
+    bindingId: legacyCodexConversationBindingId("/repo/legacy-session.jsonl"),
+  };
+  await f.store.mutate(conversation, { kind: "set", binding: f.binding });
+
+  await f.remove();
+
+  expect(f.store.read(session)).toBeUndefined();
+  expect(f.store.read(conversation)).toEqual(f.binding);
+  expect(await consumeThread(f.client, f.binding.threadId)).toBeDefined();
+  expect(f.request).not.toHaveBeenCalled();
+});
+
+it.each(["resume-first", "unsubscribe-first"])(
+  "preserves the successor with %s queue ownership",
+  async (order) => {
+    const resumeFirst = order === "resume-first";
+    const f = await fixture(resumeFirst ? withSessionDeletion : withContextReset);
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const committed = createDeferred<void>();
+    if (!resumeFirst) {
+      f.request.mockImplementation(async (method) => {
         if (method === "thread/unsubscribe") {
-          unsubscribeStarted.resolve();
-          await unsubscribeAcknowledged.promise;
+          entered.resolve();
+          await release.promise;
         }
         return {};
       });
-      const deletion = fixture.remove();
-      const deletionCompletion = Promise.allSettled([deletion]);
-      let resuming: Promise<void> | undefined;
-      try {
-        await withTimeout(unsubscribeStarted.promise, 5_000, "deletion did not unsubscribe");
-        const successor = { ...session, sessionId: "session-after-deletion" };
-        let resumeEntered = false;
-        resuming = withExclusiveCodexAppServerThread({
-          bindingStore: fixture.bindingStore,
-          identity: successor,
-          threadId: fixture.binding.threadId,
-          run: async () => {
-            resumeEntered = true;
-            await fixture.resume(successor);
-          },
-        });
-        const completion = Promise.allSettled([deletion, resuming]);
-        await withCodexAppServerThreadMutation(`other-${fixture.binding.threadId}`, async () => {});
+    }
+    const first = resumeFirst
+      ? withThreadMutation(f.binding.threadId, async () => {
+          entered.resolve();
+          await release.promise;
+          await f.resume(successor);
+        })
+      : f.remove();
+    let completion: Promise<PromiseSettledResult<void>[]> = Promise.allSettled([first]);
+    try {
+      await wait(entered.promise, `${order} operation did not enter the native queue`);
+      let resumeEntered = false;
+      const second = resumeFirst
+        ? f.remove(session, async (mutation) => {
+            mutation.commit();
+            committed.resolve();
+          })
+        : withExclusiveThread({
+            bindingStore: f.store,
+            identity: successor,
+            threadId: f.binding.threadId,
+            run: async () => {
+              resumeEntered = true;
+              await f.resume(successor);
+            },
+          });
+      completion = Promise.allSettled([first, second]);
+      if (resumeFirst) {
+        await wait(committed.promise, "native resume queue blocked session deletion");
+      } else {
+        await withThreadMutation(`other-${f.binding.threadId}`, async () => {});
         expect(resumeEntered).toBe(false);
-        expect(fixture.bindingStore.read(session)).toBeUndefined();
-        unsubscribeAcknowledged.resolve();
-        expect(
-          await withTimeout(completion, 5_000, "resume did not follow deletion cleanup"),
-        ).toEqual([
-          { status: "fulfilled", value: undefined },
-          { status: "fulfilled", value: undefined },
-        ]);
-        expect(fixture.request.mock.calls.map(([method]) => method)).toEqual([
-          "thread/unsubscribe",
-          "thread/resume",
-        ]);
-        expect(fixture.bindingStore.read(successor)).toEqual(fixture.binding);
-        expect(hasCodexAppServerLiveThread(fixture.client, fixture.binding.threadId)).toBe(true);
-      } finally {
-        unsubscribeAcknowledged.resolve();
-        await withTimeout(
-          Promise.allSettled([deletionCompletion, resuming]),
-          5_000,
-          "unsubscribe and resume cleanup did not settle",
-        );
+        expect(f.store.read(session)).toBeUndefined();
       }
-    },
+      release.resolve();
+      await expectCompleted(completion);
+      expect(f.request.mock.calls.map(([method]) => method)).toEqual(
+        resumeFirst ? ["thread/resume"] : ["thread/unsubscribe", "thread/resume"],
+      );
+      expect(f.store.read(successor)).toEqual(f.binding);
+      expect(hasLiveThread(f.client, f.binding.threadId)).toBe(true);
+      if (resumeFirst) {
+        expect(await consumeThread(f.client, f.binding.threadId)).toBeDefined();
+      }
+    } finally {
+      release.resolve();
+      await wait(completion, "resume and deletion cleanup did not settle");
+    }
+  },
+);
+
+it("deletes nested same-thread owners without deadlock and releases their subscription once", async () => {
+  const f = await fixture();
+  const sibling = { ...session, sessionKey: "agent:main:cron:retirement:run:child" };
+  await f.seed(sibling);
+
+  await wait(
+    f.remove(session, async (first) => {
+      await f.remove(sibling, async (second) => {
+        first.commit();
+        second.commit();
+      });
+    }),
+    "nested deletion deadlocked on a shared native thread",
   );
 
-  it("deletes nested same-thread owners without deadlock and releases their subscription once", async () => {
-    const fixture = createFixture();
-    const sibling = { ...session, sessionKey: "agent:main:cron:retirement:run:child" };
-    await fixture.seed();
-    await fixture.seed(sibling);
-    await retainCodexAppServerBindingSubscription(fixture.client, fixture.binding.threadId);
+  expect(f.store.read(session)).toBeUndefined();
+  expect(f.store.read(sibling)).toBeUndefined();
+  expect(f.request.mock.calls.map(([method]) => method)).toEqual(["thread/unsubscribe"]);
+  expect(hasLiveThread(f.client, f.binding.threadId)).toBe(false);
+});
 
-    await withTimeout(
-      fixture.remove(session, async (first) => {
-        await fixture.remove(sibling, async (second) => {
-          first.commit();
-          second.commit();
-        });
-      }),
-      5_000,
-      "nested deletion deadlocked on a shared native thread",
-    );
+it("restores a prepared predecessor binding and subscription when a context cut rolls back", async () => {
+  const f = await fixture(withContextReset);
+  await expect(
+    f.remove(
+      { ...session, sessionId: "session-after-compaction" },
+      async (mutation) => {
+        mutation.commit();
+        expect(f.store.read(session)).toBeUndefined();
+        mutation.rollback();
+        throw new Error("local transcript transaction rolled back");
+      },
+      session.sessionId,
+    ),
+  ).rejects.toThrow("local transcript transaction rolled back");
+  expect(f.store.read(session)).toEqual(f.binding);
+  expect(hasLiveThread(f.client, f.binding.threadId)).toBe(true);
+  expect(f.request).not.toHaveBeenCalled();
+});
 
-    expect(fixture.bindingStore.read(session)).toBeUndefined();
-    expect(fixture.bindingStore.read(sibling)).toBeUndefined();
-    expect(fixture.request.mock.calls.map(([method]) => method)).toEqual(["thread/unsubscribe"]);
-    expect(hasCodexAppServerLiveThread(fixture.client, fixture.binding.threadId)).toBe(false);
-  });
+it("unsubscribes an incognito thread without an idle registry entry", async () => {
+  const incognito = { ...session, sessionKey: "agent:main:dashboard:incognito-retirement" };
+  const f = await fixture(withSessionDeletion, incognito, false);
 
-  it("restores a prepared predecessor binding and subscription when a context cut rolls back", async () => {
-    const fixture = createFixture("context reset");
-    await fixture.seed();
-    await retainCodexAppServerBindingSubscription(fixture.client, fixture.binding.threadId);
-    await expect(
-      withCodexAppServerSessionContextReset(
-        fixture.bindingStore,
-        {
-          ...session,
-          sessionId: "session-after-compaction",
-          previousSessionId: session.sessionId,
-          assertCurrent() {},
-        },
-        async (mutation) => {
-          mutation.commit();
-          expect(fixture.bindingStore.read(session)).toBeUndefined();
-          mutation.rollback();
-          throw new Error("local transcript transaction rolled back");
-        },
-      ),
-    ).rejects.toThrow("local transcript transaction rolled back");
-    expect(fixture.bindingStore.read(session)).toEqual(fixture.binding);
-    expect(hasCodexAppServerLiveThread(fixture.client, fixture.binding.threadId)).toBe(true);
-    expect(fixture.request).not.toHaveBeenCalled();
-  });
+  await f.remove(incognito);
 
-  it("unsubscribes an incognito thread without an idle registry entry", async () => {
-    const fixture = createFixture();
-    const incognito = { ...session, sessionKey: "agent:main:dashboard:incognito-retirement" };
-    await fixture.seed(incognito);
-
-    await fixture.remove(incognito);
-
-    expect(fixture.bindingStore.read(incognito)).toBeUndefined();
-    expect(fixture.request).toHaveBeenCalledExactlyOnceWith(
-      "thread/unsubscribe",
-      { threadId: fixture.binding.threadId },
-      { timeoutMs: 5_000, assertCurrent: expect.any(Function) },
-    );
-  });
+  expect(f.store.read(incognito)).toBeUndefined();
+  f.expectUnsubscribe();
 });

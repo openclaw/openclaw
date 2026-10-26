@@ -1,12 +1,26 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import {
-  takeControlUiElementScreenshot,
-  takeControlUiViewportScreenshot,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import type { CronJob } from "../api/types.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+
+export function sidebarCronJob(
+  overrides: Pick<CronJob, "id" | "name"> & Partial<CronJob>,
+): CronJob {
+  return {
+    enabled: true,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "test" },
+    state: { lastRunStatus: "error", lastError: "Provider request failed" },
+    ...overrides,
+  };
+}
 
 export function createSidebarCustomizationSuite(name: string) {
   return createControlUiE2eSuite({
@@ -42,29 +56,6 @@ export async function captureSidebarUiProof(
   });
 }
 
-export async function captureSettingsSidebarUiProof(
-  owner: { readonly artifactDir: string },
-  sidebar: Locator,
-  fileName: string,
-): Promise<void> {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
-    return;
-  }
-  if (sidebar.page().video()) {
-    await writeFile(
-      path.join(owner.artifactDir, fileName),
-      await takeControlUiElementScreenshot(sidebar.page(), sidebar, [
-        sidebar.getByRole("searchbox", { name: "Search settings" }),
-      ]),
-    );
-    return;
-  }
-  await sidebar.screenshot({
-    animations: "disabled",
-    path: path.join(owner.artifactDir, fileName),
-  });
-}
-
 export async function openSidebarCustomizationPage(
   suite: ReturnType<typeof createSidebarCustomizationSuite>,
 ) {
@@ -76,19 +67,17 @@ export async function openSidebarCustomizationPage(
   const page = await context.newPage();
   await installMockGateway(page);
   await page.goto(`${suite.server.baseUrl}chat`);
-  await page.locator("openclaw-app-sidebar").waitFor();
+  const sidebar = page.locator("openclaw-app-sidebar");
+  await sidebar.waitFor();
   const pages = await openSidebarPages(page);
-  for (const label of ["Agents", "Dashboards", "Systems"]) {
+  for (const label of ["Sessions", "Dashboards", "Systems"]) {
     await pages
       .locator(".sidebar-pages__entry")
       .filter({ has: page.getByRole("link", { name: label, exact: true }) })
       .getByRole("button", { name: "Pin", exact: true })
       .click();
   }
-  await page
-    .locator("openclaw-app-sidebar")
-    .getByRole("button", { name: "Sessions", exact: true })
-    .click();
+  await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
   return { context, page };
 }
 
@@ -107,7 +96,7 @@ export async function openSidebarPinMenu(page: Page, entry = "route:dashboards")
     .locator("openclaw-app-sidebar:visible")
     .locator(`[data-sidebar-entry="${entry}"]`);
   await row.locator("a, button").first().click({ button: "right" });
-  const menu = page.locator("wa-dropdown.sidebar-rail-pin-menu");
+  const menu = page.locator(".sidebar-rail-pin-menu");
   await menu.getByRole("menuitem", { name: "Unpin", exact: true }).waitFor();
   return menu;
 }

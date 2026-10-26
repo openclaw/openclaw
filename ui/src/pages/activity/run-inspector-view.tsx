@@ -1,5 +1,5 @@
 import { createMemo } from "@solidjs/signals";
-import { For } from "solid-js";
+import { createDeferred, Errored, For, isPending, latest, Loading } from "solid-js";
 import type {
   ExecutionIdentityContextV1,
   PrincipalRefV1,
@@ -31,7 +31,12 @@ type EvidenceState = "present" | "absent" | "unknown" | "unsupported";
 
 type RunInspectorProps = {
   basePath: string;
+  connected?: boolean;
   state: RunInspectorState;
+  request?: {
+    kind: "executions" | "decisions" | "refresh";
+    completion: { promise: Promise<void> };
+  };
   selector: RunInspectorSelector | null;
   selectorId: string | null;
   onLoadMoreDecisions: () => void;
@@ -83,7 +88,7 @@ function renderFact(fact: IdentityFact) {
       <dt>
         <span>{fact.label}</span>
         <span
-          class={`run-inspector__state run-inspector__state--${fact.state}`}
+          class={["run-inspector__state", `run-inspector__state--${fact.state}`]}
           role="img"
           aria-label={t("activity.runInspector.evidenceStateLabel", {
             state: stateLabel,
@@ -238,6 +243,7 @@ function renderUnavailableResult(
   basePath: string,
   executionPageStatus: "loading" | "error" | undefined,
   onLoadMoreExecutions: () => void,
+  disabled: boolean,
 ) {
   if (result.identity.state === "present") {
     return undefined;
@@ -284,7 +290,12 @@ function renderUnavailableResult(
             </For>
           </ol>
           {result.nextExecutionCursor
-            ? renderRunInspectorPagination("candidates", executionPageStatus, onLoadMoreExecutions)
+            ? renderRunInspectorPagination(
+                "candidates",
+                executionPageStatus,
+                onLoadMoreExecutions,
+                disabled,
+              )
             : undefined}
         </>
       ) : undefined}
@@ -302,8 +313,11 @@ function renderReady(
   const currentCoverageLabel = runInspectorCoverageLabel(result.coverage.state);
   return (
     <>
+      {state.refreshError
+        ? renderPanel(props, { status: "error", recovery: state.refreshError })
+        : undefined}
       <div
-        class={`run-inspector__coverage run-inspector__coverage--${result.coverage.state}`}
+        class={["run-inspector__coverage", `run-inspector__coverage--${result.coverage.state}`]}
         role="status"
         aria-label={t("activity.runInspector.coverageStatusLabel", {
           state: currentCoverageLabel,
@@ -333,6 +347,7 @@ function renderReady(
             props.selectorId,
             props.basePath,
             props.onLoadMoreDecisions,
+            props.connected === false,
           )}
         </>
       ) : (
@@ -341,6 +356,7 @@ function renderReady(
           props.basePath,
           state.executionPageStatus,
           props.onLoadMoreExecutions,
+          props.connected === false,
         )
       )}
     </>
@@ -351,7 +367,6 @@ function renderPanel(
   props: RunInspectorProps,
   state: Exclude<RunInspectorState, { status: "ready" }>,
 ) {
-  const key = state.status === "loading" && state.waitingForGateway ? "waiting" : state.status;
   const action =
     state.status === "error"
       ? state.recovery === "restart"
@@ -363,10 +378,15 @@ function renderPanel(
       class="run-inspector__panel"
       role={state.status === "error" || state.status === "unauthorized" ? "alert" : "status"}
     >
-      <h3>{t(`activity.runInspector.panels.${key}.title`)}</h3>
-      <p>{t(`activity.runInspector.panels.${key}.description`)}</p>
+      <h3>{t(`activity.runInspector.panels.${state.status}.title`)}</h3>
+      <p>{t(`activity.runInspector.panels.${state.status}.description`)}</p>
       {action ? (
-        <button type="button" class="btn" onClick={action.onClick}>
+        <button
+          type="button"
+          class="btn"
+          disabled={props.connected === false}
+          onClick={action.onClick}
+        >
           {action.label}
         </button>
       ) : undefined}
@@ -375,6 +395,10 @@ function renderPanel(
 }
 
 export function renderRunInspector(props: RunInspectorProps) {
+  const request = createMemo(() => props.request);
+  // Pagination readiness must not hold accepted receipts or a new inspection scope.
+  const read = createDeferred(() => request()?.completion.promise);
+  const initialRequest = createMemo(() => (props.state.status === "ready" ? undefined : request()));
   const identity = createMemo(() => {
     const state = props.state;
     return state.status === "ready" && state.result.identity.state === "present"
@@ -383,7 +407,25 @@ export function renderRunInspector(props: RunInspectorProps) {
   });
   const content = createMemo(() => {
     const state = props.state;
-    return state.status === "ready" ? renderReady(props, state) : renderPanel(props, state);
+    if (state.status !== "ready") {
+      return renderPanel(props, state);
+    }
+    const pending = isPending(read);
+    return renderReady(props, {
+      ...state,
+      executionPageStatus:
+        props.request?.kind === "executions" && pending
+          ? "loading"
+          : state.executionPageStatus === "error"
+            ? "error"
+            : undefined,
+      decisionPageStatus:
+        props.request?.kind === "decisions" && pending
+          ? "loading"
+          : state.decisionPageStatus === "error"
+            ? "error"
+            : undefined,
+    });
   });
 
   return (
@@ -403,7 +445,9 @@ export function renderRunInspector(props: RunInspectorProps) {
       <div class="run-inspector__warning" role="note">
         {t("activity.runInspector.bestEffortWarning")}
       </div>
-      {content()}
+      <Loading on={initialRequest()} fallback={renderPanel(props, { status: "loading" })}>
+        <Errored fallback={() => content()}>{(latest(read), content())}</Errored>
+      </Loading>
     </section>
   );
 }

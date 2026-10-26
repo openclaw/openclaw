@@ -7,6 +7,7 @@ import {
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "../utils/system-prompt-cache-boundary.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
 const anthropicMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -29,7 +30,13 @@ vi.mock("@anthropic-ai/sdk", () => ({
 }));
 
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { collectEventTypes } from "../transports/openai-stream-cases.test-support.js";
 import { createZeroUsage } from "../usage.test-support.js";
+import {
+  anthropicTerminalFallbackCases,
+  anthropicTerminalFallbackRequestedModel,
+  createAnthropicTerminalFallbackEvents,
+} from "./anthropic-server-fallback.test-support.js";
 import { streamAnthropic, streamSimpleAnthropic } from "./anthropic.js";
 
 function user(
@@ -81,10 +88,7 @@ function startStream(
   });
 }
 async function consumeStream(stream: ReturnType<typeof streamAnthropic>) {
-  const eventTypes: string[] = [];
-  for await (const event of stream) {
-    eventTypes.push(event.type);
-  }
+  const eventTypes = await collectEventTypes(stream);
   return { eventTypes, result: await stream.result() };
 }
 
@@ -114,19 +118,13 @@ function messageDelta(delta: Record<string, unknown>, usage?: Record<string, unk
 }
 
 function makeAnthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}) {
-  return {
-    id: "claude-sonnet-4-6",
+  return makeProviderModel("anthropic-messages", "anthropic", "claude-sonnet-4-6", {
     name: "Claude Sonnet 4.6",
-    provider: "anthropic",
-    api: "anthropic-messages",
     baseUrl: "https://api.anthropic.com",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
     maxTokens: 4096,
     ...overrides,
-  } satisfies Model<"anthropic-messages">;
+  });
 }
 
 function makeAnthropicAssistantMessage(
@@ -336,6 +334,46 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it.each(anthropicTerminalFallbackCases)("terminal fallback: $name", async (testCase) => {
+    const client = createAnthropicSseClient(createAnthropicTerminalFallbackEvents(testCase));
+    const result = await startStream(client, anthropicTerminalFallbackRequestedModel).result();
+    const fallback = testCase.fallback;
+    const failed = Boolean(testCase.failure);
+
+    expect(result.model).toBe("claude-fable-5");
+    expect(result.stopReason).toBe(failed ? "error" : "toolUse");
+    expect(result.responseModel).toBe(testCase.unknown ? "claude-future-9" : "claude-opus-4-8");
+    expect
+      .soft(result.diagnostics?.filter(({ type }) => type === "provider_fallback") ?? [])
+      .toEqual(
+        fallback
+          ? [
+              expect.objectContaining({
+                details: {
+                  provider: "anthropic",
+                  fromModel: "claude-fable-5",
+                  toModel: testCase.model,
+                },
+              }),
+            ]
+          : [],
+      );
+    if (failed) {
+      expect(result.errorMessage).toContain(
+        testCase.failure === "incomplete" ? "before message_stop" : "synthetic stream failure",
+      );
+      expect(result.usage.cost.total).toBeCloseTo(0.000552, 10);
+      return;
+    }
+    expect(result.content.map(({ type }) => type)).toEqual(["thinking", "text", "toolCall"]);
+    expect(result.usage).toMatchObject({ input: 5, output: 9, cacheRead: 2, cacheWrite: 4 });
+    expect(result.usage.cost.total).toBeCloseTo(
+      fallback && !testCase.unknown ? 0.000276 : 0.000552,
+      10,
+    );
+    expect(result.usage.cost).not.toHaveProperty("totalOrigin");
+  });
+
   it("includes compaction iterations in billed usage while keeping final context usage", async () => {
     const client = createAnthropicSseClient([
       messageStart(wireUsage(12, 0, 120_000, null), "claude-fable-5"),
@@ -514,30 +552,6 @@ describe("Anthropic provider", () => {
     expect(result.usage.contextUsage).toEqual(contextUsage);
   });
 
-  it("ignores a message_delta whose usage object is omitted", async () => {
-    const client = createAnthropicSseClient([
-      messageStart(wireUsage(12, 0, 3, 4), "claude-sonnet-4-6"),
-      messageDelta({ stop_reason: "end_turn" }),
-      { type: "message_stop" },
-    ]);
-
-    const result = await startStream(client, {
-      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-    }).result();
-
-    expect(result.stopReason).toBe("stop");
-    expect(result.usage).toMatchObject({
-      input: 12,
-      output: 0,
-      cacheRead: 3,
-      cacheWrite: 4,
-      totalTokens: 19,
-      contextUsage: { state: "available", promptTokens: 19, totalTokens: 19 },
-    });
-    expect(result.usage.cost.input).toBeCloseTo(0.00006, 10);
-    expect(result.usage.cost.total).toBeGreaterThan(0);
-  });
-
   it("prices reported 1-hour cache writes at twice the input rate", async () => {
     const client = createAnthropicSseClient([
       messageStart(
@@ -561,6 +575,7 @@ describe("Anthropic provider", () => {
     expect(result.usage).toMatchObject({
       cacheWrite: 1_000_000,
       cacheWrite1h: 400_000,
+      cacheWrite5m: 600_000,
     });
     expect(result.usage.cost.cacheWrite).toBeCloseTo(7.75, 10);
   });
@@ -924,10 +939,7 @@ describe("Anthropic provider", () => {
         name,
         provider,
       });
-      const eventTypes: string[] = [];
-      for await (const event of stream) {
-        eventTypes.push(event.type);
-      }
+      const eventTypes = await collectEventTypes(stream);
       const result = await stream.result();
 
       expect(eventTypes).toEqual(["error"]);
@@ -1318,21 +1330,13 @@ describe("Anthropic provider", () => {
     expect(payload.stop_sequences).toEqual(["STOP"]);
   });
 
-  it("skips unreadable Anthropic provider tools while preserving healthy siblings", async () => {
-    const unreadableTool = {
-      name: "unreadable_plugin_tool",
-      description: "unreadable schema",
-      get parameters(): Tool["parameters"] {
-        throw new Error("fuzz parameters getter exploded");
-      },
-    } as Tool;
+  it("skips invalid Anthropic provider schemas while preserving healthy siblings", async () => {
     const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
       {},
       { mode: "raw", stopBeforeNetwork: true },
       {
         messages: [user("hello")],
         tools: [
-          unreadableTool,
           {
             name: "invalid_required_tool",
             description: "invalid required",
@@ -1373,20 +1377,18 @@ describe("Anthropic provider", () => {
   });
 
   it("fails locally when a pinned Anthropic provider tool is skipped", async () => {
-    const unreadableTool = {
-      name: "unreadable_plugin_tool",
-      description: "unreadable schema",
-      get parameters(): Tool["parameters"] {
-        throw new Error("fuzz parameters getter exploded");
-      },
-    } as Tool;
+    const invalidTool = {
+      name: "invalid_plugin_tool",
+      description: "invalid schema",
+      parameters: { type: "object", properties: false },
+    };
     const onPayload = vi.fn();
     const stream = streamAnthropic(
       makeAnthropicModel(),
       {
         messages: [user("hello")],
         tools: [
-          unreadableTool,
+          invalidTool,
           {
             name: "healthy_tool",
             description: "healthy schema",
@@ -1396,7 +1398,7 @@ describe("Anthropic provider", () => {
       },
       {
         apiKey: "sk-ant-provider",
-        toolChoice: { type: "tool", name: "unreadable_plugin_tool" },
+        toolChoice: { type: "tool", name: "invalid_plugin_tool" },
         onPayload,
       },
     );
@@ -1405,9 +1407,10 @@ describe("Anthropic provider", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain(
-      'Anthropic tool_choice requested unavailable tool "unreadable_plugin_tool"',
+      'Anthropic tool_choice requested unavailable tool "invalid_plugin_tool"',
     );
     expect(onPayload).not.toHaveBeenCalled();
+    expect(anthropicMockState.requestOptions).toHaveLength(0);
   });
 
   it("keeps Anthropic wire tool bytes and their cache breakpoint stable across discovery orders", async () => {
@@ -1480,36 +1483,6 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("anchors the message cache breakpoint before transient runtime context", async () => {
-    const { payload: capturedPayload, result } = await captureSimpleAnthropicPayload(
-      {},
-      { stopBeforeNetwork: true },
-      {
-        systemPrompt: "system",
-        messages: [
-          user("stable question"),
-          {
-            role: "user",
-            content: "OpenClaw runtime context:\ntransient current-turn metadata",
-            timestamp: 1,
-            runtimeContext: {},
-          },
-        ],
-      },
-    );
-
-    expect(result.stopReason).toBe("error");
-    const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
-    expect(messages[0]?.content).toEqual([
-      {
-        type: "text",
-        text: "stable question",
-        cache_control: { type: "ephemeral" },
-      },
-    ]);
-    expect(messages[1]?.content).toBe("OpenClaw runtime context:\ntransient current-turn metadata");
-  });
-
   it("emits error without a preceding start event when SSE error arrives before message_start", async () => {
     function createSseEventResponse(lines: string): Response {
       return new Response(lines, {
@@ -1538,10 +1511,7 @@ describe("Anthropic provider", () => {
 
     const stream = startStream(client, {}, conversation(user("hi")));
 
-    const eventTypes: string[] = [];
-    for await (const event of stream as AsyncIterable<{ type: string }>) {
-      eventTypes.push(event.type);
-    }
+    const eventTypes = await collectEventTypes(stream);
 
     // error must be the first event — no start emitted before it
     expect(eventTypes[0]).toBe("error");

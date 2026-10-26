@@ -1,9 +1,10 @@
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
 import { settlesWithin } from "../../../shared/settle-within.js";
 import type { StreamFn } from "../../runtime/index.js";
+import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import {
   createModelLifecycle,
   type ModelCallDiagnosticContext,
@@ -15,19 +16,6 @@ import {
 } from "./attempt.model-diagnostic-observation.js";
 
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
-function asyncIteratorFactory(value: unknown): (() => AsyncIterator<unknown>) | undefined {
-  if (value === null || typeof value !== "object") {
-    return undefined;
-  }
-  try {
-    const asyncIterator = (value as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator];
-    return typeof asyncIterator === "function"
-      ? () => asyncIterator.call(value) as AsyncIterator<unknown>
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 async function safeReturnIterator(
   iterator: AsyncIterator<unknown>,
@@ -50,12 +38,77 @@ function throwModelCallError(lifecycle: ModelCallLifecycle, error: unknown): nev
 function observeModelCallIterator<T>(
   iterator: AsyncIterator<T>,
   lifecycle: ModelCallLifecycle,
-  observeSharedResult: (() => Promise<unknown>) | undefined,
+  observeSharedResult: () => Promise<unknown>,
 ): AsyncIterableIterator<T> {
   const trackCleanup = captureAsyncWorkTracker();
   let started = false;
+  let closed = false;
   let returning: Promise<IteratorResult<T>> | undefined;
-  const observed = observe();
+  let pending: Promise<IteratorResult<T>> | undefined;
+  let queued = 0;
+  let advanceSource: AsyncIterator<T>["next"] | undefined;
+  const advance = () => enqueue(read);
+  const ignoreError = () => undefined;
+
+  // Usually there is no pending read. Only overlapping consumer operations need
+  // a promise chain; the provider and observer still see them in FIFO order.
+  function enqueue(operation: () => Promise<IteratorResult<T>>) {
+    queued++;
+    const result = pending ? pending.then(operation, operation) : operation();
+    if (queued) {
+      pending = result;
+    }
+    return result;
+  }
+  function settled() {
+    if (--queued === 0) {
+      pending = undefined;
+    }
+  }
+  function read(): Promise<IteratorResult<T>> {
+    if (closed) {
+      settled();
+      return Promise.resolve({ done: true, value: undefined });
+    }
+    started = true;
+    try {
+      advanceSource ??= iterator.next.bind(iterator);
+      return Promise.resolve(advanceSource()).then(observeNext, rejectRead);
+    } catch (error) {
+      return rejectRead(error);
+    }
+  }
+  async function rejectRead(error: unknown): Promise<never> {
+    try {
+      closed = true;
+      return throwModelCallError(lifecycle, error);
+    } finally {
+      settled();
+    }
+  }
+  function observeNext(next: IteratorResult<T>): IteratorResult<T> {
+    try {
+      if (!next.done) {
+        const chunk = next.value;
+        lifecycle.observeChunk(chunk);
+        return { done: false, value: chunk };
+      }
+      closed = true;
+      // EOF need not delay drain-only consumers, but result decorators retain
+      // their cleanup ownership and failures for explicit result() callers.
+      if (!lifecycle.observer.state.terminalError) {
+        void trackCleanup(observeSharedResult).catch(ignoreError);
+      } else {
+        lifecycle.emitCompleted();
+      }
+      return { done: true, value: undefined };
+    } catch (error) {
+      closed = true;
+      return throwModelCallError(lifecycle, error);
+    } finally {
+      settled();
+    }
+  }
   return {
     [Symbol.asyncIterator]() {
       return this;
@@ -64,99 +117,72 @@ function observeModelCallIterator<T>(
       if (returning) {
         return returning.then(() => ({ done: true as const, value: undefined }));
       }
-      started = true;
-      return observed.next();
+      return lifecycle.runInTransportContext(advance);
     },
     return(value) {
-      returning ??= started
-        ? observed.return(value)
-        : Promise.resolve().then(async () => {
-            // An unopened async generator skips its finally block. Forward closure
-            // explicitly so inner stream owners can settle their admitted repairs.
-            await safeReturnIterator(iterator, trackCleanup);
-            lifecycle.emitCompleted();
-            return { done: true as const, value };
-          });
+      returning ??= lifecycle.runInTransportContext(() =>
+        enqueue(async () => {
+          try {
+            const result = started ? await value : value;
+            if (!closed) {
+              closed = true;
+              // Result observation can finish before an abandoned provider
+              // iterator. Its cleanup must still run exactly once.
+              await safeReturnIterator(iterator, trackCleanup);
+              lifecycle.emitCompleted();
+            }
+            return { done: true as const, value: result };
+          } catch (error) {
+            if (started && !closed) {
+              closed = true;
+              lifecycle.emitError(error);
+            }
+            throw error;
+          } finally {
+            settled();
+          }
+        }),
+      );
       return returning;
     },
     throw(error) {
-      started = true;
-      return observed.throw(error);
+      return lifecycle.runInTransportContext(() =>
+        enqueue(async () => {
+          try {
+            const observeError = started && !closed;
+            started = true;
+            closed = true;
+            if (observeError) {
+              lifecycle.emitError(error);
+            }
+            throw error;
+          } finally {
+            settled();
+          }
+        }),
+      );
     },
   };
-
-  async function* observe(): AsyncGenerator<T> {
-    // Tracks whether the underlying iterator terminated on its own (done or threw).
-    // This is independent of state.terminalEventEmitted: result() can emit the
-    // terminal event first, but the abandoned iterator still needs return() cleanup.
-    let iteratorSettled = false;
-    try {
-      for (;;) {
-        const next = await iterator.next();
-        if (next.done) {
-          iteratorSettled = true;
-          break;
-        }
-        const chunk = next.value;
-        lifecycle.observeChunk(chunk);
-        yield chunk;
-      }
-      // EOF can precede result decorators' settlement. Retain that work through
-      // owner cleanup without delaying drain-only consumers or losing failures.
-      if (observeSharedResult && !lifecycle.observer.state.terminalError) {
-        void trackCleanup(observeSharedResult).catch(() => undefined);
-      } else {
-        lifecycle.emitCompleted();
-      }
-    } catch (err) {
-      iteratorSettled = true;
-      throwModelCallError(lifecycle, err);
-    } finally {
-      if (!iteratorSettled) {
-        // A consumer can stop reading before the provider emits done/error — e.g.
-        // the agent loop returns on the terminal event after awaiting result().
-        // Close the underlying iterator for provider cleanup (idle-timeout abort
-        // listeners, SSE readers) even when result() already emitted the terminal
-        // event; lifecycle completion self-dedupes via state.terminalEventEmitted.
-        await safeReturnIterator(iterator, trackCleanup);
-        lifecycle.emitCompleted();
-      }
-    }
-  }
 }
 
 function createSharedResultObserver(
-  stream: unknown,
+  stream: MutableAssistantMessageEventStream,
   lifecycle: ModelCallLifecycle,
-): (() => Promise<unknown>) | undefined {
-  if (!isRecord(stream) || typeof stream.result !== "function") {
-    return undefined;
-  }
-  const resultFn = stream.result;
+): MutableAssistantMessageEventStream["result"] {
+  const resultFn = stream.result.bind(stream);
   // The stream contract exposes one no-argument final result. Share observation
   // across iterator exhaustion and explicit callers, including rejected results.
-  let cached: Promise<unknown> | undefined;
+  let cached: ReturnType<MutableAssistantMessageEventStream["result"]> | undefined;
   return () => {
     if (!cached) {
       cached = Promise.resolve()
-        .then(() => resultFn.call(stream))
-        .then(
-          (resolved) => {
-            try {
-              lifecycle.observer.observeFinalResult(
-                lifecycle.eventBase,
-                lifecycle.startedAt,
-                resolved,
-              );
-              lifecycle.emitCompleted();
-              return resolved;
-            } catch (error) {
-              lifecycle.emitError(error);
-              throw error;
-            }
-          },
-          (err: unknown) => throwModelCallError(lifecycle, err),
-        );
+        .then(() => lifecycle.runInTransportContext(resultFn))
+        .then((resolved) => {
+          lifecycle.observer.observeFinalResult(lifecycle.eventBase, lifecycle.startedAt, resolved);
+          lifecycle.emitCompleted();
+          return resolved;
+        })
+        .catch((err: unknown) => throwModelCallError(lifecycle, err));
       // Drain-only consumers never await this promise; retain rejection for callers.
       void cached.catch(() => undefined);
     }
@@ -165,58 +191,27 @@ function createSharedResultObserver(
 }
 
 function observeModelCallStream(
-  stream: AsyncIterable<unknown>,
-  createIterator: () => AsyncIterator<unknown>,
+  stream: MutableAssistantMessageEventStream,
   lifecycle: ModelCallLifecycle,
-): AsyncIterable<unknown> {
+): MutableAssistantMessageEventStream {
   const observedResult = createSharedResultObserver(stream, lifecycle);
   const observedIterator = () => {
     try {
-      return observeModelCallIterator(createIterator(), lifecycle, observedResult);
+      return observeModelCallIterator(
+        lifecycle.runInTransportContext(() => stream[Symbol.asyncIterator]()),
+        lifecycle,
+        observedResult,
+      );
     } catch (error) {
       lifecycle.emitError(error);
       throw error;
     }
   };
-  let hasNonConfigurableIterator;
-  try {
-    hasNonConfigurableIterator =
-      Object.getOwnPropertyDescriptor(stream, Symbol.asyncIterator)?.configurable === false;
-  } catch {
-    hasNonConfigurableIterator = true;
-  }
-  if (hasNonConfigurableIterator) {
-    return {
-      [Symbol.asyncIterator]: observedIterator,
-      ...(observedResult ? { result: observedResult } : {}),
-    };
-  }
-  return new Proxy(stream, {
-    get(target, property, receiver) {
-      if (property === Symbol.asyncIterator) {
-        return observedIterator;
-      }
-      if (property === "result" && observedResult) {
-        return observedResult;
-      }
-      const value = Reflect.get(target, property, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
-}
-
-function observeModelCallResult(result: unknown, lifecycle: ModelCallLifecycle): unknown {
-  try {
-    const createIterator = asyncIteratorFactory(result);
-    if (createIterator) {
-      return observeModelCallStream(result as AsyncIterable<unknown>, createIterator, lifecycle);
-    }
-    lifecycle.emitCompleted();
-    return result;
-  } catch (error) {
-    lifecycle.emitError(error);
-    throw error;
-  }
+  // StreamFn exposes iteration and its final result, not provider implementation methods.
+  return {
+    [Symbol.asyncIterator]: observedIterator,
+    result: observedResult,
+  };
 }
 
 export function wrapStreamFnWithDiagnosticModelCallEvents(
@@ -224,36 +219,42 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
   ctx: ModelCallDiagnosticContext,
 ): StreamFn {
   const measurePromptStats = createModelPromptStats();
-  return ((model, streamContext, options) => {
+  return (
+    model: Parameters<StreamFn>[0] & Pick<ProviderRuntimeModel, "requestTimeoutMs">,
+    streamContext,
+    options,
+  ) => {
     const requestTimeoutMs = clampPositiveTimerTimeoutMs(
-      (isRecord(model) ? model.requestTimeoutMs : undefined) ?? ctx.requestTimeoutMs,
+      model.requestTimeoutMs ?? ctx.requestTimeoutMs,
     );
     const lifecycle = createModelLifecycle({
       ctx,
       options,
       requestTimeoutMs,
-      createObserver: (capturePromptStats) =>
+      createObserver: (capturePromptStats, captureByteStats) =>
         createModelObserver({
-          config: ctx.config,
+          diagnosticOwner: ctx.diagnosticOwner,
           streamContext,
           contentCapture: ctx.contentCapture,
           suppressPluginHooks: ctx.suppressPluginHooks,
           capturePromptStats,
+          captureByteStats,
           measurePromptStats,
         }),
     });
 
     try {
-      const result = streamFn(model, streamContext, lifecycle.propagatedOptions);
+      const result = lifecycle.runInTransportContext(() =>
+        streamFn(model, streamContext, lifecycle.propagatedOptions),
+      );
       if (isPromiseLike(result)) {
-        return result.then(
-          (resolved) => observeModelCallResult(resolved, lifecycle),
-          (err: unknown) => throwModelCallError(lifecycle, err),
-        );
+        return result
+          .then((resolved) => observeModelCallStream(resolved, lifecycle))
+          .catch((err: unknown) => throwModelCallError(lifecycle, err));
       }
-      return observeModelCallResult(result, lifecycle);
+      return observeModelCallStream(result, lifecycle);
     } catch (err) {
       return throwModelCallError(lifecycle, err);
     }
-  }) as StreamFn;
+  };
 }

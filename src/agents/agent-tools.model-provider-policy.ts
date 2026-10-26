@@ -4,6 +4,7 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { filterLocalModelLeanTools } from "./local-model-lean.js";
 import { resolveNativeWebSearchRoute } from "./native-web-search.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
+import type { WebSearchToolPolicyParams } from "./web-search-tool-policy.js";
 
 export function applyModelProviderToolPolicy(
   toolsInput: AnyAgentTool[],
@@ -12,6 +13,7 @@ export function applyModelProviderToolPolicy(
     modelProvider?: string;
     modelApi?: string;
     modelBaseUrl?: string;
+    modelParams?: Record<string, unknown>;
     modelId?: string;
     agentId?: string;
     sessionKey?: string;
@@ -20,6 +22,7 @@ export function applyModelProviderToolPolicy(
     modelCompat?: ModelCompatConfig;
     suppressManagedWebSearch?: boolean;
     runtimeToolAllowlist?: string[];
+    preparedRequesterPolicy?: WebSearchToolPolicyParams["preparedRequesterPolicy"];
     localModelLeanPreserveToolNames?: string[];
   },
 ): AnyAgentTool[] {
@@ -38,11 +41,13 @@ export function applyModelProviderToolPolicy(
       modelProvider: params?.modelProvider,
       modelApi: params?.modelApi,
       modelBaseUrl: params?.modelBaseUrl,
+      modelParams: params?.modelParams,
       modelId: params?.modelId,
       agentId: params?.agentId,
       sessionKey: params?.sessionKey,
       agentDir: params?.agentDir,
       runtimeToolAllowlist: params?.runtimeToolAllowlist,
+      preparedRequesterPolicy: params?.preparedRequesterPolicy,
       pluginMetadataSnapshot: params?.preparedModelRuntime?.metadataSnapshot,
     }).kind === "native"
   ) {

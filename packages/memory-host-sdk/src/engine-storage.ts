@@ -34,6 +34,7 @@ export {
 export {
   formatMemoryIndexRebuildGuidance,
   isAutomaticMemoryEntryEligible,
+  readMemorySearchManagerStatus,
   resolveMemoryIndexIdentityDiagnostic,
   resolveMemoryIndexIdentityReason,
   resolveMemoryIndexSearchDiagnostic,
@@ -77,7 +78,6 @@ export {
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
 } from "./host/memory-schema.js";
-export { loadSqliteVecExtension, loadSqliteVecExtensionFromPath } from "./host/sqlite-vec.js";
 export {
   readCuratedProjectMemoryCandidates,
   readCuratedMemoryTriggerCandidates,

@@ -36,7 +36,6 @@ export function renderCaptureDetailView(model: CaptureViewModel): string {
     effectiveFlowLayout,
     effectiveDetailView,
     effectivePayloadLayout,
-    effectivePayloadExtent,
     selectedPayload,
     rawPayloadBody,
     selectedHeaderCount,
@@ -141,7 +140,7 @@ export function renderCaptureDetailView(model: CaptureViewModel): string {
             ])}
           </div>
           <div class="capture-subview-switch" role="radiogroup" aria-label="Payload extent">
-            ${renderCaptureRadioOptions("capture-payload-extent", effectivePayloadExtent, [
+            ${renderCaptureRadioOptions("capture-payload-extent", state.capturePayloadExtent, [
               ["preview", "Preview"],
               ["full", "Full inline"],
             ])}
@@ -186,7 +185,7 @@ export function renderCaptureDetailView(model: CaptureViewModel): string {
                 </div>`
               : ""
           }
-          <div class="capture-detail-payload capture-detail-payload--${effectivePayloadExtent}">
+          <div class="capture-detail-payload capture-detail-payload--${state.capturePayloadExtent}">
             ${effectivePayloadLayout === "raw" ? rawPayloadBody : selectedPayload.body}
             ${
               effectivePayloadLayout !== "raw" && selectedPayload.looksStructured

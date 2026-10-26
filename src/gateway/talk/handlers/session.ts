@@ -60,7 +60,8 @@ import {
   rememberUnifiedTalkSession,
   requireUnifiedTalkSessionConn,
 } from "../session-registry.js";
-import { requirePreparedTalkSessionTarget } from "../session-target.js";
+import { restoreTalkSessionTarget } from "../session-start.js";
+import { prepareTalkSessionTarget, requirePreparedTalkSessionTarget } from "../session-target.js";
 import {
   createTalkTranscriptionRelaySession,
   sendTalkTranscriptionRelayAudio,
@@ -274,6 +275,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           warn: (message) => context.logGateway.warn(`talk realtime context: ${message}`),
         });
         assertCommitAllowed();
+        await restoreTalkSessionTarget(request, target, replacement?.source(target).assertCurrent);
         const ensuredSessionId = await ensureClientVoiceAgentSessionEntry({
           agentId,
           sessionKey: target.canonicalKey,
@@ -294,6 +296,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
               sessionKey: target.canonicalKey,
               storePath: target.storePath,
               sessionId: entry.sessionId,
+              entry,
               lifecycleRevision: entry.lifecycleRevision,
               readSource,
             }),
@@ -390,24 +393,47 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           return;
         }
         const runtimeConfig = context.getRuntimeConfig();
+        const sessionKey = normalizeOptionalString(params.sessionKey);
+        const target =
+          sessionMutationAuthorization?.talkSessionTarget ??
+          (sessionKey && hasGatewayAdminScope(client)
+            ? await prepareTalkSessionTarget(runtimeConfig, sessionKey)
+            : undefined);
+        if (sessionKey) {
+          requirePreparedTalkSessionTarget(target);
+        }
+        const assertCurrent = () => {
+          requester.assertCurrent();
+          if (target) {
+            target.assertCurrent(context.getRuntimeConfig());
+          }
+        };
         const transcriptionConfig = await buildTalkTranscriptionConfig(
           runtimeConfig,
           params.provider,
           params.model,
+          target?.agentId,
         );
-        const resolution = await resolveConfiguredRealtimeTranscriptionProvider({
-          config: runtimeConfig,
-          configuredProviderId: transcriptionConfig.provider,
-          providerConfigs: transcriptionConfig.providers,
-          requestedModel: normalizeOptionalString(params.model),
-          defaultModel: transcriptionConfig.model,
-        });
-        requester.assertCurrent();
+        if (transcriptionConfig.file && !transcriptionConfig.file.ready) {
+          throw new Error(
+            "No configured audio transcription provider is available; check tools.media.models",
+          );
+        }
+        const resolution = transcriptionConfig.file
+          ? { file: transcriptionConfig.file, assertCurrent }
+          : await resolveConfiguredRealtimeTranscriptionProvider({
+              config: runtimeConfig,
+              configuredProviderId: transcriptionConfig.provider,
+              providerConfigs: transcriptionConfig.providers,
+              requestedModel: normalizeOptionalString(params.model),
+              defaultModel: transcriptionConfig.model,
+            });
+        sessionMutationAuthorization?.assertCurrent();
+        assertCurrent();
         const session = createTalkTranscriptionRelaySession({
           context,
           connId,
-          provider: resolution.provider,
-          providerConfig: resolution.providerConfig,
+          ...resolution,
         });
         rememberUnifiedTalkSession(session.transcriptionSessionId, {
           kind: "transcription-relay",
@@ -593,18 +619,26 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       const session = getUnifiedTalkSession(params.sessionId);
       if (session.kind === "realtime-relay") {
         const connId = requireUnifiedTalkSessionConn(session, client?.connId);
-        await stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId });
+        await stopTalkRealtimeRelaySession({
+          relaySessionId: session.relaySessionId,
+          connId,
+          disposition: params.disposition,
+        });
       } else if (session.kind === "transcription-relay") {
         const connId = requireUnifiedTalkSessionConn(session, client?.connId);
-        stopTalkTranscriptionRelaySession({
+        await stopTalkTranscriptionRelaySession({
           transcriptionSessionId: session.transcriptionSessionId,
           connId,
+          discard: params.discard,
         });
       } else {
         getTalkHandoff(session.handoffId);
         revokeTalkHandoff(session.handoffId);
       }
-      forgetUnifiedTalkSession(params.sessionId);
+      // Transcription owns its final drain and accepts discard until that drain ends.
+      if (session.kind !== "transcription-relay") {
+        forgetUnifiedTalkSession(params.sessionId);
+      }
       respondOk(respond);
     },
     talkSessionError,

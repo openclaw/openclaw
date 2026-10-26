@@ -49,14 +49,19 @@ function parseSshConfigOutput(output: string): SshResolvedConfig {
 
 export async function resolveSshConfig(
   target: SshParsedTarget,
-  opts: { identity?: string; timeoutMs?: number } = {},
+  opts: {
+    identity?: string;
+    timeoutMs?: number;
+    explicitPort?: boolean;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<SshResolvedConfig | null> {
   const sshPath = resolveSshClient();
   if (!sshPath) {
     return null;
   }
   const args = ["-G"];
-  if (target.port > 0 && target.port !== 22) {
+  if (target.port > 0 && (target.port !== 22 || opts.explicitPort)) {
     args.push("-p", String(target.port));
   }
   if (opts.identity?.trim()) {
@@ -72,6 +77,7 @@ export async function resolveSshConfig(
       outputCapture: "head",
       terminateOnOutputLimit: true,
       timeoutMs: Math.max(200, opts.timeoutMs ?? 800),
+      signal: opts.signal,
     });
     if (result.code !== 0 || result.termination !== "exit" || !result.stdout.trim()) {
       return null;

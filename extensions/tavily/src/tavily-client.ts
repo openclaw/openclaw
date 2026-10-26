@@ -1,37 +1,71 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   parseDateStringTimestampMs,
   resolveIntegerOption,
 } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
-  DEFAULT_CACHE_TTL_MINUTES,
+  externalContentStamp,
   normalizeCacheKey,
   postTrustedWebToolsJson,
   readCache,
-  resolveCacheTtlMs,
+  readCachedSearchPayload,
+  resolvePositiveTimeoutSeconds,
+  resolveSearchCacheTtlMs,
   writeCache,
+  writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { resolveProviderWebSearchPluginConfig } from "openclaw/plugin-sdk/provider-web-search-config-contract";
+import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { assertPluginCapabilitySecretAvailable } from "openclaw/plugin-sdk/secret-input-runtime";
+import { resolveReadOnlyEnvSecretRef } from "openclaw/plugin-sdk/secret-ref-readonly";
 import {
   truncateSanitizedExternalContent,
   wrapExternalContent,
   wrapWebContent,
 } from "openclaw/plugin-sdk/security-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  DEFAULT_TAVILY_BASE_URL,
-  TAVILY_API_KEY_CONFIG_PATH,
-  resolveTavilyApiKey,
-  resolveTavilyBaseUrl,
-  resolveTavilyExtractTimeoutSeconds,
-  resolveTavilySearchTimeoutSeconds,
-} from "./config.js";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-const SEARCH_CACHE = new Map<
-  string,
-  { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
->();
+const DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com";
+const DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS = 30;
+const DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS = 60;
+const TAVILY_API_KEY_ENV_VAR = "TAVILY_API_KEY";
+const TAVILY_API_KEY_CONFIG_PATH = "plugins.entries.tavily.config.webSearch.apiKey";
+
+function requireTavilyApiKey(cfg: OpenClawConfig | undefined, tool: string): string {
+  assertPluginCapabilitySecretAvailable(TAVILY_API_KEY_CONFIG_PATH);
+  const search = resolveProviderWebSearchPluginConfig(cfg, "tavily");
+  const resolved = resolveReadOnlyEnvSecretRef({
+    value: search?.apiKey,
+    path: TAVILY_API_KEY_CONFIG_PATH,
+    cfg,
+    expectedEnvId: TAVILY_API_KEY_ENV_VAR,
+    normalizeValue: normalizeSecretInput,
+  });
+  const apiKey =
+    resolved.status === "available"
+      ? resolved.value
+      : resolved.status === "blocked"
+        ? undefined
+        : normalizeSecretInput(process.env.TAVILY_API_KEY);
+  if (!apiKey) {
+    throw new Error(
+      `${tool} needs a Tavily API key. Set TAVILY_API_KEY in the Gateway environment, or configure plugins.entries.tavily.config.webSearch.apiKey.`,
+    );
+  }
+  return apiKey;
+}
+
+function resolveTavilyBaseUrl(cfg?: OpenClawConfig): string {
+  const search = resolveProviderWebSearchPluginConfig(cfg, "tavily");
+  const configured =
+    (normalizeOptionalString(search?.baseUrl) ?? "") ||
+    normalizeSecretInput(process.env.TAVILY_BASE_URL) ||
+    "";
+  return configured || DEFAULT_TAVILY_BASE_URL;
+}
+
 const EXTRACT_CACHE = new Map<
   string,
   { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
@@ -44,31 +78,6 @@ const TAVILY_EXTRACT_MAX_ERROR_CHARS = 4_000;
 const TAVILY_EXTRACT_MAX_RESULTS = 20;
 const TAVILY_RESULT_URL_MAX_CHARS = 2_048;
 const TAVILY_PUBLISHED_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
-
-type TavilySearchParams = {
-  cfg?: OpenClawConfig;
-  query: string;
-  searchDepth?: string;
-  topic?: string;
-  maxResults?: number;
-  includeAnswer?: boolean;
-  timeRange?: string;
-  includeDomains?: string[];
-  excludeDomains?: string[];
-  timeoutSeconds?: number;
-  signal?: AbortSignal;
-};
-
-type TavilyExtractParams = {
-  cfg?: OpenClawConfig;
-  urls: string[];
-  query?: string;
-  extractDepth?: string;
-  chunksPerSource?: number;
-  includeImages?: boolean;
-  timeoutSeconds?: number;
-  signal?: AbortSignal;
-};
 
 function normalizeTavilyResultUrl(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > TAVILY_RESULT_URL_MAX_CHARS) {
@@ -109,19 +118,10 @@ function normalizeTavilyPublishedDate(value: unknown): string | undefined {
 }
 
 function resolveEndpoint(baseUrl: string, pathname: string): string {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return `${DEFAULT_TAVILY_BASE_URL}${pathname}`;
-  }
-  try {
-    const url = new URL(trimmed);
-    // Always append the endpoint pathname to the base URL path,
-    // supporting both bare hosts and reverse-proxy path prefixes.
-    url.pathname = url.pathname.replace(/\/$/, "") + pathname;
-    return url.toString();
-  } catch {
-    return `${DEFAULT_TAVILY_BASE_URL}${pathname}`;
-  }
+  const url = new URL(baseUrl);
+  // Append to reverse-proxy path prefixes as well as bare hosts.
+  url.pathname = url.pathname.replace(/\/$/, "") + pathname;
+  return url.toString();
 }
 
 async function postTavilyJson(params: {
@@ -151,24 +151,32 @@ async function postTavilyJson(params: {
   );
 }
 
-export async function runTavilySearch(
-  params: TavilySearchParams,
-): Promise<Record<string, unknown>> {
+export async function runTavilySearch(params: {
+  cfg?: OpenClawConfig;
+  query: string;
+  searchDepth?: string;
+  topic?: string;
+  maxResults?: number;
+  includeAnswer?: boolean;
+  timeRange?: string;
+  includeDomains?: string[];
+  excludeDomains?: string[];
+  timeoutSeconds?: number;
+  signal?: AbortSignal;
+}): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
-  assertPluginCapabilitySecretAvailable(TAVILY_API_KEY_CONFIG_PATH);
-  const apiKey = resolveTavilyApiKey(params.cfg);
-  if (!apiKey) {
-    throw new Error(
-      "web_search (tavily) needs a Tavily API key. Set TAVILY_API_KEY in the Gateway environment, or configure plugins.entries.tavily.config.webSearch.apiKey.",
-    );
-  }
+  const apiKey = requireTavilyApiKey(params.cfg, "web_search (tavily)");
   const count = resolveIntegerOption(params.maxResults, DEFAULT_SEARCH_COUNT, { min: 1, max: 20 });
-  const timeoutSeconds = resolveTavilySearchTimeoutSeconds(params.timeoutSeconds);
+  const timeoutSeconds = resolvePositiveTimeoutSeconds(
+    params.timeoutSeconds,
+    DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS,
+  );
   const baseUrl = resolveTavilyBaseUrl(params.cfg);
 
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "tavily-search",
+      credential: sha256Hex(apiKey),
       q: params.query,
       count,
       baseUrl,
@@ -180,13 +188,10 @@ export async function runTavilySearch(
       excludeDomains: params.excludeDomains,
     }),
   );
-  const cacheTtlMs = resolveCacheTtlMs(
-    params.cfg?.tools?.web?.search?.cacheTtlMinutes,
-    DEFAULT_CACHE_TTL_MINUTES,
-  );
-  const cached = readCache(SEARCH_CACHE, cacheKey, cacheTtlMs);
+  const cacheTtlMs = resolveSearchCacheTtlMs(params.cfg?.tools?.web?.search);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
-    return { ...cached.value, cached: true };
+    return cached;
   }
 
   const body: Record<string, unknown> = {
@@ -246,12 +251,7 @@ export async function runTavilySearch(
     provider: "tavily",
     count: results.length,
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "tavily",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("tavily"),
     results,
   };
   if (typeof payload.answer === "string" && payload.answer) {
@@ -261,27 +261,32 @@ export async function runTavilySearch(
     result.truncated = true;
   }
 
-  writeCache(SEARCH_CACHE, cacheKey, result, cacheTtlMs);
+  writeCachedSearchPayload(cacheKey, result, cacheTtlMs);
   return result;
 }
 
-export async function runTavilyExtract(
-  params: TavilyExtractParams,
-): Promise<Record<string, unknown>> {
+export async function runTavilyExtract(params: {
+  cfg?: OpenClawConfig;
+  urls: string[];
+  query?: string;
+  extractDepth?: string;
+  chunksPerSource?: number;
+  includeImages?: boolean;
+  timeoutSeconds?: number;
+  signal?: AbortSignal;
+}): Promise<Record<string, unknown>> {
   params.signal?.throwIfAborted();
-  assertPluginCapabilitySecretAvailable(TAVILY_API_KEY_CONFIG_PATH);
-  const apiKey = resolveTavilyApiKey(params.cfg);
-  if (!apiKey) {
-    throw new Error(
-      "tavily_extract needs a Tavily API key. Set TAVILY_API_KEY in the Gateway environment, or configure plugins.entries.tavily.config.webSearch.apiKey.",
-    );
-  }
+  const apiKey = requireTavilyApiKey(params.cfg, "tavily_extract");
   const baseUrl = resolveTavilyBaseUrl(params.cfg);
-  const timeoutSeconds = resolveTavilyExtractTimeoutSeconds(params.timeoutSeconds);
+  const timeoutSeconds = resolvePositiveTimeoutSeconds(
+    params.timeoutSeconds,
+    DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS,
+  );
 
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "tavily-extract",
+      credential: sha256Hex(apiKey),
       urls: params.urls,
       baseUrl,
       query: params.query,
@@ -395,11 +400,6 @@ export async function runTavilyExtract(
     ...(truncated ? { truncated: true } : {}),
   };
 
-  writeCache(
-    EXTRACT_CACHE,
-    cacheKey,
-    result,
-    resolveCacheTtlMs(undefined, DEFAULT_CACHE_TTL_MINUTES),
-  );
+  writeCache(EXTRACT_CACHE, cacheKey, result, resolveSearchCacheTtlMs());
   return result;
 }

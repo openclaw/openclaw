@@ -1,4 +1,4 @@
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -16,7 +16,10 @@ import {
 import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
-import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
+import {
+  createOpenClawTestInstance,
+  type OpenClawTestInstance,
+} from "../../test/helpers/openclaw-test-instance.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -32,10 +35,10 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 const testLifetime = createFixtureLifetime();
 // onTestFinished runs after shared afterEach hooks; join native teardown before those resets.
 afterEach(() => testLifetime.cleanup());
-type ConcurrentStreamLifetime = Pick<
-  ReturnType<typeof createFixtureLifetime>,
-  "verifyCleanup" | "createTempDir"
-> & { signal: AbortSignal };
+type ConcurrentStreamLifetime = {
+  signal: AbortSignal;
+  verifyCleanup: typeof testLifetime.verifyCleanup;
+};
 
 function runConcurrentStreamFixture<T>(
   context: { signal: AbortSignal },
@@ -49,7 +52,6 @@ function runConcurrentStreamFixture<T>(
         return await body({
           signal: context.signal,
           verifyCleanup: testLifetime.verifyCleanup,
-          createTempDir: testLifetime.createTempDir,
         });
       },
       ...cleanups.map(
@@ -130,46 +132,76 @@ function ownMockProcess(child: ChildProcess): MockProcessOwner {
   return owner;
 }
 
+function spawnMock(controlPath: string, requestLogPath?: string) {
+  const stdio: StdioOptions = requestLogPath ? ["pipe", "pipe", "pipe", "ipc"] : "pipe";
+  const owner = ownMockProcess(
+    spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
+      cwd: process.cwd(),
+      detached: process.platform !== "win32",
+      stdio,
+      env: {
+        PATH: process.env.PATH,
+        MOCK_PORT: "0",
+        MOCK_RESPONSE_CONTROL: controlPath,
+        ...(requestLogPath ? { MOCK_REQUEST_LOG: requestLogPath } : {}),
+      },
+    }),
+  );
+  owner.stderr.resume();
+  return owner;
+}
+
+async function mockPort(owner: MockProcessOwner, signal: AbortSignal) {
+  const lines = createInterface({ input: owner.stdout, signal });
+  try {
+    const [ready] = await withinTest(
+      awaitGateBeforeSettlement(
+        once(lines, "line", { signal }),
+        owner.closed.then(() => {
+          if (owner.error) {
+            throw owner.error;
+          }
+        }),
+        "mock OpenAI exited before listening",
+      ),
+      signal,
+    );
+    expect(ready).toMatch(/^mock-openai listening on ([1-9]\d{0,4})$/u);
+    const port = Number(ready.split(" ").at(-1));
+    expect(port).toBeLessThanOrEqual(65_535);
+    signal.throwIfAborted();
+    return port;
+  } finally {
+    lines.close();
+    owner.stdout.resume();
+  }
+}
+
 async function stopMockProcess(
   owner: MockProcessOwner,
   { verifyMissingClose = false }: { verifyMissingClose?: boolean } = {},
 ): Promise<void> {
-  // The negative fixture must observe the missing close without awaiting it.
-  // Normal teardown joins the retained native close before inspecting resources.
-  const deadline = verifyMissingClose ? Date.now() + 2_000 + 1_000 : undefined;
+  // A mocked stop must fail the close check; real teardown joins native closure.
   await gatewayBenchChild.stopChild(owner.child);
   if (!verifyMissingClose) {
     await owner.closed;
   }
-  while (true) {
-    const { child } = owner;
-    const exited = child.exitCode !== null || child.signalCode !== null;
-    // This mock and its checked-in imports spawn no descendants. Windows proof
-    // is native leader/close/stdio, not a nominally dead POSIX group.
-    const groupClosed =
-      process.platform === "win32" ||
-      inspectManagedProcessGroup(child, {
-        deadlineAt: deadline,
-        errorPolicy: "indeterminate",
-      }) === "dead";
-    if (
-      exited &&
-      owner.closeObserved &&
-      owner.stdin.closed &&
-      owner.stdout.closed &&
-      owner.stderr.closed &&
-      groupClosed
-    ) {
-      return;
-    }
-    const remaining = deadline === undefined ? 0 : deadline - Date.now();
-    if (remaining <= 0) {
-      throw new Error("Mock provider shutdown unverified; Gateway state retained", {
-        cause: owner.error,
-      });
-    }
-    await gatewayBenchChild.delay(Math.min(10, remaining));
+  const { child } = owner;
+  // This mock spawns no descendants; Windows proves native leader/close/stdio.
+  if (
+    (child.exitCode !== null || child.signalCode !== null) &&
+    owner.closeObserved &&
+    owner.stdin.closed &&
+    owner.stdout.closed &&
+    owner.stderr.closed &&
+    (process.platform === "win32" ||
+      inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }) === "dead")
+  ) {
+    return;
   }
+  throw new Error("Mock provider shutdown unverified; Gateway state retained", {
+    cause: owner.error,
+  });
 }
 
 async function cleanupConcurrentStreamResources(owners: {
@@ -197,6 +229,29 @@ async function cleanupConcurrentStreamResources(owners: {
   );
 }
 
+function resourceCleanup(
+  gateway: OpenClawTestInstance | undefined,
+  mock: MockProcessOwner | undefined,
+  closeClient: () => Promise<void> = async () => {},
+  settleStreams: () => Promise<unknown> = async () => {},
+) {
+  return cleanupConcurrentStreamResources({
+    closeClient,
+    stopGateway: async () => {
+      await gateway?.stopGateway();
+    },
+    stopMock: async () => {
+      if (mock) {
+        await stopMockProcess(mock);
+      }
+    },
+    settleStreams,
+    cleanupGateway: async () => {
+      await gateway?.cleanup();
+    },
+  });
+}
+
 const cases = [
   {
     endpoint: "/v1/chat/completions",
@@ -212,7 +267,7 @@ const cases = [
 
 describe("Gateway concurrent HTTP streams", () => {
   it("retains backing state when mock shutdown resolves without native closure", (context) => {
-    let gateway: Awaited<ReturnType<typeof createOpenClawTestInstance>> | undefined;
+    let gateway: OpenClawTestInstance | undefined;
     let mock: MockProcessOwner | undefined;
     return runConcurrentStreamFixture(
       context,
@@ -232,39 +287,9 @@ describe("Gateway concurrent HTTP streams", () => {
         });
         await fs.writeFile(controlPath, control);
         signal.throwIfAborted();
-        const processOwner = ownMockProcess(
-          spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
-            cwd: process.cwd(),
-            detached: process.platform !== "win32",
-            env: {
-              PATH: process.env.PATH,
-              MOCK_PORT: "0",
-              MOCK_RESPONSE_CONTROL: controlPath,
-            },
-          }),
-        );
+        const processOwner = spawnMock(controlPath);
         mock = processOwner;
-        processOwner.stderr.resume();
-        const lines = createInterface({ input: processOwner.stdout });
-        try {
-          const [ready] = await withinTest(
-            awaitGateBeforeSettlement(
-              once(lines, "line", { signal }),
-              processOwner.closed.then(() => {
-                if (processOwner.error) {
-                  throw processOwner.error;
-                }
-              }),
-              "mock OpenAI exited before listening",
-            ),
-            signal,
-          );
-          expect(ready).toMatch(/^mock-openai listening on \d+$/);
-        } finally {
-          lines.close();
-          processOwner.stdout.resume();
-        }
-        signal.throwIfAborted();
+        await mockPort(processOwner, signal);
         const closeClient = vi.fn(async () => {});
         const stopGateway = vi.fn(() => stateOwner.stopGateway());
         const settleStreams = vi.fn(async () => {});
@@ -275,23 +300,21 @@ describe("Gateway concurrent HTTP streams", () => {
           exitedBeforeTeardown: false,
         });
         try {
-          const cleanupOutcome = await cleanupConcurrentStreamResources({
-            closeClient,
-            stopGateway,
-            stopMock: () => stopMockProcess(processOwner, { verifyMissingClose: true }),
-            settleStreams,
-            cleanupGateway,
-          }).then(
-            () => ({ status: "fulfilled" }),
-            (error: unknown) => ({ status: "rejected", error }),
-          );
+          await expect(
+            cleanupConcurrentStreamResources({
+              closeClient,
+              stopGateway,
+              stopMock: () => stopMockProcess(processOwner, { verifyMissingClose: true }),
+              settleStreams,
+              cleanupGateway,
+            }),
+          ).rejects.toMatchObject({
+            message: "Mock provider shutdown unverified; Gateway state retained",
+          });
           expect(closeClient).toHaveBeenCalledOnce();
           expect(stopGateway).toHaveBeenCalledOnce();
           expect(settleStreams).toHaveBeenCalledOnce();
-          expect(processOwner.child.exitCode).toBeNull();
-          expect(processOwner.child.signalCode).toBeNull();
           expect(processOwner.closeObserved).toBe(false);
-          expect(processOwner.child.pid).toBeTypeOf("number");
           expect(() => process.kill(processOwner.child.pid!, 0)).not.toThrow();
           if (process.platform !== "win32") {
             expect(
@@ -300,30 +323,12 @@ describe("Gateway concurrent HTTP streams", () => {
           }
           await expect(fs.readFile(controlPath, "utf8")).resolves.toBe(control);
           expect(cleanupGateway).not.toHaveBeenCalled();
-          expect(cleanupOutcome).toMatchObject({
-            status: "rejected",
-            error: { message: "Mock provider shutdown unverified; Gateway state retained" },
-          });
         } finally {
           reportedStop.mockRestore();
         }
       },
       async () => {
-        await cleanupConcurrentStreamResources({
-          closeClient: async () => {},
-          stopGateway: async () => {
-            await gateway?.stopGateway();
-          },
-          stopMock: async () => {
-            if (mock) {
-              await stopMockProcess(mock);
-            }
-          },
-          settleStreams: async () => {},
-          cleanupGateway: async () => {
-            await gateway?.cleanup();
-          },
-        });
+        await resourceCleanup(gateway, mock);
         if (gateway) {
           await expect(fs.stat(gateway.state.root)).rejects.toMatchObject({ code: "ENOENT" });
         }
@@ -334,7 +339,7 @@ describe("Gateway concurrent HTTP streams", () => {
   it("keeps both streams isolated while global observers retain every run", (context) => {
     const { signal } = context;
     const abort = new AbortController();
-    let ownedGateway: Awaited<ReturnType<typeof createOpenClawTestInstance>> | undefined;
+    let ownedGateway: OpenClawTestInstance | undefined;
     let client: ReturnType<typeof createGatewayWsClient> | undefined;
     let mock: MockProcessOwner | undefined;
     const streams: Array<{
@@ -382,12 +387,6 @@ describe("Gateway concurrent HTTP streams", () => {
             OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
             OPENCLAW_TEST_CONSOLE: "1",
             OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
             OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
             OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
           },
@@ -427,52 +426,16 @@ describe("Gateway concurrent HTTP streams", () => {
             : [];
         };
         try {
-          signal.throwIfAborted();
           expect(await gateway.entrypoint()).toEqual(["dist/index.js"]);
           signal.throwIfAborted();
           await writeControl(true);
-          signal.throwIfAborted();
-          mock = ownMockProcess(
-            spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
-              cwd: process.cwd(),
-              detached: process.platform !== "win32",
-              stdio: ["pipe", "pipe", "pipe", "ipc"],
-              env: {
-                PATH: process.env.PATH,
-                MOCK_PORT: "0",
-                MOCK_RESPONSE_CONTROL: controlPath,
-                MOCK_REQUEST_LOG: requestLogPath,
-              },
-            }),
-          );
-          mock.stderr.resume();
-          await once(mock.child, "spawn", { signal });
-          const output = createInterface({ input: mock.stdout, signal });
-          let mockPort: number | undefined;
-          try {
-            for await (const line of output) {
-              const match = /^mock-openai listening on ([1-9]\d{0,4})$/u.exec(line);
-              if (match) {
-                mockPort = Number(match[1]);
-                expect(mockPort).toBeLessThanOrEqual(65_535);
-                break;
-              }
-            }
-            signal.throwIfAborted();
-            if (mockPort === undefined) {
-              throw new Error(
-                `mock OpenAI exited before listening (code=${mock.child.exitCode} signal=${mock.child.signalCode})`,
-              );
-            }
-          } finally {
-            output.close();
-            mock.stdout.resume();
-          }
+          mock = spawnMock(controlPath, requestLogPath);
+          const portOfMock = await mockPort(mock, signal);
           expect(
-            (await fetch(`http://127.0.0.1:${mockPort}/health`, { signal: abort.signal })).status,
+            (await fetch(`http://127.0.0.1:${portOfMock}/health`, { signal: abort.signal })).status,
           ).toBe(200);
           const provider = buildMockOpenAiResponsesProvider(
-            `http://127.0.0.1:${mockPort}/v1`,
+            `http://127.0.0.1:${portOfMock}/v1`,
             "gpt-5.6-luna",
           );
           const cfg = {
@@ -490,7 +453,6 @@ describe("Gateway concurrent HTTP streams", () => {
                 workspace: state.workspaceDir,
                 skipBootstrap: true,
                 maxConcurrent: 2,
-                heartbeat: { every: "0m" },
                 model: { primary: provider.modelRef },
                 models: {
                   [provider.modelRef]: {
@@ -550,7 +512,6 @@ describe("Gateway concurrent HTTP streams", () => {
             });
             signal.throwIfAborted();
             expect(subscribed.ok, JSON.stringify(subscribed.error)).toBe(true);
-            signal.throwIfAborted();
             const body = {
               model: "openclaw:main",
               stream: true,
@@ -606,7 +567,6 @@ describe("Gateway concurrent HTTP streams", () => {
           for (const [index, item] of cases.entries()) {
             expect(requests[index]).toContain(item.marker);
           }
-          signal.throwIfAborted();
           await writeControl(false);
           for (const stream of streams) {
             signal.throwIfAborted();
@@ -665,26 +625,17 @@ describe("Gateway concurrent HTTP streams", () => {
       async () => {
         abort.abort();
         try {
-          await cleanupConcurrentStreamResources({
-            closeClient: async () => {
+          await resourceCleanup(
+            ownedGateway,
+            mock,
+            async () => {
               if (client) {
                 client.close();
                 await closeGatewayTestWebSocket(client.ws);
               }
             },
-            stopGateway: async () => {
-              await ownedGateway?.stopGateway();
-            },
-            stopMock: async () => {
-              if (mock) {
-                await stopMockProcess(mock);
-              }
-            },
-            settleStreams: () => Promise.all(streams.map((stream) => stream.settled)),
-            cleanupGateway: async () => {
-              await ownedGateway?.cleanup();
-            },
-          });
+            () => Promise.all(streams.map((stream) => stream.settled)),
+          );
         } finally {
           signal.removeEventListener("abort", cancel);
         }

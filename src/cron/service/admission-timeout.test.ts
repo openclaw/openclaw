@@ -18,10 +18,7 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -29,11 +26,10 @@ import { stop } from "./ops-lifecycle.js";
 import { runMissedJobs } from "./timer.test-support.js";
 
 function stallCronHostCallbacks() {
-  const submitted = createDeferred();
   const held = createDeferred();
   const delayed: Array<() => void> = [];
   const ports = new WeakMap<MessagePort, { paused: boolean }>();
-  const restores: Array<() => void> = [];
+  const restores: Array<{ mockRestore(): void }> = [];
   let stalling = true;
   const mutationTypes = new Set([
     "cron.schedulerStart",
@@ -83,52 +79,32 @@ function stallCronHostCallbacks() {
         }
       }
       nativePost(message, transferList);
-      if (cronMutation) {
-        submitted.resolve();
-      }
     });
-    restores.push(() => reply.mockRestore());
-    restores.push(() => post.mockRestore());
+    restores.push(reply, post);
     return worker;
   });
   const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
   const admissions = vi
     .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((...args) => {
+    .mockImplementation((admit, attachment) => {
       const receiver = { paused: false };
-      const listening = vi.spyOn(MessagePort.prototype, "on").mockImplementation(function (
-        this: MessagePort,
-        event,
-        listener,
-      ) {
-        if (event !== "message") {
-          return this.addListener(event, listener);
+      const admission = createAdmission((request, grant) => {
+        if (
+          stalling &&
+          receiver.paused &&
+          (request.stage === "transaction" || request.stage === "commit")
+        ) {
+          // Delay the real admission decision without replacing the transport or SQLite worker.
+          delayed.push(() => admit(request, grant));
+          held.resolve();
+        } else {
+          admit(request, grant);
         }
-        return this.addListener("message", function (this: MessagePort, message: unknown) {
-          if (
-            stalling &&
-            receiver.paused &&
-            isRecord(message) &&
-            (message.stage === "transaction" || message.stage === "commit")
-          ) {
-            // Hold the real receiver; the worker keeps its actual SQLite transaction and decision.
-            delayed.push(() => listener.call(this, message));
-            held.resolve();
-            return;
-          }
-          listener.call(this, message);
-        });
-      });
-      try {
-        const admission = createAdmission(...args);
-        ports.set(admission.port, receiver);
-        return admission;
-      } finally {
-        listening.mockRestore();
-      }
+      }, attachment);
+      ports.set(admission.port, receiver);
+      return admission;
     });
   return {
-    submitted: submitted.promise,
     held: held.promise,
     release() {
       stalling = false;
@@ -140,25 +116,22 @@ function stallCronHostCallbacks() {
       admissions.mockRestore();
       workers.mockRestore();
       for (const restore of restores.toReversed()) {
-        restore();
+        restore.mockRestore();
       }
     },
   };
 }
 
-it("finishes startup, state writes, and update history while cron host callbacks are stalled", async ({
+it("finishes startup and writes update history while cron host callbacks are stalled", async ({
   signal,
 }) => {
   await withOpenClawTestState({ label: "cron-startup-independent-writers" }, async (fixture) => {
     const fault = stallCronHostCallbacks();
     const now = 1_800_000_000_000;
     const storePath = fixture.statePath("cron", "jobs.json");
-    const deferred = createDueIsolatedJob({ id: "deferred-startup", nowMs: now, nextRunAtMs: now });
-    const immediate = createDueIsolatedJob({
-      id: "immediate-startup",
-      nowMs: now,
-      nextRunAtMs: now,
-    });
+    const dueJob = (id: string) => createDueIsolatedJob({ id, nowMs: now, nextRunAtMs: now });
+    const deferred = dueJob("deferred-startup");
+    const immediate = dueJob("immediate-startup");
     immediate.payload = { kind: "command", argv: ["echo", "synthetic"] };
     const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
     const state = createCronRegressionState({
@@ -176,14 +149,7 @@ it("finishes startup, state writes, and update history while cron host callbacks
       const options = { env: fixture.env, busyTimeoutMs: 0 };
       const update = createUpdateRun({ trigger: "cli" }, options);
       const startup = runMissedJobs(state, { deferAgentWork: true });
-      settled = startup.then(
-        () => ({ ok: true }),
-        (error: unknown) => ({ ok: false, error }),
-      );
-      await withinTest(
-        awaitGateBeforeSettlement(fault.submitted, startup, "Startup skipped its worker mutation"),
-        signal,
-      );
+      settled = Promise.allSettled([startup]);
       await withinTest(
         awaitGateBeforeSettlement(
           fault.held,
@@ -192,42 +158,28 @@ it("finishes startup, state writes, and update history while cron host callbacks
         ),
         signal,
       );
-      // A pending host response must never retain the writer needed by state and update history.
-      runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          db.prepare(
-            "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-          ).run("cron-independent-writer", JSON.stringify("saved"), now);
-        },
-        { env: fixture.env },
-        { busyTimeoutMs: 0 },
-      );
+      // Update history uses the shared-state writer that a pending cron response must not hold.
       recordUpdateRunStep(
         update.runId,
         { step: "cron-independent-history", status: "completed", endedAtMs: now },
         options,
       );
       fault.release();
-      expect(await withinTest(settled, signal)).toEqual({ ok: true });
+      expect(await withinTest(settled, signal)).toMatchObject([{ status: "fulfilled" }]);
       expect(runCommandJob).toHaveBeenCalledOnce();
       const jobs = (await loadCronStore(storePath)).jobs;
       expect(jobs.find(({ id }) => id === deferred.id)?.state.startupCatchupAtMs).toBeGreaterThan(
         now,
       );
       expect(jobs.find(({ id }) => id === immediate.id)?.state.lastRunStatus).toBe("ok");
-      expect(
-        openOpenClawStateDatabase()
-          .db.prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-          .get("cron-independent-writer"),
-      ).toEqual({ value_json: JSON.stringify("saved") });
+      const db = openOpenClawStateDatabase().db;
       expect(getUpdateRun(update.runId, options)?.steps).toContainEqual(
         expect.objectContaining({ step: "cron-independent-history", status: "completed" }),
       );
-      expect(
-        openOpenClawStateDatabase()
-          .db.prepare("SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ?")
-          .all(cronStoreKey(storePath), immediate.id),
-      ).toEqual([{ status: "ok" }]);
+      const receipts = db
+        .prepare("SELECT status FROM cron_run_receipts WHERE store_key = ? AND job_id = ?")
+        .all(cronStoreKey(storePath), immediate.id);
+      expect(receipts).toEqual([{ status: "ok" }]);
     } finally {
       fault.release();
       fault.restore();

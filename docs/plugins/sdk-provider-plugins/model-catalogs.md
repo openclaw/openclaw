@@ -17,10 +17,40 @@ For lightweight model-reference normalization, use
 `openclaw/plugin-sdk/model-ref-parse`. Its `normalizeGooglePreviewModelId`
 and `normalizeAntigravityPreviewModelId` exports share the catalog's alias
 rules without loading provider replay or transport helpers.
+`normalizeOpenRouterModelFamilyId` strips the optional `openrouter/` qualifier
+and leading `~` alias prefix for family detection, without changing the API model ID.
 Use `splitTrailingAuthProfile` to separate a trailing auth profile while preserving
 model-version and local quantization suffixes.
 
+Successful catalog hooks can return private `modelIdCatalog` evidence on a
+`ready` outcome: `{ baseUrl, modelIds, aliases? }`. Include every server-listed
+ID before filtering model kinds, and retain an empty list for a successful empty
+response. This evidence is separate from `listedModelIds`, which retains its
+entitlement meaning.
+
+Core compares current authored references and declarations with that retained
+listing when projecting a catalog, including after config hot reload. The default
+comparison uses exact IDs and trailing-slash-normalized endpoints. Providers with
+other alias or endpoint rules can supply the pure, synchronous
+`catalog.getUnlistedConfiguredModelIds(listing, configuredModels)` hook. It receives
+only that provider's resolved references, including model-level endpoint overrides;
+it must skip references routed to another server and must not perform I/O.
+`aliases` is optional provider-owned matching data.
+
+Only the derived `unlistedConfiguredModelIds` advisory is exposed publicly. It
+never changes entitlement or model availability. Failed or skipped discovery
+produces no missing-ID warning, and reprojecting retained evidence makes no
+provider requests.
+
 ## Live model discovery
+
+For interactive setup of an OpenAI-compatible custom endpoint, reuse
+`discoverOpenAICompatibleLocalModels` from `openclaw/plugin-sdk/provider-setup`.
+Pass the resolved API key, `rawResult: true`, and `discoverRuntimeContext: false`
+to list models without updating the runtime catalog. The optional
+`configuredProvider: { config, id }` resolves only that provider row's header and
+transport SecretRefs and applies its existing private-network, proxy, and TLS policy.
+The authored configuration keeps its original secret references.
 
 If your provider exposes an OpenAI-compatible `/models` API, opt the
 single-provider helper into shared discovery:
@@ -44,15 +74,15 @@ catalog: {
 `liveModelDiscovery: true` is a public Plugin SDK contract with these
 behaviors:
 
-| Area           | Contract                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Credentials    | Discovery uses the catalog's resolved provider credential, preferring `discoveryApiKey` when auth supplies one. Secret-reference markers are never sent as tokens. The default request uses `Authorization: Bearer <token>`; use `buildRequestHeaders` for another vendor auth scheme.                                                                                                                                                                                                                                                                                                                            |
-| Endpoint       | The default URL is `models` relative to the effective provider `baseUrl`, including an operator override when `allowExplicitBaseUrl` is enabled. Use `endpointPath` for another relative path. Use `endpointUrl: { url, requireBaseUrl }` only for a fixed vendor URL; discovery is skipped unless the effective base URL still equals `requireBaseUrl`, so a custom proxy credential is not sent to the vendor.                                                                                                                                                                                                  |
-| Network limits | Fetches use OpenClaw's SSRF guard, one 5-second timeout budget across pagination, a 4 MiB response limit per page, and a 50-page limit. Cross-origin pagination links are rejected; credentials are removed after a cross-origin redirect.                                                                                                                                                                                                                                                                                                                                                                        |
-| Cache          | Successful, non-empty catalogs are cached for 60 seconds by provider, endpoint, and resolved credential. Empty or unusable results are not cached.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Filtering      | The listing decides which models exist. Exact live IDs keep their trusted static metadata; every other listed chat ID becomes a conservative text/chat row, so new models appear without an OpenClaw release. Disabled, archived, deprecated, past-`shutdown_date`, explicitly non-chat, embedding, reranking, moderation, speech, transcription, realtime, audio, image, video, and legacy completions rows are excluded, including static IDs. Use `readRows` only to select rows from a nonstandard response envelope; provider-specific model semantics still belong in a custom catalog.                     |
-| Admission      | Optional. Set `acceptUnknownModel: ({ id, record }) => boolean` when your request shaping is model-version specific, so discovery cannot publish a model you cannot yet build a valid request for. It is called only for IDs your static catalog does not already publish; known IDs bypass it and keep their published metadata. Return `false` to drop the row. Providers that omit it keep the previous behavior unchanged. Prefer comparing the vendor's advertised capabilities against your own contract checks over a hand-maintained model list, and fail closed when the row carries no capability data. |
-| Failure        | Live discovery is advisory. Auth, network, timeout, pagination, parsing, empty-catalog, and filtering failures return the provider-owned static seed instead of removing the provider.                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Area           | Contract                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Credentials    | Discovery uses the catalog's resolved provider credential, preferring `discoveryApiKey` when auth supplies one. Secret-reference markers are never sent as tokens. The default request uses `Authorization: Bearer <token>`; use `buildRequestHeaders` for another vendor auth scheme.                                                                                                                                                                                                                                                                                                                          |
+| Endpoint       | The default URL is `models` relative to the effective provider `baseUrl`, including an operator override when `allowExplicitBaseUrl` is enabled. Use `endpointPath` for another relative path. Use `endpointUrl: { url, requireBaseUrl }` only for a fixed vendor URL; discovery is skipped unless the effective base URL still equals `requireBaseUrl`, so a custom proxy credential is not sent to the vendor.                                                                                                                                                                                                |
+| Network limits | Fetches use OpenClaw's SSRF guard, one 5-second timeout budget across pagination, a 4 MiB response limit per page, and a 50-page limit. Cross-origin pagination links are rejected; credentials are removed after a cross-origin redirect.                                                                                                                                                                                                                                                                                                                                                                      |
+| Cache          | Successful, non-empty catalogs are cached for 60 seconds by provider, endpoint, and resolved credential. Empty or unusable results are not cached.                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Filtering      | The listing decides which models exist. Exact live IDs keep their trusted static metadata; every other listed chat ID becomes a conservative text/chat row, so new models appear without an OpenClaw release. Disabled, archived, deprecated, past-`shutdown_date`, explicitly non-chat, embedding, reranking, moderation, speech, transcription, realtime, audio, image, video, and legacy completions rows are excluded, including static IDs. Use `readRows` only to select rows from a nonstandard response envelope; provider-specific model semantics still belong in a custom catalog.                   |
+| Admission      | Optional. Set `acceptUnknownModel: ({ id, record }) => boolean` when your request shaping is model-version specific, so discovery cannot publish a model you cannot yet build a valid request for. It is called only for IDs your static catalog does not already publish; known IDs bypass it and keep their published metadata. Return `false` to drop the row. Providers that omit it keep the previous behavior unchanged. Prefer comparing the vendor's advertised capabilities against your own contract checks over a hand-maintained model list, and reject the row when it carries no capability data. |
+| Failure        | Live discovery is advisory. Auth, network, timeout, pagination, parsing, empty-catalog, and filtering failures return the provider-owned static seed instead of removing the provider.                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Relative catalog cache TTLs start when a successful load completes. Cache hits
 preserve that deadline, and explicit absolute provider deadlines remain unchanged.
@@ -395,22 +425,30 @@ OpenClaw also filters returned identities to that scope. An absent scope
 means the caller requested the full catalog.
 
 If the upstream provider uses different control tokens than OpenClaw, add a
-small bidirectional text transform instead of replacing the stream path:
+small bidirectional `textTransforms` declaration on that provider instead of replacing the stream path:
 
 ```typescript
-api.registerTextTransforms({
-  input: [
-    { from: /red basket/g, to: "blue basket" },
-    { from: /paper ticket/g, to: "digital ticket" },
-    { from: /left shelf/g, to: "right shelf" },
-  ],
-  output: [
-    { from: /blue basket/g, to: "red basket" },
-    { from: /digital ticket/g, to: "paper ticket" },
-    { from: /right shelf/g, to: "left shelf" },
-  ],
+api.registerProvider({
+  id: "my-provider",
+  label: "My provider",
+  auth: [],
+  textTransforms: {
+    input: [
+      { from: /red basket/g, to: "blue basket" },
+      { from: /paper ticket/g, to: "digital ticket" },
+      { from: /left shelf/g, to: "right shelf" },
+    ],
+    output: [
+      { from: /blue basket/g, to: "red basket" },
+      { from: /digital ticket/g, to: "paper ticket" },
+      { from: /right shelf/g, to: "left shelf" },
+    ],
+  },
 });
 ```
+
+These transforms apply only to this provider. The removed
+`api.registerTextTransforms(...)` global overlay has no equivalent replacement.
 
 `input` rewrites the final system prompt and text message content before
 transport. `output` rewrites assistant text deltas and final text before

@@ -28,7 +28,7 @@ export function captureApprovedCwdSnapshotSync(
   } catch {
     return {
       ok: false,
-      message: "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd",
+      message: "SYSTEM_RUN_DENIED: approval requires an existing, resolved working directory",
     };
   }
   if (!cwdStat.isDirectory()) {
@@ -40,7 +40,8 @@ export function captureApprovedCwdSnapshotSync(
   if (hasMutableSymlinkPathComponentSync(requestedCwd) || cwdLstat.isSymbolicLink()) {
     return {
       ok: false,
-      message: "SYSTEM_RUN_DENIED: approval requires canonical cwd (no symlink path components)",
+      message:
+        "SYSTEM_RUN_DENIED: approval requires a working directory without symlink path components",
     };
   }
   if (

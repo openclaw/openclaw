@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
-import {
-  COMMAND_PALETTE_SHORTCUT,
-  createKeyboardShortcutMatcher,
-} from "../shared/keyboard-shortcuts.js";
+import { LruCache } from "../infra/lru-cache.js";
+import { KEYBOARD_SHORTCUT_MATCHER_SOURCE } from "../shared/keyboard-shortcuts.generated.js";
+import { COMMAND_PALETTE_SHORTCUTS } from "../shared/keyboard-shortcuts.js";
 import { WIDGET_THEME_MESSAGE_TYPE } from "../shared/widget-theme.js";
 import { buildSandboxWidgetScrollBridgeHtml } from "./sandbox-widget-scroll-bridge.js";
 
@@ -23,6 +22,8 @@ const SANDBOX_HOST_CSP_QUERY = "csp";
 const SANDBOX_HOST_CSP_MAX_JSON_BYTES = 5 * 1024;
 const SANDBOX_HOST_CSP_MAX_HEADER_BYTES = 6 * 1024;
 const SANDBOX_HOST_CSP_MAX_ENCODED_BYTES = Math.ceil(SANDBOX_HOST_CSP_MAX_JSON_BYTES / 3) * 4 + 4;
+// The complete policy keys immutable public URLs; shell code changes retire this process cache.
+const sandboxHostPaths = new LruCache<string>(64);
 
 function buildSandboxShortcutBridgeHtml(): string {
   return `<script>(()=>{
@@ -44,8 +45,8 @@ function buildSandboxShortcutBridgeHtml(): string {
   const HTMLElementType=HTMLElement;
   const fields=["key","code","keyCode","isComposing","metaKey","ctrlKey","altKey","shiftKey"];
   const getters=fields.map(name=>descriptor(KeyboardEvent.prototype,name).get);
-  const combo=${JSON.stringify(COMMAND_PALETTE_SHORTCUT)};
-  const matcher=(${createKeyboardShortcutMatcher.toString()})();
+  const combos=${JSON.stringify(COMMAND_PALETTE_SHORTCUTS)};
+  const matcher=(${KEYBOARD_SHORTCUT_MATCHER_SOURCE})();
   const applePlatform=matcher.isApplePlatform();
   let nonce="";
   let returnFocus=null;
@@ -66,7 +67,12 @@ function buildSandboxShortcutBridgeHtml(): string {
     if(!nonce||!event.isTrusted||apply(preventedGetter,event,[])||apply(repeatGetter,event,[]))return;
     const snapshot=create(null);
     for(let index=0;index<fields.length;index++)snapshot[fields[index]]=apply(getters[index],event,[]);
-    if(!matcher.matchesKeyboardShortcut(combo,snapshot,applePlatform,matcher.resolveAsciiShortcutKey(snapshot)))return;
+    const asciiKey=matcher.resolveAsciiShortcutKey(snapshot);
+    let matched=false;
+    for(let index=0;index<combos.length;index++){
+      if(matcher.matchesKeyboardShortcut(combos[index],snapshot,applePlatform,asciiKey)){matched=true;break;}
+    }
+    if(!matched)return;
     const target=apply(path,event,[])[0];
     returnFocus=target instanceof HTMLElementType?target:null;
     apply(prevent,event,[]);
@@ -210,23 +216,27 @@ export function normalizeSandboxHostCsp(value: unknown): SandboxHostCsp | undefi
 
 export function buildSandboxHostPath(csp?: SandboxHostCsp): string {
   const normalized = normalizeSandboxHostCsp(csp);
+  const policy = normalized ? JSON.stringify(normalized) : "";
+  const cached = sandboxHostPaths.get(policy);
+  if (cached !== undefined) {
+    return cached;
+  }
   const query = new URLSearchParams();
   if (normalized) {
-    query.set(
-      SANDBOX_HOST_CSP_QUERY,
-      Buffer.from(JSON.stringify(normalized)).toString("base64url"),
-    );
+    query.set(SANDBOX_HOST_CSP_QUERY, Buffer.from(policy).toString("base64url"));
   }
   query.set("v", buildSandboxHostDocument(normalized).version);
-  return `${SANDBOX_HOST_PATH}?${query}`;
+  const pathname = `${SANDBOX_HOST_PATH}?${query}`;
+  sandboxHostPaths.set(policy, pathname);
+  return pathname;
 }
 
 /** Version the public shell and its security headers together, never widget content. */
-export function buildSandboxHostDocument(csp?: SandboxHostCsp) {
+export function buildSandboxHostDocument(csp?: SandboxHostCsp, frameAncestors?: readonly string[]) {
   const html = buildSandboxHostProxyHtml(csp);
   const headers = {
     "Content-Type": "text/html; charset=utf-8",
-    "Content-Security-Policy": buildSandboxHostContentSecurityPolicy(csp),
+    "Content-Security-Policy": buildSandboxHostContentSecurityPolicy(csp, frameAncestors),
     "Permissions-Policy": "camera=(), microphone=(), geolocation=(), clipboard-write=()",
     "Cross-Origin-Resource-Policy": "cross-origin",
     "Origin-Agent-Cluster": "?1",
@@ -290,6 +300,11 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   return `<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
+<script>
+  // Match the embedding frame before this document can paint an opaque UA canvas.
+  const initialTheme = new URLSearchParams(window.location.hash.slice(1)).get("theme");
+  if (initialTheme === "light" || initialTheme === "dark") document.documentElement.style.colorScheme = initialTheme;
+</script>
 <title>MCP App sandbox</title>
 <style>html,body{height:100%;margin:0;background:transparent}iframe{display:block;width:100%;height:100%;border:0;background:transparent}</style>
 <body>
@@ -298,9 +313,11 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   if (window.self === window.top) throw new Error("invalid MCP App sandbox host");
   let hostOrigin;
   try {
-    const referrer = new URL(document.referrer);
-    if (referrer.protocol !== "http:" && referrer.protocol !== "https:") throw new Error();
-    hostOrigin = referrer.origin;
+    // WebKit sends no referrer when an attached iframe is navigated later, so bind
+    // the browser-reported parent origin; browsers without it keep the referrer.
+    const parent = new URL(location.ancestorOrigins?.[0] ?? document.referrer);
+    if (parent.protocol !== "http:" && parent.protocol !== "https:") throw new Error();
+    hostOrigin = parent.origin;
   } catch { throw new Error("invalid MCP App sandbox parent"); }
   try { void window.top.document; throw new Error("MCP App sandbox isolation failed"); } catch (error) {
     if (error instanceof Error && error.message === "MCP App sandbox isolation failed") throw error;
@@ -399,7 +416,10 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
 }
 
 /** HTTP response policy for the isolated proxy and its inner about:blank content. */
-function buildSandboxHostContentSecurityPolicy(csp?: SandboxHostCsp): string {
+function buildSandboxHostContentSecurityPolicy(
+  csp?: SandboxHostCsp,
+  frameAncestors?: readonly string[],
+): string {
   const resources = csp?.resourceDomains ?? [];
   const media = csp?.mediaDomains ?? resources;
   const connections = csp?.connectDomains ?? [];
@@ -420,7 +440,7 @@ function buildSandboxHostContentSecurityPolicy(csp?: SandboxHostCsp): string {
     `base-uri ${bases.length > 0 ? bases.join(" ") : "'self'"}`,
     "object-src 'none'",
     "form-action 'none'",
-    "frame-ancestors http: https:",
+    `frame-ancestors ${frameAncestors ? (frameAncestors.length ? frameAncestors.join(" ") : "'none'") : "http: https:"}`,
   ];
   if (csp) {
     directives.splice(5, 0, `font-src 'self' ${resources.join(" ")}`.trim());

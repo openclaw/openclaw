@@ -1,9 +1,12 @@
 import crypto from "node:crypto";
+import { imageMimeFromFormat } from "@openclaw/media-core/mime";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readImageMetadataFromHeader } from "../../media/image-ops.js";
 import type {
   ComputerActResult,
   ComputerUseV2ActionName,
@@ -11,18 +14,18 @@ import type {
 import { COMPUTER_USE_V2_ACTION_NAMES } from "../../plugins/computer-use-contract.js";
 import { sleep } from "../../utils/sleep.js";
 import type { PreparedPairedComputerUse } from "../computer-use-node-capabilities.js";
-import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import {
+  DEFAULT_IMAGE_MAX_DIMENSION_PX,
+  resolveImageSanitizationLimits,
+} from "../image-sanitization.js";
+import { readNodePermissionError } from "../node-permission-error.js";
+import type { AgentMessage, AgentToolResult } from "../runtime/index.js";
+import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { type AnyAgentTool, readFiniteNumberParam, readToolStringParam } from "./common.js";
 import { buildComputerToolDescription } from "./computer-tool-guidance.js";
 import { ComputerToolSession } from "./computer-tool-node.js";
 import { recordComputerToolOutcome } from "./computer-tool-outcome.js";
 import { buildComputerActParams, isComputerActAction } from "./computer-tool-request.js";
-import {
-  computerActResultText,
-  projectComputerActResult,
-  projectScreenshotResult,
-  resolveReferenceWidth,
-} from "./computer-tool-result.js";
 import {
   availableComputerActions,
   COMPUTER_TOOL_ACTIONS,
@@ -30,15 +33,18 @@ import {
 } from "./computer-tool-schema.js";
 import type {
   ComputerContextEpoch,
+  ComputerObservationState,
   ComputerToolAction,
   ComputerToolTransport,
   ResolvedComputerTarget,
 } from "./computer-tool-shared.js";
 import {
   AFTER_ACTION_SCREENSHOT_DELAY_MS,
+  COMPUTER_REF_WIDTH,
   computerTargetDetails,
   isComputerObservationAction,
   MAX_WAIT_SECONDS,
+  MODEL_OBSERVATION_MAX_ELEMENTS,
 } from "./computer-tool-shared.js";
 import { readGatewayCallOptions } from "./gateway.js";
 import {
@@ -48,7 +54,106 @@ import {
 import { textResult } from "./tool-results.js";
 
 export type { ComputerContextEpoch, ComputerToolTransport } from "./computer-tool-shared.js";
-export { invalidateComputerFrameIfMissing } from "./computer-tool-result.js";
+
+type ModelObservationProjection = NonNullable<ComputerActResult["observation"]> & {
+  truncatedElements?: number;
+};
+
+function projectComputerActResultMetadata(result: ComputerActResult) {
+  const observation: ModelObservationProjection | undefined = result.observation
+    ? { ...result.observation, ...(result.observation.base64 ? { base64: "[image]" } : {}) }
+    : undefined;
+  const details = result.details ? { ...result.details } : undefined;
+  for (const projection of [observation, details]) {
+    if (
+      Array.isArray(projection?.elements) &&
+      projection.elements.length > MODEL_OBSERVATION_MAX_ELEMENTS
+    ) {
+      const originalLength = projection.elements.length;
+      projection.elements = projection.elements.slice(0, MODEL_OBSERVATION_MAX_ELEMENTS);
+      projection.truncatedElements = originalLength - MODEL_OBSERVATION_MAX_ELEMENTS;
+    }
+  }
+  return {
+    ...result,
+    ...(observation ? { observation } : {}),
+    ...(details ? { details } : {}),
+  };
+}
+
+function computerActResultText(action: ComputerToolAction, result: ComputerActResult): string {
+  return JSON.stringify({ action, ...projectComputerActResultMetadata(result) });
+}
+
+function computerFrameImageIdentity(
+  content: AgentToolResult<unknown>["content"],
+): string | undefined {
+  const [image, duplicate] = content.filter((block) => block.type === "image");
+  if (!image || duplicate) {
+    return undefined;
+  }
+  return sha256Hex(JSON.stringify([image.mimeType, image.data]));
+}
+
+function invalidateComputerFrame(contextEpoch: ComputerContextEpoch): boolean {
+  if (contextEpoch.frameToolCallId === undefined && contextEpoch.frameImageIdentity === undefined) {
+    return false;
+  }
+  contextEpoch.value += 1;
+  delete contextEpoch.frameToolCallId;
+  delete contextEpoch.frameImageIdentity;
+  return true;
+}
+
+/**
+ * Invalidate screenshot coordinates when the final model context no longer
+ * contains the image produced by the tracked computer tool result.
+ */
+export function invalidateComputerFrameIfMissing(params: {
+  contextEpoch: ComputerContextEpoch;
+  messages: AgentMessage[];
+  imagesBlocked?: boolean;
+}): boolean {
+  const frameToolCallId = params.contextEpoch.frameToolCallId;
+  if (frameToolCallId === undefined || params.imagesBlocked) {
+    return invalidateComputerFrame(params.contextEpoch);
+  }
+  const frameMessage = params.messages.findLast(
+    (message): message is Extract<AgentMessage, { role: "toolResult" }> =>
+      message?.role === "toolResult" &&
+      message.toolName === "computer" &&
+      message.toolCallId === frameToolCallId,
+  );
+  const frameImageIdentity = frameMessage
+    ? computerFrameImageIdentity(frameMessage.content)
+    : undefined;
+  if (
+    frameImageIdentity !== undefined &&
+    frameImageIdentity === params.contextEpoch.frameImageIdentity
+  ) {
+    return false;
+  }
+  return invalidateComputerFrame(params.contextEpoch);
+}
+
+async function projectComputerImage(params: {
+  image?: { base64: string; mimeType: string };
+  action: ComputerToolAction;
+  referenceWidth: number;
+}) {
+  // Keep the delivered pixels within the replay cap so later turns cannot
+  // resize the image underneath the coordinates bound to it.
+  const content = await sanitizeContentBlocksImages(
+    params.image
+      ? [{ type: "image", data: params.image.base64, mimeType: params.image.mimeType }]
+      : [],
+    `computer:${params.action}`,
+    { maxDimensionPx: params.referenceWidth },
+  );
+  const image = content.find((block) => block.type === "image");
+  const dimensions = image ? readImageMetadataFromHeader(Buffer.from(image.data, "base64")) : null;
+  return { content, image, dimensions };
+}
 
 function prepareComputerArguments(args: unknown): unknown {
   if (!isRecord(args)) {
@@ -86,7 +191,11 @@ export function createComputerTool(options?: {
   const availableActions = (actions: readonly ComputerUseV2ActionName[]) =>
     availableComputerActions(actions, hasCleanupOwner);
   const configuredLimits = resolveImageSanitizationLimits(options?.config);
-  const referenceWidth = resolveReferenceWidth(configuredLimits);
+  // Replay sanitization must not resize the image underneath its coordinate frame.
+  const referenceWidth = Math.max(
+    1,
+    Math.min(COMPUTER_REF_WIDTH, configuredLimits.maxDimensionPx ?? DEFAULT_IMAGE_MAX_DIMENSION_PX),
+  );
   const targetScope = options?.transport ? "session" : "paired";
   // Harnesses serialize the schema before execution; a prepared desktop must
   // advertise its full action surface before the first observation.
@@ -103,14 +212,6 @@ export function createComputerTool(options?: {
     availableActions(options?.transport?.computerUse?.actions ?? initialPairedActions),
     targetScope,
   );
-  const replaceParameterSchema = (actions: readonly ComputerUseV2ActionName[]) => {
-    const next = createComputerToolSchema(actions, targetScope);
-    for (const key of Object.keys(parameterSchema)) {
-      Reflect.deleteProperty(parameterSchema, key);
-    }
-    Object.assign(parameterSchema, next);
-  };
-
   // Serialize execute() per tool instance. This runtime can dispatch parallel
   // tool calls (some providers enable it by default), but desktop input and the
   // shared target/frame/button state must apply in model order, not completion
@@ -133,7 +234,10 @@ export function createComputerTool(options?: {
     transport: options?.transport,
     gatewayStatus: options?.pairedNodeComputerUse?.gateway,
     onCapabilitiesChanged: (capabilities) => {
-      replaceParameterSchema(availableActions(capabilities?.actions ?? COMPUTER_TOOL_ACTIONS));
+      tool.parameters = createComputerToolSchema(
+        availableActions(capabilities?.actions ?? COMPUTER_TOOL_ACTIONS),
+        targetScope,
+      );
       tool.description = buildComputerToolDescription(capabilities, targetScope);
     },
     registerRunCleanup: options?.registerRunCleanup,
@@ -162,17 +266,37 @@ export function createComputerTool(options?: {
     signal?: AbortSignal;
   }) => {
     const capture = await session.captureScreenshot(params.resolved, referenceWidth, params.signal);
-    const projected = await projectScreenshotResult({
-      capture,
-      noteLines: params.noteLines,
-      target: params.resolved.target,
-      action: params.action,
+    const target = params.resolved.target;
+    const { noteLines, action } = params;
+    const frameId = crypto.randomUUID();
+    const { content, dimensions } = await projectComputerImage({
+      image: capture,
+      action,
       referenceWidth,
     });
+    const dims = dimensions ? `${dimensions.width}x${dimensions.height}` : "unknown size";
+    const screenshotText = [
+      ...noteLines,
+      `screenshot ${dims} (screen ${target.screenIndex}, frameId ${frameId})`,
+    ].join("\n");
+    const result: AgentToolResult<unknown> = {
+      content: [{ type: "text", text: screenshotText }, ...content],
+      details: {
+        ...computerTargetDetails(target),
+        action,
+        width: dimensions?.width,
+        height: dimensions?.height,
+        screenIndex: target.screenIndex,
+        frameId,
+        refWidth: referenceWidth,
+        media: { outbound: false },
+      },
+    };
+    const imageIdentity = computerFrameImageIdentity(result.content);
     const previousFrame = session.refreshUnchangedFrame({
       target: params.resolved.target,
       capture,
-      imageIdentity: projected.imageIdentity,
+      imageIdentity,
     });
     if (previousFrame) {
       const text = [
@@ -190,11 +314,11 @@ export function createComputerTool(options?: {
     session.bindDeliveredFrame({
       resolved: params.resolved,
       capture,
-      frameId: projected.frameId,
+      frameId,
       toolCallId: params.toolCallId,
-      imageIdentity: projected.imageIdentity,
+      imageIdentity,
     });
-    return projected.result;
+    return result;
   };
 
   const tool: AnyAgentTool = {
@@ -227,17 +351,67 @@ export function createComputerTool(options?: {
           precedingAction?: { action: ComputerToolAction; result: ComputerActResult },
         ) => {
           session.setTarget(resolved.target);
-          const projected = await projectComputerActResult({
-            result,
-            precedingAction,
-            target: resolved.target,
+          const target = resolved.target;
+          const observation = result.observation;
+          // Observation images have no context-presence tracking, so they must never be deduplicated.
+          const { content, image, dimensions } = await projectComputerImage({
+            image: observation?.base64
+              ? {
+                  base64: observation.base64,
+                  mimeType: imageMimeFromFormat(observation.format ?? "png") ?? "image/png",
+                }
+              : undefined,
             action: observationAction,
             referenceWidth,
           });
-          session.recordObservation(resolved, result, projected.imageCoordinates);
+          // Pixels belong only in image content. Metadata describes the delivered bitmap;
+          // accessibility bounds retain the provider's coordinate space.
+          const metadata = projectComputerActResultMetadata(result);
+          if (metadata.observation && dimensions) {
+            Object.assign(metadata.observation, dimensions, {
+              format: image?.mimeType === "image/jpeg" ? "jpeg" : "png",
+            });
+          }
+          let imageCoordinates: ComputerObservationState["imageCoordinates"];
+          if (result.details?.coordinateSpace === "image-pixels") {
+            imageCoordinates =
+              dimensions && observation?.width && observation.height
+                ? {
+                    kind: "available",
+                    scaleX: observation.width / dimensions.width,
+                    scaleY: observation.height / dimensions.height,
+                  }
+                : { kind: "unavailable" };
+          }
+          const projected: AgentToolResult<unknown> = {
+            content: [
+              ...(precedingAction
+                ? [
+                    {
+                      type: "text" as const,
+                      text: computerActResultText(precedingAction.action, precedingAction.result),
+                    },
+                  ]
+                : []),
+              { type: "text", text: JSON.stringify({ action: observationAction, ...metadata }) },
+              ...content,
+            ],
+            details: {
+              ...computerTargetDetails(target),
+              action: precedingAction?.action ?? observationAction,
+              screenIndex: target.screenIndex,
+              // Keep mutation evidence separate from the read's coordinate space and other metadata.
+              result: precedingAction
+                ? projectComputerActResultMetadata(precedingAction.result)
+                : metadata,
+              ...(precedingAction ? { followUpObservation: metadata } : {}),
+              media: { outbound: false },
+            },
+          };
+          session.recordObservation(resolved, result, imageCoordinates);
           return action === "get_window_state"
-            ? recordComputerToolOutcome(projected.result, result)
-            : projected.result;
+            ? recordComputerToolOutcome(projected, result)
+            : projected;
         };
 
         if (action === "screenshot" || action === "wait" || action === "take_control") {
@@ -322,6 +496,7 @@ export function createComputerTool(options?: {
           session.setTarget(resolved.target);
           signal?.throwIfAborted();
           // Input landed; a failed follow-up observation should not fail the action.
+          const permissionMissing = readNodePermissionError(err);
           return textResult(
             `${computerActResultText(action, actResult)}\nfollow-up ${observeWindow ? "observation" : "screenshot"} failed: ${formatErrorMessage(err)}`,
             {
@@ -329,6 +504,7 @@ export function createComputerTool(options?: {
               action,
               screenIndex: resolved.target.screenIndex,
               result: actResult,
+              ...(permissionMissing ? { permissionMissing } : {}),
             },
           );
         }

@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
+import {
+  CodexAppServerRpcError,
+  CodexCatalogResponseTooLargeError,
+} from "./app-server/rpc-error.js";
 import { findCodexAppServerSpawnError } from "./app-server/spawn-error.js";
 import type {
   CodexCatalogListRequest,
@@ -67,9 +70,11 @@ export class CodexCatalogSourceBackoff {
         // Transient failures retain one immediate retry; OS launch refusals are terminal.
         const delayMs = findCodexAppServerSpawnError(error)
           ? Infinity
-          : failure
-            ? Math.min(failure.delayMs * 2 || INITIAL_BACKOFF_MS, MAX_BACKOFF_MS)
-            : 0;
+          : CodexCatalogResponseTooLargeError.fromError(error)
+            ? 15 * 60_000
+            : failure
+              ? Math.min(failure.delayMs * 2 || INITIAL_BACKOFF_MS, MAX_BACKOFF_MS)
+              : 0;
         sources.set(key, {
           failure: { error, delayMs, retryAt: this.now() + delayMs, probing: false },
         });

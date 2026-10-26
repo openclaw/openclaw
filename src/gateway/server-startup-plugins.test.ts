@@ -2,13 +2,20 @@
  * Gateway startup plugin bootstrap tests.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorDebugLogger as createLog } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { createFixture } from "../plugins/plugin-generation-artifact.admission.test-support.js";
+import { capturePluginGenerationArtifact } from "../plugins/plugin-generation-artifact.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
+import { preparePluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
+import * as sourceAdmissionStore from "../plugins/plugin-source-admission-store.js";
 import type { ProviderPolicySurface } from "../plugins/provider-policy-surface.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
@@ -206,15 +213,6 @@ vi.mock("./server-startup-session-migration.js", () => ({
     runGatewaySessionStartupMaintenance(params),
 }));
 
-function createLog() {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
-}
-
 function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
   const call = mock.mock.calls.at(0);
   if (!call) {
@@ -298,12 +296,14 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
     });
   });
 
-  it("reports failed session repair while completing the other maintenance owners", async () => {
+  it("reports nested session repair failures while completing the other maintenance owners", async () => {
     const log = createLog();
     const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
     const cfg = slackConfig();
     runGatewaySessionStartupMaintenance.mockRejectedValueOnce(
-      new Error("synthetic repair failure"),
+      new Error("synthetic repair failure", {
+        cause: Object.assign(new Error("synthetic storage failure"), { code: "SQLITE_BUSY" }),
+      }),
     );
     listLegacyPairingStoreFiles.mockResolvedValueOnce(["synthetic-pairing.json"]);
     await runGatewayPostReadyStartupMaintenance({
@@ -314,7 +314,9 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
       log,
     });
     expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith({ cfg, env: process.env, log });
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("synthetic repair failure"));
+    expect(log.warn).toHaveBeenCalledWith(
+      "Gateway post-ready sessions maintenance failed: synthetic repair failure | synthetic storage failure | SQLITE_BUSY",
+    );
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("synthetic-pairing.json"));
   });
 
@@ -579,6 +581,69 @@ describe("loadGatewayStartupPluginRuntime", () => {
     }));
   });
 
+  it("returns admitted plugins while native receipt persistence remains owned by cache cleanup", async () => {
+    await withOpenClawTestState({ label: "startup-native-receipt" }, async (state) => {
+      const fixture = createFixture(state.path("installed"), true);
+      await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+      const cache = createPluginCache();
+      const publication = createDeferred();
+      let publicationStarted = false;
+      let publicationFinished = false;
+      const createPublisher = sourceAdmissionStore.createPluginSourceAdmissionPublisher;
+      const publisher = vi
+        .spyOn(sourceAdmissionStore, "createPluginSourceAdmissionPublisher")
+        .mockImplementation((options) => {
+          const publish = createPublisher(options);
+          return publish
+            ? async (receipt) => {
+                publicationStarted = true;
+                await publication.promise;
+                const accepted = await publish(receipt);
+                publicationFinished = true;
+                return accepted;
+              }
+            : undefined;
+        });
+      preparePluginNativeAdmissions(fixture.index, cache);
+      const artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
+      const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
+      let retirement: ReturnType<typeof retirePluginCache> | undefined;
+      try {
+        expect(publicationStarted).toBe(true);
+        vi.useFakeTimers();
+        let loaded: Awaited<ReturnType<typeof loadGatewayStartupPluginRuntime>> | undefined;
+        const startup = withPluginCache(cache, () =>
+          loadGatewayStartupPluginRuntime({
+            cfg: {},
+            log: createLog(),
+            baseMethods: ["ping"],
+            startupPluginIds: ["fixture"],
+          }),
+        ).then((result) => {
+          loaded = result;
+        });
+        await vi.runAllTimersAsync();
+        expect(loaded?.gatewayMethods).toEqual(["ping"]);
+        expect(publicationFinished).toBe(false);
+        await startup;
+        const retired = vi.fn();
+        retirement = retirePluginCache(cache).finally(retired);
+        await vi.runAllTimersAsync();
+        expect(retired).not.toHaveBeenCalled();
+        vi.useRealTimers();
+        publication.resolve();
+        await retirement;
+        expect(publicationFinished).toBe(true);
+      } finally {
+        vi.useRealTimers();
+        publication.resolve();
+        publisher.mockRestore();
+        await artifact.disposeAsync();
+        await (retirement ?? retirePluginCache(cache));
+      }
+    });
+  });
+
   it.each(["valid", "invalid", "invalid with failed cleanup"] as const)(
     "validates %s bindings inside the unpublished candidate and owns its disposal",
     async (outcome) => {
@@ -702,7 +767,7 @@ describe("loadGatewayStartupPluginRuntime", () => {
     );
   });
 
-  it.each(["registered owner", "ready", "inspection failed", "inspection stalled"] as const)(
+  it.each(["ready", "inspection failed", "inspection stalled"] as const)(
     "reports registered memory provider setup per active agent without blocking startup: %s",
     async (outcome) => {
       const log = createLog();
@@ -789,13 +854,9 @@ describe("loadGatewayStartupPluginRuntime", () => {
         agentId: "helper",
         provider: "local",
       });
-      if (outcome === "registered owner") {
-        expect(resolveProviderPolicySurfaceForOwner).toHaveBeenCalledExactlyOnceWith(
-          registeredOwner,
-        );
-        expect(disabledPolicy.inspectEmbeddingProviderSetup).not.toHaveBeenCalled();
-      }
-      if (outcome === "registered owner" || outcome === "inspection stalled") {
+      expect(resolveProviderPolicySurfaceForOwner).toHaveBeenCalledExactlyOnceWith(registeredOwner);
+      expect(disabledPolicy.inspectEmbeddingProviderSetup).not.toHaveBeenCalled();
+      if (outcome === "inspection stalled") {
         await vi.waitFor(() =>
           expect(log.warn).toHaveBeenCalledWith(
             expect.stringMatching(/helper.*degraded.*llama-server.*models --agent helper/s),

@@ -50,9 +50,9 @@ export function createAgentTestSessionRowProjection(
     withPreparedExactRows: async <T>(
       queries: Parameters<SessionRowProjection["withPreparedExactRows"]>[0],
       consume: (read: SessionRowReadView) => T,
-    ): Promise<{ kind: "complete"; value: T }> => {
+    ): Promise<T> => {
       queries(getConfig());
-      return { kind: "complete", value: consume(fixture) };
+      return consume(fixture);
     },
     snapshot: ({ key, agentId }: { key: string; agentId: string }) => ({
       row: session?.agentId === agentId && session.row.key === key ? session.row : null,

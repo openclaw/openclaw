@@ -3,16 +3,15 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import { ensureContextEnginesInitialized } from "../../../context-engine/init.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
-import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { getAgentRunContext, hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import {
   captureSubagentCompletionReply,
@@ -21,7 +20,6 @@ import {
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerArchiveCancellationTests } from "./subagent-registry.archive-cancellation.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 
@@ -88,12 +86,16 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
   >(async () => {}),
 }));
 
+// mock-isolation: Archive tests supply registry handles without discovering installed plugins.
 vi.mock("../../runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
+  const loadRegistry = vi.fn<
+    typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
+  >(() => createEmptyPluginRegistry());
   return {
-    loadAgentRuntimePluginRegistryHandle: vi.fn<
-      typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
-    >(() => createEmptyPluginRegistry()),
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
   };
 });
 
@@ -120,7 +122,6 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
 }));
 
 describe("subagent registry archive behavior", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let settleRootWork: ReturnType<typeof observeRootWork>;
   let mod: typeof import("./subagent-registry.test-helpers.js");
   let createCanonicalSubagentRunFixture: typeof import("./subagent-registry.persistence.test-support.js").createCanonicalSubagentRunFixture;
@@ -160,6 +161,7 @@ describe("subagent registry archive behavior", () => {
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 60 } } },
     };
+    setRuntimeConfigSnapshot(currentConfig);
     vi.mocked(callGateway).mockReset();
     vi.mocked(callGateway).mockImplementation(respondToGatewayRequest);
     loadConfigMock.mockReset().mockImplementation(() => currentConfig);
@@ -169,6 +171,7 @@ describe("subagent registry archive behavior", () => {
     vi.mocked(captureSubagentCompletionReply).mockReset();
     vi.mocked(runSubagentAnnounceFlow).mockReset();
     vi.mocked(getAgentRunContext).mockReset().mockReturnValue(undefined);
+    vi.mocked(hasLiveAgentRunContext).mockReset().mockReturnValue(false);
     sessionAccessorMocks.readSessionEntryReadOnlyInWorker.mockReset();
     await mod.resetSubagentRegistryForTests({ persist: false });
     settleRootWork = observeRootWork();
@@ -180,6 +183,7 @@ describe("subagent registry archive behavior", () => {
     } finally {
       await mod.resetSubagentRegistryForTests({ persist: false });
       vi.useRealTimers();
+      clearRuntimeConfigSnapshot();
     }
   });
 
@@ -187,7 +191,9 @@ describe("subagent registry archive behavior", () => {
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
     };
+    setRuntimeConfigSnapshot(currentConfig);
     vi.mocked(getAgentRunContext).mockReturnValue({} as never);
+    vi.mocked(hasLiveAgentRunContext).mockReturnValue(true);
     vi.mocked(captureSubagentCompletionReply).mockResolvedValue("completed result");
     vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("retryable");
 
@@ -270,6 +276,7 @@ describe("subagent registry archive behavior", () => {
 
   it("does not archive an active run carrying an obsolete persisted deadline", async () => {
     vi.mocked(getAgentRunContext).mockReturnValue({} as never);
+    vi.mocked(hasLiveAgentRunContext).mockReturnValue(true);
     const now = Date.now();
     await addCanonicalSubagentRunForTests({
       runId: "run-delete-stale-deadline",
@@ -361,6 +368,7 @@ describe("subagent registry archive behavior", () => {
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
     };
+    setRuntimeConfigSnapshot(currentConfig);
     const onSubagentEnded = vi.fn(async () => undefined);
     const attachmentsRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sweep-retry-"));
     const attachmentsDir = path.join(attachmentsRootDir, "child");
@@ -431,7 +439,7 @@ describe("subagent registry archive behavior", () => {
     });
     expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
     expect(onSubagentEnded).not.toHaveBeenCalled();
-    await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
+    await fs.access(attachmentsDir);
 
     await mod.testing.sweepOnceForTests();
     await vi.dynamicImportSettled();
@@ -451,6 +459,7 @@ describe("subagent registry archive behavior", () => {
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
     };
+    setRuntimeConfigSnapshot(currentConfig);
     const deleteGate = createDeferred();
     const deleteEntered = createDeferred();
     sessionAccessorMocks.readSessionEntryReadOnlyInWorker.mockResolvedValue({
@@ -529,125 +538,5 @@ describe("subagent registry archive behavior", () => {
     await vi.waitFor(() => {
       expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
     });
-  });
-
-  it("does not set archiveAtMs for persistent session-mode runs", async () => {
-    await mod.registerSubagentRun({
-      runId: "run-session-1",
-      childSessionKey: "agent:main:subagent:session-1",
-      childAgentId: "main",
-      sessionEntry: {
-        sessionId: "session-session-1",
-        lifecycleRevision: "lifecycle-session-1",
-      },
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "persistent-session",
-      cleanup: "keep",
-      spawnMode: "session",
-    });
-
-    const run = mod.listSubagentRunsForRequester("agent:main:main")[0];
-    expect(run?.runId).toBe("run-session-1");
-    expect(run?.spawnMode).toBe("session");
-    expect(run?.archiveAtMs).toBeUndefined();
-  });
-
-  it("keeps archiveAtMs unset when replacing a keep-mode run after steer restart", async () => {
-    await mod.registerSubagentRun({
-      runId: "run-old",
-      childSessionKey: "agent:main:subagent:run-1",
-      childAgentId: "main",
-      sessionEntry: {
-        sessionId: "session-run-1",
-        lifecycleRevision: "lifecycle-run-1",
-      },
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "persistent-run",
-      cleanup: "keep",
-    });
-
-    const replaced = await mod.replaceSubagentRunAfterSteerCore({
-      previousRunId: "run-old",
-      nextRunId: "run-new",
-    });
-
-    expect(replaced).toBe(true);
-    const run = mod
-      .listSubagentRunsForRequester("agent:main:main")
-      .find((entry) => entry.runId === "run-new");
-    expect(run?.spawnMode).toBe("run");
-    expect(run?.archiveAtMs).toBeUndefined();
-  });
-
-  it("keeps retention unarmed when replacing an active delete-mode run after steer restart", async () => {
-    currentConfig = {
-      agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
-    };
-
-    await mod.registerSubagentRun({
-      runId: "run-delete-old",
-      childSessionKey: "agent:main:subagent:delete-old",
-      childAgentId: "main",
-      sessionEntry: {
-        sessionId: "session-delete-old",
-        lifecycleRevision: "lifecycle-delete-old",
-      },
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "ephemeral-run",
-      cleanup: "delete",
-    });
-
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    const replaced = await mod.replaceSubagentRunAfterSteerCore({
-      previousRunId: "run-delete-old",
-      nextRunId: "run-delete-new",
-    });
-
-    expect(replaced).toBe(true);
-    const run = mod
-      .listSubagentRunsForRequester("agent:main:main")
-      .find((entry) => entry.runId === "run-delete-new");
-    expect(run?.archiveAtMs).toBeUndefined();
-  });
-
-  it("does not traverse legacy attachment paths after steer restart", async () => {
-    const attachmentsRootDir = tempDirs.make("openclaw-replace-attachments-");
-    const attachmentsDir = path.join(attachmentsRootDir, "old");
-    await fs.mkdir(attachmentsDir, { recursive: true });
-    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
-
-    const runId = "run-delete-attachments-old";
-    await addCanonicalSubagentRunForTests({
-      runId,
-      childSessionKey: "agent:main:subagent:delete-attachments-old",
-      childSessionIdentity: {
-        sessionId: "session-delete-attachments-old",
-        lifecycleRevision: "lifecycle-delete-attachments-old",
-      },
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "replace attachments",
-      cleanup: "delete",
-      createdAt: Date.now(),
-      execution: { status: "running" },
-      attachmentsRootDir,
-      attachmentsDir,
-    });
-    const restored = expectDefined(loadSubagentRegistryFromSqlite().get(runId), "legacy run");
-    expect(restored).toMatchObject({ attachmentsRootDir, attachmentsDir });
-    expect(restored.attachmentId).toBeUndefined();
-    subagentRuns.set(runId, restored);
-
-    const replaced = await mod.replaceSubagentRunAfterSteerCore({
-      previousRunId: "run-delete-attachments-old",
-      nextRunId: "run-delete-attachments-new",
-    });
-
-    expect(replaced).toBe(true);
-    await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
   });
 });

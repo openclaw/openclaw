@@ -8,12 +8,11 @@ import {
   crabboxCommandOutput,
   parseCrabboxJson,
   runCrabboxCommand,
-  type CrabboxCommandRunner,
 } from "./crabbox-worker-command.js";
 import { WARM_IMAGE_COMMAND_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 import type { WarmImageRecord } from "./crabbox-worker-warm-image-store.js";
 
-const CHECKPOINT_ID_PATTERN = /^chk_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
+export const CHECKPOINT_ID_PATTERN = /^chk_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
 
 export class CrabboxCheckpointCreateError extends Error {
   private readonly notSubmitted?: { provider: string; leaseId: string };
@@ -98,7 +97,7 @@ function parseCheckpointJson(stdout: string, action: string): Record<string, unk
 export function parseCreatedCheckpoint(
   stdout: string,
   leaseId: string,
-): Pick<WarmImageRecord, "checkpointId" | "kind" | "state"> {
+): Pick<WarmImageRecord, "checkpointId" | "kind" | "state"> & { captureEstablished: boolean } {
   const record = parseCheckpointJson(stdout, "create");
   const checkpointId = nonEmptyString(record.id);
   const kind = nonEmptyString(record.kind);
@@ -112,9 +111,14 @@ export function parseCreatedCheckpoint(
   ) {
     throw new Error("Crabbox checkpoint create returned an invalid native checkpoint");
   }
-  // This parser consumes only successful `checkpoint create --wait` results.
-  // Crabbox owns readiness; provider-native state names are not a portable readiness signal.
-  return { checkpointId, kind, state: "available" };
+  return {
+    checkpointId,
+    kind,
+    captureEstablished: record.captureEstablished === true,
+    state: ["available", "ready", "succeeded", "completed"].includes(nativeState.toLowerCase())
+      ? "available"
+      : "pending",
+  };
 }
 
 export function parseForkedCheckpoint(
@@ -162,62 +166,60 @@ export type MaintenanceContext = Omit<CheckpointContext, "binary"> & {
   binaries: readonly string[];
 };
 
-export function createCheckpointCommands(runCommand: CrabboxCommandRunner) {
-  const assertCurrent = (context: CheckpointContext | MaintenanceContext) => {
-    context.assertCurrent?.();
-    context.signal?.throwIfAborted();
-  };
-  const checkpointCommand = async (
-    context: CheckpointContext,
-    action: "create" | "delete" | "fork" | "inspect" | "scrub",
-    args: string[],
-    timeoutMs = WARM_IMAGE_COMMAND_TIMEOUT_MS,
-    input?: string,
-  ): Promise<string> => {
+function assertCurrent(context: CheckpointContext | MaintenanceContext) {
+  context.assertCurrent?.();
+  context.signal?.throwIfAborted();
+}
+
+export async function checkpointCommand(
+  context: CheckpointContext,
+  action: "create" | "delete" | "fork" | "inspect" | "list" | "scrub",
+  args: string[],
+  timeoutMs = WARM_IMAGE_COMMAND_TIMEOUT_MS,
+  input?: string,
+): Promise<string> {
+  assertCurrent(context);
+  const commandAction = action === "scrub" ? action : `checkpoint ${action}`;
+  const result = await runCrabboxCommand({
+    action: commandAction,
+    args,
+    binary: context.binary,
+    timeoutMs,
+    ...(context.signal ? { signal: context.signal } : {}),
+    ...(input === undefined ? {} : { input }),
+  });
+  if (action === "create" && (result.termination !== "exit" || result.code !== 0)) {
+    throw new CrabboxCheckpointCreateError(result);
+  }
+  return crabboxCommandOutput(commandAction, result);
+}
+
+export async function deleteCheckpoint(
+  context: CheckpointContext | MaintenanceContext,
+  checkpointId: string,
+  remainingMs: () => number,
+): Promise<boolean> {
+  const binaries = "binary" in context ? [context.binary] : context.binaries;
+  for (const [index, binary] of binaries.entries()) {
     assertCurrent(context);
-    const commandAction = action === "scrub" ? action : `checkpoint ${action}`;
-    const result = await runCrabboxCommand({
-      action: commandAction,
-      args,
-      binary: context.binary,
-      runCommand,
+    const timeoutMs = remainingMs();
+    if (timeoutMs <= 0) {
+      return false;
+    }
+    const stdout = await checkpointCommand(
+      { ...context, binary },
+      "delete",
+      ["checkpoint", "delete", checkpointId],
       timeoutMs,
-      ...(context.signal ? { signal: context.signal } : {}),
-      ...(input === undefined ? {} : { input }),
-    });
-    if (action === "create" && (result.termination !== "exit" || result.code !== 0)) {
-      throw new CrabboxCheckpointCreateError(result);
+    );
+    // Crabbox exits 0 with this line for ids outside its catalog; a record clears only
+    // after a real deletion or once every configured executable reports it absent.
+    if (
+      index === binaries.length - 1 ||
+      !stdout.split("\n").some((line) => line.trim() === `checkpoint absent id=${checkpointId}`)
+    ) {
+      return true;
     }
-    return crabboxCommandOutput(commandAction, result);
-  };
-  const deleteCheckpoint = async (
-    context: CheckpointContext | MaintenanceContext,
-    checkpointId: string,
-    remainingMs: () => number,
-  ): Promise<boolean> => {
-    const binaries = "binary" in context ? [context.binary] : context.binaries;
-    for (const [index, binary] of binaries.entries()) {
-      assertCurrent(context);
-      const timeoutMs = remainingMs();
-      if (timeoutMs <= 0) {
-        return false;
-      }
-      const stdout = await checkpointCommand(
-        { ...context, binary },
-        "delete",
-        ["checkpoint", "delete", checkpointId],
-        timeoutMs,
-      );
-      // Crabbox exits 0 with this line for ids outside its catalog; a record clears only
-      // after a real deletion or once every configured executable reports it absent.
-      if (
-        index === binaries.length - 1 ||
-        !stdout.split("\n").some((line) => line.trim() === `checkpoint absent id=${checkpointId}`)
-      ) {
-        return true;
-      }
-    }
-    return false;
-  };
-  return { checkpointCommand, deleteCheckpoint };
+  }
+  return false;
 }

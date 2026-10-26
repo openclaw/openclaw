@@ -1,9 +1,9 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { clearCronJobActive, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
-import { noteCronJobsStoreCommit } from "../store.js";
-import { cronStoreKey } from "../store/key.js";
+import { getCronJobsStoreRevision, noteCronJobsStoreCommit } from "../store.js";
 import { cronRunResultEvent } from "../store/run-result.js";
+import { isDeferredCronAdmission } from "./admission-deferred.js";
 import { needsCronTimerMaintenance } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
@@ -13,7 +13,11 @@ import {
 } from "./runtime-publication.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { cronFailureNotificationEventContext, emit, type CronServiceState } from "./state.js";
-import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
+import {
+  ensureLoaded,
+  noteLoadedCronStoreCommit,
+  runPostPersistCronNotifications,
+} from "./store.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 
 type CompletedCronRunOutcomeFinalizationOptions = {
@@ -32,10 +36,31 @@ export async function finalizeCompletedCronRunOutcomes(
   if (!outcomes.length) {
     return [];
   }
+  if (
+    outcomes.length > 1 &&
+    outcomes.some((outcome) => isDeferredCronAdmission(outcome.job, outcome))
+  ) {
+    const completed = outcomes.filter((outcome) => !isDeferredCronAdmission(outcome.job, outcome));
+    const deferred = outcomes.filter((outcome) => isDeferredCronAdmission(outcome.job, outcome));
+    const finalized: TimedCronRunOutcome[] = [];
+    const failures: unknown[] = [];
+    // Completed siblings survive a failed deferred-admission transition.
+    for (const batch of [completed, ...deferred.map((outcome) => [outcome])]) {
+      try {
+        finalized.push(...(await finalizeCompletedCronRunOutcomes(state, batch, opts)));
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length) {
+      throw new AggregateError(failures, "Cron outcome settlement failed");
+    }
+    return finalized;
+  }
   const context =
     outcomes.find((outcome) => outcome.runReceiptContext)?.runReceiptContext ??
     captureOpenClawStateWorkerContext();
-  const storeKey = cronStoreKey(state.deps.storePath);
+  const storeKey = state.deps.storeKey;
   const canPublish = (outcome: TimedCronRunOutcome) =>
     !(state.stopped && opts?.discardWhenStopped) &&
     isCronActiveJobMarkerCurrent(outcome.activeJobMarker);
@@ -43,7 +68,10 @@ export async function finalizeCompletedCronRunOutcomes(
   let committedSuccessfully = false;
   try {
     const committed = await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true });
+      if (!state.store) {
+        await ensureLoaded(state);
+      }
+      const observedRevision = getCronJobsStoreRevision(storeKey);
       const { outcome: result } = await executeOpenClawStateWorker(context, {
         type: "cron.finalizeRuns",
         input: {
@@ -52,6 +80,7 @@ export async function finalizeCompletedCronRunOutcomes(
             nowMs: state.deps.nowMs(),
             defaultAgentId: state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
             cronConfig: state.deps.cronConfig,
+            failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
             outcomes: outcomes.map(
               ({ activeJobMarker, runReceiptContext: _context, request, ...completed }) => ({
                 ...completed,
@@ -72,15 +101,15 @@ export async function finalizeCompletedCronRunOutcomes(
         },
       });
       committedSuccessfully = true;
-      if (result.changed) {
-        noteCronJobsStoreCommit(storeKey);
-      }
       applyCronRuntimeRowsToState(
         state,
         result.upsertedJobs,
         result.removedJobs.map((job) => job.id),
         { publish: false },
       );
+      if (result.changed) {
+        noteLoadedCronStoreCommit(state, observedRevision);
+      }
       for (const entry of result.logs) {
         state.deps.log[entry.level](entry.fields, entry.message);
       }

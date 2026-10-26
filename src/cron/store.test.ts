@@ -11,6 +11,7 @@ import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-rea
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   loadCronJobsStoreWithConfigJobs,
@@ -235,7 +236,7 @@ describe("cron store", () => {
     expectDefined(first.jobs[0], "prior job").description = "x".repeat(128 * 1024);
     await saveCronStore(store.storePath, first);
     const counter = trackSqliteStatementExecutions(
-      openOpenClawStateDatabase().db,
+      requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
       ["priorRows"],
       (sql) => (/^select\b/i.test(sql) && sql.includes('"cron_jobs"') ? "priorRows" : null),
     );

@@ -38,7 +38,7 @@ export type SubagentRegistryWriteAuthority = {
 
 export type SubagentRunMutationOptions<P extends SubagentRunMutation<unknown>> = {
   runs?: Map<string, SubagentRunRecord>;
-  preparedRows?: ReadonlyMap<string, SubagentRunRecord>;
+  preparedRows?: () => ReadonlyMap<string, SubagentRunRecord>;
   context?: OpenClawStateWorkerContext;
   assertCurrent?: () => void;
   pendingKillClaim?: SubagentRunRecord;
@@ -54,7 +54,6 @@ export type SubagentRunMutationOptions<P extends SubagentRunMutation<unknown>> =
   ) => void;
   commit?: (
     planned: P,
-    versions: ReadonlyMap<string, string | null>,
     authority: SubagentRegistryWriteAuthority,
   ) => Promise<SubagentRunMutation<P["value"]>>;
 };
@@ -62,13 +61,17 @@ export type SubagentRunMutationOptions<P extends SubagentRunMutation<unknown>> =
 export type SubagentRegistryWorkerWrite<T> = {
   writeId: string;
   assertCurrent: () => void;
-  execute: (scope: DomainScope) => Promise<unknown>;
-  decode: (value: unknown) => T;
 } & (
   | {
       kind: "registry";
+      execute: (scope: DomainScope) => Promise<unknown>;
+      decode: (value: unknown) => T;
       terminalEvents: SubagentRunMutation<unknown>["terminalEvents"];
       acknowledged: () => boolean;
     }
-  | { kind: "completion" }
+  | {
+      kind: "completion";
+      execute: (scope: DomainScope) => Promise<T>;
+      decodeCommitted: (value: unknown) => T;
+    }
 );

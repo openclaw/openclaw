@@ -1,17 +1,17 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { lookup } from "node:dns/promises";
-// Openai tests cover openai chatgpt oauth flow plugin behavior.
-import { EventEmitter, once } from "node:events";
+import { once } from "node:events";
 import { Agent, createServer, get, type IncomingHttpHeaders, type Server } from "node:http";
 import { connect, type Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { isRecoverableOAuthRefreshFailure } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 
-const ssrfMocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(),
-}));
+const ssrfMocks = vi.hoisted(() => ({ fetchWithSsrFGuard: vi.fn() }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
@@ -41,16 +41,113 @@ import {
 import { loginOpenAICodexOAuth } from "./openai-chatgpt-oauth.runtime.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
-function timeoutError(): Error {
-  return new DOMException("timed out", "TimeoutError");
-}
-
 function fakeJwt(payload: unknown): string {
   return [
     Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url"),
     Buffer.from(JSON.stringify(payload)).toString("base64url"),
     "test-signature",
   ].join(".");
+}
+
+function tokenPayload(accountId?: string) {
+  return {
+    access_token: accountId
+      ? fakeJwt({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } })
+      : "test-access-token",
+    refresh_token: "test-refresh-token",
+    expires_in: 3600,
+  };
+}
+
+function exchange(options?: Parameters<typeof exchangeOpenAIAuthorizationCode>[3]) {
+  return exchangeOpenAIAuthorizationCode(
+    "code",
+    "verifier",
+    resolveOpenAIRedirectUri("localhost"),
+    options,
+  );
+}
+
+type TokenResult = Awaited<ReturnType<typeof exchange>>;
+type Failure = Extract<TokenResult, { type: "failed" }>;
+type TokenOperation = Failure["operation"];
+const refresh = (options?: Parameters<typeof exchange>[0]) =>
+  refreshOpenAIAccessToken("old-refresh-token", options);
+const tokenOperations = { exchange, refresh };
+
+function expectTokenFailure(
+  result: TokenResult,
+  operation: TokenOperation,
+  summary: string,
+  extra = {},
+) {
+  if (result.type === "failed" && operation === "refresh") {
+    const { oauthRefreshOutcome, ...presentation } = result;
+    expect(presentation).toEqual({ type: "failed", operation, summary, ...extra });
+    expect(oauthRefreshOutcome).toMatchObject({ version: 1 });
+    expect(isRecoverableOAuthRefreshFailure(result)).toBe(false);
+  } else {
+    expect(result).toEqual({ type: "failed", operation, summary, ...extra });
+  }
+}
+
+function expectTokenSuccess(
+  result: TokenResult,
+  access = "test-access-token",
+  refreshToken = "test-refresh-token",
+) {
+  expect(result).toMatchObject({ type: "success", access, refresh: refreshToken });
+}
+
+function buildCallbackUrl(url: string, code = "callback-code") {
+  const authorization = new URL(url);
+  const redirectUri = authorization.searchParams.get("redirect_uri");
+  const state = authorization.searchParams.get("state");
+  if (!redirectUri || !state) {
+    throw new Error("OAuth URL missing callback parameters");
+  }
+  const callback = new URL(redirectUri);
+  callback.searchParams.set("state", state);
+  callback.searchParams.set("code", code);
+  return callback.toString();
+}
+
+function credential(accountId: string, userId?: string): OAuthCredential {
+  return {
+    type: "oauth",
+    provider: "openai",
+    access: fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_account_id: accountId, chatgpt_user_id: userId },
+      "https://api.openai.com/profile": { email: "same@example.test" },
+    }),
+    refresh: "synthetic-refresh",
+    expires: 1,
+  };
+}
+
+function providerError(message: string, code: string, refresh_token?: string) {
+  return { error: { message, type: "invalid_request_error", code, refresh_token } };
+}
+
+async function expectRefreshFailure(
+  body: unknown,
+  failure: Omit<Failure, "type" | "operation" | "status">,
+  message?: string,
+) {
+  const mockResponse = () =>
+    typeof body === "string" ? mockTokenResponseText(body, 401) : mockTokenResponse(body, 401);
+  mockResponse();
+  expectTokenFailure(await refresh(), "refresh", failure.summary, { status: 401, ...failure });
+  mockResponse();
+  const error = await refreshOpenAICodexToken("old-refresh-token").catch(
+    (caught: unknown) => caught,
+  );
+  const { code: _code, ...facts } = failure;
+  expect(error).toMatchObject({
+    oauthRefreshFailure: { status: 401, ...facts },
+    ...(message ? { message } : {}),
+  });
+  expect(JSON.stringify(error)).not.toContain("must-not-leak");
 }
 
 async function requestCallback(
@@ -88,13 +185,17 @@ function mockTokenResponse(body: unknown, status = 200): void {
 }
 
 function mockTokenResponseText(body: string, status = 200): void {
-  ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+  ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce(tokenResponse(body, status));
+}
+
+function tokenResponse(body: string, status = 200) {
+  return {
     response: new Response(body, {
       status,
       headers: { "Content-Type": "application/json" },
     }),
     release: vi.fn(async () => undefined),
-  });
+  };
 }
 
 function mockFakeIpTokenResponse(params: { address: string; family: 4 | 6 }): void {
@@ -112,17 +213,7 @@ function mockFakeIpTokenResponse(params: { address: string; family: 4 | 6 }): vo
       ).rejects.toThrow("Blocked hostname (not in allowlist)");
       expect(lookupFn).toHaveBeenCalledOnce();
 
-      return {
-        response: new Response(
-          JSON.stringify({
-            access_token: "test-access-token",
-            refresh_token: "test-refresh-token",
-            expires_in: 3600,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-        release: vi.fn(async () => undefined),
-      };
+      return tokenResponse(JSON.stringify(tokenPayload()));
     },
   );
 }
@@ -136,118 +227,53 @@ describe("OpenAI Codex OAuth flow", () => {
   it("uses the provider message for failed token refreshes without exposing the response body", async () => {
     const providerMessage =
       "Your refresh token has already been used to generate a new access token. Please try signing in again.";
-    const responseBody = {
-      error: {
-        message: providerMessage,
-        type: "invalid_request_error",
-        code: "refresh_token_reused",
-        refresh_token: "must-not-leak",
-      },
-    };
-    mockTokenResponse(responseBody, 401);
-
-    await expect(refreshOpenAIAccessToken("old-refresh-token")).resolves.toEqual({
-      type: "failed",
-      operation: "refresh",
-      status: 401,
-      reason: "refresh_token_reused",
-      summary: providerMessage,
-      code: "refresh_token_reused",
-      errorType: "invalid_request_error",
-    });
-
-    mockTokenResponse(responseBody, 401);
-    const error = await refreshOpenAICodexToken("old-refresh-token").catch(
-      (caught: unknown) => caught,
-    );
-    expect(error).toMatchObject({
-      message: `${providerMessage}\n\nOpenAI Codex token refresh failed (HTTP 401; code=refresh_token_reused; type=invalid_request_error).`,
-      oauthRefreshFailure: {
-        errorType: "invalid_request_error",
-        reason: "refresh_token_reused",
-        status: 401,
-        summary: providerMessage,
-      },
-    });
-    expect(JSON.stringify(error)).not.toContain("must-not-leak");
-
-    mockTokenResponseText("refresh_token=must-not-leak", 401);
-    await expect(refreshOpenAIAccessToken("old-refresh-token")).resolves.toEqual({
-      type: "failed",
-      operation: "refresh",
-      status: 401,
-      summary: "OpenAI Codex token refresh failed (HTTP 401).",
-    });
-    mockTokenResponseText("refresh_token=must-not-leak", 401);
-    await expect(refreshOpenAICodexToken("old-refresh-token")).rejects.toMatchObject({
-      oauthRefreshFailure: {
-        status: 401,
-        summary: "OpenAI Codex token refresh failed (HTTP 401).",
-      },
-    });
-
-    mockTokenResponse({ error: { code: "refresh_token_reused" } }, 401);
-    await expect(refreshOpenAIAccessToken("old-refresh-token")).resolves.toEqual({
-      type: "failed",
-      operation: "refresh",
-      status: 401,
-      reason: "refresh_token_reused",
-      summary: "OpenAI Codex token refresh failed (HTTP 401).",
-      code: "refresh_token_reused",
-    });
-    mockTokenResponse({ error: { code: "refresh_token_reused" } }, 401);
-    await expect(refreshOpenAICodexToken("old-refresh-token")).rejects.toMatchObject({
-      oauthRefreshFailure: {
-        reason: "refresh_token_reused",
-        status: 401,
-        summary: "OpenAI Codex token refresh failed (HTTP 401).",
-      },
-    });
-
-    mockTokenResponse(
+    await expectRefreshFailure(
+      providerError(providerMessage, "refresh_token_reused", "must-not-leak"),
       {
-        error: {
-          message: "Your refresh token is expired.",
-          type: "invalid_request_error",
-          code: "refresh_token_expired",
-        },
+        reason: "refresh_token_reused",
+        summary: providerMessage,
+        code: "refresh_token_reused",
+        errorType: "invalid_request_error",
       },
-      401,
+      `${providerMessage}\n\nOpenAI Codex token refresh failed (HTTP 401; code=refresh_token_reused; type=invalid_request_error).`,
     );
-    await expect(refreshOpenAICodexToken("old-refresh-token")).rejects.toMatchObject({
-      oauthRefreshFailure: {
+    await expectRefreshFailure("refresh_token=must-not-leak", {
+      summary: "OpenAI Codex token refresh failed (HTTP 401).",
+    });
+    await expectRefreshFailure(
+      { error: { code: "refresh_token_reused" } },
+      {
+        reason: "refresh_token_reused",
+        summary: "OpenAI Codex token refresh failed (HTTP 401).",
+        code: "refresh_token_reused",
+      },
+    );
+
+    await expectRefreshFailure(
+      providerError("Your refresh token is expired.", "refresh_token_expired"),
+      {
         errorType: "invalid_request_error",
         reason: "expired",
-        status: 401,
+        code: "refresh_token_expired",
         summary: "Your refresh token is expired.",
       },
-    });
+    );
   });
 
-  it("cancels provider login before opening the OAuth flow", async () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    await expect(
-      loginOpenAICodex({
-        onAuth: vi.fn(),
-        onPrompt: vi.fn(async () => "unused-code"),
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow("Login cancelled");
-  });
-
-  it("does not open the OAuth flow after cancellation during setup", async () => {
+  it.each(["before", "during"])("cancels %s setup without opening OAuth", async (timing) => {
     const controller = new AbortController();
     const onAuth = vi.fn();
+    if (timing === "before") {
+      controller.abort();
+    }
     const loginPromise = loginOpenAICodex({
       onAuth,
       onPrompt: vi.fn(async () => "unused-code"),
+      onManualCodeInput: () => createDeferred<string>().promise,
       signal: controller.signal,
     });
 
     controller.abort();
-
     await expect(loginPromise).rejects.toThrow("Login cancelled");
     expect(onAuth).not.toHaveBeenCalled();
   });
@@ -262,24 +288,20 @@ describe("OpenAI Codex OAuth flow", () => {
       });
       const onAuth = vi.fn();
       const onPrompt = vi.fn(async () => "manual-code");
-      mockTokenResponse({
-        access_token: fakeJwt({
-          "https://api.openai.com/auth": { chatgpt_account_id: "manual-account" },
-        }),
-        refresh_token: "test-refresh-token",
-        expires_in: 3600,
-      });
+      mockTokenResponse(tokenPayload("manual-account"));
       try {
         await expect(
           loginOpenAICodex({
             onAuth,
             onPrompt,
-            ...(entry === "manual input" ? { onManualCodeInput: async () => "manual-code" } : {}),
+            onManualCodeInput: async () => (entry === "manual input" ? "manual-code" : ""),
           }),
         ).resolves.toMatchObject({ accountId: "manual-account" });
         expect(onAuth).toHaveBeenCalledOnce();
         if (entry === "manual input") {
           expect(onPrompt).not.toHaveBeenCalled();
+        } else {
+          expect(onPrompt).toHaveBeenCalledOnce();
         }
         expect(ssrfMocks.fetchWithSsrFGuard.mock.calls[0]?.[0].init.body.get("code")).toBe(
           "manual-code",
@@ -290,31 +312,42 @@ describe("OpenAI Codex OAuth flow", () => {
     },
   );
 
+  it.each(["wrong state", "manual rejection"] as const)(
+    "rejects %s without exchanging a token",
+    async (failure) => {
+      const onPrompt = vi.fn(async () => "unused-code");
+      await expect(
+        loginOpenAICodex({
+          onAuth: () => undefined,
+          onPrompt,
+          onManualCodeInput: () =>
+            failure === "wrong state"
+              ? Promise.resolve("manual-code#wrong-state")
+              : Promise.reject(new Error("manual entry failed")),
+        }),
+      ).rejects.toThrow(failure === "wrong state" ? "State mismatch" : "manual entry failed");
+      expect(onPrompt).not.toHaveBeenCalled();
+      expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["callback", "manual input", "transport preparation"] as const)(
     "revalidates live authority after held %s before exchanging the code",
     async (boundary) => {
       const held = createDeferred<void>();
       const release = createDeferred<void>();
+      const hold = async () => {
+        held.resolve();
+        await release.promise;
+      };
       const controller = new AbortController();
       const agent = new Agent();
       let current = true;
-      const sendToken = vi.fn(async () => ({
-        response: new Response(
-          JSON.stringify({
-            access_token: fakeJwt({
-              "https://api.openai.com/auth": { chatgpt_account_id: "account" },
-            }),
-            refresh_token: "refresh",
-            expires_in: 60,
-          }),
-        ),
-        release: vi.fn(async () => undefined),
-      }));
+      const sendToken = vi.fn(async () => tokenResponse(JSON.stringify(tokenPayload("account"))));
       ssrfMocks.fetchWithSsrFGuard.mockImplementation(
         async ({ beforeRequest }: { beforeRequest?: () => void }) => {
           if (boundary === "transport preparation") {
-            held.resolve();
-            await release.promise;
+            await hold();
           }
           beforeRequest?.();
           return await sendToken();
@@ -329,36 +362,25 @@ describe("OpenAI Codex OAuth flow", () => {
         },
         onAuth: async ({ url }) => {
           if (boundary === "callback") {
-            const authUrl = new URL(url);
-            const callback = new URL(authUrl.searchParams.get("redirect_uri") ?? "");
-            callback.searchParams.set("state", authUrl.searchParams.get("state") ?? "");
-            callback.searchParams.set("code", "synthetic-code");
-            await requestCallback(callback.toString(), agent);
-            held.resolve();
-            await release.promise;
+            await requestCallback(buildCallbackUrl(url, "synthetic-code"), agent);
+            await hold();
           }
         },
         onPrompt: async () => "synthetic-code",
         onManualCodeInput: async () => {
           if (boundary === "manual input") {
-            held.resolve();
-            await release.promise;
+            await hold();
           }
           return "synthetic-code";
         },
-      }).then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      }).catch((error: unknown) => error);
       try {
         await held.promise;
         current = false;
         release.resolve();
         const result = await outcome;
         expect(sendToken).not.toHaveBeenCalled();
-        expect(result).toEqual({
-          error: expect.objectContaining({ message: expect.stringContaining("owner retired") }),
-        });
+        expect(result).toMatchObject({ message: expect.stringContaining("owner retired") });
         expect(controller.signal.aborted).toBe(false);
       } finally {
         controller.abort();
@@ -370,22 +392,22 @@ describe("OpenAI Codex OAuth flow", () => {
   );
 
   it("closes the callback listener when cancellation outlives a pending browser presentation", async () => {
-    const events = new EventEmitter();
-    const ready = once(events, "ready");
-    const release = once(events, "release");
+    const ready = createDeferred<string>();
+    const release = createDeferred<void>();
     const controller = new AbortController();
     const rejected = vi.fn();
     const login = loginOpenAICodex({
       onAuth: async ({ url }) => {
-        events.emit("ready", url);
-        await release;
+        ready.resolve(url);
+        await release.promise;
       },
       onPrompt: vi.fn(async () => "unused-code"),
+      onManualCodeInput: () => createDeferred<string>().promise,
       signal: controller.signal,
     }).catch(rejected);
     let socket: Socket | undefined;
     try {
-      const [url] = await ready;
+      const url = await ready.promise;
       const redirectUri = new URL(url).searchParams.get("redirect_uri");
       if (!redirectUri) {
         throw new Error("expected the callback redirect URI");
@@ -412,7 +434,7 @@ describe("OpenAI Codex OAuth flow", () => {
       expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
     } finally {
       controller.abort();
-      events.emit("release");
+      release.resolve();
       await login;
       socket?.destroy();
     }
@@ -424,38 +446,33 @@ describe("OpenAI Codex OAuth flow", () => {
     const firstController = new AbortController();
     const nextController = new AbortController();
     const agent = new Agent();
-    const token = (accountId: string) => ({
-      access_token: fakeJwt({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
-      refresh_token: "test-refresh-token",
-      expires_in: 3600,
-    });
     ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-      response: new Response(JSON.stringify(token("old-account"))),
+      ...tokenResponse(JSON.stringify(tokenPayload("old-account"))),
       release: async () => {
         releasing.resolve();
         await released.promise;
       },
     });
-    mockTokenResponse(token("new-account"));
+    mockTokenResponse(tokenPayload("new-account"));
     const onAuth = async ({ url }: { url: string }) => {
-      const authorization = new URL(url);
-      const callback = new URL(authorization.searchParams.get("redirect_uri")!);
-      callback.searchParams.set("state", authorization.searchParams.get("state")!);
-      callback.searchParams.set("code", "callback-code");
-      const response = await requestCallback(callback.toString(), agent);
+      const response = await requestCallback(buildCallbackUrl(url), agent);
       expect(response.body).toContain("OpenAI authentication completed");
     };
     const onPrompt = vi.fn(async () => {
       throw new Error("Browser login must not fall back to manual input");
     });
-    const first = loginOpenAICodex({ onAuth, onPrompt, signal: firstController.signal }).catch(
-      () => undefined,
-    );
+    const onManualCodeInput = () => createDeferred<string>().promise;
+    const first = loginOpenAICodex({
+      onAuth,
+      onPrompt,
+      onManualCodeInput,
+      signal: firstController.signal,
+    }).catch(() => undefined);
     try {
       await releasing.promise;
       firstController.abort();
       await expect(
-        loginOpenAICodex({ onAuth, onPrompt, signal: nextController.signal }),
+        loginOpenAICodex({ onAuth, onPrompt, onManualCodeInput, signal: nextController.signal }),
       ).resolves.toMatchObject({ accountId: "new-account" });
       expect(onPrompt).not.toHaveBeenCalled();
       expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
@@ -500,14 +517,8 @@ describe("OpenAI Codex OAuth flow", () => {
       "fetch",
       vi.fn(async () => new Response(null, { status: 302 })),
     );
-    const testJwt = fakeJwt({
-      "https://api.openai.com/auth": { chatgpt_account_id: "acct-test" },
-    });
-    mockTokenResponse({
-      access_token: testJwt,
-      refresh_token: "test-refresh-token",
-      expires_in: 3600,
-    });
+    const payload = tokenPayload("acct-test");
+    mockTokenResponse(payload);
     const agent = new Agent({ keepAlive: true });
     let callbackResponse: Promise<{ headers: IncomingHttpHeaders; body: string }> | undefined;
     let idleSocket: Socket | undefined;
@@ -530,31 +541,21 @@ describe("OpenAI Codex OAuth flow", () => {
           }),
       ),
     } as unknown as ProviderAuthContext["prompter"];
-    const oauth = {
-      createVpsAwareHandlers: vi.fn(
-        (params: Parameters<ProviderAuthContext["oauth"]["createVpsAwareHandlers"]>[0]) => ({
-          onAuth: async ({ url }: { url: string }) => {
-            const authUrl = new URL(url);
-            const redirectUri = authUrl.searchParams.get("redirect_uri");
-            const state = authUrl.searchParams.get("state");
-            if (!redirectUri || !state) {
-              throw new Error("OAuth URL missing callback parameters");
-            }
-            idleSocket = await connectIdleSocket(redirectUri);
-            manualPrompt = params.prompter.text({
-              message: "Paste callback",
-              signal: params.manualPromptSignal,
-            });
-            callbackResponse = requestCallback(
-              `${redirectUri}?state=${state}&code=callback-code`,
-              agent,
-            );
-            await callbackResponse;
-          },
-          onPrompt: async () => await (manualPrompt ?? Promise.reject(new Error("no prompt"))),
-        }),
-      ),
-    } satisfies ProviderAuthContext["oauth"];
+    const oauth: ProviderAuthContext["oauth"] = {
+      createVpsAwareHandlers: (params) => ({
+        onAuth: async ({ url }: { url: string }) => {
+          const callback = buildCallbackUrl(url);
+          idleSocket = await connectIdleSocket(callback);
+          manualPrompt = params.prompter.text({
+            message: "Paste callback",
+            signal: params.manualPromptSignal,
+          });
+          callbackResponse = requestCallback(callback, agent);
+          await callbackResponse;
+        },
+        onPrompt: async () => await (manualPrompt ?? Promise.reject(new Error("no prompt"))),
+      }),
+    };
 
     try {
       await expect(
@@ -565,7 +566,7 @@ describe("OpenAI Codex OAuth flow", () => {
           isRemote: true,
           openUrl: vi.fn(async () => undefined),
         }),
-      ).resolves.toMatchObject({ access: testJwt, accountId: "acct-test" });
+      ).resolves.toMatchObject({ access: payload.access_token, accountId: "acct-test" });
       if (!callbackResponse) {
         throw new Error("OAuth callback request was not started");
       }
@@ -581,167 +582,165 @@ describe("OpenAI Codex OAuth flow", () => {
     }
   });
 
-  it("times out token exchange requests", async () => {
-    ssrfMocks.fetchWithSsrFGuard.mockRejectedValueOnce(timeoutError());
-
-    const result = await exchangeOpenAIAuthorizationCode(
-      "code",
-      "verifier",
-      resolveOpenAIRedirectUri("localhost"),
-      { timeoutMs: 5 },
+  it("stops local progress before prompting after the callback grace period", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 302 })),
     );
-
-    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        auditContext: "openai-chatgpt-oauth-token",
-        timeoutMs: 5,
-      }),
-    );
-    expect(result).toMatchObject({
-      type: "failed",
-      operation: "exchange",
-      summary: "OpenAI Codex token exchange timed out after 5ms",
+    mockTokenResponse(tokenPayload("manual-account"));
+    const events: string[] = [];
+    const ready = createDeferred<void>();
+    const controller = new AbortController();
+    const onPrompt = vi.fn(async () => {
+      events.push("prompt");
+      return "manual-code";
     });
+    const prompter = createTestWizardPrompter({
+      progress: () => ({ update: () => {}, stop: () => events.push("stop") }),
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const login = loginOpenAICodexOAuth({
+      prompter,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      oauth: {
+        createVpsAwareHandlers: () => ({ onAuth: async () => ready.resolve(), onPrompt }),
+      },
+      isRemote: false,
+      openUrl: vi.fn(async () => undefined),
+      signal: controller.signal,
+    });
+    try {
+      await ready.promise;
+      await vi.advanceTimersByTimeAsync(15_999);
+      expect(onPrompt).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(login).resolves.toMatchObject({ accountId: "manual-account" });
+      expect(events).toEqual(["stop", "prompt"]);
+    } finally {
+      controller.abort();
+      vi.useRealTimers();
+      await login.catch(() => undefined);
+    }
   });
 
   it.each([
-    { operation: "authorization-code exchange", address: "198.18.0.42", family: 4 as const },
-    { operation: "refresh-token exchange", address: "fc00::42", family: 6 as const },
+    ["/opt/homebrew/Cellar/node/26.12.1/bin/node", " /ignored-prefix ", "/opt/homebrew"],
+    ["/usr/local/bin/node", " /custom-prefix ", "/custom-prefix"],
   ])(
-    "allows fake-IP DNS for the OpenAI OAuth $operation",
-    async ({ operation, address, family }) => {
-      mockFakeIpTokenResponse({ address, family });
-
-      const result =
-        operation === "authorization-code exchange"
-          ? await exchangeOpenAIAuthorizationCode(
-              "code",
-              "verifier",
-              resolveOpenAIRedirectUri("localhost"),
-            )
-          : await refreshOpenAIAccessToken("old-refresh-token");
-
-      expect(result).toMatchObject({
-        type: "success",
-        access: "test-access-token",
-        refresh: "test-refresh-token",
-      });
-      expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-        expect.objectContaining({
-          policy: {
-            allowRfc2544BenchmarkRange: true,
-            allowIpv6UniqueLocalRange: true,
-            hostnameAllowlist: ["auth.openai.com"],
-          },
+    "shows the certificate repair path for %s before starting OAuth",
+    async (execPath, envPrefix, prefix) => {
+      const descriptor = Object.getOwnPropertyDescriptor(process, "execPath");
+      vi.stubEnv("HOMEBREW_PREFIX", envPrefix);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          throw new TypeError("fetch failed", {
+            cause: {
+              code: "ERR_TLS_CERT_ALTNAME_INVALID",
+              message: "certificate hostname mismatch",
+            },
+          });
         }),
       );
+      const prompter = createTestWizardPrompter();
+      const createVpsAwareHandlers = vi.fn(() => {
+        throw new Error("OAuth must not start after failed prerequisites");
+      });
+      const openUrl = vi.fn(async () => undefined);
+      Object.defineProperty(process, "execPath", { configurable: true, value: execPath });
+      try {
+        await expect(
+          loginOpenAICodexOAuth({
+            prompter,
+            runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+            oauth: { createVpsAwareHandlers },
+            isRemote: false,
+            openUrl,
+          }),
+        ).rejects.toThrow("prerequisites failed");
+        expect(prompter.note).toHaveBeenCalledWith(
+          expect.stringContaining(`Verify cert bundle exists: ${prefix}/etc/openssl@3/cert.pem`),
+          "OAuth prerequisites",
+        );
+        expect(createVpsAwareHandlers).not.toHaveBeenCalled();
+        expect(openUrl).not.toHaveBeenCalled();
+        expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+      } finally {
+        if (descriptor) {
+          Object.defineProperty(process, "execPath", descriptor);
+        }
+        vi.unstubAllEnvs();
+      }
     },
   );
+
+  it.each(["exchange", "refresh"] as const)("times out token %s requests", async (operation) => {
+    ssrfMocks.fetchWithSsrFGuard.mockRejectedValueOnce(
+      new DOMException("timed out", "TimeoutError"),
+    );
+    const result = await tokenOperations[operation]({ timeoutMs: 5 });
+    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ auditContext: "openai-chatgpt-oauth-token", timeoutMs: 5 }),
+    );
+    expectTokenFailure(result, operation, `OpenAI Codex token ${operation} timed out after 5ms`);
+  });
+
+  it.each([
+    ["exchange", "198.18.0.42", 4],
+    ["refresh", "fc00::42", 6],
+  ] as const)("allows fake-IP DNS for the OpenAI OAuth %s", async (operation, address, family) => {
+    mockFakeIpTokenResponse({ address, family });
+    const result = await tokenOperations[operation]();
+    expectTokenSuccess(result);
+    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        policy: {
+          allowRfc2544BenchmarkRange: true,
+          allowIpv6UniqueLocalRange: true,
+          hostnameAllowlist: ["auth.openai.com"],
+        },
+      }),
+    );
+  });
 
   it("cancels token exchange requests with the caller signal", async () => {
     const controller = new AbortController();
     controller.abort();
 
-    const result = await exchangeOpenAIAuthorizationCode(
-      "code",
-      "verifier",
-      resolveOpenAIRedirectUri("localhost"),
-      { signal: controller.signal, timeoutMs: 5 },
-    );
-
+    const result = await exchange({ signal: controller.signal, timeoutMs: 5 });
     expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      type: "failed",
-      cancelled: true,
-      operation: "exchange",
-      summary: "Login cancelled",
-    });
-  });
-
-  it("rejects unsafe token exchange lifetimes", async () => {
-    mockTokenResponseText(
-      '{"access_token":"access-token","refresh_token":"refresh-token","expires_in":1e309}',
-    );
-
-    const result = await exchangeOpenAIAuthorizationCode(
-      "code",
-      "verifier",
-      resolveOpenAIRedirectUri("localhost"),
-      { timeoutMs: 5 },
-    );
-
-    expect(result).toEqual({
-      type: "failed",
-      operation: "exchange",
-      summary: "OpenAI Codex token exchange response missing fields: expires_in",
-    });
+    expectTokenFailure(result, "exchange", "Login cancelled", { cancelled: true });
   });
 
   it.each([
-    {
-      operation: "exchange" as const,
-      run: () =>
-        exchangeOpenAIAuthorizationCode("code", "verifier", resolveOpenAIRedirectUri("localhost")),
-    },
-    {
-      operation: "refresh" as const,
-      run: () => refreshOpenAIAccessToken("old-refresh-token"),
-    },
-  ])(
-    "returns a failed result when the token $operation response is malformed JSON",
-    async ({ operation, run }) => {
+    ["exchange", "1e309"],
+    ["refresh", "0"],
+  ] as const)("rejects unsafe token %s lifetimes (%s)", async (operation, lifetime) => {
+    mockTokenResponseText(
+      `{"access_token":"access-token","refresh_token":"refresh-token","expires_in":${lifetime}}`,
+    );
+    expectTokenFailure(
+      await tokenOperations[operation]({ timeoutMs: 5 }),
+      operation,
+      `OpenAI Codex token ${operation} response missing fields: expires_in`,
+    );
+  });
+
+  it.each(["exchange", "refresh"] as const)(
+    "rejects malformed JSON from token %s",
+    async (operation) => {
       mockTokenResponseText('{"access_token":"access-token","refresh_to');
 
-      const result = await run();
-
-      expect(result).toEqual({
-        type: "failed",
+      expectTokenFailure(
+        await tokenOperations[operation](),
         operation,
-        summary: `OpenAI Codex token ${operation} failed: response is not valid JSON`,
-      });
+        `OpenAI Codex token ${operation} failed: response is not valid JSON`,
+      );
     },
   );
 
-  it("times out token refresh requests", async () => {
-    ssrfMocks.fetchWithSsrFGuard.mockRejectedValueOnce(timeoutError());
-
-    const result = await refreshOpenAIAccessToken("old-refresh-token", { timeoutMs: 5 });
-
-    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        auditContext: "openai-chatgpt-oauth-token",
-        timeoutMs: 5,
-      }),
-    );
-    expect(result).toMatchObject({
-      type: "failed",
-      operation: "refresh",
-      summary: "OpenAI Codex token refresh timed out after 5ms",
-    });
-  });
-
-  it("rejects non-positive token refresh lifetimes", async () => {
-    mockTokenResponse({
-      access_token: "access-token",
-      refresh_token: "refresh-token",
-      expires_in: 0,
-    });
-
-    const result = await refreshOpenAIAccessToken("old-refresh-token", { timeoutMs: 5 });
-
-    expect(result).toEqual({
-      type: "failed",
-      operation: "refresh",
-      summary: "OpenAI Codex token refresh response missing fields: expires_in",
-    });
-  });
-
   it("preserves the shared 30-second token-refresh deadline", async () => {
-    mockTokenResponse({
-      access_token: "renewed-access-token",
-      refresh_token: "rotated-refresh-token",
-      expires_in: 3600,
-    });
+    mockTokenResponse(tokenPayload());
 
     await refreshOpenAIAccessToken("existing-refresh-token");
 
@@ -753,52 +752,22 @@ describe("OpenAI Codex OAuth flow", () => {
 
 describe("OpenAI model-account credential ownership", () => {
   it.each([
-    { name: "same user and workspace", accountId: "workspace-1", userId: "user-1", matches: true },
-    {
-      name: "another workspace member",
-      accountId: "workspace-1",
-      userId: "user-2",
-      matches: false,
-    },
-    {
-      name: "the same user in another workspace",
-      accountId: "workspace-2",
-      userId: "user-1",
-      matches: false,
-    },
-    { name: "missing user claims", accountId: "workspace-1", userId: undefined, matches: false },
-  ])(
-    "matches $name from token claims, never email or stored workspace metadata",
-    ({ accountId, userId, matches }) => {
-      const access = fakeJwt({
-        "https://api.openai.com/auth": {
-          chatgpt_account_id: "workspace-1",
-          chatgpt_user_id: "user-1",
-        },
-        "https://api.openai.com/profile": { email: "same@example.test" },
-      });
-      const credential: OAuthCredential = {
-        type: "oauth",
-        provider: "openai",
-        access,
-        refresh: "synthetic-refresh",
-        expires: 1,
-      };
+    ["workspace-1", "user-1", true],
+    ["workspace-1", "user-2", false],
+    ["workspace-2", "user-1", false],
+    ["workspace-1", undefined, false],
+  ] as const)(
+    "matches token identity %s/%s, never email or stored workspace metadata: %s",
+    (accountId, userId, matches) => {
+      const incoming = credential("workspace-1", "user-1");
       for (const methodId of ["oauth", "device-code"]) {
         const method = buildOpenAIProvider().auth.find((entry) => entry.id === methodId);
         expect(method?.matchesPersonalAccount).toBeTypeOf("function");
         expect(
-          method?.matchesPersonalAccount?.(credential, {
-            ...credential,
+          method?.matchesPersonalAccount?.(incoming, {
+            ...credential(accountId, userId),
             // Identical stored metadata must not substitute for the actual token identity.
             accountId: "workspace-1",
-            access: fakeJwt({
-              "https://api.openai.com/auth": {
-                chatgpt_account_id: accountId,
-                chatgpt_user_id: userId,
-              },
-              "https://api.openai.com/profile": { email: "same@example.test" },
-            }),
           }),
         ).toBe(matches);
       }
@@ -806,37 +775,14 @@ describe("OpenAI model-account credential ownership", () => {
   );
 
   it("refuses to replace any prior credential without an incoming user claim", () => {
-    const credential: OAuthCredential = {
-      type: "oauth",
-      provider: "openai",
-      access: fakeJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "workspace-1" },
-      }),
-      refresh: "synthetic-refresh",
-      expires: 1,
-    };
+    const incoming = credential("workspace-1");
     for (const methodId of ["oauth", "device-code"]) {
       const method = buildOpenAIProvider().auth.find((entry) => entry.id === methodId);
       expect(method?.matchesPersonalAccount).toBeTypeOf("function");
-      expect(method?.matchesPersonalAccount?.(credential, credential)).toBe(false);
+      expect(method?.matchesPersonalAccount?.(incoming, incoming)).toBe(false);
     }
   });
 });
-
-async function listenLoopbackServer(server: Server): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
-}
 
 async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve) => {
@@ -844,20 +790,24 @@ async function closeServer(server: Server): Promise<void> {
   });
 }
 
-async function withLoopbackTokenResponse(body: string, run: () => Promise<void>) {
+async function withLoopbackTokenResponse(
+  body: string,
+  run: typeof exchange = () => exchange({ timeoutMs: 5000 }),
+) {
   const server = createServer((_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(body);
   });
-  const port = await listenLoopbackServer(server);
+  const port = await listenOnLoopback(server);
   const release = vi.fn(async () => undefined);
   try {
     ssrfMocks.fetchWithSsrFGuard.mockImplementationOnce(async ({ init, signal }) => ({
       response: await globalThis.fetch(`http://127.0.0.1:${port}`, { ...init, signal }),
       release,
     }));
-    await run();
+    const result = await run();
     expect(release).toHaveBeenCalledOnce();
+    return result;
   } finally {
     await closeServer(server);
   }
@@ -865,80 +815,43 @@ async function withLoopbackTokenResponse(body: string, run: () => Promise<void>)
 
 describe("OpenAI Codex OAuth bounded token response reads", () => {
   it("retains an unrotated refresh token from a real loopback HTTP response", async () => {
-    await withLoopbackTokenResponse(
+    const result = await withLoopbackTokenResponse(
       JSON.stringify({ access_token: "loopback-renewed-access", expires_in: 3600 }),
-      async () => {
-        await expect(refreshOpenAIAccessToken("loopback-existing-refresh")).resolves.toMatchObject({
-          type: "success",
-          access: "loopback-renewed-access",
-          refresh: "loopback-existing-refresh",
-        });
-      },
+      () => refreshOpenAIAccessToken("loopback-existing-refresh"),
     );
+    expectTokenSuccess(result, "loopback-renewed-access", "loopback-existing-refresh");
   });
 
   it.each([
-    { operation: "exchange", envelope: "null", value: null },
-    { operation: "refresh", envelope: "array", value: [] },
+    ["exchange", null],
+    ["refresh", []],
   ] as const)(
-    "rejects $envelope $operation token responses from a real loopback HTTP server",
-    async ({ operation, value }) => {
-      await withLoopbackTokenResponse(JSON.stringify(value), async () => {
-        const result =
-          operation === "exchange"
-            ? await exchangeOpenAIAuthorizationCode(
-                "code-loopback",
-                "verifier-loopback",
-                "http://localhost:1455/auth/callback",
-              )
-            : await refreshOpenAIAccessToken("refresh-token-loopback");
-
-        expect(result).toEqual({
-          type: "failed",
-          operation,
-          summary: `OpenAI Codex token ${operation} failed: expected JSON object response`,
-        });
-      });
+    "rejects non-object %s responses from a real loopback HTTP server: %j",
+    async (operation, value) => {
+      const result = await withLoopbackTokenResponse(
+        JSON.stringify(value),
+        tokenOperations[operation],
+      );
+      expectTokenFailure(
+        result,
+        operation,
+        `OpenAI Codex token ${operation} failed: expected JSON object response`,
+      );
     },
   );
 
   it("reads under-cap token exchange responses from a real loopback HTTP server", async () => {
-    const validPayload = {
-      access_token: "access-token-loopback",
-      refresh_token: "refresh-token-loopback",
-      expires_in: 3600,
-    };
-    await withLoopbackTokenResponse(JSON.stringify(validPayload), async () => {
-      const result = await exchangeOpenAIAuthorizationCode(
-        "code-loopback",
-        "verifier-loopback",
-        "http://localhost:1455/auth/callback",
-        { timeoutMs: 5000 },
-      );
-
-      expect(result).toMatchObject({
-        type: "success",
-        access: "access-token-loopback",
-        refresh: "refresh-token-loopback",
-      });
-      expect(
-        (result as { type: "success"; access: string; refresh: string; expires: number }).expires,
-      ).toBeGreaterThan(0);
-    });
+    const result = await withLoopbackTokenResponse(JSON.stringify(tokenPayload()));
+    expectTokenSuccess(result);
+    expect(result).toHaveProperty("expires", expect.any(Number));
+    if (result.type === "success") {
+      expect(result.expires).toBeGreaterThan(0);
+    }
   });
 
   it("rejects oversized token exchange responses from a real loopback HTTP server", async () => {
     const oversizedPayload = "o".repeat(2 * 1024 * 1024); // 2 MiB > 1 MiB cap
-    await withLoopbackTokenResponse(oversizedPayload, async () => {
-      const result = await exchangeOpenAIAuthorizationCode(
-        "code-loopback",
-        "verifier-loopback",
-        "http://localhost:1455/auth/callback",
-        { timeoutMs: 5000 },
-      );
-
-      expect(result).toMatchObject({ type: "failed" });
-      expect((result as { type: "failed"; summary: string }).summary).toContain("too large");
-    });
+    const result = await withLoopbackTokenResponse(oversizedPayload);
+    expect(result).toMatchObject({ type: "failed", summary: expect.stringContaining("too large") });
   });
 });

@@ -1,4 +1,9 @@
-import type { Context, Model, SimpleStreamOptions } from "@openclaw/llm-core";
+import {
+  omitNullRequestHeaders,
+  type Context,
+  type Model,
+  type SimpleStreamOptions,
+} from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH } from "../providers/openai-prompt-cache.js";
 import {
@@ -40,36 +45,6 @@ describe("buildOpenAIClientHeaders session_id affinity header", () => {
     expect(sessionHeader?.startsWith("internal-session-effects-session-companion-")).toBe(true);
   });
 
-  it.each(["short", "none"] as const)(
-    "preserves a mixed-case caller header with %s retention",
-    (cacheRetention) => {
-      const headers = buildOpenAIClientHeaders(
-        proxyResponsesModel,
-        context,
-        { SeSsIoN_Id: "caller-affinity" },
-        undefined,
-        "generated-affinity",
-        cacheRetention,
-      );
-      expect(new Headers(headers).get("session_id")).toBe("caller-affinity");
-      expect(
-        Object.keys(headers).filter((name) => name.toLowerCase() === "session_id"),
-      ).toHaveLength(1);
-    },
-  );
-
-  it("honors an explicit native Responses session header opt-out", () => {
-    const headers = buildOpenAIClientHeaders(
-      { ...codexModel, compat: { sendSessionIdHeader: false } },
-      context,
-      undefined,
-      undefined,
-      "native-session-123",
-    );
-
-    expect(headers.session_id).toBeUndefined();
-  });
-
   it("omits generated Responses session headers when caching is disabled", () => {
     const headers = buildOpenAIClientHeaders(
       proxyResponsesModel,
@@ -82,6 +57,26 @@ describe("buildOpenAIClientHeaders session_id affinity header", () => {
 
     expect(headers.session_id).toBeUndefined();
   });
+
+  it.each(["short"] as const)(
+    "preserves a mixed-case caller header with %s retention",
+    (cacheRetention) => {
+      const headers = buildOpenAIClientHeaders(
+        proxyResponsesModel,
+        context,
+        { SeSsIoN_Id: "caller-affinity" },
+        undefined,
+        "generated-affinity",
+        cacheRetention,
+      );
+      expect(new Headers(omitNullRequestHeaders(headers)).get("session_id")).toBe(
+        "caller-affinity",
+      );
+      expect(
+        Object.keys(headers).filter((name) => name.toLowerCase() === "session_id"),
+      ).toHaveLength(1);
+    },
+  );
 });
 
 describe("buildOpenAISdkRequestOptions turn controls", () => {

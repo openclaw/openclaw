@@ -63,12 +63,8 @@ export function readSessionRoutingFacts(
 
 /** Canonicalize an opaque session key into the agent-scoped store namespace. */
 export function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
-  const lowered = normalizeLowercaseStringOrEmpty(key);
-  if (lowered === "global" || lowered === "unknown") {
-    return lowered;
-  }
   const normalized = normalizeSessionKeyPreservingOpaquePeerIds(key);
-  return normalized.startsWith("agent:")
+  return normalized === "global" || normalized === "unknown" || normalized.startsWith("agent:")
     ? normalized
     : `agent:${normalizeAgentId(agentId)}:${normalized}`;
 }
@@ -140,11 +136,8 @@ export function resolveSessionStoreKey(params: {
   storeAgentId?: string;
 }): string {
   const raw = normalizeOptionalString(params.sessionKey) ?? "";
-  if (!raw) {
-    return raw;
-  }
-  const rawLower = normalizeLowercaseStringOrEmpty(raw);
-  if (rawLower === "global" || rawLower === "unknown") {
+  const rawLower = raw.toLowerCase();
+  if (!raw || rawLower === "global" || rawLower === "unknown") {
     return rawLower;
   }
 
@@ -244,11 +237,8 @@ export function resolveStoredSessionKeyForAgentStore(params: {
   preserveQualifiedAddress?: boolean;
 }): string {
   const raw = normalizeOptionalString(params.sessionKey) ?? "";
-  if (!raw) {
-    return raw;
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(raw);
-  if (lowered === "global" || lowered === "unknown") {
+  const lowered = raw.toLowerCase();
+  if (!raw || lowered === "global" || lowered === "unknown") {
     return lowered;
   }
   const parsed = parseAgentSessionKey(raw);

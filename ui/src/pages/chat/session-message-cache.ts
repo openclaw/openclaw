@@ -5,7 +5,9 @@ import {
 } from "@openclaw/gateway-client/browser";
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
@@ -22,19 +24,6 @@ export const MAX_CACHED_CHAT_WEIGHT = 24 * 1024 * 1024;
 const cachedMessageWeights = new WeakMap<object, number>();
 const appendedEventClaims = new WeakMap<ChatMessageCache, WeakSet<object>>();
 
-export type ChatTranscriptMetadata = Pick<
-  GatewaySessionRow,
-  | "key"
-  | "kind"
-  | "classification"
-  | "participants"
-  | "expandedParticipants"
-  | "owner"
-  | "lastRunId"
-  | "status"
-  | "runtimeMs"
->;
-
 const transcriptMetadata = new WeakMap<GatewaySessionRow, ChatTranscriptMetadata>();
 
 export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTranscriptMetadata {
@@ -42,37 +31,36 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   if (existing) {
     return existing;
   }
-  const {
-    key,
-    kind,
-    classification,
-    participants,
-    expandedParticipants,
-    owner,
-    lastRunId,
-    status,
-    runtimeMs,
-  } = row;
   const metadata = {
-    key,
-    kind,
-    classification,
-    participants,
-    expandedParticipants,
-    owner,
-    lastRunId,
-    status,
-    runtimeMs,
+    key: row.key,
+    kind: row.kind,
+    label: row.label,
+    displayName: row.displayName,
+    derivedTitle: row.derivedTitle,
+    classification: row.classification,
+    participants: row.participants,
+    expandedParticipants: row.expandedParticipants,
+    owner: row.owner,
+    lastRunId: row.lastRunId,
+    status: row.status,
+    runtimeMs: row.runtimeMs,
   };
   transcriptMetadata.set(row, metadata);
   return metadata;
 }
 
+// Display only: the live catalog and session owners still admit every action.
+export type ChatComposerSnapshot = { id: string; provider: string; name: string };
+
 export type ChatSessionSnapshot = {
+  composer?: ChatComposerSnapshot | null;
+  // The board provider validates cached payloads before they can reach a view.
+  board?: { snapshot: unknown; receivedAtMs: number } | null;
   widgetHeights?: Record<string, number>;
   transcriptMetadata?: ChatTranscriptMetadata;
   progressCard?: ProgressCard | null;
   deltaCursor?: string;
+  historyState?: ChatHistoryState;
   displayedLeafEntryId?: string | null;
   messages: unknown[];
   pagination: ChatHistoryPagination;
@@ -130,6 +118,15 @@ type CachedChatSessionSnapshot = {
 
 export type ChatMessageCache = Map<string, CachedChatSessionSnapshot>;
 
+/** Disk snapshots omit pairing secrets; discard only their connection-owned memory copies. */
+export function retireCachedPairingQr(cache: ChatMessageCache | undefined): void {
+  for (const [key, cached] of cache ?? []) {
+    if (cached.snapshot.messages.some((message) => readPairingQrContent(message).length > 0)) {
+      cache?.delete(key);
+    }
+  }
+}
+
 export type ChatCacheObserver = {
   delete: (sessionKey: string, reason?: SessionSnapshotInvalidationReason) => void | Promise<void>;
   write: (sessionKey: string, snapshot: ChatSessionSnapshot) => void;
@@ -156,6 +153,19 @@ export function readChatHistoryCursor(state: ChatHistoryCursorHost): string | un
   }
   delete state.chatHistoryCursor;
   return undefined;
+}
+
+export function readChatHistoryState(
+  state: ChatHistoryCursorHost & { chatMessagesBySession?: ChatMessageCache },
+  cursor: string | undefined,
+): ChatHistoryState | undefined {
+  if (cursor === undefined || !state.currentSessionId || !state.chatMessagesBySession) {
+    return undefined;
+  }
+  const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, {
+    sessionKey: state.sessionKey,
+  });
+  return snapshot?.sessionId === state.currentSessionId ? snapshot.historyState : undefined;
 }
 
 export function setChatHistoryCursor(
@@ -300,18 +310,30 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.sessionId === incoming.sessionId
       ? { ...incoming, progressCard: existing.snapshot.progressCard }
       : incoming;
-  const snapshot =
+  const withWidgetHeights =
     withProgress.widgetHeights === undefined && existing?.snapshot.sessionId === incoming.sessionId
       ? { ...withProgress, widgetHeights: existing.snapshot.widgetHeights }
       : withProgress;
+  // Boards belong to the scoped conversation key, independently of transcript resets.
+  const withBoard =
+    withWidgetHeights.board === undefined && existing?.snapshot.board !== undefined
+      ? { ...withWidgetHeights, board: existing.snapshot.board }
+      : withWidgetHeights;
+  const snapshot =
+    withBoard.composer === undefined && existing?.snapshot.composer !== undefined
+      ? { ...withBoard, composer: existing.snapshot.composer }
+      : withBoard;
   if (
     existing?.snapshot.messages === snapshot.messages &&
     existing.snapshot.deltaCursor === snapshot.deltaCursor &&
+    existing.snapshot.historyState === snapshot.historyState &&
     existing.snapshot.sessionId === snapshot.sessionId &&
     existing.snapshot.displayedLeafEntryId === snapshot.displayedLeafEntryId &&
     existing.snapshot.transcriptMetadata === snapshot.transcriptMetadata &&
     existing.snapshot.progressCard === snapshot.progressCard &&
     existing.snapshot.widgetHeights === snapshot.widgetHeights &&
+    existing.snapshot.board === snapshot.board &&
+    existing.snapshot.composer === snapshot.composer &&
     samePagination(existing.snapshot.pagination, snapshot.pagination)
   ) {
     return;
@@ -319,6 +341,8 @@ export function cacheChatSessionSnapshot(
   if (
     snapshot.messages.length === 0 &&
     snapshot.sessionId === null &&
+    snapshot.board === undefined &&
+    snapshot.composer === undefined &&
     !snapshot.pagination.hasMore &&
     (snapshot.pagination.totalMessages ?? 0) === 0 &&
     snapshot.pagination.completeSnapshot !== true

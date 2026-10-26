@@ -3,6 +3,7 @@ import {
   type resolveEnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { IMessageRpcClient } from "../client.js";
 import { normalizeIMessageHandle } from "../targets.js";
@@ -105,7 +106,6 @@ export async function resolveIMessageDmHistoryContext(params: {
   senderNormalized: string;
   limit: number;
   envelopeOptions: ReturnType<typeof resolveEnvelopeFormatOptions>;
-  logVerbose?: (msg: string) => void;
 }): Promise<IMessageDmHistoryContext> {
   const maxMessages = Math.max(0, Math.floor(params.limit));
   const chatId =
@@ -128,7 +128,7 @@ export async function resolveIMessageDmHistoryContext(params: {
       { timeoutMs: DM_HISTORY_RPC_TIMEOUT_MS },
     );
   } catch (err) {
-    params.logVerbose?.(`imessage: DM history fetch failed for chat_id=${chatId}: ${String(err)}`);
+    logVerbose(`imessage: DM history fetch failed for chat_id=${chatId}: ${String(err)}`);
     return {};
   }
 

@@ -6,14 +6,15 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import type { MSTeamsConfig } from "../config/types.msteams.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import {
   loadCronRows,
   loadedCronStoreFromRows,
   upsertCronJobRow,
 } from "../cron/store/row-codec.js";
-import type { CronStoredJob } from "../cron/types.js";
 import { resolveApprovalOverGateway } from "../infra/approval-gateway-resolver.js";
 import type { ExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals-core.js";
@@ -48,6 +49,7 @@ const { msteamsPlugin } = await loadBundledPluginFacade<{ msteamsPlugin: Channel
 });
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+const command = "echo synthetic";
 beforeAll(async () => {
   state = await createOpenClawTestState({ label: "internal-approval-authority" });
 });
@@ -114,14 +116,18 @@ function createFixture(
     runtime,
     context,
     databaseOptions: persistence.databaseOptions,
+    read: (id: string) => getOperatorApproval({ id, databaseOptions: persistence.databaseOptions }),
+    register: (id: string, request: ExecApprovalRequestPayload = { command }) =>
+      registerApproval(exec, request, id),
     revoke() {
       current = false;
     },
-    async close() {
+    async [Symbol.asyncDispose]() {
       runtime.close();
       await Promise.all([exec.drain(), plugin.drain()]);
     },
     resolve(
+      this: void,
       id: string,
       route: "channel" | "tool",
       isCurrent = () => true,
@@ -153,6 +159,33 @@ function createFixture(
   };
 }
 
+async function registerApproval<T>(manager: ExecApprovalManager<T>, request: T, id: string) {
+  const record = manager.create(request, 60_000, id);
+  return { record, ...(await manager.register(record, 60_000)) };
+}
+
+async function withSqlFixture(
+  id: string,
+  run: (fixture: SqlFixture) => Promise<void>,
+  standingGrant?: CronStandingGrantMintSpec,
+) {
+  await using fixture = createFixture(standingGrant);
+  const approval = await fixture.register(id, {
+    command,
+    ...(standingGrant && { agentId: "main" }),
+  });
+  const sql = observeMainThreadSql();
+  try {
+    sql.calibrate();
+    await run({ ...fixture, ...approval });
+    sql.expectIdle();
+  } finally {
+    sql.restore();
+  }
+}
+type SqlFixture = ReturnType<typeof createFixture> &
+  Awaited<ReturnType<ReturnType<typeof createFixture>["register"]>>;
+
 it.each([
   "unchanged",
   "sibling",
@@ -165,27 +198,29 @@ it.each([
     support: { appId: "support-app", appPassword: "synthetic-support", allowFrom: [senderId] },
     sales: { appId: "sales-app", appPassword: "synthetic-sales", allowFrom: [senderId] },
   };
-  let cfg: OpenClawConfig = {
+  const teamsConfig = (overrides: Partial<MSTeamsConfig> = {}): OpenClawConfig => ({
     channels: {
-      msteams: { enabled: true, tenantId: "synthetic-tenant", allowFrom: [senderId], accounts },
+      msteams: {
+        enabled: true,
+        tenantId: "synthetic-tenant",
+        allowFrom: [senderId],
+        accounts,
+        ...overrides,
+      },
     },
-  };
+  });
+  let cfg = teamsConfig();
   setRuntimeConfigSnapshot(cfg);
   setActivePluginRegistry(
     createTestRegistry([{ pluginId: "msteams", plugin: msteamsPlugin, source: "test" }]),
   );
-  const fixture = createFixture();
+  await using fixture = createFixture();
   fixture.context.getRuntimeConfig = () => cfg;
-  const record = fixture.exec.create(
-    {
-      command: "echo synthetic",
-      turnSourceChannel: "msteams",
-      turnSourceAccountId: "support",
-    },
-    60_000,
-    `teams-custody-${scenario}`,
-  );
-  const { decision } = await fixture.exec.register(record, 60_000);
+  const { record, decision } = await fixture.register(`teams-custody-${scenario}`, {
+    command,
+    turnSourceChannel: "msteams",
+    turnSourceAccountId: "support",
+  });
   const decisions: Array<string | null> = [];
   void decision.then((value) => decisions.push(value));
   const accountId = scenario === "sibling" ? "sales" : "support";
@@ -199,29 +234,16 @@ it.each([
     // The first transaction reads the approval; the second commits its decision.
     if (request.stage === "commit" && transaction === 2) {
       if (scenario === "account-disabled") {
-        cfg = {
-          channels: {
-            msteams: {
-              enabled: true,
-              tenantId: "synthetic-tenant",
-              allowFrom: [senderId],
-              accounts: { ...accounts, support: { ...accounts.support, enabled: false } },
-            },
-          },
-        };
+        cfg = teamsConfig({
+          accounts: { ...accounts, support: { ...accounts.support, enabled: false } },
+        });
         revokedBeforeCommit = true;
       } else if (scenario === "channel-disabled" || scenario === "account-removed") {
-        cfg = {
-          channels: {
-            msteams: {
-              enabled: scenario !== "channel-disabled",
-              tenantId: "synthetic-tenant",
-              // Root approvers must not authorize a named account that no longer exists.
-              allowFrom: [senderId],
-              accounts: scenario === "account-removed" ? { sales: accounts.sales } : accounts,
-            },
-          },
-        };
+        // Root approvers must not authorize a named account that no longer exists.
+        cfg = teamsConfig({
+          enabled: scenario !== "channel-disabled",
+          accounts: scenario === "account-removed" ? { sales: accounts.sales } : accounts,
+        });
         revokedBeforeCommit = true;
       }
       if (revokedBeforeCommit) {
@@ -230,55 +252,47 @@ it.each([
     }
     return admit(request, grant);
   });
-  try {
-    // Both accounts authorize this actor before submission; only support owns the request.
-    expect(
-      msteamsPlugin.approvalCapability?.authorizeActorAction?.({
-        cfg,
-        accountId,
-        senderId,
-        action: "approve",
-        approvalKind: "exec",
-      })?.authorized,
-    ).toBe(true);
-    const resolution = resolveApprovalOverGateway({
-      cfg: submittedConfig,
-      approvalId: record.id,
-      approvalKind: "exec",
-      decision: "allow-once",
-      channel: "msteams",
+  // Both accounts authorize this actor before submission; only support owns the request.
+  await expect(
+    msteamsPlugin.approvalCapability?.authorizeActorActionAsync?.({
+      cfg,
       accountId,
       senderId,
-      gatewayRuntime: fixture.runtime.nativeApprovals,
+      action: "approve",
+      approvalKind: "exec",
+    }),
+  ).resolves.toMatchObject({ authorized: true });
+  const resolution = resolveApprovalOverGateway({
+    cfg: submittedConfig,
+    approvalId: record.id,
+    approvalKind: "exec",
+    decision: "allow-once",
+    channel: "msteams",
+    accountId,
+    senderId,
+    gatewayRuntime: fixture.runtime.nativeApprovals,
+  });
+  if (scenario === "unchanged") {
+    await expect(resolution).resolves.toMatchObject({
+      applied: true,
+      approval: { status: "allowed", decision: "allow-once" },
     });
-    if (scenario === "unchanged") {
-      await expect(resolution).resolves.toMatchObject({
-        applied: true,
-        approval: { status: "allowed", decision: "allow-once" },
-      });
-      await expect(decision).resolves.toBe("allow-once");
-      expect(
-        getOperatorApproval({ id: record.id, databaseOptions: fixture.databaseOptions }),
-      ).toMatchObject({
-        status: "allowed",
-        resolver: { kind: "channel", id: "msteams:support" },
-      });
-      expect(fixture.context.approvalEvents?.publishResolved).toHaveBeenCalledOnce();
-    } else {
-      const outcome = await resolution.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      expect(revokedBeforeCommit).toBe(scenario !== "sibling");
-      expect
-        .soft(getOperatorApproval({ id: record.id, databaseOptions: fixture.databaseOptions }))
-        .toMatchObject({ status: "pending", decision: null });
-      expect.soft(decisions).not.toContain("allow-once");
-      expect.soft(fixture.context.approvalEvents?.publishResolved).not.toHaveBeenCalled();
-      expect(outcome).toHaveProperty("error");
-    }
-  } finally {
-    await fixture.close();
+    await expect(decision).resolves.toBe("allow-once");
+    expect(fixture.read(record.id)).toMatchObject({
+      status: "allowed",
+      resolver: { kind: "channel", id: "msteams:support" },
+    });
+    expect(fixture.context.approvalEvents?.publishResolved).toHaveBeenCalledOnce();
+  } else {
+    const outcome = await resolution.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    expect(revokedBeforeCommit).toBe(scenario !== "sibling");
+    expect.soft(fixture.read(record.id)).toMatchObject({ status: "pending", decision: null });
+    expect.soft(decisions).not.toContain("allow-once");
+    expect.soft(fixture.context.approvalEvents?.publishResolved).not.toHaveBeenCalled();
+    expect(outcome).toHaveProperty("error");
   }
 });
 
@@ -293,25 +307,22 @@ it.each(["exec", "plugin"] as const)(
       await releaseForwarding.promise;
       forwarded.resolve();
     };
-    const fixture = createFixture(undefined, {
+    await using fixture = createFixture(undefined, {
       handleRequested: async () => false,
       handleResolved,
       handlePluginApprovalResolved: handleResolved,
       stop: async () => {},
     });
-    const register = async <TPayload>(
-      manager: ExecApprovalManager<TPayload>,
-      request: TPayload,
-    ) => {
-      const record = manager.create(request, 60_000, `notice-${kind}`);
-      return { record, ...(await manager.register(record, 60_000)) };
-    };
     const { record, decision } = await (kind === "exec"
-      ? register(fixture.exec, { command: "echo synthetic" })
-      : register(fixture.plugin, {
-          title: "Synthetic operation",
-          description: "Confirm the synthetic operation",
-        }));
+      ? fixture.register(`notice-${kind}`)
+      : registerApproval(
+          fixture.plugin,
+          {
+            title: "Synthetic operation",
+            description: "Confirm the synthetic operation",
+          },
+          `notice-${kind}`,
+        ));
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const resolution = fixture.runtime.nativeApprovals.request(`${kind}.approval.resolve`, {
       id: record.id,
@@ -331,7 +342,6 @@ it.each(["exec", "plugin"] as const)(
       await forwarded.promise;
       await resolution.catch(() => {});
       vi.useRealTimers();
-      await fixture.close();
     }
   },
 );
@@ -339,53 +349,26 @@ it.each(["exec", "plugin"] as const)(
 it.each(["channel", "tool"] as const)(
   "resolves %s approvals without caller-thread SQL",
   async (route) => {
-    const fixture = createFixture();
-    const record = fixture.exec.create(
-      { command: "echo synthetic" },
-      60_000,
-      `internal-verdict-${route}`,
-    );
-    const { decision } = await fixture.exec.register(record, 60_000);
-    const sql = observeMainThreadSql();
-    try {
-      sql.calibrate();
-      await fixture.resolve(record.id, route);
+    await withSqlFixture(`internal-verdict-${route}`, async ({ record, decision, resolve }) => {
+      await resolve(record.id, route);
       await expect(decision).resolves.toBe("allow-once");
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-      await fixture.close();
-    }
+    });
   },
 );
 
 it("runs legacy SDK approval callbacks at worker commit without host SQLite", async () => {
-  const fixture = createFixture();
-  const record = fixture.exec.create({ command: "echo synthetic" }, 60_000, "opaque-verdict");
-  const { decision } = await fixture.exec.register(record, 60_000);
-  const callback = vi.fn();
-  const sql = observeMainThreadSql();
-  try {
-    sql.calibrate();
-    await fixture.resolve(record.id, "tool", () => true, callback);
+  await withSqlFixture("opaque-verdict", async ({ record, decision, resolve }) => {
+    const callback = vi.fn();
+    await resolve(record.id, "tool", () => true, callback);
     await expect(decision).resolves.toBe("allow-once");
     expect(callback).toHaveBeenCalled();
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-    await fixture.close();
-  }
+  });
 });
 
 it("denies a malformed internal verdict through the same worker owner", async () => {
-  const fixture = createFixture();
-  const record = fixture.exec.create({ command: "echo synthetic" }, 60_000, "malformed-verdict");
-  const { decision } = await fixture.exec.register(record, 60_000);
-  const sql = observeMainThreadSql();
-  try {
-    sql.calibrate();
+  await withSqlFixture("malformed-verdict", async ({ record, decision, runtime }) => {
     await expect(
-      fixture.runtime.nativeApprovals.request("approval.resolve", {
+      runtime.nativeApprovals.request("approval.resolve", {
         id: record.id,
         kind: "plugin",
         decision: "allow-once",
@@ -395,28 +378,17 @@ it("denies a malformed internal verdict through the same worker owner", async ()
       approval: { status: "denied", reason: "malformed-verdict" },
     });
     await expect(decision).resolves.toBe("deny");
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-    await fixture.close();
-  }
+  });
 });
 
 it("mints a cron standing grant with the internal approval verdict in the worker", async () => {
-  const now = Date.now();
-  const job: CronStoredJob = {
+  const job = makeCronJob({
     id: "internal-grant-job",
     agentId: "main",
     name: "Synthetic grant job",
-    enabled: true,
-    createdAtMs: now,
-    updatedAtMs: now,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
     wakeMode: "now",
-    payload: { kind: "agentTurn", message: "echo synthetic" },
-    state: {},
-  };
+    payload: { kind: "agentTurn", message: command },
+  });
   const database = openOpenClawStateDatabase({ env: state.env });
   const storePath = state.statePath("cron");
   upsertCronJobRow(database.db, storePath, job, 0);
@@ -425,48 +397,30 @@ it("mints a cron standing grant with the internal approval verdict in the worker
     agentId: "main",
     cronJobId: job.id,
     jobConfigRevision: resolveCronJobConfigRevision(loaded),
-    operationBinding: buildCronExecOperationBinding({
-      command: "echo synthetic",
-      cwd: undefined,
-      env: undefined,
-    }),
+    operationBinding: buildCronExecOperationBinding({ command, cwd: undefined, env: undefined }),
   };
-  const fixture = createFixture(grant);
-  const record = fixture.exec.create(
-    { command: "echo synthetic", agentId: "main" },
-    60_000,
+  await withSqlFixture(
     "grant-verdict",
+    async ({ record, decision, runtime, databaseOptions }) => {
+      await runtime.nativeApprovals.request("approval.resolve", {
+        id: record.id,
+        kind: "exec",
+        decision: "allow-always",
+      });
+      await expect(decision).resolves.toBe("allow-always");
+      expect(await listCronStandingGrants({ databaseOptions })).toEqual([
+        expect.objectContaining({ ...grant, mintedByApprovalId: record.id, useCount: 0 }),
+      ]);
+    },
+    grant,
   );
-  const { decision } = await fixture.exec.register(record, 60_000);
-  const sql = observeMainThreadSql();
-  try {
-    sql.calibrate();
-    await fixture.runtime.nativeApprovals.request("approval.resolve", {
-      id: record.id,
-      kind: "exec",
-      decision: "allow-always",
-    });
-    await expect(decision).resolves.toBe("allow-always");
-    expect(await listCronStandingGrants({ databaseOptions: fixture.databaseOptions })).toEqual([
-      expect.objectContaining({ ...grant, mintedByApprovalId: record.id, useCount: 0 }),
-    ]);
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-    await fixture.close();
-  }
 });
 
 it.each(["channel", "tool"] as const)(
   "refuses %s approval after its owner retires before commit",
   async (route) => {
-    const fixture = createFixture();
-    const record = fixture.exec.create(
-      { command: "echo synthetic" },
-      60_000,
-      `internal-revoked-${route}`,
-    );
-    await fixture.exec.register(record, 60_000);
+    await using fixture = createFixture();
+    const { record } = await fixture.register(`internal-revoked-${route}`);
     let current = true;
     let transaction = 0;
     probe.admission(workerAdmission, (request, grant, admit) => {
@@ -481,16 +435,10 @@ it.each(["channel", "tool"] as const)(
       }
       return admit(request, grant);
     });
-    try {
-      await expect(fixture.resolve(record.id, route, () => current)).rejects.toThrow();
-      expect(transaction).toBe(route === "channel" ? 2 : 1);
-      expect(
-        getOperatorApproval({ id: record.id, databaseOptions: fixture.databaseOptions }),
-      ).toMatchObject({ status: "pending", decision: null });
-      expect(record.resolvedAtMs).toBeUndefined();
-      expect(fixture.context.approvalEvents?.publishResolved).not.toHaveBeenCalled();
-    } finally {
-      await fixture.close();
-    }
+    await expect(fixture.resolve(record.id, route, () => current)).rejects.toThrow();
+    expect(transaction).toBe(route === "channel" ? 2 : 1);
+    expect(fixture.read(record.id)).toMatchObject({ status: "pending", decision: null });
+    expect(record.resolvedAtMs).toBeUndefined();
+    expect(fixture.context.approvalEvents?.publishResolved).not.toHaveBeenCalled();
   },
 );

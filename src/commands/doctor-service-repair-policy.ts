@@ -84,9 +84,12 @@ export function resolveServiceRepairPolicy(
 }
 
 export function isServiceRepairExternallyManaged(
-  policy: ServiceRepairPolicy = resolveServiceRepairPolicy(),
+  policy?: ServiceRepairPolicy,
+  env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return policy === "external" || isGatewayExternallySupervised();
+  return (
+    (policy ?? resolveServiceRepairPolicy(env)) === "external" || isGatewayExternallySupervised(env)
+  );
 }
 
 /** Maintenance inspection remains separate from publishing or activating a service. */

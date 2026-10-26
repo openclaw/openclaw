@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { lstatIfExists } from "../../infra/path-existence.js";
 import {
   estimateCheckoutObjectBytes,
   estimateCheckoutTransitionBytes,
@@ -18,7 +19,7 @@ import type {
   GitWorktreeOperationResult,
   GitWorktreeOperations,
 } from "./git-worktree-operations.js";
-import { lstatIfExists, requireGitBuffer, worktreePathExists } from "./git.js";
+import { requireGitBuffer, worktreePathExists } from "./git.js";
 import {
   hasSafeParentDirectories,
   hasUnsnapshotableProvisionedFiles,
@@ -72,7 +73,7 @@ async function inspectProvisioning(
     if (!normalized || !(await hasSafeParentDirectories(sourceRoot, normalized))) {
       continue;
     }
-    const stat = await lstatIfExists(resolveGitPath(sourceRoot, normalized));
+    const stat = await lstatIfExists(resolveGitPath(sourceRoot, normalized), "ENOENT");
     if (stat?.isFile()) {
       estimatedBytes += Math.max(4096, stat.size);
     }
@@ -159,7 +160,7 @@ export async function executeGitWorktreeOperation(
         operation.input.replacementRefBase,
       );
     case "worktree.directory-size":
-      return await measureDirectoryTreeBytes(operation.input.root, operation.input.excludeGit);
+      return await measureDirectoryTreeBytes(operation.input.root);
     default:
       throw new Error("Unknown managed-worktree Git operation");
   }

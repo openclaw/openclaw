@@ -14,7 +14,10 @@ export {
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
 export { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-export { readSqliteDatabaseWriteTokenForPath } from "../infra/sqlite-database-admission.js";
+export {
+  readSqliteDatabaseScopedWriteTokenForPath,
+  readSqliteDatabaseWriteTokenForPath,
+} from "../infra/sqlite-database-admission.js";
 export {
   openOpenClawAgentSqliteWorkerStore,
   openOpenClawAgentSqliteWorkerStoreV2,
@@ -43,9 +46,11 @@ export {
   sqliteStringSet,
 } from "../infra/kysely-sync.js";
 export { resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
+export { withSqliteReadOnlyInspection } from "../infra/sqlite-maintenance-inspection.js";
 export {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
+  startSqliteReadOnlyLocationAsync,
 } from "../infra/sqlite-snapshot-source.js";
 export { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 export {
@@ -61,7 +66,6 @@ export {
   runSqliteImmediateTransaction,
   runSqliteImmediateTransactionSync,
   withOpenClawAgentDatabaseAsync,
-  withOpenClawAgentDatabaseRuntime,
   withOpenClawAgentDatabaseWrite,
 } from "./sqlite-runtime-legacy.js";
 export { tableExists } from "../state/openclaw-state-db-schema-helpers.js";

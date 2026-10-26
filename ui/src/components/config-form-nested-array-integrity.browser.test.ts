@@ -1,13 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderArrayFixture } from "../test-helpers/config-form-fixtures.ts";
-
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element instanceof Element, label).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${label}`);
-  }
-  return element;
-}
+import { expectElement, renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
 
 describe("config form nested array integrity", () => {
   it("preserves an unrelated JSON draft when a sibling field changes", () => {

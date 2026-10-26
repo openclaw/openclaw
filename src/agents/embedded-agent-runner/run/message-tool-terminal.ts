@@ -1,7 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveAgentAssistantTurnId } from "../../../../packages/agent-core/src/tool-execution-context.js";
+import {
+  getAgentToolInputScope,
+  resolveAgentAssistantTurnId,
+} from "../../../../packages/agent-core/src/tool-execution-context.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
-import { readEmbeddedMessageDeliveryFact } from "../../embedded-agent-message-delivery.js";
 import {
   isDeliveredMessageToolOnlySourceReplyResult,
   resolveMessageToolSourceReplyFinal,
@@ -13,19 +15,21 @@ import {
 } from "../../embedded-agent-messaging-extraction.js";
 import type { MessagingToolSourceReplyPayload } from "../../embedded-agent-messaging.types.js";
 import { captureToolAuthoredSourceReply } from "../../embedded-agent-tool-authored-source-reply.js";
-import type { AfterToolCallContext, Agent } from "../../runtime/index.js";
+import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
 import {
   getInternalToolTurnCompletion,
   setInternalToolTurnCompletion,
 } from "../../runtime/internal-hooks.js";
 import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import { isToolResultError, readToolResultDetails } from "../../tool-result-error.js";
+import { createSourceReplyBatchCompletion } from "../../tool-source-reply-completion.js";
 
 type MessageToolTerminalRoute = Omit<
   Parameters<typeof isDeliveredMessagingToolSendToCurrentSource>[0],
   "send" | "deliveredPayload"
 > & {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  messageToolFinalByDefault?: boolean;
   currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
@@ -96,20 +100,33 @@ export function installToolAuthoredSourceReplyTerminalHook(params: {
   };
 }
 
-export function installMessageToolOnlyTerminalHook(
+export function installMessageToolTerminalHook(
   params: MessageToolTerminalRoute & {
     agent: Agent;
     onDeliveredSourceReply?: () => void;
   },
 ): void {
-  if (params.sourceReplyDeliveryMode !== "message_tool_only") {
-    return;
-  }
+  const finalReplyInputs = new Set<object>();
+  const nestedCompletion = createSourceReplyBatchCompletion();
+  const previousCompletion = getInternalToolTurnCompletion(params.agent);
+  // Let sibling tools settle, then finish without another model request.
+  setInternalToolTurnCompletion(params.agent, (context) => {
+    const completed = nestedCompletion.complete(
+      context.toolResults,
+      finalReplyInputs.has(context.inputScope),
+      context.inputScope,
+    );
+    finalReplyInputs.clear();
+    return previousCompletion?.(context) === true || completed;
+  });
   const previousAfterToolCall = params.agent.afterToolCall?.bind(params.agent);
   params.agent.afterToolCall = async (context, signal) => {
-    const hookResult = await previousAfterToolCall?.(context, signal);
+    const inputScope = getAgentToolInputScope(context);
+    // Capture private cell identity before presentation can replace or reject its result.
+    nestedCompletion.observe(context.result);
     const toolName = context.toolCall.name;
     const toolArgs = argsRecordForToolCall(context);
+    const final = resolveMessageToolSourceReplyFinal(toolArgs, params.messageToolFinalByDefault);
     const extractionArgs =
       toolName === "message" &&
       params.currentProvider &&
@@ -120,36 +137,35 @@ export function installMessageToolOnlyTerminalHook(
     const pendingSend = extractMessagingToolSend(toolName, extractionArgs, params);
     const confirmedSend =
       pendingSend && extractMessagingToolSendResult(pendingSend, context.result);
-    const deliveryFact = readEmbeddedMessageDeliveryFact(
-      readToolResultDetails(context.result)?.messageDelivery,
-    );
-    const isError = hookResult?.isError ?? context.isError;
-    const delivered = isDeliveredMessageToolOnlySourceReplyResult({
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-      toolName,
-      args: toolArgs,
-      result: hookResult ?? context.result,
-      // Middleware may retain a delivery summary while redacting its source receipt.
-      hookResult: context.result,
-      isError,
-      allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
-        ...params,
-        send: confirmedSend,
-        deliveredPayload: context.result,
-      }),
-      ...(deliveryFact
-        ? {
-            deliveryConfirmed:
-              deliveryFact.status === "settled" && (!isError || deliveryFact.partialDelivery),
-          }
-        : {}),
-    });
-    if (delivered) {
-      params.onDeliveredSourceReply?.();
-      if (resolveMessageToolSourceReplyFinal(argsRecordForToolCall(context))) {
-        return { ...hookResult, terminate: true };
+    const isDelivered = (hookResult?: AfterToolCallResult) =>
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        toolName,
+        args: toolArgs,
+        result: hookResult ?? context.result,
+        // Middleware may retain a delivery summary while redacting its source receipt.
+        hookResult: context.result,
+        isError: hookResult?.isError ?? context.isError,
+        allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
+          ...params,
+          send: confirmedSend,
+          deliveredPayload: context.result,
+        }),
+      });
+    // Presentation hooks cannot revoke delivery or finality already committed by the tool.
+    let delivered = isDelivered();
+    let hookResult: AfterToolCallResult | undefined;
+    try {
+      hookResult = await previousAfterToolCall?.(context, signal);
+    } finally {
+      delivered ||= isDelivered(hookResult);
+      if (delivered) {
+        if (final && inputScope) {
+          finalReplyInputs.add(inputScope);
+        }
+        params.onDeliveredSourceReply?.();
       }
     }
-    return hookResult;
+    return delivered && final ? { ...hookResult, terminate: true } : hookResult;
   };
 }

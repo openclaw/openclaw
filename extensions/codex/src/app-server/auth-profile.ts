@@ -4,7 +4,6 @@ import {
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-harness-registration";
 import {
-  ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
   resolveAuthProfileOrder,
 } from "openclaw/plugin-sdk/provider-auth";
@@ -21,12 +20,25 @@ export {
 const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
 
+export async function resolveModelBackedReviewerPolicyProvider(params: {
+  authProfileId?: string;
+  modelProvider?: string;
+  agentDir?: string;
+  config?: CodexAppServerAuthProfileLookup["config"];
+}): Promise<string | undefined> {
+  const modelProvider = params.modelProvider?.trim();
+  if (modelProvider && modelProvider.toLowerCase() !== "codex") {
+    return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;
+  }
+  return (await isCodexAppServerNativeAuthProfile(params)) ? "openai" : undefined;
+}
+
 export const {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerAuthProfileStore,
+  withCodexAppServerAuthProfileIdAtEffect,
 } = createCodexAuthProfileSelection({
-  ensureAuthProfileStore,
   ensureAuthProfileStoreAsync,
   resolveAuthProfileOrder,
 });

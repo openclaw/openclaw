@@ -74,7 +74,7 @@ it
     const expectedOutput =
       action === "delayed-output" ? "x".repeat(256 * 1024) : "owned worker finished\n";
     const rootExited = createDeferred();
-    let output = "";
+    const output: string[] = [];
     let stderr = "";
     try {
       const descendantSource = `
@@ -133,9 +133,7 @@ it
       });
       adapter = startup.adapter;
       await startup.ready;
-      const collectOutput = (chunk: string) => {
-        output += chunk;
-      };
+      const collectOutput = output.push.bind(output);
       if (action !== "delayed-output") {
         adapter.onStdout(collectOutput);
       }
@@ -202,22 +200,21 @@ it
           message: {
             type: "openclaw-worker-start-v1",
             lineageFds: expect.any(Array),
-            ...(adapter.treeOwnership
+            ...(action !== "force-descendant"
               ? { nativeProcessOwner: expect.stringMatching(/^file:/u) }
               : {}),
           },
         });
         expect(onWorkerMessage).toHaveBeenCalledTimes(action === "force-descendant" ? 3 : 2);
         expect(await readFile(marker, "utf8")).toBe("started\n");
-        expect(output.length).toBe(expectedOutput.length);
-        expect(output).toBe(expectedOutput);
+        expect(output.join("")).toBe(expectedOutput);
       } else {
         adapter.closeStartGate!();
         await expect(adapter.openStartGate!()).rejects.toThrow("closed before startup");
         await adapter.waitForExtinction();
         expect(existsSync(marker)).toBe(false);
         expect(onWorkerMessage).toHaveBeenCalledTimes(1);
-        expect(output).toBe("");
+        expect(output.join("")).toBe("");
       }
       await adapter.waitForExtinction();
       expect(await store.get(claim.launchId)).toMatchObject({

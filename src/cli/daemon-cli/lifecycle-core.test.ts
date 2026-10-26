@@ -1,10 +1,9 @@
-// Daemon lifecycle core tests cover service lifecycle transitions and platform adapters.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { GatewayService } from "../../daemon/service.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { GatewayRestartPreparationError } from "../../infra/restart-intent-error.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-support.js";
 import {
   createGatewayServiceRunArgs as createServiceRunArgs,
   lifecycleTestRuntime,
@@ -15,17 +14,21 @@ import {
   stubEmptyGatewayEnv,
 } from "./test-helpers/lifecycle-core-harness.js";
 
-const loadConfig = vi.fn<() => OpenClawConfig>(() => ({
-  gateway: {
-    auth: {
-      token: "config-token",
-    },
-  },
-}));
+const loadConfig = vi.fn<() => OpenClawConfig>(makeTokenConfig);
 const writeGatewayRestartIntentSync = vi.fn();
 const clearGatewayRestartIntentSync = vi.fn();
 const appendGatewayLifecycleAudit = vi.fn();
 const MISSING_SERVICE_PROGRAM = "/openclaw-test-missing-runtime/node";
+const scheduledMessage = "restart scheduled, gateway will restart momentarily";
+function makeTokenConfig() {
+  return { gateway: { auth: { token: "config-token" } } };
+}
+const serviceSnapshot = {
+  label: "TestService",
+  loaded: true,
+  loadedText: "loaded",
+  notLoadedText: "not loaded",
+};
 const createGatewayLifecycleMutationAudit = vi.fn(
   (params: { action: string; source?: string }) => (mutation: { mode: string; pid?: number }) =>
     appendGatewayLifecycleAudit({
@@ -44,6 +47,11 @@ vi.mock("../../config/config.js", () => ({
 vi.mock("../../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: lifecycleTestRuntime,
+}));
+
+// mock-isolation: These service tests use valid config; preflight has its own guard tests.
+vi.mock("./lifecycle-action-preflight.js", () => ({
+  getServiceActionPreflightFailure: async () => null,
 }));
 
 vi.mock("../../infra/restart-intent.js", () => ({
@@ -77,875 +85,674 @@ vi.mock("./lifecycle-audit.js", () => ({
 
 // The runtime mock consumes the initialized lifecycle harness, not an early static import.
 const { ExitError } = await import("../../runtime.js");
-const { runServiceRestart, runServiceStart, runServiceStop } = await import("./lifecycle-core.js");
+const { runServiceRestart, runServiceStart, runServiceStop, runServiceUninstall } =
+  await import("./lifecycle-core.js");
+type StartArgs = Parameters<typeof runServiceStart>[0];
+type RestartArgs = Parameters<typeof runServiceRestart>[0];
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe logged JSON shape.
-function readJsonLog<T extends object>() {
+function start(overrides: Partial<StartArgs> = {}) {
+  return runServiceStart({ ...createServiceRunArgs(), ...overrides });
+}
+function restart(overrides: Partial<RestartArgs> = {}) {
+  return runServiceRestart({ ...createServiceRunArgs(), ...overrides });
+}
+function missingService() {
+  service.isLoaded.mockResolvedValue(false);
+  service.readCommand.mockResolvedValue(null);
+}
+function command(programArguments: string[], environment?: Record<string, string>) {
+  service.readCommand.mockResolvedValue({ programArguments, ...(environment && { environment }) });
+}
+
+type ActionPayload = Parameters<
+  ReturnType<typeof import("./response.js").createDaemonActionContext>["emit"]
+>[0];
+
+function readJsonLog(): ActionPayload {
   const jsonLine = lifecycleRuntimeLogs.find((line) => line.trim().startsWith("{"));
-  return JSON.parse(jsonLine ?? "{}") as T;
+  return JSON.parse(jsonLine ?? "{}");
 }
 
-async function withUnsupportedGatewayService(
-  run: (unsupportedService: GatewayService) => Promise<void>,
-) {
-  const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("aix");
-  try {
-    const { resolveGatewayService } = await import("../../daemon/service.js");
-    await run(resolveGatewayService());
-  } finally {
-    platformSpy.mockRestore();
-  }
+function expectJsonOutput(payload: object) {
+  expect(lifecycleRuntimeLogs).toEqual([JSON.stringify(payload, null, 2)]);
 }
 
-function expectUnsupportedServiceCheckFailure() {
-  const payload = readJsonLog<{ ok?: boolean; error?: string }>();
-  expect(payload.ok).toBe(false);
-  expect(payload.error).toContain(
-    "Gateway service check failed: Error: Gateway service install not supported on aix",
+function clearResponseMocks() {
+  lifecycleTestRuntime.exit.mockClear();
+  lifecycleTestRuntime.writeJson.mockClear();
+  lifecycleTestRuntime.error.mockClear();
+}
+
+function expectSingleRefusal(code: number, payload: object) {
+  expect(lifecycleTestRuntime.exit).toHaveBeenCalledExactlyOnceWith(code);
+  expect(lifecycleTestRuntime.writeJson).toHaveBeenCalledOnce();
+  expect(lifecycleTestRuntime.error).not.toHaveBeenCalled();
+  expect(lifecycleRuntimeLogs).toHaveLength(1);
+  expect(JSON.parse(lifecycleRuntimeLogs[0]!)).toMatchObject(payload);
+}
+
+async function expectReportedExit(code: number, run: () => Promise<unknown>) {
+  const exit = new ExitError(code);
+  await lifecycleTestRuntime.exit.withImplementation(
+    (actualCode) => {
+      expect(actualCode).toBe(code);
+      throw exit;
+    },
+    async () => {
+      await expect(run()).rejects.toBe(exit);
+    },
   );
 }
 
-describe("Gateway service lifecycle", () => {
-  it.each(["native-start", "recovered-start", "repaired-start", "restart-repair-refused"] as const)(
-    "preserves the single reported outcome through %s catch boundaries",
-    async (route) => {
-      lifecycleTestRuntime.exit.mockClear();
-      lifecycleTestRuntime.writeJson.mockClear();
-      lifecycleTestRuntime.error.mockClear();
-      if (route === "recovered-start") {
-        service.isLoaded.mockResolvedValue(false);
-        service.readCommand.mockResolvedValue(null);
-      } else if (route === "repaired-start" || route === "restart-repair-refused") {
-        service.readCommand.mockResolvedValue({
-          programArguments: [MISSING_SERVICE_PROGRAM],
-        });
-      }
-      const refusedRepair = route === "restart-repair-refused";
-      const expectedCode = refusedRepair ? 1 : 2;
-      const exit = new ExitError(expectedCode);
-      await writeGatewayRestartIntentSync.withImplementation(
-        () => true,
-        async () => {
-          await lifecycleTestRuntime.exit.withImplementation(
-            (code) => {
-              expect(code).toBe(expectedCode);
-              throw exit;
-            },
-            async () => {
-              const operation = refusedRepair
-                ? runServiceRestart({
-                    ...createServiceRunArgs(),
-                    repairLoadedService: async () => null,
-                  })
-                : runServiceStart({
-                    ...createServiceRunArgs(),
-                    ...(route === "recovered-start"
-                      ? { onNotLoaded: async () => ({ result: "started" as const, loaded: true }) }
-                      : {}),
-                    ...(route === "repaired-start"
-                      ? {
-                          repairLoadedService: async () => ({
-                            result: "started" as const,
-                            loaded: true,
-                          }),
-                        }
-                      : {}),
-                    postStartCheck: async ({ fail }) => {
-                      fail("Gateway is still starting", ["inspect"], "still-starting");
-                    },
-                  });
-              await expect(operation).rejects.toBe(exit);
-            },
-          );
-        },
-      );
-      expect(lifecycleTestRuntime.exit).toHaveBeenCalledExactlyOnceWith(expectedCode);
-      expect(lifecycleTestRuntime.writeJson).toHaveBeenCalledOnce();
-      expect(lifecycleTestRuntime.error).not.toHaveBeenCalled();
-      expect(lifecycleRuntimeLogs).toHaveLength(1);
-      const payload = JSON.parse(lifecycleRuntimeLogs[0]!);
-      expect(payload).toMatchObject(
-        refusedRepair
-          ? {
-              ok: false,
-              action: "restart",
-              error: expect.stringContaining("service needs repair before restart"),
-            }
-          : {
-              ok: false,
-              action: "start",
-              result: "still-starting",
-              error: "Gateway is still starting",
-            },
-      );
-      if (refusedRepair) {
-        expect(clearGatewayRestartIntentSync).toHaveBeenCalledOnce();
-        expect(service.restart).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it.each(["stop-recovery", "restart-recovery", "restart-owned"] as const)(
-    "preserves one reported refusal from %s callbacks",
-    async (route) => {
-      lifecycleTestRuntime.exit.mockClear();
-      lifecycleTestRuntime.writeJson.mockClear();
-      lifecycleTestRuntime.error.mockClear();
-      service.isLoaded.mockResolvedValue(false);
-      service.readCommand.mockResolvedValue(null);
-      const exit = new ExitError(1);
-      await lifecycleTestRuntime.exit.withImplementation(
-        () => {
-          throw exit;
-        },
-        async () => {
-          const refuse = async (ctx: { fail: (message: string) => void }) => {
-            ctx.fail("Recovery refused");
-            return null;
-          };
-          const operation =
-            route === "stop-recovery"
-              ? runServiceStop({ ...createServiceRunArgs(), onNotLoaded: refuse })
-              : runServiceRestart({
-                  ...createServiceRunArgs(),
-                  ...(route === "restart-owned"
-                    ? { restartOwnedProcess: refuse }
-                    : { onNotLoaded: refuse }),
-                });
-          await expect(operation).rejects.toBe(exit);
-        },
-      );
-      expect(lifecycleTestRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
-      expect(lifecycleTestRuntime.writeJson).toHaveBeenCalledOnce();
-      expect(lifecycleTestRuntime.error).not.toHaveBeenCalled();
-      expect(lifecycleRuntimeLogs).toHaveLength(1);
-      expect(JSON.parse(lifecycleRuntimeLogs[0]!)).toMatchObject({
-        ok: false,
-        action: route === "stop-recovery" ? "stop" : "restart",
-        error: "Recovery refused",
-      });
-      expect(service.restart).not.toHaveBeenCalled();
-      expect(service.stop).not.toHaveBeenCalled();
-    },
-  );
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  beforeEach(() => {
-    mockSystemAccountHome();
-    appendGatewayLifecycleAudit.mockClear();
-    createGatewayLifecycleMutationAudit.mockClear();
-    resetLifecycleRuntimeLogs();
-    loadConfig.mockReset();
-    loadConfig.mockReturnValue({
-      gateway: {
-        auth: {
-          token: "config-token",
-        },
-      },
-    });
-    resetLifecycleServiceMocks();
-    writeGatewayRestartIntentSync.mockClear();
-    clearGatewayRestartIntentSync.mockClear();
-    service.readCommand.mockResolvedValue({
-      programArguments: [],
-      environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
-    });
-    stubEmptyGatewayEnv();
-  });
-
-  it("rejects unsupported-platform start before not-loaded recovery", async () => {
-    const onNotLoaded = vi.fn(async () => ({
-      result: "started" as const,
-      message: "should not run",
-      loaded: true,
-    }));
-
-    await withUnsupportedGatewayService(async (unsupportedService) => {
-      await expect(
-        runServiceStart({
-          serviceNoun: "Gateway",
-          service: unsupportedService,
-          renderStartHints: () => ["openclaw gateway install"],
-          opts: { json: true },
-          onNotLoaded,
-        }),
-      ).rejects.toThrow("__exit__:1");
-    });
-
-    expect(onNotLoaded).not.toHaveBeenCalled();
-    expectUnsupportedServiceCheckFailure();
-  });
-
-  it("fails restart with the container hint when no service is installed", async () => {
-    service.isLoaded.mockResolvedValue(false);
-    service.readCommand.mockResolvedValue(null);
-    const hasInstalledDefinition = vi.fn(async () => false);
-    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "openclaw-demo-container");
-
-    await expect(
-      runServiceRestart({
-        serviceNoun: "Gateway",
-        service: { ...service, hasInstalledDefinition } as GatewayService,
-        renderStartHints: () => [
-          "Restart the container or the service that manages it for openclaw-demo-container.",
-          "openclaw gateway install",
-        ],
-        opts: { json: true },
-      }),
-    ).rejects.toThrow("__exit__:1");
-
-    const payload = readJsonLog<{
-      action?: string;
-      ok?: boolean;
-      error?: string;
-      hints?: string[];
-      hintItems?: Array<{ kind: string; text: string }>;
-    }>();
-    expect(payload).toMatchObject({
-      action: "restart",
-      ok: false,
-      error: "Gateway service not loaded.",
-    });
-    expect(payload.hints).toContain(
-      "Restart the container or the service that manages it for openclaw-demo-container.",
-    );
-    expect(payload.hintItems).toContainEqual(
-      expect.objectContaining({ kind: "container-restart" }),
-    );
-    expect(hasInstalledDefinition).toHaveBeenCalledWith({ env: process.env });
-  });
-
-  it("runs the service mutation guard before restarting a loaded service", async () => {
-    const beforeServiceMutation = vi.fn();
-
-    await runServiceRestart({
-      ...createServiceRunArgs(),
-      beforeServiceMutation,
-    });
-
-    expect(beforeServiceMutation).toHaveBeenCalledTimes(1);
-    expect(beforeServiceMutation.mock.invocationCallOrder[0]).toBeLessThan(
-      service.restart.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-  });
-
-  it("aborts loaded-service mutation when the service guard rejects", async () => {
-    const repairLoadedService = vi.fn();
-
-    await expect(
-      runServiceRestart({
-        ...createServiceRunArgs(),
-        beforeServiceMutation: () => {
-          throw new Error("service mutation denied");
-        },
-        repairLoadedService,
-      }),
-    ).rejects.toThrow("service mutation denied");
-
-    expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
-    expect(repairLoadedService).not.toHaveBeenCalled();
-    expect(service.restart).not.toHaveBeenCalled();
-  });
-
-  it("repairs managed port drift before restarting", async () => {
-    service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
-    service.readCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "--port", "18789"],
-      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
-    });
-    type RepairLoadedService = NonNullable<
-      Parameters<typeof runServiceRestart>[0]["repairLoadedService"]
-    >;
-    const repairLoadedService = vi.fn<RepairLoadedService>(async () => ({
-      result: "restarted" as const,
-      message: "Gateway service definition repaired and restarted.",
-      loaded: true,
-    }));
-
-    await runServiceRestart({
-      serviceNoun: "Gateway",
-      service,
-      renderStartHints: () => [],
-      opts: { json: true, restartIntent: { waitMs: 2_500 } },
-      expectedPort: 19_001,
-      repairLoadedService,
-    });
-
-    expect(repairLoadedService).toHaveBeenCalledWith(
-      expect.objectContaining({
-        issues: [
-          {
-            code: "port-mismatch",
-            message: "service port 18789 does not match current gateway config port 19001",
-          },
-        ],
-      }),
-    );
-    expect(service.restart).not.toHaveBeenCalled();
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: expect.any(Object),
-        reason: "gateway.restart",
-        intent: { waitMs: 2_500 },
-      }),
-    );
-    expect(readJsonLog<{ result?: string; message?: string }>()).toMatchObject({
-      result: "restarted",
-      message: "Gateway service definition repaired and restarted.",
-    });
-  });
-
-  it.each([false])(
-    "keeps Nix restart available without suggesting a forbidden token reinstall (json=%s)",
-    async (json) => {
-      await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
-        await expect(
-          runServiceRestart({ ...createServiceRunArgs(true), opts: { json } }),
-        ).resolves.toBe(true);
-
-        expect(service.restart).toHaveBeenCalledOnce();
-        const output = json
-          ? readJsonLog<{ warnings: string[] }>().warnings.join("\n")
-          : lifecycleRuntimeLogs.join("\n");
-        expect(output).toContain("Config token differs from service token");
-        expect(output).toContain("Nix mode detected; service install is disabled.");
-        expect(output).not.toContain("gateway install --force");
-      });
-    },
-  );
-
-  it("compares restart drift against config token even when caller env is set", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        auth: {
-          token: "config-token",
-        },
-      },
-    });
-    service.readCommand.mockResolvedValue({
-      programArguments: [],
-      environment: { OPENCLAW_GATEWAY_TOKEN: "env-token" },
-    });
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
-
-    await runServiceRestart(createServiceRunArgs(true));
-
-    const payload = readJsonLog<{ warnings?: string[] }>();
-    expect(payload.warnings?.some((warning) => warning.includes("gateway install --force"))).toBe(
-      true,
-    );
-  });
-
-  it("skips drift warning when disabled", async () => {
-    await runServiceRestart({
-      serviceNoun: "Node",
-      service,
-      renderStartHints: () => [],
-      opts: { json: true },
-    });
-
-    expect(loadConfig).not.toHaveBeenCalled();
-    expect(service.readCommand).not.toHaveBeenCalled();
-    expect(writeGatewayRestartIntentSync).not.toHaveBeenCalled();
-    const payload = readJsonLog<{ warnings?: string[] }>();
-    expect(payload.warnings).toBeUndefined();
-  });
-
-  it("runs a requested managed stop even when the service is not loaded", async () => {
-    const onNotLoaded = vi.fn(async () => ({
-      result: "stopped" as const,
-      message: "Gateway stop signal sent to unmanaged process on port 18789: 4200.",
-    }));
-    service.isLoaded.mockResolvedValue(false);
-
-    await runServiceStop({
-      serviceNoun: "Gateway",
-      service,
-      opts: { json: true, disable: true },
-      stopWhenNotLoaded: true,
-      onNotLoaded,
-    });
-
-    const payload = readJsonLog<{ result?: string; service?: { loaded?: boolean } }>();
-    expect(payload.result).toBe("stopped");
-    expect(payload.service?.loaded).toBe(false);
-    expect(service.stop).toHaveBeenCalledTimes(1);
-    const [stopOptions] = service.stop.mock.calls[0] ?? [];
-    expect(stopOptions?.env).toBe(process.env);
-    expect(stopOptions?.disable).toBe(true);
-    expect(onNotLoaded).not.toHaveBeenCalled();
-  });
-
-  it("skips restart health checks when restart is only scheduled", async () => {
-    const postRestartCheck = vi.fn(async () => {});
-    service.restart.mockResolvedValue({ outcome: "scheduled" });
-
-    const result = await runServiceRestart({
-      serviceNoun: "Gateway",
-      service,
-      renderStartHints: () => [],
-      opts: { json: true },
-      postRestartCheck,
-    });
-
-    expect(result).toBe(true);
-    expect(postRestartCheck).not.toHaveBeenCalled();
-    const payload = readJsonLog<{ result?: string; message?: string }>();
-    expect(payload.result).toBe("scheduled");
-    expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
-  });
-
-  it("reports startup recovery instead of install hints when restart cannot verify a serving owner", async () => {
-    writeGatewayRestartIntentSync.mockImplementationOnce(() => {
-      throw new GatewayRestartPreparationError("serving-owner");
-    });
-    await expect(
-      runServiceRestart({
-        ...createServiceRunArgs(),
-        renderStartHints: () => ["openclaw gateway install"],
-      }),
-    ).rejects.toThrow("__exit__:1");
-    const payload = readJsonLog<{ hints: string[] }>();
-    expect(payload.hints).toEqual([
-      "openclaw gateway status --deep",
-      "Fix the reported startup failure, then run `openclaw gateway start` to wait for readiness without restarting the process.",
-    ]);
-    expect(service.restart).not.toHaveBeenCalled();
-  });
-
-  it("clears restart intent when service-manager restart fails before signaling", async () => {
-    service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
-    writeGatewayRestartIntentSync.mockReturnValueOnce(true);
-    service.restart.mockRejectedValueOnce(new Error("launchctl failed before signaling"));
-
-    await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
-
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: expect.any(Object),
-        reason: "gateway.restart",
-      }),
-    );
-    expect(clearGatewayRestartIntentSync).toHaveBeenCalledOnce();
-  });
-
-  it.each(["ready", "still-starting", "failed"] as const)(
-    "checks an already-running service before reporting start %s",
-    async (outcome) => {
-      service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
-      const postStartCheck: NonNullable<
-        Parameters<typeof runServiceStart>[0]["postStartCheck"]
-      > = async ({ fail }) => {
-        if (outcome !== "ready") {
-          fail(
-            "Gateway listener is unavailable.",
-            [],
-            outcome === "still-starting" ? outcome : undefined,
-          );
-        }
-      };
-      const start = runServiceStart({ ...createServiceRunArgs(), postStartCheck });
-      if (outcome === "ready") {
-        await start;
-        expect(readJsonLog()).toMatchObject({ ok: true, result: "already-running" });
-      } else {
-        await expect(start).rejects.toThrow(`__exit__:${outcome === "still-starting" ? 2 : 1}`);
-        expect(readJsonLog()).toMatchObject({
-          ok: false,
-          error: "Gateway listener is unavailable.",
-        });
-        if (outcome === "still-starting") {
-          expect(readJsonLog()).toMatchObject({ result: "still-starting" });
-        }
-      }
-      expect(lifecycleRuntimeLogs.filter((line) => line.trim().startsWith("{"))).toHaveLength(1);
-      expect(service.start).not.toHaveBeenCalled();
-      expect(service.restart).not.toHaveBeenCalled();
-    },
-  );
-
-  it("preserves the readiness failure and exit code after starting a stopped service", async () => {
-    await expect(
-      runServiceStart({
-        ...createServiceRunArgs(),
-        postStartCheck: async ({ fail }) =>
-          fail("Gateway is still starting.", [], "still-starting"),
-      }),
-    ).rejects.toThrow("__exit__:2");
-    expect(readJsonLog()).toMatchObject({
-      ok: false,
-      result: "still-starting",
-      error: "Gateway is still starting.",
-    });
-    expect(lifecycleRuntimeLogs.filter((line) => line.trim().startsWith("{"))).toHaveLength(1);
-    expect(service.start).toHaveBeenCalledOnce();
-  });
-
-  it.each([["Gateway", "", "", "openclaw gateway", "restart"]] as const)(
-    "warns in json with the %s service repair command and active context",
-    async (serviceNoun, profile, container, command, repairAction) => {
-      vi.stubEnv("OPENCLAW_PROFILE", profile);
-      vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
-      service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
-      service.readCommand.mockResolvedValue({
-        programArguments: [MISSING_SERVICE_PROGRAM, "openclaw", serviceNoun.toLowerCase()],
-      });
-
-      await runServiceStart({
-        ...createServiceRunArgs(),
-        serviceNoun,
-        repairLoadedService: serviceNoun === "Gateway" ? vi.fn(async () => null) : undefined,
-      });
-
-      const payload = readJsonLog<{ result?: string; warnings?: string[] }>();
-      expect(payload.result).toBe("already-running");
-      expect(payload.warnings).toEqual([
-        `${serviceNoun} service already running, but its installed service definition needs repair: service command points at a missing path: ${MISSING_SERVICE_PROGRAM}; run \`${command} ${repairAction}\` to apply.`,
-      ]);
-      expect(service.start).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([["Node", "install --force"]])(
-    "prints one warning line when an already-running %s service needs repair",
-    async (serviceNoun, repairAction) => {
-      service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
-      service.readCommand.mockResolvedValue({
-        programArguments: [MISSING_SERVICE_PROGRAM, "openclaw", serviceNoun.toLowerCase()],
-      });
-
-      await runServiceStart({
-        serviceNoun,
-        service,
-        renderStartHints: () => [],
-        repairLoadedService: serviceNoun === "Gateway" ? vi.fn(async () => null) : undefined,
-      });
-
-      const repairWarnings = lifecycleRuntimeLogs.filter((line) =>
-        line.startsWith(
-          `${serviceNoun} service already running, but its installed service definition needs repair:`,
+it.each(["native-start", "recovered-start", "repaired-start", "restart-repair-refused"] as const)(
+  "preserves the single reported outcome through %s catch boundaries",
+  async (route) => {
+    if (route === "recovered-start") {
+      missingService();
+    } else if (route === "repaired-start" || route === "restart-repair-refused") {
+      command([MISSING_SERVICE_PROGRAM]);
+    }
+    const refusedRepair = route === "restart-repair-refused";
+    const expectedCode = refusedRepair ? 1 : 2;
+    const recover = async () => ({ result: "started" as const, loaded: true });
+    await writeGatewayRestartIntentSync.withImplementation(
+      () => true,
+      () =>
+        expectReportedExit(expectedCode, () =>
+          refusedRepair
+            ? restart({ repairLoadedService: async () => null })
+            : start({
+                onNotLoaded: route === "recovered-start" ? recover : undefined,
+                repairLoadedService: route === "repaired-start" ? recover : undefined,
+                postStartCheck: async ({ fail }) => {
+                  fail("Gateway is still starting", ["inspect"], "still-starting");
+                },
+              }),
         ),
-      );
-      expect(repairWarnings).toHaveLength(1);
-      expect(repairWarnings[0]).toContain(
-        `run \`openclaw ${serviceNoun.toLowerCase()} ${repairAction}\` to apply.`,
-      );
-      expect(service.start).not.toHaveBeenCalled();
-    },
-  );
-
-  it("repairs loaded services with port drift during start before reporting success", async () => {
-    service.readCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "--port", "18789"],
-    });
-    type RepairLoadedService = NonNullable<
-      Parameters<typeof runServiceStart>[0]["repairLoadedService"]
-    >;
-    const repairLoadedService = vi.fn<RepairLoadedService>(async (ctx) => {
-      ctx.warn?.(
-        "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
-      );
-      return {
-        result: "started" as const,
-        message: "Gateway service definition repaired and started.",
-        warnings: ["service port 18789 does not match current gateway config port 19001"],
-        loaded: true,
-      };
-    });
-
-    await runServiceStart({
-      serviceNoun: "Gateway",
-      service,
-      renderStartHints: () => [],
-      opts: { json: true },
-      repairLoadedService,
-      expectedPort: 19_001,
-    });
-
-    expect(repairLoadedService).toHaveBeenCalledTimes(1);
-    expect(service.start).not.toHaveBeenCalled();
-    const payload = readJsonLog<{
-      result?: string;
-      message?: string;
-      warnings?: string[];
-      service?: { loaded?: boolean };
-    }>();
-    expect(payload.result).toBe("started");
-    expect(payload.message).toBe("Gateway service definition repaired and started.");
-    expect(payload.warnings).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("service port 18789"),
-        expect.stringContaining("custom behavior and will be overwritten"),
-      ]),
     );
-    expect(payload.service?.loaded).toBe(true);
-  });
+    expectSingleRefusal(
+      expectedCode,
+      refusedRepair
+        ? {
+            ok: false,
+            action: "restart",
+            error: expect.stringContaining("service needs repair before restart"),
+          }
+        : {
+            ok: false,
+            action: "start",
+            result: "still-starting",
+            error: "Gateway is still starting",
+          },
+    );
+    if (refusedRepair) {
+      expect(clearGatewayRestartIntentSync).toHaveBeenCalledOnce();
+      expect(service.restart).not.toHaveBeenCalled();
+    }
+  },
+);
 
-  it.each([["Node", "work", "demo", "openclaw --container demo node"]] as const)(
-    "fails %s service start with its own install hint when repair is required",
-    async (serviceNoun, profile, container, command) => {
-      vi.stubEnv("OPENCLAW_PROFILE", profile);
-      vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
-      service.readCommand.mockResolvedValue({
-        programArguments: [MISSING_SERVICE_PROGRAM, "openclaw", serviceNoun.toLowerCase()],
-      });
-
-      await expect(runServiceStart({ ...createServiceRunArgs(), serviceNoun })).rejects.toThrow(
-        "__exit__:1",
-      );
-
-      const payload = readJsonLog<{
-        ok?: boolean;
-        error?: string;
-        hints?: string[];
-        hintItems?: Array<{ kind: string; text: string }>;
-      }>();
-      expect(payload.ok).toBe(false);
-      expect(payload.error).toContain("service needs repair");
-      expect(payload.hints).toEqual([`${command} install --force`]);
-      expect(payload.hintItems).toEqual([{ kind: "install", text: `${command} install --force` }]);
-
-      resetLifecycleRuntimeLogs();
-      await expect(
-        runServiceStart({
-          ...createServiceRunArgs(),
-          serviceNoun,
-          opts: { json: false },
-        }),
-      ).rejects.toThrow("__exit__:1");
-      expect(lifecycleRuntimeLogs).toContain(`Tip: ${command} install --force`);
-      expect(service.start).not.toHaveBeenCalled();
-    },
-  );
-
-  it("fails start with install hints when no service is installed", async () => {
-    service.isLoaded.mockResolvedValue(false);
-    service.readCommand.mockResolvedValue(null);
-
-    await expect(
-      runServiceStart({
-        serviceNoun: "Gateway",
-        service,
-        renderStartHints: () => ["openclaw gateway install"],
-        opts: { json: true },
-      }),
-    ).rejects.toThrow("__exit__:1");
-
-    const payload = readJsonLog<{
-      ok?: boolean;
-      error?: string;
-      hints?: string[];
-      hintItems?: Array<{ kind: string; text: string }>;
-    }>();
-    expect(payload.ok).toBe(false);
-    expect(payload.error).toBe("Gateway service not loaded.");
-    expect(payload.hints?.includes("openclaw gateway install")).toBe(true);
-    expect(
-      payload.hintItems?.some(
-        (item) => item.kind === "install" && item.text === "openclaw gateway install",
-      ),
-    ).toBe(true);
-    expect(service.start).not.toHaveBeenCalled();
-  });
-  it.each(
-    (
-      [
-        ["start-recovery", "start", "started", "service repaired", true, true],
-        [
-          "already-running",
-          "start",
-          "already-running",
-          "Gateway service already running.",
-          true,
-          true,
-        ],
-        ["stop-empty", "stop", "stopped", "", false, true],
-        ["stop-missing", "stop", "not-loaded", "Gateway service not loaded.", false, false],
-        ["restart-no-message", "restart", "restarted", undefined, false, true],
-        [
-          "restart-postcheck-scheduled",
-          "restart",
-          "scheduled",
-          "restart scheduled, gateway will restart momentarily",
-          true,
-          true,
-        ],
-      ] as const
-    ).map(
-      ([route, action, result, message, loaded, json]) =>
-        [route, json, { route, action, result, message, loaded }] as const,
-    ),
-  )("preserves exact %s output (json=%s)", async (_route, json, row) => {
-    const args = {
-      serviceNoun: "Gateway",
-      service,
-      renderStartHints: () => [],
-      opts: { json },
+it.each(["stop-recovery", "restart-recovery", "restart-owned"] as const)(
+  "preserves one reported refusal from %s callbacks",
+  async (route) => {
+    missingService();
+    const refuse = async (ctx: { fail: (message: string) => void }) => {
+      ctx.fail("Recovery refused");
+      return null;
     };
-    const postCheck = vi.fn(async () =>
-      row.route === "restart-postcheck-scheduled" ? { outcome: "scheduled" as const } : undefined,
+    await expectReportedExit(1, () =>
+      route === "stop-recovery"
+        ? runServiceStop({ ...createServiceRunArgs(), onNotLoaded: refuse })
+        : restart(
+            route === "restart-owned" ? { restartOwnedProcess: refuse } : { onNotLoaded: refuse },
+          ),
     );
-    lifecycleTestRuntime.error.mockClear();
-    lifecycleTestRuntime.exit.mockClear();
-    lifecycleTestRuntime.writeJson.mockClear();
-    service.isLoaded.mockResolvedValue(row.loaded);
-    service.readCommand.mockResolvedValue(
-      row.loaded ? { programArguments: [], environment: {} } : null,
+    expectSingleRefusal(1, {
+      ok: false,
+      action: route === "stop-recovery" ? "stop" : "restart",
+      error: "Recovery refused",
+    });
+    expectNoCalls(service.restart, service.stop);
+  },
+);
+
+afterEach(() => vi.restoreAllMocks());
+
+beforeEach(() => {
+  clearResponseMocks();
+  mockSystemAccountHome();
+  appendGatewayLifecycleAudit.mockClear();
+  createGatewayLifecycleMutationAudit.mockClear();
+  resetLifecycleRuntimeLogs();
+  loadConfig.mockReset().mockReturnValue(makeTokenConfig());
+  resetLifecycleServiceMocks();
+  writeGatewayRestartIntentSync.mockClear();
+  clearGatewayRestartIntentSync.mockClear();
+  command([], { OPENCLAW_GATEWAY_TOKEN: "service-token" });
+  stubEmptyGatewayEnv();
+});
+
+it("rejects unsupported-platform start before not-loaded recovery", async () => {
+  const onNotLoaded = vi.fn(async () => ({
+    result: "started" as const,
+    message: "should not run",
+    loaded: true,
+  }));
+
+  vi.spyOn(process, "platform", "get").mockReturnValue("aix");
+  const { resolveGatewayService } = await import("../../daemon/service.js");
+  await expect(
+    start({
+      serviceNoun: "Gateway",
+      service: resolveGatewayService(),
+      renderStartHints: () => ["openclaw gateway install"],
+      onNotLoaded,
+    }),
+  ).rejects.toThrow("__exit__:1");
+
+  expect(onNotLoaded).not.toHaveBeenCalled();
+  expect(readJsonLog()).toMatchObject({
+    ok: false,
+    error: expect.stringContaining(
+      "Gateway service check failed: Error: Gateway service install not supported on aix",
+    ),
+  });
+});
+
+it("fails restart with the container hint when no service is installed", async () => {
+  missingService();
+  const hasInstalledDefinition = vi.fn(async () => false);
+  vi.stubEnv("OPENCLAW_CONTAINER_HINT", "openclaw-demo-container");
+
+  await expect(
+    restart({
+      service: { ...service, hasInstalledDefinition },
+      renderStartHints: () => [
+        "Restart the container or the service that manages it for openclaw-demo-container.",
+        "openclaw gateway install",
+      ],
+    }),
+  ).rejects.toThrow("__exit__:1");
+
+  const payload = readJsonLog();
+  expect(payload).toMatchObject({
+    action: "restart",
+    ok: false,
+    error: "Gateway service not loaded.",
+    hints: expect.arrayContaining([
+      "Restart the container or the service that manages it for openclaw-demo-container.",
+    ]),
+    hintItems: expect.arrayContaining([expect.objectContaining({ kind: "container-restart" })]),
+  });
+  expect(hasInstalledDefinition).toHaveBeenCalledWith({ env: process.env });
+});
+
+it("runs the service mutation guard before restarting a loaded service", async () => {
+  const beforeServiceMutation = vi.fn();
+
+  await restart({ beforeServiceMutation });
+
+  expect(beforeServiceMutation).toHaveBeenCalledTimes(1);
+  expect(beforeServiceMutation.mock.invocationCallOrder[0]).toBeLessThan(
+    service.restart.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+  );
+});
+
+it("aborts loaded-service mutation when the service guard rejects", async () => {
+  const repairLoadedService = vi.fn();
+
+  await expect(
+    restart({
+      beforeServiceMutation: () => {
+        throw new Error("service mutation denied");
+      },
+      repairLoadedService,
+    }),
+  ).rejects.toThrow("service mutation denied");
+
+  expectNoCalls(writeGatewayRestartIntentSync, repairLoadedService, service.restart);
+});
+
+it("repairs managed port drift before restarting", async () => {
+  service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
+  command(["openclaw", "gateway", "--port", "18789"], { OPENCLAW_GATEWAY_PORT: "18789" });
+  const repairLoadedService = vi.fn<NonNullable<RestartArgs["repairLoadedService"]>>(async () => ({
+    result: "restarted" as const,
+    message: "Gateway service definition repaired and restarted.",
+    loaded: true,
+  }));
+
+  await restart({
+    opts: { json: true, restartIntent: { waitMs: 2_500 } },
+    expectedPort: 19_001,
+    repairLoadedService,
+  });
+
+  expectPartialCall(repairLoadedService, {
+    issues: [
+      {
+        message: "service port 18789 does not match current gateway config port 19001",
+      },
+    ],
+  });
+  expect(service.restart).not.toHaveBeenCalled();
+  expectPartialCall(writeGatewayRestartIntentSync, {
+    env: expect.any(Object),
+    reason: "gateway.restart",
+    intent: { waitMs: 2_500 },
+  });
+  expect(readJsonLog()).toMatchObject({
+    result: "restarted",
+    message: "Gateway service definition repaired and restarted.",
+  });
+});
+
+it("keeps Nix restart available without suggesting a forbidden token reinstall", async () => {
+  await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
+    await expect(
+      runServiceRestart({ ...createServiceRunArgs(true), opts: { json: false } }),
+    ).resolves.toBe(true);
+
+    expect(service.restart).toHaveBeenCalledOnce();
+    const output = lifecycleRuntimeLogs.join("\n");
+    expect(output).toContain("Config token differs from service token");
+    expect(output).toContain("Nix mode detected; service install is disabled.");
+    expect(output).not.toContain("gateway install --force");
+  });
+});
+
+it("compares restart drift against config token even when caller env is set", async () => {
+  command([], { OPENCLAW_GATEWAY_TOKEN: "env-token" });
+  vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
+
+  await runServiceRestart(createServiceRunArgs(true));
+
+  const payload = readJsonLog();
+  expect(payload.warnings?.some((warning) => warning.includes("gateway install --force"))).toBe(
+    true,
+  );
+});
+
+it("skips drift warning when disabled", async () => {
+  await restart({ serviceNoun: "Node" });
+
+  expectNoCalls(loadConfig, service.readCommand, writeGatewayRestartIntentSync);
+  const payload = readJsonLog();
+  expect(payload.warnings).toBeUndefined();
+});
+
+it("runs a requested managed stop even when the service is not loaded", async () => {
+  const onNotLoaded = vi.fn(async () => ({
+    result: "stopped" as const,
+    message: "Gateway stop signal sent to unmanaged process on port 18789: 4200.",
+  }));
+  service.isLoaded.mockResolvedValue(false);
+
+  await runServiceStop({
+    serviceNoun: "Gateway",
+    service,
+    renderFailureHints: () => [],
+    opts: { json: true, disable: true },
+    stopWhenNotLoaded: true,
+    onNotLoaded,
+  });
+
+  expect(readJsonLog()).toMatchObject({ result: "stopped", service: { loaded: false } });
+  expect(service.stop).toHaveBeenCalledTimes(1);
+  const [stopOptions] = service.stop.mock.calls[0] ?? [];
+  expect(stopOptions).toMatchObject({ env: process.env, disable: true });
+  expect(stopOptions?.env).toBe(process.env);
+  expect(onNotLoaded).not.toHaveBeenCalled();
+});
+
+it("skips restart health checks when restart is only scheduled", async () => {
+  const postRestartCheck = vi.fn(async () => {});
+  service.restart.mockResolvedValue({ outcome: "scheduled" });
+
+  const result = await restart({ postRestartCheck });
+
+  expect(result).toBe(true);
+  expect(postRestartCheck).not.toHaveBeenCalled();
+  expect(readJsonLog()).toMatchObject({
+    result: "scheduled",
+    message: scheduledMessage,
+  });
+});
+
+it("reports startup recovery instead of install hints when restart cannot verify a serving owner", async () => {
+  writeGatewayRestartIntentSync.mockImplementationOnce(() => {
+    throw new GatewayRestartPreparationError("serving-owner");
+  });
+  await expect(restart({ renderStartHints: () => ["openclaw gateway install"] })).rejects.toThrow(
+    "__exit__:1",
+  );
+  const payload = readJsonLog();
+  expect(payload.hints).toEqual([
+    "openclaw gateway status --deep",
+    "Fix the reported startup failure, then run `openclaw gateway start` to wait for readiness without restarting the process.",
+  ]);
+  expect(service.restart).not.toHaveBeenCalled();
+});
+
+it("clears restart intent when service-manager restart fails before signaling", async () => {
+  service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
+  writeGatewayRestartIntentSync.mockReturnValueOnce(true);
+  service.restart.mockRejectedValueOnce(new Error("launchctl failed before signaling"));
+
+  await expect(restart()).rejects.toThrow("__exit__:1");
+
+  expectPartialCall(writeGatewayRestartIntentSync, {
+    env: expect.any(Object),
+    reason: "gateway.restart",
+  });
+  expect(clearGatewayRestartIntentSync).toHaveBeenCalledOnce();
+});
+
+it.each(["ready", "still-starting", "failed"] as const)(
+  "checks an already-running service before reporting start %s",
+  async (outcome) => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
+    const postStartCheck: NonNullable<StartArgs["postStartCheck"]> = async ({ fail }) => {
+      if (outcome !== "ready") {
+        fail(
+          "Gateway listener is unavailable.",
+          [],
+          outcome === "still-starting" ? outcome : undefined,
+        );
+      }
+    };
+    const pendingStart = start({ postStartCheck });
+    if (outcome === "ready") {
+      await pendingStart;
+      expect(readJsonLog()).toMatchObject({ ok: true, result: "already-running" });
+    } else {
+      await expect(pendingStart).rejects.toThrow(
+        `__exit__:${outcome === "still-starting" ? 2 : 1}`,
+      );
+      expect(readJsonLog()).toMatchObject({
+        ok: false,
+        error: "Gateway listener is unavailable.",
+      });
+      if (outcome === "still-starting") {
+        expect(readJsonLog()).toMatchObject({ result: "still-starting" });
+      }
+    }
+    expect(lifecycleRuntimeLogs.filter((line) => line.trim().startsWith("{"))).toHaveLength(1);
+    expectNoCalls(service.start, service.restart);
+  },
+);
+
+it("warns in JSON with the Gateway restart repair command", async () => {
+  vi.stubEnv("OPENCLAW_PROFILE", "");
+  vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
+  service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
+  command([MISSING_SERVICE_PROGRAM, "openclaw", "gateway"]);
+
+  await start({ repairLoadedService: vi.fn(async () => null) });
+
+  expect(readJsonLog()).toMatchObject({
+    result: "already-running",
+    warnings: [
+      `Gateway service already running, but its installed service definition needs repair: service command points at a missing path: ${MISSING_SERVICE_PROGRAM}; run \`openclaw gateway restart\` to apply.`,
+    ],
+  });
+  expect(service.start).not.toHaveBeenCalled();
+});
+
+it("prints one warning line when an already-running Node service needs repair", async () => {
+  service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
+  command([MISSING_SERVICE_PROGRAM, "openclaw", "node"]);
+
+  await start({ serviceNoun: "Node", opts: undefined });
+
+  const repairWarnings = lifecycleRuntimeLogs.filter((line) =>
+    line.startsWith(
+      "Node service already running, but its installed service definition needs repair:",
+    ),
+  );
+  expect(repairWarnings).toHaveLength(1);
+  expect(repairWarnings[0]).toContain("run `openclaw node install --force` to apply.");
+  expect(service.start).not.toHaveBeenCalled();
+});
+
+it("repairs loaded services with port drift during start before reporting success", async () => {
+  command(["openclaw", "gateway", "--port", "18789"]);
+  const repairLoadedService = vi.fn<NonNullable<StartArgs["repairLoadedService"]>>(async (ctx) => {
+    ctx.warn?.(
+      "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
     );
-    let result: unknown;
-    if (row.route === "start-recovery") {
+    return {
+      result: "started" as const,
+      message: "Gateway service definition repaired and started.",
+      warnings: ["service port 18789 does not match current gateway config port 19001"],
+      loaded: true,
+    };
+  });
+
+  await start({ repairLoadedService, expectedPort: 19_001 });
+
+  expect(repairLoadedService).toHaveBeenCalledTimes(1);
+  expect(service.start).not.toHaveBeenCalled();
+  expect(readJsonLog()).toMatchObject({
+    result: "started",
+    message: "Gateway service definition repaired and started.",
+    warnings: expect.arrayContaining([
+      expect.stringContaining("service port 18789"),
+      expect.stringContaining("custom behavior and will be overwritten"),
+    ]),
+    service: { loaded: true },
+  });
+});
+
+it("fails Node service start with its container-scoped install hint when repair is required", async () => {
+  const nodeCommand = "openclaw --container demo node";
+  vi.stubEnv("OPENCLAW_PROFILE", "work");
+  vi.stubEnv("OPENCLAW_CONTAINER_HINT", "demo");
+  command([MISSING_SERVICE_PROGRAM, "openclaw", "node"]);
+
+  await expect(start({ serviceNoun: "Node" })).rejects.toThrow("__exit__:1");
+
+  const payload = readJsonLog();
+  expect(payload).toMatchObject({
+    ok: false,
+    error: expect.stringContaining("service needs repair"),
+    hints: [`${nodeCommand} install --force`],
+  });
+  expect(payload.hintItems).toEqual([{ kind: "install", text: `${nodeCommand} install --force` }]);
+
+  resetLifecycleRuntimeLogs();
+  await expect(start({ serviceNoun: "Node", opts: { json: false } })).rejects.toThrow("__exit__:1");
+  expect(lifecycleRuntimeLogs).toContain(`Tip: ${nodeCommand} install --force`);
+  expect(service.start).not.toHaveBeenCalled();
+});
+
+it("fails start with install hints when no service is installed", async () => {
+  missingService();
+
+  await expect(start({ renderStartHints: () => ["openclaw gateway install"] })).rejects.toThrow(
+    "__exit__:1",
+  );
+
+  expect(readJsonLog()).toMatchObject({
+    ok: false,
+    error: "Gateway service not loaded.",
+    hints: expect.arrayContaining(["openclaw gateway install"]),
+    hintItems: expect.arrayContaining([
+      expect.objectContaining({ kind: "install", text: "openclaw gateway install" }),
+    ]),
+  });
+  expect(service.start).not.toHaveBeenCalled();
+});
+it.each([
+  ["start-recovery", "start", "started", "service repaired", true, true],
+  ["stop-empty", "stop", "stopped", "", false, true],
+  ["stop-missing", "stop", "not-loaded", "Gateway service not loaded.", false, false],
+  ["restart-no-message", "restart", "restarted", undefined, false, true],
+  ["scheduled", "restart", "scheduled", scheduledMessage, true, true],
+] as const)("preserves exact %s output", async (route, action, result, message, loaded, json) => {
+  const args = { ...createServiceRunArgs(), opts: { json } };
+  const postCheck = vi.fn(async () =>
+    route === "scheduled" ? { outcome: "scheduled" as const } : undefined,
+  );
+  service.isLoaded.mockResolvedValue(loaded);
+  service.readCommand.mockResolvedValue(loaded ? { programArguments: [], environment: {} } : null);
+  let returned: unknown;
+  if (route === "start-recovery") {
+    service.isLoaded.mockResolvedValue(false);
+    returned = await runServiceStart({
+      ...args,
+      onNotLoaded: async () => ({ result: "started", message, loaded: true }),
+      postStartCheck: async () => {
+        await postCheck();
+      },
+    });
+  } else if (action === "stop") {
+    returned = await runServiceStop({
+      ...args,
+      onNotLoaded:
+        route === "stop-missing" ? undefined : async () => ({ result: "stopped", message }),
+    });
+  } else {
+    returned = await runServiceRestart({
+      ...args,
+      postRestartCheck: postCheck,
+      onNotLoaded: loaded ? undefined : async () => ({ result: "restarted", message }),
+    });
+  }
+  expect(returned).toBe(action === "restart" ? true : undefined);
+  const payload = {
+    action,
+    ok: true,
+    result,
+    message,
+    service: { ...serviceSnapshot, loaded },
+  };
+  expect(lifecycleRuntimeLogs).toEqual(
+    json ? [JSON.stringify(payload, null, 2)] : message ? [message] : [],
+  );
+  expectNoCalls(lifecycleTestRuntime.error, lifecycleTestRuntime.exit);
+  expect(lifecycleTestRuntime.writeJson).toHaveBeenCalledTimes(json ? 1 : 0);
+  if (action === "restart" || route === "start-recovery") {
+    expect(postCheck).toHaveBeenCalledOnce();
+    if (json) {
+      expect(postCheck.mock.invocationCallOrder[0]).toBeLessThan(
+        lifecycleTestRuntime.writeJson.mock.invocationCallOrder[0]!,
+      );
+    }
+  }
+});
+
+it("keeps native lifecycle warnings ordered in JSON", async () => {
+  const events: string[] = [];
+  service.restart.mockImplementationOnce(async (args) => {
+    expect(args.warn).toBeDefined();
+    args.warn?.("native warning");
+    events.push("native");
+    return { outcome: "completed" };
+  });
+  await restart({
+    postRestartCheck: async (ctx) => {
+      expect(ctx.warn).toBeDefined();
+      ctx.warn?.("post-check warning");
+      events.push("post-check");
+    },
+  });
+  expect(events).toEqual(["native", "post-check"]);
+  expectJsonOutput({
+    action: "restart",
+    ok: true,
+    result: "restarted",
+    service: serviceSnapshot,
+    warnings: ["native warning", "post-check warning"],
+  });
+});
+
+it("never reports recovery success after a failed post-check", async () => {
+  missingService();
+  await expect(
+    restart({
+      onNotLoaded: async () => ({ result: "restarted", message: "must stay hidden" }),
+      postRestartCheck: async ({ fail }) => {
+        fail("not healthy", ["inspect"], "restart-health-failed");
+      },
+    }),
+  ).rejects.toThrow("__exit__:1");
+  expectJsonOutput({
+    action: "restart",
+    ok: false,
+    error: "not healthy",
+    hints: ["inspect"],
+    result: "restart-health-failed",
+    hintItems: [{ kind: "generic", text: "inspect" }],
+  });
+  expect(lifecycleTestRuntime.error.mock.calls).toEqual([]);
+  expect(lifecycleTestRuntime.writeJson).toHaveBeenCalledOnce();
+  expect(service.restart).not.toHaveBeenCalled();
+});
+
+const failureHint = "Run openclaw gateway status --deep to inspect the service, then retry.";
+function failureRunArgs(json: boolean) {
+  return {
+    ...createServiceRunArgs(),
+    renderFailureHints: () => [failureHint],
+    opts: { json },
+  };
+}
+
+it.each([
+  {
+    branch: "the service manager stop fails",
+    error: "Gateway stop failed: Error: bootout failed",
+    run: (json: boolean) => {
+      service.isLoaded.mockResolvedValue(true);
+      service.stop.mockRejectedValue(new Error("bootout failed"));
+      return runServiceStop(failureRunArgs(json));
+    },
+  },
+  {
+    branch: "stop recovery for an unloaded service fails",
+    error: "Gateway stop failed: Error: signal failed",
+    run: (json: boolean) => {
       service.isLoaded.mockResolvedValue(false);
-      result = await runServiceStart({
-        ...args,
-        onNotLoaded: async () => ({ result: "started", message: row.message, loaded: true }),
-        postStartCheck: async () => {
-          await postCheck();
+      return runServiceStop({
+        ...failureRunArgs(json),
+        onNotLoaded: async () => {
+          throw new Error("signal failed");
         },
       });
-    } else if (row.action === "start") {
-      service.readRuntime.mockResolvedValue({
-        status: "running",
-      });
-      service.readCommand.mockResolvedValue({ programArguments: [], environment: {} });
-      result = await runServiceStart(args);
-    } else if (row.action === "stop") {
-      result = await runServiceStop({
-        ...args,
-        ...(row.route === "stop-missing"
-          ? {}
-          : {
-              onNotLoaded: async () => ({ result: "stopped" as const, message: row.message }),
-            }),
-      });
-    } else {
-      result = await runServiceRestart({
-        ...args,
-        postRestartCheck: postCheck,
-        ...(!row.loaded
-          ? {
-              onNotLoaded: async () => ({ result: "restarted" as const, message: row.message }),
-            }
-          : {}),
-      });
-    }
-    expect(result).toBe(row.action === "restart" ? true : undefined);
-    const payload = {
-      action: row.action,
-      ok: true,
-      result: row.result,
-      message: row.message,
-      service: {
-        label: "TestService",
-        loaded: row.loaded,
-        loadedText: "loaded",
-        notLoadedText: "not loaded",
-      },
-    };
-    expect(lifecycleRuntimeLogs).toEqual(
-      json ? [JSON.stringify(payload, null, 2)] : row.message ? [row.message] : [],
-    );
-    expect(lifecycleTestRuntime.error).not.toHaveBeenCalled();
-    expect(lifecycleTestRuntime.exit).not.toHaveBeenCalled();
-    expect(lifecycleTestRuntime.writeJson).toHaveBeenCalledTimes(json ? 1 : 0);
-    if (row.action === "restart" || row.route === "start-recovery") {
-      expect(postCheck).toHaveBeenCalledOnce();
-      if (json) {
-        expect(postCheck.mock.invocationCallOrder[0]).toBeLessThan(
-          lifecycleTestRuntime.writeJson.mock.invocationCallOrder[0]!,
-        );
-      }
-    }
-  });
-
-  it.each([true])("keeps native lifecycle warn optional and ordered (json=%s)", async (json) => {
-    const events: string[] = [];
-    service.restart.mockImplementationOnce(async (args) => {
-      expect(args.warn === undefined).toBe(!json);
-      args.warn?.("native warning");
-      events.push("native");
-      return { outcome: "completed" };
-    });
-    await runServiceRestart({
-      ...createServiceRunArgs(),
-      opts: { json },
-      postRestartCheck: async (ctx) => {
-        expect(ctx.warn === undefined).toBe(!json);
-        ctx.warn?.("post-check warning");
-        events.push("post-check");
-      },
-    });
-    expect(events).toEqual(["native", "post-check"]);
-    expect(lifecycleRuntimeLogs).toEqual(
-      json
-        ? [
-            JSON.stringify(
-              {
-                action: "restart",
-                ok: true,
-                result: "restarted",
-                service: {
-                  label: "TestService",
-                  loaded: true,
-                  loadedText: "loaded",
-                  notLoadedText: "not loaded",
-                },
-                warnings: ["native warning", "post-check warning"],
-              },
-              null,
-              2,
-            ),
-          ]
-        : [],
-    );
-  });
-
-  it.each([true])(
-    "never reports recovery success after a failed post-check (json=%s)",
-    async (json) => {
-      service.isLoaded.mockResolvedValue(false);
-      service.readCommand.mockResolvedValue(null);
-      lifecycleTestRuntime.log.mockClear();
-      lifecycleTestRuntime.error.mockClear();
-      lifecycleTestRuntime.writeJson.mockClear();
-      await expect(
-        runServiceRestart({
-          ...createServiceRunArgs(),
-          opts: { json },
-          onNotLoaded: async () => ({ result: "restarted", message: "must stay hidden" }),
-          postRestartCheck: async ({ fail }) => {
-            fail("not healthy", ["inspect"], "restart-health-failed");
-          },
-        }),
-      ).rejects.toThrow("__exit__:1");
-      expect(lifecycleRuntimeLogs).toEqual(
-        json
-          ? [
-              JSON.stringify(
-                {
-                  action: "restart",
-                  ok: false,
-                  error: "not healthy",
-                  hints: ["inspect"],
-                  result: "restart-health-failed",
-                  hintItems: [{ kind: "generic", text: "inspect" }],
-                },
-                null,
-                2,
-              ),
-            ]
-          : ["Tip: inspect"],
-      );
-      expect(lifecycleTestRuntime.error.mock.calls).toEqual(json ? [] : [["not healthy"]]);
-      expect(lifecycleTestRuntime.writeJson).toHaveBeenCalledTimes(json ? 1 : 0);
-      if (!json) {
-        expect(lifecycleTestRuntime.error.mock.invocationCallOrder[0]).toBeLessThan(
-          lifecycleTestRuntime.log.mock.invocationCallOrder[0]!,
-        );
-      }
-      expect(service.restart).not.toHaveBeenCalled();
     },
-  );
+  },
+  {
+    branch: "the service manager uninstall fails",
+    error: "Gateway uninstall failed: Error: unit busy",
+    run: (json: boolean) => {
+      service.isLoaded.mockResolvedValue(false);
+      service.uninstall.mockRejectedValue(new Error("unit busy"));
+      return runServiceUninstall({
+        ...failureRunArgs(json),
+        stopBeforeUninstall: true,
+        assertNotLoadedAfterUninstall: true,
+      });
+    },
+  },
+  {
+    branch: "the service is still loaded after uninstall",
+    error: "Gateway service still loaded after uninstall.",
+    run: (json: boolean) => {
+      service.isLoaded.mockResolvedValue(true);
+      return runServiceUninstall({
+        ...failureRunArgs(json),
+        stopBeforeUninstall: true,
+        assertNotLoadedAfterUninstall: true,
+      });
+    },
+  },
+])("names a next step when $branch", async ({ error, run }) => {
+  await expect(run(true)).rejects.toThrow("__exit__:1");
+  expect(readJsonLog()).toMatchObject({ ok: false, error, hints: [failureHint] });
+
+  resetLifecycleRuntimeLogs();
+  await expect(run(false)).rejects.toThrow("__exit__:1");
+  expect(lifecycleTestRuntime.error).toHaveBeenCalledWith(error);
+  expect(lifecycleRuntimeLogs).toContain(`Tip: ${failureHint}`);
 });

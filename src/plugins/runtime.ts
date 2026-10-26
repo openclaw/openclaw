@@ -127,33 +127,31 @@ export function disposePluginRegistryInstances(
     const cfg = options?.cfg ?? getRuntimeConfigSnapshot() ?? undefined;
     const runContextCleanup = options?.runContextCleanup ?? preparePluginRunContextCleanup();
     // Admit initialization before its first await so the caller drains through instance cleanup.
-    const initialized = trackAsyncWork(() =>
-      runContextCleanup(() =>
-        Promise.resolve()
-          .then(() => waitForPluginCommandExecutions(registry))
-          .then(() => options?.beforeDispose?.())
-          .then(loadPluginHostCleanupRuntime)
-          .then(({ createPluginHostRegistryRetirement }) => {
-            if (retirements.get(registry) !== wait) {
-              return undefined;
-            }
-            if (options?.cleanupPersistentState && isRegistryLive(registry)) {
-              retirements.delete(registry);
-              return undefined;
-            }
-            markPluginRegistryRetired(registry);
-            return createPluginHostRegistryRetirement({
-              cfg,
-              previousRegistry: registry,
-              nextRegistry: typeof retained === "function" ? retained() : retained,
-              skipPersistentSessionState: options?.cleanupPersistentState !== true,
-              shouldCleanup: options?.cleanupPersistentState
-                ? () => !isRegistryLive(registry)
-                : undefined,
-            });
-          }),
-      ),
-    );
+    const initialize = () =>
+      Promise.resolve()
+        .then(() => waitForPluginCommandExecutions(registry))
+        .then(() => options?.beforeDispose?.())
+        .then(loadPluginHostCleanupRuntime)
+        .then(({ createPluginHostRegistryRetirement }) => {
+          if (retirements.get(registry) !== wait) {
+            return undefined;
+          }
+          if (options?.cleanupPersistentState && isRegistryLive(registry)) {
+            retirements.delete(registry);
+            return undefined;
+          }
+          markPluginRegistryRetired(registry);
+          return createPluginHostRegistryRetirement({
+            cfg,
+            previousRegistry: registry,
+            nextRegistry: typeof retained === "function" ? retained() : retained,
+            skipPersistentSessionState: options?.cleanupPersistentState !== true,
+            shouldCleanup: options?.cleanupPersistentState
+              ? () => !isRegistryLive(registry)
+              : undefined,
+          });
+        });
+    const initialized = trackAsyncWork(() => runContextCleanup(initialize));
     // Cache initialization, not one caller's self-retirement acknowledgment.
     wait = async (observation) =>
       (await (await initialized)?.(observation)) ?? { cleanupCount: 0, failures: [] };
@@ -180,7 +178,6 @@ function preparePluginRegistryRetirement(
   if (!registry) {
     return undefined;
   }
-  const runContextCleanup = preparePluginRunContextCleanup();
   const work = new AsyncWorkScope();
   const completion = createDeferredCore();
   const pending = (state.retiredRegistryCleanups ??= new Map());
@@ -196,7 +193,6 @@ function preparePluginRegistryRetirement(
         if (registryHasPluginHostCleanupWork(registry)) {
           await disposePluginRegistryInstances(registry, retained, {
             cleanupPersistentState,
-            runContextCleanup,
           });
         } else {
           await waitForPluginCommandExecutions(registry);
@@ -596,16 +592,11 @@ export async function clearActivePluginRegistry(
   previousRegistry: PluginRegistry | null = state.activeRegistry,
 ): Promise<void> {
   const cfg = getRuntimeConfigSnapshot() ?? undefined;
-  const runContextCleanup = preparePluginRunContextCleanup();
   // Final custody can end after projection was cleared; never erase an unrelated successor.
   if (state.activeRegistry === previousRegistry) {
     clearActivePluginRegistryState();
   }
   const clearVersion = state.activeVersion;
-  const clearRegistries = (state.commandRegistryClearRegistries ??= new Map());
-  if (previousRegistry) {
-    clearRegistries.set(previousRegistry, (clearRegistries.get(previousRegistry) ?? 0) + 1);
-  }
   const previousTail = state.commandRegistryClearTail ?? Promise.resolve();
   const completion = previousTail
     .catch(() => undefined)
@@ -619,7 +610,6 @@ export async function clearActivePluginRegistry(
             await cleanupWork.track(() =>
               disposePluginRegistryInstances(previousRegistry, () => state.activeRegistry, {
                 cfg,
-                runContextCleanup,
               }),
             );
           }
@@ -641,28 +631,17 @@ export async function clearActivePluginRegistry(
           }
         }
       }
-    })
-    .finally(() => {
-      if (previousRegistry) {
-        const remaining = (clearRegistries.get(previousRegistry) ?? 1) - 1;
-        if (remaining === 0) {
-          clearRegistries.delete(previousRegistry);
-        } else {
-          clearRegistries.set(previousRegistry, remaining);
-        }
-      }
     });
   state.commandRegistryClearTail = completion.catch((error: unknown) => {
     log.warn(`plugin registry clear failed: ${String(error)}`);
   });
-  // Publish the clear owner and tail before synchronous retirement listeners can reenter.
+  // Publish the drain before synchronous retirement listeners can reenter.
   quiescePluginRegistry(previousRegistry);
   // Reentrant commands and retired cleanup callbacks must not await their own pending attempt.
   if (
-    [...clearRegistries.keys()].some(isPluginCommandExecutionActiveHere) ||
-    [...(state.retiredRegistryCleanups?.values() ?? [])].some(
-      ({ registry, work }) =>
-        isPluginCommandExecutionActiveHere(registry) || isAsyncWorkScopeActiveHere(work),
+    isPluginCommandExecutionActiveHere() ||
+    [...(state.retiredRegistryCleanups?.values() ?? [])].some(({ work }) =>
+      isAsyncWorkScopeActiveHere(work),
     )
   ) {
     return;

@@ -1,7 +1,9 @@
-import type { SessionEntryMaintenancePlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
+import type {
+  SessionMaintenancePreservationPlan,
+  SessionMaintenancePreservationSnapshot,
+} from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
 
 export function addSessionMaintenancePreserveKeys(
@@ -70,7 +72,7 @@ export function resolveSessionMaintenancePreserveKeys(params: {
 export function assertMaintenancePreservationCompatible(
   sent: SessionMaintenancePreservationSnapshot,
   current: SessionMaintenancePreservationSnapshot,
-  plans?: readonly SessionEntryMaintenancePlan[],
+  plans?: readonly SessionMaintenancePreservationPlan[],
 ): void {
   const added = new Set(
     (["providerKeys", "workIdentities", "lifecycleIdentities"] as const).flatMap((kind) => {

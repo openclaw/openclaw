@@ -1,4 +1,5 @@
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { SessionObserverEvent } from "./session-observer-contract.js";
 import {
   isSameSessionObserverLifecycle,
@@ -14,9 +15,11 @@ import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 /** Retire same-run live health even when terminal observation cannot run the model. */
 export function createSessionObserverTerminalPublisher(params: {
   dormantRuns: Map<string, DormantSessionObserverRun>;
-  readSession: NonNullable<SessionObserverDeps["readSession"]>;
+  readSession: (
+    sessionKey: string,
+    agentId: string,
+  ) => SessionEntry | undefined | Promise<SessionEntry | undefined>;
   persistDigest: NonNullable<SessionObserverDeps["persistDigest"]>;
-  now: () => number;
   work: Pick<ReturnType<typeof createSessionObserverWork>, "withCurrent" | "closing" | "resetting">;
   runStillCurrent: (runId: string, sessionKey: string, agentId: string) => () => boolean;
   broadcast: (digest: SessionObserverDigest, agentId: string) => void;
@@ -49,7 +52,6 @@ export function createSessionObserverTerminalPublisher(params: {
         // Synthesis only prepares a write; its transaction revalidates the row before commit.
         readSession: reader ? () => reader.withRead((session) => session) : params.readSession,
         persistDigest: (input) => params.persistDigest({ ...input, ...(reader ? { reader } : {}) }),
-        now: params.now,
         stillCurrent,
       });
       if (!digest) {

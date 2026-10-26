@@ -8,9 +8,42 @@ import {
   WATERMELON_RIND,
 } from "./lobster-pet-sprites-wild.tsx";
 
-// Lumen photophores: dotted running lights along the shell. The glow (and
-// its dark-theme-only intensity) lives in lobster-pet.css.
-const LUMEN_SPOTS = staticSprite(`
+export const GLITCH_GHOSTS = staticSprite(`
+<g class="lob-glitch-ghosts">
+  <path d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" transform="translate(-3 0)" fill="#ff3355" opacity="0.4"></path>
+  <path d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" transform="translate(3 1)" fill="#22d3ee" opacity="0.4"></path>
+</g>
+`);
+
+// Direct claw paths inherit the existing size transform as well as wave/snip.
+const MICROPHONE = staticSprite(`
+<path class="lob-microphone" d="M106 32 L112 34 L106 56 Q105 58 103 57 Q101 56 102 54 Z" fill="#343747"></path>
+<path class="lob-microphone" d="M103 27 A7 7 0 1 1 117 27 A7 7 0 1 1 103 27 Z" fill="#666a80"></path>
+<path class="lob-microphone" d="M106 23 L114 25 M105 27 L113 29" fill="none" stroke="#e7e7f0" stroke-width="1.5" stroke-linecap="round"></path>
+`);
+
+export const PALETTE_RIGHT_CLAW_PROPS: Partial<Record<LobsterPetPaletteId, () => JSX.Element>> = {
+  taylorpinch: MICROPHONE,
+  shellvis: MICROPHONE,
+  leonardodepinchy: staticSprite(`
+<path class="lob-leonardodepinchy__brush" d="M107 32 L112 33 L106 57 Q104 59 102 56 Z" fill="#855233"></path>
+<path class="lob-leonardodepinchy__brush" d="M106 27 L114 29 L112 36 L104 34 Z" fill="#b4b7b5"></path>
+<path class="lob-leonardodepinchy__brush" d="M106 27 C105 21 110 18 111 11 C119 21 118 26 114 29 Z" fill="#e6c88e"></path>
+<path class="lob-leonardodepinchy__brush" d="M111 11 Q114 16 115 18 Q111 21 108 22 Q110 16 111 11 Z" fill="#4a89b8"></path>
+`),
+  alexandergrahamshell: staticSprite(`
+<path class="lob-telephone-receiver" d="M105 33 L112 34 L108 56 Q105 59 102 55 Z" fill="#4b3c30"></path>
+<path class="lob-telephone-receiver" d="M102 29 C104 21 113 21 117 29 L117 34 Q109 39 101 34 Z" fill="#35312f"></path>
+<path class="lob-telephone-receiver" d="M103 30 Q110 34 116 30" fill="none" stroke="#bc955c" stroke-width="2" stroke-linecap="round"></path>
+<path class="lob-telephone-receiver" d="M105 56 Q101 63 108 65 Q115 67 110 71 Q106 74 112 77" fill="none" stroke="#574631" stroke-width="1.8" stroke-linecap="round"></path>
+`),
+};
+
+// Every registered pattern suppresses freckles. Null entries use geometry or CSS instead of an overlay.
+export const PALETTE_PATTERNS: Partial<Record<LobsterPetPaletteId, (() => JSX.Element) | null>> = {
+  // Lumen photophores: dotted running lights along the shell. The glow (and
+  // its dark-theme-only intensity) lives in lobster-pet.css.
+  lumen: staticSprite(`
 <g class="lob-lumen" fill="#7ef5dd">
   <circle cx="36" cy="54" r="2.4"></circle>
   <circle cx="50" cy="66" r="2"></circle>
@@ -19,31 +52,27 @@ const LUMEN_SPOTS = staticSprite(`
   <circle cx="88" cy="46" r="1.7"></circle>
   <circle cx="60" cy="86" r="1.7"></circle>
 </g>
-`);
-
-const MAGMA_SEAMS = staticSprite(`
+`),
+  magma: staticSprite(`
 <g class="lob-magma" fill="none" stroke="#ff6a3d" stroke-width="2" stroke-linecap="round">
   <path d="M40 44 L48 54 L42 66 L50 78"></path>
   <path d="M74 40 L68 52 L78 64"></path>
   <path d="M56 82 L62 90"></path>
 </g>
-`);
-
-const OILSLICK_SHEEN = staticSprite(`
+`),
+  oilslick: staticSprite(`
 <g class="lob-oilsheen">
   <ellipse cx="46" cy="60" rx="22" ry="11" fill="#7f77dd" opacity="0.3" transform="rotate(-14 46 60)"></ellipse>
   <ellipse cx="76" cy="74" rx="17" ry="8" fill="#1d9e75" opacity="0.28" transform="rotate(10 76 74)"></ellipse>
 </g>
-`);
-
-const AURORA_BANDS = staticSprite(`
+`),
+  aurora: staticSprite(`
 <g class="lob-aurora" fill="none" stroke-linecap="round">
   <path class="lob-aurora__band1" d="M24 62 Q48 48 70 58 T102 54" stroke="#4ecfa6" stroke-width="6" opacity="0.5"></path>
   <path class="lob-aurora__band2" d="M28 76 Q54 62 78 72 T100 68" stroke="#a184ec" stroke-width="5" opacity="0.45"></path>
 </g>
-`);
-
-const NEBULA_STARS = staticSprite(`
+`),
+  nebula: staticSprite(`
 <g class="lob-nebula-stars">
   <circle cx="38" cy="52" r="1" fill="#fff"></circle>
   <circle cx="52" cy="70" r="1.2" fill="#fff"></circle>
@@ -53,16 +82,14 @@ const NEBULA_STARS = staticSprite(`
   <circle cx="46" cy="40" r="1.4" fill="#ff9de2"></circle>
   <path class="lob-twinkle" d="M60 52 L61.5 55.5 L65 57 L61.5 58.5 L60 62 L58.5 58.5 L55 57 L58.5 55.5 Z" fill="#fff"></path>
 </g>
-`);
-
-const GLASS_GLINTS = staticSprite(`
+`),
+  glass: staticSprite(`
 <g class="lob-glass-glints" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.7">
   <path d="M34 22 L28 32"></path>
   <path d="M40 16 L37 22"></path>
 </g>
-`);
-
-const GEODE_FACETS = staticSprite(`
+`),
+  geode: staticSprite(`
 <g class="lob-geode-facets">
   <polygon points="70,34 80,30 78,44" fill="#9b6ff0"></polygon>
   <polygon points="82,46 94,42 88,58" fill="#b48ef0"></polygon>
@@ -70,32 +97,22 @@ const GEODE_FACETS = staticSprite(`
   <polygon points="86,68 96,64 90,80" fill="#9b6ff0"></polygon>
   <circle class="lob-twinkle" cx="90" cy="50" r="1.8" fill="#fff"></circle>
 </g>
-`);
-
-const PHOSPHOR_SCANLINES = staticSprite(`
+`),
+  phosphor: staticSprite(`
 <g class="lob-scanlines" stroke="#3fff7d" stroke-width="1" opacity="0.16">
   <path d="M40 20 H80 M30 27 H90 M26 34 H94 M21 41 H99 M18 48 H102 M17 55 H103 M17 62 H103 M18 69 H102 M22 76 H98 M31 83 H89 M45 90 H75"></path>
 </g>
-`);
-
-export const GLITCH_GHOSTS = staticSprite(`
-<g class="lob-glitch-ghosts">
-  <path d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" transform="translate(-3 0)" fill="#ff3355" opacity="0.4"></path>
-  <path d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" transform="translate(3 1)" fill="#22d3ee" opacity="0.4"></path>
-</g>
-`);
-
-const BLUEPRINT_MARKS = staticSprite(`
+`),
+  blueprint: staticSprite(`
 <g class="lob-blueprint" fill="none" stroke="#cfe3ff">
   <path class="lob-bp-outline" d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" stroke-width="1.5" stroke-dasharray="5 3"></path>
   <path d="M54 58 H66 M60 52 V64" stroke-width="1" opacity="0.7"></path>
   <path d="M16 100 H104" stroke-width="1" stroke-dasharray="2 3" opacity="0.7"></path>
 </g>
-`);
-
-// Laurel and imperial sash belong to the shell, not the random wardrobe.
-// The sash's lower edge follows the shell contour; its highlight stays inset.
-const CLAWNSTANTINE_REGALIA = staticSprite(`
+`),
+  // Laurel and imperial sash belong to the shell, not the random wardrobe.
+  // The sash's lower edge follows the shell contour; its highlight stays inset.
+  clawnstantine: staticSprite(`
 <g class="lob-clawnstantine">
   <path d="M18 48 Q60 62 102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#4e296e"></path>
   <path d="M28 61 Q30 72 39 78 M70 88 Q82 82 91 65" fill="none" stroke="#a576c4" stroke-width="1.6" stroke-linecap="round"></path>
@@ -109,45 +126,15 @@ const CLAWNSTANTINE_REGALIA = staticSprite(`
     <path d="M87 25 Q97 21 92 15 Q85 17 87 25 Z M83 19 Q92 13 86 9 Q79 12 83 19 Z M77 14 Q82 7 76 6 Q71 9 77 14 Z"></path>
   </g>
 </g>
-`);
-
-// Face paint rides the shell; the shared renderer draws the eyes above it.
-const CLAWIE_STARDUST_BOLT = staticSprite(`
+`),
+  // Face paint rides the shell; the shared renderer draws the eyes above it.
+  clawiestardust: staticSprite(`
 <g class="lob-clawiestardust">
   <path d="M72 14 L57 49 L70 43 L51 89 L85 38 L72 44 L83 18 Z" fill="#4dc8eb" transform="translate(2.5 0)"></path>
   <path d="M72 14 L57 49 L70 43 L51 89 L85 38 L72 44 L83 18 Z" fill="#e6393d"></path>
 </g>
-`);
-
-// Direct claw paths inherit the existing size transform as well as wave/snip.
-const MICROPHONE = staticSprite(`
-<path class="lob-microphone" d="M106 32 L112 34 L106 56 Q105 58 103 57 Q101 56 102 54 Z" fill="#343747"></path>
-<path class="lob-microphone" d="M103 27 A7 7 0 1 1 117 27 A7 7 0 1 1 103 27 Z" fill="#666a80"></path>
-<path class="lob-microphone" d="M106 23 L114 25 M105 27 L113 29" fill="none" stroke="#e7e7f0" stroke-width="1.5" stroke-linecap="round"></path>
-`);
-
-const LEONARDO_PAINTBRUSH = staticSprite(`
-<path class="lob-leonardodepinchy__brush" d="M107 32 L112 33 L106 57 Q104 59 102 56 Z" fill="#855233"></path>
-<path class="lob-leonardodepinchy__brush" d="M106 27 L114 29 L112 36 L104 34 Z" fill="#b4b7b5"></path>
-<path class="lob-leonardodepinchy__brush" d="M106 27 C105 21 110 18 111 11 C119 21 118 26 114 29 Z" fill="#e6c88e"></path>
-<path class="lob-leonardodepinchy__brush" d="M111 11 Q114 16 115 18 Q111 21 108 22 Q110 16 111 11 Z" fill="#4a89b8"></path>
-`);
-
-const TELEPHONE_RECEIVER = staticSprite(`
-<path class="lob-telephone-receiver" d="M105 33 L112 34 L108 56 Q105 59 102 55 Z" fill="#4b3c30"></path>
-<path class="lob-telephone-receiver" d="M102 29 C104 21 113 21 117 29 L117 34 Q109 39 101 34 Z" fill="#35312f"></path>
-<path class="lob-telephone-receiver" d="M103 30 Q110 34 116 30" fill="none" stroke="#bc955c" stroke-width="2" stroke-linecap="round"></path>
-<path class="lob-telephone-receiver" d="M105 56 Q101 63 108 65 Q115 67 110 71 Q106 74 112 77" fill="none" stroke="#574631" stroke-width="1.8" stroke-linecap="round"></path>
-`);
-
-export const PALETTE_RIGHT_CLAW_PROPS: Partial<Record<LobsterPetPaletteId, () => JSX.Element>> = {
-  taylorpinch: MICROPHONE,
-  shellvis: MICROPHONE,
-  leonardodepinchy: LEONARDO_PAINTBRUSH,
-  alexandergrahamshell: TELEPHONE_RECEIVER,
-};
-
-const TAYLOR_PINCH_SPARKLES = staticSprite(`
+`),
+  taylorpinch: staticSprite(`
 <g class="lob-taylorpinch">
   <path d="M51 44 Q56 40 60 43 Q64 40 69 44 Q60 54 51 44 Z" fill="#c92e48"></path>
   <path d="M16 52 Q37 50 60 62 Q83 50 104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#9c82cf"></path>
@@ -160,9 +147,8 @@ const TAYLOR_PINCH_SPARKLES = staticSprite(`
     <circle cx="87" cy="64" r="1.5"></circle>
   </g>
 </g>
-`);
-
-const CLAWTOO_DEETOO_PANELS = staticSprite(`
+`),
+  clawtoodeetoo: staticSprite(`
 <g class="lob-clawtoodeetoo">
   <path d="M27 26 C35 14 45 8 60 8 C75 8 85 14 93 26 Q60 19 27 26 Z" fill="#b8c3cf"></path>
   <g fill="#2d5cbd">
@@ -178,9 +164,8 @@ const CLAWTOO_DEETOO_PANELS = staticSprite(`
   </g>
   <circle cx="87" cy="49" r="2.5" fill="#ef5261"></circle>
 </g>
-`);
-
-const LEONARDO_SMOCK = staticSprite(`
+`),
+  leonardodepinchy: staticSprite(`
 <g class="lob-leonardodepinchy">
   <path d="M18 48 Q60 61 102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#5f6950"></path>
   <path d="M60 63 V93 M27 64 Q31 77 40 84 M93 64 Q89 77 80 84" fill="none" stroke="#87906e" stroke-width="1.6" stroke-linecap="round"></path>
@@ -192,9 +177,8 @@ const LEONARDO_SMOCK = staticSprite(`
   <circle cx="77" cy="81" r="3" fill="#4a89b8"></circle>
   <circle cx="83" cy="65" r="2.5" fill="#dfb34f"></circle>
 </g>
-`);
-
-const SHELLVIS_JUMPSUIT = staticSprite(`
+`),
+  shellvis: staticSprite(`
 <g class="lob-shellvis">
   <path d="M18 48 L43 47 L60 62 L77 47 L102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#fff7e9"></path>
   <path d="M43 49 L48 66 L60 61 L72 66 L77 49 M26 80 Q60 87 94 80" fill="none" stroke="#d7ab4c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
@@ -204,9 +188,8 @@ const SHELLVIS_JUMPSUIT = staticSprite(`
   <path d="M35 17 Q50 10 61 13 Q75 8 85 15" fill="none" stroke="#4d4750" stroke-width="2" stroke-linecap="round"></path>
   <path d="M25 27 L32 25 L32 42 L26 38 Z M88 25 L95 27 L94 38 L88 42 Z" fill="#29272d"></path>
 </g>
-`);
-
-const GRAHAM_SHELL_WAISTCOAT = staticSprite(`
+`),
+  alexandergrahamshell: staticSprite(`
 <g class="lob-alexandergrahamshell">
   <path d="M18 48 Q60 58 102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#3d4b53"></path>
   <path d="M37 47 L49 73 L60 63 L71 73 L83 47" fill="#f1ebdf"></path>
@@ -217,9 +200,8 @@ const GRAHAM_SHELL_WAISTCOAT = staticSprite(`
   <path d="M50 78 L60 81 L70 78 V86 L60 83 L50 86 Z" fill="#8f3347"></path>
   <circle cx="60" cy="91" r="1.8" fill="#bc955c"></circle>
 </g>
-`);
-
-const MECHA_PLATES = staticSprite(`
+`),
+  clawtron: staticSprite(`
 <g class="lob-mecha">
   <g fill="none" stroke="#5f6a75" stroke-width="1.5">
     <path d="M28 56 Q60 66 92 56"></path>
@@ -232,57 +214,8 @@ const MECHA_PLATES = staticSprite(`
   </g>
   <circle class="lob-led" cx="89" cy="7" r="3" fill="#ff4444"></circle>
 </g>
-`);
-
-// Palettes whose identity is already pattern-driven skip the freckle trait;
-// stacking speckle sets reads as noise, not a variant.
-export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
-  "split",
-  "retro",
-  "lumen",
-  "magma",
-  "oilslick",
-  "aurora",
-  "nebula",
-  "glass",
-  "geode",
-  "phosphor",
-  "heisenbug",
-  "blueprint",
-  "clawnstantine",
-  "clawiestardust",
-  "taylorpinch",
-  "clawtoodeetoo",
-  "leonardodepinchy",
-  "shellvis",
-  "alexandergrahamshell",
-  "clawtron",
-  "selene",
-  "pixel",
-  "banana",
-  "bee",
-  "rubberduck",
-  "watermelon",
-  "sourdough",
-  "zombie",
-  "plush",
-  "balloon",
-  "disco",
-  "cryptid",
-  "flatpack",
-  "tinfoil",
-  "actual",
-  "chimera",
-  "notexture",
-  "loading",
-  "eclipse",
-  "ascii",
-  "portal",
-  "invisible",
-  "goldenretro",
-]);
-
-const BANANA_MARKS = staticSprite(`
+`),
+  banana: staticSprite(`
 <g fill="#8a6430">
   <rect x="56" y="8" width="8" height="6" rx="2.5"></rect>
   <ellipse cx="60" cy="91" rx="6" ry="3.5"></ellipse>
@@ -291,9 +224,8 @@ const BANANA_MARKS = staticSprite(`
   <circle cx="47" cy="70" r="1.8"></circle>
   <circle cx="72" cy="79" r="2.3"></circle>
 </g>
-`);
-
-const BEE_PARTS = staticSprite(`
+`),
+  bee: staticSprite(`
 <g class="lob-bee-wings" fill="#ffffff" opacity="0.45">
   <ellipse cx="38" cy="14" rx="8" ry="4.5" transform="rotate(-24 38 14)"></ellipse>
   <ellipse cx="82" cy="14" rx="8" ry="4.5" transform="rotate(24 82 14)"></ellipse>
@@ -303,17 +235,15 @@ const BEE_PARTS = staticSprite(`
   <path d="M17 58 Q60 67 103 58 L101 67 Q60 76 19 67 Z"></path>
   <path d="M24 76 Q60 84 96 76 L90 85 Q60 92 30 85 Z"></path>
 </g>
-`);
-
-const DUCK_BILL = staticSprite(`
+`),
+  rubberduck: staticSprite(`
 <g>
   <ellipse cx="60" cy="71" rx="21" ry="14" fill="#ffffff" opacity="0.5"></ellipse>
   <rect x="47" y="41" width="26" height="8" rx="4" fill="#ff9a2e"></rect>
   <rect x="50" y="47" width="20" height="5" rx="2.5" fill="#e98322"></rect>
 </g>
-`);
-
-const SOURDOUGH_SCORING = staticSprite(`
+`),
+  sourdough: staticSprite(`
 <g fill="none" stroke="#a8763e" stroke-width="2.5" stroke-linecap="round">
   <path d="M38 23 Q45 29 52 30"></path>
   <path d="M52 17 Q59 24 66 25"></path>
@@ -327,9 +257,8 @@ const SOURDOUGH_SCORING = staticSprite(`
   <circle cx="56" cy="78" r="1"></circle>
   <circle cx="83" cy="75" r="1.3"></circle>
 </g>
-`);
-
-const ZOMBIE_STITCHES = staticSprite(`
+`),
+  zombie: staticSprite(`
 <g fill="none" stroke="#5a6b52" stroke-width="2" stroke-linecap="round">
   <path d="M32 24 Q47 19 61 23"></path>
   <path d="M38 19 L40 26 M46 18 L47 25 M54 19 L53 26"></path>
@@ -337,9 +266,8 @@ const ZOMBIE_STITCHES = staticSprite(`
   <path d="M65 72 L63 79 M73 73 L72 80 M81 71 L83 78"></path>
 </g>
 <ellipse cx="35" cy="61" rx="9" ry="6" fill="#86987a" opacity="0.8" transform="rotate(-18 35 61)"></ellipse>
-`);
-
-const PLUSH_SEAMS = staticSprite(`
+`),
+  plush: staticSprite(`
 <g fill="none" stroke="#c97a5e" stroke-width="1.5" stroke-dasharray="3 3">
   <path d="M30 32 Q60 4 90 32"></path>
   <path d="M60 50 Q58 72 60 96"></path>
@@ -349,9 +277,8 @@ const PLUSH_SEAMS = staticSprite(`
   <circle cx="76.8" cy="44" r="0.7" fill="#e8967a"></circle>
   <circle cx="79.2" cy="44" r="0.7" fill="#e8967a"></circle>
 </g>
-`);
-
-const DISCO_FACETS = staticSprite(`
+`),
+  disco: staticSprite(`
 <g class="lob-disco" fill="#ffffff">
   <rect x="42" y="18" width="4" height="4" opacity="0.3"></rect>
   <rect x="52" y="16" width="4" height="4" opacity="0.5"></rect>
@@ -368,35 +295,24 @@ const DISCO_FACETS = staticSprite(`
   <rect x="49" y="79" width="4" height="4" opacity="0.35"></rect>
   <rect x="70" y="80" width="4" height="4" opacity="0.25"></rect>
 </g>
-`);
-
-export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, () => JSX.Element>> = {
-  lumen: LUMEN_SPOTS,
-  magma: MAGMA_SEAMS,
-  oilslick: OILSLICK_SHEEN,
-  aurora: AURORA_BANDS,
-  nebula: NEBULA_STARS,
-  glass: GLASS_GLINTS,
-  geode: GEODE_FACETS,
-  phosphor: PHOSPHOR_SCANLINES,
-  blueprint: BLUEPRINT_MARKS,
-  clawnstantine: CLAWNSTANTINE_REGALIA,
-  clawiestardust: CLAWIE_STARDUST_BOLT,
-  taylorpinch: TAYLOR_PINCH_SPARKLES,
-  clawtoodeetoo: CLAWTOO_DEETOO_PANELS,
-  leonardodepinchy: LEONARDO_SMOCK,
-  shellvis: SHELLVIS_JUMPSUIT,
-  alexandergrahamshell: GRAHAM_SHELL_WAISTCOAT,
-  clawtron: MECHA_PLATES,
-  banana: BANANA_MARKS,
-  bee: BEE_PARTS,
-  rubberduck: DUCK_BILL,
-  sourdough: SOURDOUGH_SCORING,
-  zombie: ZOMBIE_STITCHES,
-  plush: PLUSH_SEAMS,
-  disco: DISCO_FACETS,
+`),
   watermelon: WATERMELON_RIND,
   eclipse: ECLIPSE_CORONA,
   notexture: NOTEXTURE_CHECKER,
   chimera: CHIMERA_STITCHES,
+  split: null,
+  retro: null,
+  heisenbug: null,
+  selene: null,
+  pixel: null,
+  balloon: null,
+  cryptid: null,
+  flatpack: null,
+  tinfoil: null,
+  actual: null,
+  loading: null,
+  ascii: null,
+  portal: null,
+  invisible: null,
+  goldenretro: null,
 };

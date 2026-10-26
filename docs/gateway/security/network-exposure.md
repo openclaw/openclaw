@@ -11,12 +11,22 @@ title: "Network exposure"
 
 ### Bind, port, firewall
 
-The Gateway multiplexes WebSocket + HTTP on one port (default `18789`; config/flags/env: `gateway.port`, `--port`, `OPENCLAW_GATEWAY_PORT`). That HTTP surface includes the Control UI (SPA assets, default base path `/`), hosted widget documents (`/__openclaw__/canvas`), and A2UI renderer assets (`/__openclaw__/a2ui`). Widget documents contain agent-authored HTML/JS; treat them as untrusted content when loaded in a normal browser, do not expose them to untrusted networks or users, and do not share their origin with privileged web surfaces.
+The Gateway multiplexes WebSocket + HTTP on one port (default `18789`; config/flags/env: `gateway.port`, `--port`, `OPENCLAW_GATEWAY_PORT`). That HTTP surface includes the Control UI (SPA assets, default base path `/`), and hosted widget documents (`/__openclaw__/canvas`). Widget documents contain agent-authored HTML/JS; treat them as untrusted content when loaded in a normal browser, do not expose them to untrusted networks or users, and do not share their origin with privileged web surfaces.
 
 `gateway.bind` controls where the Gateway listens:
 
-- `"loopback"` (default): only local clients can connect.
+- `"loopback"` (default on regular hosts): only local clients can connect.
+- `"auto"` (default when the setting is omitted in a detected container):
+  resolves to `0.0.0.0` so port forwarding and container-network ingress work.
+  Tailscale Serve/Funnel instead forces loopback.
 - `"lan"`, `"tailnet"`, `"custom"`: make the Gateway reachable by more clients. Only use with gateway auth (shared token/password, or a correctly configured trusted proxy) and a real firewall.
+
+Non-loopback startup requires configured auth and fails closed without it. The
+standalone image defines no host port publication; actual reachability depends
+on the runtime and network topology. Peers on the same container network and
+hosts with a route to the container address can reach a wildcard listener. Set
+`gateway.bind: "loopback"` explicitly for a loopback-only listener; host
+networking changes what that interface represents.
 
 Rules of thumb: prefer Tailscale Serve over LAN binds (Serve keeps the Gateway on loopback and Tailscale handles access); if you must bind to LAN, firewall the port to a tight source-IP allowlist rather than port-forwarding broadly; never expose the Gateway unauthenticated on `0.0.0.0`.
 
@@ -159,6 +169,26 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 ```
 
 Trusted proxy headers do not make node device pairing automatically trusted - `gateway.nodes.pairing.autoApproveCidrs` is a separate, disabled-by-default operator policy, and loopback-source trusted-proxy header paths stay excluded from node auto-approval even when loopback trusted-proxy auth is enabled (because local callers can forge those headers).
+
+### Plugin remote Control UI ingress
+
+A trusted plugin such as [MCP Relay](/plugins/mcp-relay) can expose the
+[remote Control UI ingress](/plugins/sdk-gateway-ingress). Each grant is bound to
+the shared owner on a token or password Gateway without `gateway.roles`, or to a
+verified person on a Cloudflare Access trusted-proxy Gateway with roles. The
+plugin must authenticate the browser as its locally approved grant holder before
+forwarding any request or socket. Core treats the live handle like a trusted
+proxy: a browser with a signed device identity connects as an operator, with
+scopes limited to the grant's ceiling intersected with the principal's current
+authority. No reusable device token is issued. Shared Gateway secrets, bootstrap
+credentials, device-less connections, non-operator roles, and scopes above the
+ceiling are refused.
+
+The browser appears in **Devices** and `openclaw devices list` as a paired-device
+row kept for visibility and key checks. It holds no bearer credential that works
+on the Gateway's direct listener; every reconnect is admitted by the live grant.
+Revoke the plugin grant to end delegated access. Revocation closes the ingress
+path and its retained work without deleting the paired-device row.
 
 ### HSTS and origin notes
 

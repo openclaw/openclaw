@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { registerInternalHook, unregisterInternalHook } from "../../hooks/internal-hooks.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import * as fsSafe from "../../infra/fs-safe.js";
@@ -32,6 +37,7 @@ import { registerAgentWorkspaceAccess } from "../workspace-access.js";
 import * as builtinOpenClaw from "./builtin-openclaw.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./hook-helpers.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import * as harnessLifecycle from "./lifecycle.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import { runAgentHarnessAttempt } from "./selection.js";
 import { createHarnessAttemptParams } from "./selection.test-support.js";
@@ -53,7 +59,10 @@ beforeEach(async () => {
     operationalRunInstance: createOperationalRunInstanceRef("attachment-test"),
   });
   const context = await admission.admit("plugin-harness", "attachment-test");
-  createAttemptParams = (config) => createHarnessAttemptParams(context, config);
+  createAttemptParams = (config) => {
+    setRuntimeConfigSnapshot(config ?? {}, config);
+    return createHarnessAttemptParams(context, config);
+  };
 });
 afterEach(async () => {
   resetGlobalHookRunner();
@@ -64,6 +73,57 @@ afterEach(async () => {
   await closeStateDatabaseForTest();
   vi.unstubAllEnvs();
   trajectoryTempDirs.cleanup();
+  clearRuntimeConfigSnapshot();
+});
+it("refuses remembered consent revoked after admission before native dispatch", async () => {
+  const storePath = path.join(trajectoryTempDirs.make("harness-native-consent-"), "sessions.json");
+  const config: OpenClawConfig = {
+    session: { store: storePath },
+    agents: { entries: { main: { nativeRuntimeConsent: ["codex"] } } },
+    tools: { fs: { workspaceOnly: true } },
+  };
+  const attempt = createAttemptParams(config);
+  attempt.agentId = "main";
+  attempt.sessionKey = "agent:main:remembered-revocation";
+  setRuntimeConfigSnapshot(config);
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: attempt.sessionKey, storePath },
+    {
+      sessionId: attempt.sessionId,
+      updatedAt: 1,
+      agentRuntimeOverride: "codex",
+      permissionMode: "full",
+      sandboxMode: "off",
+    },
+  );
+  attempt.permissionMode = "full";
+  const nativeStart = vi.fn<AgentHarness["runAttempt"]>(async () =>
+    makeEmbeddedRunnerAttempt({ agentHarnessId: "codex" }),
+  );
+  registerAgentHarness(
+    {
+      id: "codex",
+      label: "Codex",
+      executionEnvironment: "host-only",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: nativeStart,
+    },
+    { ownerPluginId: "codex" },
+  );
+  const original = harnessLifecycle.runAgentHarnessLifecycleAttempt;
+  using dispatch = vi
+    .spyOn(harnessLifecycle, "runAgentHarnessLifecycleAttempt")
+    .mockImplementation(async (harness, prepared, execute) => {
+      setRuntimeConfigSnapshot({
+        ...config,
+        agents: { entries: { main: { nativeRuntimeConsent: [] } } },
+      });
+      return original(harness, prepared, execute);
+    });
+
+  await expect(runAgentHarnessAttempt(attempt)).rejects.toThrow(/workspace-only|revoked/);
+  expect(dispatch).toHaveBeenCalledOnce();
+  expect(nativeStart).not.toHaveBeenCalled();
 });
 
 function createAttributionRecorder(registered = true) {
@@ -95,7 +155,6 @@ describe("registered harness input attachment preparation", () => {
         "tool_result_persist",
         "before_compaction",
         "after_compaction",
-        "heartbeat_prompt_contribution",
       ] as const
     ).map((hook) => ({ name: hook, hook, waits: true })),
     { name: "internal bootstrap", bootstrap: true, waits: true },
@@ -125,8 +184,7 @@ describe("registered harness input attachment preparation", () => {
     const pending = runAgentHarnessAttempt({
       ...createAttemptParams(),
       agentHarnessId: "openclaw",
-      trigger:
-        scenario.hook === "heartbeat_prompt_contribution" && scenario.waits ? "heartbeat" : "user",
+      trigger: "user",
       awaitSessionDiffBaseline: awaitBaseline,
     });
     try {

@@ -21,7 +21,6 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     private var onFailure: (@MainActor (String) -> Void)?
     private var tapInstalled = false
     private var outputRouteDecisionState = MacRealtimeTalkOutputRouteDecisionState()
-    private var outputRouteObservationGeneration: UInt64 = 0
     #if DEBUG
     private var testOutputRouteCallbackHandled: (@Sendable () -> Void)?
     #endif
@@ -171,21 +170,18 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     private func replaceOutputRouteObserver(
         _ observer: MacRealtimeTalkOutputRouteObserver) -> @Sendable (MacRealtimeTalkOutputRoute?) -> Void
     {
-        self.outputRouteObservationGeneration &+= 1
-        let generation = self.outputRouteObservationGeneration
         self.audioOutputObserver = observer
         #if DEBUG
         let onHandled = self.testOutputRouteCallbackHandled
         self.testOutputRouteCallbackHandled = nil
         #endif
-        return { [weak self, observerID = ObjectIdentifier(observer)] route in
+        return { [weak self, weak observer] route in
             Task { @MainActor [weak self] in
                 #if DEBUG
                 defer { onHandled?() }
                 #endif
-                guard let self,
-                      generation == self.outputRouteObservationGeneration,
-                      self.audioOutputObserver.map(ObjectIdentifier.init) == observerID
+                guard let self, let observer,
+                      self.audioOutputObserver === observer
                 else { return }
                 self.updateOutputRoute(route)
             }
@@ -193,7 +189,6 @@ final class MacRealtimeTalkAudioCapture: RealtimeTalkAudioCapturing {
     }
 
     private func retireOutputRouteObserver() {
-        self.outputRouteObservationGeneration &+= 1
         self.audioOutputObserver?.stop()
         self.audioOutputObserver = nil
         self.outputRouteDecisionState.reset()

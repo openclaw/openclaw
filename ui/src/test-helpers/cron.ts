@@ -1,5 +1,53 @@
-import type { CronCompactJob, CronJob, CronJobsListResult } from "../api/types.ts";
+import type { CronCompactJob, CronJob, CronJobsListResult, CronRunsResult } from "../api/types.ts";
 import type { CronFormState } from "../lib/cron/types.ts";
+
+export function createCronJob(id: string, name: string, overrides: Partial<CronJob> = {}): CronJob {
+  return {
+    id,
+    name,
+    enabled: true,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    configRevision: "config-revision-1",
+    schedule: { kind: "cron", expr: "0 * * * *" },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "run" },
+    state: {},
+    ...overrides,
+  };
+}
+
+export function cronJobsListResponse(
+  jobs: CronJob[] = [],
+  overrides: Partial<Omit<CronJobsListResult, "jobs">> = {},
+): CronJobsListResult {
+  return {
+    jobs,
+    snapshotRevision: "cron-jobs-fixture",
+    total: jobs.length,
+    offset: 0,
+    limit: 50,
+    hasMore: false,
+    nextOffset: null,
+    ...overrides,
+  };
+}
+
+export function createCronRunsResult(
+  entries: CronRunsResult["entries"],
+  overrides: Partial<Omit<CronRunsResult, "entries">> = {},
+): CronRunsResult {
+  return {
+    entries,
+    total: entries.length,
+    offset: 0,
+    limit: 50,
+    hasMore: false,
+    nextOffset: null,
+    ...overrides,
+  };
+}
 
 export function compactCronJobFixture(job: CronJob): CronCompactJob {
   return {
@@ -52,6 +100,10 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   enabled: true,
   deleteAfterRun: false,
   scheduleKind: "every",
+  eventSource: "mcp-events",
+  eventServer: "",
+  eventName: "",
+  eventArguments: "{}",
   scheduleAt: "",
   everyAmount: "30",
   everyUnit: "minutes",
@@ -60,6 +112,14 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   scheduleExact: false,
   staggerAmount: "",
   staggerUnit: "seconds",
+  activeHoursEnabled: false,
+  activeHoursStart: "09:00",
+  activeHoursEnd: "17:00",
+  activeHoursTimezone: "",
+  idleOnly: false,
+  payloadSkipIfScratchEmpty: false,
+  deliveryTarget: "",
+  deliveryDirectPolicy: "",
   triggerEnabled: false,
   triggerScript: "",
   triggerOnce: false,
@@ -71,6 +131,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   payloadModel: "",
   payloadThinking: "",
   payloadLightContext: false,
+  payloadIncludeReasoning: false,
   deliveryMode: "none",
   deliveryChannel: "last",
   deliveryTo: "",

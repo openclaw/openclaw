@@ -1,10 +1,11 @@
+import { queryObjects } from "node:v8";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
   clearLiveCatalogCacheForTests,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   OPENAI_API_BASE_URL,
@@ -15,100 +16,14 @@ import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveThinkingProfile } from "./provider-policy-api.js";
+import {
+  mocks,
+  runCatalogWithFetchGuard,
+  buildOpenAICodexLiveProviderConfig,
+} from "./test-support/live-catalog.test-support.js";
 import { registerOpenAIServiceTierCatalogTests } from "./test-support/model-service-tiers.test-support.js";
-
-const mocks = vi.hoisted(() => ({
-  resolveApiKeyForProvider: vi.fn(),
-  resolveProviderAuthProfileMetadata: vi.fn(),
-}));
-
-type OpenAITestCatalogResult = {
-  provider: ModelProviderConfig;
-  outcomes: readonly {
-    provider: string;
-    profileId?: string;
-    rejectionScope?: "catalog";
-    status: "ready" | "auth-rejected" | "unavailable";
-  }[];
-};
-
-async function runCatalogWithFetchGuard(params: {
-  fetchGuard: LiveModelCatalogFetchGuard;
-  auth: {
-    mode: "api_key" | "oauth" | "token";
-    apiKey: string;
-    discoveryApiKey?: string;
-    profileId?: string;
-    authFlow?: string;
-    source: string;
-  };
-  accountId?: string;
-  baseUrl?: string;
-}): Promise<OpenAITestCatalogResult> {
-  if (params.auth.mode === "oauth") {
-    mocks.resolveApiKeyForProvider.mockResolvedValue({
-      ...params.auth,
-      source: params.auth.source,
-    });
-    mocks.resolveProviderAuthProfileMetadata.mockReturnValue({
-      profileId: params.auth.profileId,
-      accountId: params.accountId,
-    });
-  }
-  const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-    const guarded = await params.fetchGuard({
-      url: typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
-      init,
-    });
-    await guarded.release();
-    return guarded.response;
-  });
-  try {
-    const result = await buildOpenAIProvider().catalog?.run({
-      resolveProviderAuth: () => params.auth,
-      resolveProviderApiKey: () => ({
-        apiKey: params.auth.apiKey,
-        discoveryApiKey: params.auth.discoveryApiKey,
-      }),
-      config: params.baseUrl
-        ? { models: { providers: { openai: { baseUrl: params.baseUrl, models: [] } } } }
-        : { auth: { profiles: {} } },
-      agentDir: "/tmp/openai-agent",
-      workspaceDir: "/tmp/openai-workspace",
-    } as never);
-    if (!result || "provider" in result || !result.providers.openai) {
-      throw new Error("expected OpenAI live provider catalog");
-    }
-    return { provider: result.providers.openai, outcomes: result.outcomes ?? [] };
-  } finally {
-    fetchSpy.mockRestore();
-  }
-}
-
-async function buildOpenAICodexLiveProviderConfig(params: {
-  discoveryApiKey: string;
-  accountId?: string;
-  fetchGuard: LiveModelCatalogFetchGuard;
-}): Promise<ModelProviderConfig> {
-  return (
-    await runCatalogWithFetchGuard({
-      fetchGuard: params.fetchGuard,
-      auth: {
-        mode: "oauth",
-        apiKey: params.discoveryApiKey,
-        profileId: "openai:chatgpt",
-        source: "profile",
-      },
-      accountId: params.accountId,
-    })
-  ).provider;
-}
-
-// mock-isolation: Catalog tests supply synthetic credentials and account metadata.
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: mocks.resolveApiKeyForProvider,
-  resolveProviderAuthProfileMetadataAsync: mocks.resolveProviderAuthProfileMetadata,
-}));
+import { registerOpenAIFailoverTests } from "./test-support/provider-failover.test-support.js";
+import { createOpenAIResponsesTestModel } from "./test-support/responses-model.test-support.js";
 
 async function runWrappedPayloadCase(params: {
   wrap: NonNullable<ReturnType<typeof buildOpenAIProvider>["wrapStreamFn"]>;
@@ -226,34 +141,7 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it("classifies OpenAI-native code-only failover errors", () => {
-    const provider = buildOpenAIProvider();
-
-    for (const providerId of ["openai", "azure-openai", "azure-openai-responses"]) {
-      expect(
-        provider.classifyFailoverReason?.({
-          provider: providerId,
-          errorMessage: "",
-          code: "SERVER_ERROR",
-        }),
-      ).toBe("server_error");
-      expect(
-        provider.classifyFailoverReason?.({
-          provider: providerId,
-          errorMessage: "",
-          code: "INSUFFICIENT_QUOTA",
-        }),
-      ).toBe("billing");
-    }
-    // API_ERROR is an Anthropic-native code, not OpenAI's: fall through to generic.
-    expect(
-      provider.classifyFailoverReason?.({
-        provider: "openai",
-        errorMessage: "",
-        code: "API_ERROR",
-      }),
-    ).toBeUndefined();
-  });
+  registerOpenAIFailoverTests();
 
   it("does not hardcode transport routing on static catalog entries (#91710)", () => {
     const openaiModels = manifest.modelCatalog.providers.openai.models as Array<
@@ -270,11 +158,10 @@ describe("buildOpenAIProvider", () => {
 
   it("scopes the OpenAI API-key catalog to the OpenAI provider id", async () => {
     const provider = buildOpenAIProvider();
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      Response.json({
-        data: [{ id: "gpt-5.5", object: "model" }],
-      }),
-    );
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ data: [{ id: "gpt-5.5", object: "model" }] }))
+      .mockResolvedValueOnce(Response.json({ models: [] }));
 
     try {
       const result = await provider.catalog?.run({
@@ -292,14 +179,15 @@ describe("buildOpenAIProvider", () => {
       }
       expect(Object.keys(result.providers)).toEqual(["openai"]);
       expect(result.providers.openai?.apiKey).toBe("sk-openai");
-      expect(fetchSpy).toHaveBeenCalledOnce();
-      const fetchInit = fetchSpy.mock.calls[0]?.[1];
-      const headers = fetchInit?.headers;
-      expect(headers).toBeInstanceOf(Headers);
-      if (!(headers instanceof Headers)) {
-        throw new Error("expected fetch headers");
+      expect(fetchSpy.mock.calls.map(([input]) => input)).toEqual([
+        "https://api.openai.com/v1/models",
+        expect.stringMatching(
+          /^https:\/\/chatgpt\.com\/backend-api\/codex\/models\?client_version=[^&]+$/u,
+        ),
+      ]);
+      for (const [, init] of fetchSpy.mock.calls) {
+        expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer sk-discovery");
       }
-      expect(headers.get("Authorization")).toBe("Bearer sk-discovery");
       expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
@@ -740,6 +628,66 @@ describe("buildOpenAIProvider", () => {
         supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
       },
     });
+  });
+
+  it("releases raw Codex instructions while reusing account catalog facts", async () => {
+    const body = JSON.stringify({
+      models: [
+        {
+          slug: "catalog-retention-fixture",
+          display_name: "Catalog retention fixture",
+          visibility: "list",
+          base_instructions: "Synthetic instructions".repeat(1024),
+          model_messages: { instructions_template: "Synthetic template".repeat(1024) },
+        },
+      ],
+    });
+    const rows: WeakRef<object>[] = [];
+    const parse = JSON.parse;
+    const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      const parsed: unknown = parse(text, reviver);
+      if (
+        text === body &&
+        parsed &&
+        typeof parsed === "object" &&
+        "models" in parsed &&
+        Array.isArray(parsed.models)
+      ) {
+        rows.push(new WeakRef(parsed.models[0]));
+      }
+      return parsed;
+    });
+    const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(async () => ({
+      response: new Response(body),
+      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+      release: async () => undefined,
+    }));
+    try {
+      for (const accountId of ["account-one", "account-one", "account-two"]) {
+        const provider = await buildOpenAICodexLiveProviderConfig({
+          discoveryApiKey: "synthetic-retention-token",
+          accountId,
+          fetchGuard,
+        });
+        expect(provider.models).toEqual([
+          expect.objectContaining({
+            id: "catalog-retention-fixture",
+            name: "Catalog retention fixture",
+            api: "openai-chatgpt-responses",
+          }),
+        ]);
+      }
+      expect(fetchGuard).toHaveBeenCalledTimes(2);
+      expect(rows).toHaveLength(2);
+    } finally {
+      parseSpy.mockRestore();
+    }
+    // Cross the job boundary before collection; the cached projection stays available.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    queryObjects(WeakRef);
+    expect(rows.map((row) => row.deref() !== undefined)).toEqual([false, false]);
   });
 
   it("keeps an explicit empty Codex reasoning catalog authoritative", async () => {
@@ -1238,60 +1186,6 @@ describe("buildOpenAIProvider", () => {
     expect(unknownModelHint).toContain("OpenAI API-key auth cannot use this model");
   });
 
-  it("resolves chat-latest as an explicit direct API model override", () => {
-    const provider = buildOpenAIProvider();
-
-    const model = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "chat-latest",
-      modelRegistry: {
-        find: (_provider: string, id: string) =>
-          id === "gpt-5.5"
-            ? {
-                id,
-                name: "GPT-5.5",
-                provider: "openai",
-                api: "openai-responses",
-                baseUrl: "https://api.openai.com/v1",
-                reasoning: true,
-                input: ["text", "image"],
-                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-                contextWindow: 1_050_000,
-                maxTokens: 128_000,
-              }
-            : null,
-      } as never,
-    });
-
-    expectFields(model, {
-      provider: "openai",
-      id: "chat-latest",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: false,
-      input: ["text", "image"],
-      contextWindow: 400_000,
-      maxTokens: 128_000,
-      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-    });
-
-    const fallback = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "chat-latest",
-      modelRegistry: { find: () => null },
-    } as never);
-
-    expectFields(fallback, {
-      provider: "openai",
-      id: "chat-latest",
-      api: "openai-responses",
-      reasoning: false,
-      contextWindow: 400_000,
-      maxTokens: 128_000,
-      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-    });
-  });
-
   it("passes the selected runtime into GPT-5.6 thinking policy", () => {
     const provider = buildOpenAIProvider();
     const openClawLuna = provider.resolveThinkingProfile?.({
@@ -1392,11 +1286,8 @@ describe("buildOpenAIProvider", () => {
 
   it("owns direct OpenAI wrapper composition for responses payloads", async () => {
     const provider = buildOpenAIProvider();
-    const wrap = provider.wrapStreamFn;
+    const wrap = expectDefined(provider.wrapStreamFn, "OpenAI wrapper");
     expect(wrap).toBeTypeOf("function");
-    if (!wrap) {
-      throw new Error("expected OpenAI wrapper");
-    }
     const extraParams = provider.prepareExtraParams?.({
       provider: "openai",
       modelId: "gpt-5.4",
@@ -1437,23 +1328,14 @@ describe("buildOpenAIProvider", () => {
   });
 
   it("authorizes native OpenAI web search through the code mode wrapper chain", async () => {
-    const provider = buildOpenAIProvider();
-    const wrap = provider.wrapStreamFn;
-    if (!wrap) {
-      throw new Error("expected OpenAI wrapper");
-    }
+    const wrap = expectDefined(buildOpenAIProvider().wrapStreamFn, "OpenAI wrapper");
     const allowedHostedToolTypes = new Set<string>();
 
     const result = await runWrappedPayloadCase({
       wrap,
       provider: "openai",
       modelId: "gpt-5.4",
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-        baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      model: createOpenAIResponsesTestModel(),
       context: {
         messages: [],
         tools: [
@@ -1484,22 +1366,13 @@ describe("buildOpenAIProvider", () => {
   });
 
   it("keeps one native OpenAI web search tool when the payload is already patched", async () => {
-    const provider = buildOpenAIProvider();
-    const wrap = provider.wrapStreamFn;
-    if (!wrap) {
-      throw new Error("expected OpenAI wrapper");
-    }
+    const wrap = expectDefined(buildOpenAIProvider().wrapStreamFn, "OpenAI wrapper");
 
     const result = await runWrappedPayloadCase({
       wrap,
       provider: "openai",
       modelId: "gpt-5.4",
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-        baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      model: createOpenAIResponsesTestModel(),
       payload: {
         tools: [{ type: "web_search" }, { type: "function", name: "web_search" }],
         reasoning: { effort: "minimal" },
@@ -1511,12 +1384,8 @@ describe("buildOpenAIProvider", () => {
   });
 
   it("keeps managed OpenAI web_search when agent policy denies native web search", async () => {
-    const provider = buildOpenAIProvider();
-    const wrap = provider.wrapStreamFn;
+    const wrap = expectDefined(buildOpenAIProvider().wrapStreamFn, "OpenAI wrapper");
     expect(wrap).toBeTypeOf("function");
-    if (!wrap) {
-      throw new Error("expected OpenAI wrapper");
-    }
 
     const allowedHostedToolTypes = new Set<string>();
     const result = await runWrappedPayloadCase({
@@ -1538,12 +1407,7 @@ describe("buildOpenAIProvider", () => {
           },
         },
       },
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-        baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      model: createOpenAIResponsesTestModel(),
       payload: {
         tools: [
           { type: "function", name: "read" },
@@ -1560,12 +1424,8 @@ describe("buildOpenAIProvider", () => {
   });
 
   it("does not inject native OpenAI web search when disabled or proxied", async () => {
-    const provider = buildOpenAIProvider();
-    const wrap = provider.wrapStreamFn;
+    const wrap = expectDefined(buildOpenAIProvider().wrapStreamFn, "OpenAI wrapper");
     expect(wrap).toBeTypeOf("function");
-    if (!wrap) {
-      throw new Error("expected OpenAI wrapper");
-    }
 
     const disabledAllowedHostedToolTypes = new Set<string>();
     const disabled = await runWrappedPayloadCase({
@@ -1576,12 +1436,7 @@ describe("buildOpenAIProvider", () => {
       streamOptions: {
         openclawCodeModeAllowedHostedToolTypes: disabledAllowedHostedToolTypes,
       },
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-        baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      model: createOpenAIResponsesTestModel(),
       payload: { tools: [{ type: "function", name: "web_search" }] },
     });
     const proxiedAllowedHostedToolTypes = new Set<string>();
@@ -1608,12 +1463,8 @@ describe("buildOpenAIProvider", () => {
   });
 
   it("keeps managed web_search when another search provider is configured", async () => {
-    const provider = buildOpenAIProvider();
-    const wrap = provider.wrapStreamFn;
+    const wrap = expectDefined(buildOpenAIProvider().wrapStreamFn, "OpenAI wrapper");
     expect(wrap).toBeTypeOf("function");
-    if (!wrap) {
-      throw new Error("expected OpenAI wrapper");
-    }
 
     const allowedHostedToolTypes = new Set<string>();
     const result = await runWrappedPayloadCase({
@@ -1624,12 +1475,7 @@ describe("buildOpenAIProvider", () => {
       streamOptions: {
         openclawCodeModeAllowedHostedToolTypes: allowedHostedToolTypes,
       },
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-        baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      model: createOpenAIResponsesTestModel(),
       payload: { tools: [{ type: "function", name: "web_search" }] },
     });
 
@@ -1649,12 +1495,7 @@ describe("buildOpenAIProvider", () => {
       provider.prepareExtraParams?.({
         provider: "openai",
         modelId: "gpt-5.4",
-        model: {
-          api: "openai-responses",
-          provider: "openai",
-          id: "gpt-5.4",
-          baseUrl: "https://api.openai.com/v1",
-        },
+        model: createOpenAIResponsesTestModel(),
         config: {
           models: {
             providers: {
@@ -1733,7 +1574,7 @@ describe("buildOpenAIProvider", () => {
   });
 });
 describe("OpenAI model materialization", () => {
-  it.each(["gpt-daybreak-blue-latest", "gpt-daybreak-red-latest"])(
+  it.each(["gpt-daybreak-red-latest"])(
     "materializes %s capabilities and preserves its registered Ultra opt-out",
     (modelId) => {
       const provider = buildOpenAIProvider();

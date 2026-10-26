@@ -70,13 +70,8 @@
   font-weight: 600;
 }
 
-.plugin-session-summary__avatar .chat-author-avatar__fallback,
 .plugin-session-summary__avatar .chat-author-avatar.is-fallback .chat-author-avatar__image {
   display: none;
-}
-
-.plugin-session-summary__avatar .chat-author-avatar.is-fallback .chat-author-avatar__fallback {
-  display: inline-flex;
 }
 
 .plugin-session-summary__unknown {

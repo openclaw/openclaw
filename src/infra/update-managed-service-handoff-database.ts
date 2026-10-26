@@ -8,7 +8,7 @@ import { root as openLockRoot, type Root } from "@openclaw/fs-safe/root";
 import { sql } from "kysely";
 import { z } from "zod";
 import { formatCliCommand } from "../cli/command-format.js";
-import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
@@ -19,6 +19,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { packageUpdateRefusal } from "./package-update-refusal.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
   isSqliteLockError,
@@ -56,6 +57,7 @@ const writeAdmissions = new AsyncLocalStorage<{
 
 type HandoffDatabaseOwner = {
   <T>(write: boolean, operation: (db: HandoffDatabase) => T): T;
+  readonly databasePath: string;
   forExisting(identity: ManagedUpdateLeaseDatabaseIdentity): HandoffDatabaseOwner;
   retainReadConnection(this: void): { [Symbol.dispose](): void };
   transact<T>(db: HandoffDatabase, operation: () => T, options: SqliteTransactionOptions): T;
@@ -70,7 +72,8 @@ function assertRecordedDatabasePath(
   existingIdentity?: ManagedUpdateLeaseDatabaseIdentity,
 ): void {
   if (existingIdentity && databasePath !== existingIdentity.databasePath) {
-    throw new Error(
+    throw packageUpdateRefusal(
+      "managed-handoff-lease-identity-changed",
       identityChangedMessage(databasePath, [
         `path (recorded ${existingIdentity.databasePath}; current ${databasePath})`,
       ]),
@@ -174,6 +177,9 @@ export function readManagedHandoffRepairMetadata(
 }
 
 function initializeLeaseSchema(db: HandoffDatabase): void {
+  if (tableExists(db, "managed_update_handoffs")) {
+    return;
+  }
   executeSqliteQuerySync(
     db,
     leaseQueries(db)
@@ -355,7 +361,10 @@ export function captureManagedUpdateLeaseDatabaseIdentity(
       );
     }
     if (changes.length) {
-      throw new Error(identityChangedMessage(databasePath, changes));
+      throw packageUpdateRefusal(
+        "managed-handoff-lease-identity-changed",
+        identityChangedMessage(databasePath, changes),
+      );
     }
   }
   return Object.freeze({
@@ -559,6 +568,7 @@ export function createManagedHandoffLeaseDatabase(
     );
   }
   return Object.assign(withDatabase, {
+    databasePath,
     forExisting(identity: ManagedUpdateLeaseDatabaseIdentity) {
       return createManagedHandoffLeaseDatabase(identity.databasePath, identity, writeLockRoot);
     },

@@ -1,60 +1,52 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveChatPaneDesktopTarget } from "../../../ui/src/components/desktop/desktop-source.js";
 import {
   createSessionCapabilityHarness,
   sessionsResult,
 } from "../../../ui/src/lib/sessions/session-capability.test-support.js";
-import { resolveChatPaneDesktopTarget } from "../../../ui/src/pages/chat/chat-pane-placement.js";
 import { createTestGatewayClient } from "../../../ui/src/test-helpers/gateway-client.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildProjectedAgentRunIndex,
   clearAgentRunContext,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
+import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import { createSessionRowPlacementProjection } from "../session-row-placement-projection.js";
 import {
   bindSessionRowProjection,
   getSessionRowProjection,
 } from "../session-row-projection-access.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
-import { loadCachedSessionSharingSnapshot } from "../session-sharing-snapshot-cache.js";
+import { replaceSessionRowFacts } from "../session-utils-row.js";
+import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
+import { activePlacement as makeActivePlacement } from "../worker-environments/placement-suite.test-support.js";
+import {
+  createActiveRpcSourceForTest,
+  registerRpcSourceForTest,
+} from "./rpc-source-fixtures.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  warn: vi.fn(),
-  invalidate: vi.fn(),
   loadRow: vi.fn(),
   rowLabel: "first",
 }));
-
-vi.mock("../../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
-      const logger = actual.createSubsystemLogger(...args);
-      return args[0] === "gateway/session-events" ? { ...logger, warn: mocks.warn } : logger;
-    },
-  };
-});
-
-vi.mock("../session-sharing.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session-sharing.js")>();
-  return {
-    ...actual,
-    invalidateSessionSharingSnapshot: mocks.invalidate.mockImplementation(
-      actual.invalidateSessionSharingSnapshot,
-    ),
-  };
-});
 
 const { emitSessionsChanged, flushPendingSessionsChangedEvents } =
   await import("./session-change-event.js");
@@ -77,22 +69,27 @@ function holdExactPreparation(projection: SessionRowProjection, ...ready: Promis
 function createContext(
   receivers = new Set(["conn-1"]),
   config: OpenClawConfig = {},
-  chatAbortControllers: GatewayRequestContext["chatAbortControllers"] = new Map(),
+  sources: Iterable<readonly [string, RpcSourceRef]> = [],
 ) {
+  setRuntimeConfigSnapshot(config);
+  rpcSourceTesting.reset(sources);
   const projection = {
     get state() {
       return { rowContext: { projectedAgentRuns: buildProjectedAgentRunIndex() } };
     },
     ensureMaterialized: async () => {},
-    withPreparedExactRows: async (_queries: unknown, consume: () => unknown) => ({
-      kind: "complete",
-      value: consume(),
+    withPreparedExactRows: async (_queries: unknown, consume: (read: unknown) => unknown) =>
+      consume(projection),
+    describe: ({ key, agentId }: { key: string; agentId: string }) => ({
+      key,
+      storeTarget: {
+        storePath: resolveSessionStorePathCore(config.session?.store, { agentId }),
+      },
     }),
-    snapshot: ({ key }: { key: string }) => ({ row: mocks.loadRow(key) }),
+    present: ({ key }: { key: string }) => mocks.loadRow(key),
   };
   return {
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers,
     getRuntimeConfig: () => config,
     ...bindSessionRowProjection({}, () => projection as unknown as SessionRowProjection),
     getSessionEventSubscriberConnIds: () => receivers,
@@ -100,29 +97,42 @@ function createContext(
   } as unknown as GatewayRequestContext;
 }
 
+function broadcasts(context: GatewayRequestContext) {
+  return vi.mocked(context.broadcastToConnIds).mock.calls;
+}
+
+function fixedStoreConfig(retired = false): OpenClawConfig {
+  return {
+    session: { scope: "global", store: "/stores/shared.sqlite" },
+    agents: {
+      ownership: "explicit",
+      defaults: { sessionStore: { agentId: "ops" } },
+      entries: retired ? { research: {} } : { ops: {}, research: {} },
+    },
+  };
+}
+
+async function contextWithRun(
+  config: OpenClawConfig,
+  runId: string,
+  identity: Parameters<typeof createActiveRpcSourceForTest>[1],
+) {
+  return createContext(new Set(["conn-1"]), config, [
+    [runId, await createActiveRpcSourceForTest({}, identity)],
+  ]);
+}
+
 function activePlacement(
   sessionKey: string,
 ): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
-  return {
-    sessionId: `${sessionKey}-id`,
+  return makeActivePlacement(`${sessionKey}-id`, {
     sessionKey,
-    agentId: "main",
-    state: "active",
-    executionMode: "worker-turn",
     generation: 1,
-    createdAtMs: 1,
     updatedAtMs: 2,
     stateChangedAtMs: 2,
     environmentId: "worker-first",
     activeOwnerEpoch: 1,
     workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-    remoteWorkspaceDir: "/workspace",
-    workerBundleHash: "a".repeat(64),
-    lastTranscriptAckCursor: null,
-    lastLiveEventAckCursor: null,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
     turnClaim: {
       owner: "worker",
       claimId: "private-turn-claim",
@@ -130,7 +140,7 @@ function activePlacement(
       generation: 1,
       ownerEpoch: 1,
     },
-  };
+  });
 }
 
 function preparePlacementProjection(
@@ -152,26 +162,21 @@ function preparePlacementProjection(
     }
     const placement = placements.get(record.entry.sessionId);
     // Simulate committed owner facts without reading the placement store during event snapshots.
-    if (placement) {
-      record.materialized.row.placement = projectWorkerSessionPlacement(placement);
-    } else {
-      delete record.materialized.row.placement;
-    }
+    record.materialized = replaceSessionRowFacts(record.materialized, {
+      placement: placement ? projectWorkerSessionPlacement(placement) : undefined,
+    });
   };
   update();
   return { update };
 }
 
-let restorePerformanceClock: () => void;
-
 beforeEach((context) => {
   vi.useFakeTimers();
   // Publication budgets must advance on the same clock as debounce timers.
   const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-  restorePerformanceClock = () => clock.mockRestore();
-  context.onTestFinished(restorePerformanceClock);
-  mocks.invalidate();
-  mocks.invalidate.mockClear();
+  context.onTestFinished(() => {
+    clock.mockRestore();
+  });
   mocks.loadRow.mockReset().mockImplementation((key: string) => ({
     key,
     label: mocks.rowLabel,
@@ -182,6 +187,7 @@ beforeEach((context) => {
 
 afterEach(async () => {
   await flushPendingSessionsChangedEvents();
+  clearRuntimeConfigSnapshot();
   vi.useRealTimers();
 });
 
@@ -196,7 +202,6 @@ describe("sessions.changed coalescing", () => {
     await emitAndSettleLeading(context, { reason: "groups" }, { catalogOnly: true });
 
     expect(changed).not.toHaveBeenCalled();
-    expect(mocks.invalidate).not.toHaveBeenCalled();
     expect(context.mentionInbox?.invalidateAsync).not.toHaveBeenCalled();
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
     expect(context.broadcastToConnIds).toHaveBeenCalledWith(
@@ -209,7 +214,6 @@ describe("sessions.changed coalescing", () => {
     // Rename/delete use the same public reason but can change member rows.
     await emitAndSettleLeading(context, { reason: "groups" });
     expect(changed).toHaveBeenCalledWith({ all: true, scope: "sessions" });
-    expect(mocks.invalidate).toHaveBeenCalledOnce();
     expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 1);
   });
@@ -308,28 +312,86 @@ describe("sessions.changed coalescing", () => {
     }
   });
 
+  it.each(["before", "during"])(
+    "publishes a 20-session burst when its producer drains %s preparation",
+    async (when) => {
+      vi.useRealTimers();
+      const context = createContext();
+      const keys = Array.from({ length: 20 }, (_, index) => `agent:main:burst-${index}`);
+      const projection = createSessionRowProjectionFixture({
+        cfg: context.getRuntimeConfig(),
+        store: Object.fromEntries(
+          keys.map((key) => [key, { sessionId: key, updatedAt: 1, label: "committed" }]),
+        ),
+      });
+      bindSessionRowProjection(context, () => projection);
+      const entered = createDeferred();
+      const release = createDeferred();
+      let ready = false;
+      const preparation = release.promise.then(() => {
+        ready = true;
+      });
+      const binding = new AsyncLocalStorage<string>();
+      const preparationBindings = new Set<string | undefined>();
+      const placement = createSessionRowPlacementProjection(undefined, () => {
+        preparationBindings.add(binding.getStore());
+        entered.resolve();
+        return ready ? undefined : preparation;
+      });
+      projection.withPreparedExactRows = (queries, consume) =>
+        placement.withPreparedRows(
+          projection,
+          () => true,
+          (query) => projection.capture(query),
+          queries,
+          () => undefined,
+          consume,
+        );
+      const producer = new AsyncWorkScope();
+      try {
+        binding.run("publisher", () =>
+          producer.run(() => {
+            for (const sessionKey of keys) {
+              emitSessionsChanged(context, { reason: "patch", sessionKey });
+            }
+          }),
+        );
+        if (when === "during") {
+          await entered.promise;
+        }
+        await producer.drain();
+        release.resolve();
+        await flushPendingSessionsChangedEvents(context);
+        expect(preparationBindings).toEqual(new Set(["publisher"]));
+        expect(broadcasts(context).map(([, payload]) => payload)).toMatchObject(
+          keys.map((key) => ({ sessionKey: key, session: { key, label: "committed" } })),
+        );
+      } finally {
+        release.resolve();
+        await flushPendingSessionsChangedEvents(context);
+        placement.dispose();
+        projection.dispose();
+      }
+    },
+  );
+
   it("publishes an exact row while unrelated bulk preparation is blocked", async () => {
     const context = createContext();
     const projection = getSessionRowProjection(context)!;
     const unrelated = createDeferred();
-    const bulk = vi.spyOn(projection, "ensureMaterialized").mockReturnValue(unrelated.promise);
+    vi.spyOn(projection, "ensureMaterialized").mockReturnValue(unrelated.promise);
     const bulkWork = projection.ensureMaterialized();
     const sessionKey = "agent:main:ready";
     try {
       await emitAndSettleLeading(context, { reason: "patch", sessionKey });
-      expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-        "sessions.changed",
-        expect.objectContaining({
-          session: expect.objectContaining({
-            key: sessionKey,
-            sessionId: `${sessionKey}-id`,
-            label: "first",
-          }),
-        }),
-        new Set(["conn-1"]),
-        expect.objectContaining({ sessionKeys: [sessionKey] }),
-      );
-      expect(bulk).toHaveBeenCalledOnce();
+      expect(broadcasts(context)).toMatchObject([
+        [
+          "sessions.changed",
+          { session: { key: sessionKey, sessionId: `${sessionKey}-id`, label: "first" } },
+          new Set(["conn-1"]),
+          { sessionKeys: [sessionKey] },
+        ],
+      ]);
     } finally {
       unrelated.resolve();
       await bulkWork;
@@ -355,9 +417,7 @@ describe("sessions.changed coalescing", () => {
     mocks.rowLabel = "committed-latest";
     prepared.resolve();
     await drain;
-    expect(
-      vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload),
-    ).toMatchObject([
+    expect(broadcasts(context).map(([, payload]) => payload)).toMatchObject([
       { reason: "first", session: { label: "committed-latest" } },
       { reason: "latest", session: { label: "committed-latest" } },
     ]);
@@ -384,16 +444,52 @@ describe("sessions.changed coalescing", () => {
       sessionId: "removed",
     });
     await vi.advanceTimersByTimeAsync(0);
-    const earlyPublications = vi.mocked(context.broadcastToConnIds).mock.calls.length;
+    const earlyPublications = broadcasts(context).length;
     prepared.resolve();
     await flushPendingSessionsChangedEvents(context);
     expect(earlyPublications).toBe(0);
-    expect(
-      vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload),
-    ).toMatchObject([
-      { reason: "patch", sessionId: "removed" },
-      { reason: "delete", sessionId: "removed" },
+    expect(broadcasts(context).map(([event, payload]) => [event, payload])).toMatchObject([
+      ["sessions.changed", { reason: "patch", sessionId: "removed" }],
+      ["socket.drain", { reason: "delete", sessionId: "removed" }],
+      ["sessions.changed", { reason: "delete", sessionId: "removed" }],
     ]);
+  });
+
+  it.each([
+    { key: "main", agentId: "main", subscriptionKey: "agent:main:main" },
+    { key: "global", agentId: "work", subscriptionKey: "agent:work:global" },
+  ])(
+    "routes $key teardown to message-only subscribers for $agentId",
+    async ({ key, agentId, subscriptionKey }) => {
+      const context = createContext(new Set(), {
+        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+      });
+      context.getSessionMessageSubscriberConnIds = vi.fn(
+        (requestedKey) => new Set(requestedKey === subscriptionKey ? ["message-reader"] : []),
+      );
+
+      await emitAndSettleLeading(context, { reason: "reset", sessionKey: key, agentId });
+      await flushPendingSessionsChangedEvents(context);
+
+      expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "socket.drain",
+        expect.objectContaining({ sessionKey: key, agentId, reason: "reset" }),
+        new Set(["message-reader"]),
+        expect.objectContaining({ agentId, dropIfSlow: false }),
+      );
+    },
+  );
+
+  it("sends one drain notice to the union of list and message subscribers", async () => {
+    const context = createContext(new Set(["list-reader", "both"]));
+    context.getSessionMessageSubscriberConnIds = () => new Set(["message-reader", "both"]);
+
+    await emitAndSettleLeading(context, { reason: "reset", sessionKey: "agent:main:main" });
+    await flushPendingSessionsChangedEvents(context);
+
+    const drains = broadcasts(context).filter(([event]) => event === "socket.drain");
+    expect(drains).toHaveLength(1);
+    expect(drains[0]?.[2]).toEqual(new Set(["list-reader", "message-reader", "both"]));
   });
 
   it("joins a different session admitted while shutdown is draining", async () => {
@@ -433,44 +529,27 @@ describe("sessions.changed coalescing", () => {
     await emitAndSettleLeading(context, { reason: "send", sessionKey: "agent:main:chat" });
 
     expect(context.broadcastToConnIds).toHaveBeenCalledOnce();
-    expect(mocks.loadRow).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(100);
 
     expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
-    expect(mocks.loadRow).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(context.broadcastToConnIds).mock.calls[1]?.[1]).toMatchObject({
+    expect(broadcasts(context)[1]?.[1]).toMatchObject({
       label: "latest",
       reason: "send",
       catalogChanged: true,
     });
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 3);
-    expect(mocks.invalidate).toHaveBeenCalledTimes(3);
     await emitAndSettleLeading(context, { reason: "patch", sessionKey: "agent:main:chat" });
-    expect(vi.mocked(context.broadcastToConnIds).mock.calls.at(-1)?.[1]).not.toHaveProperty(
-      "catalogChanged",
-    );
+    expect(broadcasts(context).at(-1)?.[1]).not.toHaveProperty("catalogChanged");
   });
 
   it("refreshes metadata projections without expiring access when nobody receives events", async () => {
     const context = createContext(new Set());
     const sessionKey = "agent:main:metadata";
     const initialAccessRevision = readGatewayAccessRevision();
-    const resolve = vi.fn(() => ({
-      canonicalKey: sessionKey,
-      snapshot: { incognito: false, visibility: "shared" as const },
-    }));
-    loadCachedSessionSharingSnapshot({ sessionKey, resolve });
-
     await emitAndSettleLeading(context, { reason: "patch", sessionKey }, { accessChanged: false });
 
     expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
-    expect(mocks.invalidate).toHaveBeenCalledOnce();
     expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
-    expect(mocks.invalidate.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(context.mentionInbox!.invalidateAsync).mock.invocationCallOrder[0]!,
-    );
-    loadCachedSessionSharingSnapshot({ sessionKey, resolve });
-    expect(resolve).toHaveBeenCalledTimes(2);
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
     expect(mocks.loadRow).not.toHaveBeenCalled();
   });
@@ -492,36 +571,24 @@ describe("sessions.changed coalescing", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(context.broadcastToConnIds).mock.calls[1]?.[1]).toMatchObject({
+    expect(broadcasts(context)[1]?.[1]).toMatchObject({
       label: "state-5",
       reason: "update-5",
     });
   });
 
   it("does not adopt the compatibility owner's ownerless run for another agent", async () => {
-    const config = retainLegacyDefaultAgentId(
+    const config: OpenClawConfig = retainLegacyDefaultAgentId(
       {
         agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
       } satisfies OpenClawConfig,
       "ops",
     );
-    const sessionId = "agent:research:shared-session-id";
-    const context = createContext(
-      new Set(["conn-1"]),
-      config,
-      new Map([
-        [
-          "compat-owner-run",
-          {
-            controller: new AbortController(),
-            expiresAtMs: 60_000,
-            sessionId,
-            sessionKey: "legacy-unscoped",
-            startedAtMs: 0,
-          } satisfies ChatAbortControllerEntry,
-        ],
-      ]),
-    );
+    const context = await contextWithRun(config, "compat-owner-run", {
+      sessionId: "agent:research:shared-session-id",
+      sessionKey: "legacy-unscoped",
+      storeScope: resolveSessionStorePathCore(config.session?.store, { agentId: "ops" }),
+    });
 
     await emitAndSettleLeading(context, {
       reason: "update",
@@ -537,60 +604,29 @@ describe("sessions.changed coalescing", () => {
   });
 
   it("projects active bare-global runs through the persisted fixed-store owner", async () => {
-    const config = {
-      session: { scope: "global", store: "/stores/shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    } satisfies OpenClawConfig;
-    const context = createContext(
-      new Set(["conn-1"]),
-      config,
-      new Map([
-        [
-          "ops-global-run",
-          {
-            agentId: "ops",
-            controller: new AbortController(),
-            expiresAtMs: 60_000,
-            sessionId: "global-id",
-            sessionKey: "global",
-            startedAtMs: 0,
-          } satisfies ChatAbortControllerEntry,
-        ],
-      ]),
-    );
+    const config = fixedStoreConfig();
+    const context = await contextWithRun(config, "ops-global-run", {
+      agentId: "ops",
+      storeScope: resolveSessionStorePathCore(config.session?.store, { agentId: "ops" }),
+      sessionId: "global-id",
+      sessionKey: "global",
+    });
 
     await emitAndSettleLeading(context, { reason: "update", sessionKey: "global" });
 
     expect(context.broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.changed",
-      expect.objectContaining({
-        activeRunIds: ["ops-global-run"],
-        hasActiveRun: true,
-      }),
+      expect.objectContaining({ activeRunIds: ["ops-global-run"], hasActiveRun: true }),
       expect.anything(),
-      expect.objectContaining({
-        agentId: "ops",
-        sessionKeys: ["global"],
-      }),
+      expect.objectContaining({ agentId: "ops", sessionKeys: ["global"] }),
     );
-    const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
+    const payload = broadcasts(context)[0]?.[1];
     expect(payload).not.toHaveProperty("agentId");
     expect(payload).not.toHaveProperty("goal");
   });
 
   it("keeps a retired fixed-store owner private after the mutation commits", async () => {
-    const config = {
-      session: { scope: "global", store: "/stores/shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { research: {} },
-      },
-    } satisfies OpenClawConfig;
+    const config = fixedStoreConfig(true);
     const context = createContext(new Set(["conn-1"]), config);
 
     await emitAndSettleLeading(context, { reason: "update", sessionKey: "global" });
@@ -604,19 +640,13 @@ describe("sessions.changed coalescing", () => {
         agentId: "ops",
         dropIfSlow: true,
         sessionKeys: ["agent:ops:global"],
+        sessionEventSubscriptionKeys: ["agent:ops:global"],
       },
     );
-    const payload = vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1];
-    for (const field of [
-      "agentId",
-      "key",
-      "label",
-      "session",
-      "goal",
-      "status",
-      "hasActiveRun",
-      "activeRunIds",
-    ]) {
+    const payload = broadcasts(context)[0]?.[1];
+    for (const field of "agentId key label session goal status hasActiveRun activeRunIds".split(
+      " ",
+    )) {
       expect(payload, field).not.toHaveProperty(field);
     }
   });
@@ -624,28 +654,24 @@ describe("sessions.changed coalescing", () => {
   it("tombstones exact run ids when lifecycle projection takes ownership", async () => {
     const sessionKey = "agent:main:projected";
     const sessionId = `${sessionKey}-id`;
-    const chatAbortControllers = new Map([
-      [
-        "direct-run",
-        {
-          agentId: "main",
-          controller: new AbortController(),
-          expiresAtMs: 60_000,
-          sessionId,
-          sessionKey,
-          startedAtMs: 0,
-        } satisfies ChatAbortControllerEntry,
-      ],
-    ]);
-    const context = createContext(new Set(["conn-1"]), {}, chatAbortControllers);
+    const context = createContext();
+    const registration = registerRpcSourceForTest({
+      runId: "direct-run",
+      agentId: "main",
+      storeScope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      sessionId,
+      sessionKey,
+    });
+    const release = await claimRpcSourceForTest(registration.entry);
 
     await emitAndSettleLeading(context, { reason: "update", sessionKey });
-    expect(vi.mocked(context.broadcastToConnIds).mock.calls[0]?.[1]).toMatchObject({
+    expect(broadcasts(context)[0]?.[1]).toMatchObject({
       hasActiveRun: true,
       activeRunIds: ["direct-run"],
     });
 
-    chatAbortControllers.clear();
+    release();
+    await registration.entry.input.settlement.promise;
     registerAgentRunContext("hidden-worker-run", {
       isControlUiVisible: false,
       projectSessionActive: true,
@@ -655,7 +681,7 @@ describe("sessions.changed coalescing", () => {
       await emitAndSettleLeading(context, { reason: "update", sessionKey });
       await flushPendingSessionsChangedEvents(context);
 
-      const payload = vi.mocked(context.broadcastToConnIds).mock.calls[1]?.[1];
+      const payload = broadcasts(context)[1]?.[1];
       expect(payload).toMatchObject({ hasActiveRun: true });
       expect(payload).toHaveProperty("activeRunIds", null);
     } finally {

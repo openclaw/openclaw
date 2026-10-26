@@ -3,6 +3,7 @@ import { publishTranscriptUpdate } from "../config/sessions/session-accessor.js"
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindAgentAssistantSource, readAgentAssistantSource } from "../infra/agent-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
@@ -17,6 +18,7 @@ import {
 } from "../sessions/user-turn-transcript-runtime-context.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
+import { prepareCodeModeCheckpoint } from "./code-mode-checkpoint.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import {
@@ -49,6 +51,7 @@ import {
   rewriteToolResultIds,
 } from "./tool-call-id.js";
 type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
+const log = createSubsystemLogger("agents/transcript");
 export type NextUserMessagePersistence = "normal" | "suppress" | "runtime";
 type AsyncMessageCallback<T extends AgentMessage> = (message: T) => void | Promise<void>;
 type UserMessagePersistedCallback = (
@@ -61,6 +64,20 @@ type UserMessagePersistedCallback = (
     sessionTarget?: ReturnType<SessionManager["getSessionTarget"]>;
   },
 ) => void | Promise<void>;
+type MessageWriteContext = {
+  runId?: string;
+  assistantErrorTranscript?: AssistantErrorTranscript;
+  suppressTranscriptOnlyAssistantPersistence?: boolean;
+  nextUserMessagePersistence: NextUserMessagePersistence;
+  beforeMessageWriteHook?: (
+    event: PluginHookBeforeMessageWriteEvent,
+  ) => PluginHookBeforeMessageWriteResult | undefined;
+  transformMessageForPersistence?: (message: AgentMessage) => AgentMessage;
+  onUserMessagePersisted?: UserMessagePersistedCallback;
+  onUserMessagePersistenceSuppressed?: AsyncMessageCallback<UserAgentMessage>;
+  onUserMessageBlocked?: (message: UserAgentMessage) => void;
+  onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
+};
 type AppendMessageOptions = Parameters<SessionManager["appendMessage"]>[1];
 type AppendReceipt = Awaited<ReturnType<SessionManager["appendMessageWithTranscriptAnchorAsync"]>>;
 type AppendRequest = {
@@ -123,9 +140,8 @@ export function installSessionToolResultGuard(
   opts?: {
     sessionKey?: string;
     agentId?: string;
-    /** Exact run that owns terminal assistant transcript updates. */
-    runId?: string;
-    transformMessageForPersistence?: (message: AgentMessage) => AgentMessage;
+    /** Capture the accepting run before an append waits for manager admission. */
+    captureMessageContext?: () => MessageWriteContext;
     transformToolResultForPersistence?: (
       message: AgentMessage,
       meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
@@ -141,34 +157,18 @@ export function installSessionToolResultGuard(
      * When set, tool calls with unknown names are dropped before persistence.
      */
     allowedToolNames?: Iterable<string>;
-    /**
-     * Synchronous hook invoked before any message is written to the session JSONL.
-     * If the hook returns { block: true }, the message is silently dropped.
-     * If it returns { message }, the modified message is written instead.
-     */
-    beforeMessageWriteHook?: (
-      event: PluginHookBeforeMessageWriteEvent,
-    ) => PluginHookBeforeMessageWriteResult | undefined;
     config?: OpenClawConfig;
     maxToolResultChars?: number;
     suppressNextUserMessagePersistence?: boolean;
-    suppressTranscriptOnlyAssistantPersistence?: boolean;
-    assistantErrorTranscript?: AssistantErrorTranscript;
-    onUserMessagePersisted?: UserMessagePersistedCallback;
-    onUserMessagePersistenceSuppressed?: AsyncMessageCallback<UserAgentMessage>;
-    onUserMessageBlocked?: (message: UserAgentMessage) => void;
-    onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
     withCompactionPersistence?: CompactionAppendPersistence;
     withCompactionPersistenceAsync?: CompactionAppendPersistenceAsync;
-  },
+  } & Omit<MessageWriteContext, "nextUserMessagePersistence">,
 ): {
   hasPendingToolResults: () => boolean;
   flushPendingToolResults: () => void;
   flushPendingToolResultsAsync: () => Promise<void>;
   clearPendingToolResults: () => void;
-  setNextUserMessagePersistence: (mode: NextUserMessagePersistence) => void;
   getPendingIds: () => string[];
-  setTranscriptRunId: (runId: string | undefined, errors?: AssistantErrorTranscript) => void;
 } {
   const originalAppend = getRawSessionAppendMessage(sessionManager);
   const originalAppendWithTranscriptAnchor =
@@ -180,30 +180,25 @@ export function installSessionToolResultGuard(
   const pending = new Map<string, string | undefined>();
   // Response that most recently added pending tool calls; see clearsPendingToolCalls.
   let pendingResponseIds: readonly string[] = [];
-  const persistMessage = (message: AgentMessage) => {
-    const transformer = opts?.transformMessageForPersistence;
-    const persisted = transformer ? transformer(message) : message;
-    return persisted;
+  const defaultContext: MessageWriteContext = {
+    ...opts,
+    nextUserMessagePersistence: opts?.suppressNextUserMessagePersistence ? "suppress" : "normal",
   };
+  const captureMessageContext = (): MessageWriteContext =>
+    opts?.captureMessageContext?.() ?? defaultContext;
+  const persistMessage = (message: AgentMessage, context: MessageWriteContext) =>
+    context.transformMessageForPersistence?.(message) ?? message;
 
   const persistToolResult = (
     message: AgentMessage,
     meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean },
-  ) => {
-    const transformer = opts?.transformToolResultForPersistence;
-    return transformer ? transformer(message, meta) : message;
-  };
+  ) => opts?.transformToolResultForPersistence?.(message, meta) ?? message;
 
   const allowSyntheticToolResults = opts?.allowSyntheticToolResults ?? true;
   const missingToolResultText = opts?.missingToolResultText;
-  const beforeWrite = opts?.beforeMessageWriteHook;
   const toolResultTransformerMayMutate = opts?.transformToolResultForPersistence !== undefined;
   const maxToolResultChars = resolveMaxToolResultChars(opts);
   const transcriptSeqByEntryId = new Map<string, number>();
-  let transcriptRunId = opts?.runId;
-  let assistantErrorTranscript = opts?.assistantErrorTranscript;
-  let nextUserMessagePersistence: NextUserMessagePersistence =
-    opts?.suppressNextUserMessagePersistence ? "suppress" : "normal";
 
   const appendRequest = <T>(
     request: AppendRequest,
@@ -290,6 +285,7 @@ export function installSessionToolResultGuard(
 
   function* appendMessageAndCacheTranscriptSeq(
     message: AgentMessage,
+    context: MessageWriteContext,
     options?: AppendMessageOptions,
     acknowledgementSource: AgentMessage = message,
   ): Generator<
@@ -306,7 +302,10 @@ export function installSessionToolResultGuard(
     AppendReceipt
   > {
     const assistantSource = readAgentAssistantSource(acknowledgementSource);
-    const runOwnedMessage = attachSessionTranscriptRunId(message, transcriptRunId);
+    const runOwnedMessage = prepareCodeModeCheckpoint(
+      attachSessionTranscriptRunId(message, context.runId),
+      acknowledgementSource,
+    );
     const parentEntryId = sessionManager.getLeafId();
     const originalTarget = sessionManager.getSessionTarget();
     const {
@@ -328,19 +327,27 @@ export function installSessionToolResultGuard(
     if (viewWasSuperseded) {
       transcriptSeqByEntryId.clear();
     }
-    const persistedEntry = sessionManager.getEntry(entryId);
+    const committedMessageSeq =
+      anchor && !viewWasSuperseded ? anchor.activeMessagePosition + 1 : undefined;
+    const persistedEntry =
+      committedMessageSeq === undefined ? sessionManager.getEntry(entryId) : undefined;
     const messageSeq =
       appended && sessionTarget && (!viewWasSuperseded || persistedEntry)
-        ? resolveAppendedMessageSeq({
+        ? (committedMessageSeq ??
+          resolveAppendedMessageSeq({
             sessionManager,
             entryId,
             parentEntryId: persistedEntry ? persistedEntry.parentId : parentEntryId,
             seqByEntryId: transcriptSeqByEntryId,
-          })
+          }))
         : undefined;
+    if (committedMessageSeq !== undefined) {
+      transcriptSeqByEntryId.set(entryId, committedMessageSeq);
+    }
     // Destructive tool-side state commits only after this exact result is durable.
     acknowledgeInternalToolResult(acknowledgementSource);
     if (assistantSource && appended) {
+      assistantSource.committedMessageId = entryId;
       assistantSource.committedMessageSeq =
         messageSeq ?? (anchor ? anchor.activeMessagePosition + 1 : null);
       bindAgentAssistantSource(persistedMessage, assistantSource);
@@ -348,7 +355,7 @@ export function installSessionToolResultGuard(
     // Update only committed state, before callbacks can re-enter or throw.
     recordPendingReceipt(entryId, persistedMessage, viewWasSuperseded === true);
     if (appended) {
-      void opts?.onMessagePersisted?.(persistedMessage);
+      void context.onMessagePersisted?.(persistedMessage);
     }
     if (!appended || !sessionTarget) {
       return { entryId, message: persistedMessage, appended, ...(anchor ? { anchor } : {}) };
@@ -369,13 +376,13 @@ export function installSessionToolResultGuard(
     ...args: Parameters<SessionManager["appendCompaction"]>
   ): string => {
     // Replayed boundaries supply their recorded identity; new ones inherit the owning run.
-    args[5] = { runId: transcriptRunId, ...args[5] };
+    args[5] = { runId: captureMessageContext().runId, ...args[5] };
     return withSessionCompactionPersistence(sessionManager, opts?.withCompactionPersistence, () =>
       originalAppendCompaction(...args),
     );
   }) as SessionManager["appendCompaction"];
   const guardedAppendCompactionAsync: SessionManager["appendCompactionAsync"] = (...args) => {
-    args[5] = { runId: transcriptRunId, ...args[5] };
+    args[5] = { runId: captureMessageContext().runId, ...args[5] };
     return withSessionCompactionPersistenceAsync(
       sessionManager,
       opts?.withCompactionPersistenceAsync,
@@ -385,8 +392,9 @@ export function installSessionToolResultGuard(
 
   const applyBeforeWriteHook = (
     msg: AgentMessage,
+    context: MessageWriteContext,
   ): { message: AgentMessage; changed: boolean } | null => {
-    const result = beforeWrite ? beforeWrite({ message: msg }) : undefined;
+    const result = context.beforeMessageWriteHook?.({ message: msg });
     if (result?.block) {
       return null;
     }
@@ -395,7 +403,9 @@ export function installSessionToolResultGuard(
       : { message: msg, changed: false };
   };
 
-  function* flushPendingToolResultsOperation(): Generator<AppendRequest, void, AppendReceipt> {
+  function* flushPendingToolResultsOperation(
+    context: MessageWriteContext,
+  ): Generator<AppendRequest, void, AppendReceipt> {
     if (pending.size === 0) {
       return;
     }
@@ -406,13 +416,13 @@ export function installSessionToolResultGuard(
           toolName: name,
           text: missingToolResultText,
         });
-        const persistedSynthetic = persistMessage(synthetic);
+        const persistedSynthetic = persistMessage(synthetic, context);
         const transformed = persistToolResult(persistedSynthetic, {
           toolCallId: id,
           toolName: name,
           isSynthetic: true,
         });
-        const flushed = applyBeforeWriteHook(transformed);
+        const flushed = applyBeforeWriteHook(transformed, context);
         if (flushed) {
           // Payload hooks still run, but this repair already owns a persisted call ID.
           const canonical =
@@ -421,6 +431,7 @@ export function installSessionToolResultGuard(
               : flushed.message;
           yield* appendMessageAndCacheTranscriptSeq(
             capToolResultForPersistence(canonical, maxToolResultChars),
+            context,
             {
               invalidateSerializedPrefixCache:
                 persistedSynthetic !== synthetic ||
@@ -434,15 +445,29 @@ export function installSessionToolResultGuard(
     }
     pending.clear();
   }
-  const flushPendingToolResults = () => runSync(flushPendingToolResultsOperation());
-  const flushPendingToolResultsAsync = () =>
-    withSessionManagerAppend(sessionManager, () => runAsync(flushPendingToolResultsOperation()));
+  const flushPendingToolResults = () =>
+    runSync(flushPendingToolResultsOperation(captureMessageContext()));
+  const flushPendingToolResultsAsync = () => {
+    const context = captureMessageContext();
+    return withSessionManagerAppend(sessionManager, () =>
+      runAsync(flushPendingToolResultsOperation(context)),
+    );
+  };
 
   function* guardedAppend(
     message: AgentMessage,
+    context: MessageWriteContext,
     callerOptions?: AppendMessageOptions,
   ): Generator<AppendRequest, string | undefined, AppendReceipt> {
     const callerInvalidatesCache = callerOptions?.invalidateSerializedPrefixCache === true;
+    // Publish the owning run before storage clones the message or hooks project it.
+    // Already-admitted immutable replay messages retain their recorded envelope.
+    if (
+      (message.role === "assistant" || message.role === "toolResult") &&
+      !Object.isFrozen(message)
+    ) {
+      Object.assign(message, attachSessionTranscriptRunId(message, context.runId));
+    }
     let nextMessage = message;
     if (message.role === "assistant") {
       const sanitized = sanitizeToolCallInputs([message], {
@@ -450,7 +475,7 @@ export function installSessionToolResultGuard(
       });
       if (sanitized.length === 0) {
         if (pending.size > 0) {
-          yield* flushPendingToolResultsOperation();
+          yield* flushPendingToolResultsOperation(context);
         }
         return undefined;
       }
@@ -466,20 +491,21 @@ export function installSessionToolResultGuard(
       );
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
-      const persistedToolResult = persistMessage(normalizedToolResult);
+      const persistedToolResult = persistMessage(normalizedToolResult, context);
       const capped = capToolResultForPersistence(persistedToolResult, maxToolResultChars);
       const transformed = persistToolResult(capped, {
         toolCallId: id ?? undefined,
         toolName,
         isSynthetic: false,
       });
-      const persisted = applyBeforeWriteHook(transformed);
+      const persisted = applyBeforeWriteHook(transformed, context);
       if (!persisted) {
         return undefined;
       }
       // A blocked or failed append must remain pending for transcript repair.
       return (yield* appendMessageAndCacheTranscriptSeq(
         capToolResultForPersistence(persisted.message, maxToolResultChars),
+        context,
         {
           invalidateSerializedPrefixCache:
             callerInvalidatesCache ||
@@ -500,19 +526,19 @@ export function installSessionToolResultGuard(
       pending.size > 0 &&
       clearsPendingToolCalls(nextMessage, toolCalls, allowSyntheticToolResults, pendingResponseIds)
     ) {
-      yield* flushPendingToolResultsOperation();
+      yield* flushPendingToolResultsOperation(context);
     }
 
-    if (nextMessage.role === "user" && nextUserMessagePersistence === "runtime") {
-      nextUserMessagePersistence = "normal";
+    if (nextMessage.role === "user" && context.nextUserMessagePersistence === "runtime") {
+      context.nextUserMessagePersistence = "normal";
       // Publish attribution on the live message too; cold replay must keep the same model prefix.
       Object.assign(nextMessage, { provenance: { kind: "internal_system" }, display: false });
     }
-    const transformedMessage = persistMessage(nextMessage);
-    const finalWrite = applyBeforeWriteHook(transformedMessage);
+    const transformedMessage = persistMessage(nextMessage, context);
+    const finalWrite = applyBeforeWriteHook(transformedMessage, context);
     if (!finalWrite) {
       if (transformedMessage.role === "user") {
-        opts?.onUserMessageBlocked?.(transformedMessage);
+        context.onUserMessageBlocked?.(transformedMessage);
       }
       return undefined;
     }
@@ -520,22 +546,22 @@ export function installSessionToolResultGuard(
     if (
       finalMessage.role === "assistant" &&
       toolCalls.length === 0 &&
-      opts?.suppressTranscriptOnlyAssistantPersistence === true
+      context.suppressTranscriptOnlyAssistantPersistence === true
     ) {
       return undefined;
     }
     if (
       finalMessage.role === "assistant" &&
-      assistantErrorTranscript &&
+      context.assistantErrorTranscript &&
       finalMessage.stopReason === "error"
     ) {
-      assistantErrorTranscript.record(message);
+      context.assistantErrorTranscript.record(message);
     }
     if (finalMessage.role === "user") {
-      const suppress = nextUserMessagePersistence === "suppress";
-      nextUserMessagePersistence = "normal";
+      const suppress = context.nextUserMessagePersistence === "suppress";
+      context.nextUserMessagePersistence = "normal";
       if (suppress) {
-        void opts?.onUserMessagePersistenceSuppressed?.(finalMessage);
+        void context.onUserMessagePersistenceSuppressed?.(finalMessage);
         return undefined;
       }
     }
@@ -549,28 +575,31 @@ export function installSessionToolResultGuard(
       sessionTarget,
     } = yield* appendMessageAndCacheTranscriptSeq(
       finalMessage,
+      context,
       {
         invalidateSerializedPrefixCache:
-          callerInvalidatesCache ||
-          transformedMessage !== nextMessage ||
-          finalWrite.changed ||
-          finalMessage !== finalWrite.message,
+          callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
       },
       message,
     );
     if (sessionTarget) {
-      const runId = resolveTerminalAssistantTranscriptRunId(persistedMessage, transcriptRunId);
+      const runId = resolveTerminalAssistantTranscriptRunId(persistedMessage, context.runId);
       void publishTranscriptUpdate(sessionTarget, {
         lifecycleRevision,
         message: persistedMessage,
-        messageId: typeof result === "string" ? result : undefined,
+        messageId: result,
         ...(messageSeq !== undefined ? { messageSeq } : {}),
         ...(runId ? { runId } : {}),
-      });
+      }).catch(() =>
+        log.warn(
+          "Transcript update publication failed after append; reload the session to refresh its transcript.",
+          { sessionId: sessionTarget.sessionId, messageId: result },
+        ),
+      );
     }
 
     if (finalMessage.role === "user" && persistedMessage.role === "user") {
-      void opts?.onUserMessagePersisted?.(finalMessage, {
+      void context.onUserMessagePersisted?.(finalMessage, {
         ...(anchor ? { anchor } : {}),
         appended,
         entryId: result,
@@ -584,11 +613,16 @@ export function installSessionToolResultGuard(
 
   // Retained third-party synchronous adapter; bundled runtime uses the awaited guard below.
   sessionManager.appendMessage = ((message, options) => {
+    const context = captureMessageContext();
     prepareSessionManagerSync("appendMessage", sessionManager.getSessionTarget(), sessionManager);
-    return runSync(guardedAppend(message, options));
+    return runSync(guardedAppend(message, context, options));
   }) as SessionManager["appendMessage"];
-  sessionManager.appendMessageAsync = (message, options) =>
-    withSessionManagerAppend(sessionManager, () => runAsync(guardedAppend(message, options)));
+  sessionManager.appendMessageAsync = (message, options) => {
+    const context = captureMessageContext();
+    return withSessionManagerAppend(sessionManager, () =>
+      runAsync(guardedAppend(message, context, options)),
+    );
+  };
   sessionManager.appendCompaction = guardedAppendCompaction;
   sessionManager.appendCompactionAsync = guardedAppendCompactionAsync;
 
@@ -597,13 +631,6 @@ export function installSessionToolResultGuard(
     flushPendingToolResults,
     flushPendingToolResultsAsync,
     clearPendingToolResults: () => pending.clear(),
-    setNextUserMessagePersistence: (mode) => {
-      nextUserMessagePersistence = mode;
-    },
     getPendingIds: () => Array.from(pending.keys()),
-    setTranscriptRunId: (runId, errors) => {
-      transcriptRunId = runId;
-      assistantErrorTranscript = errors;
-    },
   };
 }

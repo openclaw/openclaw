@@ -29,6 +29,7 @@ import {
 } from "./bootstrap-timeouts.js";
 import type { DeviceWorkerAvailability } from "./device-provider.js";
 import type { NodeBootstrapArtifact } from "./node-bootstrap-artifact-contract.js";
+import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH } from "./node-toolchain.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import type { WorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
@@ -52,7 +53,6 @@ type WorkerNodeEnrollmentManagerOptions = {
     signal?: AbortSignal,
   ) => Promise<NodeBootstrapArtifact>;
   transfer: WorkerBootstrapArtifactTransferService;
-  now?: () => number;
 };
 
 function isProvisioningOwner(
@@ -68,7 +68,6 @@ function isProvisioningOwner(
 }
 
 export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentManagerOptions) {
-  const now = options.now ?? Date.now;
   const controller = new AbortController();
   const { signal } = controller;
   const active = new Map<string, NodeEnrollmentBinding>();
@@ -194,13 +193,26 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     prepared: Awaited<ReturnType<typeof prepare>>,
     enrollmentSignal: AbortSignal,
     isAuthorized: () => boolean,
-    transferBytes = prepared.artifact.tarballBytes,
+    transferBytes = prepared.artifact.tarballBytes +
+      (prepared.artifact.installLock?.tarballBytes ?? 0),
   ) => ({
     bootstrapTimeoutMs: workerBootstrapOperationTimeoutMs({ tarballBytes: transferBytes }),
     nodeBootstrap: {
       ...grantArtifact(prepared, prepared.artifact, enrollmentSignal, isAuthorized, transferBytes),
       openclawVersion: prepared.artifact.openclawVersion,
       enabledPluginIds: prepared.artifact.enabledPluginIds,
+      linuxToolchainSetup: DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
+      ...(prepared.artifact.installLock
+        ? {
+            installLock: grantArtifact(
+              prepared,
+              prepared.artifact.installLock,
+              enrollmentSignal,
+              isAuthorized,
+              transferBytes,
+            ),
+          }
+        : {}),
     },
     signal: enrollmentSignal,
   });
@@ -219,7 +231,10 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         const live = current();
         return live.nodeSetupId === owner.nodeSetupId && live.nodeDeviceId === owner.nodeDeviceId;
       };
-      const transferBytes = prepared.artifact.tarballBytes + bundle.tarballBytes;
+      const transferBytes =
+        prepared.artifact.tarballBytes +
+        bundle.tarballBytes +
+        (prepared.artifact.installLock?.tarballBytes ?? 0);
       const runtime: WorkerNodeRuntimePreparation = {
         ...grantRuntime(prepared, enrollmentSignal, isAuthorized, transferBytes),
         workerBundle: {
@@ -326,8 +341,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         displayName: truncateUtf16Safe(`Cloud worker ${owner.profileId}`, 64),
         signal: enrollmentSignal,
         waitForDeviceId: async () => {
-          const deadline = now() + NODE_ENROLLMENT_TIMEOUT_MS;
-          while (now() < deadline) {
+          const deadline = Date.now() + NODE_ENROLLMENT_TIMEOUT_MS;
+          while (Date.now() < deadline) {
             enrollmentSignal.throwIfAborted();
             const live = options.store.get(owner.environmentId);
             if (
@@ -374,7 +389,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         `Worker node ${deviceId} is still owned by environment ${sharedOwner.environmentId}`,
       );
     }
-    await removePairedDeviceRole({ deviceId, role: "node" });
+    await removePairedDeviceRole({ deviceId });
   };
 
   return {

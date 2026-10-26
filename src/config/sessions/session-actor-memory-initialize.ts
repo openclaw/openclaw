@@ -1,3 +1,4 @@
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import { installSessionActorMemoryEntry } from "./session-actor-memory-entry-install.js";
 import type { SessionActorMemoryState } from "./session-actor-memory-state.js";
 import type {
@@ -15,7 +16,7 @@ export function initializeSessionActorMemoryEntry(
     input.entry.sessionId !== input.scope.sessionId ||
     (input.scope.agentId !== undefined && input.scope.agentId !== agentId) ||
     (input.scope.sessionKey !== undefined &&
-      input.scope.sessionKey !== state.hot.target.sessionKey) ||
+      resolveSqliteSessionKey(input.scope.sessionKey, agentId) !== state.hot.target.sessionKey) ||
     (input.scope.storePath !== undefined && input.scope.storePath !== path)
   ) {
     throw new SessionTranscriptWriterClaimReboundError();

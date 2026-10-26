@@ -6,6 +6,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
 import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { releaseAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
@@ -24,8 +25,12 @@ import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
-import { canReceiveSessionEvent } from "../session-sharing.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
+import {
+  createProjectedSessionEventPredicate,
+  roleClient,
+  rolePolicyConfig,
+} from "../session-sharing.test-utils.js";
 import {
   adminRequestClient,
   broadcast,
@@ -158,9 +163,7 @@ it("keeps a trusted narrow question on worker-backed RPCs and fanout through lab
     );
     const admin = questionPeer(adminRequestClient, "sql-admin");
     const revoked = questionPeer({ ...f.viewer, invalidated: true }, "sql-revoked");
-    const fallback = vi.fn((client, sessionKeys, agentId, event, payload) =>
-      canReceiveSessionEvent({ cfg: f.cfg, client, sessionKeys, agentId, event, payload }),
-    );
+    const fallback = vi.fn(() => false);
     const broadcaster = createGatewayBroadcaster({
       clients: new GatewayClientRegistry([owner.ws, viewer.ws, broad.ws, admin.ws, revoked.ws]),
       canReceiveSessionEvent: fallback,
@@ -258,10 +261,12 @@ it("fans out requester-only questions after draft visibility changes with no glo
       { ...f.owner, connect: { ...f.owner.connect, scopes: ["operator.questions"] } },
       "broad-questions",
     );
+    const projection = await createSessionRowProjection({ cfg: f.cfg });
+    sourceReleases.add(() => projection.dispose());
+    await projection.ensureMaterialized();
     const broadcaster = createGatewayBroadcaster({
       clients: new GatewayClientRegistry([owner.ws, viewer.ws, broad.ws]),
-      canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-        canReceiveSessionEvent({ cfg: f.cfg, client, sessionKeys, agentId, event, payload }),
+      canReceiveSessionEvent: createProjectedSessionEventPredicate(f.cfg, projection),
     });
     broadcast.mockImplementation(broadcaster.broadcast);
     expect((await f.request())[0]).toBe(true);
@@ -662,13 +667,14 @@ it.each([
       const entered = createDeferredCore();
       const release = createDeferredCore();
       invalidateQuestionReadFacts();
-      const run = projectionLane.pool.run.bind(projectionLane.pool);
-      const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
-        const result = await run(...args);
-        entered.resolve();
-        await release.promise;
-        return result;
-      });
+      const read = sessionEntryReads.withSessionEntriesFromStoresInWorker;
+      const spy = vi
+        .spyOn(sessionEntryReads, "withSessionEntriesFromStoresInWorker")
+        .mockImplementation(async (...args) => {
+          entered.resolve();
+          await release.promise;
+          return read(...args);
+        });
       let current = true;
       const observer = new AsyncWorkScope();
       broadcast.mockClear();
@@ -743,7 +749,9 @@ it.each(["admin", "narrow"] as const)(
           canReceiveSessionEvent: fallback,
         }).broadcast,
       );
-      const spy = vi.spyOn(projectionLane.pool, "run").mockRejectedValue(failure);
+      const spy = vi
+        .spyOn(sessionEntryReads, "withSessionEntriesFromStoresInWorker")
+        .mockRejectedValue(failure);
       try {
         invalidateQuestionReadFacts();
         const client = kind === "narrow" ? f.producer : adminRequestClient;

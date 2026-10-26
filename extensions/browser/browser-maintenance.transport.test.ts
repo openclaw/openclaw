@@ -1,100 +1,62 @@
-import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  createPluginStateKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
-import { expect, it } from "vitest";
+import { assert, expect, it, onTestFinished } from "vitest";
 import { closeTrackedBrowserTabsForSessions } from "./browser-maintenance.js";
+import { setupMaintenance } from "./browser-maintenance.test-support.js";
 import { resolveCdpTabOwnership } from "./src/browser/cdp.helpers.js";
+import { createCdpFixture, cdpResult } from "./src/browser/cdp.test-support.js";
 import { resolveBrowserConfig } from "./src/browser/config.js";
 import * as registry from "./src/browser/session-tab-registry.js";
-import {
-  getBrowserSessionTabStore,
-  initializeBrowserSessionTabStore,
-} from "./src/browser/session-tab-store.js";
 
 it("closes owned tabs over their transports and rechecks claims after runtime lookup", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const requests: string[] = [];
     const closedTargets: string[] = [];
     const targets = new Set(["owned", "user"]);
-    const server = createServer((request, response) => {
-      const port = (server.address() as AddressInfo).port;
-      response.setHeader("content-type", "application/json");
-      if (request.url === "/json/version") {
-        response.end(
-          JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/test` }),
-        );
-      } else if (request.method === "DELETE") {
+    const cdp = createCdpFixture({});
+    onTestFinished(() => cdp.close());
+    const { cdpUrl } = await cdp.start({
+      "Target.getTargets": () =>
+        cdpResult({ targetInfos: [...targets].map((targetId) => ({ targetId, type: "page" })) }),
+      "Target.closeTarget": ({ params }) => {
+        const targetId = params?.targetId;
+        assert(typeof targetId === "string", "expected a string target ID");
+        closedTargets.push(targetId);
+        return cdpResult({ success: targets.delete(targetId) });
+      },
+    });
+    const control = await cdp.listenHttp((request, response) => {
+      if (request.method === "DELETE") {
         requests.push(`${request.method} ${request.url}`);
+        response.setHeader("content-type", "application/json");
         response.end(JSON.stringify({ ok: true }));
       } else {
         response.statusCode = 404;
         response.end("{}");
       }
     });
-    const ws = new WebSocketServer({ server });
-    ws.on("connection", (socket) => {
-      socket.on("message", (data) => {
-        const message = JSON.parse(rawDataToString(data)) as {
-          id: number;
-          method: string;
-          params?: { targetId?: string };
-        };
-        if (message.method === "Target.getTargets") {
-          socket.send(
-            JSON.stringify({
-              id: message.id,
-              result: { targetInfos: [...targets].map((targetId) => ({ targetId, type: "page" })) },
-            }),
-          );
-        } else if (message.method === "Target.closeTarget") {
-          const targetId = message.params?.targetId ?? "";
-          closedTargets.push(targetId);
-          socket.send(
-            JSON.stringify({ id: message.id, result: { success: targets.delete(targetId) } }),
-          );
-        }
-      });
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const cdpUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const config = {
-      browser: { profiles: { remote: { driver: "existing-session" as const, cdpUrl } } },
-    };
-    await state.writeConfig(config);
-    initializeBrowserSessionTabStore({
-      state: {
-        openKeyedStore: (options) => createPluginStateKeyedStoreForTests("browser", options),
-      },
-    });
+    const { config, store } = await setupMaintenance(state, cdpUrl);
     const sessionKey = "agent:main:transport-cleanup";
-    try {
-      await registry.trackSessionBrowserTab({
-        sessionKey,
-        targetId: "volatile",
-        profile: "remote",
-        route: { kind: "browser-control", baseUrl: cdpUrl },
+    const close = () => closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] });
+    const forget = () =>
+      registry.closeTrackedBrowserTabsForSessions({
+        sessionKeys: [sessionKey],
+        closeTab: async () => {},
       });
-      await expect(closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] })).resolves.toBe(
-        1,
-      );
+    const route = {
+      kind: "browser-control" as const,
+      baseUrl: `http://127.0.0.1:${(control.address() as AddressInfo).port}`,
+    };
+    const tabDefaults = { sessionKey, profile: "remote" };
+    try {
+      await registry.trackSessionBrowserTab({ ...tabDefaults, targetId: "volatile", route });
+      await expect(close()).resolves.toBe(1);
       expect(requests).toEqual(["DELETE /tabs/volatile?targetIdMode=raw&profile=remote"]);
 
       for (const firstKind of ["sweep", "lifecycle"] as const) {
-        const joined = {
-          sessionKey,
-          targetId: `joined-${firstKind}`,
-          profile: "remote",
-          route: { kind: "browser-control" as const, baseUrl: cdpUrl },
-        };
+        const joined = { ...tabDefaults, targetId: `joined-${firstKind}`, route };
         await registry.trackSessionBrowserTab({ ...joined, now: 1_000 });
         const lifecycle = () =>
           registry.closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] });
@@ -110,10 +72,7 @@ it("closes owned tabs over their transports and rechecks claims after runtime lo
         expect
           .soft(requests.slice(before))
           .toEqual([`DELETE /tabs/joined-${firstKind}?targetIdMode=raw&profile=remote`]);
-        await registry.closeTrackedBrowserTabsForSessions({
-          sessionKeys: [sessionKey],
-          closeTab: async () => {},
-        });
+        await forget();
       }
 
       const ownership = await resolveCdpTabOwnership({
@@ -122,7 +81,7 @@ it("closes owned tabs over their transports and rechecks claims after runtime lo
         nativeTargetId: "owned",
       });
       expect(ownership.status).toBe("durable");
-      const tab = { sessionKey, targetId: "owned", profile: "remote", ownership };
+      const tab = { ...tabDefaults, targetId: "owned", ownership };
       await registry.trackSessionBrowserTab({ ...tab, now: 1_000 });
       const resolved = resolveBrowserConfig(config.browser, config);
       const entered = createDeferred<void>();
@@ -144,36 +103,20 @@ it("closes owned tabs over their transports and rechecks claims after runtime lo
       }
       await expect(sweep).resolves.toBe(0);
       expect(closedTargets).toEqual([]);
-      const retained = await getBrowserSessionTabStore().entries();
+      const retained = await store.entries();
       expect(retained).toHaveLength(1);
       expect(retained[0]?.value).not.toHaveProperty("cleanupAttemptToken");
 
-      await expect(closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] })).resolves.toBe(
-        1,
-      );
+      await expect(close()).resolves.toBe(1);
       expect(closedTargets).toEqual(["owned"]);
       expect([...targets]).toEqual(["user"]);
-      expect(await getBrowserSessionTabStore().entries()).toEqual([]);
-      await expect(closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] })).resolves.toBe(
-        0,
-      );
+      expect(await store.entries()).toEqual([]);
+      await expect(close()).resolves.toBe(0);
       expect(requests).toHaveLength(3);
       expect(closedTargets).toHaveLength(1);
     } finally {
-      await registry.closeTrackedBrowserTabsForSessions({
-        sessionKeys: [sessionKey],
-        closeTab: async () => {},
-      });
+      await forget();
       resetPluginStateStoreForTests();
-      for (const client of ws.clients) {
-        client.terminate();
-      }
-      await new Promise<void>((resolve) => {
-        ws.close(() => resolve());
-      });
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
     }
   });
 });

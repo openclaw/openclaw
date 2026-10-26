@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { CronService } from "../../cron/service.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../../cron/service/active-run-cancellation.js";
 import { GatewayConnectionWork } from "../../gateway/server-connection-work.js";
@@ -37,7 +38,6 @@ const cron = new CronService({
   defaultAgentId: "main",
   log: { info() {}, warn() {}, error() {}, debug() {} },
   enqueueSystemEvent() {},
-  requestHeartbeat() {},
   runIsolatedAgentJob: ({ abortSignal, onExecutionStarted }) =>
     trackAsyncWork(async () => {
       assert(abortSignal);
@@ -45,15 +45,16 @@ const cron = new CronService({
       abortSignal.addEventListener("abort", () => cancelled.resolve(), { once: true });
       onExecutionStarted?.();
       coreStarted.resolve();
-      trace("cron-started");
       if (!force) {
         await cancelled.promise;
-        trace(`cron-cancelled:${String(abortSignal.reason)}`);
+        assert(isAgentRunRestartAbortReason(abortSignal.reason));
+        trace("cron-cancelled:restart");
       }
       await cleanupMayFinish.promise;
-      if (force) {
-        assert(!abortSignal.aborted, "force restart cancelled admitted work before its budget");
-      }
+      assert(
+        !force || !abortSignal.aborted,
+        "force restart cancelled admitted work before its budget",
+      );
       await fs.writeFile(path.join(root, "cleanup.txt"), "settled\n");
       trace("cron-cleanup-settled");
       return { status: "ok" as const, summary: "settled" };
@@ -114,14 +115,11 @@ const code = await runGatewayLoop({
             assert.equal(getSuspensionVisibleCronTaskRunCount(), 0);
             trace("close-completed");
           },
-          onError: (message) => {
-            throw new Error(message);
-          },
+          onError: (message) => assert.fail(message),
         });
       },
     };
   },
 });
-trace(`exit:${code}`);
 process.disconnect?.();
 process.exitCode = code;

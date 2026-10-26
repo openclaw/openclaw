@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { listCronJobsFromGateway } from "../cli/cron-cli/list-jobs.js";
 import {
@@ -6,7 +7,7 @@ import {
   type GatewayRpcOpts,
 } from "../cli/gateway-rpc.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import {
   backupScheduleModeForDeclaration,
   buildBackupScheduleJob,
@@ -60,7 +61,10 @@ function resolveScheduledRedaction(options: BackupScheduleOptions): boolean {
   return options.includeSecrets !== true;
 }
 
-function resolveScheduleSpec(options: BackupScheduleOptions, everyMs: number): BackupScheduleSpec {
+async function resolveScheduleSpec(
+  options: BackupScheduleOptions,
+  everyMs: number,
+): Promise<BackupScheduleSpec> {
   if (options.to !== undefined) {
     if (
       options.repository !== undefined ||
@@ -78,7 +82,10 @@ function resolveScheduleSpec(options: BackupScheduleOptions, everyMs: number): B
     if (!location) {
       throw new Error("--to must name a configured storage location.");
     }
-    if (!getRuntimeConfig({ skipPluginValidation: true }).storage?.locations?.[location]) {
+    if (
+      !(await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })()).storage
+        ?.locations?.[location]
+    ) {
       throw new Error(
         `Storage location "${location}" is not configured. Run openclaw storage list.`,
       );
@@ -115,7 +122,7 @@ function resolveScheduleSpec(options: BackupScheduleOptions, everyMs: number): B
   }
   const agentId = agent
     ? resolveConfiguredAgentId(
-        getRuntimeConfig({ skipPluginValidation: true }),
+        await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })(),
         normalizeAgentId(agent),
       )
     : undefined;
@@ -152,14 +159,14 @@ export async function backupEnableCommand(
   if (!Number.isSafeInteger(everyMs) || everyMs <= 0) {
     throw new Error("--every must be a positive duration such as 6h or 24h.");
   }
-  const spec = resolveScheduleSpec(options, everyMs);
+  const spec = await resolveScheduleSpec(options, everyMs);
   if (spec.mode === "git" && spec.push) {
     // The unattended job cannot configure a remote; without this preflight the
     // first scheduled run records a degraded push-failed backup instead.
     const origin = await executeGitCommand(spec.repository, ["remote", "get-url", "origin"]);
     if (origin.code !== 0) {
       throw new Error(
-        `--push requires an origin remote. Run: openclaw backup git init --repository ${shortenHomePath(spec.repository)} --remote <url>`,
+        `--push requires an origin remote. Run: openclaw backup git init --repository ${sanitizeTerminalText(shortenHomePath(spec.repository))} --remote <url>`,
       );
     }
     if (!spec.excludeSecrets) {
@@ -177,7 +184,9 @@ export async function backupEnableCommand(
   }
   const updated = result.created === false;
   runtime.log(
-    `Scheduled ${spec.mode === "git" ? "Git" : "offsite"} backups ${updated ? "updated" : "enabled"}: every ${every} to ${spec.mode === "git" ? shortenHomePath(spec.repository) : spec.location}`,
+    sanitizeTerminalText(
+      `Scheduled ${spec.mode === "git" ? "Git" : "offsite"} backups ${updated ? "updated" : "enabled"}: every ${every} to ${spec.mode === "git" ? shortenHomePath(spec.repository) : spec.location}`,
+    ),
   );
   return { id, updated };
 }

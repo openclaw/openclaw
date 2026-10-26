@@ -16,7 +16,10 @@ import {
   vi,
 } from "vitest";
 import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
-import { readProcessMemoryCapacity } from "../../scripts/lib/process-memory.mts";
+import {
+  readProcessCgroupV2Snapshot,
+  readProcessMemoryCapacity,
+} from "../../scripts/lib/process-memory.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
@@ -28,7 +31,6 @@ import {
   createTsdownOutputScanner,
   describeInsufficientTsdownHeap,
   listTsdownOutputRoots,
-  parseTsdownBuildArgs,
   prepareTsdownBuildExecution,
   pruneStaleRootChunkFiles,
   pruneStaleRuntimeSymlinks,
@@ -205,14 +207,6 @@ function expectPathMissing(targetPath: string) {
 }
 
 describe("resolveTsdownBuildInvocation", () => {
-  it("parses wrapper help before any tsdown work", () => {
-    expect(parseTsdownBuildArgs(["--help"])).toEqual({ forwardedArgs: [], help: true });
-    expect(parseTsdownBuildArgs(["--format", "esm"])).toEqual({
-      forwardedArgs: ["--format", "esm"],
-      help: false,
-    });
-  });
-
   it("prints wrapper help without invoking pnpm or tsdown", () => {
     const result = spawnSync(
       process.execPath,
@@ -585,6 +579,23 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.invocations[1]?.args).not.toContain("--filter");
   });
 
+  it.each([
+    { label: "defaults", env: {}, limit: "3GiB" },
+    { label: "explicit tuning", env: { GOMEMLIMIT: "6GiB" }, limit: "6GiB" },
+  ])("bounds native declaration compiler memory with $label", ({ env, limit }) => {
+    const cpus = vi.spyOn(os, "availableParallelism").mockReturnValue(8);
+    onTestFinished(() => cpus.mockRestore());
+    const result = resolveTsdownBuildInvocation({
+      args: ["--filter", "openclaw-dts"],
+      env: { CI: "true", ...env },
+      physicalMemoryBytes: 16 * GiB,
+      cgroupMemoryLimitBytes: 16 * GiB,
+    });
+    expect(result.options.env.GOMEMLIMIT).toBe(limit);
+    expect(result.options.env.GOMAXPROCS).toBe("2");
+    expect(result.options.env.GOGC).toBe("30");
+  });
+
   it("keeps the selected Windows runtime and literal compiler arguments", () => {
     const args = ["--format", "esm", "--concurrency", "2"];
     const result = resolveTsdownBuildInvocation({
@@ -608,7 +619,13 @@ describe("resolveTsdownBuildInvocation", () => {
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
       windowsVerbatimArguments: undefined,
-      env: { NODE_OPTIONS: "--max-old-space-size=8192", npm_execpath: "/unrelated/pnpm.cjs" },
+      env: {
+        NODE_OPTIONS: "--max-old-space-size=8192",
+        npm_execpath: "/unrelated/pnpm.cjs",
+        GOGC: "30",
+        GOMAXPROCS: "2",
+        GOMEMLIMIT: "3GiB",
+      },
     });
   });
 
@@ -796,6 +813,49 @@ describe("resolveTsdownBuildInvocation", () => {
       ),
     };
   }
+
+  it("observes raw counters along the mapped cgroup subtree and ancestors", () => {
+    const mountPoint = "/sys/fs/cgroup dir";
+    const leaf = `${mountPoint}/parent/leaf`;
+    const snapshot = readProcessCgroupV2Snapshot(
+      cgroupMemory(
+        "0::/container/parent/leaf\n",
+        "30 25 0:26 /container /sys/fs/cgroup\\040dir rw - cgroup2 cgroup2 rw\n",
+        [
+          [`${leaf}/cpu.stat`, "usage_usec 1200\n"],
+          [`${leaf}/memory.peak`, "900\n"],
+          [`${leaf}/cpuset.cpus.effective`, "0-3\n"],
+          [`${mountPoint}/parent/cpu.max`, "200000 100000\n"],
+          [`${mountPoint}/cpu.max`, "max 100000\n"],
+        ],
+      ),
+    );
+    expect(snapshot?.map((row) => row.directory)).toEqual([
+      leaf,
+      `${mountPoint}/parent`,
+      mountPoint,
+    ]);
+    expect(snapshot?.map((row) => row.counters)).toMatchObject([
+      {
+        "cpu.stat": "usage_usec 1200\n",
+        "memory.peak": "900\n",
+        "cpuset.cpus.effective": "0-3\n",
+        "memory.current": null,
+      },
+      { "cpu.max": "200000 100000\n" },
+      { "cpu.max": "max 100000\n" },
+    ]);
+  });
+
+  it("does not substitute an unrelated cgroup mount for an unmapped process", () => {
+    expect(
+      readProcessCgroupV2Snapshot(
+        cgroupMemory("0::/\n", `30 25 0:26 /other ${cgroupRoot} rw - cgroup2 cgroup2 rw\n`, [
+          [`${cgroupRoot}/cpu.stat`, "usage_usec 1200\n"],
+        ]),
+      ),
+    ).toBeNull();
+  });
 
   const memoryCases: [
     name: string,

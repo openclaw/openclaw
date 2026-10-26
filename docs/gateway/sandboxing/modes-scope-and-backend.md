@@ -57,6 +57,9 @@ administrator explicitly chooses the native agent's own permissions. This
 combines the optional sandbox opt-out with Full access and consent bound to that
 chat and runtime. Optional native tool and workspace restrictions are then
 delegated to the native agent; OpenClaw-hosted tools keep their existing policy.
+If setup already remembered consent for that runtime on the chat's owning agent,
+the administrator can recover without another prompt. Otherwise, both ordinary
+agent chats and global chats require explicit confirmation.
 After a refused send, confirmation saves the permissions and retries that message
 once. Selection-only confirmation does not send the draft. Neither changes global
 settings. Native consent is cleared on reset or runtime change and is never

@@ -10,7 +10,7 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { resolveModelExtraParamSources } from "./model-extra-params.js";
-import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
+import { resolveProviderFastModeRequestCapabilities } from "./provider-attribution.js";
 
 /** Capture light policy with the private catalog owner; published row reads cannot load plugins. */
 export function createModelSpeedPolicyResolver(params: {
@@ -58,6 +58,19 @@ export function createModelSpeedPolicyResolver(params: {
       return {};
     }
     const route = evaluation.selectedRoute ?? entry;
+    if (!policy.resolveFastModeSupport && !policy.resolveServiceTiers) {
+      return {
+        supportsFastMode: undefined,
+        serviceTiers: undefined,
+        supportsServiceTierRecovery:
+          (runtimeId ?? entry.nativeRuntime) === "openclaw" &&
+          supportsNativeOpenAIResponsesEndpoint({
+            provider: entry.provider,
+            api: route.api ?? "",
+            baseUrl: route.baseUrl,
+          }),
+      };
+    }
     const { defaultParams, modelParams, agentModelParams, agentParams } =
       resolveModelExtraParamSources({
         config: params.cfg,
@@ -74,9 +87,8 @@ export function createModelSpeedPolicyResolver(params: {
       runtimeId: runtimeId ?? entry.nativeRuntime,
       modelParams: entry.params,
       params: Object.assign({}, defaultParams, modelParams, agentModelParams, agentParams),
-      requestCapabilities: resolveProviderRequestCapabilities({
+      requestCapabilities: resolveProviderFastModeRequestCapabilities({
         provider: entry.provider,
-        modelId: entry.id,
         api: route.api,
         baseUrl: route.baseUrl,
         providerMetadataOwners: params.metadataSnapshot.owners,

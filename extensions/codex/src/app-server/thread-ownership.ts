@@ -225,7 +225,7 @@ export async function retireCodexConversationThreadBinding(params: {
   }
   return await withCodexAppServerThreadMutation(expected.threadId, () =>
     params.bindingStore.withLease(params.identity, async () => {
-      const current = params.bindingStore.read(params.identity);
+      const current = await params.bindingStore.readAsync(params.identity);
       if (
         !current ||
         !isSameCodexAppServerThreadOwner(current, expected) ||

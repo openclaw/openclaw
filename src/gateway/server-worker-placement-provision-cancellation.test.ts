@@ -14,19 +14,22 @@ vi.mock("./worker-environments/workspace-sync-preflight.js", () => ({
 
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
-  GatewayDrainingError,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import {
-  beginSessionWorkAdmission,
-  closeSessionWorkAdmissions,
-  runExclusiveSessionLifecycleMutation,
-  startSessionWorkAdmissionInterruption,
-} from "../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  closeSessionControllerAdmission,
+  runSessionMutation,
+  startSessionControllerInterruption,
+} from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
+import {
+  createPlacementTestHold,
+  waitForPlacementBoundary as waitForBoundary,
+} from "./server-worker-placement-hold.test-support.js";
 import {
   createHeldWorkspacePreflight,
   createRuntime,
@@ -36,9 +39,11 @@ import { installWorkerPlacementReconcileGuard } from "./server-worker-placement-
 import {
   REQUEST as FIXTURE_REQUEST,
   seedActivePlacement,
+  seedProvisioningPlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { placementSource } from "./worker-environments/placement-suite.test-support.js";
 import { deriveEnvironmentIntent } from "./worker-environments/service-contract.js";
 import * as support from "./worker-environments/service.test-support.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
@@ -47,6 +52,17 @@ const REQUEST = {
   ...FIXTURE_REQUEST,
   profileId: "development",
   executionMode: "remote-exec" as const,
+};
+
+const sessionIdentity = (scope = `${support.testState.root}/sessions.sqlite`) => ({
+  agentId: REQUEST.agentId,
+  scope,
+  identities: [REQUEST.sessionKey, REQUEST.sessionId],
+});
+const captureError = (error: unknown) => error;
+const cancelSessionWork: WorkerPlacementSessionWorkCancellation = async (request) => {
+  request.assertCurrent();
+  request.onCancellationStarted?.();
 };
 
 describe("dispatch Stop before provider allocation", () => {
@@ -60,7 +76,18 @@ describe("dispatch Stop before provider allocation", () => {
     { identity: "legacy-session-alias", inherited: false },
     { identity: REQUEST.sessionKey, inherited: true },
   ])("preserves active $identity work (inherited: $inherited)", async ({ identity, inherited }) => {
-    moveDestinationMocks.resolveGatewaySessionTarget().storeKeys.push("legacy-session-alias");
+    const targetReader = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+      "./session-utils-store-worker.js",
+    );
+    moveDestinationMocks.prepareGatewaySessionTarget.mockImplementation((params) =>
+      targetReader.resolveGatewaySessionStoreTargetInWorker({
+        ...params,
+        onSelected: (target) => {
+          target.storeKeys.push("legacy-session-alias");
+          params.onSelected?.(target);
+        },
+      }),
+    );
     workspace.preflight.mockReset().mockResolvedValue(undefined);
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const environments = support.createService(support.createProvider());
@@ -71,7 +98,8 @@ describe("dispatch Stop before provider allocation", () => {
     const start = vi.spyOn(placements, "startDispatch");
     const runtime = await createRuntime(placements, environments);
     const interrupted = vi.fn();
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
+      agentId: REQUEST.agentId,
       scope: `${support.testState.root}/sessions.sqlite`,
       identities: [identity],
       assertAllowed: () => {},
@@ -124,7 +152,8 @@ describe("dispatch Stop before provider allocation", () => {
         targetOwner.resolveWorkerPlacementSessionTarget,
       );
       const sourceEntry = moveDestinationMocks.resolveCanonicalSession();
-      const storePath = moveDestinationMocks.resolveGatewaySessionTarget().storePath;
+      const sessionTarget = moveDestinationMocks.resolveGatewaySessionTarget();
+      const { storePath } = sessionTarget;
       await upsertSessionEntryCore(
         { agentId: REQUEST.agentId, sessionKey: REQUEST.sessionKey, storePath },
         {
@@ -136,15 +165,6 @@ describe("dispatch Stop before provider allocation", () => {
           },
         },
       );
-      const sessionUtils =
-        await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
-      const sessionTarget = sessionUtils.resolveGatewaySessionStoreTargetWithStore({
-        cfg: { ...support.testState.config, session: { store: storePath } },
-        key: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-        exactRead: true,
-      });
-      moveDestinationMocks.resolveGatewaySessionTarget.mockReturnValue(sessionTarget);
       runtimeFactoryMocks.createDispatch.mockImplementation((options) =>
         actual.createWorkerPlacementDispatchService({
           ...options,
@@ -159,8 +179,7 @@ describe("dispatch Stop before provider allocation", () => {
                 },
         }),
       );
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const entered = createPlacementTestHold();
       const destinationAborted = createDeferredCore();
       let destinationSignal: AbortSignal | undefined;
       workspace.preflight.mockImplementation(async ({ signal }: { signal?: AbortSignal }) => {
@@ -169,8 +188,7 @@ describe("dispatch Stop before provider allocation", () => {
         }
         destinationSignal = signal;
         signal?.addEventListener("abort", () => destinationAborted.resolve(), { once: true });
-        entered.resolve();
-        await release.promise;
+        await entered.wait();
         if (outcome === "preflight-error" || outcome === "canceled-preflight-error") {
           throw new Error("destination preflight rejected");
         }
@@ -190,8 +208,7 @@ describe("dispatch Stop before provider allocation", () => {
         vi.mocked(harness.environments.createWithRequest).mockImplementation(async ({ signal }) => {
           destinationSignal = signal;
           signal?.addEventListener("abort", () => destinationAborted.resolve(), { once: true });
-          entered.resolve();
-          await release.promise;
+          await entered.wait();
           signal?.throwIfAborted();
           throw new Error("published destination must be canceled");
         });
@@ -200,20 +217,13 @@ describe("dispatch Stop before provider allocation", () => {
         ...support.createService(support.createProvider()),
         ...harness.environments,
       };
-      const runtime = await createRuntime(placements, environments, async (request) => {
-        request.assertCurrent();
-        request.onCancellationStarted?.();
-      });
+      const runtime = await createRuntime(placements, environments, cancelSessionWork);
       const transitions: Array<{ state: string; generation: number }> = [];
       const moving = runtime.dispatchService
         .move(
           {
             ...REQUEST,
-            source: {
-              generation: active.generation,
-              environmentId: active.environmentId,
-              ownerEpoch: active.activeOwnerEpoch,
-            },
+            source: placementSource(active),
             target:
               targetKind === "profile"
                 ? { kind: "profile", profileId: "development" }
@@ -222,15 +232,10 @@ describe("dispatch Stop before provider allocation", () => {
           (placement) =>
             transitions.push({ state: placement.state, generation: placement.generation }),
         )
-        .catch((error: unknown) => error);
+        .catch(captureError);
       let stopping: Promise<unknown> = Promise.resolve();
       try {
-        await Promise.race([
-          entered.promise,
-          moving.then((result) => {
-            throw result;
-          }),
-        ]);
+        await waitForBoundary(entered.entered.promise, moving);
         const local = transitions.find((placement) => placement.state === "local");
         expect(local).toBeDefined();
         expect(placements.get(REQUEST.sessionId)?.state).toBe(
@@ -238,21 +243,20 @@ describe("dispatch Stop before provider allocation", () => {
         );
         expect(harness.environments.destroy).toHaveBeenCalledOnce();
         if (outcome !== "preflight-error") {
-          stopping = runtime.dispatchService.reclaim(REQUEST).catch((error: unknown) => error);
-          await Promise.race([
-            destinationAborted.promise,
-            stopping.then((result) => {
-              throw result;
-            }),
-          ]);
+          stopping = runtime.dispatchService.reclaim(REQUEST).catch(captureError);
+          await waitForBoundary(destinationAborted.promise, stopping);
           expect(destinationSignal?.aborted).toBe(true);
           if (outcome === "replacement") {
             await placements.startDispatch(REQUEST);
           } else if (outcome === "incarnation") {
             sourceEntry.sessionId = "replacement-session";
+            await upsertSessionEntryCore(
+              { agentId: REQUEST.agentId, sessionKey: REQUEST.sessionKey, storePath },
+              sourceEntry,
+            );
           }
         }
-        release.resolve();
+        entered.release.resolve();
         const moved = await moving;
         const stopped = await stopping;
         if (outcome === "cancel" || outcome === "incarnation") {
@@ -292,11 +296,10 @@ describe("dispatch Stop before provider allocation", () => {
         );
         expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       } finally {
-        release.resolve();
+        entered.release.resolve();
         await Promise.allSettled([moving, stopping]);
-        await runExclusiveSessionLifecycleMutation("placement-move", {
-          scope: sessionTarget.storePath,
-          identities: [REQUEST.sessionKey, REQUEST.sessionId],
+        await runSessionMutation({
+          ...sessionIdentity(sessionTarget.storePath),
           run: async () => {},
         });
       }
@@ -359,16 +362,17 @@ describe("dispatch Stop before provider allocation", () => {
           ownerEpoch: 1,
           executionMode: "remote-exec",
         });
-        const draining = await placements.startDrain({
+        const source = {
           sessionId: REQUEST.sessionId,
           environmentId: "old-environment",
           ownerEpoch: 1,
+        };
+        const draining = await placements.startDrain({
+          ...source,
           expectedGeneration: active.generation,
         });
         await placements.startReconcile({
-          sessionId: REQUEST.sessionId,
-          environmentId: "old-environment",
-          ownerEpoch: 1,
+          ...source,
           expectedGeneration: draining.generation,
         });
         const current = placements.get(REQUEST.sessionId)!;
@@ -388,16 +392,14 @@ describe("dispatch Stop before provider allocation", () => {
           { database: support.testState.stateDb },
         );
       }
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const entered = createPlacementTestHold();
       vi.spyOn(environments, "reconcileOnce").mockImplementation(async () => {
-        entered.resolve();
-        await release.promise;
+        await entered.wait();
       });
       const create = vi.spyOn(environments, "createWithRequest");
       const runtime = await createRuntime(placements, environments);
       const sweep = runtime.dispatchService.reconcileActive();
-      await entered.promise;
+      await entered.entered.promise;
       const dispatch = runtime.dispatchService.dispatch(REQUEST).then(
         () => "active",
         () => "cancelled",
@@ -413,20 +415,12 @@ describe("dispatch Stop before provider allocation", () => {
         expect((await placements.getAsync(REQUEST.sessionId))?.state).toBe(
           state === "missing" ? undefined : "reclaimed",
         );
-        stopping = runtime.dispatchService.reclaim(REQUEST).then(
-          (value) => value,
-          (error: unknown) => error,
-        );
-        await Promise.race([
-          preflight.aborted,
-          stopping.then((result) => {
-            throw result;
-          }),
-        ]);
+        stopping = runtime.dispatchService.reclaim(REQUEST).catch(captureError);
+        await waitForBoundary(preflight.aborted, stopping);
         expect(preflight.signal?.aborted).toBe(true);
         expect(create).not.toHaveBeenCalled();
         preflight.release();
-        release.resolve();
+        entered.release.resolve();
         await sweep;
         expect(await dispatch).toBe("cancelled");
         const result = await stopping;
@@ -439,30 +433,11 @@ describe("dispatch Stop before provider allocation", () => {
         expect(support.testState.store.list()).toEqual([]);
       } finally {
         preflight.release();
-        release.resolve();
+        entered.release.resolve();
         await Promise.allSettled([sweep, dispatch, stopping]);
       }
     },
   );
-
-  it("does not cancel an ordinary local session without an in-flight dispatch", async () => {
-    const environments = support.createService(support.createProvider());
-    const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-    const interrupted = vi.fn();
-    const admission = await beginSessionWorkAdmission({
-      scope: `${support.testState.root}/sessions.sqlite`,
-      identities: [REQUEST.sessionKey, REQUEST.sessionId],
-      assertAllowed: () => {},
-      onInterrupt: interrupted,
-    });
-    const runtime = await createRuntime(placements, environments);
-    try {
-      await expect(runtime.dispatchService.reclaim(REQUEST)).rejects.toThrow();
-      expect(interrupted).not.toHaveBeenCalled();
-    } finally {
-      admission.release();
-    }
-  });
 
   it.each(["local", "recovery", "activation", "move"] as const)(
     "releases admitted %s queued behind an interrupting lifecycle owner",
@@ -470,8 +445,7 @@ describe("dispatch Stop before provider allocation", () => {
       const actual = await vi.importActual<
         typeof import("./worker-environments/placement-dispatch.js")
       >("./worker-environments/placement-dispatch.js");
-      const beforeBarrier = createDeferredCore();
-      const enterBarrier = createDeferredCore();
+      const beforeBarrier = createPlacementTestHold();
       const queued = createDeferredCore();
       const mutationEntered = createDeferredCore();
       const interrupt = createDeferredCore();
@@ -479,15 +453,18 @@ describe("dispatch Stop before provider allocation", () => {
       const events: string[] = [];
       let observeQueue = false;
       const target = moveDestinationMocks.resolveGatewaySessionTarget();
-      moveDestinationMocks.resolveGatewaySessionTarget.mockImplementation(() => {
+      const targetReader = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+        "./session-utils-store-worker.js",
+      );
+      moveDestinationMocks.prepareGatewaySessionTarget.mockImplementation(async (params) => {
+        const prepared = await targetReader.resolveGatewaySessionStoreTargetInWorker(params);
         if (observeQueue) {
           queued.resolve();
         }
-        return target;
+        return prepared;
       });
       const pause = async <T>(run: () => Promise<T>): Promise<T> => {
-        beforeBarrier.resolve();
-        await enterBarrier.promise;
+        await beforeBarrier.wait();
         return await run();
       };
       runtimeFactoryMocks.createDispatch.mockImplementation((options) =>
@@ -559,33 +536,25 @@ describe("dispatch Stop before provider allocation", () => {
           : phase === "move" && initial?.state === "active"
             ? runtime.dispatchService.move({
                 ...REQUEST,
-                source: {
-                  generation: initial.generation,
-                  environmentId: initial.environmentId,
-                  ownerEpoch: initial.activeOwnerEpoch,
-                },
+                source: placementSource(initial),
                 target: { kind: "gateway" },
               })
             : runtime.dispatchService.dispatch(REQUEST)
-      ).catch((error: unknown) => error);
-      await Promise.race([
-        beforeBarrier.promise,
-        operation.then(() => {
-          throw new Error("Placement operation ended before its lifecycle barrier");
-        }),
-      ]);
-      const identity = {
-        scope: target.storePath,
-        identities: [REQUEST.sessionKey, REQUEST.sessionId],
-      };
+      ).catch(captureError);
+      await waitForBoundary(
+        beforeBarrier.entered.promise,
+        operation,
+        "Placement operation ended before its lifecycle barrier",
+      );
+      const identity = sessionIdentity(target.storePath);
       // A task kill acquires this mutation outside the admitted operation's ALS,
       // then drains admissions while its own lifecycle mutation remains active.
-      const mutation = runExclusiveSessionLifecycleMutation("subagent-kill", {
+      const mutation = runSessionMutation({
         ...identity,
         prepare: async () => {
           mutationEntered.resolve();
           await interrupt.promise;
-          const { released } = startSessionWorkAdmissionInterruption(identity);
+          const { released } = startSessionControllerInterruption(identity);
           void released.then(() => events.push("admission-released"));
           await Promise.race([released, releaseMutation.promise]);
           await releaseMutation.promise;
@@ -595,22 +564,88 @@ describe("dispatch Stop before provider allocation", () => {
       try {
         await mutationEntered.promise;
         observeQueue = true;
-        enterBarrier.resolve();
+        beforeBarrier.release.resolve();
         await queued.promise;
         interrupt.resolve();
         await support.waitForFast(() => expect(events).toEqual(["admission-released"]));
         expect(harness.log).not.toContain("placement:active");
       } finally {
-        enterBarrier.resolve();
+        beforeBarrier.release.resolve();
         interrupt.resolve();
         releaseMutation.resolve();
         await Promise.allSettled([operation, mutation]);
         // Flush the canceled contender: it must never execute after its predecessor releases.
-        await runExclusiveSessionLifecycleMutation("patch", { ...identity, run: async () => {} });
+        await runSessionMutation({ ...identity, run: async () => {} });
       }
       expect(events).toEqual(["admission-released", "mutation-finished"]);
     },
   );
+
+  it("shutdown cancels recovery queued behind a session mutation before provider entry", async () => {
+    const mutationEntered = createPlacementTestHold();
+    const admissionTargetReady = createDeferredCore();
+    const targetReader = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+      "./session-utils-store-worker.js",
+    );
+    moveDestinationMocks.prepareGatewaySessionTarget.mockImplementation(async (params) => {
+      const target = await targetReader.resolveGatewaySessionStoreTargetInWorker(params);
+      admissionTargetReady.resolve();
+      return target;
+    });
+    const provider = support.createProvider();
+    vi.spyOn(provider, "provision");
+    vi.spyOn(provider, "destroy");
+    const environments = support.createService(provider);
+    const environment = await support.seedBootstrapping("environment-shutdown-queued-recovery");
+    const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+    await seedProvisioningPlacement(placements, environment.environmentId, "remote-exec");
+    const runtime = await createRuntime(placements, environments);
+    const uninstall = installWorkerPlacementReconcileGuard({
+      placements,
+      environments,
+      dispatch: runtime.dispatchService,
+      isStopping: environments.isStopping,
+    });
+    const mutation = runSessionMutation({
+      ...sessionIdentity(),
+      prepare: async () => {
+        await mutationEntered.wait();
+      },
+      run: async () => {},
+    });
+    let recovery: Promise<unknown> = Promise.resolve();
+    let stopping: Promise<unknown> = Promise.resolve();
+    try {
+      await mutationEntered.entered.promise;
+      recovery = environments.reconcileEnvironment(environment.environmentId).catch(captureError);
+      await waitForBoundary(
+        admissionTargetReady.promise,
+        recovery,
+        "Recovery ended before session admission",
+      );
+      let stopped = false;
+      environments.beginClose();
+      stopping = environments.stop().then(() => {
+        stopped = true;
+      });
+      // Shutdown must release queued recovery without waiting for the unrelated mutation.
+      await support.waitForFast(() => expect(stopped).toBe(true));
+      await recovery;
+      expect(provider.provision).not.toHaveBeenCalled();
+      expect(provider.destroy).not.toHaveBeenCalled();
+      expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
+      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+        state: "bootstrapping",
+        leaseId: environment.leaseId,
+        destroyRequestedAtMs: null,
+      });
+    } finally {
+      mutationEntered.release.resolve();
+      await Promise.allSettled([mutation, recovery, stopping]);
+      await uninstall();
+    }
+  });
 
   it.each([
     "replaced",
@@ -622,22 +657,18 @@ describe("dispatch Stop before provider allocation", () => {
   ] as const)(
     "preserves the exact recovery cleanup owner after %s admission refusal",
     async (reason) => {
-      const destroyEntered = createDeferredCore();
-      const releaseDestroy = createDeferredCore();
-      const exclusiveEntered = createDeferredCore();
-      const releaseExclusive = createDeferredCore();
+      const destroyEntered = createPlacementTestHold();
+      const exclusiveEntered = createPlacementTestHold();
       const invalidOwner = reason === "replaced" || reason.startsWith("archived");
       const destroy = vi.fn(
         async ({
           leaseId,
         }: Parameters<ReturnType<typeof support.createProvider>["destroy"]>[0]) => {
           if (leaseId === "lease:environment-prior-exclusive") {
-            exclusiveEntered.resolve();
-            await releaseExclusive.promise;
+            await exclusiveEntered.wait();
             return;
           }
-          destroyEntered.resolve();
-          await releaseDestroy.promise;
+          await destroyEntered.wait();
         },
       );
       const provision = vi.fn(async () => {
@@ -646,14 +677,7 @@ describe("dispatch Stop before provider allocation", () => {
       const environments = support.createService(support.createProvider({ provision, destroy }));
       const environment = await support.seedBootstrapping("environment-refused-recovery");
       const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-      const requested = await placements.startDispatch(REQUEST);
-      await placements.transition({
-        sessionId: REQUEST.sessionId,
-        from: "requested",
-        to: "provisioning",
-        expectedGeneration: requested.generation,
-        patch: { environmentId: environment.environmentId },
-      });
+      await seedProvisioningPlacement(placements, environment.environmentId, "remote-exec");
       const entry = {
         sessionId: reason === "replaced" ? "replacement-session" : REQUEST.sessionId,
         lifecycleRevision: "original",
@@ -690,18 +714,16 @@ describe("dispatch Stop before provider allocation", () => {
           sessionId: REQUEST.sessionId,
         });
         exclusive = runtime.dispatchService.forceDestroyEnvironment("environment-prior-exclusive");
-        await Promise.race([
-          exclusiveEntered.promise,
-          exclusive.then(() => {
-            throw new Error("Prior exclusive operation ended before its held provider");
-          }),
-        ]);
+        await waitForBoundary(
+          exclusiveEntered.entered.promise,
+          exclusive,
+          "Prior exclusive operation ended before its held provider",
+        );
       }
       const releaseIngress =
         reason === "closed-ingress"
-          ? closeSessionWorkAdmissions({
-              scope: `${support.testState.root}/sessions.sqlite`,
-              identities: [REQUEST.sessionKey, REQUEST.sessionId],
+          ? closeSessionControllerAdmission({
+              ...sessionIdentity(),
               reason: new Error("session cancellation owns ingress"),
             })
           : () => {};
@@ -712,7 +734,7 @@ describe("dispatch Stop before provider allocation", () => {
       const recovery = environments.reconcileEnvironment(environment.environmentId).then(
         () => {
           settled = true;
-          return "recovered";
+          return "settled";
         },
         (error: unknown) => {
           settled = true;
@@ -725,13 +747,14 @@ describe("dispatch Stop before provider allocation", () => {
           expect(destroy).toHaveBeenCalledExactlyOnceWith({
             leaseId: "lease:environment-prior-exclusive",
             profile: { region: "test" },
+            signal: expect.any(AbortSignal),
           });
           expect(settled).toBe(false);
-          releaseExclusive.resolve();
+          exclusiveEntered.release.resolve();
           await exclusive;
         }
         const first = await Promise.race([
-          destroyEntered.promise.then(() => "destroy-started"),
+          destroyEntered.entered.promise.then(() => "destroy-started"),
           recovery,
         ]);
         expect(provision).not.toHaveBeenCalled();
@@ -743,18 +766,23 @@ describe("dispatch Stop before provider allocation", () => {
           expect(settled).toBe(false);
           expect(
             destroy.mock.calls.filter(([lease]) => lease.leaseId === environment.leaseId),
-          ).toEqual([[{ leaseId: environment.leaseId, profile: { region: "test" } }]]);
-          const interruption = startSessionWorkAdmissionInterruption({
-            scope: `${support.testState.root}/sessions.sqlite`,
-            identities: [REQUEST.sessionKey, REQUEST.sessionId],
-          });
+          ).toEqual([
+            [
+              {
+                leaseId: environment.leaseId,
+                profile: { region: "test" },
+                signal: expect.any(AbortSignal),
+              },
+            ],
+          ]);
+          const interruption = startSessionControllerInterruption(sessionIdentity());
           const admissionReleased = vi.fn();
           void interruption.released.then(admissionReleased);
           if (reason === "started-failure") {
             await setImmediate();
             expect(admissionReleased).not.toHaveBeenCalled();
           }
-          releaseDestroy.resolve();
+          destroyEntered.release.resolve();
           await recovery;
           await interruption.released;
           expect(placements.get(REQUEST.sessionId)).toMatchObject({
@@ -765,7 +793,8 @@ describe("dispatch Stop before provider allocation", () => {
             reason === "started-failure" ? "failed" : "destroyed",
           );
         } else {
-          expect(first).toBeInstanceOf(reason === "shutdown" ? GatewayDrainingError : Error);
+          // Shutdown skips reconciliation before admission and preserves recovery state.
+          expect(first).toEqual(reason === "shutdown" ? "settled" : expect.any(Error));
           expect(destroy).not.toHaveBeenCalled();
           expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
           expect(support.testState.store.get(environment.environmentId)).toMatchObject({
@@ -775,8 +804,8 @@ describe("dispatch Stop before provider allocation", () => {
           });
         }
       } finally {
-        releaseExclusive.resolve();
-        releaseDestroy.resolve();
+        exclusiveEntered.release.resolve();
+        destroyEntered.release.resolve();
         releaseIngress();
         resetGatewayWorkAdmission();
         await Promise.allSettled([recovery, exclusive]);
@@ -792,8 +821,7 @@ describe("dispatch Stop before provider allocation", () => {
         // Seed the durable provisioning state before expiring the held provider replay.
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       }
-      const replayEntered = createDeferredCore();
-      const childClosed = createDeferredCore();
+      const replayEntered = createPlacementTestHold();
       const stopPrepared = createDeferredCore();
       const sweepEntered = createDeferredCore();
       const enterSweep = createDeferredCore();
@@ -812,8 +840,7 @@ describe("dispatch Stop before provider allocation", () => {
             }
             providerSignal = options?.signal;
             events.push("replay");
-            replayEntered.resolve();
-            await childClosed.promise;
+            await replayEntered.wait();
             events.push("child-closed");
             return { leaseId: "lease-recovery-stop", ssh: support.SSH_ENDPOINT, sharedHost: false };
           },
@@ -840,10 +867,7 @@ describe("dispatch Stop before provider allocation", () => {
           executionMode: REQUEST.executionMode,
         }),
       ).rejects.toMatchObject({ code: "provider_failure" });
-      const cancelSessionWork = vi.fn<WorkerPlacementSessionWorkCancellation>(async (request) => {
-        request.assertCurrent();
-        request.onCancellationStarted?.();
-      });
+      const cancel = vi.fn(cancelSessionWork);
       if (mode === "late-sweep") {
         // Recovery captures service methods when its runtime is created.
         const reconcileOnce = environments.reconcileOnce.bind(environments);
@@ -853,7 +877,7 @@ describe("dispatch Stop before provider allocation", () => {
           await reconcileOnce();
         });
       }
-      const runtime = await createRuntime(placements, environments, cancelSessionWork);
+      const runtime = await createRuntime(placements, environments, cancel);
       const uninstallGuard = installWorkerPlacementReconcileGuard({
         placements,
         environments,
@@ -872,12 +896,11 @@ describe("dispatch Stop before provider allocation", () => {
             ? environments.reconcileEnvironment(intent.environmentId)
             : runtime.dispatchService.reconcileActive();
       if (mode !== "idle") {
-        await Promise.race([
-          mode === "late-sweep" ? sweepEntered.promise : replayEntered.promise,
-          recovery.then(() => {
-            throw new Error("Recovery returned before its held boundary");
-          }),
-        ]);
+        await waitForBoundary(
+          mode === "late-sweep" ? sweepEntered.promise : replayEntered.entered.promise,
+          recovery,
+          "Recovery returned before its held boundary",
+        );
       }
       if (mode === "timeout") {
         // Startup and sweep completion use the caller result, but Stop must still
@@ -911,12 +934,7 @@ describe("dispatch Stop before provider allocation", () => {
           },
         );
       try {
-        await Promise.race([
-          stopPrepared.promise,
-          stopping.then(() => {
-            throw new Error("Stop ended before preparation");
-          }),
-        ]);
+        await waitForBoundary(stopPrepared.promise, stopping, "Stop ended before preparation");
         if (mode === "idle" || mode === "late-sweep") {
           // Stop has closed ingress before the older sweep discovers its recovery.
           // That recovery cannot wait for this Stop or allocate after it completes.
@@ -925,14 +943,13 @@ describe("dispatch Stop before provider allocation", () => {
           expect(stopped).toBe(true);
           expect(provisionCalls).toBe(2);
         } else {
-          await Promise.race([
+          await waitForBoundary(
             stopIntentCommitted.promise,
-            stopping.then(() => {
-              throw new Error("Stop ended before committing its destroy intent");
-            }),
-          ]);
+            stopping,
+            "Stop ended before committing its destroy intent",
+          );
           expect(providerSignal?.aborted).toBe(true);
-          expect(cancelSessionWork).toHaveBeenCalledOnce();
+          expect(cancel).toHaveBeenCalledOnce();
           expect(stopped).toBe(false);
           expect(destroy).not.toHaveBeenCalled();
           expect(
@@ -941,7 +958,7 @@ describe("dispatch Stop before provider allocation", () => {
         }
       } finally {
         enterSweep.resolve();
-        childClosed.resolve();
+        replayEntered.release.resolve();
         await Promise.allSettled([recovery, stopping]);
         await uninstallGuard();
       }

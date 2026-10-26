@@ -38,7 +38,7 @@ export type GoogleMeetConferenceRecord = GoogleMeetTimedResource & {
   expireTime?: string;
 };
 
-export type GoogleMeetParticipant = {
+type GoogleMeetParticipant = {
   name: string;
   earliestStartTime?: string;
   latestEndTime?: string;
@@ -252,9 +252,9 @@ async function listGoogleMeetCollection<T extends { name?: string }>(params: {
       `Google Meet ${params.operation}`,
     );
     const remaining =
-      typeof params.maxItems === "number" ? Math.max(params.maxItems - items.length, 0) : undefined;
+      params.maxItems !== undefined ? Math.max(params.maxItems - items.length, 0) : undefined;
     items.push(...(remaining === undefined ? pageItems : pageItems.slice(0, remaining)));
-    if (typeof params.maxItems === "number" && items.length >= params.maxItems) {
+    if (params.maxItems !== undefined && items.length >= params.maxItems) {
       break;
     }
     pageToken = typeof payload.nextPageToken === "string" ? payload.nextPageToken : undefined;

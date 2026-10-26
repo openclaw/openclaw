@@ -1,79 +1,61 @@
+import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronListSnapshotRevision } from "../../cron/list-snapshot-revision.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronService } from "../../cron/service.js";
 import type { CronJob } from "../../cron/types.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
-function createPrefixOnlyChannelPlugin(
-  id: string,
-  targetPrefixes: readonly string[],
-  aliases?: readonly string[],
-): ChannelPlugin {
-  const base = createChannelTestPluginBase({
-    id,
-    config: {
-      isConfigured: (_account, cfg) => {
-        const channelConfig = cfg.channels?.[id];
-        return Boolean(channelConfig && channelConfig.enabled !== false);
-      },
-    },
-  });
-  return {
-    ...base,
-    meta: {
-      ...base.meta,
-      ...(aliases ? { aliases } : {}),
-    },
-    messaging: { targetPrefixes },
-  };
-}
+type MutationOptions = {
+  commitGuard?: () => void;
+  captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
+};
 
 export function setCronValidationTestRegistry(): void {
+  const channels: [id: string, targetPrefixes: string[], aliases?: string[]][] = [
+    ["discord", ["discord"]],
+    ["telegram", ["telegram", "tg"]],
+    ["slack", ["slack"]],
+    ["msteams", ["msteams", "teams"], ["teams"]],
+    ["synology-chat", ["synology-chat", "synology_chat", "synology"]],
+  ];
   setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "discord",
-        plugin: createPrefixOnlyChannelPlugin("discord", ["discord"]),
-        source: "test:discord",
-      },
-      {
-        pluginId: "telegram",
-        plugin: createPrefixOnlyChannelPlugin("telegram", ["telegram", "tg"]),
-        source: "test:telegram",
-      },
-      {
-        pluginId: "slack",
-        plugin: createPrefixOnlyChannelPlugin("slack", ["slack"]),
-        source: "test:slack",
-      },
-      {
-        pluginId: "msteams",
-        plugin: createPrefixOnlyChannelPlugin("msteams", ["msteams", "teams"], ["teams"]),
-        source: "test:msteams",
-      },
-      {
-        pluginId: "synology-chat",
-        plugin: createPrefixOnlyChannelPlugin("synology-chat", [
-          "synology-chat",
-          "synology_chat",
-          "synology",
-        ]),
-        source: "test:synology-chat",
-      },
-    ]),
+    createTestRegistry(
+      channels.map(([id, targetPrefixes, aliases]) => {
+        const base = createChannelTestPluginBase({
+          id,
+          config: {
+            isConfigured: (_account, cfg) =>
+              Boolean(cfg.channels?.[id] && cfg.channels[id].enabled !== false),
+          },
+        });
+        return {
+          pluginId: id,
+          plugin: {
+            ...base,
+            meta: { ...base.meta, ...(aliases ? { aliases } : {}) },
+            messaging: { targetPrefixes },
+          },
+          source: `test:${id}`,
+        };
+      }),
+    ),
   );
 }
 
@@ -86,13 +68,14 @@ export function createCronTestContext(
   const committedRuntimeAuthorities: Array<CronRuntimeAuthority | undefined> = [];
   const committedRuntimeAuthorityCaptures: boolean[] = [];
   const committedUpdates: Array<{ id: string; patch: Partial<CronJob> }> = [];
+  const captureAuthority = (opts?: MutationOptions) => {
+    opts?.commitGuard?.();
+    committedRuntimeAuthorityCaptures.push(opts?.captureRuntimeAuthority !== undefined);
+    committedRuntimeAuthorities.push(opts?.captureRuntimeAuthority?.());
+  };
   const update = vi.fn(async (id: string, patch: Partial<CronJob>) => {
     committedUpdates.push({ id, patch });
-    return createCronJob({
-      ...jobs.find((job) => job.id === id),
-      ...patch,
-      id,
-    });
+    return createCronJob({ ...jobs.find((job) => job.id === id), ...patch, id });
   });
   return {
     committedAdds,
@@ -100,40 +83,25 @@ export function createCronTestContext(
     committedRuntimeAuthorityCaptures,
     committedUpdates,
     cron: {
-      add: vi.fn(
-        async (
-          input: Partial<CronJob>,
-          opts?: {
-            commitGuard?: () => void;
-            captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
-          },
-        ) => {
-          opts?.commitGuard?.();
-          committedRuntimeAuthorityCaptures.push(opts?.captureRuntimeAuthority !== undefined);
-          committedRuntimeAuthorities.push(opts?.captureRuntimeAuthority?.());
-          committedAdds.push(input);
-          return createCronJob({ ...input, id: "cron-1" });
-        },
-      ),
+      add: vi.fn(async (input: Partial<CronJob>, opts?: MutationOptions) => {
+        captureAuthority(opts);
+        committedAdds.push(input);
+        return createCronJob({ ...input, id: "cron-1" });
+      }),
       update,
       updateWithPrecondition: vi.fn(
         async (
           id: string,
           patch: Partial<CronJob>,
           precondition: (job: CronJob, nowMs: number) => void | Promise<void>,
-          opts?: {
-            commitGuard?: () => void;
-            captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
-          },
+          opts?: MutationOptions,
         ) => {
           const job = jobs.find((candidate) => candidate.id === id);
           if (!job) {
             throw new Error(`unknown automation id: ${id}`);
           }
           await precondition(job, Date.now());
-          opts?.commitGuard?.();
-          committedRuntimeAuthorityCaptures.push(opts?.captureRuntimeAuthority !== undefined);
-          committedRuntimeAuthorities.push(opts?.captureRuntimeAuthority?.());
+          captureAuthority(opts);
           return await update(id, patch);
         },
       ),
@@ -160,71 +128,44 @@ export function createCronTestContext(
       writeScratch: vi.fn(
         async (_id: string, params: { content: string | null; commitGuard?: () => void }) => {
           params.commitGuard?.();
-          return {
-            ok: true as const,
-            scratch: { content: params.content, revision: 1 },
-            currentRevision: 1,
-          };
+          const scratch = { content: params.content, revision: 1 };
+          return { ok: true as const, scratch, currentRevision: scratch.revision };
         },
       ),
       list: vi.fn(async () => jobs),
-      listPage: vi.fn(
-        async (
-          opts?: {
-            agentId?: string;
-            limit?: number;
-            offset?: number;
-            trigger?: "all" | "conditional" | "unconditional";
-          },
-          matchesJob?: (job: CronJob) => boolean,
-        ) => {
-          const requestedAgentId = opts?.agentId?.trim().toLowerCase();
-          const agentJobs = requestedAgentId
-            ? jobs.filter(
-                (job) => (job.agentId ?? "main").trim().toLowerCase() === requestedAgentId,
-              )
-            : jobs;
-          const filteredJobs = matchesJob ? agentJobs.filter(matchesJob) : agentJobs;
-          const total = filteredJobs.length;
-          const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
-          const defaultLimit = total === 0 ? 50 : total;
-          const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
-          const pageJobs = filteredJobs.slice(offset, offset + limit);
-          const nextOffset = offset + pageJobs.length;
-          return {
-            jobs: freezeJsonSnapshot(structuredClone(pageJobs)),
-            snapshotRevision: resolveCronListSnapshotRevision(filteredJobs),
-            total,
-            offset,
-            limit,
-            hasMore: nextOffset < total,
-            nextOffset: nextOffset < total ? nextOffset : null,
-          };
-        },
-      ),
+      listPage: vi.fn(async (...[opts, matchesJob]: Parameters<CronService["listPage"]>) => {
+        const requestedAgentId = opts?.agentId?.trim().toLowerCase();
+        const agentJobs = requestedAgentId
+          ? jobs.filter((job) => (job.agentId ?? "main").trim().toLowerCase() === requestedAgentId)
+          : jobs;
+        const filteredJobs = matchesJob ? agentJobs.filter(matchesJob) : agentJobs;
+        const total = filteredJobs.length;
+        const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
+        const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? (total || 50))));
+        const pageJobs = filteredJobs.slice(offset, offset + limit);
+        const nextOffset = offset + pageJobs.length;
+        return {
+          jobs: freezeJsonSnapshot(structuredClone(pageJobs)),
+          snapshotRevision: resolveCronListSnapshotRevision(filteredJobs),
+          total,
+          offset,
+          limit,
+          hasMore: nextOffset < total,
+          nextOffset: nextOffset < total ? nextOffset : null,
+        };
+      }),
     },
-    logGateway: {
-      info: vi.fn(),
-      warn: vi.fn(),
-    },
+    logGateway: { info: vi.fn(), warn: vi.fn() },
     cronStorePath: "cron-validation-test.json",
-    getRuntimeConfig: () => getRuntimeConfig(),
-    validateAgentRuntimeApprovalAuthority: undefined as
-      | GatewayRequestContext["validateAgentRuntimeApprovalAuthority"]
-      | undefined,
+    getRuntimeConfig,
+    validateAgentRuntimeApprovalAuthority:
+      undefined as GatewayRequestContext["validateAgentRuntimeApprovalAuthority"],
   };
 }
 
 export function agentTurnCronParams(overrides: Record<string, unknown> = {}) {
-  return {
-    name: "cron job",
-    enabled: true,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "hello", toolsAllow: ["*"] },
-    ...overrides,
-  };
+  const { name, enabled, schedule, sessionTarget, wakeMode, payload } = createCronJob();
+  return { name, enabled, schedule, sessionTarget, wakeMode, payload, ...overrides };
 }
 
 export function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
@@ -244,90 +185,73 @@ export function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
   };
 }
 
+export function cronAccountPolicy(ownerSessionKey: string, ownerAccountId = "default") {
+  return { version: 1, mode: "account", ownerSessionKey, ownerAccountId } as const;
+}
+
+export function expectCronReply(
+  respond: ReturnType<typeof vi.fn>,
+  payload: unknown,
+  call: "any" | "once" | "last" = "any",
+) {
+  const assertion = expect(respond);
+  if (call === "once") {
+    assertion.toHaveBeenCalledExactlyOnceWith(true, payload, undefined);
+  } else if (call === "last") {
+    assertion.toHaveBeenLastCalledWith(true, payload, undefined);
+  } else {
+    assertion.toHaveBeenCalledWith(true, payload, undefined);
+  }
+}
+
+export function expectCronFailure(respond: ReturnType<typeof vi.fn>, error: unknown) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, error);
+}
+
 export function pluginEntries(...ids: string[]): OpenClawConfig["plugins"] {
-  return {
-    entries: Object.fromEntries(ids.map((id) => [id, { enabled: true }])),
-  };
+  return { entries: Object.fromEntries(ids.map((id) => [id, { enabled: true }])) };
 }
 
 export function telegramConfig(): OpenClawConfig {
-  return {
-    channels: {
-      telegram: {
-        botToken: "telegram-token",
-      },
-    },
-    plugins: pluginEntries("telegram"),
-  } as OpenClawConfig;
+  return channelConfig({ telegram: { botToken: "telegram-token" } });
 }
 
 export function telegramSlackConfig(params: { includeMainSession?: boolean } = {}): OpenClawConfig {
-  return {
-    ...(params.includeMainSession ? { session: { mainKey: "main" } } : {}),
-    channels: {
-      telegram: {
-        botToken: "telegram-token",
-      },
-      slack: {
-        botToken: "xoxb-slack-token",
-        appToken: "xapp-slack-token",
-      },
-    },
-    plugins: pluginEntries("telegram", "slack"),
-  } as OpenClawConfig;
+  const channels = { ...telegramConfig().channels, ...slackConfig().channels };
+  return { ...slackConfig(params), ...channelConfig(channels) };
 }
 
 export function telegramDisabledAccountConfig(): OpenClawConfig {
-  return {
-    channels: {
-      telegram: {
-        accounts: {
-          primary: { botToken: "telegram-token-primary" },
-          retired: { botToken: "telegram-token-retired", enabled: false },
-        },
+  return channelConfig({
+    telegram: {
+      accounts: {
+        primary: { botToken: "telegram-token-primary" },
+        retired: { botToken: "telegram-token-retired", enabled: false },
       },
     },
-    plugins: pluginEntries("telegram"),
-  } as OpenClawConfig;
+  });
 }
 
 export function msteamsConfig(): OpenClawConfig {
   return {
-    channels: {
-      msteams: {
-        botToken: "teams-token",
-      },
-    },
+    channels: { msteams: { botToken: "teams-token" } },
     plugins: pluginEntries("msteams"),
   } as OpenClawConfig;
 }
 
 export function slackSynologyConfig(): OpenClawConfig {
-  return {
-    channels: {
-      slack: {
-        botToken: "xoxb-slack-token",
-        appToken: "xapp-slack-token",
-      },
-      "synology-chat": {
-        token: "synology-token",
-      },
-    },
-    plugins: pluginEntries("slack", "synology-chat"),
-  } as OpenClawConfig;
+  return channelConfig({ ...slackConfig().channels, "synology-chat": { token: "synology-token" } });
+}
+
+function channelConfig(channels: NonNullable<OpenClawConfig["channels"]>): OpenClawConfig {
+  return { channels, plugins: pluginEntries(...Object.keys(channels)) };
 }
 
 export function slackConfig(params: { includeMainSession?: boolean } = {}): OpenClawConfig {
   return {
     ...(params.includeMainSession ? { session: { mainKey: "main" } } : {}),
-    channels: {
-      slack: {
-        botToken: "xoxb-slack-token",
-        appToken: "xapp-slack-token",
-      },
-    },
-    plugins: pluginEntries("slack"),
-  } as OpenClawConfig;
+    ...channelConfig({ slack: { botToken: "xoxb-slack-token", appToken: "xapp-slack-token" } }),
+  };
 }
 
 export function createCronCallerClient(
@@ -337,32 +261,32 @@ export function createCronCallerClient(
   currentJobId?: string,
   currentJobExpiresAtMs = Date.now() + 60_000,
 ): GatewayClient {
-  const operationalRunInstance = createOperationalRunInstanceRef("run-cron-validation");
+  const operationalRunInstance = createOperationalRunInstanceRef(
+    `run-cron-validation-${randomUUID()}`,
+  );
+  const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+  onTestFinished(() => {
+    releaseAgentRunDelegatedAuthority(authority);
+  });
+  const identity: AgentRuntimeIdentity = {
+    kind: "agentRuntime",
+    agentId,
+    sessionKey: sessionKey ?? `agent:${agentId}:main`,
+    operationalRunInstance,
+    delegatedAuthority: { kind: "local", ...authority },
+  };
+  if (accountId) {
+    identity.turnSourceAccountId = accountId;
+  }
+  if (currentJobId) {
+    identity.cronSelfManagementContext = {
+      jobId: currentJobId,
+      expiresAtMs: currentJobExpiresAtMs,
+    };
+  }
   return {
     connect: {} as GatewayClient["connect"],
-    internal: {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime",
-        agentId,
-        sessionKey: sessionKey ?? `agent:${agentId}:main`,
-        operationalRunInstance,
-        delegatedAuthority: {
-          kind: "local",
-          operationalRunInstance,
-          lifecycleGeneration: "test-generation",
-          claimId: "test-claim",
-        },
-        ...(accountId ? { turnSourceAccountId: accountId } : {}),
-        ...(currentJobId
-          ? {
-              cronSelfManagementContext: {
-                jobId: currentJobId,
-                expiresAtMs: currentJobExpiresAtMs,
-              },
-            }
-          : {}),
-      },
-    },
+    internal: { agentRuntimeIdentity: identity },
   };
 }
 
@@ -419,13 +343,9 @@ export function expectResponseError(
   respond: ReturnType<typeof vi.fn>,
   expected: { code?: string; messageIncludes?: string; details?: Record<string, unknown> },
 ) {
-  const call = respond.mock.calls.at(0);
-  if (!call) {
-    throw new Error("expected response call");
-  }
-  expect(call[0]).toBe(false);
-  expect(call[1]).toBeUndefined();
-  const error = requireRecord(call[2], "response error");
+  const [ok, payload, responseError] = expectDefined(respond.mock.calls[0], "response call");
+  expect([ok, payload]).toEqual([false, undefined]);
+  const error = requireRecord(responseError, "response error");
   if (expected.code) {
     expect(error.code).toBe(expected.code);
   }

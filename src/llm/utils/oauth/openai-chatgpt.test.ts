@@ -144,6 +144,22 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
     ).rejects.toThrow("Login cancelled");
   });
 
+  it("does not return completed credentials after login cancellation", async () => {
+    const controller = new AbortController();
+    mocks.loginOpenAICodexOAuth.mockImplementationOnce(() => {
+      queueMicrotask(() => controller.abort());
+      return Promise.resolve(createCredential());
+    });
+
+    await expect(
+      loginThroughOpenAIProvider({
+        onAuth: vi.fn(),
+        onPrompt: vi.fn(async () => "manual-code"),
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("Login cancelled");
+  });
+
   it("honors legacy login cancellation before invoking the auth callback", async () => {
     const controller = new AbortController();
     const onAuth = vi.fn();
@@ -178,12 +194,32 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
       context: {
         type: "oauth",
         provider: "openai",
-        access: "",
+        access: "expired-access-token",
         refresh: "old-refresh-token",
         expires: 0,
       },
     });
     expect(mocks.loadActivatedBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+  });
+
+  it("requires the plugin owner for flow-specific credentials instead of the standard facade", async () => {
+    mocks.refreshProviderOAuthCredentialWithPlugin.mockResolvedValueOnce(null);
+
+    await expect(
+      openaiCodexOAuthProvider.refreshToken({
+        access: "expired-access-token",
+        refresh: "shared-refresh-token",
+        expires: 0,
+        authFlow: "chatgpt-token-sharing",
+      }),
+    ).rejects.toThrow("OpenAI OAuth flow owner is unavailable");
+
+    expect(mocks.refreshProviderOAuthCredentialWithPlugin).toHaveBeenCalledWith({
+      provider: "openai",
+      context: expect.objectContaining({ authFlow: "chatgpt-token-sharing" }),
+    });
+    expect(mocks.loadActivatedBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+    expect(mocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
   });
 
   it("falls back to the OpenAI plugin facade when provider runtime refresh is unavailable", async () => {

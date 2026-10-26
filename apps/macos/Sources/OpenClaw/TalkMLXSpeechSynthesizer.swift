@@ -155,13 +155,7 @@ actor TalkMLXSpeechSynthesizer {
 
     func cancelCurrent() async {
         guard let activeID else { return }
-        self.cancelRequestedID = activeID
-        do {
-            try await self.transport?.send(.cancel(id: activeID))
-        } catch {
-            await self.discardTransport(forRequest: activeID)
-        }
-        self.scheduleCancelEscalation(id: activeID)
+        await self.cancelStreamRequest(id: activeID, transport: self.transport)
     }
 
     func shutdown() async {
@@ -270,14 +264,13 @@ actor TalkMLXSpeechSynthesizer {
         }
     }
 
-    private func cancelStreamRequest(id: String, transport: any MLXTTSTransport) async {
+    private func cancelStreamRequest(id: String, transport: (any MLXTTSTransport)?) async {
         guard self.activeID == id else { return }
         self.cancelRequestedID = id
         do {
-            try await transport.send(.cancel(id: id))
+            try await transport?.send(.cancel(id: id))
         } catch {
             await self.discardTransport(forRequest: id)
-            return
         }
         self.scheduleCancelEscalation(id: id)
     }

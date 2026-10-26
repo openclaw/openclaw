@@ -22,6 +22,7 @@ export function createAgentsApiAttemptHooks(
   };
   const hookContext = {
     runId: params.runId,
+    config: params.config,
     agentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
@@ -64,7 +65,6 @@ export function createAgentsApiAttemptHooks(
       },
       ctx: {
         ...hookContext,
-        config: params.config,
         foregroundPromptContext: buildEmbeddedForegroundPromptContext(
           { ...params, agentId },
           params.agentDir ?? resolveAgentDir(params.config ?? {}, agentId),

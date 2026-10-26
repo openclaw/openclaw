@@ -1,13 +1,14 @@
 // Tests node-role capability approvals stored on canonical paired-device records.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
+import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
 import {
   approveNodePairing,
@@ -23,6 +24,7 @@ import {
   reusePendingNodePairingForReconnect,
 } from "./device-pairing-node.js";
 import { seedNodeDevice, setupPairedNode } from "./device-pairing-node.test-support.js";
+import { revokeDeviceToken } from "./device-pairing-tokens.js";
 import {
   getPairedDevice,
   listDevicePairingReadOnly,
@@ -353,6 +355,58 @@ describe("node surface approvals", () => {
         created: false,
       });
       await expect(finalizeNodePairingCleanupClaim(snapshot.cleanupClaim!)).resolves.toEqual([]);
+      await expect(
+        approveNodePairing(
+          pending.request.requestId,
+          { callerScopes: ["operator.pairing", "operator.admin"] },
+          baseDir,
+        ),
+      ).resolves.toMatchObject({ requestId: pending.request.requestId });
+    });
+  });
+
+  test("claims and reuses a committed reconnect while the pairing writer is occupied", async ({
+    signal,
+  }) => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const pending = await requestExpandedSurface(baseDir);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const writer = withDevicePairingLock(async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      let snapshot: Awaited<ReturnType<typeof beginNodePairingConnect>> | undefined;
+      try {
+        await withinTest(entered.promise, signal);
+        snapshot = await withinTest(beginNodePairingConnect("node-1", baseDir), signal);
+        expect(snapshot.pairedNode?.commands).toEqual(["system.run"]);
+        expect(snapshot.cleanupClaim).toBeDefined();
+        await expect(
+          withinTest(
+            reusePendingNodePairingForReconnect(
+              {
+                nodeId: "node-1",
+                platform: "darwin",
+                commands: ["system.run", "canvas.snapshot"],
+              },
+              snapshot.cleanupClaim,
+              baseDir,
+            ),
+            signal,
+          ),
+        ).resolves.toMatchObject({
+          request: { requestId: pending.request.requestId },
+          created: false,
+        });
+      } finally {
+        release.resolve();
+        await writer;
+        if (snapshot?.cleanupClaim) {
+          await releaseNodePairingCleanupClaim(snapshot.cleanupClaim);
+        }
+      }
       await expect(
         approveNodePairing(
           pending.request.requestId,
@@ -720,6 +774,7 @@ describe("node surface approvals", () => {
           nodeId: "node-1",
           connectedAtMs: 1_000,
           disconnectedAtMs: 1_500,
+          hostStats,
           expectedPairingGeneration: generation,
           baseDir,
         }),
@@ -727,30 +782,38 @@ describe("node surface approvals", () => {
       expect(await findPairedNode("node-1", baseDir)).toMatchObject({
         lastConnectedAtMs: 1_000,
         lastDisconnectedAtMs: 1_500,
+        lastHostStats: hostStats,
       });
 
       await expect(
         recordPairedNodeConnection("node-1", 2_000, baseDir, generation),
       ).resolves.toEqual({ recorded: true, firstConnection: false });
       expect((await findPairedNode("node-1", baseDir))?.lastDisconnectedAtMs).toBeUndefined();
+      const finalHostStats = { ...hostStats, memoryFreeBytes: 2048, updatedAtMs: 2_750 };
       await expect(
         recordPairedNodeDisconnection({
           nodeId: "node-1",
           connectedAtMs: 1_000,
           disconnectedAtMs: 2_500,
+          hostStats: finalHostStats,
           expectedPairingGeneration: generation,
           baseDir,
         }),
       ).resolves.toEqual({ recorded: false });
       expect((await findPairedNode("node-1", baseDir))?.lastDisconnectedAtMs).toBeUndefined();
+      expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toEqual(hostStats);
       await recordPairedNodeDisconnection({
         nodeId: "node-1",
         connectedAtMs: 2_000,
         disconnectedAtMs: 3_000,
+        hostStats: finalHostStats,
         expectedPairingGeneration: generation,
         baseDir,
       });
-      expect((await findPairedNode("node-1", baseDir))?.lastDisconnectedAtMs).toBe(3_000);
+      expect(await findPairedNode("node-1", baseDir)).toMatchObject({
+        lastDisconnectedAtMs: 3_000,
+        lastHostStats: finalHostStats,
+      });
     });
   });
 
@@ -774,6 +837,7 @@ describe("node surface approvals", () => {
       );
       expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toEqual(hostStats);
       await recordPairedNodeConnection("node-1", 4_000, baseDir, generation);
+      await renamePairedNode("node-1", "Checkpoint node", baseDir);
       const nextStats = {
         cpuCount: 8,
         memoryTotalBytes: 16384,
@@ -788,7 +852,10 @@ describe("node surface approvals", () => {
           baseDir,
         }),
       ).resolves.toBe(true);
-      expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toEqual(nextStats);
+      expect(await findPairedNode("node-1", baseDir)).toMatchObject({
+        displayName: "Checkpoint node",
+        lastHostStats: nextStats,
+      });
     });
   });
 
@@ -813,41 +880,62 @@ describe("node surface approvals", () => {
     });
   });
 
-  test("rejects disconnect history and host stats from a retired pairing generation", async () => {
-    await withNodePairingDir(async (baseDir) => {
-      const previousGeneration = await setupPairedNode(baseDir);
-      await recordPairedNodeConnection("node-1", 1_000, baseDir, previousGeneration);
-      const pending = await requestNodePairing(
-        { nodeId: "node-1", platform: "darwin", commands: ["system.run", "system.which"] },
-        baseDir,
-      );
-      await approveNodePairing(
-        pending.request.requestId,
-        { callerScopes: ["operator.pairing", "operator.admin"] },
-        baseDir,
-      );
+  test.each(["approval", "revocation"] as const)(
+    "rejects disconnect history and host stats after durable %s retires the pairing generation",
+    async (retirement) => {
+      await withNodePairingDir(async (baseDir) => {
+        const previousGeneration = await setupPairedNode(baseDir);
+        await recordPairedNodeConnection("node-1", 1_000, baseDir, previousGeneration);
+        const database = openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
+        });
+        if (retirement === "approval") {
+          const pending = await requestNodePairing(
+            { nodeId: "node-1", platform: "darwin", commands: ["system.run", "system.which"] },
+            baseDir,
+          );
+          await approveNodePairing(
+            pending.request.requestId,
+            { callerScopes: ["operator.pairing", "operator.admin"] },
+            baseDir,
+          );
+        } else {
+          await expect(
+            revokeDeviceToken({ deviceId: "node-1", role: "node", baseDir }),
+          ).resolves.toMatchObject({ ok: true });
+        }
+        expect(await closeOpenClawStateDatabaseByPathAsync(database.path)).toBe(true);
+        const reopened = await getPairedDevice("node-1", baseDir);
+        expect(resolveNodePairingGeneration(reopened)?.key).not.toBe(previousGeneration.key);
+        if (retirement === "approval") {
+          expect(reopened?.nodeSurface?.commands).toEqual(["system.run", "system.which"]);
+        } else {
+          expect(reopened?.tokens?.node?.revokedAtMs).toEqual(expect.any(Number));
+        }
 
-      await expect(
-        recordPairedNodeDisconnection({
-          nodeId: "node-1",
-          connectedAtMs: 1_000,
-          disconnectedAtMs: 1_500,
-          expectedPairingGeneration: previousGeneration,
-          baseDir,
-        }),
-      ).resolves.toEqual({ recorded: false });
-      expect((await findPairedNode("node-1", baseDir))?.lastDisconnectedAtMs).toBeUndefined();
-      await expect(
-        recordPairedNodeHostStats({
-          nodeId: "node-1",
-          hostStats,
-          expectedPairingGeneration: previousGeneration,
-          baseDir,
-        }),
-      ).resolves.toBe(false);
-      expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toBeUndefined();
-    });
-  });
+        await expect(
+          recordPairedNodeDisconnection({
+            nodeId: "node-1",
+            connectedAtMs: 1_000,
+            disconnectedAtMs: 1_500,
+            hostStats,
+            expectedPairingGeneration: previousGeneration,
+            baseDir,
+          }),
+        ).resolves.toEqual({ recorded: false });
+        expect((await findPairedNode("node-1", baseDir))?.lastDisconnectedAtMs).toBeUndefined();
+        await expect(
+          recordPairedNodeHostStats({
+            nodeId: "node-1",
+            hostStats,
+            expectedPairingGeneration: previousGeneration,
+            baseDir,
+          }),
+        ).resolves.toBe(false);
+        expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toBeUndefined();
+      });
+    },
+  );
 
   test("serializes connection metadata with locked node-surface mutations", async () => {
     await withNodePairingDir(async (baseDir) => {

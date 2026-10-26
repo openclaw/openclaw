@@ -12,7 +12,25 @@ import {
   createNewerSqliteSchemaVersionError,
   describeRunningOpenClawBuild,
   readSqliteUserVersion,
+  writeSqliteUserVersion,
 } from "./sqlite-user-version.js";
+
+describe("writeSqliteUserVersion", () => {
+  it("writes signed 32-bit versions inside a transaction and rejects values that SQLite would truncate", () => {
+    using db = new DatabaseSync(":memory:");
+    db.exec("BEGIN");
+    for (const version of [0, 7, 2147483647]) {
+      writeSqliteUserVersion(db, version);
+      expect(readSqliteUserVersion(db)).toBe(version);
+    }
+    for (const version of [-1, 1.5, 2147483648, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => writeSqliteUserVersion(db, version)).toThrow(RangeError);
+      expect(readSqliteUserVersion(db)).toBe(2147483647);
+    }
+    db.exec("ROLLBACK");
+    expect(readSqliteUserVersion(db)).toBe(0);
+  });
+});
 
 describe("readSqliteUserVersion", () => {
   it.each([false, true])(

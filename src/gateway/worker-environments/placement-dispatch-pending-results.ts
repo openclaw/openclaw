@@ -28,6 +28,7 @@ import { boundedWorkerError } from "./worker-error.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
+  adoptReclaimedWorkspaceHistory,
   createWorkspaceResultJournal,
   finalizeWorkspaceResultConflicts,
   resolvePriorWorkspaceResultConflict,
@@ -193,6 +194,28 @@ export async function recoverPendingWorkspaceResults(
             let active: WorkerOwnedPendingPlacement = pendingPlacement;
             const workspace = await resolveWorkspace(active, pending, recovery.workspace);
             recovery.assertCurrent();
+            if (workspace.kind === "device-folder") {
+              // A restart revokes the old turn, but not this device's authoritative files.
+              // Join process cleanup without capturing or reconciling the folder.
+              await environments.stopTunnel(active.environmentId, active.activeOwnerEpoch);
+              recovery.assertCurrent();
+              await placements.acceptWorkspaceResult(turnClaim, recovery.assertCurrent);
+              await placements.closeWorkerTurnToolState(turnClaim);
+              if (active.state === "draining") {
+                await environments.destroy(active.environmentId);
+                await completeRecoveredWorkspaceTeardown({
+                  placements,
+                  placement: active,
+                  turnClaim,
+                });
+              } else {
+                await placements.completeWorkspaceResultAndReleaseTurn(
+                  turnClaim,
+                  recovery.assertCurrent,
+                );
+              }
+              return;
+            }
             const root = sessionWorkspaceRoot(workspace);
             const priorWorkspaceResultConflict = await resolvePriorWorkspaceResultConflict(
               recovery.resolveConflict,
@@ -357,7 +380,7 @@ export async function recoverPendingWorkspaceResults(
                 "beforeComplete" | "complete" | "afterComplete"
               > = { beforeComplete: destroyResultEnvironment, complete: completeResult },
             ) => {
-              const finalized = await finalizeWorkspaceResultConflicts({
+              const conflictRetained = await finalizeWorkspaceResultConflicts({
                 assertCurrent: recovery.assertCurrent,
                 placements,
                 turnClaim,
@@ -367,13 +390,21 @@ export async function recoverPendingWorkspaceResults(
                 report: recovery.reportConflict,
               });
               await deps.publishAcceptedWorkspace?.(turnClaim);
+              // Recovery may drain an ordinary turn; only a reclaim owns commit adoption.
+              if (reclaimResult) {
+                await adoptReclaimedWorkspaceHistory({
+                  ...recovery,
+                  workspace,
+                  stagedResultRef: result.stagedResultRef,
+                });
+              }
               await settleStagedWorkspaceResult({
                 assertCurrent: recovery.assertCurrent,
                 placements,
                 turnClaim,
                 workspace,
                 stagedResultRef: result.stagedResultRef,
-                conflictRetained: finalized.conflictRetained,
+                conflictRetained,
                 ...completion,
               });
             };

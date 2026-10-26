@@ -67,11 +67,9 @@ export async function streamActiveMemoryTranscriptRecords(params: {
     return;
   }
   for (const { event } of page.events) {
-    try {
-      if (params.onRecord(event)) {
-        break;
-      }
-    } catch {}
+    if (params.onRecord(event)) {
+      break;
+    }
   }
 }
 
@@ -158,10 +156,8 @@ export function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
   let deadlineAt = 0;
   const { promise, resolve: resolveTimeout } = createDeferred<symbol>();
   const stop = () => {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-      timeoutId = undefined;
-    }
+    clearTimeout(timeoutId);
+    timeoutId = undefined;
   };
   const arm = (timeoutMs: number, onTimeout: () => void) => {
     stop();

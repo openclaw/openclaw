@@ -1,56 +1,53 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  resolveEventSessionKeyForPolicy,
-  resolveEventSessionRoutingPolicy,
-  scopedHeartbeatWakeOptionsForPolicy,
-} from "../infra/event-session-routing.js";
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+  enqueueSessionEventForHost,
+  type SessionEventTarget,
+} from "../auto-reply/reply/session-event-handoff.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
-import { isUnscopedSessionKeySentinel } from "../routing/session-key.js";
+import {
+  consumeSelectedSystemEventEntries,
+  enqueueSystemEventEntry,
+} from "../infra/system-events.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
 
-/** One exec-notice handoff: validate authority, enqueue, then wake only its admitted scope. */
+/** Transfer the authorized exec notice and its captured route to one ordinary turn. */
 export function enqueueNodeExecNotice(params: {
-  cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
   authorization: ReturnType<NodeEventContext["authorizeNodeSystemRunEvent"]>;
   runId: string;
   text: string;
-}): void {
-  const { cfg, sessionKey, agentId, runId, text } = params;
+  expectedTarget: SessionEventTarget;
+  assertAcceptanceCurrent: () => void;
+}) {
+  const { sessionKey, agentId, runId, text, expectedTarget, assertAcceptanceCurrent } = params;
   // The registry owns this snapshot; the terminal payload never supplies a route.
-  // Legacy calls without a host-bound source retain the existing session fallback.
+  // Calls without a host-bound route retain the captured session fallback.
   const deliveryContext =
-    typeof params.authorization === "object"
+    (typeof params.authorization === "object"
       ? params.authorization.invocationDeliveryContext
-      : undefined;
-  const policy = resolveEventSessionRoutingPolicy({ cfg, sessionKey });
-  const queued = enqueueSystemEvent(
-    text,
-    withSystemEventOwner(
-      {
-        sessionKey: resolveEventSessionKeyForPolicy(sessionKey, policy),
-        contextKey: runId ? "exec:" + runId : "exec",
-        ...(deliveryContext ? { deliveryContext } : {}),
-      },
-      agentId,
-    ),
+      : undefined) ?? expectedTarget.deliveryContext;
+  assertAcceptanceCurrent();
+  const eventOptions = withSystemEventOwner(
+    { sessionKey, contextKey: runId ? `exec:${runId}` : "exec", deliveryContext },
+    agentId,
   );
-  if (queued) {
-    requestHeartbeat(
-      scopedHeartbeatWakeOptionsForPolicy(
-        sessionKey,
-        {
-          source: "exec-event",
-          intent: "event",
-          reason: "exec-event",
-          coalesceMs: 0,
-          ...(isUnscopedSessionKeySentinel(sessionKey) ? { agentId } : {}),
-        },
-        policy,
-      ),
-    );
+  const occurrence = enqueueSystemEventEntry(text, eventOptions);
+  if (!occurrence) {
+    return undefined;
+  }
+  try {
+    return enqueueSessionEventForHost(text, {
+      agentId,
+      sessionKey,
+      source: "node",
+      contextKey: eventOptions.contextKey,
+      deliveryContext,
+      expectedTarget,
+      occurrences: [occurrence],
+      assertAcceptanceCurrent,
+    });
+  } catch (error) {
+    consumeSelectedSystemEventEntries(eventOptions.sessionKey, [occurrence]);
+    throw error;
   }
 }

@@ -9,8 +9,10 @@ const loadGatewaySessionEntry = vi.hoisted(() =>
 
 // mock-isolation: cron RPC fixtures own the creator session lookup without a live session store.
 vi.mock("../session-utils.js", () => ({
-  loadSessionEntry: loadGatewaySessionEntry,
-  loadGatewaySessionEntryReadOnly: loadGatewaySessionEntry,
+  loadGatewaySessionEntryReadOnlyAsync: async (
+    sessionKey: string,
+    options?: { agentId?: string },
+  ) => loadGatewaySessionEntry(sessionKey, options),
 }));
 
 vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({

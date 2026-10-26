@@ -12,7 +12,10 @@ it("keeps replacement maintenance observers subscribed after repeated old cleanu
 
   const current = vi.fn();
   const stopCurrent = observeSessionEntryMaintenanceAgeChanges(identity, current);
-  const change = { sessionKey: "agent:main:observed", entry: { updatedAt: 1 } };
+  const change = {
+    sessionKey: "agent:main:observed",
+    entry: { sessionId: "observed", updatedAt: 1 },
+  };
   try {
     stopPrevious();
     publishSessionEntryMaintenanceAgeChanges(identity, [change]);

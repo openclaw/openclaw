@@ -13,10 +13,7 @@ import {
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
 import { holdQueuedSwarmRun, isSwarmRunActive } from "../swarm/swarm-scheduler.js";
-import {
-  resolveSubagentChildAuthority,
-  warnLegacySubagentAuthority,
-} from "./subagent-child-owner-match.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { matchesSubagentKillIntent } from "./subagent-control-kill-intent.js";
 import {
   persistSubagentAbortedLastRun,
@@ -51,7 +48,6 @@ class SubagentRunManager extends SubagentLaunchManager {
     if (!selected || resolveSubagentChildAuthority(selected).status === "mismatch") {
       return;
     }
-    warnLegacySubagentAuthority(selected, log.warn);
     const entry = await mutateSubagentRuns(
       [runId],
       (rows) => {
@@ -181,6 +177,8 @@ class SubagentRunManager extends SubagentLaunchManager {
     childAgentId?: string;
     reason?: string;
     suppressTaskDelivery?: boolean;
+    /** A withdrawn queued input never owned the session's active execution metadata. */
+    suppressSessionEffects?: boolean;
     session?: SubagentKillSession;
     withdrawQueuedReservation?: () => void;
     assertCurrent?: () => void;
@@ -248,7 +246,6 @@ class SubagentRunManager extends SubagentLaunchManager {
     const sessions = new Map<string, SubagentKillSession>();
     const holds = new Map<string, NonNullable<ReturnType<typeof holdQueuedSwarmRun>>>();
     for (const entry of selected.values()) {
-      warnLegacySubagentAuthority(entry, log.warn);
       if (
         entry.collect &&
         entry.execution.status === "queued" &&
@@ -295,7 +292,6 @@ class SubagentRunManager extends SubagentLaunchManager {
         mutateSubagentRuns(
           [...runIds],
           (rows) => {
-            assertSelectedCurrent();
             updated = 0;
             entriesByChildSessionKey.clear();
             queuedCollectorRunIds.length = 0;
@@ -324,7 +320,6 @@ class SubagentRunManager extends SubagentLaunchManager {
                 // it receives the same reconciliation tombstone as a direct kill.
                 continue;
               }
-              assertCurrent();
               const wasYielded = entry.pauseReason === "sessions_yield";
               const wasQueuedCollector = entry.collect && entry.execution.status === "queued";
               const collectorLaunchInFlight =
@@ -348,6 +343,7 @@ class SubagentRunManager extends SubagentLaunchManager {
                     : entry.execution.lifecycleGeneration,
                 restartRecovery: undefined,
                 suppressSessionEffects:
+                  markParams.suppressSessionEffects ||
                   resolveSubagentChildAuthority(entry).status === "legacy-unverified"
                     ? true
                     : existingKillIntent && currentKillLifecycle

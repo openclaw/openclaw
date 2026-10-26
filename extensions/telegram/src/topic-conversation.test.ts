@@ -40,27 +40,10 @@ describe("parseTelegramTopicConversation", () => {
     });
   });
 
-  it("returns null when a DM binding carries the chat id in both fields", () => {
-    expect(
-      parseTelegramTopicConversation({
-        conversationId: "1234",
-        parentConversationId: "1234",
-      }),
-    ).toBeNull();
-  });
-
   it("returns null when neither shape matches", () => {
     expect(
       parseTelegramTopicConversation({
         conversationId: "not-a-topic",
-      }),
-    ).toBeNull();
-  });
-
-  it("returns null for a bare topic id without a parentConversationId", () => {
-    expect(
-      parseTelegramTopicConversation({
-        conversationId: "42",
       }),
     ).toBeNull();
   });

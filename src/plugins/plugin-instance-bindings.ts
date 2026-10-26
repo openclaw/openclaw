@@ -17,6 +17,7 @@ import {
 } from "./plugin-instance-scope.js";
 import type { PluginInstanceCallLease } from "./plugin-instance.types.js";
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
+import { createPluginToolExecutionBinding } from "./plugin-tool-execution.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
@@ -42,15 +43,13 @@ const DATA_FIELDS = new Set([
 ]);
 
 function pluginMemberDescriptor(object: object, key: PropertyKey) {
-  let descriptor: PropertyDescriptor | undefined;
-  for (
-    let source: object | null = object;
-    source && !descriptor;
-    source = Object.getPrototypeOf(source)
-  ) {
-    descriptor = Object.getOwnPropertyDescriptor(source, key);
+  for (let source: object | null = object; source; source = Object.getPrototypeOf(source)) {
+    const descriptor = Object.getOwnPropertyDescriptor(source, key);
+    if (descriptor) {
+      return descriptor;
+    }
   }
-  return descriptor;
+  return undefined;
 }
 
 function pluginMemberNeedsAdmission(object: object, key: PropertyKey, getters = true): boolean {
@@ -102,32 +101,30 @@ type PluginInstanceBindingOwner = {
 
 /** Registration facts and captured stream scopes share the instance's lifetime. */
 export function createPluginInstanceBindings(bindings: PluginInstanceBindingOwner) {
-  const factories = new WeakMap<object, true | readonly PropertyKey[]>();
-  const admitFactory = (
-    factory: (...args: never[]) => unknown,
-    resultCallbacks?: readonly PropertyKey[],
-  ): void => {
-    factories.set(factory, resultCallbacks ?? true);
-  };
+  const factories = new WeakMap<object, true | "tool" | readonly PropertyKey[]>();
   return {
-    admitFactory,
+    admitFactory: (
+      factory: (...args: never[]) => unknown,
+      resultCallbacks?: "tool" | readonly PropertyKey[],
+    ): void => void factories.set(factory, resultCallbacks ?? true),
     create(
       admit: <T>(run: () => T) => T,
       admitCallback: <T>(run: () => T) => T = (run) => admit(() => bindings.invoke(run)),
     ) {
-      return createPluginBindings(bindings, factories, admit, admitCallback);
+      // Unused custody needs no callable cache; each admission still owns its views.
+      let wrap: ReturnType<typeof createPluginBindings> | undefined;
+      return <T>(value: T): T =>
+        (wrap ??= createPluginBindings(bindings, factories, admit, admitCallback))(value);
     },
   };
 }
 
-/** Builds callable views while the exact instance continues to own admission and leases. */
 function createPluginBindings(
   bindings: PluginInstanceBindingOwner,
-  factories: WeakMap<object, true | readonly PropertyKey[]>,
+  factories: WeakMap<object, true | "tool" | readonly PropertyKey[]>,
   admit: <T>(run: () => T) => T,
   admitCallback: <T>(run: () => T) => T,
 ) {
-  const { instance } = bindings;
   const prepareInvocation = (token: object, parent?: PluginInstanceInvocation) => {
     const context = pluginInvocationContext.getStore();
     const consumer = bindings.isConsumerToken(token);
@@ -143,18 +140,18 @@ function createPluginBindings(
       origin,
       reenter: <T>(run: () => T): T => {
         if (consumer && !bindings.hasToken(token)) {
-          throw new Error(`Plugin ${instance.pluginId} consumer is closed`);
+          throw new Error(`Plugin ${bindings.instance.pluginId} consumer is closed`);
         }
         return resource.runInAsyncScope(() => pluginInstanceInvocation.run(origin, run));
       },
       assertCurrent: () => {
-        context?.lookup(instance);
+        context?.lookup(bindings.instance);
         const current = pluginInvocationContext.getStore();
         if (current !== context) {
-          current?.lookup(instance);
+          current?.lookup(bindings.instance);
         }
       },
-      run: <T>(run: () => T): T => resource.runInAsyncScope(run),
+      resource,
       close: () => {
         held.registry = undefined;
         resource.emitDestroy();
@@ -165,7 +162,7 @@ function createPluginBindings(
     for (
       let source: object | undefined = value;
       source;
-      source = getPluginOriginalValue(source, instance)
+      source = getPluginOriginalValue(source, bindings.instance)
     ) {
       const binding = factories.get(source);
       if (binding) {
@@ -195,7 +192,10 @@ function createPluginBindings(
       ? wrap(value)
       : value;
   // Factory arrays contain executable registrations, not ordinary result payloads.
-  const bindFactoryResult = <T>(value: T, binding: true | readonly PropertyKey[]): T => {
+  const bindFactoryResult = <T>(value: T, binding: true | "tool" | readonly PropertyKey[]): T => {
+    if (binding === "tool") {
+      return bindTool(value);
+    }
     const callbacks = binding === true ? undefined : binding;
     if (
       callbacks &&
@@ -205,16 +205,14 @@ function createPluginBindings(
     ) {
       return value;
     }
-    if (!Array.isArray(value)) {
-      return wrap(value, "", undefined, callbacks);
-    }
-    // SAFETY: Each member keeps its declared shape while native iteration sees its bound methods.
-    return value.map((entry) => wrap(entry, "", undefined, callbacks)) as T;
+    return Array.isArray(value)
+      ? (value.map((entry) => wrap(entry, "", undefined, callbacks)) as T) // SAFETY: Binding preserves each member's shape.
+      : wrap(value, "", undefined, callbacks);
   };
   const wrapResult = <T>(
     result: T,
     callerData?: unknown[],
-    executable?: true | readonly PropertyKey[],
+    executable?: true | "tool" | readonly PropertyKey[],
   ): T => {
     const completion = resolvePluginReturnPromise(result);
     if (completion) {
@@ -236,6 +234,21 @@ function createPluginBindings(
         : passResult(result);
   };
 
+  const bindTool = createPluginToolExecutionBinding({
+    admit,
+    wrapProxy: (tool) => wrap(tool),
+    call: (method, receiver, args) =>
+      admit(() => {
+        const call = wrapArguments(args);
+        return wrapResult(Reflect.apply(method, receiver, call.args), call.callerData);
+      }),
+    register: (view, source) => {
+      void new PluginFactoryBinding(view, factory);
+      setPluginOriginalValue(view, source, bindings.instance);
+      valueInstances.setHost(view, bindings.instance);
+    },
+  });
+
   /** Callables retain their instance; schemas remain data for host validators. */
   const wrap = <T>(
     value: T,
@@ -250,15 +263,21 @@ function createPluginBindings(
     if (DATA_FIELDS.has(field) || (typeof value === "object" && isNativePluginData(value))) {
       return value;
     }
-    const object: object = value;
-    if (PluginFactoryBinding.belongsTo(object, factory)) {
+    if (PluginFactoryBinding.belongsTo(value, factory)) {
       return value;
     }
-    const cached = wrapped.get(object);
-    if (cached) {
-      // SAFETY: The cache stores only the view created for this exact input value.
-      return cached as T;
-    }
+    // SAFETY: The cache stores only the view created for this exact input value.
+    return (wrapped.get(value) ?? createView(value, field, callbackIndex, resultCallbacks)) as T;
+  };
+
+  // Keep closure contexts off primitive reads and already-bound value lookups.
+  const createView = <T extends object>(
+    value: T,
+    field: string,
+    callbackIndex?: 0 | null,
+    resultCallbacks?: readonly PropertyKey[],
+  ): T => {
+    const object: object = value;
     const methods = new Map<
       PropertyKey,
       { original: Function; receiver: object; wrapped: unknown }
@@ -616,7 +635,7 @@ function createPluginBindings(
           state = "done";
           throw error;
         }
-        return invocation.run(() => {
+        return invocation.resource.runInAsyncScope(() => {
           const result = run();
           const completion = resolvePluginReturnPromise(result);
           if (completion) {
@@ -642,6 +661,33 @@ function createPluginBindings(
         throw error;
       }
     };
+    const call = async (key: PropertyKey, method: Function | undefined, args: unknown[]) => {
+      pending += 1;
+      try {
+        if (!method) {
+          if (key === "return") {
+            state = "done";
+            return { done: true, value: await args[0] };
+          }
+          throw new TypeError("Plugin iterator method must be callable");
+        }
+        const next: unknown = await Reflect.apply(method, iterator, args);
+        if (next === null || (typeof next !== "object" && typeof next !== "function")) {
+          throw new TypeError("Plugin async iterator result must be an object");
+        }
+        assertActive();
+        state = Reflect.get(next, "done") ? "done" : key === "return" ? "returned" : state;
+        return next;
+      } catch (error) {
+        state = "done";
+        throw error;
+      } finally {
+        const completion = releaseOperation();
+        if (completion) {
+          await completion;
+        }
+      }
+    };
     const admission: PluginIteratorAdmission = {
       origin: invocation.origin,
       reenter: (run) => {
@@ -649,8 +695,7 @@ function createPluginBindings(
           invocation.assertCurrent();
           return invocation.reenter(run);
         } catch (error) {
-          state = "done";
-          void settle();
+          admission.close();
           throw error;
         }
       },
@@ -684,33 +729,7 @@ function createPluginBindings(
         try {
           assertActive();
           invocation.assertCurrent();
-          return invocation.run(async () => {
-            pending += 1;
-            try {
-              if (!method) {
-                if (key === "return") {
-                  state = "done";
-                  return { done: true, value: await args[0] };
-                }
-                throw new TypeError("Plugin iterator method must be callable");
-              }
-              const next: unknown = await Reflect.apply(method, iterator, args);
-              if (next === null || (typeof next !== "object" && typeof next !== "function")) {
-                throw new TypeError("Plugin async iterator result must be an object");
-              }
-              assertActive();
-              state = Reflect.get(next, "done") ? "done" : key === "return" ? "returned" : state;
-              return next;
-            } catch (error) {
-              state = "done";
-              throw error;
-            } finally {
-              const completion = releaseOperation();
-              if (completion) {
-                await completion;
-              }
-            }
-          });
+          return invocation.resource.runInAsyncScope(call, undefined, key, method, args);
         } catch (error) {
           state = "done";
           const reject = () => {

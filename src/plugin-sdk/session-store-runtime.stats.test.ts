@@ -2,6 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { existsSync } from "node:fs";
 import { afterAll, expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { appendTranscriptEvent } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -10,9 +11,11 @@ import { readTranscriptStatsBatchReadOnlyAsync } from "./memory-core-host-engine
 import { readTranscriptStatsAsync } from "./session-store-runtime.js";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "sdk-transcript-stats-");
+afterAll(() => resetConfigRuntimeState());
 
 it("reads current ordered statistics off the host after transcript writes without creating missing stores", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make() };
+  setRuntimeConfigSnapshot({}, {});
   const scope = {
     agentId: "main",
     env,

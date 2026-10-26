@@ -1,14 +1,21 @@
+import { asNullableRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount, formatCost, formatTimeAgo } from "../../../lib/format.ts";
-import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { getLocale, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 const CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
+
+// Shared relative-time copy is lowercase for mid-sentence use ("Updated just now");
+// the chat footer shows it alone, so it starts with a capital ("Just now").
+function capitalizeStandaloneLabel(value: string): string {
+  return value.charAt(0).toLocaleUpperCase(getLocale()) + value.slice(1);
+}
 
 function prepareTimestamp(timestamp: number) {
   const date = new Date(timestamp);
@@ -35,35 +42,45 @@ function prepareTimestamp(timestamp: number) {
         timeZoneName: "short",
       })
     : label;
+  return { dateTime: valid ? date.toISOString() : "", label, title };
+}
+
+function relativeTimestampLabel(timestamp: number, label: string) {
+  const date = new Date(timestamp);
+  const valid = Number.isFinite(date.getTime());
   const nowMs = Date.now();
   const ageMs = nowMs - date.getTime();
-  // Slightly-future messages clamp to "just now"; older or distant-future ones use a date.
-  const relativeLabel = !valid
+  // Slightly-future messages clamp to "Just now"; older or distant-future ones use a date.
+  return !valid
     ? label
     : ageMs >= -CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS && ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS
-      ? formatTimeAgo(Math.max(0, ageMs))
+      ? capitalizeStandaloneLabel(formatTimeAgo(Math.max(0, ageMs)))
       : date.toLocaleDateString([], {
           month: "short",
           day: "numeric",
           ...(date.getFullYear() === new Date(nowMs).getFullYear() ? {} : { year: "numeric" }),
         });
-  return { dateTime: valid ? date.toISOString() : "", label, title, relativeLabel };
 }
 
-function TimestampTime(props: { view: ReturnType<typeof prepareTimestamp> }) {
+function TimestampTime(props: { view: { dateTime: string; relativeLabel: string } }) {
+  // Usage-only refreshes must leave the native timestamp attributes untouched.
+  const dateTime = createMemo(() => props.view.dateTime);
   return (
-    <time class="chat-group-timestamp" datetime={props.view.dateTime} aria-live="off">
+    <time class="chat-group-timestamp" datetime={dateTime()} aria-live="off">
       {props.view.relativeLabel}
     </time>
   );
 }
 
-export function renderSolidChatTimestamp(timestamp: number, metadata: JSX.Element[] = []) {
-  return <ChatTimestamp timestamp={timestamp} metadata={metadata} />;
-}
-
 export function ChatTimestamp(props: { timestamp: number; metadata?: JSX.Element[] }) {
-  const view = createMemo(() => prepareTimestamp(props.timestamp));
+  const timestamp = createMemo(() => props.timestamp);
+  const calendar = createMemo(() => prepareTimestamp(timestamp()));
+  const view = createMemo(() => ({
+    ...calendar(),
+    // Parent clock refreshes still advance relative copy without reformatting calendar labels.
+    relativeLabel: relativeTimestampLabel(props.timestamp, calendar().label),
+  }));
+  const contextLabel = createMemo(() => t("chat.messages.contextFor", { timestamp: view().title }));
   const hasMetadata = () => Boolean(props.metadata?.length);
   return (
     <openclaw-tooltip
@@ -72,11 +89,7 @@ export function ChatTimestamp(props: { timestamp: number; metadata?: JSX.Element
       prop:content={hasMetadata() ? "" : view().label}
     >
       <Show when={hasMetadata()} fallback={<TimestampTime view={view()} />}>
-        <button
-          type="button"
-          class="msg-meta__summary"
-          aria-label={t("chat.messages.contextFor", { timestamp: view().title })}
-        >
+        <button type="button" class="msg-meta__summary" aria-label={contextLabel()}>
           <TimestampTime view={view()} />
         </button>
       </Show>
@@ -91,6 +104,7 @@ export function ChatTimestamp(props: { timestamp: number; metadata?: JSX.Element
 }
 
 type GroupMeta = {
+  usageUnavailable?: true;
   input: number;
   output: number;
   cacheRead: number;
@@ -112,11 +126,21 @@ export function extractGroupMeta(
   let model: string | null = null;
   let hasUsage = false;
   let maxPromptTokens = 0;
+  let maxLegacyPromptTokens = 0;
+  let hasContextUsage = false;
+  let usageUnavailable = false;
 
   for (const { message } of group.messages) {
     // SAFETY: Grouped transcript entries are admitted message objects; the role is checked below.
     const m = message as Record<string, unknown>;
     if (m.role !== "assistant") {
+      continue;
+    }
+    if (typeof m.model === "string" && m.model !== "gateway-injected") {
+      model = m.model;
+    }
+    if (asNullableRecord(asNullableRecord(m.usage)?.usageReport)?.state === "unavailable") {
+      usageUnavailable = true;
       continue;
     }
     // SAFETY: The message producer supplies numeric token counts under these usage field names.
@@ -131,7 +155,19 @@ export function extractGroupMeta(
       output += callOutput;
       cacheRead += callCacheRead;
       cacheWrite += callCacheWrite;
-      maxPromptTokens = Math.max(maxPromptTokens, callInput + callCacheRead + callCacheWrite);
+      // A context marker holds the latest call; the counters may cover a whole multi-call turn.
+      const context = asOptionalRecord(asOptionalRecord(m.usage)?.contextUsage);
+      if (context?.state === "available" && typeof context.promptTokens === "number") {
+        hasContextUsage = true;
+        maxPromptTokens = Math.max(maxPromptTokens, context.promptTokens);
+      } else if (context?.state === "unavailable") {
+        hasContextUsage = true;
+      } else {
+        maxLegacyPromptTokens = Math.max(
+          maxLegacyPromptTokens,
+          callInput + callCacheRead + callCacheWrite,
+        );
+      }
     }
     // Producers write cost nested under usage.cost (the AssistantMessage
     // shape); a bare message.cost never exists, so reading only it left the
@@ -144,18 +180,29 @@ export function extractGroupMeta(
     if (c?.total) {
       cost += c.total;
     }
-    if (typeof m.model === "string" && m.model !== "gateway-injected") {
-      model = m.model;
-    }
   }
 
+  if (usageUnavailable) {
+    return {
+      usageUnavailable: true,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      model,
+      contextPercent: null,
+    };
+  }
   if (!hasUsage && !model) {
     return null;
   }
 
+  // Legacy counters are an estimate only when the group has no explicit context snapshots.
+  const promptTokens = hasContextUsage ? maxPromptTokens : maxLegacyPromptTokens;
   const contextPercent =
-    contextWindow && maxPromptTokens > 0
-      ? Math.min(Math.round((maxPromptTokens / contextWindow) * 100), 100)
+    contextWindow && promptTokens > 0
+      ? Math.min(Math.round((promptTokens / contextWindow) * 100), 100)
       : null;
 
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };
@@ -171,6 +218,9 @@ const TOKEN_FIELDS = [
 function MessageMetadata(props: { meta: GroupMeta | null }) {
   return (
     <>
+      <Show when={props.meta?.usageUnavailable}>
+        <span class="msg-meta__tokens">{t("chat.messages.usageUnavailable")}</span>
+      </Show>
       <For each={TOKEN_FIELDS} keyed={(entry) => entry[0]}>
         {(entry) => (
           <Show when={props.meta?.[entry()[0]]}>
@@ -211,6 +261,7 @@ export function MessageMeta(props: { timestamp: number; meta: GroupMeta | null }
   const hasMetadata = () =>
     props.meta &&
     Boolean(
+      props.meta.usageUnavailable ||
       props.meta.input ||
       props.meta.output ||
       props.meta.cacheRead ||

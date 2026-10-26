@@ -1,7 +1,9 @@
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
@@ -11,13 +13,22 @@ import { AgentHarnessPreflightError } from "./errors.js";
 import { getRegisteredAgentHarness } from "./registry.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "./types.js";
 
+export class SessionRuntimeOwnershipChanged extends AgentHarnessPreflightError {}
+
 type SessionRuntimeOwnershipReadParams = {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
   storePath?: string;
   sessionEntry?: Partial<
-    Pick<SessionEntry, "sessionId" | "agentHarnessId" | "modelSelectionLocked" | "pluginOwnerId">
+    Pick<
+      SessionEntry,
+      | "sessionId"
+      | "previousSessionId"
+      | "agentHarnessId"
+      | "modelSelectionLocked"
+      | "pluginOwnerId"
+    >
   >;
   assertCurrent?: () => void;
   /** Caller retains the fresh row through the ownership invocation. */
@@ -37,21 +48,21 @@ function captureSessionRuntimeOwnershipRead(params: SessionRuntimeOwnershipReadP
   }
   const { agentId, sessionKey, storePath } = params;
   const privateSource = sessionKey
-    ? captureIncognitoSessionSource({ agentId, sessionKey, storePath })
+    ? captureSessionActorStorageOwner(
+        { agentId, sessionKey, storePath },
+        {
+          assertCurrent() {
+            params.assertCurrent?.();
+          },
+          authorize() {},
+        },
+      )
     : undefined;
-  const claim =
-    privateSource && !("kind" in privateSource)
-      ? privateSource.actor.sessions.captureCurrent(sessionKey!)
-      : undefined;
   let active = true;
   const assertCurrent = () => {
     if (active) {
       params.assertCurrent?.();
-      privateSource?.admissionSignal?.throwIfAborted();
-      if (privateSource && "kind" in privateSource) {
-        privateSource.assertCurrent();
-      }
-      claim?.assertCurrent();
+      privateSource?.owner?.assertCurrent();
     }
     if (
       !active ||
@@ -59,7 +70,7 @@ function captureSessionRuntimeOwnershipRead(params: SessionRuntimeOwnershipReadP
       entry?.sessionId !== sessionId ||
       resolveSessionPinnedHarnessId(entry) !== harnessId
     ) {
-      throw new AgentHarnessPreflightError(
+      throw new SessionRuntimeOwnershipChanged(
         "Native session ownership changed while reading its runtime. Reattach the original native session before retrying.",
       );
     }
@@ -77,11 +88,25 @@ function captureSessionRuntimeOwnershipRead(params: SessionRuntimeOwnershipReadP
       storePath: params.storePath,
       assertCurrent,
     },
+    readPreviousSessionId: () => {
+      assertCurrent();
+      if (params.readPreparedPreviousSessionId) {
+        const previousSessionId = params.readPreparedPreviousSessionId();
+        assertCurrent();
+        return previousSessionId;
+      }
+      if (privateSource) {
+        const key = sessionKey?.trim();
+        const current = !key ? undefined : readCapturedSessionActorEntry(privateSource, key);
+        assertCurrent();
+        return current?.sessionId === sessionId ? current.previousSessionId : undefined;
+      }
+      // Released synchronous hooks consume the row their caller already prepared.
+      return entry?.previousSessionId;
+    },
     finish(ownership: AgentHarnessSessionRuntimeOwnership | undefined) {
       assertCurrent();
-      return ownership
-        ? { ...ownership, ...(ownership.modelRef ? { modelRef: { ...ownership.modelRef } } : {}) }
-        : undefined;
+      return ownership;
     },
     close() {
       active = false;
@@ -115,7 +140,7 @@ export function readSessionRuntimeOwnership(
   if (!read) {
     return undefined;
   }
-  const { harness, sessionId, privateSource, assertCurrent } = read;
+  const { harness, assertCurrent } = read;
   try {
     assertCurrent();
     if (harness.resolveSessionRuntimeOwnership) {
@@ -131,27 +156,7 @@ export function readSessionRuntimeOwnership(
     return read.finish(
       harness.resolveSessionRuntimeOwnership?.({
         ...read.input,
-        readPreviousSessionId: () => {
-          assertCurrent();
-          if (params.readPreparedPreviousSessionId) {
-            const previousSessionId = params.readPreparedPreviousSessionId();
-            assertCurrent();
-            return previousSessionId;
-          }
-          if (privateSource) {
-            const key = params.sessionKey?.trim();
-            const current =
-              !key || "kind" in privateSource
-                ? undefined
-                : privateSource.actor.sessions.readSharing(key)?.entry;
-            assertCurrent();
-            return current?.sessionId === sessionId ? current.previousSessionId : undefined;
-          }
-          const scope = previousSessionReadScope(params);
-          const current = scope ? loadSessionEntryReadOnly(scope) : undefined;
-          assertCurrent();
-          return current?.sessionId === sessionId ? current.previousSessionId : undefined;
-        },
+        readPreviousSessionId: read.readPreviousSessionId,
         assertCurrent,
       }),
     );
@@ -181,19 +186,8 @@ export async function readSessionRuntimeOwnershipAsync(
       version: 2,
       readPreviousSessionId: async () => {
         assertCurrent();
-        if (params.readPreparedPreviousSessionId) {
-          const previousSessionId = params.readPreparedPreviousSessionId();
-          assertCurrent();
-          return previousSessionId;
-        }
-        if (privateSource) {
-          const key = params.sessionKey?.trim();
-          const current =
-            !key || "kind" in privateSource
-              ? undefined
-              : privateSource.actor.sessions.readSharing(key)?.entry;
-          assertCurrent();
-          return current?.sessionId === sessionId ? current.previousSessionId : undefined;
+        if (params.readPreparedPreviousSessionId || privateSource) {
+          return read.readPreviousSessionId();
         }
         const scope = previousSessionReadScope(params);
         const current = scope

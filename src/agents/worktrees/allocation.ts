@@ -99,7 +99,7 @@ export async function waitForWorktreeCapacity(
   }
 }
 
-function startWorktreeWait(budget?: WorktreeWaitBudget) {
+export function startWorktreeWait(budget?: WorktreeWaitBudget) {
   const startedAt = performance.now();
   let active = true;
   return {

@@ -1,52 +1,31 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
+  createComposerQuestionPrompt as questionPrompt,
+  createComposerControlsFixture,
   createComposerProps as props,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
-
-function questionPrompt(id: string, question: string): QuestionPrompt {
-  return {
-    id,
-    questions: [
-      {
-        questionId: "choice",
-        header: "Choice",
-        question,
-        options: [{ label: "Yes" }, { label: "No" }],
-        isOther: false,
-      },
-    ],
-    sessionKey: "queue-test",
-    createdAtMs: 1_000,
-    expiresAtMs: Date.now() + 60_000,
-    status: "pending",
-    answeredElsewhere: false,
-    localResolutionConfirmed: false,
-    locallyExpired: false,
-    submitting: false,
-    error: null,
-    drafts: new Map(),
-    revision: 1,
-  };
-}
 
 afterEach(() => resetComposerFixture());
 
 describe("composer question takeover", () => {
-  it.each([true, false])(
-    "swaps the expanded question with the composer and restores its draft, focus, and progress (open=%s)",
-    async (progressOpen) => {
+  it.each([
+    { progressOpen: true, takeover: "expand" },
+    { progressOpen: false, takeover: "next" },
+  ])(
+    "restores draft, focus, and progress after $takeover takeover (open=$progressOpen)",
+    async ({ progressOpen, takeover }) => {
       const container = createComposerContainer();
       document.body.append(container);
       const prompt = questionPrompt("question-swap", "Choose a release target");
+      const nextPrompt = questionPrompt("question-next", "Choose a release format");
       const composerProps = props({
         paneId: `question-swap-pane-${progressOpen}`,
         collapseTaskProgress: progressOpen,
@@ -60,15 +39,18 @@ describe("composer question takeover", () => {
         sessionKey: "queue-test",
         draft: "Keep this draft",
         gatewayQuestionPrompts: [],
-        composerControls: html`<button type="button">Model</button>`,
-        onRequestUpdate: vi.fn(),
+        composerControls: createComposerControlsFixture(),
       });
       composerProps.onDraftChange = (next) => {
         composerProps.draft = next;
       };
-      const draw = () => render(renderChatComposer(composerProps), container);
+      const draw = () => renderComposerInto(container, composerProps);
 
       draw();
+      await vi.dynamicImportSettled();
+      await waitForSolid(() =>
+        expect(container.querySelector(".session-progress-card--composer")).not.toBeNull(),
+      );
       const progress = container.querySelector<HTMLDetailsElement>(
         ".session-progress-card--composer",
       )!;
@@ -85,7 +67,7 @@ describe("composer question takeover", () => {
         new InputEvent("input", { bubbles: true, inputType: "insertCompositionText" }),
       );
 
-      composerProps.gatewayQuestionPrompts = [prompt];
+      composerProps.gatewayQuestionPrompts = [prompt, nextPrompt];
       draw();
       let panel = await questionPanelIn(container);
       expect(container.querySelector(".agent-chat__input")).toBeNull();
@@ -108,22 +90,34 @@ describe("composer question takeover", () => {
       expect(textarea.value).toBe("Host updated this draft while the question was open");
       expect(document.activeElement).toBe(textarea);
 
+      textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      const composedDraft = `Draft composed before ${takeover}`;
+      textarea.value = composedDraft;
+      textarea.dispatchEvent(
+        new InputEvent("input", { bubbles: true, inputType: "insertCompositionText" }),
+      );
       panel = await questionPanelIn(container);
-      panel.props!.onCollapsedChange!(false);
+      if (takeover === "expand") {
+        panel.props!.onCollapsedChange!(false);
+      } else {
+        panel.props!.onNextRequest!();
+      }
       draw();
       await questionPanelIn(container);
       expect(container.querySelector(".agent-chat__input")).toBeNull();
       expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
+      expect(composerProps.draft).toBe(composedDraft);
 
       expect(progressWrapper.hidden).toBe(true);
       prompt.status = "answered";
+      nextPrompt.status = "answered";
       draw();
       await Promise.resolve();
       textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
       expect(container.querySelector(".session-progress-card--composer")).toBe(progress);
       expect(progressWrapper.hidden).toBe(false);
       expect(progress.open).toBe(progressOpen);
-      expect(textarea.value).toBe("Host updated this draft while the question was open");
+      expect(textarea.value).toBe(composedDraft);
       expect(document.activeElement).toBe(textarea);
       expect(container.querySelector("openclaw-chat-question-panel")).toBeNull();
 

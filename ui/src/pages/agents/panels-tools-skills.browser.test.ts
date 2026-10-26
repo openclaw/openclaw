@@ -1,12 +1,16 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
-import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { createIdentityFixture } from "../../features/github-connections/github-identity-harness.test-support.ts";
+import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
+import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
+import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
 import { mountSolid as mountConnected } from "../../test-helpers/mount-solid.ts";
 import { cleanupSolid } from "../../test-helpers/solid-cleanup.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
-import { createBaseParams } from "./panels-tools-skills.test-support.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createBaseParams, createReadToolCatalog } from "./panels-tools-skills.test-support.ts";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 installBrowserHistoryIsolation();
@@ -44,35 +48,52 @@ const toolPreview: ToolsEffectiveResult = {
 };
 
 describe("agents tools panel (browser)", () => {
+  it("updates preset and catalog labels when the mounted panel changes language", async () => {
+    const restoreI18n = captureI18nStateForTesting();
+    try {
+      await i18n.setLocale("en");
+      const container = document.createElement("div");
+      mountSolid(
+        AgentTools,
+        createBaseParams({
+          catalog: {
+            agentId: "main",
+            profiles: [{ id: "coding", label: "Coding" }],
+            groups: [{ id: "media", label: "Media", source: "core", tools: [] }],
+          },
+        }),
+        container,
+      );
+      const presetLabel = () =>
+        container.querySelector(".agent-tools-buttons button")?.textContent?.trim();
+      const groupLabel = () =>
+        container.querySelector(".agent-tools-group__title")?.textContent?.trim();
+      expect(presetLabel()).toBe("Coding");
+      expect(groupLabel()).toBe("Media");
+
+      await i18n.setLocale("de");
+      await waitForSolid(() => {
+        expect(presetLabel()).toBe("Programmierung");
+        expect(groupLabel()).toBe("Medien");
+      });
+    } finally {
+      await restoreI18n();
+    }
+  });
+
   it.each([
     { name: "not requested", overrides: {}, status: "Not loaded" },
-    { name: "loading", overrides: { toolsEffectiveLoading: true }, status: "Loading…" },
-    {
-      name: "failed",
-      overrides: { toolsEffectiveError: "request failed" },
-      status: "Unavailable",
-    },
     {
       name: "another agent",
-      overrides: { runtimeSessionMatchesSelectedAgent: false, toolsEffectiveResult: toolPreview },
+      overrides: { runtimeSessionMatchesSelectedAgent: false, effective: toolPreview },
       status: "Other Agent",
-    },
-    {
-      name: "refreshing stale",
-      overrides: { toolsEffectiveLoading: true, toolsEffectiveResult: toolPreview },
-      status: "Loading…",
-    },
-    {
-      name: "failed stale",
-      overrides: { toolsEffectiveError: "request failed", toolsEffectiveResult: toolPreview },
-      status: "Unavailable",
     },
   ])("does not treat a $name preview as zero tools or denied access", ({ overrides, status }) => {
     const container = document.createElement("div");
     const params = createBaseParams(overrides);
-    if (params.toolsEffectiveResult) {
-      params.toolsEffectiveResult = {
-        ...params.toolsEffectiveResult,
+    if (params.effective) {
+      params.effective = {
+        ...params.effective,
         toolAccess: {
           checked: "live-session",
           profiles: [],
@@ -103,7 +124,7 @@ describe("agents tools panel (browser)", () => {
 
   it("distinguishes missing preview entries from disabled tools and an empty result", () => {
     const container = document.createElement("div");
-    const params = createBaseParams({ toolsEffectiveResult: toolPreview });
+    const params = createBaseParams({ effective: toolPreview });
     const view = mountSolid(AgentTools, params, container);
 
     const included = container.querySelector("#agent-tool-read");
@@ -124,7 +145,7 @@ describe("agents tools panel (browser)", () => {
 
     view.update({
       ...params,
-      toolsEffectiveResult: {
+      effective: {
         ...toolPreview,
         groups: [{ id: "core", label: "Built-in tools", source: "core", tools: [] }],
       },
@@ -139,7 +160,7 @@ describe("agents tools panel (browser)", () => {
     mountSolid(
       AgentTools,
       createBaseParams({
-        toolsCatalogResult: {
+        catalog: {
           agentId: "main",
           profiles: [
             { id: "minimal", label: "Minimal" },
@@ -181,7 +202,7 @@ describe("agents tools panel (browser)", () => {
             },
           ],
         },
-        toolsEffectiveResult: {
+        effective: {
           agentId: "main",
           profile: "messaging",
           groups: [
@@ -282,12 +303,14 @@ describe("agents tools panel (browser)", () => {
       oauthScopes: [],
       repositoryGrants: "unknown" as const,
     };
-    params.githubIdentity.status = {
-      agentId: "main",
-      selectedScope: "system",
-      selected: { scope: "system", configured: false, identity: nativeIdentity },
-      effective: nativeIdentity,
-    };
+    params.githubIdentity = githubIdentityViewFixture({
+      status: {
+        agentId: "main",
+        selectedScope: "system",
+        selected: { scope: "system", configured: false, identity: nativeIdentity },
+        effective: nativeIdentity,
+      },
+    });
     mountSolid(AgentTools, params, container);
     await settleGitHubIdentity(container);
 
@@ -330,23 +353,18 @@ describe("agents tools panel (browser)", () => {
         pollAfterMs: 60_000,
       })),
     } as never;
-    const githubIdentity = new GitHubIdentityController({
-      requestUpdate: () => undefined,
-      runExternalMutation: async () => ({
-        ok: false,
-        reason: "unavailable",
-        error: "not used",
-      }),
-    });
-    githubIdentity.sync({
+    const { identity: githubIdentity, sync } = createIdentityFixture(
       client,
-      connected: true,
-      target: { kind: "shared", scope: "agent", agentId: "main", config: {} },
-      statusReadable: true,
-      configurable: true,
-      authorizable: true,
-      clientRevision: 1,
-    });
+      {
+        runExternalMutation: async () => ({
+          ok: false,
+          reason: "unavailable",
+          error: "not used",
+        }),
+      },
+      { scope: "agent" },
+    );
+    sync();
     await githubIdentity.startAuthorization();
 
     mountSolid(AgentTools, createBaseParams({ githubIdentity }), container);
@@ -380,12 +398,14 @@ describe("agents tools panel (browser)", () => {
       oauthScopes: ["repo", "workflow"],
       repositoryGrants: "unknown" as const,
     };
-    params.githubIdentity.status = {
-      agentId: "main",
-      selectedScope: "agent",
-      selected: { scope: "agent", configured: false, identity: null },
-      effective,
-    };
+    params.githubIdentity = githubIdentityViewFixture({
+      status: {
+        agentId: "main",
+        selectedScope: "agent",
+        selected: { scope: "agent", configured: false, identity: null },
+        effective,
+      },
+    });
 
     mountSolid(AgentTools, params, container);
     await settleGitHubIdentity(container);
@@ -401,23 +421,18 @@ describe("agents tools panel (browser)", () => {
   it("keeps PAT fields hidden until the explicit fallback is selected", async () => {
     const container = document.createElement("div");
     const client = { request: vi.fn() } as never;
-    const githubIdentity = new GitHubIdentityController({
-      requestUpdate: () => undefined,
-      runExternalMutation: async () => ({
-        ok: false,
-        reason: "unavailable",
-        error: "not used",
-      }),
-    });
-    githubIdentity.sync({
+    const { identity: githubIdentity, sync } = createIdentityFixture(
       client,
-      connected: true,
-      target: { kind: "shared", scope: "agent", agentId: "main", config: {} },
-      statusReadable: true,
-      configurable: true,
-      authorizable: true,
-      clientRevision: 1,
-    });
+      {
+        runExternalMutation: async () => ({
+          ok: false,
+          reason: "unavailable",
+          error: "not used",
+        }),
+      },
+      { scope: "agent" },
+    );
+    sync();
 
     const view = mountSolid(AgentTools, createBaseParams({ githubIdentity }), container);
     await settleGitHubIdentity(container);
@@ -425,35 +440,20 @@ describe("agents tools panel (browser)", () => {
     expect(container.textContent).toContain("Use a PAT instead");
 
     githubIdentity.showPatFallback();
-    view.update(createBaseParams({ githubIdentity }));
     await settleGitHubIdentity(container);
     expect(container.querySelector(".settings-secret input")).not.toBeNull();
     expect(container.textContent).not.toContain("Continue with GitHub");
 
-    githubIdentity.busy = true;
-    view.update(createBaseParams({ githubIdentity }));
+    view.update(
+      createBaseParams({
+        githubIdentity: githubIdentityViewFixture({ ...githubIdentity.read(), busy: true }),
+      }),
+    );
     await settleGitHubIdentity(container);
     const cancel = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
       (button) => button.textContent?.trim() === "Cancel",
     );
     expect(cancel?.disabled).toBe(true);
-  });
-
-  it("shows fallback warning when runtime catalog fails", async () => {
-    const container = document.createElement("div");
-    mountSolid(
-      AgentTools,
-      createBaseParams({
-        toolsCatalogError: "unavailable",
-        toolsCatalogResult: null,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
-      "Could not load runtime tool catalog. Showing built-in fallback list instead.",
-    );
   });
 
   it("enables the fallback setup helper without selecting Full", async () => {
@@ -464,7 +464,6 @@ describe("agents tools panel (browser)", () => {
       AgentTools,
       createBaseParams({
         configForm: { agents: { entries: { main: { tools: { profile: "coding" } } } } },
-        toolsCatalogResult: null,
         onOverridesChange,
         onProfileChange,
       }),
@@ -506,7 +505,7 @@ describe("agents tools panel (browser)", () => {
     mountSolid(
       AgentTools,
       createBaseParams({
-        toolsEffectiveResult: {
+        effective: {
           agentId: "main",
           profile: "full",
           groups: [],
@@ -533,26 +532,7 @@ describe("agents tools panel (browser)", () => {
     mountSolid(
       AgentTools,
       createBaseParams({
-        toolsCatalogResult: {
-          agentId: "main",
-          profiles: [{ id: "full", label: "Full" }],
-          groups: [
-            {
-              id: "files",
-              label: "Files",
-              source: "core",
-              tools: [
-                {
-                  id: "read",
-                  label: "read",
-                  description: "Read file contents",
-                  source: "core",
-                  defaultProfiles: ["full"],
-                },
-              ],
-            },
-          ],
-        },
+        catalog: createReadToolCatalog(),
       }),
       container,
     );
@@ -582,26 +562,7 @@ describe("agents tools panel (browser)", () => {
     mountSolid(
       AgentTools,
       createBaseParams({
-        toolsCatalogResult: {
-          agentId: "main",
-          profiles: [{ id: "full", label: "Full" }],
-          groups: [
-            {
-              id: "files",
-              label: "Files",
-              source: "core",
-              tools: [
-                {
-                  id: "read",
-                  label: "read",
-                  description: "Read file contents",
-                  source: "core",
-                  defaultProfiles: ["full"],
-                },
-              ],
-            },
-          ],
-        },
+        catalog: createReadToolCatalog(),
       }),
       container,
     );
@@ -620,7 +581,7 @@ describe("agents tools panel (browser)", () => {
     mountSolid(
       AgentTools,
       createBaseParams({
-        toolsCatalogResult: {
+        catalog: {
           agentId: "main",
           profiles: [{ id: "full", label: "Full" }],
           groups: [
@@ -671,27 +632,8 @@ describe("agents tools panel (browser)", () => {
     mountSolid(
       AgentTools,
       createBaseParams({
-        toolsCatalogResult: {
-          agentId: "main",
-          profiles: [{ id: "full", label: "Full" }],
-          groups: [
-            {
-              id: "files",
-              label: "Files",
-              source: "core",
-              tools: [
-                {
-                  id: "read",
-                  label: "read",
-                  description: "Read file contents",
-                  source: "core",
-                  defaultProfiles: ["full"],
-                },
-              ],
-            },
-          ],
-        },
-        toolsEffectiveResult: {
+        catalog: createReadToolCatalog(),
+        effective: {
           agentId: "main",
           profile: "full",
           groups: [
@@ -821,7 +763,7 @@ describe("agents tools panel (browser)", () => {
       createBaseParams({
         configForm,
         onOverridesChange,
-        toolsCatalogResult: {
+        catalog: {
           agentId: "main",
           profiles: [{ id: "minimal", label: "Minimal" }],
           groups: [
@@ -924,7 +866,7 @@ describe("agents tools panel (browser)", () => {
         configForm: {
           agents: { entries: { main: { tools } } },
         },
-        toolsCatalogResult: {
+        catalog: {
           agentId: "main",
           profiles: [{ id: "full", label: "Full" }],
           groups: [

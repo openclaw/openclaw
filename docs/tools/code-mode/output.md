@@ -18,8 +18,8 @@ For a tool made with `defineToolPlugin`, declare the schema beside
 `parameters`:
 
 ```typescript
-import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { Type } from "typebox";
 
 const Shipment = Type.Object(
   {
@@ -50,10 +50,16 @@ For `api.registerTool(...)` or a factory tool, put the same `outputSchema`
 property on the returned `AnyAgentTool` object.
 
 Current built-in contracts include `agents_list`, `agents_wait`, `apply_patch`,
-`automations`, `conversations_list`, `conversations_send`, `conversations_turn`, `edit`,
+`automations`, `browser`, `conversations_list`, `conversations_send`, `conversations_turn`, `edit`,
 `openclaw`, `process`, `read`, `screen`,
 `sessions_history`, `sessions_list`, `sessions_search`, `sessions_send`,
 `session_status`, `suggest_task`, `terminal`, `web_fetch`, and `web_search`.
+Browser snapshot and text observations expose a bounded `text` string in the
+structured result, including the untrusted browser-content wrapper. This makes
+page prose and snapshot references available in guest cells without a separate
+evaluate call. Preserve the wrapper when returning page content to the model;
+`query`, `selector`, and `maxChars` narrow reads before wrapping.
+
 `automations` declares scheduler status, paginated job summaries, full jobs,
 run history, and action outcomes. A successful removal can include
 `sessionCleanup: "pending"` when an active run still owns its session. The job is
@@ -129,6 +135,11 @@ The contract rules are strict:
   `details` after normal tool hooks and before a catalog call returns. An
   invalid schema cannot run the tool; a mismatch fails without printing the
   value.
+- Host-owned execution refusals are outside the tool's output contract. A
+  turn-authority gate returns guidance with `gated: true` and a `message` in
+  Code Mode, without running the tool or throwing a call error. Policy blocks
+  retain their existing call-error behavior for tools with declared outputs.
+  Tool-authored lookalike fields do not bypass output validation.
 - Compact hints follow fixed rules and size limits. Handle `describe()` exposes
   the full trusted schema when the compact hint is insufficient.
 - Installed plugin code is already trusted local code. Remote MCP and client

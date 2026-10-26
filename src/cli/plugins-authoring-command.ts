@@ -2,12 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
-import {
-  filterStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { root } from "../infra/fs-safe.js";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
-import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
+import { getToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
+import { loadPluginControlUiDeclaration } from "../plugins/control-ui-build-manifest.js";
 import {
   loadPluginManifest,
   PLUGIN_MANIFEST_FILENAME,
@@ -15,14 +13,21 @@ import {
 } from "../plugins/manifest.js";
 import { unwrapDefaultModuleExport } from "../plugins/module-export.js";
 import { controlUiSource } from "../plugins/package-manifest.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
-import { isRecord, shortenHomeInString } from "../utils.js";
+import { shortenHomeInString } from "../utils.js";
 import { VERSION } from "../version.js";
 import { formatCliOperatorError } from "./failure-output.js";
 import { readPluginAuthoringJson as readJsonFile } from "./plugins-authoring-json.js";
+import {
+  buildToolPluginManifest,
+  buildToolPluginPackageManifest,
+  createConfigSchema,
+  validateToolPluginProject,
+} from "./plugins-authoring-metadata.js";
 import { buildPluginControlUi, writePluginBuildManifest } from "./plugins-control-ui-build.js";
 import { writeFeaturePluginScaffold } from "./plugins-feature-scaffold.js";
 
@@ -127,129 +132,6 @@ export async function loadToolPlugin(params: { rootDir: string; entryPath: strin
   return { entry, metadata };
 }
 
-export function buildToolPluginManifest(params: {
-  metadata: ToolPluginMetadata;
-  packageManifest: JsonObject;
-  existingManifest?: JsonObject;
-}): JsonObject {
-  const toolMetadata = buildToolPluginToolMetadata(params.metadata, params.existingManifest);
-  const existingContracts = isRecord(params.existingManifest?.contracts)
-    ? params.existingManifest.contracts
-    : {};
-  const {
-    contracts: _existingContracts,
-    toolMetadata: _existingToolMetadata,
-    ...existingManifestFields
-  } = params.existingManifest ?? {};
-  const manifest: JsonObject = {
-    ...existingManifestFields,
-    id: params.metadata.id,
-    name: params.metadata.name,
-    description: params.metadata.description,
-    version:
-      typeof params.packageManifest.version === "string" ? params.packageManifest.version : "0.0.0",
-    configSchema: params.metadata.configSchema,
-    activation: params.metadata.activation,
-    contracts: {
-      ...existingContracts,
-      tools: params.metadata.tools.map((tool) => tool.name),
-    },
-    ...(toolMetadata ? { toolMetadata } : {}),
-  };
-  // Runtime schema options can contain undefined fields that the manifest writer drops.
-  const serialized = JSON.stringify(manifest);
-  return JSON.parse(serialized) as JsonObject;
-}
-
-function buildToolPluginToolMetadata(
-  metadata: ToolPluginMetadata,
-  existingManifest: JsonObject | undefined,
-): Record<string, unknown> | undefined {
-  const existingToolMetadata = isRecord(existingManifest?.toolMetadata)
-    ? existingManifest.toolMetadata
-    : {};
-  const nextEntries = metadata.tools
-    .map((tool) => {
-      const existingValue = existingToolMetadata[tool.name];
-      const existing = isRecord(existingValue) ? { ...existingValue } : {};
-      if (tool.optional) {
-        existing.optional = true;
-      } else {
-        delete existing.optional;
-      }
-      return [tool.name, existing] as const;
-    })
-    .filter(([, value]) => Object.keys(value).length > 0);
-  return nextEntries.length > 0 ? Object.fromEntries(nextEntries) : undefined;
-}
-
-export function buildToolPluginPackageManifest(params: {
-  packageManifest: JsonObject;
-  entry: string;
-}): JsonObject {
-  const openclaw = isRecord(params.packageManifest.openclaw) ? params.packageManifest.openclaw : {};
-  const existingExtensions = filterStringEntries(openclaw.extensions);
-  const extensions = uniqueStrings([...existingExtensions, params.entry]);
-  return {
-    ...params.packageManifest,
-    openclaw: {
-      ...openclaw,
-      extensions,
-    },
-  };
-}
-
-export function validateToolPluginProject(params: {
-  metadata: ToolPluginMetadata;
-  manifest: JsonObject;
-  packageManifest: JsonObject;
-  entry: string;
-}): string[] {
-  const errors: string[] = [];
-  const expectedManifest = buildToolPluginManifest({
-    metadata: params.metadata,
-    packageManifest: params.packageManifest,
-    existingManifest: params.manifest,
-  });
-  if (!jsonSchemaValuesEqual(params.manifest, expectedManifest)) {
-    errors.push("openclaw.plugin.json generated metadata is stale. Run openclaw plugins build.");
-  }
-  if (params.manifest.id !== params.metadata.id) {
-    errors.push(
-      `openclaw.plugin.json id (${String(params.manifest.id)}) must match entry id (${params.metadata.id})`,
-    );
-  }
-  if (!params.manifest.configSchema || typeof params.manifest.configSchema !== "object") {
-    errors.push("openclaw.plugin.json must include object configSchema");
-  }
-  const manifestContracts = params.manifest.contracts as { tools?: unknown } | undefined;
-  const manifestTools = filterStringEntries(manifestContracts?.tools);
-  const metadataTools = params.metadata.tools.map((tool) => tool.name);
-  const missing = metadataTools.filter((tool) => !manifestTools.includes(tool));
-  const extra = manifestTools.filter((tool) => !metadataTools.includes(tool));
-  if (missing.length > 0) {
-    errors.push(`openclaw.plugin.json contracts.tools is missing: ${missing.join(", ")}`);
-  }
-  if (extra.length > 0) {
-    errors.push(
-      `openclaw.plugin.json contracts.tools has no matching defineToolPlugin tool: ${extra.join(
-        ", ",
-      )}`,
-    );
-  }
-  const extensionResolution = resolvePackageExtensionEntries(params.packageManifest);
-  if (extensionResolution.status !== "ok") {
-    errors.push(
-      extensionResolution.status === "missing" || extensionResolution.status === "empty"
-        ? "package.json must include openclaw.extensions"
-        : extensionResolution.error,
-    );
-  } else if (!extensionResolution.entries.includes(params.entry)) {
-    errors.push(`package.json openclaw.extensions must include ${params.entry}`);
-  }
-  return errors;
-}
-
 export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise<void> {
   const rootDir = path.resolve(opts.root ?? process.cwd());
   const entryPath = resolveEntryPath(rootDir, opts.entry);
@@ -279,7 +161,18 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
 
   if (opts.check) {
     const currentPackage = readJsonFile(packagePath);
+    const currentControlUi = withPluginCache(createPluginCache(), () =>
+      loadPluginControlUiDeclaration({
+        rootDir,
+        controlUi: currentManifest?.controlUi,
+        channels: currentManifest?.channels,
+        rejectHardlinks: false,
+      }),
+    );
     if (
+      (browserSource &&
+        (!currentControlUi.ok ||
+          !jsonSchemaValuesEqual(currentControlUi.value, manifest.controlUi))) ||
       !jsonSchemaValuesEqual(currentManifest, manifest) ||
       !jsonSchemaValuesEqual(currentPackage, nextPackageManifest)
     ) {
@@ -299,6 +192,13 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
     syncTempFile: true,
     syncParentDir: true,
   });
+  // Retire the derived pointer before publishing the authored declaration;
+  // failed retirement must leave the previous authored pointer and assets usable.
+  if (browserSource) {
+    await (
+      await root(realRootDir, { symlinks: "reject" })
+    ).remove(`dist/${PLUGIN_MANIFEST_FILENAME}`, { force: true });
+  }
   await writePluginBuildManifest(realRootDir, manifest);
   defaultRuntime.log(`Wrote ${formatOutputPath(manifestPath, PLUGIN_MANIFEST_FILENAME)}`);
   defaultRuntime.log(`Updated ${formatOutputPath(packagePath, "package.json")}`);
@@ -311,7 +211,9 @@ export async function collectPluginsValidationResult(
   const entryPath = resolveEntryPath(rootDir, opts.entry);
   const entryRelative = normalizeRelativePath(rootDir, entryPath);
   const packageManifest = readPackageManifest(rootDir);
-  const manifestResult = loadPluginManifest(rootDir, false);
+  const manifestResult = withPluginCache(createPluginCache(), () =>
+    loadPluginManifest(rootDir, false),
+  );
   if (!manifestResult.ok) {
     return { valid: false, errors: [manifestResult.error] };
   }
@@ -326,7 +228,10 @@ export async function collectPluginsValidationResult(
   const browserSource = controlUiSource(packageManifest);
   if (browserSource) {
     const declaration = await buildPluginControlUi({ rootDir, source: browserSource, check: true });
-    if (!jsonSchemaValuesEqual(manifest.controlUi, declaration)) {
+    if (
+      !jsonSchemaValuesEqual(manifest.controlUi, declaration) ||
+      !jsonSchemaValuesEqual(manifestResult.manifest.controlUi, declaration)
+    ) {
       errors.push("Control UI manifest is stale. Run openclaw plugins build.");
     }
   }
@@ -368,19 +273,6 @@ export async function runPluginsValidateCommand(opts: PluginsValidateOptions): P
   defaultRuntime.log(`Plugin ${result.pluginId} is valid.`);
 }
 
-function resolveScaffoldType(input: string | undefined) {
-  const type = input ?? "tool";
-  const supported = SUPPORTED_PLUGIN_SCAFFOLD_TYPES.find((candidate) => candidate === type);
-  if (supported) {
-    return supported;
-  }
-  throw new Error(
-    `Unsupported plugin scaffold type "${type}". Supported types: ${SUPPORTED_PLUGIN_SCAFFOLD_TYPES.join(
-      ", ",
-    )}.`,
-  );
-}
-
 function normalizeRequiredPluginText(input: string, label: string): string {
   const value = input.trim();
   if (!value) {
@@ -389,206 +281,112 @@ function normalizeRequiredPluginText(input: string, label: string): string {
   return value;
 }
 
-function titleFromId(id: string): string {
-  return id
-    .split(/[-_]/u)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function upperSnakeFromId(id: string): string {
-  return id
-    .replace(/[^a-z0-9]+/giu, "_")
-    .replace(/^_+|_+$/gu, "")
-    .toUpperCase();
-}
-
-function lowerCamelFromId(id: string): string {
-  const parts = id.split(/-+/u).filter(Boolean);
-  return parts
-    .map((part, index) => (index === 0 ? part : `${part.charAt(0).toUpperCase()}${part.slice(1)}`))
-    .join("");
-}
-
-function createConfigSchema() {
-  return {
-    type: "object",
-    additionalProperties: false,
-    properties: {},
-  };
-}
-
 const createPluginPackageMetadata = (pluginApi: string) => ({
   extensions: ["./dist/index.js"],
   compat: { pluginApi },
   build: { openclawVersion: VERSION },
 });
 
-function writeScaffoldVitestConfig(rootDir: string): void {
-  fs.writeFileSync(
-    path.join(rootDir, "vitest.config.ts"),
-    `import { defineConfig } from "vitest/config";
+export async function runPluginsInitCommand(
+  idInput: string,
+  opts: PluginsInitOptions,
+): Promise<void> {
+  const id = normalizeRequiredPluginText(idInput, "id");
+  const name = opts.name
+    ? normalizeRequiredPluginText(opts.name, "display name")
+    : id
+        .split(/[-_]/u)
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ");
+  const requestedType = opts.type ?? "tool";
+  const type = SUPPORTED_PLUGIN_SCAFFOLD_TYPES.find((candidate) => candidate === requestedType);
+  if (!type) {
+    throw new Error(
+      `Unsupported plugin scaffold type "${requestedType}". Supported types: ${SUPPORTED_PLUGIN_SCAFFOLD_TYPES.join(
+        ", ",
+      )}.`,
+    );
+  }
+  const rootDir = path.resolve(opts.directory ?? id);
+  if (opts.force !== true && fs.existsSync(rootDir)) {
+    throw new Error(`Refusing to overwrite existing path: ${rootDir}`);
+  }
+  fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
 
-export default defineConfig({
-  test: {
-    environment: "node",
-    include: ["src/**/*.test.ts"],
-  },
-});
-`,
-  );
-}
-
-function writeToolPluginScaffold(params: { rootDir: string; id: string; name: string }): void {
-  const packageManifest = {
-    name: `openclaw-plugin-${params.id}`,
-    version: "0.1.0",
-    type: "module",
-    private: true,
-    scripts: {
-      build: "tsc -p tsconfig.json",
-      "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
-      "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js",
-      test: "vitest run --config ./vitest.config.ts",
-    },
-    files: ["dist", "openclaw.plugin.json", "README.md"],
-    peerDependencies: {
-      openclaw: TOOL_PLUGIN_API_RANGE,
-    },
-    dependencies: {
-      typebox: "^1.1.38",
-    },
-    devDependencies: {
-      openclaw: "latest",
-      typescript: "7.0.2",
-      vitest: "^3.2.0",
-    },
-    openclaw: createPluginPackageMetadata(TOOL_PLUGIN_API_RANGE),
-  };
-  const idLiteral = JSON.stringify(params.id);
-  const description = `Add ${params.name} tools to OpenClaw.`;
-  const indexSource = `import { Type } from "typebox";
-import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
-
-export default defineToolPlugin({
-  id: ${idLiteral},
-  name: ${JSON.stringify(params.name)},
-  description: ${JSON.stringify(description)},
-  tools: (tool) => [
-    tool({
-      name: "echo",
-      description: "Echo input text.",
-      parameters: Type.Object({
-        input: Type.String({ description: "Text to echo." }),
-      }),
-      execute: async ({ input }) => ({ input }),
-    }),
-  ],
-});
-`;
-  const testSource = `import { describe, expect, it } from "vitest";
-import entry from "./index.js";
-import { getToolPluginMetadata } from "openclaw/plugin-sdk/tool-plugin";
-
-describe(${idLiteral}, () => {
-  it("declares tool metadata", () => {
-    expect(getToolPluginMetadata(entry)?.tools.map((tool) => tool.name)).toEqual(["echo"]);
-  });
-});
-`;
-  const readmeSource = `# ${params.name}
-
-Simple OpenClaw tool plugin.
-
-## Build
-
-\`\`\`bash
-npm install
-npm run plugin:build
-npm run plugin:validate
-npm test
-\`\`\`
-`;
-
-  writeJsonFile(path.join(params.rootDir, "package.json"), packageManifest);
-  fs.writeFileSync(path.join(params.rootDir, "src/index.ts"), indexSource);
-  fs.writeFileSync(path.join(params.rootDir, "src/index.test.ts"), testSource);
-  fs.writeFileSync(path.join(params.rootDir, "README.md"), readmeSource);
-  writeJsonFile(path.join(params.rootDir, PLUGIN_MANIFEST_FILENAME), {
-    id: params.id,
-    name: params.name,
-    description,
-    version: packageManifest.version,
-    configSchema: createConfigSchema(),
-    activation: { onStartup: true },
-    contracts: { tools: ["echo"] },
-  });
-}
-
-function writeProviderPluginScaffold(params: { rootDir: string; id: string; name: string }): void {
-  const packageName = `openclaw-plugin-${params.id}`;
-  const envVar = `${upperSnakeFromId(params.id)}_API_KEY`;
-  const optionKey = `${lowerCamelFromId(params.id)}ApiKey`;
-  const flagName = `--${params.id}-api-key`;
-  const defaultModelId = "example-chat";
-  const defaultModelRef = `${params.id}/${defaultModelId}`;
-  const description = `Add ${params.name} models to OpenClaw.`;
-  const packageManifest = {
-    name: packageName,
-    version: "0.1.0",
-    description: `OpenClaw provider plugin for ${params.name}.`,
-    type: "module",
-    scripts: {
-      build: "tsc -p tsconfig.json",
-      test: "vitest run --config ./vitest.config.ts",
-      validate: "npm run build && clawhub package validate . --out .clawhub-validation",
-    },
-    files: ["dist", "openclaw.plugin.json", "README.md"],
-    peerDependencies: {
-      openclaw: `>=${VERSION}`,
-    },
-    peerDependenciesMeta: {
-      openclaw: {
-        optional: true,
+  if (type === "feature") {
+    writeFeaturePluginScaffold({ rootDir, id, name });
+  } else if (type === "provider") {
+    const packageName = `openclaw-plugin-${id}`;
+    const envVar = `${id
+      .replace(/[^a-z0-9]+/giu, "_")
+      .replace(/^_+|_+$/gu, "")
+      .toUpperCase()}_API_KEY`;
+    const parts = id.split(/-+/u).filter(Boolean);
+    const optionKey = `${parts
+      .map((part, index) =>
+        index === 0 ? part : `${part.charAt(0).toUpperCase()}${part.slice(1)}`,
+      )
+      .join("")}ApiKey`;
+    const flagName = `--${id}-api-key`;
+    const defaultModelId = "example-chat";
+    const defaultModelRef = `${id}/${defaultModelId}`;
+    const description = `Add ${name} models to OpenClaw.`;
+    const packageManifest = {
+      name: packageName,
+      version: "0.1.0",
+      description: `OpenClaw provider plugin for ${name}.`,
+      type: "module",
+      scripts: {
+        build: "tsc -p tsconfig.json",
+        test: "vitest run --config ./vitest.config.ts",
+        validate: "npm run build && clawhub package validate . --out .clawhub-validation",
       },
-    },
-    devDependencies: {
-      clawhub: "latest",
-      openclaw: "latest",
-      typescript: "7.0.2",
-      vitest: "^3.2.0",
-    },
-    openclaw: {
-      ...createPluginPackageMetadata(`>=${VERSION}`),
-      install: {
-        clawhubSpec: `clawhub:${packageName}`,
-        defaultChoice: "clawhub",
-        minHostVersion: `>=${VERSION}`,
+      files: ["dist", "openclaw.plugin.json", "README.md"],
+      peerDependencies: {
+        openclaw: `>=${VERSION}`,
       },
-      release: {
-        publishToClawHub: true,
-      },
-    },
-    pluginInspector: {
-      version: 1,
-      plugin: {
-        id: params.id,
-        priority: "high",
-        seams: ["plugin-runtime"],
-        sourceRoot: ".",
-        expect: {
-          registrations: ["registerProvider"],
+      peerDependenciesMeta: {
+        openclaw: {
+          optional: true,
         },
       },
-    },
-  };
-  const idLiteral = JSON.stringify(params.id);
-  const nameLiteral = JSON.stringify(params.name);
-  const envVarLiteral = JSON.stringify(envVar);
-  const defaultModelIdLiteral = JSON.stringify(defaultModelId);
-  const defaultModelRefLiteral = JSON.stringify(defaultModelRef);
-  const indexSource = `import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+      devDependencies: {
+        clawhub: "latest",
+        openclaw: "latest",
+        typescript: "7.0.2",
+        vitest: "^3.2.0",
+      },
+      openclaw: {
+        ...createPluginPackageMetadata(`>=${VERSION}`),
+        install: {
+          clawhubSpec: `clawhub:${packageName}`,
+          defaultChoice: "clawhub",
+          minHostVersion: `>=${VERSION}`,
+        },
+        release: {
+          publishToClawHub: true,
+        },
+      },
+      pluginInspector: {
+        version: 1,
+        plugin: {
+          id,
+          priority: "high",
+          seams: ["plugin-runtime"],
+          sourceRoot: ".",
+          expect: {
+            registrations: ["registerProvider"],
+          },
+        },
+      },
+    };
+    const idLiteral = JSON.stringify(id);
+    const nameLiteral = JSON.stringify(name);
+    const envVarLiteral = JSON.stringify(envVar);
+    const defaultModelIdLiteral = JSON.stringify(defaultModelId);
+    const defaultModelRefLiteral = JSON.stringify(defaultModelRef);
+    const indexSource = `import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 
 const PLUGIN_ID = ${idLiteral};
@@ -604,22 +402,22 @@ export default definePluginEntry({
     api.registerProvider({
       id: PROVIDER_ID,
       label: ${nameLiteral},
-      docsPath: "/providers/${params.id}",
+      docsPath: "/providers/${id}",
       envVars: [${envVarLiteral}],
       auth: [
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
           methodId: "api-key",
-          label: ${JSON.stringify(`${params.name} API key`)},
+          label: ${JSON.stringify(`${name} API key`)},
           hint: "OpenAI-compatible API endpoint",
           optionKey: ${JSON.stringify(optionKey)},
           flagName: ${JSON.stringify(flagName)},
           envVar: ${envVarLiteral},
-          promptMessage: ${JSON.stringify(`Enter ${params.name} API key`)},
+          promptMessage: ${JSON.stringify(`Enter ${name} API key`)},
           defaultModel: DEFAULT_MODEL_REF,
           expectedProviders: [PROVIDER_ID],
           noteTitle: ${nameLiteral},
-          noteMessage: ${JSON.stringify(`Replace https://api.example.com/v1 with your ${params.name} API base URL.`)},
+          noteMessage: ${JSON.stringify(`Replace https://api.example.com/v1 with your ${name} API base URL.`)},
         }),
       ],
       catalog: {
@@ -661,7 +459,7 @@ export default definePluginEntry({
   },
 });
 `;
-  const testSource = `import { describe, expect, it } from "vitest";
+    const testSource = `import { describe, expect, it } from "vitest";
 import type { OpenClawPluginApi, ProviderPlugin } from "openclaw/plugin-sdk/plugin-entry";
 import entry from "./index.js";
 
@@ -689,8 +487,8 @@ describe(${idLiteral}, () => {
     ]);
     for (const [apiKey, configuredId, baseUrl, expectedBaseUrl] of [
       [undefined, ${idLiteral}, "https://configured.example/v1", null],
-      ["fixture-api-key", ${JSON.stringify(`${params.id}-unrelated`)}, "https://unrelated.example/v1", "https://api.example.com/v1"],
-      ["fixture-api-key", ${JSON.stringify(` ${params.id.toUpperCase()} `)}, " https://configured.example/v1 ", "https://configured.example/v1"],
+      ["fixture-api-key", ${JSON.stringify(`${id}-unrelated`)}, "https://unrelated.example/v1", "https://api.example.com/v1"],
+      ["fixture-api-key", ${JSON.stringify(` ${id.toUpperCase()} `)}, " https://configured.example/v1 ", "https://configured.example/v1"],
       ["fixture-api-key", ${idLiteral}, " ", "https://api.example.com/v1"],
     ] as const) {
       const result = await provider.catalog.run({
@@ -723,9 +521,9 @@ describe(${idLiteral}, () => {
   });
 });
 `;
-  const readmeSource = `# ${params.name}
+    const readmeSource = `# ${name}
 
-OpenClaw provider plugin for ${params.name}.
+OpenClaw provider plugin for ${name}.
 
 ## Commands
 
@@ -767,7 +565,7 @@ npm exec clawhub -- package trusted-publisher set ${packageName} \\
 
 Future release publishes can run through the manually dispatched \`.github/workflows/clawhub-publish.yml\` action without a long-lived ClawHub token. Run it first with \`dry_run=true\`, then rerun with \`dry_run=false\` after the preview is clean.
 `;
-  const workflowSource = `name: ClawHub Publish
+    const workflowSource = `name: ClawHub Publish
 
 on:
   workflow_dispatch:
@@ -789,53 +587,113 @@ jobs:
       dry_run: \${{ inputs.dry_run }}
 `;
 
-  writeJsonFile(path.join(params.rootDir, "package.json"), packageManifest);
-  fs.writeFileSync(path.join(params.rootDir, "src/index.ts"), indexSource);
-  fs.writeFileSync(path.join(params.rootDir, "src/index.test.ts"), testSource);
-  fs.writeFileSync(path.join(params.rootDir, "README.md"), readmeSource);
-  fs.mkdirSync(path.join(params.rootDir, ".github/workflows"), { recursive: true });
-  fs.writeFileSync(
-    path.join(params.rootDir, ".github/workflows/clawhub-publish.yml"),
-    workflowSource,
-  );
-  writeJsonFile(path.join(params.rootDir, PLUGIN_MANIFEST_FILENAME), {
-    id: params.id,
-    name: params.name,
-    description,
-    version: packageManifest.version,
-    providers: [params.id],
-    setup: {
-      providers: [
-        {
-          id: params.id,
-          envVars: [envVar],
-        },
-      ],
-    },
-    configSchema: createConfigSchema(),
-    activation: { onStartup: true, providers: [params.id], capabilities: ["provider"] },
-  });
-}
-
-export async function runPluginsInitCommand(
-  idInput: string,
-  opts: PluginsInitOptions,
-): Promise<void> {
-  const id = normalizeRequiredPluginText(idInput, "id");
-  const name = opts.name ? normalizeRequiredPluginText(opts.name, "display name") : titleFromId(id);
-  const type = resolveScaffoldType(opts.type);
-  const rootDir = path.resolve(opts.directory ?? id);
-  if (opts.force !== true && fs.existsSync(rootDir)) {
-    throw new Error(`Refusing to overwrite existing path: ${rootDir}`);
-  }
-  fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
-
-  if (type === "feature") {
-    writeFeaturePluginScaffold({ rootDir, id, name });
-  } else if (type === "provider") {
-    writeProviderPluginScaffold({ rootDir, id, name });
+    writeJsonFile(path.join(rootDir, "package.json"), packageManifest);
+    fs.writeFileSync(path.join(rootDir, "src/index.ts"), indexSource);
+    fs.writeFileSync(path.join(rootDir, "src/index.test.ts"), testSource);
+    fs.writeFileSync(path.join(rootDir, "README.md"), readmeSource);
+    fs.mkdirSync(path.join(rootDir, ".github/workflows"), { recursive: true });
+    fs.writeFileSync(path.join(rootDir, ".github/workflows/clawhub-publish.yml"), workflowSource);
+    writeJsonFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME), {
+      id,
+      name,
+      description,
+      version: packageManifest.version,
+      providers: [id],
+      setup: {
+        providers: [
+          {
+            id,
+            envVars: [envVar],
+          },
+        ],
+      },
+      configSchema: createConfigSchema(),
+      activation: { onStartup: true, providers: [id], capabilities: ["provider"] },
+    });
   } else {
-    writeToolPluginScaffold({ rootDir, id, name });
+    const packageManifest = {
+      name: `openclaw-plugin-${id}`,
+      version: "0.1.0",
+      type: "module",
+      private: true,
+      scripts: {
+        build: "tsc -p tsconfig.json",
+        "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
+        "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js",
+        test: "vitest run --config ./vitest.config.ts",
+      },
+      files: ["dist", "openclaw.plugin.json", "README.md"],
+      peerDependencies: {
+        openclaw: TOOL_PLUGIN_API_RANGE,
+      },
+      dependencies: {
+        typebox: "^1.1.38",
+      },
+      devDependencies: {
+        openclaw: "latest",
+        typescript: "7.0.2",
+        vitest: "^3.2.0",
+      },
+      openclaw: createPluginPackageMetadata(TOOL_PLUGIN_API_RANGE),
+    };
+    const idLiteral = JSON.stringify(id);
+    const description = `Add ${name} tools to OpenClaw.`;
+    const indexSource = `import { Type } from "typebox";
+import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+
+export default defineToolPlugin({
+  id: ${idLiteral},
+  name: ${JSON.stringify(name)},
+  description: ${JSON.stringify(description)},
+  tools: (tool) => [
+    tool({
+      name: "echo",
+      description: "Echo input text.",
+      parameters: Type.Object({
+        input: Type.String({ description: "Text to echo." }),
+      }),
+      execute: async ({ input }) => ({ input }),
+    }),
+  ],
+});
+`;
+    const testSource = `import { describe, expect, it } from "vitest";
+import entry from "./index.js";
+import { getToolPluginMetadata } from "openclaw/plugin-sdk/tool-plugin";
+
+describe(${idLiteral}, () => {
+  it("declares tool metadata", () => {
+    expect(getToolPluginMetadata(entry)?.tools.map((tool) => tool.name)).toEqual(["echo"]);
+  });
+});
+`;
+    const readmeSource = `# ${name}
+
+Simple OpenClaw tool plugin.
+
+## Build
+
+\`\`\`bash
+npm install
+npm run plugin:build
+npm run plugin:validate
+npm test
+\`\`\`
+`;
+
+    writeJsonFile(path.join(rootDir, "package.json"), packageManifest);
+    fs.writeFileSync(path.join(rootDir, "src/index.ts"), indexSource);
+    fs.writeFileSync(path.join(rootDir, "src/index.test.ts"), testSource);
+    fs.writeFileSync(path.join(rootDir, "README.md"), readmeSource);
+    writeJsonFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME), {
+      id,
+      name,
+      description,
+      version: packageManifest.version,
+      configSchema: createConfigSchema(),
+      activation: { onStartup: true },
+      contracts: { tools: ["echo"] },
+    });
   }
   writeJsonFile(path.join(rootDir, "tsconfig.json"), {
     compilerOptions: {
@@ -851,8 +709,18 @@ export async function runPluginsInitCommand(
     include: type === "feature" ? ["src/**/*.ts"] : ["src/index.ts"],
   });
   if (type !== "feature") {
-    writeScaffoldVitestConfig(rootDir);
+    fs.writeFileSync(
+      path.join(rootDir, "vitest.config.ts"),
+      `import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.ts"],
+  },
+});
+`,
+    );
   }
   defaultRuntime.log(`Created ${formatOutputPath(rootDir, ".")}`);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

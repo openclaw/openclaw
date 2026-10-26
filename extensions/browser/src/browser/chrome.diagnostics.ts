@@ -37,7 +37,6 @@ export type ChromeCdpDiagnostic =
       cdpUrl: string;
       wsUrl: string;
       browser?: string;
-      userAgent?: string;
       elapsedMs: number;
     }
   | {
@@ -148,14 +147,7 @@ function readObjectString(value: unknown, key: string): string | undefined {
 
 function chromeVersionFromCdpResult(result: unknown): ChromeVersion | undefined {
   const browser = readObjectString(result, "Browser") ?? readObjectString(result, "product");
-  const userAgent = readObjectString(result, "User-Agent") ?? readObjectString(result, "userAgent");
-  if (!browser && !userAgent) {
-    return undefined;
-  }
-  return {
-    Browser: browser,
-    "User-Agent": userAgent,
-  };
+  return browser ? { Browser: browser } : undefined;
 }
 
 async function diagnoseCdpHealthCommand(
@@ -253,7 +245,10 @@ export function formatChromeCdpDiagnostic(diagnostic: ChromeCdpDiagnostic): stri
   }
   const websocket = redactedWsUrl ? `; websocket=${redactedWsUrl}` : "";
   const wslPortproxyHint =
-    diagnostic.code === "http_unreachable" && isLikelyEmptyHttpReply(diagnostic.message)
+    diagnostic.code === "http_unreachable" &&
+    /empty reply|other side closed|socket closed|connection reset|econnreset|terminated before response/i.test(
+      diagnostic.message,
+    )
       ? WSL_EMPTY_REPLY_PORTPROXY_HINT
       : "";
   return `CDP diagnostic: ${diagnostic.code} after ${diagnostic.elapsedMs}ms; cdp=${redactedCdpUrl}${websocket}; ${diagnostic.message}.${wslPortproxyHint}`;
@@ -268,12 +263,6 @@ const WSL_EMPTY_REPLY_PORTPROXY_HINT =
   " 127.0.0.1 and falls back to [::1] only when the IPv4 bind fails. If svchost/iphlpsvc owns" +
   " 127.0.0.1:9222, remove the 127.0.0.1:9222 -> 127.0.0.1:9222 self-loop; if chrome.exe" +
   " listens only on [::1], use v4tov6 with connectaddress=::1 for the WSL2-reachable listener.";
-
-function isLikelyEmptyHttpReply(message: string): boolean {
-  return /empty reply|other side closed|socket closed|connection reset|econnreset|terminated before response/i.test(
-    message,
-  );
-}
 
 export async function diagnoseChromeCdp(
   cdpUrl: string,
@@ -309,7 +298,6 @@ export async function diagnoseChromeCdp(
           cdpUrl,
           wsUrl,
           browser: version?.Browser ?? health.version?.Browser,
-          userAgent: version?.["User-Agent"] ?? health.version?.["User-Agent"],
           elapsedMs: elapsedSince(startedAt),
         }
       : failure(health.code, health.message, wsUrl);

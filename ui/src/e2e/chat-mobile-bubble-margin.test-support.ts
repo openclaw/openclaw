@@ -7,33 +7,35 @@ const marginImageSvg =
   '<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="960" height="540" fill="teal"/><circle cx="480" cy="270" r="160" fill="gold"/></svg>';
 const imageUrl = `data:image/svg+xml,${encodeURIComponent(marginImageSvg)}`;
 const image = { type: "image", url: imageUrl, width: 960, height: 540 };
-const file = {
+const mediaAttachment = (
+  kind: string,
+  label: string,
+  mimeType: string,
+  url: string,
+  extra = {},
+) => ({
   type: "attachment",
-  attachment: {
-    kind: "document",
-    label: "release-checklist-with-a-long-file-name.txt",
-    mimeType: "text/plain",
-    url: "https://example.com/checklist.txt",
-    sizeBytes: 1024,
-  },
-};
-const video = {
-  type: "attachment",
-  attachment: {
-    kind: "video",
-    url: "https://media.example/preview.mp4",
-    mimeType: "video/mp4",
-    label: "preview.mp4",
-  },
-};
-const audio = {
-  type: "attachment",
-  attachment: {
-    kind: "audio",
-    url: "https://media.example/preview.mp3",
-    mimeType: "audio/mpeg",
-    label: "preview.mp3",
-  },
+  attachment: { kind, label, mimeType, url, ...extra },
+});
+const file = mediaAttachment(
+  "document",
+  "release-checklist-with-a-long-file-name.txt",
+  "text/plain",
+  "https://example.com/checklist.txt",
+  { sizeBytes: 1024 },
+);
+const preview = (kind: string, ext: string, mimeType: string) =>
+  mediaAttachment(kind, `preview.${ext}`, mimeType, `https://media.example/preview.${ext}`);
+const video = preview("video", "mp4", "video/mp4");
+const audio = preview("audio", "mp3", "audio/mpeg");
+const plugin = {
+  type: "clawhub",
+  kind: "plugin",
+  id: "ch_sample",
+  name: "Sample checklist plugin",
+  description: "Review and share sample release checklists with your team.",
+  official: true,
+  installed: false,
 };
 const users = ["Riley", "Colin"].map((name, index) => ({
   id: name,
@@ -54,169 +56,96 @@ const forwarded = (sourceSessionKey: string, content: unknown) =>
     }),
   ]);
 
+const surface = (
+  id: string,
+  messages: NonNullable<ControlUiMockGatewayScenario["historyMessages"]>,
+  side: string,
+  selector = ".chat-bubble",
+) => ({ id, messages, side, selector });
+const peer = (content: unknown) =>
+  message("user", content, {
+    __openclaw: { senderId: "Colin", senderIdentity: users[1]!.identity, senderName: "Colin" },
+  });
+
+const caseFor = (id: string, role: string, content: unknown, selector = ".chat-bubble") =>
+  surface(id, [message(role, content)], role === "user" ? "right" : "left", selector);
+const activity = (id: string, key: string, content: unknown = longText) =>
+  surface(id, forwarded(key, content), "left", ".chat-session-activity");
+const cardSelector = ".chat-assistant-attachment-card";
+const remoteImage = (width = 960) => `https://media.example/preview-${width}.png`;
+function remoteImageCase(width: number, attachment: boolean) {
+  const imageSize = { width, height: (width * 9) / 16 };
+  const media = { url: remoteImage(width), ...imageSize };
+  const content = attachment
+    ? mediaAttachment("image", "sample.png", "image/png", media.url, imageSize)
+    : { type: "image", ...media };
+  return {
+    ...caseFor(
+      `assistant-${attachment ? "attachment-image" : "image"}-${width}`,
+      "assistant",
+      [content],
+      ".chat-message-image",
+    ),
+    imageSize,
+  };
+}
+
 export const marginCases = [
-  {
-    id: "user-long",
-    messages: [message("user", longText)],
-    side: "right",
-    selector: ".chat-bubble",
-  },
-  {
-    id: "user-short",
-    messages: [message("user", "Ready.")],
-    side: "right",
-    selector: ".chat-bubble",
-  },
-  {
-    id: "peer-long",
-    messages: [
-      message("user", longText, {
-        __openclaw: { senderId: "Colin", senderIdentity: users[1]!.identity, senderName: "Colin" },
-      }),
-    ],
-    side: "left",
-    selector: ".chat-bubble",
-  },
-  ...["user", "assistant"].flatMap((role) =>
-    [
-      {
-        id: `${role}-file`,
-        content: [file, { type: "text", text: "Please read this checklist." }],
-        selector: ".chat-assistant-attachment-card",
-      },
-      { id: `${role}-image`, content: [image], selector: ".chat-message-image" },
-      {
-        id: `${role}-video`,
-        content: [video],
-        selector: role === "user" ? ".chat-video-preview" : ".chat-assistant-attachment-card",
-      },
-      { id: `${role}-audio`, content: [audio], selector: ".chat-assistant-attachment-card" },
-    ].map(({ id, content, selector }) => ({
-      id,
-      messages: [message(role, content)],
-      side: role === "user" ? "right" : "left",
-      selector,
-      imageSize: id === "assistant-image" ? { width: 960, height: 540 } : undefined,
-    })),
+  caseFor("user-long", "user", longText),
+  caseFor("user-short", "user", "Ready."),
+  surface("peer-long", [peer(longText)], "left"),
+  ...["user", "assistant"].flatMap((role) => [
+    caseFor(
+      `${role}-file`,
+      role,
+      [file, { type: "text", text: "Please read this checklist." }],
+      cardSelector,
+    ),
+    {
+      ...caseFor(`${role}-image`, role, [image], ".chat-message-image"),
+      imageSize: role === "assistant" ? { width: 960, height: 540 } : undefined,
+    },
+    caseFor(`${role}-video`, role, [video], role === "user" ? ".chat-video-preview" : cardSelector),
+    caseFor(`${role}-audio`, role, [audio], cardSelector),
+  ]),
+  remoteImageCase(320, false),
+  remoteImageCase(320, true),
+  remoteImageCase(960, true),
+  ...[2, 3, 5].map((count) =>
+    caseFor(
+      `user-gallery-${count}`,
+      "user",
+      Array.from({ length: count }, () => image),
+      ".chat-message-images",
+    ),
   ),
+  surface("peer-gallery", [peer([image, image, image])], "left", ".chat-message-images"),
+  caseFor("user-mixed", "user", [image, video, file, { type: "text", text: longText }]),
   ...[
-    { width: 320, height: 180, attachment: false },
-    { width: 320, height: 180, attachment: true },
-    { width: 960, height: 540, attachment: true },
-  ].map(({ width, height, attachment }) => ({
-    id: `assistant-${attachment ? "attachment-image" : "image"}-${width}`,
-    messages: [
-      message("assistant", [
-        attachment
-          ? {
-              type: "attachment",
-              attachment: {
-                kind: "image",
-                url: "https://media.example/preview.png",
-                mimeType: "image/png",
-                label: "sample.png",
-                width,
-                height,
-              },
-            }
-          : { type: "image", url: "https://media.example/preview.png", width, height },
-      ]),
-    ],
-    side: "left",
-    selector: ".chat-message-image",
-    imageSize: { width, height },
-  })),
-  ...[2, 3, 5].map((count) => ({
-    id: `user-gallery-${count}`,
-    messages: [
-      message(
-        "user",
-        Array.from({ length: count }, () => image),
+    ["forwarded", "agent:main:cron:release-review"],
+    ["other-agent", "agent:research:notes"],
+    ["subagent", "agent:main:subagent:checklist"],
+    ["legacy", "legacy-checklist"],
+  ].map(([id, key]) => activity(id!, key!)),
+  activity("forwarded-short", "agent:main:cron:release-review", "Review complete."),
+  activity("forwarded-media", "agent:research:notes", [
+    { ...image, url: remoteImage() },
+    file,
+    { type: "text", text: "The sample checklist is ready." },
+  ]),
+  caseFor("clawhub", "assistant", [plugin], ".chat-clawhub-card"),
+  {
+    ...caseFor(
+      "assistant-plain",
+      "assistant",
+      "A plain assistant response with a long line that should keep the full conversation width. ".repeat(
+        4,
       ),
-    ],
-    side: "right",
-    selector: ".chat-message-images",
-  })),
-  {
-    id: "peer-gallery",
-    messages: [
-      message("user", [image, image, image], {
-        __openclaw: { senderId: "Colin", senderIdentity: users[1]!.identity, senderName: "Colin" },
-      }),
-    ],
-    side: "left",
-    selector: ".chat-message-images",
-  },
-  {
-    id: "user-mixed",
-    messages: [message("user", [image, video, file, { type: "text", text: longText }])],
-    side: "right",
-    selector: ".chat-bubble",
-  },
-  ...[
-    "agent:main:cron:release-review",
-    "agent:research:notes",
-    "agent:main:subagent:checklist",
-    "legacy-checklist",
-  ].map((key, index) => ({
-    id: ["forwarded", "other-agent", "subagent", "legacy"][index]!,
-    messages: forwarded(key, longText),
-    side: "left",
-    selector: ".chat-session-activity",
-  })),
-  {
-    id: "forwarded-short",
-    messages: forwarded("agent:main:cron:release-review", "Review complete."),
-    side: "left",
-    selector: ".chat-session-activity",
-  },
-  {
-    id: "forwarded-media",
-    messages: forwarded("agent:research:notes", [
-      { ...image, url: "https://media.example/preview.png" },
-      file,
-      { type: "text", text: "The sample checklist is ready." },
-    ]),
-    side: "left",
-    selector: ".chat-session-activity",
-  },
-  {
-    id: "clawhub",
-    messages: [
-      message("assistant", [
-        {
-          type: "clawhub",
-          kind: "plugin",
-          id: "ch_sample",
-          official: true,
-          name: "Sample checklist plugin",
-          description: "Review and share sample release checklists with your team.",
-          installed: false,
-        },
-      ]),
-    ],
-    side: "left",
-    selector: ".chat-clawhub-card",
-  },
-  {
-    id: "assistant-plain",
-    messages: [
-      message(
-        "assistant",
-        "A plain assistant response with a long line that should keep the full conversation width. ".repeat(
-          4,
-        ),
-      ),
-    ],
-    side: "left",
-    selector: ".chat-bubble",
+    ),
     excluded: true,
   },
   {
-    id: "system-notice",
-    messages: [message("system", "The sample session is ready.")],
-    side: "left",
-    selector: ".chat-notice",
+    ...caseFor("system-notice", "system", "The sample session is ready.", ".chat-notice"),
     excluded: true,
   },
 ] as const;
@@ -230,11 +159,8 @@ export function marginScenario(testCase: MarginCase): ControlUiMockGatewayScenar
     methodResponses: {
       "plugins.catalog.get": {
         plugin: {
-          id: "ch_sample",
-          catalog: {
-            name: "Sample checklist plugin",
-            summary: "Review and share sample release checklists with your team.",
-          },
+          id: plugin.id,
+          catalog: { name: plugin.name, summary: plugin.description },
           local: { installed: false, action: "install" },
         },
       },
@@ -250,19 +176,15 @@ export async function createMarginImage(
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
-    const context = canvas.getContext("2d")!;
-    context.fillStyle = "teal";
-    context.fillRect(0, 0, width, height);
-    context.fillStyle = "gold";
-    context.beginPath();
-    context.arc(width / 2, height / 2, height * (160 / 540), 0, 2 * Math.PI);
-    context.fill();
+    canvas.getContext("2d")!.fillRect(0, 0, width, height);
     return canvas.toDataURL("image/png").split(",")[1]!;
   }, size);
   return Buffer.from(encoded, "base64");
 }
 
 export async function resizeMarginViewport(page: Page, width: number): Promise<void> {
+  // Sidebar clicks can hover media after resize; measure gutters without its 1.02 hover scale.
+  await page.mouse.move(0, 0);
   await page.setViewportSize({ width, height: 1200 });
   // Excluded cases have no mobile measurement between resizes. Await native
   // layout publication before issuing the desktop restore.
@@ -286,19 +208,23 @@ export async function resizeMarginViewport(page: Page, width: number): Promise<v
 }
 
 export async function measureMargin(page: Page, testCase: MarginCase) {
-  const target = page.locator(`.chat-thread ${testCase.selector}`).first();
+  const scope = page.locator(".chat-pane-cache__pane--active");
+  const target = scope.locator(`.chat-thread ${testCase.selector}`).first();
   await target.waitFor();
-  await page
-    .locator(".chat-thread img.chat-message-image")
-    .evaluateAll((images: HTMLImageElement[]) =>
-      Promise.all(images.map((element) => element.decode())),
+  return target.evaluate(async (element, side) => {
+    const activePane = element.closest(".chat-pane-cache__pane--active")!;
+    const images = activePane.querySelectorAll<HTMLImageElement>(
+      ".chat-thread img.chat-message-image",
     );
-  await page.evaluate(() => document.fonts.ready);
-  return target.evaluate((element, side) => {
+    await Promise.all(Array.from(images, (imageElement) => imageElement.decode()));
+    await document.fonts.ready;
+    const finiteAnimations = element
+      .getAnimations()
+      .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime));
+    await Promise.allSettled(finiteAnimations.map((animation) => animation.finished));
     const group = element.closest(".chat-group") ?? element.closest(".chat-thread-inner")!;
     const column = group.getBoundingClientRect();
     const box = element.getBoundingClientRect();
-    const style = getComputedStyle(element);
     const media = [...element.querySelectorAll(".chat-image-frame, img.chat-message-image, video")]
       .map((item) => item.getBoundingClientRect())
       .filter((rect) => rect.width > 0);
@@ -313,9 +239,6 @@ export async function measureMargin(page: Page, testCase: MarginCase) {
       open: side === "right" ? left - column.left : column.right - right,
       closed: side === "right" ? column.right - right : left - column.left,
       overflow: Math.max(0, element.scrollWidth - element.clientWidth),
-      padding: style.padding,
-      radius: style.borderRadius,
-      background: style.backgroundColor,
       media: [...element.querySelectorAll("img, video")].map((mediaElement) => {
         const rect = mediaElement.getBoundingClientRect();
         return {

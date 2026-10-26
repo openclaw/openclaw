@@ -1,4 +1,5 @@
 import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import {
@@ -6,9 +7,9 @@ import {
   isCodeModeEngagedForModel,
   resolveCodeModeConfig,
 } from "./code-mode.js";
+import { isLocalModelLeanEnabled } from "./local-model-lean.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
 import { normalizeToolPolicyName, readToolAllowlistIntersection } from "./tool-policy-shared.js";
-import { resolveAgentToolSearchRuntimeConfig } from "./tool-search-runtime-config.js";
 import type { ToolSearchConfig } from "./tool-search-types.js";
 import {
   applyToolSchemaDirectoryCatalog,
@@ -21,7 +22,7 @@ export type AgentToolSurfacePlanParams = {
   agentId?: string;
   sessionKey?: string;
   forceDirectMessageTool: boolean;
-  model?: { compat?: unknown; toolSearchMode?: "tools" | false };
+  model?: { api?: string; compat?: unknown; toolSearchMode?: "tools" | false };
   modelProvider?: string;
   modelId?: string;
   codeModeOverride?: boolean | "auto";
@@ -53,13 +54,22 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
       : undefined,
   );
   codeModeConfig.enabled = params.codeModeOverride ?? codeModeConfig.enabled;
-  const selectedToolConfig = resolveAgentToolSearchRuntimeConfig({
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    completionPrivateMessageOnly,
-    model: params.model,
-  });
+  // Select before overlay cloning; cloning source config first loses snapshot identity and can
+  // reintroduce unresolved SecretRefs into plugin tool factories.
+  const runtimeConfig = selectLiveRuntimeConfig(params.config);
+  const selectedToolConfig: OpenClawConfig | undefined =
+    completionPrivateMessageOnly ||
+    runtimeConfig?.tools?.toolSearch !== undefined ||
+    (params.model?.toolSearchMode !== "tools" &&
+      !isLocalModelLeanEnabled({ ...params, config: runtimeConfig }))
+      ? runtimeConfig
+      : {
+          ...runtimeConfig,
+          tools: {
+            ...runtimeConfig?.tools,
+            toolSearch: { enabled: true, mode: "tools", searchDefaultLimit: 5, maxSearchLimit: 10 },
+          },
+        };
   // Apply restrictions after snapshot selection so config rebinding cannot
   // restore discovery for direct-tool or persistence-only turns.
   const isMemoryFlushRun = params.trigger === "memory";
@@ -104,12 +114,14 @@ export function prepareAgentToolSurfacePresentation(
   return {
     codeMode: { ...plan.codeModeConfig, enabled: plan.codeModeControlsEnabled },
     toolSearch: { ...plan.toolSearchConfig, enabled: plan.toolSearchControlsEnabled },
+    toolSearchDirectoryLean: isLocalModelLeanEnabled(params),
     forceDirectMessageTool: params.forceDirectMessageTool,
   };
 }
 
 type CodeModeCatalogParams = Parameters<typeof applyCodeModeCatalog>[0];
 type ApplyAgentToolSurfaceCatalogParams = Omit<CodeModeCatalogParams, "directToolNames"> & {
+  model?: AgentToolSurfacePlanParams["model"];
   /** Required key (may be undefined for a config-less run): the tool-search
    * branches resolve their mode from this, so omitting it would silently
    * downgrade the run to schema defaults. */
@@ -122,6 +134,7 @@ export function applyAgentToolSurfaceCatalog({
   codeModeControlsEnabled,
   toolSearchConfig,
   toolSearchRuntimeConfig,
+  model,
   ...catalogParams
 }: ApplyAgentToolSurfaceCatalogParams) {
   // Reply delivery changes per turn; keep an authorized message tool visible
@@ -134,6 +147,12 @@ export function applyAgentToolSurfaceCatalog({
   return applyCatalog({
     ...catalogParams,
     config: codeModeControlsEnabled ? catalogParams.config : toolSearchRuntimeConfig,
-    directToolNames: ["message"],
+    directToolNames:
+      !codeModeControlsEnabled &&
+      catalogParams.config?.tools?.toolSearch === undefined &&
+      model?.api === "ollama" &&
+      model.toolSearchMode === "tools"
+        ? ["message", "web_search", "web_fetch", "memory_search", "memory_get"]
+        : ["message"],
   });
 }

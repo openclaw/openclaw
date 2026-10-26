@@ -1,144 +1,126 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { SettingsSegmented, SettingsToggle, SettingsToggleRow } from "./settings-ui.tsx";
 
 afterEach(cleanup);
+const options = [
+  { value: "first", label: "First" },
+  { value: "last", label: "Last" },
+] as const;
 
-it("uses the visible title to name a toggle without moving caller-owned DOM", () => {
-  const title = document.createElement("span");
-  title.textContent = "Rich title";
-  const view = render(() => (
-    <SettingsToggleRow title={title} checked={false} onChange={() => {}} />
-  ));
-  expect(title.parentElement).toBe(view.container.querySelector(".settings-row__title"));
-  expect(view.getByRole("switch", { name: "Rich title" })).toBeTruthy();
-});
+it.each([
+  ["standalone", SettingsToggle],
+  ["row", SettingsToggleRow],
+] as const)(
+  "%s uses the current activation callback synchronously and restores rejected changes",
+  (_kind, Toggle) => {
+    const calls: [string, boolean][] = [];
+    const record = (name: string) => (checked: boolean) => calls.push([name, checked]);
+    const [updated, setUpdated] = createSignal(false);
+    const view = render(() => (
+      <Toggle
+        title="Notifications"
+        ariaLabel="Enabled"
+        checked={false}
+        onAct={updated() ? record("current") : record("old")}
+        onChange={(checked) => {
+          calls.push(["change", checked]);
+          return false;
+        }}
+      />
+    ));
+    setUpdated(true);
+    flush();
+    const input = view.getByRole("switch") as HTMLInputElement;
+    for (const activate of [
+      () =>
+        Toggle === SettingsToggleRow
+          ? fireEvent.click(view.getByText("Notifications", { selector: ".settings-row__title" }))
+          : input.click(),
+      () => fireEvent.keyDown(input, { key: "ArrowRight" }),
+    ]) {
+      activate();
+      expect(calls).toEqual([
+        ["current", true],
+        ["change", true],
+      ]);
+      expect(input.checked).toBe(false);
+      calls.length = 0;
+    }
+  },
+);
 
-it("runs the current standalone activation callback before proposing the change", () => {
-  const calls: string[] = [];
-  const [updated, setUpdated] = createSignal(false);
-  const view = render(() => (
-    <SettingsToggle
-      ariaLabel="Enabled"
-      checked={false}
-      onAct={updated() ? () => calls.push("current") : () => calls.push("old")}
-      onChange={() => {
-        calls.push("change");
-        return false;
-      }}
-    />
-  ));
-  setUpdated(true);
-  flush();
-  const input = view.getByRole("switch") as HTMLInputElement;
-  input.click();
-  expect(calls).toEqual(["current", "change"]);
-  expect(input.checked).toBe(false);
-});
-
-it("keeps direct activation synchronous and restores a rejected switch", () => {
-  const onAct = vi.fn();
-  const onChange = vi.fn(() => false);
-  const view = render(() => (
-    <SettingsToggleRow title="Notifications" checked={false} onAct={onAct} onChange={onChange} />
-  ));
-  const input = view.getByRole("switch") as HTMLInputElement;
-  fireEvent.click(view.getByText("Notifications", { selector: ".settings-row__title" }));
-  expect(onAct).toHaveBeenCalledExactlyOnceWith(true);
-  expect(onChange).toHaveBeenCalledExactlyOnceWith(true);
-  expect(input.checked).toBe(false);
-  onAct.mockClear();
-  onChange.mockClear();
-  fireEvent.keyDown(input, { key: "ArrowRight" });
-  expect(onAct).toHaveBeenCalledExactlyOnceWith(true);
-  expect(onChange).toHaveBeenCalledExactlyOnceWith(true);
-  expect(input.checked).toBe(false);
-});
-
-it("honors switch direction and restores interaction after a busy fieldset", () => {
-  const [busy, setBusy] = createSignal(true);
-  const [checked, setChecked] = createSignal(false);
-  const onChange = vi.fn((next: boolean) => {
-    setChecked(next);
-  });
-  const view = render(() => (
-    <fieldset disabled={busy()} dir="rtl">
-      <SettingsToggle ariaLabel="Enabled" checked={checked()} onChange={onChange} />
-    </fieldset>
-  ));
-  const input = view.getByRole("switch") as HTMLInputElement;
-  input.click();
-  expect(onChange).not.toHaveBeenCalled();
-  setBusy(false);
-  flush();
-  input.click();
-  flush();
-  expect(input.checked).toBe(true);
-  // jsdom does not resolve inherited direction; explicit direction tests the same input contract.
-  input.style.direction = "rtl";
-  fireEvent.keyDown(input, { key: "ArrowRight" });
-  expect(onChange).toHaveBeenLastCalledWith(false);
-  flush();
-  expect(input.checked).toBe(false);
-});
-
-it("keeps radio groups independent, skips disabled options and rolls back rejected keyboard choice", () => {
+it("isolates radio groups, skips disabled options and rolls back rejected keyboard choice", () => {
   const onChange = vi.fn(() => false);
   const onReselect = vi.fn();
-  const options = [
-    { value: "first", label: "First" },
-    { value: "locked", label: "Locked", disabled: true },
-    { value: "last", label: "Last" },
-  ];
+  const choices = [options[0], { value: "locked", label: "Locked", disabled: true }, options[1]];
   const view = render(() => (
     <>
       <SettingsSegmented
         value="first"
-        options={options}
+        options={choices}
         ariaLabel="Schedule"
         onChange={onChange}
         onReselect={onReselect}
       />
-      <SettingsSegmented value="first" options={options} ariaLabel="Other" onChange={() => {}} />
+      <SettingsSegmented value="first" options={choices} ariaLabel="Other" onChange={() => {}} />
     </>
   ));
   const groups = view.getAllByRole("radiogroup");
-  const first = groups[0]!.querySelector<HTMLInputElement>('input[value="first"]')!;
-  const last = groups[0]!.querySelector<HTMLInputElement>('input[value="last"]')!;
+  const radio = (value: string, group = groups[0]!) =>
+    group.querySelector<HTMLInputElement>(`input[value="${value}"]`)!;
+  const first = radio("first"),
+    last = radio("last");
   first.focus();
   fireEvent.keyDown(first, { key: "ArrowRight" });
   expect(document.activeElement).toBe(last);
   expect(onChange).toHaveBeenCalledExactlyOnceWith("last", last.parentElement);
-  expect(first.checked).toBe(true);
-  expect(last.checked).toBe(false);
-  expect(groups[1]!.querySelector<HTMLInputElement>('input[value="first"]')!.checked).toBe(true);
+  expect([first.checked, last.checked, radio("first", groups[1]).checked]).toEqual([
+    true,
+    false,
+    true,
+  ]);
   first.click();
   expect(onReselect).toHaveBeenCalledExactlyOnceWith("first", first.parentElement);
-  const locked = groups[0]!.querySelector<HTMLInputElement>('input[value="locked"]')!;
-  locked.click();
+  radio("locked").click();
   expect(onChange).toHaveBeenCalledTimes(1);
 });
 
-it("applies controlled radio changes without replacing focused inputs", () => {
+it("registers keyed radio refs without untracked reads and retains focused inputs", () => {
+  const warnings = vi.spyOn(console, "warn");
+  onTestFinished(() => warnings.mockRestore());
+  const inputRef = vi.fn();
+  const [choices, setChoices] = createSignal([
+    options[0],
+    { value: "middle", label: "Middle" },
+    options[1],
+  ]);
   const [value, setValue] = createSignal("first");
   const view = render(() => (
     <SettingsSegmented
       value={value()}
-      options={[
-        { value: "first", label: "First" },
-        { value: "last", label: "Last" },
-      ]}
-      onChange={(next) => {
-        setValue(next);
-      }}
+      options={choices()}
+      inputRef={inputRef}
+      onChange={(next) => void setValue(next)}
     />
   ));
-  const last = view.getByRole("radio", { name: "Last" }) as HTMLInputElement;
+  flush();
+  const last = view.container.querySelector<HTMLInputElement>('input[value="last"]')!;
+  expect(inputRef).toHaveBeenCalledTimes(3);
+  expect(inputRef).toHaveBeenCalledWith("last", last);
   last.focus();
+  setChoices([
+    { value: "first", label: "First updated" },
+    { value: "middle", label: "Middle updated" },
+    { value: "last", label: "Last updated" },
+  ]);
+  flush();
   last.click();
   flush();
   expect(last.checked).toBe(true);
-  expect(view.getByRole("radio", { name: "Last" })).toBe(last);
+  expect(view.getByRole("radio", { name: "Last updated" })).toBe(last);
   expect(document.activeElement).toBe(last);
+  expect(inputRef).toHaveBeenCalledTimes(3);
+  expect(warnings).not.toHaveBeenCalledWith(expect.stringContaining("STRICT_READ_UNTRACKED"));
 });

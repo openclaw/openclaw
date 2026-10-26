@@ -24,7 +24,7 @@ import {
   closeRelayOperationConnection,
 } from "./extension-relay/owner-playwright.js";
 import { getBorrowedRelayCdpAccess } from "./extension-relay/relay-access.js";
-import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
+import { connectOverCdpTransport, UnresponsiveCdpTargetError } from "./pw-session-cdp-transport.js";
 import {
   blockedPageRefsByCdpUrl,
   blockedTargetsByCdpUrl,
@@ -49,6 +49,11 @@ import {
   normalizeCdpUrl,
   targetKey,
 } from "./pw-session-state.js";
+import {
+  guardHeadlessContexts,
+  isHeadlessChromium,
+  refuseHeadlessPasskeyDialogs,
+} from "./pw-session-webauthn.js";
 
 export { pageTargetInfo } from "./pw-session-page-target.js";
 
@@ -311,7 +316,6 @@ function observeContext(context: BrowserContext) {
   context.on("page", (page) => ensurePageState(page));
 }
 
-/** Ensure shared Playwright browser-context state. */
 export function ensureContextState(context: BrowserContext): ContextState {
   const existing = contextStates.get(context);
   if (existing) {
@@ -342,7 +346,7 @@ export async function connectBrowser(
     }
     const browser = await connectRelayBrowser(relay, normalized, relayReference);
     observeBrowser(browser);
-    return { browser, cdpUrl: normalized };
+    return { browser };
   }
   const cached = cachedByCdpUrl.get(normalized);
   if (cached) {
@@ -430,26 +434,52 @@ export async function connectBrowser(
             throw new Error("Relay connection was superseded");
           }
         } catch (err) {
-          if (!configuredIsWebSocket || endpointUrl === normalized) {
+          if (
+            err instanceof UnresponsiveCdpTargetError ||
+            !configuredIsWebSocket ||
+            endpointUrl === normalized
+          ) {
             throw err;
           }
           browser = await connectEndpoint(normalized, configuredPin?.lookup);
         }
+        let disconnected = false;
         const onDisconnected = () => {
+          disconnected = true;
           const current = cachedByCdpUrl.get(normalized);
           if (current?.browser === browser) {
             cachedByCdpUrl.delete(normalized);
           }
         };
-        if (resolveBrowserEngine(engine).descriptor.sessionScope === "connection") {
+        // Listen before the awaited setup below, so a browser lost meanwhile is not cached.
+        browser.on("disconnected", onDisconnected);
+        const engineAdapter = resolveBrowserEngine(engine);
+        if (engineAdapter.descriptor.sessionScope === "connection") {
           markConnectionScopedBrowser(browser);
         }
-        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected, engine };
+        // Relay connections drive the user's visible Chrome, which shows its own dialogs.
+        const headless =
+          !relay && engineAdapter.descriptor.id === "chromium"
+            ? await isHeadlessChromium(browser)
+            : false;
+        observeBrowser(browser);
+        if (headless) {
+          // Before any caller can load a document through this connection.
+          await guardHeadlessContexts(browser.contexts());
+        }
+        if (disconnected) {
+          browser.off("disconnected", onDisconnected);
+          throw new Error("Browser disconnected while connecting.");
+        }
+        const connected: ConnectedBrowser = {
+          browser,
+          onDisconnected,
+          engine,
+          headless,
+        };
         if (connectingByCdpUrl.get(normalized) === pending) {
           cachedByCdpUrl.set(normalized, connected);
         }
-        browser.on("disconnected", onDisconnected);
-        observeBrowser(browser);
         return connected;
       } catch (err) {
         lastErr = err;
@@ -458,7 +488,7 @@ export async function connectBrowser(
         }
         // Don't retry rate-limit errors; retrying worsens the 429.
         const errMsg = formatErrorMessage(err);
-        if (errMsg.includes("rate limit")) {
+        if (err instanceof UnresponsiveCdpTargetError || errMsg.includes("rate limit")) {
           break;
         }
         await sleepWithAbort(250 + attempt * 250);
@@ -523,7 +553,11 @@ async function getPageForTargetIdOnce(opts: {
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
   }
-  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy, opts.relayReference);
+  const { browser, headless } = await connectBrowser(
+    opts.cdpUrl,
+    opts.ssrfPolicy,
+    opts.relayReference,
+  );
   const pages = await getAllPages(browser);
   if (!pages.length) {
     throw new Error("No pages available in the connected browser.");
@@ -541,6 +575,10 @@ async function getPageForTargetIdOnce(opts: {
     : accessible[0];
   if (found) {
     bindRoleRefsTarget(found.page, opts.cdpUrl, found.targetId);
+    if (headless) {
+      // Settled guards are cached; this only re-registers one that failed.
+      void refuseHeadlessPasskeyDialogs(found.page.context());
+    }
     return found.page;
   }
   throw new BrowserTabNotFoundError();

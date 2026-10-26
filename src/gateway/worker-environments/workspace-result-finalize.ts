@@ -55,9 +55,6 @@ import {
 import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
-type RemoteExecEnvironmentService = Pick<WorkerEnvironmentService, "get" | "startTunnel"> &
-  Partial<Pick<WorkerEnvironmentService, "prepareComputer">>;
-
 type WorkspaceConflictReport = Required<WorkerWorkspaceResultConflict> & {
   summary: string;
 };
@@ -108,7 +105,7 @@ export async function recoverWorkspaceBeforeTurn(params: {
   workspace: WorkerSessionWorkspace;
   signal?: AbortSignal;
 }): Promise<void> {
-  if (params.workspace.kind === "repository") {
+  if (params.workspace.kind !== "local") {
     return;
   }
   const localWorkspaceDir = params.workspace.path;
@@ -157,6 +154,17 @@ export async function reconcileWorkspaceAfterTurn(params: {
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 }): Promise<WorkspaceConflictReport | undefined> {
+  if (params.workspace.kind === "device-folder") {
+    // This is a turn-completion fence only; the device owns all filesystem state.
+    await params.placements.prepareWorkspaceResultClaim(params.turnClaim);
+    if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
+      throw new Error("Device folder turn lost its placement owner");
+    }
+    await params.placements.acceptWorkspaceResult(params.turnClaim);
+    await params.placements.closeWorkerTurnToolState(params.turnClaim);
+    await params.placements.completeWorkspaceResultAndReleaseTurn(params.turnClaim);
+    return undefined;
+  }
   const transcriptTarget = { ...params.transcriptTarget };
   const requireCurrentPlacement = () => {
     const currentPlacement = params.placements.preparedWorkspaceResultPlacement(params.turnClaim);
@@ -236,7 +244,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
         if (applied?.conflictPaths.length && !recordedStagedResultRef) {
           throw new Error("Cloud workspace conflict has no staged result reference");
         }
-        const finalized = await finalizeWorkspaceResultConflicts({
+        const conflictRetained = await finalizeWorkspaceResultConflicts({
           assertCurrent: assertResultCurrent,
           placements: params.placements,
           turnClaim: params.turnClaim,
@@ -290,7 +298,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
           turnClaim: params.turnClaim,
           workspace: params.workspace,
           stagedResultRef: recordedStagedResultRef,
-          conflictRetained: finalized.conflictRetained,
+          conflictRetained,
           beforeComplete: async () => {
             await quiescence.resume();
             resumed = true;
@@ -335,7 +343,8 @@ function appendWorkspaceConflict(
 }
 
 export async function executeRemoteExecTurn(params: {
-  environments: RemoteExecEnvironmentService;
+  environments: Pick<WorkerEnvironmentService, "get" | "startTunnel"> &
+    Partial<Pick<WorkerEnvironmentService, "prepareComputer">>;
   onHandoff: (custody?: { requiresTerminalReceipt: true }) => void;
   placement: ActiveWorkerPlacement;
   placements: WorkerSessionPlacementStore;

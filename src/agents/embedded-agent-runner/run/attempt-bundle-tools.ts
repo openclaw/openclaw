@@ -44,6 +44,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     cronCreatorToolAllowlistCaptureRef,
     effectiveToolsAllow,
     inheritedToolAllowlist,
+    additionalInheritedToolNamesRef,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolsEnabled,
@@ -133,7 +134,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         agentId: params.setup.sessionAgentId,
         agentDir: params.agentDir,
         // senderId is only set from the verified inbound sender (sessionCtx.SenderId
-        // or the triggering run's sender on follow-ups). Cron/subagent/heartbeat runs
+        // or the triggering run's sender on follow-ups). Cron/subagent runs
         // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
         requesterSenderId: params.attempt.senderId,
         agentAccountId: params.attempt.agentAccountId,
@@ -223,10 +224,15 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         (tool) => getPluginToolMeta(tool),
       );
       if (inheritedToolAllowlist?.length) {
-        // Spawn tools close over this ref before MCP/LSP materialize. Refresh it
-        // only after final policy and schema projection so children inherit the
-        // parent's complete authorized surface, never denied bundled tools.
-        replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, schemaProjection.tools);
+        // Runtime availability limits this turn; independently approved workspace
+        // capabilities remain delegable under the same final runtime cap.
+        replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, [
+          ...schemaProjection.tools,
+          ...applyEmbeddedAttemptToolsAllow(
+            toolsEnabled ? additionalInheritedToolNamesRef.map((name) => ({ name })) : [],
+            effectiveToolsAllow,
+          ),
+        ]);
       }
       recordQuarantine({
         diagnostics: schemaProjection.diagnostics,

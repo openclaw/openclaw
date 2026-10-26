@@ -95,7 +95,7 @@ export async function reconcileCodexCatalogFiles(
     thread.preview ||= existing?.preview;
     const projected = await projectCodexCatalogPage(
       { data: [projectCodexCatalogNativeThread(thread, sanitizeTerminalText)] },
-      { localSessionsRoot: root, sanitize: sanitizeTerminalText },
+      { localSessionsRoot: root },
     );
     owner.assertCurrent();
     observed.set(file, fingerprint);
@@ -113,8 +113,8 @@ export async function reconcileCodexCatalogFiles(
     }
     if (
       row.rolloutPath &&
-      isCodexCatalogRolloutPathCovered(root, row.rolloutPath) &&
       !present.has(codexCatalogRolloutLogicalPath(row.rolloutPath)) &&
+      isCodexCatalogRolloutPathCovered(root, row.rolloutPath) &&
       owner.rows.get(row.threadId) === row
     ) {
       owner.requestNativeRefresh();

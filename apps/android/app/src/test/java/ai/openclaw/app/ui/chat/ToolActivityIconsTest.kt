@@ -76,9 +76,14 @@ class ToolActivityIconsTest {
       "openclaw:default:message" to Icons.Default.Mail,
       "mcp:github:search_issues" to Icons.Default.Extension,
     ).forEach { (id, expected) ->
-      val call = unwrapToolCallForDisplay("tool_call", Json.parseToJsonElement("""{"id":"$id","args":{}}""").jsonObject)
-
-      assertSame(id, expected, config.iconForTool(call.name))
+      listOf("dispatch_action", "tool_call").forEach { dispatcher ->
+        val call =
+          unwrapToolCallForDisplay(
+            dispatcher,
+            Json.parseToJsonElement("""{"id":"$id","args":{}}""").jsonObject,
+          )
+        assertSame(id, expected, config.iconForTool(call.name))
+      }
     }
   }
 }

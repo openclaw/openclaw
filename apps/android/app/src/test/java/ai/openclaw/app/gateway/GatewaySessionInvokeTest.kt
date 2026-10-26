@@ -162,6 +162,47 @@ private data class InvokeScenarioResult(
 @Config(sdk = [34])
 class GatewaySessionInvokeTest {
   @Test
+  fun talkCatalogRetriesOnlyTheCorrelatedWarmingResponse() =
+    runBlocking {
+      for ((method, retryable, timeoutMs) in listOf(
+        Triple("talk.catalog", true, null),
+        Triple("talk.catalog", true, 0L),
+        Triple("talk.catalog", false, null),
+        Triple("models.list", true, null),
+      )) {
+        val connected = CompletableDeferred<Unit>()
+        val lastDisconnect = AtomicReference("")
+        val requests = AtomicInteger()
+        val server =
+          startGatewayServer(testJson()) { webSocket, id, requestedMethod, _ ->
+            if (requestedMethod == "connect") {
+              webSocket.send(connectResponseFrame(id))
+            } else if (requests.incrementAndGet() == 1) {
+              webSocket.send(
+                """{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"warming","retryable":$retryable,"retryAfterMs":250,"details":{"reason":"talk-catalog-warming"}}}""",
+              )
+            } else {
+              webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"realtime":{"providers":[]}}}""")
+            }
+          }
+        val harness =
+          createNodeHarness(connected = connected, lastDisconnect = lastDisconnect) {
+            GatewaySession.InvokeResult.ok("{}")
+          }
+        try {
+          connectNodeSession(harness.session, server.port)
+          awaitConnectedOrThrow(connected, lastDisconnect, server)
+          val result = harness.session.requestDetailed(method, "{}", timeoutMs = timeoutMs)
+          val shouldRetry = method == "talk.catalog" && retryable
+          assertEquals(shouldRetry, result.ok)
+          assertEquals(if (shouldRetry) 2 else 1, requests.get())
+        } finally {
+          shutdownHarness(harness, server)
+        }
+      }
+    }
+
+  @Test
   fun connect_usesGatewayChallengeTimestamp() =
     runBlocking {
       val json = testJson()

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  commonPrefixLength,
   containsAsciiControlCharacter,
   filterStringEntries,
   normalizeAtHashSlug,
@@ -18,6 +19,20 @@ import {
 } from "./string-normalization.js";
 
 describe("normalization-core/string-normalization", () => {
+  it.each([
+    ["", "value", 0],
+    ["value", "", 0],
+    ["same", "same", 4],
+    ["prefix", "pre", 3],
+    ["pre", "prefix", 3],
+    ["abX", "abY", 2],
+    ["A", "a", 0],
+    ["\ud83d\ude00", "\ud83d\ude01", 1],
+    ["é", "e\u0301", 0],
+  ])("counts the raw UTF-16 prefix of %j and %j", (left, right, expected) => {
+    expect(commonPrefixLength(left, right)).toBe(expected);
+  });
+
   it.each([
     { label: "empty", value: "", expected: false },
     { label: "printable Unicode", value: "fix/a&b λ", expected: false },

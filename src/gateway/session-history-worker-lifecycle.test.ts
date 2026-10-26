@@ -11,6 +11,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
@@ -20,7 +21,7 @@ import {
 import { prepareSessionEntryPresenceRead } from "../config/sessions/session-entry-presence-read.js";
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import {
-  historyClearTimeout,
+  clearDatabaseWorkerIdleRetirement,
   historyLane,
   maintenanceLane,
   rotateDatabaseWorkers,
@@ -49,19 +50,22 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
 import { createArchivedSessionTranscriptSource } from "./session-end-transcript-reader.js";
+import {
+  expectMessageIds,
+  historyParams,
+  messageEvent,
+  withHistoryState,
+} from "./session-history-events.test-support.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 
 const observed = vi.hoisted(() => ({
   timers: vi.spyOn(globalThis, "setTimeout"),
   workers: [] as Worker[],
   idleCloseKeepsWorker: new WeakMap<Worker, boolean>(),
-  dispatch: undefined as ((message: unknown) => void) | undefined,
+  dispatch: undefined as ((message: unknown, worker: Worker) => void) | undefined,
   restoration: undefined as
     | {
         sessionId: string;
@@ -91,7 +95,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         ) {
           observed.workers.push(this);
         }
-        observed.dispatch?.(args[0]);
+        observed.dispatch?.(args[0], this);
         super.postMessage(...args);
       }
     },
@@ -139,11 +143,12 @@ vi.mock("../config/sessions/session-cold-storage-read.js", async (importOriginal
 afterAll(() => observed.timers.mockRestore());
 
 afterEach(async () => {
+  memorySessionActorOwners.reset();
   observed.dispatch = undefined;
   observed.restoration = undefined;
   await Promise.all(
     [historyLane, maintenanceLane, targetDiscoveryLane].map(async (lane) => {
-      historyClearTimeout(lane.idleTimer);
+      clearDatabaseWorkerIdleRetirement(lane);
       await rotateDatabaseWorkers(lane);
     }),
   );
@@ -155,7 +160,7 @@ afterEach(async () => {
 it.each([false, true])(
   "reads exact row presence from its captured target without creating a database (incognito=%s)",
   async (incognito) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withHistoryState(async (state) => {
       const target = {
         agentId: "main",
         sessionKey: incognito
@@ -188,6 +193,11 @@ it.each([false, true])(
       if (incognito) {
         expect(observed.workers).toHaveLength(workersBefore);
         expect(fs.existsSync(databasePath)).toBe(false);
+        memorySessionActorOwners.closeDatabase({ agentId: "main", path: databasePath });
+        expect(await read()).toBe(false);
+        await replaceSessionEntry(target, { sessionId: "replacement-memory-owner", updatedAt: 2 });
+        expect(await read()).toBe(true);
+        expect(observed.workers).toHaveLength(workersBefore);
       } else {
         expect(observed.workers.length).toBeGreaterThan(workersBefore);
         target.storePath = path.join(state.agentDir(), "replacement.sqlite");
@@ -201,17 +211,12 @@ it.each([false, true])(
 );
 
 it("reads an exact ended-session archive in the history worker", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withHistoryState(async (state) => {
     const sessionId = "deleted-session-archive";
     const fixture = await seed(state, "main", sessionId);
     const content = [
       { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "archived-message",
-        parentId: null,
-        message: { role: "user", content: "archived content" },
-      },
+      messageEvent("archived-message", { role: "user", content: "archived content" }),
     ]
       .map((event) => JSON.stringify(event))
       .join("\n");
@@ -246,13 +251,11 @@ it("reads an exact ended-session archive in the history worker", async () => {
 it("keeps fresh fixture roots isolated while reusing idle reader execution", async () => {
   let previousWorker: Worker | undefined;
   for (const sessionId of ["first-fixture", "second-fixture"]) {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withHistoryState(async (state) => {
       const fixture = await seed(state, "main", sessionId);
       await prewarmSessionHistoryWorker({ agentId: "main", path: fixture.path, env: state.env });
       const prewarmedWorker = observed.workers.at(-1);
-      expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
-        `${sessionId}-message`,
-      ]);
+      expectMessageIds((await fixture.read()).messages, [`${sessionId}-message`]);
       const worker = observed.workers.at(-1)!;
       expect(worker).toBe(prewarmedWorker);
       if (previousWorker) {
@@ -286,27 +289,10 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
   });
   await replaceTranscriptEvents(target, [
     { type: "session", version: 3, id: sessionId },
-    {
-      type: "message",
-      id: `${sessionId}-message`,
-      parentId: null,
-      message: { role: "user", content: sessionId },
-    },
+    messageEvent(`${sessionId}-message`, { role: "user", content: sessionId }),
   ]);
   await waitForSessionTranscriptProjection(target);
-  const params = {
-    entry,
-    provider: undefined,
-    sessionId,
-    storePath: target.storePath,
-    sessionAgentId: agentId,
-    canonicalKey: target.sessionKey,
-    max: 20,
-    maxHistoryBytes: 100_000,
-    effectiveMaxChars: 8000,
-    offset: undefined,
-    messageId: undefined,
-  };
+  const params = { ...historyParams(target, entry), max: 20 };
   return {
     target,
     path: resolveOpenClawAgentSqlitePath({ agentId, env: state.env }),
@@ -314,18 +300,27 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
   };
 }
 
-it("settles cancelled message reads before reuse and closes their database handles", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("settles cancelled message reads before later reads and closes their database handles", async () => {
+  await withHistoryState(async (state) => {
     const fixture = await seed(state, "main", "cancel-message-read");
     await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+    // Cold admission uses the discovery lane; compare cancellation reuse on the warm history lane.
+    await prewarmSessionHistoryWorker({ agentId: "main", path: fixture.path, env: state.env });
     const controller = new AbortController();
     const cancelled = new Error("history consumer closed");
-    let dispatched = false;
-    observed.dispatch = (message) => {
-      const input = asOptionalRecord(asOptionalRecord(message)?.input);
+    const reads: Array<{ worker: Worker; threadId: number }> = [];
+    const received = vi.fn();
+    let cancelledTaskId: unknown;
+    observed.dispatch = (message, worker) => {
+      const task = asOptionalRecord(message);
+      const input = asOptionalRecord(task?.input);
+      if (input?.kind !== "history-page") {
+        return;
+      }
+      reads.push({ worker, threadId: worker.threadId });
       if (asOptionalRecord(input?.request)?.kind === "message-by-id") {
-        observed.dispatch = undefined;
-        dispatched = true;
+        cancelledTaskId = task?.taskId;
+        worker.on("message", received);
         controller.abort(cancelled);
       }
     };
@@ -336,32 +331,33 @@ it("settles cancelled message reads before reuse and closes their database handl
       },
       controller.signal,
     );
-    await expect(pending).rejects.toBe(cancelled);
-    expect(dispatched).toBe(true);
-    const worker = observed.workers.at(-1)!;
-    const threadId = worker.threadId;
-    expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "cancel-message-read-message",
-    ]);
-    expect(observed.workers.at(-1)).toBe(worker);
-    const keepsWorker = observed.idleCloseKeepsWorker.get(worker) === true;
-    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
-    expect(worker.threadId).toBe(keepsWorker ? threadId : -1);
-    expect((await fixture.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "cancel-message-read-message",
-    ]);
-    if (!keepsWorker) {
-      expect(observed.workers.at(-1)).not.toBe(worker);
-    } else {
-      expect(observed.workers.at(-1)).toBe(worker);
+    try {
+      await expect(pending).rejects.toBe(cancelled);
+    } finally {
+      reads[0]?.worker.off("message", received);
     }
+    expect(reads).toHaveLength(1);
+    expect(received).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: cancelledTaskId, status: "ok" }),
+    );
+    const cancelledRead = reads[0]!;
+    expectMessageIds((await fixture.read()).messages, ["cancel-message-read-message"]);
+    expect(cancelledRead.worker.threadId).toBe(cancelledRead.threadId);
+    // Re-admission can use discovery before the next read uses the history lane.
+    const dispatchedWorkers = new Map(reads.map(({ worker, threadId }) => [worker, threadId]));
+    await closeOpenClawAgentDatabaseByPathAsync(fixture.path, "main");
+    for (const [worker, threadId] of dispatchedWorkers) {
+      const keepsWorker = observed.idleCloseKeepsWorker.get(worker) === true;
+      expect(worker.threadId).toBe(keepsWorker ? threadId : -1);
+    }
+    expectMessageIds((await fixture.read()).messages, ["cancel-message-read-message"]);
   });
 });
 
 it.each(["no-commit", "metadata-refresh"] as const)(
   "reads history after unchanged sibling registration (%s)",
   async (mode) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withHistoryState(async (state) => {
       const a = await seed(state, "main", "registration-a");
       const b = await seed(state, "other", "registration-b");
       await a.read();
@@ -384,19 +380,17 @@ it.each(["no-commit", "metadata-refresh"] as const)(
       } finally {
         registration.finish();
       }
-      expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
-        "registration-a-message",
-      ]);
+      expectMessageIds((await a.read()).messages, ["registration-a-message"]);
     });
   },
 );
 
 it("closes idle A while active and queued B pages survive, then reads replaced A", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withHistoryState(async (state) => {
     const a = await seed(state, "main", "close-a");
     const b = await seed(state, "other", "active-b");
     const c = await seed(state, "other", "queued-b");
-    expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual(["close-a-message"]);
+    expectMessageIds((await a.read()).messages, ["close-a-message"]);
     await b.read();
     const oldWorker = observed.workers.at(-1)!;
     const threadId = oldWorker.threadId;
@@ -424,23 +418,16 @@ it("closes idle A while active and queued B pages survive, then reads replaced A
     fs.renameSync(`${a.path}.replacement`, a.path);
     await replaceTranscriptEvents(a.target, [
       { type: "session", version: 3, id: "close-a" },
-      {
-        type: "message",
-        id: "replacement-a-message",
-        parentId: null,
-        message: { role: "user", content: "replacement content" },
-      },
+      messageEvent("replacement-a-message", { role: "user", content: "replacement content" }),
     ]);
     await waitForSessionTranscriptProjection(a.target);
-    expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "replacement-a-message",
-    ]);
-    expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual(["active-b-message"]);
+    expectMessageIds((await a.read()).messages, ["replacement-a-message"]);
+    expectMessageIds((await b.read()).messages, ["active-b-message"]);
   });
 });
 
 it("evicts the least recently used of 64 retained targets without charging missing databases", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withHistoryState(async (state) => {
     const targets = [];
     for (let index = 0; index < 65; index++) {
       targets.push(await seed(state, `retained-${index}`, `history-${index}`));
@@ -477,16 +464,14 @@ it("evicts the least recently used of 64 retained targets without charging missi
     } finally {
       closeResources.mockRestore();
     }
-    expect((await targets[64]!.read()).messages.map(readChatHistoryMessageId)).toEqual([
-      "history-64-message",
-    ]);
+    expectMessageIds((await targets[64]!.read()).messages, ["history-64-message"]);
   });
 });
 
 it.for(["before restoration", "queued restoration"] as const)(
   "does not restore a replacement database for a revoked history read (%s)",
   async (phase, { signal }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withHistoryState(async (state) => {
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
       const fixture = await createSessionColdStorageFixture(databasePath);
       const unrelated =
@@ -521,20 +506,7 @@ it.for(["before restoration", "queued restoration"] as const)(
         entered: entered.resolve,
         wait: gate.promise,
       };
-      const read = () =>
-        readChatHistoryPage({
-          entry: undefined,
-          provider: undefined,
-          sessionId: fixture.scope.sessionId,
-          storePath: databasePath,
-          sessionAgentId: fixture.scope.agentId,
-          canonicalKey: fixture.scope.sessionKey,
-          max: 20,
-          maxHistoryBytes: 100_000,
-          effectiveMaxChars: 8000,
-          offset: undefined,
-          messageId: undefined,
-        });
+      const read = () => readChatHistoryPage({ ...historyParams(fixture.scope), max: 20 });
       const pending = read();
       const failure = expect(pending).rejects.toThrow("revoked");
       try {
@@ -548,9 +520,7 @@ it.for(["before restoration", "queued restoration"] as const)(
         );
         await closeOpenClawAgentDatabaseByPathAsync(databasePath, "main");
         if (unrelated) {
-          expect((await unrelated.read()).messages.map(readChatHistoryMessageId)).toEqual([
-            "unrelated-b-message",
-          ]);
+          expectMessageIds((await unrelated.read()).messages, ["unrelated-b-message"]);
         }
         fs.copyFileSync(databasePath, `${databasePath}.replacement`);
         fs.renameSync(databasePath, `${databasePath}.previous`);
@@ -563,17 +533,14 @@ it.for(["before restoration", "queued restoration"] as const)(
       }
       expect(readStoredTranscript()).toEqual(before);
       if (unrelated) {
-        expect((await read()).messages.map(readChatHistoryMessageId)).toEqual([
-          "history-user",
-          "history-assistant",
-        ]);
+        expectMessageIds((await read()).messages, ["history-user", "history-assistant"]);
       }
     });
   },
 );
 
 it("leaves the unrelated warm worker running when admission rejects a request before dispatch", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  await withHistoryState(async (state) => {
     const b = await seed(state, "other", "overload-b");
     await b.read();
     const worker = observed.workers.at(-1)!;
@@ -591,15 +558,15 @@ it("leaves the unrelated warm worker running when admission rejects a request be
       ),
     ).rejects.toMatchObject({ code: "overloaded" });
     expect(worker.threadId).toBe(threadId);
-    expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual(["overload-b-message"]);
+    expectMessageIds((await b.read()).messages, ["overload-b-message"]);
     expect(observed.workers.at(-1)).toBe(worker);
   });
 });
 
 it.each([false, true])(
-  "joins the history worker when its 30-minute idle timer fires (missing=%s)",
+  "joins the history worker when its five-minute idle timer fires (missing=%s)",
   async (missing) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withHistoryState(async (state) => {
       const a = missing
         ? prepareSessionEntryPresenceRead({
             agentId: "main",
@@ -611,7 +578,7 @@ it.each([false, true])(
       const beforeRead = observed.timers.mock.calls.length;
       await a.read();
       const worker = observed.workers.at(-1)!;
-      const index = observed.timers.mock.calls.findLastIndex((call) => call[1] === 30 * 60_000);
+      const index = observed.timers.mock.calls.findLastIndex((call) => call[1] === 5 * 60_000);
       expect(index).toBeGreaterThanOrEqual(beforeRead);
       const [expire] = observed.timers.mock.calls[index]!;
       const timer = observed.timers.mock.results[index]!.value as NodeJS.Timeout;
@@ -623,23 +590,23 @@ it.each([false, true])(
       if (typeof reopened === "boolean") {
         expect(reopened).toBe(false);
       } else {
-        expect(reopened.messages.map(readChatHistoryMessageId)).toEqual(["idle-a-message"]);
+        expectMessageIds(reopened.messages, ["idle-a-message"]);
       }
       expect(observed.workers.at(-1)).not.toBe(worker);
       if (missing) {
         // No database resource exists to close; the reopened empty worker owns only its idle timer.
         const emptyWorker = observed.workers.at(-1)!;
         const nextIndex = observed.timers.mock.calls.findLastIndex(
-          (call) => call[1] === 30 * 60_000,
+          (call) => call[1] === 5 * 60_000,
         );
         expect(nextIndex).toBeGreaterThan(index);
         clearTimeout(observed.timers.mock.results[nextIndex]!.value as NodeJS.Timeout);
         observed.timers.mock.calls[nextIndex]![0]();
         await expect.poll(() => emptyWorker.threadId).toBe(-1);
-        expect(observed.timers.mock.calls.filter((call) => call[1] === 30 * 60_000)).toHaveLength(
+        expect(observed.timers.mock.calls.filter((call) => call[1] === 5 * 60_000)).toHaveLength(
           observed.timers.mock.calls
             .slice(0, nextIndex + 1)
-            .filter((call) => call[1] === 30 * 60_000).length,
+            .filter((call) => call[1] === 5 * 60_000).length,
         );
       }
     });

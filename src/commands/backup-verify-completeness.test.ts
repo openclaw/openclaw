@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { PostgresExportEnvelope } from "../snapshot/export-envelope.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -19,6 +21,19 @@ import { backupCreateCommand } from "./backup.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const readManifest = async (root: string, archiveRoot: string): Promise<BackupManifest> =>
+  JSON.parse(await fs.readFile(path.join(root, archiveRoot, "manifest.json"), "utf8"));
+const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
+const postgresCapture = (
+  archivePath = "backup/payload/plugin.sqlite.postgres",
+  manifestSha256 = "0".repeat(64),
+) => ({ archivePath, manifestSha256 });
+
+function expectWitness(db: DatabaseSync, index: number) {
+  expect(db.prepare("SELECT value FROM completeness_witness").all()).toEqual([
+    { value: `committed-${index}` },
+  ]);
+}
 
 async function repack(root: string, archiveRoot: string, name: string, omit: string[] = []) {
   const archivePath = path.join(root, name + ".tar.gz");
@@ -34,7 +49,11 @@ async function repack(root: string, archiveRoot: string, name: string, omit: str
   return archivePath;
 }
 
-async function writeSmallArchive(sqliteSnapshots: unknown) {
+async function writeSmallArchive(
+  sqliteSnapshots: unknown,
+  postgresSnapshots?: unknown,
+  sharedDatabaseSourcePath?: unknown,
+) {
   const root = tempDirs.make("backup-inventory-contract-");
   const archiveRoot = "backup";
   const stateDir = "/synthetic/state";
@@ -48,11 +67,15 @@ async function writeSmallArchive(sqliteSnapshots: unknown) {
     platform: process.platform,
     runtimeVersion: "test",
     nodeVersion: process.version,
-    paths: { stateDir },
+    paths: {
+      stateDir,
+      ...(sharedDatabaseSourcePath === undefined ? {} : { sharedDatabaseSourcePath }),
+    },
     assets: [{ kind: "state", sourcePath: stateDir, archivePath: payload }],
     sqliteSnapshots,
+    ...(postgresSnapshots === undefined ? {} : { postgresSnapshots }),
   };
-  await fs.writeFile(path.join(root, archiveRoot, "manifest.json"), JSON.stringify(manifest));
+  await writeJson(path.join(root, archiveRoot, "manifest.json"), manifest);
   return {
     root,
     archiveRoot,
@@ -126,17 +149,14 @@ describe("standalone backup database completeness", () => {
           ).resolves.toMatchObject({ ok: true, sqliteInventoryVerified: true });
           const extracted = state.path("extracted");
           await backupRestoreCommand(runtime, { archive: archive.archivePath, target: extracted });
-          const manifest: BackupManifest = JSON.parse(
-            await fs.readFile(path.join(extracted, archive.archiveRoot, "manifest.json"), "utf8"),
-          );
+          const manifest = await readManifest(extracted, archive.archiveRoot);
           expect(manifest.sqliteSnapshots).toEqual([
             { sourcePath: databasePaths[0], role: "global" },
-            { sourcePath: databasePaths[1], role: "agent", agentId: "main" },
-            { sourcePath: databasePaths[2], role: "agent", agentId: "worker" },
-            { sourcePath: databasePaths[3], role: "agent", agentId: "external" },
-            { sourcePath: databasePaths[4], role: "agent", agentId: "dormant" },
-            { sourcePath: databasePaths[5], role: "agent", agentId: "external" },
-            { sourcePath: databasePaths[6], role: "agent", agentId: "linked" },
+            ...agents.map(({ agentId }, index) => ({
+              sourcePath: databasePaths[index + 1],
+              role: "agent",
+              agentId,
+            })),
           ]);
           const restoredLink = path.join(
             extracted,
@@ -151,13 +171,9 @@ describe("standalone backup database completeness", () => {
           const members = databasePaths.map((p) => buildBackupArchivePath(archive.archiveRoot, p));
           for (const [index, member] of members.entries()) {
             const snapshot = path.join(extracted, member);
-            const db = new DatabaseSync(snapshot, { readOnly: true });
-            try {
-              expect(db.prepare("SELECT value FROM completeness_witness").all()).toEqual([
-                { value: `committed-${index}` },
-              ]);
-            } finally {
-              db.close();
+            {
+              using db = new DatabaseSync(snapshot, { readOnly: true });
+              expectWitness(db, index);
             }
             for (const suffix of ["-wal", "-shm", "-journal"]) {
               await expect(fs.stat(snapshot + suffix)).rejects.toMatchObject({ code: "ENOENT" });
@@ -180,9 +196,7 @@ describe("standalone backup database completeness", () => {
             );
           }
           for (const [index, writer] of writers.entries()) {
-            expect(writer.prepare("SELECT value FROM completeness_witness").all()).toEqual([
-              { value: `committed-${index}` },
-            ]);
+            expectWitness(writer, index);
           }
         } finally {
           for (const writer of writers) {
@@ -193,29 +207,27 @@ describe("standalone backup database completeness", () => {
     );
   });
 
-  it.each([true])("captures an empty inventory honestly (onlyConfig=%s)", async (onlyConfig) => {
+  it("captures an empty inventory for a config-only backup", async () => {
     await withOpenClawTestState(
       { layout: "home", prefix: "backup-empty-inventory-", scenario: "minimal" },
       async (state) => {
-        if (onlyConfig) {
-          openOpenClawAgentDatabase({
-            agentId: "main",
-            path: path.join(state.agentDir(), "openclaw-agent.sqlite"),
-            env: state.env,
-          });
-        }
+        openOpenClawAgentDatabase({
+          agentId: "main",
+          path: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+          env: state.env,
+        });
         const archive = await backupCreateCommand(createTestRuntime(), {
           output: state.path("backup.tar.gz"),
-          onlyConfig,
+          onlyConfig: true,
           includeWorkspace: false,
         });
         const extracted = state.path("extracted");
         await fs.mkdir(extracted);
         await tar.x({ file: archive.archivePath, cwd: extracted });
-        const manifest = JSON.parse(
-          await fs.readFile(path.join(extracted, archive.archiveRoot, "manifest.json"), "utf8"),
-        );
-        expect(manifest.sqliteSnapshots).toEqual([]);
+        expect(await readManifest(extracted, archive.archiveRoot)).toMatchObject({
+          sqliteSnapshots: [],
+          postgresSnapshots: [],
+        });
         await expect(verifyBackupArchive(archive.archivePath)).resolves.toMatchObject({
           ok: true,
           sqliteInventoryVerified: true,
@@ -248,27 +260,216 @@ describe("standalone backup database completeness", () => {
   });
 
   it.each([
-    { name: "non-array", value: {}, error: "must be an array" },
-    {
-      name: "noncanonical agent",
-      value: [{ role: "agent", sourcePath: "/db", agentId: "Main" }],
-      error: "invalid agentId",
-    },
-    {
-      name: "duplicate path",
-      value: [
+    ["non-array", {}, "must be an array"],
+    [
+      "noncanonical agent",
+      [{ role: "agent", sourcePath: "/db", agentId: "Main" }],
+      "invalid agentId",
+    ],
+    [
+      "duplicate path",
+      [
         { role: "global", sourcePath: "/db" },
         { role: "agent", sourcePath: "/DB", agentId: "main" },
       ],
-      error: "duplicate SQLite snapshot ownership",
-    },
-    {
-      name: "host identity field",
-      value: [{ role: "global", sourcePath: "/db", ino: 1 }],
-      error: "invalid SQLite snapshot owner",
-    },
-  ])("rejects $name inventory metadata", async ({ value, error }) => {
+      "duplicate SQLite snapshot ownership",
+    ],
+    [
+      "host identity field",
+      [{ role: "global", sourcePath: "/db", ino: 1 }],
+      "invalid SQLite snapshot owner",
+    ],
+  ] as const)("rejects %s inventory metadata", async (_name, value, error) => {
     const { archivePath } = await writeSmallArchive(value);
     await expect(verifyBackupArchive(archivePath)).rejects.toThrow(error);
   });
+
+  it.each([null, 7, "relative.sqlite", "/shared/../state.sqlite", "/shared\0.sqlite"])(
+    "rejects malformed captured shared source identity %j",
+    async (sourcePath) => {
+      const { archivePath } = await writeSmallArchive([], undefined, sourcePath);
+      await expect(verifyBackupArchive(archivePath)).rejects.toThrow("shared database source");
+    },
+  );
+
+  it("does not require the captured shared source path to exist on the restore host", async () => {
+    const { archivePath } = await writeSmallArchive(
+      [],
+      undefined,
+      "/missing/captured/shared.sqlite",
+    );
+    await expect(verifyBackupArchive(archivePath)).resolves.toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ["non-array", {}, "postgresSnapshots must be an array"],
+    ["relative path", [postgresCapture("plugin.sqlite.postgres")], "outside payload root"],
+    [
+      "duplicate path",
+      [postgresCapture(), postgresCapture("backup/payload/PLUGIN.sqlite.postgres")],
+      "duplicate PostgreSQL snapshot paths",
+    ],
+    ["invalid hash", [postgresCapture(undefined, "unknown")], "invalid PostgreSQL snapshot"],
+    ["missing capsule", [postgresCapture()], "missing a regular matched artifact"],
+  ] as const)("rejects %s PostgreSQL inventory", async (_name, value, error) => {
+    const { archivePath } = await writeSmallArchive([], value);
+    await expect(verifyBackupArchive(archivePath)).rejects.toThrow(error);
+  });
+});
+
+describe("archive PostgreSQL capsule verification", () => {
+  it.each([
+    "image",
+    "manifest",
+    "inner anchor",
+    "outer anchor",
+    "pending capture",
+    "manifest binding",
+    "unowned anchor",
+    "database WAL",
+    "inner anchor WAL",
+    "outer anchor WAL",
+  ])(
+    "rejects incomplete or damaged plugin-only PostgreSQL archives (%s) before restore",
+    async (damage) => {
+      const sourcePath = "/synthetic/plugins/workboard.sqlite";
+      const fixture = await writeSmallArchive([], []);
+      const anchorPath = buildBackupArchivePath(fixture.archiveRoot, sourcePath);
+      const directoryPath = `${anchorPath}.postgres`;
+      const directory = path.join(fixture.root, directoryPath);
+      await fs.mkdir(directory, { recursive: true });
+      const anchor = path.join(fixture.root, anchorPath);
+      const storeId = "64c70dfe-1d42-4ae2-b7f1-197ff7eb3339";
+      {
+        using db = new DatabaseSync(anchor);
+        db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
+        db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', 'original')").run(
+          storeId,
+        );
+      }
+      await fs.copyFile(anchor, path.join(directory, "anchor.sqlite"));
+      {
+        using db = new DatabaseSync(path.join(directory, "database.sqlite"));
+        db.exec("CREATE TABLE notes (body TEXT); INSERT INTO notes VALUES ('retained')");
+      }
+      using walWriter = damage.endsWith(" WAL")
+        ? new DatabaseSync(
+            damage === "outer anchor WAL"
+              ? anchor
+              : path.join(
+                  directory,
+                  damage === "database WAL" ? "database.sqlite" : "anchor.sqlite",
+                ),
+          )
+        : undefined;
+      walWriter?.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA wal_checkpoint(TRUNCATE)",
+      );
+      const artifact = async (name: string) => {
+        const bytes = await fs.readFile(path.join(directory, name));
+        return {
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          sizeBytes: bytes.length,
+        };
+      };
+      const envelope: PostgresExportEnvelope = {
+        schemaVersion: 2,
+        snapshotId: path.basename(directory),
+        createdAt: "2026-10-16T00:00:00.000Z",
+        profile: "user-backup",
+        source: {
+          engine: "postgres",
+          storeId,
+          namespace: "original",
+          owner: "workboard",
+          schemaVersion: 1,
+        },
+        exportSchemaVersion: 1,
+        activeFragments: [],
+        verification: { tables: {}, allocations: {} },
+        sanitizedDifferences: [],
+        artifacts: {
+          "database.sqlite": await artifact("database.sqlite"),
+          "anchor.sqlite": await artifact("anchor.sqlite"),
+        },
+      };
+      const manifestPath = path.join(directory, "manifest.json");
+      await writeJson(manifestPath, envelope);
+      const archiveManifestPath = path.join(fixture.root, fixture.archiveRoot, "manifest.json");
+      const manifest = await readManifest(fixture.root, fixture.archiveRoot);
+      delete manifest.paths;
+      const captureHash = async () =>
+        createHash("sha256")
+          .update(await fs.readFile(manifestPath))
+          .digest("hex");
+      manifest.postgresSnapshots = [
+        { archivePath: directoryPath, manifestSha256: await captureHash() },
+      ];
+      manifest.assets = [
+        {
+          kind: "plugin",
+          sourcePath: "/synthetic",
+          archivePath: buildBackupArchivePath(fixture.archiveRoot, "/synthetic"),
+        },
+      ];
+      await writeJson(archiveManifestPath, manifest);
+      await expect(
+        verifyBackupArchive(
+          await repack(
+            fixture.root,
+            fixture.archiveRoot,
+            "valid",
+            // The checkpointed control image is sealed without the open writer's sidecars.
+            [
+              anchorPath,
+              `${directoryPath}/anchor.sqlite`,
+              `${directoryPath}/database.sqlite`,
+            ].flatMap((file) => [file + "-wal", file + "-shm"]),
+          ),
+        ),
+      ).resolves.toMatchObject({ ok: true });
+      if (walWriter) {
+        walWriter.exec(
+          damage === "database WAL"
+            ? "UPDATE notes SET body = 'unmanifested'"
+            : "UPDATE openclaw_engine_anchor SET schema = 'unmanifested'",
+        );
+      } else if (damage === "manifest binding") {
+        manifest.postgresSnapshots[0]!.manifestSha256 = "0".repeat(64);
+        await writeJson(archiveManifestPath, manifest);
+      } else if (damage === "unowned anchor") {
+        manifest.postgresSnapshots = [];
+        manifest.sqliteSnapshots = [{ sourcePath, role: "agent", agentId: "main" }];
+        manifest.paths = { stateDir: "/synthetic" };
+        manifest.assets[0]!.kind = "state";
+        await writeJson(archiveManifestPath, manifest);
+      } else if (damage === "pending capture") {
+        await fs.writeFile(path.join(directory, ".pending"), "");
+      } else if (damage === "image") {
+        await fs.appendFile(path.join(directory, "database.sqlite"), "corrupt");
+      } else if (damage === "manifest") {
+        await fs.writeFile(manifestPath, '{"source":{"engine":"postgres"}}');
+      } else {
+        const file = damage === "inner anchor" ? path.join(directory, "anchor.sqlite") : anchor;
+        {
+          using db = new DatabaseSync(file);
+          db.exec("UPDATE openclaw_engine_anchor SET schema = 'different'");
+        }
+        if (damage === "inner anchor") {
+          envelope.artifacts["anchor.sqlite"] = await artifact("anchor.sqlite");
+          await writeJson(manifestPath, envelope);
+          manifest.postgresSnapshots[0]!.manifestSha256 = await captureHash();
+          await writeJson(archiveManifestPath, manifest);
+        }
+      }
+      const damaged = await repack(fixture.root, fixture.archiveRoot, "damaged");
+      await expect(verifyBackupArchive(damaged)).rejects.toThrow(
+        damage === "manifest binding"
+          ? /does not match its capture inventory/
+          : walWriter
+            ? /unexpected SQLite sidecar/
+            : /verification failed/,
+      );
+    },
+  );
 });

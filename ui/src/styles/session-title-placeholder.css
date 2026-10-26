@@ -1,0 +1,26 @@
+.session-title-placeholder {
+  --skeleton-base: var(--border-strong);
+
+  display: inline-flex;
+  align-items: center;
+  width: 6.5em;
+  height: 1.2em;
+  vertical-align: middle;
+}
+
+.session-title-placeholder > span {
+  display: block;
+  width: 100%;
+  height: 0.55em;
+  border-radius: 3px;
+}
+
+.sidebar-recent-session--creating .sidebar-recent-session__link {
+  cursor: default;
+}
+
+/* A create lands atop a headerless first section. Use row spacing instead of
+   group spacing so the accepted row replaces this one without moving the rest. */
+.sidebar-recent-session--creating + .sidebar-recent-sessions__group--headless {
+  margin-top: calc(2px - var(--sidebar-group-gap));
+}

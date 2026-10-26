@@ -5,7 +5,10 @@ import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readToolStringParam } from "./common.js";
 
 const NO_PENDING_CHILD_COMPLETION_MESSAGE =
-  'No pending child completion is owned by this turn. This call did not pause the turn or schedule a continuation. Continue unfinished work; return its final result when complete. For background tools, follow their result\'s continuation instructions. An unfinished subagent waiting for an incoming continuation must explicitly set waitFor: "message".';
+  'No pending child completion is owned by this turn. This call did not pause the turn or schedule a continuation. Continue unfinished work; return its final result when complete. For background tools, follow their result\'s continuation instructions. Set waitFor: "message" only in a subagent session that is waiting for its requester to send it a continuation.';
+
+const WAIT_FOR_NOT_APPLIED_NOTE =
+  'waitFor: "message" was not applied: this turn yielded for its own pending child completions, which resume this session. Omit waitFor when yielding for children.';
 
 /**
  * A harness runtime's yield claim: true when this turn owns a pending completion,
@@ -63,7 +66,7 @@ const SessionsYieldToolSchema = Type.Object({
   waitFor: Type.Optional(
     Type.Literal("message", {
       description:
-        "Explicitly pause an unfinished subagent until an incoming continuation message; its requester is notified once. Does not schedule a message or submit the final result.",
+        "Only for a subagent with no pending children of its own that waits for its requester to send it a continuation. Omit when yielding for your own children: their completions resume this session. Does not send or schedule that message or submit a final result.",
     }),
   ),
   message: Type.Optional(
@@ -72,7 +75,7 @@ const SessionsYieldToolSchema = Type.Object({
   acknowledgment: Type.Optional(
     Type.String({
       description:
-        "Optional waiting reply for an otherwise-silent interactive parent turn; with waitFor, the pause notice for the requester.",
+        "Optional waiting reply in this session; with waitFor, text for an eligible task pause notice. Not an inter-session message.",
     }),
   ),
 });
@@ -94,7 +97,7 @@ export function createSessionsYieldTool(opts?: {
     // delivers this response's async results ahead of the yield result.
     async: false,
     description:
-      'End this turn for pending child completion events; this is not a final-result submission. For background tools, follow their result\'s continuation instructions. Return completed work normally. An unfinished subagent waiting for an incoming continuation must set waitFor:"message". Collector runs require explicit collection instead. acknowledgment can send a waiting reply for an otherwise-silent interactive parent.',
+      'End this turn to await pending child completions, not submit a final result. Return completed work normally. Does not message other sessions. Omit waitFor when yielding for your own children; their completions resume this session. Set waitFor:"message" only when a subagent has no pending children and waits for its requester to send it a continuation. For background tools, follow their continuation instructions. Collector runs require explicit collection instead.',
     parameters: SessionsYieldToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -151,6 +154,8 @@ export function createSessionsYieldTool(opts?: {
       return jsonResult({
         status: "yielded",
         ...(acknowledgment ? { acknowledgment } : {}),
+        // A completion claim resumes this session itself, so the runtime records no message wait.
+        ...(waitFor === "message" && claim === true ? { note: WAIT_FOR_NOT_APPLIED_NOTE } : {}),
       });
     },
   };

@@ -1,7 +1,5 @@
-import type {
-  ProviderAppGuidedSetupContext,
-  ProviderCatalogContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
+import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { expect, it } from "vitest";
 import llamaCppProviderDiscovery from "../../provider-discovery.js";
@@ -27,6 +25,13 @@ async function refresh(config: ProviderCatalogContext["config"]) {
   return result.provider.models;
 }
 
+const facts = (contextWindow: number, supportsTools: boolean, contextTokens = contextWindow) => ({
+  contextWindow,
+  contextTokens,
+  compat: { supportsTools },
+});
+const absentFacts = /"(?:contextWindow|contextTokens|supportsTools)"/u;
+
 it("persists verified router facts and refreshes unknown fields without replacing explicit values", async () => {
   let loadedModel = "model-a";
   const propsRequests: string[] = [];
@@ -34,77 +39,56 @@ it("persists verified router facts and refreshes unknown fields without replacin
     (request, response) => {
       const url = new URL(request.url ?? "/", "http://localhost");
       response.setHeader("Content-Type", "application/json");
+      const send = (body: unknown) => response.end(JSON.stringify(body));
       if (url.pathname === "/health") {
         response.end("{}");
       } else if (url.pathname === "/models") {
-        response.end(
-          JSON.stringify({
-            data: ["model-a", "model-b"].map((id) => ({
-              id,
-              object: "model",
-              status: { value: id === loadedModel ? "loaded" : "unloaded" },
-            })),
-          }),
-        );
+        send({
+          data: ["model-a", "model-b"].map((id) => ({
+            id,
+            object: "model",
+            status: { value: id === loadedModel ? "loaded" : "unloaded" },
+          })),
+        });
       } else if (url.pathname === "/props") {
         propsRequests.push(url.search);
-        response.end(
-          JSON.stringify({
-            default_generation_settings: { n_ctx: 32768 },
-            chat_template_caps: { supports_tool_calls: true },
-          }),
-        );
+        send({
+          default_generation_settings: { n_ctx: 32768 },
+          chat_template_caps: { supports_tool_calls: true },
+        });
       } else {
         response.statusCode = 404;
         response.end("{}");
       }
     },
     async (baseUrl) => {
-      const context: ProviderAppGuidedSetupContext = {
-        config: {
-          models: {
-            providers: {
-              "llama-cpp": {
-                baseUrl,
-                headers: { Authorization: "Bearer router-fixture" },
-                models: [],
-              },
-            },
-          },
-        },
-        env: {},
+      const configured = {
+        baseUrl,
+        headers: { Authorization: "Bearer router-fixture" },
+        models: [],
       };
       const setup = await prepareLlamaServerSetup({
-        ...context,
+        config: { models: { providers: { "llama-cpp": configured } } },
+        env: {},
         modelRef: "llama-cpp/model-a",
       });
-      const saved = setup?.configPatch;
+      const saved = setup ? applyProviderAuthConfigPatch({}, setup.configPatch, setup) : undefined;
       const provider = saved?.models?.providers?.["llama-cpp"];
       if (!saved || !provider) {
         throw new Error("Expected a llama-server setup config patch");
       }
-      expect(provider.models.find((model) => model.id === "model-a")).toMatchObject({
-        contextWindow: 32768,
-        contextTokens: 32768,
-        compat: { supportsTools: true },
-      });
+      expect(provider.models.find((model) => model.id === "model-a")).toMatchObject(
+        facts(32768, true),
+      );
       const unloaded = provider.models.find((model) => model.id === "model-b");
       expect(unloaded).toMatchObject({ id: "model-b" });
-      expect(JSON.stringify(unloaded)).not.toMatch(
-        /"(?:contextWindow|contextTokens|supportsTools)"/u,
-      );
+      expect(JSON.stringify(unloaded)).not.toMatch(absentFacts);
 
-      expect((await refresh(saved)).find((model) => model.id === "model-b")).toMatchObject({
-        contextWindow: 128000,
-        contextTokens: 128000,
-        compat: { supportsTools: false },
-      });
+      const refreshModel = async () =>
+        (await refresh(saved)).find((model) => model.id === "model-b");
+      expect(await refreshModel()).toMatchObject(facts(128000, false));
       loadedModel = "model-b";
-      expect((await refresh(saved)).find((model) => model.id === "model-b")).toMatchObject({
-        contextWindow: 32768,
-        contextTokens: 32768,
-        compat: { supportsTools: true },
-      });
+      expect(await refreshModel()).toMatchObject(facts(32768, true));
 
       const savedModels = provider.models;
       for (const route of [
@@ -114,36 +98,19 @@ it("persists verified router facts and refreshes unknown fields without replacin
         provider.models = savedModels.map((model) =>
           model.id === "model-b" ? Object.assign({}, model, route) : model,
         );
-        const otherRoute = (await refresh(saved)).find((model) => model.id === "model-b");
+        const otherRoute = await refreshModel();
         expect(otherRoute).toMatchObject(route);
-        expect(JSON.stringify(otherRoute)).not.toMatch(
-          /"(?:contextWindow|contextTokens|supportsTools)"/u,
-        );
+        expect(JSON.stringify(otherRoute)).not.toMatch(absentFacts);
       }
       provider.models = savedModels;
 
       provider.models = provider.models.map((model) =>
-        model.id === "model-b"
-          ? Object.assign({}, model, {
-              contextWindow: 24000,
-              contextTokens: 16000,
-              compat: { supportsTools: false },
-            })
-          : model,
+        model.id === "model-b" ? Object.assign({}, model, facts(24000, false, 16000)) : model,
       );
-      expect((await refresh(saved)).find((model) => model.id === "model-b")).toMatchObject({
-        contextWindow: 24000,
-        contextTokens: 16000,
-        compat: { supportsTools: false },
-      });
-      expect(propsRequests).toEqual([
-        "?model=model-a&autoload=false",
-        "?model=model-a&autoload=false",
-        "?model=model-b&autoload=false",
-        "?model=model-b&autoload=false",
-        "?model=model-b&autoload=false",
-        "?model=model-b&autoload=false",
-      ]);
+      expect(await refreshModel()).toMatchObject(facts(24000, false, 16000));
+      expect(propsRequests).toEqual(
+        ["a", "a", "b", "b", "b", "b"].map((id) => `?model=model-${id}&autoload=false`),
+      );
     },
   );
 });

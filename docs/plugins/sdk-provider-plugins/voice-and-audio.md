@@ -120,6 +120,11 @@ Register each capability inside `register(api)` alongside your existing
     filenames, including AAC uploads that need an M4A-style filename for
     compatible transcription APIs.
 
+    `requireTranscriptionText(value, message)` validates the response transcript
+    and trims whitespace. An empty string represents audio without detected
+    speech and is returned unchanged; the media runner records a nonfatal skip.
+    Missing or non-string values still throw with the supplied message.
+
     Official plugins can use the private `blob-runtime` helper
     `bufferToBlobPart(buffer)` for other multipart uploads. Pass it directly to
     `new Blob(...)` to preserve the Buffer range without an intermediate copy;
@@ -132,8 +137,8 @@ Register each capability inside `register(api)` alongside your existing
     to `listRealtimeVoiceProviders(cfg, providerIds)`. Omit the argument for
     ordinary catalog discovery; per-call candidates do not change that catalog.
     Automatic realtime voice and Voice Call transcription selection uses declared alias config as
-    defaults, with earlier aliases preferred and canonical values taking precedence.
-    An explicitly selected alias still overrides canonical config without inheriting
+    defaults, with earlier aliases preferred and primary-provider values taking precedence.
+    An explicitly selected alias still overrides primary-provider config without inheriting
     settings from other aliases.
 
     `resolveConfig` receives optional host context alongside `cfg` and `rawConfig`:
@@ -148,7 +153,9 @@ Register each capability inside `register(api)` alongside your existing
     when Gateway relay policy controls responses. `talk.catalog` resolves the
     provider's discovery default for the configured Talk agent and provider
     settings, excluding an explicit model; readiness and capabilities use the
-    effective model overrides.
+    effective model overrides. Within one catalog request, the selected realtime
+    provider's resolved configuration, readiness, and capabilities are reused for
+    its catalog entry. Each new request checks availability again.
     Consumers adding a new transport without changing existing model defaults
     can pass `useProviderDefaultModel: true` to
     `resolveConfiguredRealtimeVoiceProvider(...)`. This fills an absent model
@@ -403,27 +410,71 @@ Register each capability inside `register(api)` alongside your existing
     failure. Closing a transport and canceling accepted host work are
     separate lifecycle operations.
 
+    Gateway-relay clients express this choice with `talk.session.close`'s
+    optional `disposition`: `"detach"` preserves accepted agent work when
+    the client fails, while `"abort"` (or omission) cancels it on Stop. Check
+    the `talk-session-close-disposition` capability before sending the field.
+    On failure, the original agent answers remain visible alongside any recorded
+    speech; speech alone cannot prove which overlapping consults were delivered.
+    Answers finishing after detachment are visible when first recorded. Already-hidden
+    answers receive a new visible transcript entry, excluded from model context;
+    closing Talk never rewrites the original transcript messages.
+
   </Tab>
   <Tab title="Media understanding">
+    Media registrations should declare static capability metadata, not capture
+    `api.config` to calculate capabilities. A provider can opt into
+    `inheritConfiguredImageCapability: true` to add image support when the
+    **current request's** configured provider models include an image input.
+    The host projects this onto a fresh per-request provider without changing
+    the registered object. Omission or `false` preserves existing behavior;
+    this does not add a provider-specific image executor or bypass request auth.
+
+    `sharedEntryCapabilities` optionally narrows inference for entries in
+    `tools.media.models` that omit capabilities. Omission infers the provider's
+    effective capabilities as before; `[]` infers none. A supplied list is
+    intersected with effective capabilities, so it cannot grant unsupported
+    capabilities. Explicit entry capabilities, CLI entries, and runtime
+    overrides retain their existing precedence. For example, an audio provider
+    with `inheritConfiguredImageCapability: true` and
+    `sharedEntryCapabilities: ["image"]` preserves configured shared image
+    entries without turning legacy shared chat entries into audio selection.
+
     Audio providers with their own credential and endpoint contracts can
     implement `transcribeAudioWithContext(request)`. The host calls it after
     loading each audio file. The request includes the audio bytes, filename,
     model, prompt, language, timeout, transport settings, configuration,
     agent directory, and selected profile. Resolve credentials for that call;
-    do not retain credentials across attachment downloads.
+    do not retain credentials across attachment downloads. The host carries its
+    request authority through the provider callback and checks it again in the
+    guarded transport after DNS resolution and immediately before network dispatch.
+    Use the host guarded transport for uploads; plugins do not receive or manage
+    the admission callback.
 
     Return `{ ok: true, value: { text, model } }` after transcription. Return
     `{ ok: false, error }` only for authentication or configuration rejected
     **before uploading audio**. The host records that error and automatic
-    selection may try the next provider or local backend. Canonical missing
-    provider auth leaves the automatic candidate unavailable without a failed
-    attempt. Upload and HTTP failures must throw: automatic selection then
+    selection may try the next provider or local backend. A `ProviderAuthError`
+    with code `missing-provider-auth` leaves any automatic candidate unavailable
+    without a failed-attempt record. Other returned errors are recorded as failed
+    attempts. Upload and HTTP failures must throw: automatic selection then
     stops without sending the recording to another provider. Explicit model
     lists retain their authored fallback order.
 
     Return the model when known; otherwise the host retains the requested
     model in its result. `transcribeAudio` remains available for providers
     using host-owned API-key resolution and rotation.
+
+    Providers can implement optional `isAudioConfigured(context)` to report
+    audio readiness using their own credential and endpoint rules. It returns
+    a boolean or `Promise<boolean>`. The exported `AudioTranscriptionConfigContext`
+    includes configuration, profile selectors, model, agent/workspace directories,
+    and effective base URL, headers, and request overrides; it contains no audio.
+    Gateway Talk checks this hook before advertising or admitting file transcription.
+    Share credential preparation with transcription, but resolve credentials again
+    for the actual upload. Readiness does not authorize a later request.
+    Without this hook, context providers retain their existing readiness behavior;
+    providers using `transcribeAudio` retain host-owned credential checks.
 
     Bundled media providers can use `openProviderWebSocket(...)` from the
     private-local `openclaw/plugin-sdk/provider-http` entrypoint. Resolve

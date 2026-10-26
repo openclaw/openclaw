@@ -1,8 +1,8 @@
 import {
+  hasNonEmptyString,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveActiveReplyOperationForSessionId } from "../../auto-reply/reply/reply-run-registry.js";
 import { isScheduledMessageWriteAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
@@ -10,6 +10,7 @@ import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import * as messageActionTurnCapability from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -26,7 +27,9 @@ import { isDeliveredCurrentSourceReplyAsync } from "../../infra/outbound/source-
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
+import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import * as embeddedMessageDelivery from "../embedded-agent-message-delivery.js";
@@ -47,6 +50,11 @@ import {
   resolveEffectiveCurrentChannelContextForRequest,
   resolveMessageToolActionSchemaActions,
   resolveMessageToolDiscoveryAsync,
+  resolveMessageToolDefinitionContext,
+  prepareMessageToolSessionBinding,
+  readMessageToolSessionEntry,
+  resolveMessageToolScheduledAccountScope,
+  supportsMessageToolPromptReactions,
 } from "./message-tool-discovery.js";
 import type { MessageToolOptions } from "./message-tool-execution.types.js";
 import { createMessageToolExplicitTargetGuard } from "./message-tool-explicit-target.js";
@@ -62,12 +70,10 @@ import {
 } from "./message-tool-scheduled-execution.js";
 import { MessageToolSchema } from "./message-tool-schema.js";
 import {
-  addSourceReplyFinalControl,
   enforceSourceReplyOnlyMessageAction,
   enforceSourceReplyOnlyTextDirectives,
   enforceTrustedTurnExplicitAccount,
   resolveSourceReplySinkDeliveryMode,
-  SOURCE_REPLY_ONLY_MESSAGE_SCHEMA,
 } from "./message-tool-source-policy.js";
 import { createMessageToolTurnAuthority } from "./message-tool-turn-authority.js";
 import {
@@ -82,7 +88,7 @@ import {
 } from "./poll-vote-echo.js";
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
-  const steps = createMessageToolSteps(options);
+  const steps = createMessageToolSteps(options, readMessageToolSessionEntry(options));
   let next = steps.next();
   while (!next.done) {
     const actions = resolveMessageToolActionSchemaActions(next.value);
@@ -92,7 +98,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 }
 
 export async function createMessageToolAsync(options?: MessageToolOptions): Promise<AnyAgentTool> {
-  const steps = createMessageToolSteps(options);
+  const steps = createMessageToolSteps(options, await prepareMessageToolSessionBinding(options));
   let next = steps.next();
   while (!next.done) {
     next = steps.next(await resolveMessageToolDiscoveryAsync(next.value));
@@ -102,6 +108,7 @@ export async function createMessageToolAsync(options?: MessageToolOptions): Prom
 
 function* createMessageToolSteps(
   options?: MessageToolOptions,
+  sessionEntry?: SessionEntry,
 ): Generator<
   MessageToolDiscoveryParams,
   AnyAgentTool,
@@ -110,16 +117,12 @@ function* createMessageToolSteps(
   const workspaceReadiness = captureAgentWorkspaceReadiness(
     options?.runSessionKey ?? options?.agentSessionKey,
   );
-  const loadConfigForTool = options?.getRuntimeConfig ?? getRuntimeConfig;
-  const getScopedSecretTargetsForTool =
-    options?.getScopedChannelsCommandSecretTargets ?? getScopedChannelsCommandSecretTargets;
-  const resolveSecretRefsForTool =
-    options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
-  const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
   let generatedIdempotencyCounter = 0;
   const rawPollEchoSessionKey = options?.agentSessionKey?.trim() || undefined;
   const failedAutogeneratedIdempotencyKeys = new Map<string, string>();
   const inferredCurrentChannel = resolveEffectiveCurrentChannelContext(options);
+  const definitionContext = resolveMessageToolDefinitionContext(options, sessionEntry);
+  const supportsPromptReactions = supportsMessageToolPromptReactions(options);
   const preparedMessageToolCatalog =
     options?.preparedMessageToolCatalog ?? getPreparedMessageToolCatalog();
   const currentThreadTs =
@@ -149,30 +152,31 @@ function* createMessageToolSteps(
     runId: options?.runId,
     sessionKey: options?.agentSessionKey,
     sessionId: options?.sessionId,
-    getConfig: () => options?.config ?? loadConfigForTool(),
+    getConfig: () => options?.config ?? getRuntimeConfig(),
     admitScheduledInvocation: options?.admitScheduledInvocation,
   });
-  const messageToolDiscoveryParams: MessageToolDiscoveryParams | undefined =
-    options?.config && !options.sourceReplyOnly
-      ? {
-          cfg: options.config,
-          currentChatType: inferredCurrentChannel.currentChatType,
-          currentChannelProvider: inferredCurrentChannel.currentChannelProvider,
-          currentChannelId: inferredCurrentChannel.currentChannelId,
-          currentThreadTs,
-          currentMessageId: options.currentMessageId,
-          currentPromptReaction: turnAuthority.hasCurrentPromptReaction,
-          currentAccountId: agentAccountId,
-          isScheduledRun: turnAuthority.isScheduledRun,
-          scheduledAccountScope: turnAuthority.scheduledAccountScope,
-          sessionKey: options.agentSessionKey,
-          sessionId: options.sessionId,
-          agentId: resolvedAgentId,
-          requesterSenderId: options.requesterSenderId,
-          senderIsOwner: options.senderIsOwner,
-          preparedMessageToolCatalog,
-        }
-      : undefined;
+  const messageToolDiscoveryParams: MessageToolDiscoveryParams | undefined = options?.config
+    ? {
+        cfg: options.config,
+        currentChatType: definitionContext.currentChatType,
+        currentChannelProvider: definitionContext.currentChannelProvider,
+        currentChannelId: definitionContext.currentChannelId,
+        currentThreadTs: definitionContext.currentThreadTs,
+        supportsPromptReactions,
+        currentAccountId:
+          definitionContext.accountId ??
+          (options.agentSessionKey ? undefined : options.agentAccountId),
+        isScheduledRun: isCronSessionKey(options.agentSessionKey),
+        scheduledAccountScope: resolveMessageToolScheduledAccountScope(
+          options.scheduledToolPolicy,
+          sessionEntry,
+        ),
+        sessionKey: options.agentSessionKey,
+        sessionId: options.sessionId,
+        agentId: resolvedAgentId,
+        preparedMessageToolCatalog,
+      }
+    : undefined;
   // Model-supplied channel text is untrusted until routing resolves it. Early
   // denials retain only the host-prepared source provider.
   const decisionChannel = resolveTrustedDecisionChannel(
@@ -190,15 +194,14 @@ function* createMessageToolSteps(
   // across plugin hooks while needlessly loading channel action metadata twice.
   const discovered = messageToolDiscoveryParams ? yield messageToolDiscoveryParams : undefined;
   const actions = discovered?.actions;
-  const baseSchema = options?.sourceReplyOnly
-    ? SOURCE_REPLY_ONLY_MESSAGE_SCHEMA
-    : (discovered?.schema ?? MessageToolSchema);
-  const description = options?.sourceReplyOnly
-    ? "Send a message to the current source conversation. Supports actions: send."
-    : buildMessageToolDescription(actions) +
-      (turnAuthority.hasCurrentPromptReaction && (!actions || actions.includes("react"))
-        ? " In this WebChat turn, react with emoji (and optional remove:true) to the current prompt as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions."
-        : "");
+  // A source-bound completion keeps the session's message definition so its
+  // prompt prefix stays cached; the source-reply policy is enforced per call.
+  const baseSchema = discovered?.schema ?? MessageToolSchema;
+  const description =
+    buildMessageToolDescription(actions) +
+    (supportsPromptReactions && (!actions || actions.includes("react"))
+      ? " When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions."
+      : "");
   const sandboxRoot = options?.sandboxRoot?.trim();
   const sandboxWorkspaceMediaAccess =
     sandboxRoot && options?.sandboxFsBridge && options.sandboxWorkspaceMediaReadAllowed === true
@@ -220,7 +223,7 @@ function* createMessageToolSteps(
     name: "message",
     displaySummary: "Send and manage messages across configured channels.",
     description,
-    parameters: addSourceReplyFinalControl(baseSchema),
+    parameters: baseSchema,
     prepareBeforeToolCallParams: explicitTargetGuard?.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: explicitTargetGuard?.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal) => {
@@ -233,6 +236,7 @@ function* createMessageToolSteps(
       const {
         authorization: trustedTurnContext,
         currentPromptReaction,
+        sourceReplyOperation,
         config: rawConfig,
         scheduledRead,
         assertDashboardReadCurrent,
@@ -333,14 +337,20 @@ function* createMessageToolSteps(
       if (explicitTargetGuard) {
         decisions.runBoundary(() => explicitTargetGuard.require(params, action));
       }
-      // The admitted prompt wins over an inherited external delivery route. Only
-      // an explicit external channel enters the ordinary channel reaction path.
-      const requestedReactionChannel = normalizeOptionalLowercaseString(params.channel);
-      if (
-        action === "react" &&
-        currentPromptReaction &&
-        (!requestedReactionChannel || requestedReactionChannel === "webchat")
-      ) {
+      // A live local prompt grant wins over an inherited external delivery route.
+      const requestedChannel = normalizeOptionalLowercaseString(params.channel);
+      const reactionChannel =
+        requestedChannel ??
+        (currentPromptReaction ||
+        parseAgentSessionKey(options?.agentSessionKey)?.rest.startsWith("dashboard:")
+          ? "webchat"
+          : normalizeMessageChannel(options?.currentChannelProvider)) ??
+        "webchat";
+      const reactsToCurrentPrompt = action === "react" && reactionChannel === "webchat";
+      if (reactsToCurrentPrompt && !currentPromptReaction) {
+        throw new Error("No prompt here permits reactions; pass channel, target, and messageId.");
+      }
+      if (reactsToCurrentPrompt && currentPromptReaction) {
         const allowedParams = new Set(["action", "channel", "emoji", "remove", "dryRun"]);
         if (
           Object.keys(params).some((key) => params[key] !== undefined && !allowedParams.has(key))
@@ -370,8 +380,8 @@ function* createMessageToolSteps(
         assertActionCurrent();
         const sourceReplyDelivered =
           requestedSourceReplyFinal === true && result.changed && !remove && !dryRun;
-        if (sourceReplyDelivered && options?.sessionId) {
-          resolveActiveReplyOperationForSessionId(options.sessionId)?.markSourceReplyDelivered();
+        if (sourceReplyDelivered) {
+          sourceReplyOperation?.markSourceReplyDelivered();
         }
         return embeddedMessageDelivery.attachEmbeddedMessageDeliveryFact(
           jsonResult({ ok: true, channel: "webchat", ...result, remove, dryRun }),
@@ -401,17 +411,12 @@ function* createMessageToolSteps(
           checkResolvedAccount: false,
         }),
       );
-      const requestedBroadcastChannel = normalizeOptionalLowercaseString(params.channel);
-      if (
-        action === "broadcast" &&
-        requestedBroadcastChannel &&
-        requestedBroadcastChannel !== "all"
-      ) {
+      if (action === "broadcast" && requestedChannel && requestedChannel !== "all") {
         // Authorize and execute the same canonical provider. Otherwise an unavailable
         // hint can fall back to the current provider only after account authorization.
         const selection = await resolveMessageChannelSelection({
           cfg: rawConfig,
-          channel: requestedBroadcastChannel,
+          channel: requestedChannel,
           fallbackChannel: effectiveCurrentChannel.currentChannelProvider,
         });
         params.channel = selection.channel;
@@ -428,7 +433,7 @@ function* createMessageToolSteps(
       // prefixes cannot authorize fewer providers than the runner will execute.
       const unscopedExplicitBroadcast =
         action === "broadcast" &&
-        (!requestedBroadcastChannel || requestedBroadcastChannel === "all") &&
+        (!requestedChannel || requestedChannel === "all") &&
         requestedAccountId !== undefined;
       const explicitAccountId = await decisions.runBoundaryAsync(() =>
         validateExplicitMessageAccountSelection({
@@ -460,14 +465,14 @@ function* createMessageToolSteps(
         scope.accountId = explicitAccountId;
         params.accountId = explicitAccountId;
       }
-      const scopedTargets = getScopedSecretTargetsForTool({
+      const scopedTargets = getScopedChannelsCommandSecretTargets({
         config: rawConfig,
         channel: broadcastAccountPlan ? undefined : scope.channel,
         ...(broadcastAccountPlan ? { channels: broadcastAccountPlan.secretChannels } : {}),
         accountId: scope.accountId,
       });
       const cfg = (
-        await resolveSecretRefsForTool({
+        await resolveCommandSecretRefsViaGateway({
           config: rawConfig,
           commandName: "tools.message",
           targetIds: scopedTargets.targetIds,
@@ -496,18 +501,14 @@ function* createMessageToolSteps(
         });
       }
 
-      const hasCurrentMessageId =
-        typeof options?.currentMessageId === "number" ||
-        (typeof options?.currentMessageId === "string" &&
-          options.currentMessageId.trim().length > 0);
-
       const toolContext =
         effectiveCurrentChannel.currentChannelId ||
         effectiveCurrentChannel.currentChatType ||
         effectiveCurrentChannel.currentChannelProvider ||
         effectiveCurrentChannel.currentMessagingTarget ||
         currentThreadTs ||
-        hasCurrentMessageId ||
+        typeof options?.currentMessageId === "number" ||
+        hasNonEmptyString(options?.currentMessageId) ||
         replyToMode ||
         options?.hasRepliedRef ||
         options?.sameChannelThreadRequired
@@ -534,9 +535,6 @@ function* createMessageToolSteps(
         toolContext,
         catalog: preparedMessageToolCatalog,
       });
-      if (groupThread.silent) {
-        return jsonResult({ status: "suppressed", reason: "silent_reply" });
-      }
       let autogeneratedDeliveryFingerprint: string | undefined;
       let actionIdempotencyKey = normalizeOptionalString(params.idempotencyKey);
       if (!actionIdempotencyKey && options?.runId) {
@@ -568,7 +566,7 @@ function* createMessageToolSteps(
           try {
             result = await runWithAgentToolSourceExecutionScope(assertActionCurrent, () =>
               groupThread.run(() =>
-                runMessageActionForTool({
+                runMessageAction({
                   cfg,
                   action,
                   params: actionParams,
@@ -602,10 +600,13 @@ function* createMessageToolSteps(
                   sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
                   sourceReplyTranscriptOnly: options?.inputProvenance?.kind === "inter_session",
                   // Only an admitted channel source can arm terminal restart reconciliation.
-                  // Source-less scheduled and ambient sends remain ordinary message actions.
+                  // Preserve explicit progress even without a source turn: recovery must not
+                  // mistake its persisted mirror for a completed assistant reply.
                   sourceReplyFinal: hasExactSourceTurn
                     ? (requestedSourceReplyFinal ?? true)
-                    : undefined,
+                    : action === "send" && requestedSourceReplyFinal === false
+                      ? false
+                      : undefined,
                   sourceReplyToolCallId: hasExactSourceTurn ? toolCallId : undefined,
                   onActionDenied: (error, channel, receiptDiscriminator) =>
                     decisions.recordTypedDenial(
@@ -659,8 +660,7 @@ function* createMessageToolSteps(
             resolveTrustedDecisionChannel(result.channel, preparedMessageToolCatalog),
           );
           const toolResult = getToolResult(result);
-          // A2A enters through webchat but resolves an external source route here.
-          // Compare the completed send with that route, independently of display mirrors.
+          // Resolve source completion independently of display mirrors.
           const sourceReply = {
             action,
             cfg,
@@ -675,8 +675,9 @@ function* createMessageToolSteps(
             replyToIsExplicit: Boolean(readToolStringParam(actionParams, "replyTo")),
           };
           const currentSourceReply =
-            result.handledBy !== "internal-source" &&
-            (await isDeliveredCurrentSourceReplyAsync(sourceReply));
+            result.handledBy === "internal-source"
+              ? options?.inputProvenance?.kind !== "inter_session"
+              : await isDeliveredCurrentSourceReplyAsync(sourceReply);
           // A completed provider write must settle even if its caller was revoked
           // while awaiting the accepted response. Its next request stays fenced.
           if (
@@ -707,11 +708,7 @@ function* createMessageToolSteps(
           ) {
             messageDelivery.sourceReplyDelivered = true;
             // A later stall cannot erase this answer; recovery and its notice read it.
-            if (options?.sessionId) {
-              resolveActiveReplyOperationForSessionId(
-                options.sessionId,
-              )?.markSourceReplyDelivered();
-            }
+            sourceReplyOperation?.markSourceReplyDelivered();
           }
           if (action === "poll-vote" && pollVoteEchoRoute && pollEchoSessionKey) {
             const details = toolResult?.details as { pollVotedOption?: unknown } | undefined;

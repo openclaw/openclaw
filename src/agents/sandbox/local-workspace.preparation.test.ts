@@ -10,12 +10,14 @@ import { prepareLocalSandboxWorkspace } from "./local-workspace.js";
 
 type Projection = Pick<ReturnType<typeof projectionOperations>, "reuse" | "prepare">;
 const fixture = vi.hoisted(() => {
-  const owner: LocalWorkspaceOwner = {
+  const release = vi.fn();
+  const owner: LocalWorkspaceOwner & Disposable = {
     agentId: "main",
     sessionKey: "agent:main:fixture",
     sessionId: "fixture-session",
     lifecycleRevision: null,
     assertCurrent: () => {},
+    [Symbol.dispose]: release,
     worktree: {
       id: "fixture-worktree",
       name: "fixture",
@@ -32,6 +34,7 @@ const fixture = vi.hoisted(() => {
   };
   return {
     owner,
+    release,
     reuse: vi.fn<Projection["reuse"]>(),
     prepare: vi.fn<Projection["prepare"]>(),
     allocate: vi.fn(() => {
@@ -70,7 +73,7 @@ it.each([
   fixture.reuse.mockResolvedValue(existing);
   fixture.prepare.mockResolvedValue("/projection/fixture");
   const cfg: OpenClawConfig = { worktreeAcceleration: acceleration };
-  const workspace = await withWorktreePreparationTiming("sandbox", () =>
+  using workspace = await withWorktreePreparationTiming("sandbox", () =>
     prepareLocalSandboxWorkspace({
       cfg,
       agentId: fixture.owner.agentId,

@@ -1,10 +1,12 @@
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { ControlUiHost, ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createActiveSessionPlacement } from "../test-helpers/session-placement.ts";
 import { collectKnownSessionRows, fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
 import {
   buildReconciledSidebarZone,
@@ -16,7 +18,8 @@ import {
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sidebar-session-types.ts";
-import { renderTeamSessionSlots } from "./session-attention-presentation.ts";
+import { SidebarSessionRowProjection } from "./sidebar-projection-cache.ts";
+import { TeamSessionSlots } from "./solid/session-presentation.tsx";
 
 it("does not manufacture personal pins from plugin defaults", () => {
   const pluginNavigation = [
@@ -294,19 +297,7 @@ describe("sidebar navigation lineage ownership", () => {
       const row = (key: string, status: "available" | "offline"): GatewaySessionRow => ({
         ...child,
         key,
-        placement: {
-          state: "active",
-          generation: 1,
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          stateChangedAtMs: 1,
-          environmentId: "worker:device",
-          activeOwnerEpoch: 1,
-          workerBundleHash: "a".repeat(64),
-          workspaceBaseManifestRef: "manifest",
-          remoteWorkspaceDir: "/workspace",
-          runner: { kind: "device", status },
-        },
+        placement: createActiveSessionPlacement({ runner: { kind: "device", status } }),
       });
       const canonical = {
         ...row(rootKey, "offline"),
@@ -625,13 +616,19 @@ describe("sidebar navigation lineage ownership", () => {
       [tree!, false, "Waiting for approval\nReview deployment"],
       [tree!.children[0]!, false, "2 questions need your answer\nChoose a region\n+1 more"],
     ] as const) {
-      render(
-        renderTeamSessionSlots([row], includeChildren, row.childSessionKeys.length),
-        container,
+      const view = mountSolid(
+        () =>
+          createComponent(TeamSessionSlots, {
+            rows: [row],
+            includeChildren,
+            childCount: row.childSessionKeys.length,
+          }),
+        { container },
       );
       expect(container.querySelector("[data-session-attention]")?.getAttribute("aria-label")).toBe(
         label,
       );
+      view.unmount();
     }
   });
 
@@ -704,6 +701,7 @@ it("keeps a prepared worktree session in Coding before canonical metadata arrive
     sessions: {
       isPreparedWorkSession: (candidate: string) => candidate === key,
       pullRequestSummary: () => undefined,
+      isRunVisuallyActive: () => false,
     },
   } as unknown as Parameters<typeof buildSidebarSessionNavigationState>[0]["context"];
   const navigation = buildSidebarSessionNavigationState({
@@ -722,7 +720,7 @@ it("keeps a prepared worktree session in Coding before canonical metadata arrive
     statusFilter: "active",
     compareSessions: () => 0,
     highlightCurrentSession: true,
-    runtimeSampledAtByRow: new WeakMap(),
+    rowProjection: new SidebarSessionRowProjection(),
     loadingChildSessionKeys: new Set(),
     outboxAttentionCountForSessionKey: () => 0,
     hasSessionDraft: () => false,

@@ -1,5 +1,4 @@
-import * as childProcess from "node:child_process";
-import { execFileSync } from "node:child_process";
+import * as cp from "node:child_process";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as os from "node:os";
@@ -9,7 +8,7 @@ import { vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
 import {
   createWorkerProjectPreparation,
-  readWorkerProjectSetupRecipe,
+  readWorkerProjectEnvironmentRecipe,
 } from "./project-preparation.js";
 import { prepareWorkerProjectSnapshot, workerProjectSeedKey } from "./workspace-git-base.js";
 
@@ -21,8 +20,8 @@ export async function runProjectScriptWithGitProbe(
   home: string,
   probe: (
     args: string[],
-    options: childProcess.SpawnSyncOptionsWithStringEncoding,
-  ) => childProcess.SpawnSyncReturns<string> | undefined,
+    options: cp.SpawnSyncOptionsWithStringEncoding,
+  ) => cp.SpawnSyncReturns<string> | undefined,
 ): Promise<string> {
   let stdout = "";
   let stderr = "";
@@ -36,32 +35,27 @@ export async function runProjectScriptWithGitProbe(
     removeListener: process.removeListener.bind(process),
     kill: process.kill.bind(process),
   };
+  const modules = new Map<string, unknown>([
+    ["node:os", { ...os, homedir: () => home }],
+    [
+      "node:child_process",
+      {
+        ...cp,
+        spawnSync: (command: string, ...args: Parameters<typeof probe>) =>
+          (command === "git" ? probe(...args) : undefined) ?? cp.spawnSync(command, ...args),
+      },
+    ],
+  ]);
   // Both provider scripts wrap their Node program in a shell heredoc.
-  await runInNewContext(script.split("\n").slice(2, -1).join("\n"), {
+  const source = script.slice(script.indexOf("\n", script.indexOf("node <<'PROJECT_")) + 1);
+  await runInNewContext(source.slice(0, source.lastIndexOf("\n")), {
     Buffer,
     performance,
     setTimeout,
     clearTimeout,
     process: guestProcess,
     console: { error: (text: string) => (stderr += text) },
-    require: (id: string) => {
-      if (id === "node:os") {
-        return { ...os, homedir: () => home };
-      }
-      if (id === "node:child_process") {
-        return {
-          ...childProcess,
-          spawnSync: (
-            command: string,
-            args: string[],
-            options: childProcess.SpawnSyncOptionsWithStringEncoding,
-          ) =>
-            (command === "git" ? probe(args, options) : undefined) ??
-            childProcess.spawnSync(command, args, options),
-        };
-      }
-      return requireModule(id);
-    },
+    require: (id: string) => modules.get(id) ?? requireModule(id),
   });
   if (guestProcess.exitCode !== 0) {
     throw new Error(stderr);
@@ -73,26 +67,32 @@ export async function createProjectPreparationFixture(
   directory: string,
   setup?: string,
   symlink = false,
+  files: Record<string, string> = {},
 ) {
   const root = await fs.realpath(directory);
   const repository = path.join(root, "repository");
   const home = path.join(root, "worker-home");
+  const write = async (relative: string, content: string, mode?: number) => {
+    const file = path.join(repository, relative);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, content, { mode });
+  };
   await fs.mkdir(repository);
   await fs.mkdir(home);
   await requireGit(repository, ["init", "--quiet"]);
   await requireGit(repository, ["config", "user.name", "Project Test"]);
   await requireGit(repository, ["config", "user.email", "project@example.invalid"]);
   await requireGit(repository, ["config", "commit.gpgsign", "false"]);
-  await fs.writeFile(path.join(repository, "input.txt"), "prepared base\n");
+  await write("input.txt", "prepared base\n");
   if (symlink) {
     await fs.symlink("input.txt", path.join(repository, "linked-input"));
   }
   if (setup) {
-    await fs.mkdir(path.join(repository, ".openclaw"));
-    await fs.writeFile(path.join(repository, ".openclaw", "worktree-setup.sh"), setup, {
-      mode: 0o755,
-    });
-    await fs.writeFile(path.join(repository, ".gitignore"), "build/\n");
+    await write(".openclaw/worktree-setup.sh", setup, 0o755);
+    await write(".gitignore", "build/\n");
+  }
+  for (const [relative, content] of Object.entries(files)) {
+    await write(relative, content);
   }
   await requireGit(repository, ["add", "."]);
   await requireGit(repository, ["commit", "--quiet", "-m", "base"]);
@@ -101,7 +101,7 @@ export async function createProjectPreparationFixture(
     namespace: "gateway",
   }))!;
   const runScript = vi.fn(async (script: string) =>
-    execFileSync("sh", ["-c", script], {
+    cp.execFileSync("sh", ["-c", script], {
       env: { ...process.env, HOME: home, PREPARATION_UNRELATED_ENV: "must-not-forward" },
       encoding: "utf8",
       timeout: 30_000,
@@ -115,18 +115,14 @@ export async function createProjectPreparationFixture(
   const uploadBytes: number[] = [];
   const operation = (requireCurrent = () => {}) =>
     createWorkerProjectPreparation({ project, namespace: "gateway", requireCurrent });
-  const seed = path.join(
-    home,
-    ".openclaw-worker",
-    "git-seeds",
-    "gateway",
-    workerProjectSeedKey(project),
-  );
+  const seedKey = workerProjectSeedKey(project);
+  const seed = path.join(home, ".openclaw-worker", "git-seeds", "gateway", seedKey);
   const preparedOperation = async (
     requireCurrent = () => {},
     options: { project?: typeof project; key?: string; cacheKey?: string } = {},
   ) => {
     const snapshot = options.project ?? project;
+    const recipe = await readWorkerProjectEnvironmentRecipe(snapshot);
     return createWorkerProjectPreparation({
       project: snapshot,
       namespace: "gateway",
@@ -135,7 +131,8 @@ export async function createProjectPreparationFixture(
         demandAtMs: 1_000,
         key: options.key ?? "a".repeat(64),
         cacheKey: options.cacheKey ?? "c".repeat(64),
-        setupRecipe: await readWorkerProjectSetupRecipe(snapshot),
+        setupRecipe: recipe.identity,
+        recipe,
       },
       setupAuthorized: true,
       requireCurrent,

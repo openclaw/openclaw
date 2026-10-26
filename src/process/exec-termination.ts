@@ -6,9 +6,11 @@ import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { sleep } from "../utils/sleep.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
 import {
+  COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS,
   COMMAND_PROCESS_TREE_KILL_GRACE_MS,
   runOutsideCommandProcessScope,
   spawnCommand,
+  waitForCommandProcessGroupExit,
 } from "./exec-spawn.js";
 import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
 import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
@@ -121,21 +123,14 @@ export function createCommandTerminationController(params: {
         cleanup = "forced";
         terminateProcessTree(childPid, { force: true, detached: true });
         scheduleAdoptedChildZombieReapAfterExit(params.child, true);
-        const deadline = Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
         // Signal delivery is not exit. Observe only this group; never re-signal a retired PID.
-        while (groupAlive()) {
-          const currentStart = getFileLockProcessStartTime(childPid);
-          const remaining = deadline - Date.now();
-          if (currentStart !== null && currentStart !== originalStart) {
-            cleanup = "uncertain";
-            return;
-          }
-          if (remaining <= 0) {
-            cleanup = groupAlive() ? "uncertain" : "forced";
-            return;
-          }
-          await sleep(Math.min(25, remaining));
-        }
+        cleanup =
+          (await waitForCommandProcessGroupExit(childPid, () => {
+            const current = getFileLockProcessStartTime(childPid);
+            return current === null || current === originalStart;
+          })) === "exited"
+            ? "forced"
+            : "uncertain";
       };
       // A timeout signal is policy, not evidence of forced cleanup. Once the
       // root and its group are gone, do not signal or relabel that normal exit.
@@ -159,18 +154,18 @@ export function createCommandTerminationController(params: {
       scheduleAdoptedChildZombieReapAfterExit(
         params.child,
         true,
-        params.killGraceMs + COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+        params.killGraceMs + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS,
       );
       processTreeSettlement = new Promise<void>((resolve) => {
-        const deadline = Date.now() + params.killGraceMs;
+        const deadline = performance.now() + params.killGraceMs;
         const check = () => {
           if (!groupAlive()) {
             cleanup = "cooperative";
             resolve();
             return;
           }
-          if (Date.now() < deadline) {
-            setTimeout(check, Math.min(25, deadline - Date.now()));
+          if (performance.now() < deadline) {
+            setTimeout(check, Math.min(25, deadline - performance.now()));
             return;
           }
           void forceAndObserve().then(resolve);

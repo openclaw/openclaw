@@ -3,27 +3,38 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import type { OpenClawStateIntegrityAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
+import {
+  getDatabaseEngineSelection,
+  type DatabaseEngineSelection,
+} from "./database-engine/context.js";
 
 /** Resolved host facts for the canonical shared-state owner, never authority. */
 export type SqliteWorkerStateContext = {
+  databaseEngineSelection?: DatabaseEngineSelection;
   environment: NodeJS.ProcessEnv & {
     OPENCLAW_STATE_DIR: string;
     OPENCLAW_SUPERVISOR_MODE?: "external";
   };
   /** Selected config inputs for native shared-state initialization, not command environment. */
   initializationEnvironment?: NodeJS.ProcessEnv;
+  /** Original default cron selector, before initialization pins the physical state directory. */
+  initializationCronDefaultStoreKey?: string;
   /** Known agent paths preserve deletion-history uncertainty during native initialization. */
   initializationAgentPaths?: readonly string[];
   existingSchemaPath?: string;
   stateIntegrity?: OpenClawStateIntegrityAdmission;
   artifactPreservingReads?: true;
+  /** Actor-owned exclusion for autonomous WAL work, never write authority. */
+  scheduledMaintenanceSuspension?: SharedArrayBuffer;
 };
 
 export function captureSqliteWorkerStateContext(
   context: SqliteWorkerStateContext,
 ): SqliteWorkerStateContext {
   return {
+    databaseEngineSelection: context.databaseEngineSelection ?? getDatabaseEngineSelection(),
     environment: { ...context.environment },
+    initializationCronDefaultStoreKey: context.initializationCronDefaultStoreKey,
     ...(context.initializationEnvironment
       ? { initializationEnvironment: { ...context.initializationEnvironment } }
       : {}),
@@ -31,8 +42,11 @@ export function captureSqliteWorkerStateContext(
       ? { initializationAgentPaths: [...context.initializationAgentPaths] }
       : {}),
     existingSchemaPath: context.existingSchemaPath,
-    stateIntegrity: context.stateIntegrity,
+    ...(context.stateIntegrity ? { stateIntegrity: context.stateIntegrity } : {}),
     artifactPreservingReads: context.artifactPreservingReads,
+    ...(context.scheduledMaintenanceSuspension
+      ? { scheduledMaintenanceSuspension: context.scheduledMaintenanceSuspension }
+      : {}),
   };
 }
 
@@ -54,7 +68,12 @@ export function sqliteWorkerRequestBytes(
           total + Buffer.byteLength(key, "utf8") + Buffer.byteLength(value ?? "", "utf8"),
         bytes,
       ),
-    input.byteLength + (preparation?.byteLength ?? 0) + agentPathBytes,
+    input.byteLength +
+      Buffer.byteLength(JSON.stringify(context?.databaseEngineSelection) ?? "", "utf8") +
+      (preparation?.byteLength ?? 0) +
+      agentPathBytes +
+      Buffer.byteLength(context?.initializationCronDefaultStoreKey ?? "", "utf8") +
+      (context?.scheduledMaintenanceSuspension?.byteLength ?? 0),
   );
 }
 
@@ -68,6 +87,21 @@ const stateContexts = resolveGlobalSingleton(
       }
     >(),
 );
+
+/** Keep the actor's live maintenance holds after the opening command returns. */
+export function captureSqliteWorkerWalMaintenanceSuspension(): (() => boolean) | undefined {
+  const buffer = stateContexts.getStore()?.scheduledMaintenanceSuspension;
+  if (!buffer) {
+    return undefined;
+  }
+  const holds = new Int32Array(buffer);
+  return () => Atomics.load(holds, 0) > 0;
+}
+
+/** Original selector is an initialization fact, never a path to open or write authority. */
+export function getSqliteWorkerCronDefaultStoreKey(): string | undefined {
+  return stateContexts.getStore()?.initializationCronDefaultStoreKey;
+}
 
 /** Preserve factory facts across later commands without changing their captured host context. */
 export function withSqliteWorkerExistingDatabase<T>(

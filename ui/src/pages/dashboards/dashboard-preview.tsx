@@ -9,14 +9,12 @@ const BoardDocument = lazy(() => import("../../components/board/board-document.t
   export: "OpenClawBoardDocument",
 });
 
-export type DashboardPreviewProps = {
+export function DashboardPreview(props: {
   gatewaySnapshot?: ApplicationGatewaySnapshot;
   sessionKey?: string;
   agentId?: string;
-  error?: string | null;
-};
-
-export function DashboardPreviewContent(props: DashboardPreviewProps, host: HTMLElement) {
+}) {
+  let host!: HTMLElement;
   const [nearVisible, setNearVisible] = createSignal(false);
   onSettled(() => {
     let active = true;
@@ -34,15 +32,12 @@ export function DashboardPreviewContent(props: DashboardPreviewProps, host: HTML
     };
   });
   return (
-    <Show when={nearVisible()}>
-      <Show
-        when={!props.error}
-        fallback={
-          <div class="dashboard-preview__error">
-            {t("dashboardDocument.loadFailed", { error: props.error ?? "" })}
-          </div>
-        }
-      >
+    <openclaw-dashboard-preview
+      ref={(element) => {
+        host = element;
+      }}
+    >
+      <Show when={nearVisible()}>
         <>
           {createErrorBoundary(
             () => (
@@ -62,6 +57,14 @@ export function DashboardPreviewContent(props: DashboardPreviewProps, host: HTML
           )}
         </>
       </Show>
-    </Show>
+    </openclaw-dashboard-preview>
   );
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-dashboard-preview": HTMLAttributes<HTMLElement>;
+    }
+  }
 }

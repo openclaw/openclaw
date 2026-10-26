@@ -1,13 +1,29 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
-import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
+import {
+  hasSqliteWorkerOutcomeUnknown,
+  wrapSqliteWorkerError,
+} from "../../infra/sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionRequest,
   SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  parseConversationPublications,
+  retainConversationWorkerPublication,
+} from "./session-accessor.sqlite-conversation-publication.js";
+import { publishRetainedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
+import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
+import { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-entry-worker-publication.js";
+import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
+import {
+  captureSessionEntryMaintenanceAgeChange,
+  publishSessionEntryMaintenanceAgeChanges,
+} from "./session-accessor.sqlite-maintenance-age.js";
 import type {
   SessionActorAuthority,
   SessionActorAuthorityFacts,
@@ -22,7 +38,9 @@ import type {
   SessionActorTarget,
 } from "./session-actor-contract.js";
 import type { SessionActorExecutor, SessionActorExecutorGuards } from "./session-actor-executor.js";
+import { SessionActorReadInvalidatedError } from "./session-actor-read-error.js";
 import type { createSessionActorReplica } from "./session-actor-replica.js";
+import { publishCommittedSessionTranscriptReceipts } from "./session-transcript-authority.js";
 
 type NativeAdmission = {
   admission: Pick<SqliteWorkerOperationAdmission, "committed" | "settlement"> &
@@ -31,6 +49,8 @@ type NativeAdmission = {
 };
 
 export type SessionActorTransport = {
+  /** Selected at database acquisition; unscoped session keys cannot supply this identity. */
+  readonly agentId: string;
   /** The existing physical writer queue owns serialization, including warm reads. */
   run<T>(
     operation: (scope: {
@@ -41,6 +61,7 @@ export type SessionActorTransport = {
       native: NativeAdmission,
       grant: () => boolean,
     ) => void,
+    concurrentBoardReads?: "transcript-only",
   ): Promise<T>;
   /** Read-only committed evidence; follow-up work runs after releasing the command FIFO. */
   afterCommitted?<Value extends SessionActorPhaseResults[SessionActorPhase]>(
@@ -57,8 +78,8 @@ const executePhase: {
   [Phase in SessionActorPhase]: (
     scope: TransportScope,
     input: SessionActorCommandContext &
-      SessionActorPhaseInputs[Phase] & { target: SessionActorTarget },
-  ) => Promise<SessionActorOutcome<SessionActorPhaseResults[Phase]>>;
+      SessionActorPhaseInputs[Phase] & { target: SessionActorTarget; entryReference?: string },
+  ) => Promise<SessionActorOperations[`session.actor.${Phase}`]["output"]>;
 } = {
   acceptInput: (scope, input) => scope.execute({ type: "session.actor.acceptInput", input }),
   adoptRun: (scope, input) => scope.execute({ type: "session.actor.adoptRun", input }),
@@ -89,10 +110,17 @@ export function createSqliteSessionActorExecutor(
   } & SessionActorExecutorGuards,
 ): SessionActorExecutor {
   const { target } = params;
-  let fenced = false;
+  let fenced: Extract<SessionActorOutcome<never>, { kind: "unknown" }>["error"] | undefined;
   const authorize = (
     authority: SessionActorAuthority,
-    observe?: (native: NativeAdmission) => void,
+    observe?: (
+      native: NativeAdmission,
+      publication: unknown,
+      stage: "transaction" | "commit",
+      snapshot: SessionActorAuthorityFacts,
+    ) => void,
+    beforeFinalGrant?: (conversationPublication: unknown) => void,
+    entryReference?: () => SessionActorHotState | undefined,
   ) => {
     let actorAdmissionSeen = false;
     return (
@@ -117,10 +145,24 @@ export function createSqliteSessionActorExecutor(
         ) {
           throw new Error("Session actor admission belongs to another target");
         }
-        // SAFETY: The private MessagePort already detached this snapshot from the paired kernel.
-        const snapshot = freezeJsonSnapshot(facts.snapshot as SessionActorAuthorityFacts);
-        authority.authorize(request.stage, snapshot, facts.publication);
-        observe?.(native);
+        // SAFETY: The paired kernel owns these facts; references require its exact preimage.
+        let snapshot = facts.snapshot as SessionActorAuthorityFacts;
+        if ("entryReference" in facts.snapshot) {
+          const preimage = entryReference?.();
+          if (!preimage || facts.snapshot.entryReference !== preimage.writeToken) {
+            throw new Error("Session actor admission entry reference is unavailable");
+          }
+          snapshot = { target: preimage.target, entry: preimage.entry };
+        }
+        const publication = facts.publication;
+        observe?.(native, publication, request.stage, snapshot);
+        authority.authorize(
+          request.stage,
+          snapshot,
+          isRecord(publication) && publication.kind === "session-actor-outcome"
+            ? publication.publication
+            : publication,
+        );
       } else if (
         actorAdmissionSeen &&
         (request.stage === "commit" || (request.stage === "transaction" && facts !== undefined))
@@ -129,40 +171,55 @@ export function createSqliteSessionActorExecutor(
       }
       authority.assertCurrent();
       params.assertAccepted();
+      if (
+        request.stage === "commit" &&
+        isRecord(facts) &&
+        facts.kind === "session-actor-admission" &&
+        facts.final === true
+      ) {
+        beforeFinalGrant?.(facts.conversationPublication);
+      }
       if (!grant()) {
         throw new Error("Session actor authority expired");
       }
     };
   };
-  const read = (authority: SessionActorAuthority) =>
-    params.transport.run(async (scope) => {
-      params.assertReadable();
-      authority.assertCurrent();
-      let snapshot = params.replica.read();
-      if (!snapshot) {
-        const pending = params.replica.beginRead();
-        try {
-          snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
-          pending.install(snapshot);
-          // Disclose the immutable installed revision, including a superseding receipt.
-          snapshot = params.replica.read();
-        } finally {
-          pending.cancel();
+  const read = async (authority: SessionActorAuthority) => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await params.transport.run(async (scope) => {
+          params.assertReadable();
+          authority.assertCurrent();
+          let snapshot = params.replica.read();
+          if (!snapshot) {
+            const install = params.replica.beginRead();
+            snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
+            install(snapshot);
+            // Disclose the immutable installed revision, including a superseding receipt.
+            snapshot = params.replica.read();
+          }
+          if (!snapshot) {
+            throw new SessionActorReadInvalidatedError();
+          }
+          fenced = undefined;
+          params.assertReadable();
+          authority.assertCurrent();
+          authority.authorize("commit", snapshot);
+          authority.assertCurrent();
+          params.assertReadable();
+          // Policy callbacks do not write session state. A synchronous bookkeeping
+          // change during authorization is visible to the next read.
+          return snapshot;
+        }, authorize(authority));
+      } catch (error) {
+        // No command was accepted. Reenter the physical FIFO once with fresh
+        // caller authority after a newer publication revoked the read.
+        if (attempt > 0 || !(error instanceof SessionActorReadInvalidatedError)) {
+          throw error;
         }
       }
-      if (!snapshot) {
-        throw new Error("Session actor changed before its read could publish");
-      }
-      fenced = false;
-      params.assertReadable();
-      authority.assertCurrent();
-      authority.authorize("commit", snapshot);
-      authority.assertCurrent();
-      params.assertReadable();
-      // Policy callbacks do not write session state. A synchronous bookkeeping
-      // change during authorization is visible to the next read.
-      return snapshot;
-    }, authorize(authority));
+    }
+  };
   const command = async <Phase extends SessionActorPhase>(
     name: Phase,
     input: SessionActorCommandContext & SessionActorPhaseInputs[Phase],
@@ -172,20 +229,48 @@ export function createSqliteSessionActorExecutor(
     const captured = input;
     type Outcome = SessionActorOutcome<SessionActorPhaseResults[Phase]>;
     let native: NativeAdmission | undefined;
+    let previousEntry: SessionActorAuthorityFacts["entry"];
+    let capturedPreviousEntry = false;
+    let entryReference: SessionActorHotState | undefined;
     let running: Promise<Outcome> | undefined;
     let committed: Extract<Outcome, { kind: "committed" }> | undefined;
-    const unknown = (error: unknown): Outcome => ({
-      kind: "unknown",
-      target,
-      commandId: captured.commandId,
-      error: errorFacts(error),
+    let candidate: unknown;
+    const conversation =
+      target.database.kind === "file"
+        ? retainConversationWorkerPublication(
+            target.database.physicalIdentity,
+            target.database.nativeLocation,
+          )
+        : undefined;
+    const transfer = createSqliteWorkerTransferCollector("outcome", (value) => {
+      if (candidate !== undefined) {
+        throw new Error("Session actor transferred more than one outcome");
+      }
+      candidate = value;
     });
+    const unknown = (error: unknown): Outcome => {
+      if (target.database.kind === "file") {
+        publishRetainedSessionEntryChange(
+          target.database.physicalIdentity,
+          target.sessionKey,
+          undefined,
+          previousEntry,
+          false,
+        );
+      }
+      return {
+        kind: "unknown",
+        target,
+        commandId: captured.commandId,
+        error: { ...errorFacts(error), cause: error },
+      };
+    };
     const preserveFailure = (error: unknown, origin?: "response"): Outcome => {
       if (!committed) {
         return unknown(error);
       }
       const failure = { ...errorFacts(error), ...(origin ? { origin } : {}) };
-      committed = freezeJsonSnapshot({
+      committed = {
         ...committed,
         failure: committed.failure
           ? {
@@ -193,7 +278,7 @@ export function createSqliteSessionActorExecutor(
               message: `${committed.failure.message}; ${failure.message}`,
             }
           : failure,
-      });
+      };
       return committed;
     };
     let outcome: Outcome;
@@ -203,18 +288,49 @@ export function createSqliteSessionActorExecutor(
           running = (async (): Promise<Outcome> => {
             if (fenced) {
               return unknown(
-                new Error("Session actor requires reconciliation before another command"),
+                new Error("Session actor requires reconciliation before another command", {
+                  cause: fenced.cause,
+                }),
               );
             }
             const pending = params.replica.beginCommand();
-            const reply = await executePhase[name](scope, { ...captured, target }).then(
+            entryReference = pending.preimage;
+            const reply = await executePhase[name](scope, {
+              ...captured,
+              target,
+              entryReference: entryReference?.writeToken,
+            }).then(
               (value) => ({ ok: true as const, value }),
               (error: unknown) => ({ ok: false as const, error }),
             );
+            const unconfirmed = (message: string, settlementFailure?: unknown) => {
+              const facts = reply.ok ? { message } : errorFacts(reply.error);
+              return unknown(
+                Object.assign(
+                  wrapSqliteWorkerError(
+                    facts.message,
+                    undefined,
+                    reply.ok
+                      ? reply.value.kind !== "committed"
+                        ? reply.value.error
+                        : undefined
+                      : reply.error,
+                    settlementFailure,
+                  ),
+                  facts,
+                ),
+              );
+            };
             let result: Outcome;
             if (native) {
               const settled = await native.retained.settled;
-              const evidence = native.admission.committed?.facts;
+              const witness = native.admission.committed?.facts;
+              const evidence =
+                isRecord(witness) && witness.kind === "session-actor-committed-transfer"
+                  ? transfer.completed && witness.transferId === transfer.id
+                    ? candidate
+                    : undefined
+                  : witness;
               const receipt = isRecord(evidence) ? evidence.receipt : undefined;
               if (
                 isRecord(evidence) &&
@@ -226,20 +342,85 @@ export function createSqliteSessionActorExecutor(
                 receipt.phase === name
               ) {
                 // SAFETY: The paired worker constructs the typed result; native admission validates its settlement envelope.
-                committed = freezeJsonSnapshot(evidence) as Extract<Outcome, { kind: "committed" }>;
+                committed = evidence as Extract<Outcome, { kind: "committed" }>;
                 if (!reply.ok) {
                   preserveFailure(reply.error, "response");
                 } else if (reply.value.kind === "committed" && reply.value.failure) {
-                  committed = freezeJsonSnapshot({ ...committed, failure: reply.value.failure });
+                  committed = { ...committed, failure: reply.value.failure };
                 }
                 result = committed;
                 try {
-                  observer?.committed(committed);
+                  conversation?.settle(committed.receipt.conversationPublication);
+                  const metadata = committed.receipt.entryMetadata;
+                  // Retained effect predicates must observe this commit before its callbacks.
+                  if (target.database.kind === "file") {
+                    const entry = committed.receipt.postimage.entry;
+                    publishRetainedSessionEntryChange(
+                      target.database.physicalIdentity,
+                      target.sessionKey,
+                      entry ? projectSessionSharingEntry(entry) : undefined,
+                      previousEntry,
+                      true,
+                      entry,
+                      entry,
+                    );
+                    if (entry && (previousEntry || !metadata?.length)) {
+                      // Metadata publication owns initial age facts; later settlement can release claims.
+                      const change = captureSessionEntryMaintenanceAgeChange({
+                        sessionKey: target.sessionKey,
+                        entry,
+                        previousEntry,
+                      });
+                      if (!isDeepStrictEqual(change.entry, change.previousEntry)) {
+                        publishSessionEntryMaintenanceAgeChanges(target.database.physicalIdentity, [
+                          change,
+                        ]);
+                      }
+                    }
+                  }
+                  // Partial transcript publication precedes installation of the full actor replica.
+                  publishCommittedSessionTranscriptReceipts(
+                    committed.receipt.transcript.authorityReceipts,
+                  );
+                  try {
+                    observer?.committed(committed);
+                  } finally {
+                    // Record input custody before fallible identity notifications; row facts
+                    // still settle when the receipt observer reports a committed failure.
+                    if (target.database.kind === "file" && metadata?.length) {
+                      // Terminal accounting may change the row without appending a transcript event.
+                      const databaseIdentity = target.database.physicalIdentity;
+                      const agentId = resolveAgentIdFromSessionKey(
+                        target.sessionKey,
+                        params.transport.agentId,
+                      );
+                      const publication = retainSessionEntryWorkerPublication({
+                        agentId,
+                        storePath: target.database.nativeLocation,
+                        databaseIdentity,
+                      });
+                      publication.beginChanges(
+                        metadata.flatMap((entryReceipt) => [...entryReceipt.facts.keys()]),
+                      );
+                      try {
+                        publication.settleMetadata(metadata, [], (previous, current) =>
+                          publishCommittedSessionIdentity(
+                            agentId,
+                            databaseIdentity,
+                            previous,
+                            current,
+                          ),
+                        );
+                      } finally {
+                        publication.settle(undefined, false);
+                      }
+                    }
+                  }
                 } catch (error) {
                   result = preserveFailure(error);
                 }
               } else if (
-                evidence === undefined &&
+                witness === undefined &&
                 reply.ok &&
                 (reply.value.kind === "rolled-back" || reply.value.kind === "stale-version") &&
                 (settled.kind === "not-entered" ||
@@ -254,25 +435,35 @@ export function createSqliteSessionActorExecutor(
                       ? reply.value
                       : { kind: "rolled-back", error: errorFacts(failure) };
               } else {
-                result = unknown(
-                  reply.ok ? new Error("Unconfirmed actor settlement") : reply.error,
+                result = unconfirmed(
+                  "Unconfirmed actor settlement",
+                  settled.kind !== "completed" ? settled.error : undefined,
                 );
               }
-            } else if (reply.ok && reply.value.kind === "rolled-back") {
+            } else if (!reply.ok) {
+              // Actor mutations require host admission after hydration. A worker
+              // lost before that grant cannot have applied this command.
+              // This command did not run, but its carrier can retain an earlier uncertain write.
+              result = {
+                kind: "rolled-back",
+                error: reply.error instanceof Error ? reply.error : errorFacts(reply.error),
+              };
+            } else if (reply.value.kind === "rolled-back") {
               result = reply.value;
             } else {
-              result = unknown(
-                reply.ok ? new Error("Actor command omitted native settlement") : reply.error,
-              );
+              result = unconfirmed("Actor command omitted native settlement");
+            }
+            if (result.kind !== "committed") {
+              conversation?.settle(undefined, result.kind === "unknown");
             }
             if (result.kind === "unknown") {
-              // Fence before returning the physical FIFO permit to a queued command.
-              fenced = true;
+              // Fence the FIFO with the initiating failure, not a later reconciliation refusal.
+              fenced ??= result.error;
             }
             if (result.kind === "stale-version") {
               try {
                 authority.assertCurrent();
-                authority.authorize("commit", freezeJsonSnapshot(result.postimage));
+                authority.authorize("commit", result.postimage);
                 authority.assertCurrent();
                 params.assertAccepted();
               } catch (error) {
@@ -296,9 +487,35 @@ export function createSqliteSessionActorExecutor(
           })();
           return running;
         },
-        authorize(authority, (admission) => {
-          native = admission;
-        }),
+        authorize(
+          authority,
+          (admission, publication, stage, snapshot) => {
+            native = admission;
+            // Compound phases and transfer frames carry later snapshots of the same transaction.
+            if (stage === "transaction" && !capturedPreviousEntry) {
+              previousEntry = snapshot.entry;
+              capturedPreviousEntry = true;
+            }
+            if (isRecord(publication) && publication.kind === "session-actor-outcome") {
+              transfer.accept(publication.transfer);
+            }
+          },
+          (publication) => {
+            const receipts = parseConversationPublications(publication);
+            if (!receipts) {
+              throw new Error("Session actor commit omitted its conversation publication");
+            }
+            conversation?.begin(receipts);
+          },
+          () => entryReference,
+        ),
+        (name === "appendTranscriptEvent" || name === "appendToolResult") &&
+          "append" in captured &&
+          captured.append !== undefined &&
+          captured.append.initialization === undefined &&
+          !captured.reducers?.length
+          ? "transcript-only"
+          : undefined,
       );
     } catch (error) {
       // A transport timeout is not native settlement. The accepted callback keeps
@@ -323,6 +540,9 @@ export function createSqliteSessionActorExecutor(
               error: errorFacts(error),
             };
       }
+      if (outcome.kind !== "committed") {
+        conversation?.settle(undefined, outcome.kind === "unknown");
+      }
       params.replica.invalidate();
     }
     if (outcome.kind === "committed" && params.transport.afterCommitted) {
@@ -337,7 +557,7 @@ export function createSqliteSessionActorExecutor(
       }
     }
     if (outcome.kind === "unknown") {
-      fenced = true;
+      fenced ??= outcome.error;
       params.replica.invalidate();
     }
     return outcome;

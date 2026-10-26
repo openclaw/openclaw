@@ -1,5 +1,6 @@
 import { setImmediate } from "node:timers/promises";
-import { createSignal, onCleanup } from "solid-js";
+import { createRouter } from "@openclaw/uirouter";
+import { createSignal } from "solid-js";
 import { afterEach, expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type {
@@ -7,9 +8,11 @@ import type {
   ModelAuthStatusResult,
   ModelCatalogResult,
 } from "../../api/types.ts";
+import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
+import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import type {
   RuntimeConfigExternalMutationOptions,
@@ -26,14 +29,14 @@ import {
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
 import { beginModelCatalogRead, publishModelCatalogResult } from "../../lib/model-catalog-cache.ts";
 import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
-import { ModelProvidersController } from "./model-providers-controller.ts";
+import { createModelProviders, type ModelProvidersOwner } from "./model-providers-controller.ts";
 import { ModelProvidersContent } from "./model-providers-page.tsx";
-import type { ModelProviderProfileActionsController } from "./profile-actions-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 
 type MountedPage = {
@@ -55,12 +58,15 @@ afterEach(() => {
 });
 
 export type ModelProvidersPageTestElement = Pick<
-  ModelProvidersController,
-  keyof ModelProvidersController
+  HTMLElement,
+  "querySelector" | "querySelectorAll" | "isConnected"
 > & {
-  profileActions: Pick<ModelProviderProfileActionsController, "logout" | "setOrder" | "probe">;
-  refresh: (reason: "forced") => Promise<void>;
-  saveDefaults: () => Promise<void>;
+  readonly view: ReturnType<ModelProvidersOwner["viewProps"]>;
+  context: ApplicationContext;
+  renderRoot: HTMLElement;
+  routeData: ModelProvidersRouteData | undefined;
+  loaderPending: boolean;
+  updateComplete: Promise<boolean>;
 };
 
 const modelPickerLabels = {
@@ -75,7 +81,7 @@ export function modelPicker(
   role: keyof typeof modelPickerLabels,
 ): SelectPicker {
   const picker = page.querySelector<SelectPicker>(
-    `.model-providers__defaults openclaw-select-picker:has([role="listbox"][aria-label="${modelPickerLabels[role]}"])`,
+    `.model-providers__defaults openclaw-select-picker:has(.picker-select__trigger[aria-label^="${modelPickerLabels[role]}"])`,
   );
   expect(picker, `${role} model picker`).not.toBeNull();
   return picker!;
@@ -103,7 +109,7 @@ export async function drainPageUpdates(page: ModelProvidersPageTestElement): Pro
 export function displayedCatalog(page: ModelProvidersPageTestElement) {
   return peekModelCatalog(
     page.context.gateway.snapshot.client!,
-    { agentId: page.state.selectedAgentId },
+    { agentId: page.context.settingsAgentSelection.state.selectedId ?? "" },
     { allowStale: true },
   );
 }
@@ -156,6 +162,7 @@ export function createAuthStatus(
 export function createApiKeyProviderData(): ModelProvidersData {
   return {
     ...EMPTY_MODEL_PROVIDERS_DATA,
+    updatedAt: 1,
     authStatus: {
       ...createAuthStatus([
         {
@@ -169,12 +176,45 @@ export function createApiKeyProviderData(): ModelProvidersData {
   };
 }
 
+/** Opens a connected provider row so its accounts, messages and actions render. */
+export async function expandProvider(
+  page: ModelProvidersPageTestElement,
+  providerId: string,
+): Promise<HTMLElement> {
+  const selector = `li.provider-row[data-provider-id="${providerId}"]`;
+  await waitForSolid(() =>
+    expect(page.querySelector(selector), `${providerId} provider row`).not.toBeNull(),
+  );
+  const row = page.querySelector<HTMLElement>(selector);
+  const summary = row!.querySelector<HTMLButtonElement>(":scope > button.provider-row__summary");
+  expect(summary, `${providerId} provider summary`).not.toBeNull();
+  if (summary!.getAttribute("aria-expanded") !== "true") {
+    summary!.click();
+    await page.updateComplete;
+  }
+  expect(summary!.getAttribute("aria-expanded")).toBe("true");
+  return row!;
+}
+
 export async function saveKey(page: ModelProvidersPageTestElement, value: string) {
-  page.setState("data", createApiKeyProviderData());
-  page.setState("keyEditorProvider", "openai");
-  page.setState("keyDraft", value);
+  publishRouteData(page, createApiKeyProviderData());
+  page.view.props.onOpenKeyEditor("openai");
+  page.view.props.onKeyDraftChange(value);
   await page.updateComplete;
   page.querySelector<HTMLButtonElement>(".model-providers__inline-form button")!.click();
+}
+
+export async function openApiKeyProvider(page: ModelProvidersPageTestElement, provider: string) {
+  await page.view.scope.onConnect();
+  await page.updateComplete;
+  const choice = page.querySelector<HTMLButtonElement>(
+    `[data-models-login-provider="${provider}"]`,
+  );
+  expect(choice).not.toBeNull();
+  choice!.click();
+  await page.updateComplete;
+  page.querySelector<HTMLButtonElement>("[data-models-login-api-key]")!.click();
+  await page.updateComplete;
 }
 
 export function createHarness(initialScopeId: string) {
@@ -217,17 +257,13 @@ export function createHarness(initialScopeId: string) {
           throw new Error("usage.status unavailable");
         }
         return usageStatus;
-      case "sessions.usage":
-        return { aggregates: { byProvider: [] } };
       default:
         return {};
     }
   });
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client: { request } as unknown as GatewayBrowserClient,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: {
       type: "hello-ok",
       protocol: 3,
@@ -256,9 +292,7 @@ export function createHarness(initialScopeId: string) {
     },
     assistantAgentId: "main",
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const gatewaySource = createApplicationGateway(snapshot);
   const metadata = createGatewayMetadataObserver(
     (current) => current === gatewaySource.gateway.snapshot,
@@ -269,7 +303,7 @@ export function createHarness(initialScopeId: string) {
     previousSnapshot = { ...next };
     metadata.synchronize(previous, next);
   });
-  let selectionListener: (() => void) | undefined;
+  const selectionListeners = new Set<() => void>();
   const settingsAgentSelection = {
     intentRevision: 0,
     state: {
@@ -279,10 +313,8 @@ export function createHarness(initialScopeId: string) {
     set: vi.fn(),
     setScope: vi.fn(),
     subscribe(listener: () => void) {
-      selectionListener = listener;
-      return () => {
-        selectionListener = undefined;
-      };
+      selectionListeners.add(listener);
+      return () => selectionListeners.delete(listener);
     },
   };
   const runtimeConfigListeners = new Set<(state: RuntimeConfigState) => void>();
@@ -320,18 +352,13 @@ export function createHarness(initialScopeId: string) {
     },
   });
   const context = {
+    router: createRouter<RouteId, ApplicationContext>({
+      routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
+    }),
     gateway: gatewaySource.gateway,
     agents: {
       state: {
-        agentsList: {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "project",
-          agents: [
-            { id: "main", name: "Main" },
-            { id: "writer", name: "Writer" },
-          ],
-        },
+        agentsList: agentRoster({ main: "Main", writer: "Writer" }, "main", "project"),
         agentsLoading: false,
         agentsError: null as string | null,
       },
@@ -356,7 +383,7 @@ export function createHarness(initialScopeId: string) {
     context,
     gatewaySource,
     deferNextAuthStatus,
-    notifySelection: () => selectionListener?.(),
+    notifySelection: () => selectionListeners.forEach((listener) => listener()),
     notifyRuntimeConfig: () => {
       for (const listener of runtimeConfigListeners) {
         listener(runtimeConfig.state);
@@ -402,7 +429,7 @@ export async function waitForProviders(
 ): Promise<void> {
   await page.context.runtimeConfig.ensureLoaded();
   await waitForSolid(() => {
-    expect(page.state.data?.updatedAt).toEqual(expect.any(Number));
+    expect(page.view.props.updatedAt).toEqual(expect.any(Number));
     expect(page.context.runtimeConfig.state.configLoading).toBe(false);
     if (expectedConfig) {
       expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(expectedConfig);
@@ -435,56 +462,92 @@ export function createEmptyModelProvidersRouteData(
   };
 }
 
+export function publishRouteData(page: ModelProvidersPageTestElement, data: ModelProvidersData) {
+  const { gateway, settingsAgentSelection } = page.context;
+  page.routeData = {
+    ...page.routeData,
+    gateway,
+    gatewaySnapshot: gateway.snapshot,
+    client: gateway.snapshot.client,
+    agentId: settingsAgentSelection.state.selectedId,
+    selectionIntentRevision: settingsAgentSelection.intentRevision,
+    data,
+  };
+  flush();
+}
+
 export function createPage(context: ApplicationContext): ModelProvidersPageTestElement {
   const root = document.createElement("div");
-  const [revision, setRevision] = createSignal(0);
-  let mounted = false;
-  let queued = false;
+  let owner!: ModelProvidersOwner;
+  let routeData: ModelProvidersRouteData | undefined;
+  let loaderPending = false;
+  let publishInputs: (() => void) | undefined;
   let view: ReturnType<typeof mountSolid> | undefined;
-  const page = new ModelProvidersController(root, context, () => {
-    if (!mounted || queued) {
-      return;
-    }
-    queued = true;
-    queueMicrotask(() => {
-      queued = false;
-      if (!mounted) {
-        return;
-      }
-      page.beforeUpdate();
-      setRevision((value) => value + 1);
-      flush();
-      page.afterUpdate();
-    });
-  });
-  // SAFETY: Tests inspect the existing private action owners without adding a production facade.
-  const testPage = page as unknown as ModelProvidersPageTestElement;
-  pages.set(testPage, {
+  const page: ModelProvidersPageTestElement = {
+    context,
+    renderRoot: root,
+    querySelector: root.querySelector.bind(root),
+    querySelectorAll: root.querySelectorAll.bind(root),
+    get isConnected() {
+      return root.isConnected;
+    },
+    get view() {
+      return owner.viewProps();
+    },
+    get routeData() {
+      return routeData;
+    },
+    set routeData(value) {
+      routeData = value;
+      publishInputs?.();
+    },
+    get loaderPending() {
+      return loaderPending;
+    },
+    set loaderPending(value) {
+      loaderPending = value;
+      publishInputs?.();
+    },
+    get updateComplete() {
+      return Promise.resolve().then(() => {
+        flush();
+        return true;
+      });
+    },
+  };
+  pages.set(page, {
     mount: () => {
-      if (mounted) {
+      if (view) {
         return;
       }
       document.body.append(root);
-      mounted = true;
       view = mountSolid(
         () => {
-          onCleanup(() => {
-            mounted = false;
-            page.disconnect();
+          const [revision, setRevision] = createSignal(0);
+          publishInputs = () => setRevision((value) => value + 1);
+          owner = createModelProviders(page.context, {
+            get routeData() {
+              revision();
+              return routeData;
+            },
+            get loaderPending() {
+              revision();
+              return loaderPending;
+            },
           });
-          return <ModelProvidersContent controller={page} revision={revision} />;
+          return <ModelProvidersContent controller={owner} />;
         },
         { container: root },
       );
-      page.connect();
     },
     unmount: () => {
       view?.unmount();
       view = undefined;
+      publishInputs = undefined;
       root.remove();
     },
   });
-  return testPage;
+  return page;
 }
 
 export function mountPage(page: ModelProvidersPageTestElement): void {
@@ -506,20 +569,16 @@ export function appendPage(context: ApplicationContext) {
   return page;
 }
 
-export function clickLoginChoice(page: ModelProvidersPageTestElement, choice: string) {
-  const option = page.state.data?.authStatus?.providerCapabilities
-    ?.flatMap((provider) => provider.loginOptions ?? [])
-    .find((candidate) => candidate.id === choice);
-  expect(option).toBeDefined();
+export function clickLoginChoice(page: ModelProvidersPageTestElement, label: string) {
   const button = [
     ...page.querySelectorAll<HTMLButtonElement>("[data-models-login-choice] button"),
-  ].find((candidate) => candidate.querySelector("strong")?.textContent === option!.label);
+  ].find((candidate) => candidate.querySelector("strong")?.textContent === label);
   expect(button).toBeDefined();
   button!.click();
 }
 
-export async function startSelectedLogin(page: ModelProvidersPageTestElement, choice: string) {
-  clickLoginChoice(page, choice);
+export async function startSelectedLogin(page: ModelProvidersPageTestElement, label: string) {
+  clickLoginChoice(page, label);
   await waitForSolid(() =>
     expect(page.querySelector<HTMLInputElement>('input[name="wizard-text"]')?.disabled).toBe(false),
   );

@@ -1648,6 +1648,7 @@ extension GatewayConnection {
         limit: Int? = nil,
         maxChars: Int? = nil,
         timeoutMs: Int? = nil,
+        inputRunIDs: [String]? = nil,
         ifCurrentRoute route: Route? = nil) async throws -> OpenClawChatHistoryPayload
     {
         let request = OpenClawChatGatewayRequests.history(
@@ -1655,12 +1656,9 @@ extension GatewayConnection {
             agentID: agentID,
             limit: limit,
             maxChars: maxChars,
+            inputRunIDs: inputRunIDs,
             timeoutMs: timeoutMs)
-        let data = if let route {
-            try await self.request(request, ifCurrentRoute: route)
-        } else {
-            try await self.request(request)
-        }
+        let data = try await self.requestHistory(request, ifCurrentRoute: route)
         return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
     }
 
@@ -1679,12 +1677,13 @@ extension GatewayConnection {
         agentID: String? = nil,
         expectedSessionRoutingContract: String? = nil,
         expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
+        queueMode: OpenClawChatQueueMode? = nil,
         message: String,
         thinking: String?,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
         runTimeoutMs: Int? = nil,
-        requestTimeoutMs: Int = 30000,
+        requestTimeoutMs: Int? = nil,
         ifCurrentRoute route: Route? = nil,
         distinguishPreDispatchRouteChange: Bool = false) async throws -> OpenClawChatSendResponse
     {
@@ -1704,6 +1703,7 @@ extension GatewayConnection {
             expectedSessionRoutingContract: expectedSessionRoutingContract,
             expectedSessionSettings: expectedSessionSettings,
             supportsSessionSettingsCAS: supportsSettingsCAS,
+            queueMode: queueMode,
             message: message,
             thinking: thinking,
             idempotencyKey: idempotencyKey,
@@ -1711,14 +1711,10 @@ extension GatewayConnection {
             runTimeoutMs: runTimeoutMs,
             requestTimeoutMs: requestTimeoutMs)
 
-        let data = if let route {
-            try await self.request(
-                request,
-                ifCurrentRoute: route,
-                distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
-        } else {
-            try await self.request(request)
-        }
+        let data = try await self.request(
+            request,
+            ifCurrentRoute: route,
+            distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
         return try self.decoder.decode(OpenClawChatSendResponse.self, from: data)
     }
 }

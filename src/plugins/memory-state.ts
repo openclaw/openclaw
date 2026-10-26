@@ -9,6 +9,7 @@ import type {
   MemoryCorpusSupplementRegistration,
   MemoryFlushFilePlanDraft,
   MemoryFlushToolsPlan,
+  MemoryLearnGuidanceBuilder,
   MemoryPluginCapability,
   MemoryPluginCapabilityRegistration,
   MemoryProviderFlushPlanResolver,
@@ -38,6 +39,7 @@ export type {
   MemoryFlushPlan,
   MemoryFlushPlanResolver,
   MemoryFlushToolsPlan,
+  MemoryLearnGuidanceBuilder,
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,
@@ -173,6 +175,21 @@ export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistr
     : undefined;
 }
 
+/** The selected memory provider's /learn contribution, when it declares one. */
+export function getMemoryLearnContribution():
+  | { pluginId: string; toolNames: readonly string[]; buildGuidance: MemoryLearnGuidanceBuilder }
+  | undefined {
+  const registration = getMemoryCapability();
+  const capability = registration?.capability;
+  return registration && capability?.learnToolNames?.length && capability.learnGuidanceBuilder
+    ? {
+        pluginId: registration.pluginId,
+        toolNames: capability.learnToolNames,
+        buildGuidance: capability.learnGuidanceBuilder,
+      }
+    : undefined;
+}
+
 export function listMemoryCorpusSupplements(): MemoryCorpusSupplementRegistration[] {
   return [...requireActivePluginRegistry().memoryCorpusSupplements];
 }
@@ -297,6 +314,7 @@ function cloneMemoryPromptSectionParams(
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
     sandboxed: params.sandboxed,
+    projectKey: params.projectKey,
   };
 }
 
@@ -309,6 +327,7 @@ function snapshotMemoryPromptContext(
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
     sandboxed: params.sandboxed === true,
+    projectKey: params.projectKey,
   });
 }
 
@@ -322,6 +341,7 @@ function preparedMemoryPromptContextMatches(
     prepared.context.agentId === params.agentId &&
     prepared.context.agentSessionKey === params.agentSessionKey &&
     prepared.context.sandboxed === (params.sandboxed === true) &&
+    prepared.context.projectKey === params.projectKey &&
     prepared.context.availableTools.length === params.availableTools.size &&
     prepared.context.availableTools.every((tool) => params.availableTools.has(tool))
   );

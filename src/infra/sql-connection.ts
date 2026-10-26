@@ -1,19 +1,6 @@
 import type { DatabaseSync, SQLInputValue, SQLOutputValue } from "node:sqlite";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 
-// Handles can cross transformed SDK module graphs. Retain their first terminal
-// failure even when an inner caller catches it and continues.
-const abortedTransactionSymbol = Symbol.for("openclaw.sqliteAbortedTransaction");
-
-export function assertPostgresTransactionUsable(
-  db: PostgresSqlConnection & { [abortedTransactionSymbol]?: { error: unknown } },
-): void {
-  const aborted = db[abortedTransactionSymbol];
-  if (aborted) {
-    throw aborted.error;
-  }
-}
-
 export function assertSyncTransactionResult(value: unknown): void {
   if (isPromiseLike(value)) {
     throw new Error(
@@ -44,11 +31,9 @@ export interface SqlConnection {
 
 const postgresConnectionBrand = Symbol.for("openclaw.postgres-sync-connection");
 
-export interface PostgresSqlConnection extends Pick<
-  SqlConnection,
-  "isTransaction" | "exec" | "close"
-> {
+export interface PostgresSqlConnection extends SqlConnection {
   readonly anchor: DatabaseSync;
+  readonly mutationRevision: number;
   readonly advisoryLockKey: bigint;
   query: (
     sql: string,
@@ -61,10 +46,17 @@ export interface PostgresSqlConnection extends Pick<
   runTransaction<T>(
     operation: () => T,
     options?: { withCommit?: (commit: () => void) => void },
-    ...modes: [readOnly?: boolean, reserved?: boolean, admitWorker?: boolean]
+    ...modes: [readOnly?: boolean, reserved?: boolean]
   ): T;
 }
 
+export type EngineConnection = DatabaseSync | PostgresSqlConnection;
+
 export function isPostgresSqlConnection(db: object): db is PostgresSqlConnection {
   return postgresConnectionBrand in db && db[postgresConnectionBrand] === true;
+}
+
+/** Publications and receipts must key on the store anchor for every engine. */
+export function sqlPublicationAnchor(db: DatabaseSync | PostgresSqlConnection): DatabaseSync {
+  return isPostgresSqlConnection(db) ? db.anchor : db;
 }

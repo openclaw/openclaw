@@ -1059,6 +1059,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
     var status: NotificationAuthorizationStatus = .notDetermined
     var authorizationStatusHandler: (@Sendable () async -> NotificationAuthorizationStatus)?
     var addCalls = 0
+    var lastAddedRequest: UNNotificationRequest?
     let notificationAdded = AsyncTestGate()
     var pendingRemovedIdentifiers: [[String]] = []
     var deliveredRemovedIdentifiers: [[String]] = []
@@ -1071,8 +1072,9 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         return self.status
     }
 
-    func add(_: UNNotificationRequest) async throws {
+    func add(_ request: UNNotificationRequest) async throws {
         self.addCalls += 1
+        self.lastAddedRequest = request
         self.notificationAdded.open()
     }
 
@@ -8589,7 +8591,19 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let request = try makeInvokeRequest(
             id: "accepted-watch-mirror",
             command: OpenClawWatchCommand.notify.rawValue,
-            params: OpenClawWatchNotifyParams(title: "OpenClaw", body: "Accepted mirror test"))
+            params: OpenClawWatchNotifyParams(
+                title: " OpenClaw ",
+                body: " Accepted mirror test\n",
+                risk: .high,
+                actions: [
+                    OpenClawWatchAction(id: " ", label: "Ignored"),
+                    OpenClawWatchAction(id: " a1 ", label: " A1 "),
+                    OpenClawWatchAction(id: "a2", label: " "),
+                    OpenClawWatchAction(id: "a2", label: "A2"),
+                    OpenClawWatchAction(id: "a3", label: "A3"),
+                    OpenClawWatchAction(id: "a4", label: "A4"),
+                    OpenClawWatchAction(id: "a5", label: "A5"),
+                ]))
         let invocation = Task { @MainActor in await appModel.handleInvoke(request) }
         let deadline = ContinuousClock().now.advanced(by: .seconds(2))
         while await !(mirrorGate.hasStarted()), ContinuousClock().now < deadline {
@@ -8613,6 +8627,15 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(mirrorStarted)
         #expect(responseBeforeMirror.ok)
         #expect(center.addCalls == 1)
+        let content = try #require(center.lastAddedRequest?.content)
+        #expect(content.title == "OpenClaw")
+        #expect(content.body == "Accepted mirror test")
+        #expect(content.interruptionLevel == .timeSensitive)
+        #expect((0..<4).compactMap {
+            content.userInfo[WatchPromptNotificationBridge.actionIDKey(index: $0)] as? String
+        } == ["a1", "a2", "a3", "a4"])
+        #expect(content.userInfo[WatchPromptNotificationBridge.actionLabelKey(index: 0)] as? String == "A1")
+        #expect(content.userInfo[WatchPromptNotificationBridge.actionIDKey(index: 4)] == nil)
     }
 
     @Test @MainActor func `watch notification encodes the exact immutable quick reply target`() throws {

@@ -39,7 +39,7 @@ export type ReadSessionMessagesAsyncOptions =
 export type SessionTranscriptMessageByIdOptions = (
   | { currentOnly?: false; maxBytes?: never }
   | { currentOnly: true; maxBytes: number }
-) & { historyVisibility?: { sessionStartedAt?: number } };
+) & { historyVisibility?: { sessionStartedAt?: number; requireVisible?: boolean } };
 
 export type ReadRecentSessionMessagesResult = {
   olderOffset?: number;
@@ -97,6 +97,8 @@ export type SessionTranscriptSourceCursor = {
 export type SessionTranscriptSourcePageOptions = SessionTranscriptReadOptions & {
   mode: "page";
   includeOffPathMessages?: boolean;
+  /** Narrow by indexed IDs; unindexed legacy rows remain candidates for exact matching. */
+  messageIds?: readonly string[];
   cursor?: SessionTranscriptSourceCursor;
 };
 

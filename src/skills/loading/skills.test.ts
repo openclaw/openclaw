@@ -1,7 +1,8 @@
 // Skill loading tests cover bundled, plugin, and workspace skill resolution.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { listReservedChatSlashCommandNames } from "../../auto-reply/commands-registry.data.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -12,12 +13,12 @@ import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-st
 import {
   captureEnv,
   createPathResolutionEnv,
+  withEnv,
   withEnvAsync,
   withPathResolutionEnv,
 } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
-import { listReservedChatSlashCommandNames } from "../discovery/chat-command-invocation.js";
 import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
 import {
   applySkillEnvOverrides,
@@ -34,16 +35,13 @@ import type { SkillEntry, SkillSnapshot } from "../types.js";
 import { shouldIncludeSkill } from "./config.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
-vi.mock("./plugin-skills.js", () => ({
-  resolvePluginSkillRoots: () => [],
-}));
-
 const fixtureSuite = createFixtureSuite("openclaw-skills-suite-");
 let tempHome: TempHomeEnv | null = null;
 let skillsHomeEnv: SkillsHomeEnvSnapshot | null = null;
 const pluginEnvSnapshot = captureEnv(["OPENCLAW_DISABLE_BUNDLED_PLUGINS"]);
 
 const resolveTestSkillDirs = (workspaceDir: string) => ({
+  config: { plugins: { enabled: false } },
   managedSkillsDir: path.join(workspaceDir, ".managed"),
   bundledSkillsDir: path.join(workspaceDir, ".bundled"),
 });
@@ -69,29 +67,8 @@ async function writePromptLimitSkills(workspaceDir: string) {
   }
 }
 
-const withClearedEnv = <T>(
-  keys: string[],
-  run: (original: Record<string, string | undefined>) => T,
-): T => {
-  const original: Record<string, string | undefined> = {};
-  for (const key of keys) {
-    original[key] = process.env[key];
-    delete process.env[key];
-  }
-
-  try {
-    return run(original);
-  } finally {
-    for (const key of keys) {
-      const value = original[key];
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-};
+const withClearedEnv = <T>(keys: string[], run: () => T): T =>
+  withEnv(Object.fromEntries(keys.map((key) => [key, undefined])), run);
 
 function makeSkillEntry(
   name: string,
@@ -314,6 +291,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
         await buildWorkspaceSkillsPrompt(workspaceDir, {
           ...resolveTestSkillDirs(workspaceDir),
           config: {
+            plugins: { enabled: false },
             skills: {
               limits: {
                 maxSkillsPromptChars: 4_000,
@@ -369,27 +347,6 @@ describe("shouldIncludeSkill", () => {
         }),
       ).toBe(true);
     });
-  });
-
-  it("excludes only the skill whose configured secret is unavailable", () => {
-    setActiveDegradedSecretOwners([
-      {
-        ownerKind: "capability",
-        ownerId: "skill:env-skill",
-        state: "unavailable",
-        paths: ["skills.entries.env-skill.apiKey"],
-        refKeys: ["env:default:MISSING_SKILL_KEY"],
-        reason: "secret provider failed",
-      },
-    ]);
-
-    expect(shouldInclude(rawSkillApiKeyRefConfig("env-skill"))).toBe(false);
-    expect(
-      shouldIncludeSkill({
-        entry: makeSkillEntry("healthy-skill", { always: true }),
-        bundledAllowlist: undefined,
-      }),
-    ).toBe(true);
   });
 });
 

@@ -68,8 +68,8 @@ describe("resolveBareSessionResetPromptState", () => {
       agents: { defaults: { userTimezone: "America/New_York" } },
     } satisfies OpenClawConfig;
     // 2026-03-03 14:00 UTC = 2026-03-03 09:00 EST
-    const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
-    const prompt = await resolveResetPrompt({ cfg, nowMs });
+    using _ = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 2, 3, 14, 0, 0));
+    const prompt = await resolveResetPrompt({ cfg });
     expect(prompt).toContain("Current time: Tuesday, March 3rd, 2026 - 9:00 AM (America/New_York)");
     expect(prompt).toContain("Reference UTC: 2026-03-03 14:00 UTC");
   });

@@ -8,10 +8,7 @@ import type {
   SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRowScan } from "./session-accessor.sqlite-entry-read.js";
-import {
-  parseReadableSqliteSessionEntryRow,
-  writeSessionEntry,
-} from "./session-accessor.sqlite-entry-store.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
@@ -29,7 +26,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export function ensureSessionEntryInTransaction(
   database: OpenClawAgentDatabase,
   resolved: ReturnType<typeof resolveSqliteScope>,
-  scope: Pick<SessionTranscriptWriteScope, "expectedWriterRunId">,
+  scope: Pick<SessionTranscriptWriteScope, "expectedWriterRunId" | "expectedOwner">,
   entry: SessionEntry,
   initialWriterRunId?: string,
 ): InitialSessionEntryCommit {
@@ -41,16 +38,13 @@ export function ensureSessionEntryInTransaction(
     }
     return { owned: existing.sessionId === entry.sessionId };
   }
-  if (scope.expectedWriterRunId !== undefined && initialWriterRunId === undefined) {
+  if (
+    scope.expectedOwner !== undefined ||
+    (scope.expectedWriterRunId !== undefined && initialWriterRunId === undefined)
+  ) {
     return { owned: false };
   }
-  const previous = new Map<string, SessionEntry>();
-  for (const row of snapshot?.rows ?? []) {
-    const previousEntry = parseReadableSqliteSessionEntryRow(database, row);
-    if (previousEntry) {
-      previous.set(row.session_key, previousEntry);
-    }
-  }
+  const previous = snapshot?.entries ?? new Map<string, SessionEntry>();
   const persisted = writeSessionEntry(
     database,
     resolved.sessionKey,

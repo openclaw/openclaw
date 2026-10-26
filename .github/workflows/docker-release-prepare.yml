@@ -55,7 +55,9 @@ env:
 
 jobs:
   resolve:
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: &linux_runner_ubuntu >-
+      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     outputs:
       version: ${{ steps.identity.outputs.version }}
       include_browser: ${{ steps.identity.outputs.include_browser }}
@@ -82,9 +84,9 @@ jobs:
           sparse-checkout: scripts
           persist-credentials: false
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Resolve exact preparation identity
@@ -178,9 +180,9 @@ jobs:
       - name: Prepare OCI output directory
         run: mkdir -p "${RUNNER_TEMP}/docker-release/oci"
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
       # Both variants reuse this builder's local cache. Fresh provenance timestamps
       # invalidate application layers across runs; remote transfers cost more than
@@ -272,14 +274,14 @@ jobs:
             --architecture "${ARCHITECTURE}" \
             --output "${RUNNER_TEMP}/docker-release/metadata/${ARCHITECTURE}.json"
       - name: Upload immutable OCI payload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ needs.resolve.outputs.artifact_name }}-${{ matrix.architecture }}
           path: ${{ runner.temp }}/docker-release/oci
           compression-level: 0
           if-no-files-found: error
       - name: Upload architecture proof
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ needs.resolve.outputs.artifact_name }}-metadata-${{ matrix.architecture }}
           path: ${{ runner.temp }}/docker-release/metadata/${{ matrix.architecture }}.json
@@ -288,7 +290,7 @@ jobs:
   seal:
     name: Seal prepared Docker images
     needs: [resolve, build]
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     permissions:
       actions: read
       contents: read
@@ -304,15 +306,15 @@ jobs:
           sparse-checkout: scripts
           persist-credentials: false
       - name: Download architecture proof
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: ${{ needs.resolve.outputs.artifact_name }}-metadata-*
           merge-multiple: true
           path: ${{ runner.temp }}/docker-release/metadata
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Seal exact prepared image identities
@@ -326,13 +328,14 @@ jobs:
           IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
           BUILT_AT: ${{ needs.resolve.outputs.built_at }}
           INCLUDE_BROWSER: ${{ needs.resolve.outputs.include_browser }}
+          PREPARED_ARTIFACT_NAME: ${{ needs.resolve.outputs.artifact_name }}
         run: |
           set -euo pipefail
           node workflow-source/scripts/docker-release-artifacts.mjs seal \
             --directory "${RUNNER_TEMP}/docker-release/metadata" \
             --output "${RUNNER_TEMP}/docker-release/manifest.json"
       - name: Upload immutable Docker preparation manifest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ needs.resolve.outputs.artifact_name }}
           path: ${{ runner.temp }}/docker-release/manifest.json

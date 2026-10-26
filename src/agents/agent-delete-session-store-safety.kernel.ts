@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-lifecycle.js";
+import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-owner-read.js";
 import { readRegisteredAgentDatabaseRows } from "../state/openclaw-agent-db-registry.read.js";
 import { assertAgentSessionStoreDeletionTargetsCurrent } from "./agent-delete-session-store-safety.targets.js";
 import type {
@@ -16,7 +16,7 @@ import { listAgentIds } from "./agent-scope-config.js";
 
 /** The caller owns the current shared-state read or write transaction. */
 export function findAgentSessionStoreDeletionBlocker(
-  database: { db: DatabaseSync; path: string } | undefined,
+  database: { db: EngineConnection; path: string } | undefined,
   cfg: OpenClawConfig,
   agentId: string,
   env?: NodeJS.ProcessEnv,
@@ -61,7 +61,7 @@ export function findAgentSessionStoreDeletionBlocker(
 export const agentDeletionSessionStoreReadOperations = {
   "agentDeletion.sessionStoreBlocker": (
     input: AgentDeletionSessionStoreReadOperations["agentDeletion.sessionStoreBlocker"]["input"],
-    db: DatabaseSync,
+    db: EngineConnection,
   ): AgentDeletionSessionStoreReadOperations["agentDeletion.sessionStoreBlocker"]["output"] => ({
     type: "agentDeletion.sessionStoreBlocker",
     blocker: findAgentSessionStoreDeletionBlocker(

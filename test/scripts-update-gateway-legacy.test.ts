@@ -2,13 +2,16 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { copyTreeCloseOnExec } from "./helpers/close-on-exec-copy.js";
 import { createFixtureLifetime } from "./helpers/fixture-lifetime.js";
 import { requireNodeTool } from "./helpers/node-toolchain.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.js";
 
 const lifetime = createFixtureLifetime();
 afterEach(() => lifetime.cleanup());
+const suiteLifetime = createFixtureLifetime();
+afterAll(() => suiteLifetime.cleanup());
 const source = process.cwd();
 const nodeExecPath = requireNodeTool("node");
 const publishedScript = path.join(source, "test/scripts/fixtures/update-gateway-2026.9.4.sh");
@@ -16,6 +19,37 @@ const publishedScript = path.join(source, "test/scripts/fixtures/update-gateway-
 const publishedSha256 = "944d24f53a4f6b4134326d6d3dc5fe135ab5524d7fdccd2af5b85572e00db652";
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], { cwd, encoding: "utf8" });
+const commitFixture = (cwd: string, message: string) =>
+  git(cwd, "commit", "--no-gpg-sign", "-qm", message);
+let preparedCheckout: string;
+
+beforeAll(() => {
+  if (process.platform === "win32") {
+    return;
+  }
+  const root = fs.realpathSync(suiteLifetime.createTempDir("openclaw-legacy-source-template-"));
+  const seed = path.join(root, "seed");
+  preparedCheckout = path.join(root, "checkout");
+  fs.mkdirSync(path.join(seed, "scripts"), { recursive: true });
+  fs.writeFileSync(path.join(seed, "scripts/update-gateway.sh"), fs.readFileSync(publishedScript));
+  fs.writeFileSync(
+    path.join(seed, "package.json"),
+    JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@12.4.2" }),
+  );
+  fs.writeFileSync(
+    path.join(seed, ".gitignore"),
+    "dist/\n.artifacts/\n.update-build-backup.*/\nforeign/\nevents\nstopped\nbuild-env.json\n",
+  );
+  git(seed, "init", "-q", "-b", "main");
+  git(seed, "config", "user.name", "Fixture");
+  git(seed, "config", "user.email", "fixture@example.invalid");
+  git(seed, "add", ".");
+  commitFixture(seed, "published shell");
+  git(root, "clone", "-q", seed, preparedCheckout);
+  fs.writeFileSync(path.join(seed, "candidate"), "candidate\n");
+  git(seed, "add", "candidate");
+  commitFixture(seed, "candidate");
+});
 
 it.skipIf(process.platform === "win32").for([
   { mode: "default", restart: undefined, code: 0, owns: true },
@@ -48,54 +82,18 @@ it.skipIf(process.platform === "win32").for([
   { mode: "build-throw-restore", restart: undefined, code: 1, owns: true },
 ])(
   "published source shell reaches candidate build entry: $mode",
-  async ({ mode, restart, code, owns }, { signal }) => {
-    await lifetime.run(async () => {
+  ({ mode, restart, code, owns }, { signal }) =>
+    lifetime.run(async () => {
       const root = fs.realpathSync(lifetime.createTempDir("openclaw-legacy-source-build-"));
-      const seed = path.join(root, "seed");
       const checkout = path.join(root, "checkout");
       const bin = path.join(root, "bin");
       const home = path.join(root, "home");
-      for (const dir of [path.join(seed, "scripts"), bin, home]) {
+      for (const dir of [bin, home]) {
         fs.mkdirSync(dir, { recursive: true });
       }
       const bytes = fs.readFileSync(publishedScript);
       expect(createHash("sha256").update(bytes).digest("hex")).toBe(publishedSha256);
-      fs.writeFileSync(path.join(seed, "scripts/update-gateway.sh"), bytes);
-      fs.writeFileSync(
-        path.join(seed, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@12.4.2" }),
-      );
-      fs.writeFileSync(
-        path.join(seed, ".gitignore"),
-        "dist/\n.artifacts/\n.update-build-backup.*/\nforeign/\nevents\nstopped\nbuild-env.json\n",
-      );
-      git(seed, "init", "-q", "-b", "main");
-      git(seed, "add", ".");
-      git(
-        seed,
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.invalid",
-        "commit",
-        "--no-gpg-sign",
-        "-qm",
-        "published shell",
-      );
-      git(root, "clone", "-q", seed, checkout);
-      fs.writeFileSync(path.join(seed, "candidate"), "candidate\n");
-      git(seed, "add", "candidate");
-      git(
-        seed,
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.invalid",
-        "commit",
-        "--no-gpg-sign",
-        "-qm",
-        "candidate",
-      );
+      copyTreeCloseOnExec(preparedCheckout, checkout);
       for (const base of [checkout, path.join(checkout, "foreign")]) {
         fs.mkdirSync(path.join(base, "dist"), { recursive: true });
         fs.writeFileSync(path.join(base, "dist/entry.js"), "old runtime\n");
@@ -145,177 +143,110 @@ exec "$LEGACY_FIXTURE_NODE" --import "$LEGACY_FIXTURE_SOURCE/scripts/tsx.mjs" --
           },
         }),
       );
+      const read = (file: string) => fs.readFileSync(path.join(checkout, file), "utf8");
+      const hasBackups = fs
+        .readdirSync(checkout)
+        .some((name) => name.startsWith(".update-build-backup."));
+      const expectBackups = (present: boolean) => expect(hasBackups).toBe(present);
+      const expectRuntime = (backups: boolean) => {
+        expect(read("dist/entry.js")).toBe("old runtime\n");
+        expectBackups(backups);
+      };
+      const exists = (file: string) => fs.existsSync(path.join(checkout, file));
       expect(result.code, result.stderr).toBe(code);
-      const events = fs.existsSync(path.join(checkout, "events"))
-        ? fs.readFileSync(path.join(checkout, "events"), "utf8").trim().split("\n")
-        : [];
-      expect(events.filter((event) => event === "stop")).toHaveLength(owns ? 1 : 0);
+      const events = exists("events") ? read("events").trim().split("\n") : [];
+      const expectEvents = (sequence: string) =>
+        expect(events, result.stderr).toEqual(sequence.split(" "));
+      const expectError = (message: string) => expect(result.stderr).toContain(message);
+      const build = "stop mutation build";
+      const recovered = "enable native-admission native-restart";
       if (["manual", "whitespace", "sibling", "unavailable", "explicit-profile"].includes(mode)) {
-        expect(result.stderr).toContain("Refusing to rebuild artifacts");
+        expectError("Refusing to rebuild artifacts");
         expect(events).toEqual([]);
       } else if (mode.startsWith("build-throw-")) {
-        expect(result.stderr).toContain("fixture compiler rejected");
-        expect(
-          fs.readdirSync(checkout).some((name) => name.startsWith(".update-build-backup.")),
-        ).toBe(true);
+        expectError("fixture compiler rejected");
+        expectBackups(true);
         if (mode === "build-throw-restore") {
-          expect(result.stderr).toContain("could not be fully restored");
-          expect(events).toEqual(["stop", "mutation", "build", "complete:false"]);
+          expectError("could not be fully restored");
+          expectEvents(`${build} complete:false`);
           expect(fs.lstatSync(path.join(checkout, "dist")).isSymbolicLink()).toBe(true);
-          expect(fs.readFileSync(path.join(checkout, "foreign/dist/entry.js"), "utf8")).toBe(
-            "old runtime\n",
-          );
+          expect(read("foreign/dist/entry.js")).toBe("old runtime\n");
         } else {
-          expect(result.stderr).toContain(
-            mode === "build-throw-settle"
-              ? "fixture native completion failed"
-              : "fixture native restart failed",
+          const phase = mode === "build-throw-settle" ? "completion" : "restart";
+          expectError(`fixture native ${phase} failed`);
+          expectEvents(
+            `${build} ${recovered} ` +
+              (mode === "build-throw-settle" ? "complete:true" : "complete:false disable"),
           );
-          expect(events).toEqual([
-            "stop",
-            "mutation",
-            "build",
-            "enable",
-            "native-admission",
-            "native-restart",
-            ...(mode === "build-throw-settle" ? ["complete:true"] : ["complete:false", "disable"]),
-          ]);
-          expect(fs.readFileSync(path.join(checkout, "dist/entry.js"), "utf8")).toBe(
-            "old runtime\n",
-          );
+          expect(read("dist/entry.js")).toBe("old runtime\n");
         }
       } else if (mode.startsWith("begin-")) {
-        expect(result.stderr).toContain("openclaw-update-abort");
-        expect(fs.readFileSync(path.join(checkout, "dist/entry.js"), "utf8")).toBe("old runtime\n");
-        expect(
-          fs.readdirSync(checkout).some((name) => name.startsWith(".update-build-backup.")),
-        ).toBe(false);
+        expectError("openclaw-update-abort");
+        expectRuntime(false);
         if (mode === "begin-abort") {
-          expect(events).toEqual([
-            "stop",
-            "mutation",
-            "enable",
-            "native-admission",
-            "native-restart",
-            "complete:true",
-          ]);
+          expectEvents(`stop mutation ${recovered} complete:true`);
         } else if (mode === "begin-unjoined") {
-          expect(events).toEqual([
-            "stop",
-            "mutation",
-            "enable",
-            "native-admission",
-            "restart-unjoined",
-            "complete:false",
-            "disable",
-          ]);
-          expect(
-            fs.existsSync(path.join(checkout, ".artifacts/dist-artifacts.lock/owner.json")),
-          ).toBe(true);
+          expectEvents(
+            "stop mutation enable native-admission restart-unjoined complete:false disable",
+          );
+          expect(exists(".artifacts/dist-artifacts.lock/owner.json")).toBe(true);
         } else {
-          expect(events).toEqual([
-            "stop",
-            "mutation",
-            mode === "begin-lost" ? "complete:false" : "complete:true",
-          ]);
-          expect(result.stderr).toContain(`fixture recovery ${mode.slice(6)}`);
+          expectEvents(`stop mutation complete:${mode !== "begin-lost"}`);
+          expectError(`fixture recovery ${mode.slice(6)}`);
         }
       } else if (mode === "native-unjoined") {
-        expect(events).toEqual(["stop"]);
-        expect(result.stderr).toContain("Native source-update cleanup is unverified");
-        expect(
-          fs.existsSync(path.join(checkout, ".artifacts/dist-artifacts.lock/owner.json")),
-        ).toBe(true);
+        expectEvents("stop");
+        expectError("Native source-update cleanup is unverified");
+        expect(exists(".artifacts/dist-artifacts.lock/owner.json")).toBe(true);
       } else if (mode.startsWith("partial-stop")) {
-        expect(events, result.stderr).toEqual([
-          "stop",
-          "native-admission",
-          ...(mode === "partial-stop-drift" ? [] : ["native-restart"]),
-        ]);
-        expect(result.stderr).toContain("fixture stop rejected after native mutation");
+        expectEvents(
+          "stop native-admission" + (mode === "partial-stop-drift" ? "" : " native-restart"),
+        );
+        expectError("fixture stop rejected after native mutation");
         if (mode === "partial-stop-drift") {
-          expect(result.stderr).toContain("native fingerprint changed");
+          expectError("native fingerprint changed");
         } else if (mode === "partial-stop-scheduled") {
           expect(result.stderr).toMatch(/scheduled|not completed/i);
         }
-        expect(fs.readFileSync(path.join(checkout, "dist/entry.js"), "utf8")).toBe("old runtime\n");
-        expect(
-          fs.readdirSync(checkout).some((name) => name.startsWith(".update-build-backup.")),
-        ).toBe(false);
+        expectRuntime(false);
       } else if (mode.startsWith("failure-")) {
-        expect(events).toEqual([
-          "stop",
-          "mutation",
-          "build",
-          "enable",
-          "native-admission",
-          ...(mode === "failure-scheduled" ? ["native-restart"] : []),
-          "complete:false",
-          "disable",
-        ]);
-        expect(result.stderr).toContain("Source build failed (exit 17)");
-        expect(result.stderr).toContain(
+        expectEvents(
+          "stop mutation build enable native-admission " +
+            (mode === "failure-scheduled" ? "native-restart " : "") +
+            "complete:false disable",
+        );
+        expectError("Source build failed (exit 17)");
+        expectError(
           mode === "failure-drift"
             ? "native fingerprint changed"
             : mode === "failure-revoked"
               ? "fixture recovery revoked"
               : "restart was not completed",
         );
-        expect(fs.existsSync(path.join(checkout, "stopped"))).toBe(true);
-        expect(fs.readFileSync(path.join(checkout, "dist/entry.js"), "utf8")).toBe("old runtime\n");
-        expect(
-          fs.readdirSync(checkout).some((name) => name.startsWith(".update-build-backup.")),
-        ).toBe(true);
-      } else if (mode === "drift") {
-        expect(events).toEqual(["stop", "mutation", "build", "complete:false"]);
-        expect(result.stderr).toContain("native fingerprint changed");
-        expect(
-          fs.readdirSync(checkout).some((name) => name.startsWith(".update-build-backup.")),
-        ).toBe(true);
-      } else if (mode === "unjoined") {
-        expect(events).toEqual(["stop", "mutation", "build", "complete:false"]);
-        expect(
-          fs.readdirSync(checkout).some((name) => name.startsWith(".update-build-backup.")),
-        ).toBe(true);
-      } else if (mode === "enable-failure") {
-        expect(events).toEqual([
-          "stop",
-          "mutation",
-          "build",
-          "enable",
-          "complete:false",
-          "disable",
-        ]);
-        expect(
-          fs.readdirSync(checkout).some((name) => name.startsWith(".update-build-backup.")),
-        ).toBe(true);
-      } else {
-        expect(events).toEqual(
-          owns
-            ? [
-                "stop",
-                "mutation",
-                "build",
-                "enable",
-                ...(mode === "failure"
-                  ? ["native-admission", "native-restart", "complete:true"]
-                  : ["complete:true", "restart"]),
-              ]
-            : ["build", "restart"],
-        );
-        expect(fs.readFileSync(path.join(checkout, "dist/entry.js"), "utf8")).toBe(
-          mode === "failure" ? "old runtime\n" : "new runtime\n",
-        );
-        if (mode === "failure") {
-          expect(fs.existsSync(path.join(checkout, "stopped"))).toBe(false);
-          expect(
-            fs.readdirSync(checkout).some((name) => name.startsWith(".update-build-backup.")),
-          ).toBe(false);
+        expect(exists("stopped")).toBe(true);
+        expectRuntime(true);
+      } else if (mode === "drift" || mode === "unjoined") {
+        expectEvents(`${build} complete:false`);
+        if (mode === "drift") {
+          expectError("native fingerprint changed");
         }
-        const buildEnv = JSON.parse(fs.readFileSync(path.join(checkout, "build-env.json"), "utf8"));
-        expect(buildEnv.npm_execpath).toBe(path.join(bin, "pnpm.cjs"));
-        expect(buildEnv.workspace).toBe(checkout);
+        expectBackups(true);
+      } else if (mode === "enable-failure") {
+        expectEvents(`${build} enable complete:false disable`);
+        expectBackups(true);
+      } else {
+        const completion =
+          mode === "failure" ? `${recovered} complete:true` : "enable complete:true restart";
+        expectEvents(owns ? `${build} ${completion}` : "build restart");
+        expect(read("dist/entry.js")).toBe(mode === "failure" ? "old runtime\n" : "new runtime\n");
+        if (mode === "failure") {
+          expect(exists("stopped")).toBe(false);
+          expectBackups(false);
+        }
+        expect(JSON.parse(read("build-env.json"))).toMatchObject({
+          npm_execpath: path.join(bin, "pnpm.cjs"),
+          workspace: checkout,
+        });
       }
-    });
-  },
+    }),
 );

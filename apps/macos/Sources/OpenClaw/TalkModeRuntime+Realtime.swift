@@ -59,7 +59,6 @@ extension TalkModeRuntime {
 
     func start() async {
         let gen = lifecycleGeneration
-        guard self.dependencies.permissions.supported() else { return }
         let hasVoiceWakePermission = await self.dependencies.permissions.ensure(true)
         guard hasVoiceWakePermission else {
             logger.error("talk runtime not starting: permissions missing")
@@ -188,7 +187,6 @@ extension TalkModeRuntime {
 
     func shouldAttemptRealtimeRelay() -> Bool {
         guard macOSRealtimeRelayOptIn else {
-            logger.debug("talk macOS realtime relay disabled locally; using native speech")
             return false
         }
         guard hasGatewayRealtimeRelayTuple else {
@@ -246,7 +244,7 @@ extension TalkModeRuntime {
 
     func fallbackTalkConfig() -> TalkModeGatewayConfigState {
         let env = ProcessInfo.processInfo.environment
-        return TalkModeGatewayConfigParser.fallback(
+        return TalkModeGatewayConfigParser.parse(
             defaultModelIdFallback: Self.defaultModelIdFallback,
             defaultSilenceTimeoutMs: Self.defaultSilenceTimeoutMs,
             envVoice: env["ELEVENLABS_VOICE_ID"],
@@ -287,9 +285,7 @@ extension TalkModeRuntime {
                 options: options,
                 audioCapture: audioCapture,
                 pcmPlayer: dependencies.pcmPlayer(),
-                onStatus: { [weak self] status in
-                    Task { await self?.handleRealtimeStatus(status, relayGeneration: relayGeneration) }
-                },
+                onStatus: { _ in },
                 onIssue: { [weak self] issue in
                     Task { await self?.handleRealtimeIssue(issue, relayGeneration: relayGeneration) }
                 },
@@ -366,13 +362,6 @@ extension TalkModeRuntime {
         }
     }
 
-    private func handleRealtimeStatus(_ status: String, relayGeneration: UInt64) {
-        guard let session = realtimeSession,
-              ownsRealtimeRelay(relayGeneration, session)
-        else { return }
-        logger.debug("talk realtime status=\(status, privacy: .public)")
-    }
-
     private func handleRealtimeIssue(_ issue: RealtimeTalkRelayIssue, relayGeneration: UInt64) async {
         guard let session = realtimeSession,
               ownsRealtimeRelay(relayGeneration, session)
@@ -442,10 +431,9 @@ extension TalkModeRuntime {
         let activeDuration = realtimeSessionReadyAt.map { Date().timeIntervalSince($0) } ?? 0
         realtimeRelayGeneration &+= 1
         let terminalGeneration = realtimeRelayGeneration
-        // Session-owned terminations close before signalling; runtime-initiated ones do not.
-        // stop() is idempotent, so closing here keeps a dead relay and its event subscription
-        // from outliving their owner while recovery starts a replacement session.
-        await MainActor.run { session.stop() }
+        // Session-owned terminations already closed; a failed microphone restart leaves the relay
+        // open. Retire it before recovery without cancelling accepted agent work.
+        await MainActor.run { session.stopAfterFailure() }
         guard self.ownsRealtimeRelay(terminalGeneration, session) else { return }
         realtimeSession = nil
         realtimeSessionReadyAt = nil

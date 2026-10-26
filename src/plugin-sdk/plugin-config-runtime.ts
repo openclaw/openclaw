@@ -24,7 +24,8 @@ export function resolvePluginConfigObject(
   config: OpenClawConfig | undefined,
   pluginId: string,
 ): Record<string, unknown> | undefined {
-  const pluginConfig = readNormalizedPluginsConfig(config?.plugins).entries[pluginId]?.config;
+  const plugins = readNormalizedPluginsConfig(config?.plugins);
+  const pluginConfig = plugins.entries[pluginId]?.config;
   return asOptionalRecord(pluginConfig);
 }
 

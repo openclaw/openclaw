@@ -10,12 +10,12 @@ import type {
 } from "../../agents/prepared-model-runtime.types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type {
-  hasSessionTranscriptEventsSync,
-  readTranscriptMutationStateSync,
+  SessionTranscriptReadScope,
   recordSessionParticipant,
   listSessionParticipantsReadOnly,
-  stageSessionPendingInput,
 } from "../../config/sessions/session-accessor.js";
+import type { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
+import type { readTranscriptMutationStateInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -33,8 +33,14 @@ const mocks = vi.hoisted(() => ({
   stageSessionPendingInput: vi.fn<typeof stageSessionPendingInput>(),
   recordSessionParticipant: vi.fn<typeof recordSessionParticipant>(async () => "inserted"),
   listSessionParticipantsReadOnly: vi.fn<typeof listSessionParticipantsReadOnly>(() => new Map()),
-  hasSessionTranscriptEventsSync: vi.fn<typeof hasSessionTranscriptEventsSync>(() => false),
-  readTranscriptMutationStateSync: vi.fn<typeof readTranscriptMutationStateSync>(() => ({
+  hasSessionTranscriptEventsSync: vi.fn<(scope: SessionTranscriptReadScope) => boolean>(
+    () => false,
+  ),
+  readTranscriptMutationStateSync: vi.fn<
+    (
+      scope: SessionTranscriptReadScope,
+    ) => ReturnType<typeof readTranscriptMutationStateInTransaction>
+  >(() => ({
     observedAt: null,
     updatedAt: null,
   })),
@@ -102,21 +108,15 @@ export function resolveAgentTestConfig(
 }
 
 function loadAgentSessionFixture(
-  ...args: Parameters<typeof import("../session-utils.js").loadSessionEntry>
-): ReturnType<typeof import("../session-utils.js").loadSessionEntry> {
-  const loaded = mocks.loadSessionEntry(...args) as ReturnType<
-    typeof import("../session-utils.js").loadSessionEntry
+  ...args: Parameters<typeof import("../session-entry-load.test-support.js").loadSessionEntryAsync>
+): Awaited<
+  ReturnType<typeof import("../session-entry-load.test-support.js").loadSessionEntryAsync>
+> {
+  const loaded = mocks.loadSessionEntry(...args) as Awaited<
+    ReturnType<typeof import("../session-entry-load.test-support.js").loadSessionEntryAsync>
   >;
   return { ...loaded, cfg: resolveAgentTestConfig(loaded.cfg) };
 }
-
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return {
-    ...actual,
-    loadSessionEntry: loadAgentSessionFixture,
-  };
-});
 
 vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
@@ -162,9 +162,9 @@ vi.mock("../../config/sessions.js", async () => {
     ...actual,
     updateSessionStore: mocks.updateSessionStore,
     resolveSessionLifecycleTimestamps: mocks.resolveSessionLifecycleTimestamps,
-    resolveAgentIdFromSessionKey: (sessionKey: string) => {
+    resolveAgentIdFromSessionKey: (sessionKey: string, configuredDefaultAgentId?: string) => {
       const m = /^agent:([^:]+):/.exec(sessionKey.trim());
-      return m?.[1] ?? "main";
+      return m?.[1] ?? configuredDefaultAgentId ?? "main";
     },
     resolveExplicitAgentSessionKey: mocks.resolveExplicitAgentSessionKey,
     resolveAgentMainSessionKey: ({
@@ -189,18 +189,31 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
     "../../config/sessions/session-accessor.js",
   );
+  // The accessor barrel is still initializing when this mock resolves (import cycle through the
+  // session controller), so take exact-read helpers from their defining module.
+  const exactRead = await import("../../config/sessions/session-accessor.sqlite-exact-read.js");
+  const admittedRead =
+    await import("../../config/sessions/session-accessor.sqlite-entry-admitted-read.js");
+  const listRead = await import("../../config/sessions/session-accessor.sqlite-entry-list.read.js");
   return {
     ...actual,
+    loadExactSessionEntryCandidates: admittedRead.loadExactSessionEntryCandidates,
+    loadExactSessionEntryReadOnly: exactRead.loadExactSessionEntryReadOnly,
+    listSessionEntriesReadOnly: listRead.listSessionEntriesReadOnly,
     applySessionEntryReplacements: mocks.applySessionEntryReplacements,
     patchSessionEntryTarget: mocks.patchSessionEntryTarget,
     persistSessionTranscriptTurn: mocks.persistSessionTranscriptTurn,
-    stageSessionPendingInput: mocks.stageSessionPendingInput,
     // These handler fixtures own an in-memory store; participant access must not reach shared /tmp SQLite.
     recordSessionParticipant: mocks.recordSessionParticipant,
     listSessionParticipantsReadOnly: mocks.listSessionParticipantsReadOnly,
-    hasSessionTranscriptEventsSync: mocks.hasSessionTranscriptEventsSync,
-    readTranscriptMutationStateSync: mocks.readTranscriptMutationStateSync,
   };
+});
+
+vi.mock("../../config/sessions/session-accessor.pending-inputs.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/session-accessor.pending-inputs.js")
+  >("../../config/sessions/session-accessor.pending-inputs.js");
+  return { ...actual, stageSessionPendingInput: mocks.stageSessionPendingInput };
 });
 
 vi.mock("../../sessions/user-turn-transcript.js", async () => {
@@ -448,6 +461,14 @@ vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOri
   replaceSubagentRunAfterSteerCore: mocks.replaceSubagentRunAfterSteer,
 }));
 
+vi.mock("../session-lifecycle-plugin-hooks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-lifecycle-plugin-hooks.js")>()),
+  emitGatewaySessionEndPluginHook: (...args: unknown[]) =>
+    (mocks.emitGatewaySessionEndPluginHook as (...args: unknown[]) => unknown)(...args),
+  emitGatewaySessionStartPluginHook: (...args: unknown[]) =>
+    (mocks.emitGatewaySessionStartPluginHook as (...args: unknown[]) => unknown)(...args),
+}));
+
 vi.mock("../session-reset-service.js", () => ({
   emitGatewaySessionEndPluginHook: (...args: unknown[]) =>
     (mocks.emitGatewaySessionEndPluginHook as (...args: unknown[]) => unknown)(...args),
@@ -637,10 +658,9 @@ export function resetSessionAccessorMocks() {
       const message =
         options.messages[0]?.prepareMessageAfterIdempotencyCheck?.(candidate) ?? candidate;
       if (!message) {
-        return { appendedCount: 0, messages: [], sessionEntry: scope.sessionEntry };
+        return { messages: [], sessionEntry: scope.sessionEntry };
       }
       return {
-        appendedCount: 1,
         messages: [
           {
             appended: true,
@@ -673,9 +693,11 @@ export function resetSessionAccessorMocks() {
       options: {
         fallbackEntry?: Record<string, unknown>;
         replaceEntry?: boolean;
+        onCommitted?: (entry: Record<string, unknown>) => void;
       } = {},
-    ) =>
-      await mocks.updateSessionStore(
+    ) => {
+      let committed: Record<string, unknown> | undefined;
+      const result = await mocks.updateSessionStore(
         scope.storePath,
         async (store: SessionStoreFixture) => {
           const existing = selectFreshestTargetFixtureEntry(store, scope.target);
@@ -698,10 +720,16 @@ export function resetSessionAccessorMocks() {
             delete store[key];
           }
           store[scope.target.canonicalKey] = next;
+          committed = next;
           return next;
         },
         options,
-      ),
+      );
+      if (committed) {
+        options.onCommitted?.(committed);
+      }
+      return result;
+    },
   );
 }
 
