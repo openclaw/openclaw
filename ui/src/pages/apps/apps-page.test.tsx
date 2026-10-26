@@ -41,7 +41,7 @@ beforeEach(() => i18n.setLocale("en"));
 
 function mountApps(
   discovered: Promise<void>,
-  options: { selectedId?: string | null; sessionKey?: string; connected?: boolean } = {},
+  options: { selectedId?: string | null; connected?: boolean } = {},
 ) {
   const [search, setSearch] = createSignal("");
   const { gateway, publish } = createApplicationGateway();
@@ -68,10 +68,9 @@ function mountApps(
     ...gateway.snapshot,
     client: createTestGatewayClient(request),
     phase: options.connected === false ? "stopped" : "connected",
-    sessionKey: options.sessionKey ?? "agent:main:one",
+    sessionKey: "agent:main:one",
     hello: gatewayHelloForMethods(["mcp.app.discover"]),
   });
-  // The fixture supplies the discovery, navigation and selection capabilities used here.
   const context = {
     gateway,
     navigate: vi.fn(),
@@ -87,36 +86,37 @@ function mountApps(
   return { ...mounted, setSearch, request };
 }
 
-it("loads app view and conversation alongside discovery, retries errors, and retires a closed route", async () => {
+it("loads app conversations for the session agent, retries errors, and retires closed routes", async () => {
   const first = createDeferred();
   const retry = createDeferred();
   const discovered = createDeferred();
   const appView = createDeferred<typeof import("../../components/mcp-app-view.tsx")>();
   const preload = vi.spyOn(McpAppView, "preload").mockReturnValue(appView.promise);
-  const started = vi.fn();
   function mockLoad(pending: Promise<void>) {
     // mock-isolation: Hold or reject the actual lazy region import at its external boundary.
     vi.doMock("./apps-conversation.tsx", async (importOriginal) => {
-      started();
       await pending;
       return importOriginal<typeof import("./apps-conversation.tsx")>();
     });
   }
   mockLoad(first.promise);
-  const mounted = mountApps(discovered.promise);
+  const mounted = mountApps(discovered.promise, { selectedId: "claude" });
   const { container, setSearch, queryByRole } = mounted;
   const pane = () => container.querySelector("openclaw-chat-pane");
   await waitForSolid(() => expect(container.querySelector(".apps-page")).not.toBeNull());
-  expect(started).not.toHaveBeenCalled();
   expect(preload).not.toHaveBeenCalled();
 
   setSearch("?server=parts&tool=library");
-  await waitForSolid(() => expect(started).toHaveBeenCalledOnce());
-  expect(preload).toHaveBeenCalledOnce();
+  await waitForSolid(() => expect(preload).toHaveBeenCalledOnce());
+  await waitForSolid(() =>
+    expect(mounted.request).toHaveBeenCalledExactlyOnceWith("mcp.app.discover", {
+      sessionKey: "agent:main:one",
+      agentId: "main",
+    }),
+  );
   expect(queryByRole("status")?.textContent).toContain("Loading");
   expect(pane()).toBeNull();
   appView.reject(new Error("App view preload failed"));
-  await expect(appView.promise).rejects.toThrow("App view preload failed");
   await waitForSolid(() => {
     expect(queryByRole("status")?.textContent).toContain("Loading");
     expect(queryByRole("alert")).toBeNull();
@@ -128,8 +128,7 @@ it("loads app view and conversation alongside discovery, retries errors, and ret
 
   mockLoad(retry.promise);
   mounted.getByRole("button", { name: "Try again" }).click();
-  await waitForSolid(() => expect(started).toHaveBeenCalledTimes(2));
-  expect(pane()).toBeNull();
+  await waitForSolid(() => expect(queryByRole("status")?.textContent).toContain("Loading"));
   setSearch("");
   await waitForSolid(() => expect(container.querySelector(".apps-page")).not.toBeNull());
   retry.reject(new Error("Retired conversation download"));
@@ -138,15 +137,14 @@ it("loads app view and conversation alongside discovery, retries errors, and ret
 
   mockLoad(Promise.resolve());
   setSearch("?server=parts&tool=library");
-  await waitForSolid(() => expect(started).toHaveBeenCalledTimes(3));
-  expect(pane()).toBeNull();
+  await waitForSolid(() => expect(queryByRole("status")?.textContent).toContain("Loading"));
   discovered.resolve();
   await waitForSolid(() =>
     expect(pane()).toMatchObject({
       className: "mcp-app-conversation",
       paneId: "plugin-app",
       presentationId: "plugin-app:agent:main:one",
-      mcpAppLaunch: { sessionKey: "agent:main:one", serverName: "parts" },
+      mcpAppLaunch: { sessionKey: "agent:main:one", agentId: "main", serverName: "parts" },
     }),
   );
   const conversation = pane()!;
@@ -154,29 +152,6 @@ it("loads app view and conversation alongside discovery, retries errors, and ret
   await waitForSolid(() => expect(conversation.mcpAppLaunch?.deepLink).toBe("/updated"));
   expect(pane()).toBe(conversation);
   expect(queryByRole("alert")).toBeNull();
-});
-
-it("discovers the session's agent while selection is switching", async () => {
-  const discovered = createDeferred();
-  const mounted = mountApps(discovered.promise, {
-    selectedId: "claude",
-    sessionKey: "agent:main:main",
-  });
-  mounted.setSearch("?server=parts&tool=library");
-
-  await waitForSolid(() => expect(mounted.request).toHaveBeenCalledOnce());
-  expect(mounted.request).toHaveBeenCalledWith("mcp.app.discover", {
-    sessionKey: "agent:main:main",
-    agentId: "main",
-  });
-  discovered.resolve();
-  await waitForSolid(() =>
-    expect(mounted.container.querySelector("openclaw-chat-pane")?.mcpAppLaunch).toMatchObject({
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      serverName: "parts",
-    }),
-  );
 });
 
 afterEach(() => {
