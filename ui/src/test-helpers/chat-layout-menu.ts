@@ -56,6 +56,7 @@ export async function openChatPanels(
   await waitForLayoutSettled(pane.page(), "openclaw-chat-pane :is(" + headers + ")");
   // The scenario owns its target layout; old controls may remain visible during a viewport change.
   if (presentation === "mobile") {
+    await pane.locator(".agent-chat__header--mobile").waitFor({ state: "visible" });
     const trigger = pane
       .locator(".agent-chat__header--mobile")
       .getByRole("button", { name: "Panels", exact: true });

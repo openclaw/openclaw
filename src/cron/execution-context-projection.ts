@@ -5,6 +5,7 @@
  */
 import { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
+import { resolveScheduledSenderBit } from "./execution-context-registry.js";
 import type {
   ScheduledAdmissionFacts,
   ScheduledExecutionContextResult,
@@ -24,6 +25,7 @@ type ScheduledDivergenceLabel =
 type ScheduledDecisionField =
   | "admissionSource"
   | "ownerEmbedded"
+  | "ownerCli"
   | "automations"
   | "board"
   | "eventTarget"
@@ -32,13 +34,21 @@ type ScheduledDecisionField =
   | "sandbox"
   | "parentState";
 
+/**
+ * The owner-only surface a run's tools get: `owner` (no sender bit), `non-owner`
+ * (`senderIsOwner: false`), or the in-session turn's own command-owner check.
+ */
+type ScheduledOwnerSurface = "owner" | "non-owner" | "session-turn";
+
 type ScheduledDecisionVector = Readonly<{
   admissionSource?: "operator-schedule" | "requester-schedule";
-  ownerEmbedded: boolean;
-  automations: "none" | "self" | "self-and-parent-wake" | "unscoped";
+  ownerEmbedded: ScheduledOwnerSurface;
+  ownerCli: ScheduledOwnerSurface;
+  automations: "none" | "self" | "self-and-parent-wake";
   board: string;
   eventTarget: string;
-  memory: "run-session" | "parent";
+  /** The parent's memory as the owner's private memory, or only its conversation. */
+  memory: "run-session" | "parent-owner" | "parent-conversation";
   workspace: "run-session" | "parent-row";
   sandbox: boolean;
   parentState: "ready" | "pause";
@@ -55,13 +65,17 @@ function projectLegacyDecisions(
   facts: ScheduledAdmissionFacts,
 ): ScheduledDecisionVector {
   const inSession = resolveCronSessionTargetSessionKey(job.sessionTarget) !== undefined;
+  const sessionTurn = inSession || job.sessionTarget === "main";
   const allow = facts.resolvedToolsAllow;
   const automationsAllowed = isRuntimeToolAllowed(AUTOMATIONS_TOOL_NAME, allow);
   return {
     ...(facts.trigger === "cron" ? { admissionSource: resolveCronRunAdmissionSource(job) } : {}),
-    // Embedded scheduled runs pass no sender bit, which keeps owner-only tools.
-    ownerEmbedded: true,
-    automations: !automationsAllowed ? "none" : facts.trigger === "cron" ? "self" : "unscoped",
+    // Embedded scheduled runs pass no sender bit, which keeps owner-only tools; the
+    // CLI grant coerces that absent bit to `false`. In-session turns run their own check.
+    ownerEmbedded: sessionTurn ? "session-turn" : "owner",
+    ownerCli: sessionTurn ? "session-turn" : "non-owner",
+    // Scheduled and ingress turns are both limited to their own automation.
+    automations: !automationsAllowed ? "none" : "self",
     board: facts.runSessionKey,
     eventTarget: inSession ? facts.runSessionKey : facts.agentMainSessionKey,
     memory: "run-session",
@@ -91,22 +105,39 @@ function projectContextDecisions(
     ...(facts.authority.admissionSource
       ? { admissionSource: facts.authority.admissionSource }
       : {}),
-    ownerEmbedded: facts.authority.owner,
+    ...projectContextOwner(result, legacy),
     automations: facts.toolPolicy.automations.scope,
     board: facts.resources.boardSessionKey,
     eventTarget: facts.resources.eventTargetSessionKey,
-    memory: facts.resources.memory.source,
+    memory:
+      facts.resources.memory.source === "parent"
+        ? facts.resources.memory.owner
+          ? "parent-owner"
+          : "parent-conversation"
+        : "run-session",
     workspace: facts.resources.workspace.source,
     sandbox: facts.resources.sandbox.required,
     parentState: legacy.parentState,
   };
 }
 
+// Runs whose context does not decide the sender bit keep the legacy surfaces.
+function projectContextOwner(
+  result: ScheduledExecutionContextResult,
+  legacy: ScheduledDecisionVector,
+): Pick<ScheduledDecisionVector, "ownerEmbedded" | "ownerCli"> {
+  const bit = resolveScheduledSenderBit(result);
+  if (!bit) {
+    return { ownerEmbedded: legacy.ownerEmbedded, ownerCli: legacy.ownerCli };
+  }
+  const surface = bit.senderIsOwner === false ? "non-owner" : "owner";
+  return { ownerEmbedded: surface, ownerCli: surface };
+}
+
 const AUTOMATIONS_RANK: Record<ScheduledDecisionVector["automations"], number> = {
   none: 0,
   self: 1,
   "self-and-parent-wake": 2,
-  unscoped: 3,
 };
 
 // Fields whose widening is the intended fix for parent-linked runs.
@@ -126,8 +157,14 @@ function labelField(
   if (RETARGETS.has(field)) {
     return "retarget";
   }
-  if (field === "ownerEmbedded") {
-    return after ? "gain-unexpected" : "loss";
+  if (field === "ownerEmbedded" || field === "ownerCli") {
+    if (after === "non-owner") {
+      return "loss";
+    }
+    // The CLI gaining the embedded run's owner surface is the #178813 parity fix.
+    return field === "ownerCli" && legacy.ownerEmbedded === after
+      ? "gain-intended"
+      : "gain-unexpected";
   }
   if (field === "sandbox") {
     // A stricter sandbox is less access.
@@ -162,6 +199,7 @@ export type ScheduledDivergence = Readonly<{
 const FIELDS: readonly ScheduledDecisionField[] = [
   "admissionSource",
   "ownerEmbedded",
+  "ownerCli",
   "automations",
   "board",
   "eventTarget",

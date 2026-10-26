@@ -127,20 +127,16 @@ export class MeetingSessionCleanupTracker {
       }
     }
     const unpublished = this.#states.get(params.sessionId)?.unpublished === true;
-    const complete = this.#completeIfSettled(params.sessionId, state);
+    const sessionId = params.sessionId;
+    const complete = state.stopSettled && state.browserSettled && !this.hasRuntime(sessionId);
+    if (complete) {
+      this.#states.delete(sessionId);
+    }
     if (cleanupError) {
       throw cleanupError instanceof Error
         ? cleanupError
         : new Error("Meeting session cleanup failed", { cause: cleanupError });
     }
     return { browserLeft: state.browserLeft, complete, unpublished };
-  }
-
-  #completeIfSettled(sessionId: string, state: MeetingSessionCleanupProgress): boolean {
-    if (!state.stopSettled || !state.browserSettled || this.hasRuntime(sessionId)) {
-      return false;
-    }
-    this.#states.delete(sessionId);
-    return true;
   }
 }

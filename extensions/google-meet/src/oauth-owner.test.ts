@@ -31,6 +31,7 @@ const rotated = {
 };
 vi.mock("node:dns/promises", { spy: true });
 let stateDir: string;
+let refuseSettlement = false;
 let current = { plugins: { entries: { "google-meet": { config: { oauth: initial } } } } };
 const runtime = {
   state: {
@@ -41,12 +42,22 @@ const runtime = {
       if (options.maxEntries === undefined || !authority) {
         throw new Error("OAuth fixture requires bounded state and current authority");
       }
-      return createPluginStateKeyedStoreV2ForTests<T>("google-meet", options, authority);
+      const store = createPluginStateKeyedStoreV2ForTests<T>("google-meet", options, authority);
+      return {
+        ...store,
+        compareAndApply: async (...args: Parameters<typeof store.compareAndApply>) => {
+          if (refuseSettlement) {
+            throw new Error("synthetic settlement storage failure");
+          }
+          return store.compareAndApply(...args);
+        },
+      };
     },
   },
   config: { current: () => current },
 };
 beforeEach(async () => {
+  refuseSettlement = false;
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   stateDir = mkdtempSync(path.join(os.tmpdir(), "meet-oauth-owner-"));
@@ -63,6 +74,29 @@ afterEach(async () => {
 function config() {
   return resolveGoogleMeetConfig(current.plugins.entries["google-meet"].config);
 }
+const token = (owner = runtime) => resolveGoogleMeetTokenFromParams(config(), {}, owner);
+async function reopen() {
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginStateStoreForTests();
+}
+function stubFetch(handler: typeof fetch = async () => Response.json(rotated)) {
+  const network = vi.fn<typeof fetch>(handler);
+  vi.stubGlobal("fetch", network);
+  return network;
+}
+function heldRefresh() {
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
+  const network = stubFetch(async (url, init) => {
+    await assertRequest(url, init);
+    entered.resolve();
+    await release.promise;
+    return Response.json(rotated);
+  });
+  return { entered: entered.promise, release: release.resolve, network };
+}
+const expectToken = async (expected = rotated.access_token) =>
+  expect(await token()).toMatchObject({ accessToken: expected });
 async function assertRequest(url: RequestInfo | URL, init?: RequestInit) {
   expect(resolveRequestUrl(url)).toBe("https://oauth2.googleapis.com/token");
   expect(init?.method).toBe("POST");
@@ -96,60 +130,43 @@ it("recovers an undispatched DNS failure through the real Google request guard",
   } finally {
     lookup.mockRestore();
   }
-  vi.stubGlobal(
-    "fetch",
-    vi.fn<typeof fetch>(async (url, init) => {
-      await assertRequest(url, init);
-      return Response.json(rotated);
-    }),
-  );
-  await expect(resolveGoogleMeetTokenFromParams(config(), {}, runtime)).resolves.toMatchObject({
-    accessToken: rotated.access_token,
+  stubFetch(async (url, init) => {
+    await assertRequest(url, init);
+    return Response.json(rotated);
   });
+  await expectToken();
 });
 
 it("coalesces the real token exchange and reopens durable rotation rather than stale config", async () => {
-  const entered = createDeferred<void>();
-  const release = createDeferred<void>();
-  const network = vi.fn<typeof fetch>(async (url, init) => {
-    await assertRequest(url, init);
-    entered.resolve();
-    await release.promise;
-    return Response.json(rotated);
-  });
-  vi.stubGlobal("fetch", network);
-  const first = resolveGoogleMeetTokenFromParams(config(), {}, runtime);
-  await entered.promise;
-  const second = resolveGoogleMeetTokenFromParams(config(), {}, runtime);
-  release.resolve();
+  const { entered, release, network } = heldRefresh();
+  const first = token();
+  await entered;
+  const second = token();
+  release();
   expect((await Promise.all([first, second])).map((value) => value.accessToken)).toEqual([
     rotated.access_token,
     rotated.access_token,
   ]);
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
-  expect((await resolveGoogleMeetTokenFromParams(config(), {}, runtime)).accessToken).toBe(
-    rotated.access_token,
-  );
+  await reopen();
+  await expectToken();
   expect(network).toHaveBeenCalledOnce();
 });
 it.each(["nested-invalid-grant"] as const)(
   "does not replay %s through the configured owner",
   async () => {
-    const network = vi.fn<typeof fetch>(async (url, init) => {
+    const network = stubFetch(async (url, init) => {
       await assertRequest(url, init);
       return Response.json({ error: { code: "invalid_grant" } });
     });
-    vi.stubGlobal("fetch", network);
-    await expect(resolveGoogleMeetTokenFromParams(config(), {}, runtime)).rejects.toThrow();
-    await expect(resolveGoogleMeetTokenFromParams(config(), {}, runtime)).rejects.toThrow();
+    await expect(token()).rejects.toThrow();
+    await expect(token()).rejects.toThrow();
     expect(network).toHaveBeenCalledOnce();
   },
 );
 it.each(["lost-response", "503", "html-503", "unreadable-body"])(
   "recovers the reusable Google grant after %s and reopening storage",
   async (mode) => {
-    const network = vi.fn<typeof fetch>(async (url, init) => {
+    const network = stubFetch(async (url, init) => {
       await assertRequest(url, init);
       if (network.mock.calls.length === 1) {
         if (mode === "lost-response") {
@@ -175,54 +192,19 @@ it.each(["lost-response", "503", "html-503", "unreadable-body"])(
       }
       return Response.json(rotated);
     });
-    vi.stubGlobal("fetch", network);
-    await expect(resolveGoogleMeetTokenFromParams(config(), {}, runtime)).rejects.toThrow();
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    expect((await resolveGoogleMeetTokenFromParams(config(), {}, runtime)).accessToken).toBe(
-      rotated.access_token,
-    );
+    await expect(token()).rejects.toThrow();
+    await reopen();
+    await expectToken();
     expect(network).toHaveBeenCalledTimes(2);
   },
 );
-it("does not publish an old grant after the configured account changes", async () => {
-  const entered = createDeferred<void>();
-  const release = createDeferred<void>();
-  const network = vi.fn<typeof fetch>(async () => {
-    entered.resolve();
-    await release.promise;
-    return Response.json(rotated);
-  });
-  vi.stubGlobal("fetch", network);
-  const old = resolveGoogleMeetTokenFromParams(config(), {}, runtime);
-  const outcome = old.then(
-    () => "published",
-    () => "changed",
-  );
-  await entered.promise;
-  current.plugins.entries["google-meet"].config.oauth = {
-    ...initial,
-    accessToken: "synthetic-new-login",
-    refreshToken: "synthetic-new-login-refresh",
-    expiresAt: Date.now() + 3600000,
-  };
-  release.resolve();
-  expect(await outcome).toBe("changed");
-  expect((await resolveGoogleMeetTokenFromParams(config(), {}, runtime)).accessToken).toBe(
-    "synthetic-new-login",
-  );
-  expect(network).toHaveBeenCalledOnce();
-});
 it("makes one-shot rotation without a durable owner explicitly actionable", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn<typeof fetch>(async () => Response.json(rotated)),
-  );
+  stubFetch();
   await expect(resolveGoogleMeetTokenFromParams(config(), {})).rejects.toThrow(/rotation.*owner/i);
 });
 
 it("uses the persisted replacement on the next actual refresh", async () => {
-  const network = vi.fn<typeof fetch>(async (_url, init) => {
+  const network = stubFetch(async (_url, init) => {
     const refresh = new URLSearchParams(await new Response(init?.body).text()).get("refresh_token");
     if (network.mock.calls.length === 1) {
       expect(refresh).toBe(initial.refreshToken);
@@ -231,97 +213,66 @@ it("uses the persisted replacement on the next actual refresh", async () => {
     expect(refresh).toBe(rotated.refresh_token);
     return Response.json({ ...rotated, access_token: "synthetic-third" });
   });
-  vi.stubGlobal("fetch", network);
-  await resolveGoogleMeetTokenFromParams(config(), {}, runtime);
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
-  expect((await resolveGoogleMeetTokenFromParams(config(), {}, runtime)).accessToken).toBe(
-    "synthetic-third",
-  );
+  await token();
+  await reopen();
+  await expectToken("synthetic-third");
   expect(network).toHaveBeenCalledTimes(2);
 });
 it.each(["", 42, null])(
   "never restores a grant after an invalid replacement refresh token %j",
   async (refreshToken) => {
-    const network = vi.fn<typeof fetch>(async () =>
+    const network = stubFetch(async () =>
       Response.json({ ...rotated, refresh_token: refreshToken }),
     );
-    vi.stubGlobal("fetch", network);
-    await expect(resolveGoogleMeetTokenFromParams(config(), {}, runtime)).rejects.toThrow(
-      /refresh_token/,
-    );
-    await expect(resolveGoogleMeetTokenFromParams(config(), {}, runtime)).rejects.toThrow(
-      /uncertain/,
-    );
+    await expect(token()).rejects.toThrow(/refresh_token/);
+    await expect(token()).rejects.toThrow(/uncertain/);
     expect(network).toHaveBeenCalledOnce();
   },
 );
 it("does not treat Date-invalid cached expiry as a usable grant", async () => {
   current.plugins.entries["google-meet"].config.oauth.expiresAt = 9e20;
-  const network = vi.fn<typeof fetch>(async () => Response.json(rotated));
-  vi.stubGlobal("fetch", network);
-  expect((await resolveGoogleMeetTokenFromParams(config(), {}, runtime)).accessToken).toBe(
-    rotated.access_token,
-  );
+  const network = stubFetch();
+  await expectToken();
   expect(network).toHaveBeenCalledOnce();
 });
 it("cannot publish a rotated token when durable settlement fails", async () => {
-  const refusingRuntime = {
-    ...runtime,
-    state: {
-      openKeyedStoreV2: <T>(
-        options: OpenAsyncKeyedStoreOptions,
-        authority?: PluginStateActionAuthority,
-      ) => {
-        const store = runtime.state.openKeyedStoreV2<T>(options, authority);
-        return {
-          ...store,
-          compareAndApply: async (...args: Parameters<typeof store.compareAndApply>) => {
-            if (network.mock.calls.length) {
-              throw new Error("synthetic settlement storage failure");
-            }
-            return await store.compareAndApply(...args);
-          },
-        };
-      },
-    },
-  };
-  const network = vi.fn<typeof fetch>(async () => Response.json(rotated));
-  vi.stubGlobal("fetch", network);
-  await expect(resolveGoogleMeetTokenFromParams(config(), {}, refusingRuntime)).rejects.toThrow(
-    "settlement storage failure",
-  );
-  await expect(resolveGoogleMeetTokenFromParams(config(), {}, runtime)).resolves.toMatchObject({
-    accessToken: rotated.access_token,
+  const network = stubFetch().mockImplementationOnce(async () => {
+    refuseSettlement = true;
+    return Response.json(rotated);
   });
+  await expect(token()).rejects.toThrow("settlement storage failure");
+  refuseSettlement = false;
+  await expectToken();
   expect(network).toHaveBeenCalledTimes(2);
 });
 
-it.each(["plugin", "config"] as const)(
-  "does not publish a held refresh after %s is disabled",
+it.each(["account", "plugin", "config"] as const)(
+  "does not publish a held refresh after %s authority changes",
   async (mode) => {
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    const network = vi.fn<typeof fetch>(async () => {
-      entered.resolve();
-      await release.promise;
-      return Response.json(rotated);
-    });
-    vi.stubGlobal("fetch", network);
-    const outcome = resolveGoogleMeetTokenFromParams(config(), {}, runtime).then(
+    const { entered, release, network } = heldRefresh();
+    const outcome = token().then(
       () => "published",
-      () => "disabled",
+      () => "revoked",
     );
-    await entered.promise;
-    Object.assign(
-      mode === "plugin"
-        ? current.plugins.entries["google-meet"]
-        : current.plugins.entries["google-meet"].config,
-      { enabled: false },
-    );
-    release.resolve();
-    expect(await outcome).toBe("disabled");
-    await expect(resolveGoogleMeetTokenFromParams(config(), {}, runtime)).rejects.toThrow();
+    await entered;
+    const entry = current.plugins.entries["google-meet"];
+    if (mode === "account") {
+      entry.config.oauth = {
+        ...initial,
+        accessToken: "synthetic-new-login",
+        refreshToken: "synthetic-new-login-refresh",
+        expiresAt: Date.now() + 3600000,
+      };
+    } else {
+      Object.assign(mode === "plugin" ? entry : entry.config, { enabled: false });
+    }
+    release();
+    expect(await outcome).toBe("revoked");
+    if (mode === "account") {
+      await expectToken("synthetic-new-login");
+    } else {
+      await expect(token()).rejects.toThrow();
+    }
     expect(network).toHaveBeenCalledOnce();
   },
 );

@@ -48,11 +48,8 @@ export async function runPluginUninstallCommand(
     if (preview.plan.directoryRemoval) {
       labels.push(`directory: ${shortenHomePath(preview.plan.directoryRemoval.target)}`);
     }
-    // The display name comes from the installed plugin manifest; keep terminal controls out of
-    // the human preview while JSON and the stored manifest stay byte-exact.
-    const displayName = sanitizeTerminalText(preview.name);
     runtime.log(
-      `Plugin: ${theme.command(displayName)}${preview.name !== preview.pluginId ? theme.muted(` (${preview.pluginId})`) : ""}`,
+      `Plugin: ${theme.command(sanitizeTerminalText(preview.name))}${preview.name !== preview.pluginId ? theme.muted(` (${preview.pluginId})`) : ""}`,
     );
     if (preview.pluginIds.length > 1 || preview.requestedPluginId !== preview.pluginId) {
       runtime.log(

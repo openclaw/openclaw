@@ -75,8 +75,9 @@ Worker exit republishes only databases that held that worker's reference; an
 unrelated exit does not rescan retained session scopes. Interrupted-write
 settlement and shared reference revocation still precede publication.
 Reference and fact publications reuse the last complete scope sweep while its
-shared revision remains current. Importing scope cells invalidates that result;
-keyed publication never certifies that unrelated remote retirements were swept.
+shared revision remains current. Importing scope cells publishes only the imported
+keys and invalidates that result; keyed publication never certifies that unrelated
+remote retirements were swept.
 
 Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
@@ -107,6 +108,14 @@ and the agent's
 [`openclaw-agent-execution.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-agent-execution.worker.ts).
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
+
+Session-entry and transcript readers resolve read scopes without loading synchronous
+writer admission. A passive process-local borrower owner shares already admitted
+handles, failure visibility, pins, and idle activity with the writable lifecycle.
+The writable lifecycle alone opens and publishes those handles and owns leases,
+migrations, timers, and closure. Borrowers prevent idle eviction; explicit disposal
+can still close the connection and invalidate its claims immediately. Maintenance
+closes cached handles before migrating or replacing their storage.
 
 If PostgreSQL schema publication invalidates admission, connection opening,
 shared-state reads before their callback, and standalone feature-schema ensures
@@ -269,6 +278,11 @@ storage primitive. Lifecycle callbacks remain outside it, and ownership checks
 still read the current owner and expiry before permitting an effect.
 The CLI entry records an immutable process role before state access;
 one-shot CLI and Doctor processes may use the synchronous PostgreSQL bridge.
+Connections share four I/O services per process; inherited worker endpoints
+connect directly to those services. A bridge deadline resets the entire assigned
+service with an unknown outcome, rather than only the caller's connection. See
+[PostgreSQL topology](/gateway/postgresql#when-to-use-postgresql) and
+[timeout and recovery behavior](/gateway/postgresql#updates-and-schema-migrations).
 An unset role still refuses main-thread access. Interactive onboarding and
 `setup` (including `crestodian`) keep the CLI role through their prompts and
 local setup console. Any Gateway they start runs in a separate process with

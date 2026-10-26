@@ -3,70 +3,57 @@ import { describe, expect, it } from "vitest";
 import { configureProviderErrorRedactor, projectProviderError } from "./provider-error.js";
 
 describe("projectProviderError", () => {
+  const malformed = "[Malformed diagnostic JSON redacted]";
+  const projectBody = (body: unknown) => projectProviderError({ status: 500, body });
+  const serialize = (error: unknown) => JSON.stringify(projectProviderError(error));
+  const sdkError = (status: number, headers: Record<string, string>) =>
+    new APIError(status, { message: "rate limited" }, undefined, new Headers(headers));
   it("preserves streamed response.failed error semantics without response content", () => {
-    expect(
-      projectProviderError(
-        Object.assign(new Error("invalid_prompt: rejected"), {
-          code: "invalid_prompt",
-          response: {
-            id: "resp_fixture",
-            status: "failed",
-            error: { code: "invalid_prompt", type: "invalid_request_error", message: "rejected" },
-            output: [{ type: "message", content: "unrelated generated text" }],
-          },
-        }),
-      ),
-    ).toMatchObject({
+    const error = Object.assign(new Error("invalid_prompt: rejected"), {
+      code: "invalid_prompt",
+      response: {
+        id: "resp_fixture",
+        status: "failed",
+        error: { code: "invalid_prompt", type: "invalid_request_error", message: "rejected" },
+        output: [{ type: "message", content: "unrelated generated text" }],
+      },
+    });
+    expect(projectProviderError(error)).toMatchObject({
       errorCode: "invalid_prompt",
       errorType: "invalid_request_error",
       errorBody: '{"code":"invalid_prompt","message":"rejected","type":"invalid_request_error"}',
     });
   });
-  it.each([["=short-secret", "[Malformed diagnostic JSON redacted]"]])(
-    "requires a complete redaction marker before preserving prose (%s)",
-    (suffix, expected) => {
-      expect(
-        projectProviderError(`[2 ordinary lines remain] token=<redacted>${suffix}`).errorMessage,
-      ).toBe(expected);
-    },
-  );
-
+  it("requires a complete redaction marker before preserving prose", () => {
+    expect(
+      projectProviderError("[2 ordinary lines remain] token=<redacted>=short-secret").errorMessage,
+    ).toBe(malformed);
+  });
   it.each([
     "[1 note token=short-secret]",
     "[1 note data=QUJDRA== type=image]",
     "[1 note status=b64_json=QUJDRA==]",
     '[[2 ordinary lines remain],"sk-synthetic-secret-value"]',
   ])("keeps structured admission around prose: %s", (error) => {
-    expect(projectProviderError(error).errorMessage).toBe("[Malformed diagnostic JSON redacted]");
+    expect(projectProviderError(error).errorMessage).toBe(malformed);
   });
-
-  it.each([
-    '[note "-----BEGIN PRIVATE KEY-----\\nQUJDRA==\\n-----END PRIVATE KEY-----"] {"ok":true}',
-  ])("fails closed for nonnumeric structured fragments: %s", (error) => {
-    expect(projectProviderError(error).errorMessage).toBe("[Malformed diagnostic JSON redacted]");
+  it("fails closed for nonnumeric structured fragments", () => {
+    const error =
+      '[note "-----BEGIN PRIVATE KEY-----\\nQUJDRA==\\n-----END PRIVATE KEY-----"] {"ok":true}';
+    expect(projectProviderError(error).errorMessage).toBe(malformed);
   });
-
-  it.each([["335", 7]])(
-    "preserves SDK retry timing without exposing unrelated headers (%s ms)",
-    (milliseconds, seconds) => {
-      const error = new APIError(
-        429,
-        { message: "rate limited" },
-        undefined,
-        new Headers({
-          "retry-after": "7",
-          "retry-after-ms": milliseconds,
-          authorization: "Bearer synthetic-credential",
-        }),
-      );
-      const projection = projectProviderError(error);
-      expect(projection.retryAfterMs).toBe(seconds * 1000);
-      expect(projection.errorMessage).toContain(`Retry-After: ${seconds} seconds`);
-      expect(projection.errorBody).toBe('{"message":"rate limited"}');
-      expect(JSON.stringify(projection)).not.toContain("synthetic-credential");
-    },
-  );
-
+  it("preserves SDK retry timing without exposing unrelated headers", () => {
+    const error = sdkError(429, {
+      "retry-after": "7",
+      "retry-after-ms": "335",
+      authorization: "Bearer synthetic-credential",
+    });
+    const projection = projectProviderError(error);
+    expect(projection.retryAfterMs).toBe(7_000);
+    expect(projection.errorMessage).toContain("Retry-After: 7 seconds");
+    expect(projection.errorBody).toBe('{"message":"rate limited"}');
+    expect(JSON.stringify(projection)).not.toContain("synthetic-credential");
+  });
   it.each([
     // An explicit retry instruction outranks the bucket's full-refill time.
     { status: 429, remaining: "0", retryAfter: "7", retryAfterMs: 7_000 },
@@ -77,23 +64,17 @@ describe("projectProviderError", () => {
     "projects native quota headers before redaction: $status/$remaining/$retryAfter",
     ({ status, remaining, retryAfter, retryAfterMs }) => {
       const projection = projectProviderError(
-        new APIError(
-          status,
-          { message: "rate limited" },
-          undefined,
-          new Headers({
-            ...(retryAfter ? { "retry-after": retryAfter } : {}),
-            "x-ratelimit-remaining-tokens": remaining,
-            "x-ratelimit-reset-tokens": "1m2.5s",
-            authorization: "Bearer synthetic-credential",
-          }),
-        ),
+        sdkError(status, {
+          ...(retryAfter ? { "retry-after": retryAfter } : {}),
+          "x-ratelimit-remaining-tokens": remaining,
+          "x-ratelimit-reset-tokens": "1m2.5s",
+          authorization: "Bearer synthetic-credential",
+        }),
       );
       expect(projection.retryAfterMs).toBe(retryAfterMs);
       expect(JSON.stringify(projection)).not.toContain("synthetic-credential");
     },
   );
-
   it("reserves room for retry timing after truncating a long SDK message", () => {
     const error = new APIError(
       429,
@@ -105,15 +86,9 @@ describe("projectProviderError", () => {
     expect(projection.errorMessage).toHaveLength(4096);
     expect(projection.errorMessage).toMatch(/; Retry-After: 7 seconds$/);
   });
-
   it("normalizes string and finite-number provider error fields", () => {
-    expect(
-      projectProviderError({
-        message: "  provider failure  ",
-        code: 12.5,
-        type: "  upstream  ",
-      }),
-    ).toMatchObject({
+    const error = { message: "  provider failure  ", code: 12.5, type: "  upstream  " };
+    expect(projectProviderError(error)).toMatchObject({
       errorMessage: "provider failure",
       errorCode: "12.5",
       errorType: "upstream",
@@ -122,22 +97,17 @@ describe("projectProviderError", () => {
       projectProviderError({ message: "failed", code: Number.POSITIVE_INFINITY }),
     ).not.toHaveProperty("errorCode");
   });
-
   it("bounds repeated aliases without expanding the shared graph", () => {
     const shared = { detail: "safe" };
-
     expect(projectProviderError({ first: shared, second: shared }).errorMessage).toBe(
       '{"first":{"detail":"safe"},"second":"[Circular]"}',
     );
   });
-
   it("does not split surrogate pairs when truncating response bodies", () => {
     const body = `${"x".repeat(499)}😀tail`;
     const error = Object.assign(new Error("502 status code (no body)"), { status: 502, body });
-
     expect(projectProviderError(error).errorBody).toBe(`${"x".repeat(499)}... [truncated]`);
   });
-
   it("keeps the rejection reason when bounding a redacted structured response body", () => {
     const projection = projectProviderError({
       status: 400,
@@ -146,32 +116,27 @@ describe("projectProviderError", () => {
         trace: "x".repeat(5000),
       },
     });
-
     expect(projection.errorCode).toBe("400");
     expect(projection.errorMessage).toContain("400:");
     expect(projection.errorMessage).toContain("Cache control limit exceeded");
     expect(projection.errorMessage?.length).toBeLessThanOrEqual(4111);
     expect(projection.errorBody?.length).toBeLessThanOrEqual(515);
   });
-
   it("preserves known HTTP status with a short message and a response body", () => {
     const error = Object.assign(new Error("Provider request failed"), {
       status: 429,
       body: { error: { message: "Try later" } },
     });
-
     expect(projectProviderError(error)).toMatchObject({
       errorMessage: "429: Provider request failed",
       errorCode: "429",
     });
   });
-
   it("bounds repeated structured diagnostic fragments before extraction", () => {
     expect(projectProviderError("{}".repeat(8193)).errorMessage).toBe(
       "[Oversized diagnostic JSON redacted]",
     );
   });
-
   it.each([
     [
       "credential in a JSON message prefix",
@@ -186,16 +151,11 @@ describe("projectProviderError", () => {
   ])("redacts media from %s", (_name, error, expected) => {
     expect(projectProviderError(error).errorMessage).toBe(expected);
   });
-
-  it.each([["string chunks", ["QUJDRA=="]]])(
-    "redacts media arrays containing %s",
-    (_name, videoFrames) => {
-      expect(
-        JSON.stringify(projectProviderError({ status: 500, body: { videoFrames } })),
-      ).not.toMatch(/QUJDRA==|65,66,67,68/u);
-    },
-  );
-
+  it("redacts media arrays containing string chunks", () => {
+    expect(JSON.stringify(projectBody({ videoFrames: ["QUJDRA=="] }))).not.toMatch(
+      /QUJDRA==|65,66,67,68/u,
+    );
+  });
   it.each([
     [
       "MIME-qualified file URI",
@@ -205,68 +165,36 @@ describe("projectProviderError", () => {
     ["audio wrapper bytes", '{"audio":{"bytes":[65,66,67,68]}}', "[65,66,67,68]"],
     ["array following a JSON literal", '[true,{"b64_json":"QUJDRA=="}]', "QUJDRA=="],
   ])("redacts %s from a JSON response-body string", (_name, body, leaked) => {
-    const projected = projectProviderError({ status: 500, body });
-
-    expect(JSON.stringify(projected)).not.toContain(leaked);
+    expect(JSON.stringify(projectBody(body))).not.toContain(leaked);
   });
-
-  it.each([
-    {
-      name: "duplicate credential value",
-      body: '{"name":"password","value":"actual-secret","value":"<redacted>"}',
-      expected: '{"name":"password","value":"<redacted>"}',
-    },
-  ])("canonicalizes sensitive JSON with $name", ({ body, expected }) => {
-    expect(projectProviderError({ status: 500, body }).errorBody).toBe(expected);
+  it("canonicalizes sensitive JSON with duplicate credential values", () => {
+    const body = '{"name":"password","value":"actual-secret","value":"<redacted>"}';
+    expect(projectBody(body).errorBody).toBe('{"name":"password","value":"<redacted>"}');
   });
-
-  it.each(['[ERROR] payload "type":"video","data":"QUJDRA=="'])(
-    "fails closed when bracketed diagnostic text contains a malformed structured payload",
-    (body) => {
-      expect(projectProviderError({ status: 500, body }).errorBody).toBe(
-        "[Malformed diagnostic JSON redacted]",
-      );
-    },
-  );
-
-  it.each(['{"type":"video","data":"QUJDRA=="'])(
-    "fails closed for malformed JSON response-body strings",
-    (body) => {
-      const projected = projectProviderError({ status: 500, body });
-
-      expect(JSON.stringify(projected)).not.toContain("QUJDRA==");
-      expect(projected.errorBody).toBe("[Malformed diagnostic JSON redacted]");
-    },
-  );
-
+  it("fails closed for a malformed payload in bracketed diagnostic text", () => {
+    expect(projectBody('[ERROR] payload "type":"video","data":"QUJDRA=="').errorBody).toBe(
+      malformed,
+    );
+  });
+  it("fails closed for malformed JSON response-body strings", () => {
+    const projected = projectBody('{"type":"video","data":"QUJDRA=="');
+    expect(JSON.stringify(projected)).not.toContain("QUJDRA==");
+    expect(projected.errorBody).toBe(malformed);
+  });
   it("does not invoke hostile terminal-field accessors without a host", () => {
     const error = Object.create(null) as Record<string, unknown>;
-    Object.defineProperties(error, {
-      safe: { enumerable: true, value: "connection failed" },
-      status: {
+    Object.defineProperty(error, "safe", { enumerable: true, value: "connection failed" });
+    for (const key of ["status", "body", "message"]) {
+      Object.defineProperty(error, key, {
         enumerable: true,
         get: () => {
-          throw new Error("status getter");
+          throw new Error(`${key} getter`);
         },
-      },
-      body: {
-        enumerable: true,
-        get: () => {
-          throw new Error("body getter");
-        },
-      },
-      message: {
-        enumerable: true,
-        get: () => {
-          throw new Error("message getter");
-        },
-      },
-    });
-
+      });
+    }
     expect(() => projectProviderError(error)).not.toThrow();
     expect(projectProviderError(error).errorMessage).toContain("connection failed");
   });
-
   it("never throws when a proxy revokes itself after descriptor collection", () => {
     const revocable = Proxy.revocable([], {
       ownKeys: Reflect.ownKeys,
@@ -278,13 +206,10 @@ describe("projectProviderError", () => {
         return descriptor;
       },
     });
-
     const projected = projectProviderError(revocable.proxy);
-
     expect(projected.stopReason).toBe("error");
     expect(projected.errorMessage).toBe("[Unserializable]");
   });
-
   it("caps descriptor reads from hostile objects", () => {
     let descriptorReads = 0;
     const keys = Array.from({ length: 1_000 }, (_, index) => `field${index}`);
@@ -298,13 +223,11 @@ describe("projectProviderError", () => {
         },
       },
     );
-
     expect(projectProviderError(error).stopReason).toBe("error");
     // Fixed timing-metadata probes (headers plus the RetryInfo body shape) precede the
     // bounded diagnostic walk.
     expect(descriptorReads).toBe(64 + 10);
   });
-
   it("caps descriptor reads across a branching hostile graph", () => {
     let descriptorReads = 0;
     const keys = Array.from({ length: 64 }, (_, index) => `field${index}`);
@@ -319,63 +242,39 @@ describe("projectProviderError", () => {
           },
         },
       );
-
     expect(projectProviderError(createNode()).stopReason).toBe("error");
     // Status, response and RetryInfo shape probes are a fixed cost, not another graph walk.
     expect(descriptorReads).toBe(64 * 64 + 33);
   });
-
-  it("redacts value fields when their discriminator falls beyond the field cap", () => {
-    const secret = "late-discriminator-secret";
-    const error: Record<string, unknown> = { value: secret };
+  it.each([
+    ["value", "late-discriminator-secret", "name", "api_key"],
+    ["data", "QUJDRA==", "type", "video"],
+  ])("redacts %s when its discriminator falls beyond the field cap", (field, value, key, kind) => {
+    const error: Record<string, unknown> = { [field]: value };
     for (let index = 0; index < 63; index += 1) {
       error[`field${index}`] = index;
     }
-    error.name = "api_key";
-
-    expect(JSON.stringify(projectProviderError(error))).not.toContain(secret);
+    error[key] = kind;
+    expect(serialize(error)).not.toContain(value);
   });
-
-  it("redacts media fields when their discriminator falls beyond the field cap", () => {
-    const media = "QUJDRA==";
-    const error: Record<string, unknown> = { data: media };
-    for (let index = 0; index < 63; index += 1) {
-      error[`field${index}`] = index;
-    }
-    error.type = "video";
-
-    expect(JSON.stringify(projectProviderError(error))).not.toContain(media);
+  it("redacts ArrayBuffer media bytes without an installed host", () => {
+    const error = Object.assign(new Error("502 status code (no body)"), {
+      status: 502,
+      body: { type: "video", data: new Uint8Array([7, 8, 9]).buffer },
+    });
+    const projected = projectProviderError(error);
+    const serialized = JSON.stringify(projected);
+    expect(projected.errorMessage).toContain("502:");
+    expect(serialized).toContain("<redacted>");
+    expect(serialized).not.toMatch(/"[0-9]+":(?:[0-9]+|\{)/u);
   });
-
-  it.each([{ name: "ArrayBuffer", bytes: new Uint8Array([7, 8, 9]).buffer }])(
-    "redacts $name media bytes without an installed host",
-    ({ bytes }) => {
-      const error = Object.assign(new Error("502 status code (no body)"), {
-        status: 502,
-        body: { type: "video", data: bytes },
-      });
-
-      const projected = projectProviderError(error);
-      const serialized = JSON.stringify(projected);
-
-      expect(projected.errorMessage).toContain("502:");
-      expect(serialized).toContain("<redacted>");
-      expect(serialized).not.toMatch(/"[0-9]+":(?:[0-9]+|\{)/u);
-    },
-  );
-
-  it.each([["Buffer", Buffer.from([1, 2, 3])]])(
-    "redacts a bare %s response body by value",
-    (_name, body) => {
-      const projected = projectProviderError({ status: 500, body });
-      const summary = '{"bytes":3,"redacted":"<redacted>"}';
-
-      expect(projected.errorMessage).toBe(`500: ${summary}`);
-      expect(projected.errorBody).toBe(summary);
-      expect(JSON.stringify(projected)).not.toMatch(/"[0-9]+":(?:[0-9]+|\{)/u);
-    },
-  );
-
+  it("redacts a bare Buffer response body by value", () => {
+    const projected = projectBody(Buffer.from([1, 2, 3]));
+    const summary = '{"bytes":3,"redacted":"<redacted>"}';
+    expect(projected.errorMessage).toBe(`500: ${summary}`);
+    expect(projected.errorBody).toBe(summary);
+    expect(JSON.stringify(projected)).not.toMatch(/"[0-9]+":(?:[0-9]+|\{)/u);
+  });
   it("redacts credentials from terminal fields without an installed host", () => {
     const bearer = ["not", "a", "bearer", "credential"].join("-");
     const apiKey = ["not", "an", "api", "key"].join("-");
@@ -394,7 +293,6 @@ describe("projectProviderError", () => {
       },
     });
     const serialized = JSON.stringify(projected);
-
     expect(serialized).not.toContain(bearer);
     expect(serialized).not.toContain(apiKey);
     expect(serialized).not.toContain(jwt);
@@ -403,30 +301,22 @@ describe("projectProviderError", () => {
     expect(serialized).toContain("<redacted-jwt>");
     expect(serialized).toContain("session=<redacted>");
   });
-
-  it.each([
-    [
-      "throws",
-      () => {
-        throw new Error("redactor failed");
-      },
-    ],
-  ])("keeps the package-safe snapshot when host strengthening %s", (_name, redactor) => {
+  it("keeps the package-safe snapshot when host strengthening throws", () => {
     const secret = "package-owned-fallback-secret";
-    const previous = configureProviderErrorRedactor(redactor);
+    const previous = configureProviderErrorRedactor(() => {
+      throw new Error("redactor failed");
+    });
     try {
       const projected = projectProviderError({
         message: "provider failed",
         body: { apiKey: secret },
       });
-
       expect(projected.errorMessage).toBe("provider failed");
       expect(JSON.stringify(projected)).not.toContain(secret);
     } finally {
       configureProviderErrorRedactor(previous);
     }
   });
-
   it.each(["JSESSIONID=0123456789abcdef", 'token="abcdefghijklmnop"'])(
     "redacts loose credential pair in %s",
     (value) => {
@@ -435,14 +325,11 @@ describe("projectProviderError", () => {
       );
     },
   );
-
-  it.each(["Cookie: sid=abc123"])(
-    "redacts arbitrary credential names inside cookie headers",
-    (header) => {
-      expect(projectProviderError(header).errorMessage).toMatch(/^(?:Set-)?Cookie: <redacted>$/u);
-    },
-  );
-
+  it("redacts arbitrary credential names inside cookie headers", () => {
+    expect(projectProviderError("Cookie: sid=abc123").errorMessage).toMatch(
+      /^(?:Set-)?Cookie: <redacted>$/u,
+    );
+  });
   it.each(["x-api-key: sk-0123456789012345", "{'Authorization': 'ApiKey 0123456789abcdef'}"])(
     "redacts credential header %s",
     (header) => {

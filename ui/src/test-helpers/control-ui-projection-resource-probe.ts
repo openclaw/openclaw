@@ -1,11 +1,11 @@
-export type ProjectionSourceCounts = {
+type ProjectionSourceCounts = {
   subscribeCalls: number;
   active: number;
   peak: number;
   callbacks: number;
   cleanupCalls: number;
 };
-export type ProjectionScanCounts = { calls: number; visits: number; duringNativeCallback: number };
+type ProjectionScanCounts = { calls: number; visits: number; duringNativeCallback: number };
 export type ProjectionResourceSnapshot = {
   sources: Record<string, ProjectionSourceCounts>;
   scans: Record<string, ProjectionScanCounts>;
@@ -84,9 +84,14 @@ export function createProjectionResourceProbe() {
     }
   }
 
-  function observeSource(source: object, label: string, beforeDelivery?: () => void) {
-    const descriptor = Object.getOwnPropertyDescriptor(source, "subscribe");
-    const original: unknown = Reflect.get(source, "subscribe");
+  function observeSource(
+    source: object,
+    label: string,
+    beforeDelivery?: () => void,
+    method: "subscribe" | "subscribeEvents" = "subscribe",
+  ) {
+    const descriptor = Object.getOwnPropertyDescriptor(source, method);
+    const original: unknown = Reflect.get(source, method);
     if (typeof original !== "function") {
       throw new Error(`Missing native subscription boundary: ${label}`);
     }
@@ -102,7 +107,7 @@ export function createProjectionResourceProbe() {
       object,
       { callback: (...args: unknown[]) => unknown; active: boolean }
     >();
-    Object.defineProperty(source, "subscribe", {
+    Object.defineProperty(source, method, {
       configurable: true,
       writable: true,
       value(this: unknown, ...args: unknown[]) {
@@ -151,9 +156,9 @@ export function createProjectionResourceProbe() {
     });
     restore.push(() => {
       if (descriptor) {
-        Object.defineProperty(source, "subscribe", descriptor);
+        Object.defineProperty(source, method, descriptor);
       } else {
-        Reflect.deleteProperty(source, "subscribe");
+        Reflect.deleteProperty(source, method);
       }
     });
   }

@@ -31,29 +31,26 @@ vi.mock("openai", () => {
       create: (request: Record<string, unknown>) => {
         provider.tiers.push(request.service_tier);
         const rejected = provider.rejectUltrafast && request.service_tier === "ultrafast";
-        const event = rejected
-          ? {
-              type: "response.failed",
-              response: {
-                output: [],
-                error: { code: "invalid_prompt", message: "Invalid service_tier argument" },
-              },
-            }
-          : {
-              type: "response.completed",
-              response: {
-                id: "resp_fixture",
-                status: "completed",
-                service_tier: request.service_tier,
-                output: [],
-                usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
-              },
-            };
         return {
           withResponse: async () => ({
             response: new Response(null, { status: 200 }),
             data: (async function* () {
-              yield event;
+              yield {
+                type: rejected ? "response.failed" : "response.completed",
+                response: {
+                  output: [],
+                  ...(rejected
+                    ? {
+                        error: { code: "invalid_prompt", message: "Invalid service_tier argument" },
+                      }
+                    : {
+                        id: "resp_fixture",
+                        status: "completed",
+                        service_tier: request.service_tier,
+                        usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
+                      }),
+                },
+              };
             })(),
           }),
         };
@@ -85,12 +82,9 @@ function expectedObservation(responseTier: string) {
 
 const model = makeProviderModelFixture<"openai-responses">({
   id: "fixture",
-  name: "Fixture",
   provider: "openai",
   api: "openai-responses",
   baseUrl: "https://api.openai.com/v1",
-  contextWindow: 10000,
-  maxTokens: 100,
 });
 
 it("keeps requesting Ultrafast after a downgrade and clears it on the first honored response", async () => {

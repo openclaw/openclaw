@@ -508,6 +508,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     ...authProfile,
     thinkLevel: params.run.thinkLevel,
     thinkingExplicit: params.run.thinkingExplicit,
+    cyberAccessProgram: params.run.cyberAccessProgram,
     fastMode: params.run.fastMode,
     fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
     verboseLevel: params.run.verboseLevel,

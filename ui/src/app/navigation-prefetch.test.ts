@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ApplicationRouter } from "../app-routes.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import { connectNavigationPrefetch } from "./navigation-prefetch.ts";
 
 const cleanups: Array<() => void> = [];
@@ -13,6 +14,8 @@ const manifest = {
   "model-picker": ["assets/model-picker-1234abcd.js"],
   appearance: ["assets/appearance-1234abcd.js"],
   debug: ["assets/debug-1234abcd.js"],
+  "advanced-next": ["assets/security-1234abcd.js", "assets/security-1234abcd.css"],
+  "claws-next": ["assets/claws-next-1234abcd.js"],
 };
 
 beforeEach(() => {
@@ -43,15 +46,38 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function setup() {
+function setup(routeId?: "advanced") {
+  const currentLocation = {
+    pathname: routeId ? "/control/settings/advanced" : "/chat",
+    search: "",
+    hash: "",
+  };
   const state: ReturnType<ApplicationRouter["getState"]> = {
-    location: { pathname: "/chat", search: "", hash: "" },
-    resolvedLocation: null,
+    location: currentLocation,
+    resolvedLocation: routeId ? currentLocation : null,
     status: "success",
     matches: [],
     pendingMatches: [],
     cachedMatches: [],
   };
+  if (routeId) {
+    state.matches = [
+      {
+        id: routeId,
+        routeId,
+        location: currentLocation,
+        deps: "",
+        status: "success",
+        isFetching: false,
+        updatedAt: 0,
+        fetchCount: 1,
+        abortController: new AbortController(),
+        cause: "navigation",
+        preload: false,
+        invalid: false,
+      },
+    ];
+  }
   let notify = () => {};
   const outlet = { presentationSettled: false };
   const transcript = { ready: false };
@@ -69,17 +95,11 @@ function setup() {
       },
     },
     gateway: {
-      snapshot: {
+      snapshot: createApplicationGatewaySnapshot({
         phase: "connected",
-        client: null,
-        hello: null,
         assistantAgentId: "main",
         sessionKey: "main",
-        lastError: null,
-        lastErrorCode: null,
-        offlineStable: false,
-        canvasPluginSurfaceUrl: null,
-      },
+      }),
       subscribe: () => () => {},
     },
     outlet: () => outlet,
@@ -144,10 +164,65 @@ it("warms New Session after presentation and leaves other routes for intent", as
   expect(hints()).toHaveLength(0);
 });
 
+it("keeps declared next interactions as the route's only automatic idle work", async () => {
+  const fixture = setup("advanced");
+  await idle();
+  expect(fetch).not.toHaveBeenCalled();
+  fixture.outlet.presentationSettled = true;
+  await idle();
+  expect(fetch).not.toHaveBeenCalled();
+  fixture.transcript.ready = true;
+  await idle();
+  expect(hints().map((link) => [link.rel, link.as ?? "", link.href])).toEqual([
+    ["modulepreload", "", new URL("/control/assets/security-1234abcd.js", location.origin).href],
+    ["preload", "style", new URL("/control/assets/security-1234abcd.css", location.origin).href],
+  ]);
+  expect(fixture.preloadRoute).not.toHaveBeenCalled();
+  expect(document.querySelector("script")).toBeNull();
+  fixture.state.status = "loading";
+  fixture.notify();
+  hints().forEach((link) => link.dispatchEvent(new Event("load")));
+  await idle();
+  expect(hints()).toHaveLength(2);
+  const nextLocation = { pathname: "/control/claws", search: "", hash: "" };
+  fixture.state.location = nextLocation;
+  fixture.state.resolvedLocation = nextLocation;
+  fixture.state.matches = [
+    { ...fixture.state.matches[0]!, id: "claws", routeId: "claws", location: nextLocation },
+  ];
+  fixture.state.status = "success";
+  fixture.notify();
+  await idle();
+  expect(hints().map((link) => link.href)).toEqual([
+    new URL("/control/assets/security-1234abcd.js", location.origin).href,
+    new URL("/control/assets/security-1234abcd.css", location.origin).href,
+    new URL("/control/assets/claws-next-1234abcd.js", location.origin).href,
+  ]);
+  hints().forEach((link) => link.dispatchEvent(new Event("load")));
+  await idle();
+  expect(hints()).toHaveLength(3);
+  const fallbackLocation = { pathname: "/control/usage", search: "", hash: "" };
+  fixture.state.location = fallbackLocation;
+  fixture.state.resolvedLocation = fallbackLocation;
+  fixture.state.matches = [
+    { ...fixture.state.matches[0]!, id: "usage", routeId: "usage", location: fallbackLocation },
+  ];
+  fixture.notify();
+  await idle();
+  expect(hints().map((link) => link.href)).toEqual([
+    new URL("/control/assets/security-1234abcd.js", location.origin).href,
+    new URL("/control/assets/security-1234abcd.css", location.origin).href,
+    new URL("/control/assets/claws-next-1234abcd.js", location.origin).href,
+    new URL("/control/assets/new-1234abcd.js", location.origin).href,
+    new URL("/control/assets/new-1234abcd.css", location.origin).href,
+  ]);
+  expect(fixture.preloadRoute).not.toHaveBeenCalled();
+});
+
 it.each(["topbar-search", "sidebar-brand__search", "shell-chrome-controls__search"])(
   "prioritizes %s intent without mounting and rechecks Save-Data at effect time",
   async (searchClass) => {
-    const fixture = setup();
+    const fixture = setup("advanced");
     fixture.outlet.presentationSettled = true;
     fixture.transcript.ready = true;
     const trigger = fixture.shell.appendChild(document.createElement("button"));

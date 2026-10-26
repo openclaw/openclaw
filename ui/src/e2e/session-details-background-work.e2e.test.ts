@@ -665,6 +665,9 @@ suite.define(() => {
                 animation.pause();
                 animation.currentTime = 0;
                 animations.push(animation);
+              } else if (this.matches(".chat-details-desktop-section__body")) {
+                animation.pause();
+                animation.currentTime = 0;
               }
               return animation;
             };

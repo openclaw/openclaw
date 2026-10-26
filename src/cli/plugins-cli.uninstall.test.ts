@@ -145,10 +145,7 @@ it("escapes terminal controls from the installed manifest name in the preview", 
 
   const output = cli.pluginsCliRuntimeLogs.join("\n");
   expect(output).not.toContain("\u001b");
-  const previewLine = output
-    .split("\n")
-    .find((line) => line.includes("Plugin: alpha") && line.includes("forged-row"));
-  expect(previewLine).toContain("\\nforged-row");
+  expect(output).toContain("Plugin: alpha\\nforged-row (alpha)");
 });
 
 it("forwards online --keep-files without deleting files or writing config locally", async () => {

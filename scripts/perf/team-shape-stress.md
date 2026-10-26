@@ -49,7 +49,15 @@ Normal maintenance remains enabled in both passes.
 
 Before stress rounds, completed mock turns and closed provider streams establish
 readiness; unrelated background sidebar publications need not become quiet.
-After each workload, subscriber events still drain before fanout counters settle.
+After each workload, subscriber events drain before continuous receipts check
+delivery across all clients. Primary turns require both message and session-change
+events; native subagent parents and children retain per-event delivery parity,
+including child events published before the spawn response. Committed injections
+must arrive exactly once on every client. The existing bounded drain also waits
+for these receipts: an acknowledged write can still have publication queued.
+Timed counts of unrelated background
+events are diagnostic: a broadcast can cross the timing boundary between socket
+callbacks. Connection and sequence-gap checks remain active throughout.
 
 Clients subscribe to sidebar and transcript events while polling list/search,
 history, startup, diff, and reconnect paths. An independent writer commits
@@ -133,3 +141,20 @@ Production's exported event-loop maximum histogram is not an event-loop sample
 p99. Do not relabel it as one. This script deliberately has no production-load
 target option. Live deployment stress requires a separate, explicitly authorized
 campaign.
+
+Pass `--operator-model-policy` to exercise role-scoped model presentation. All
+clients authenticate as an identified synthetic operator through the loopback
+trusted proxy and share a role allowing `openai/*` except `openai/blocked-*`.
+The setup requires the public `models.list` response to expose the restricted
+selection policy and the mock default, and saves it in `operator-model-policy.json`.
+This avoids the shared-secret owner's role bypass. Use the same option for both
+arms and controls; it also enables the existing trusted-proxy compression path.
+Each `stress-minutes.jsonl` sample includes the host's 1/5/15-minute load averages.
+With this option, allocation passes also write `operator-model-policy-counts.json`:
+main-isolate preparation, restore, and reference-preparation calls during the
+measured window, with the instrumented function names. The private loader adds
+counters to the built policy module only in these diagnostic passes. Check the
+installed names before interpreting zero counts; `prepareRefs` runs twice per
+policy construction for the explicit allow/deny fixture. Timing passes remain
+uninstrumented. Attribute sampled bytes to the policy stacks in
+`stress-allocation.heapprofile`; sampled bytes are estimates, not exact allocation.

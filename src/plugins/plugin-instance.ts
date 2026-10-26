@@ -741,6 +741,8 @@ export class PluginInstance {
     const { failures, hostFailure, moduleCleanups } = await cleanupCompletion;
     // Expired calls lose authority, but retain their code until they actually return.
     await this.waitForCalls(() => false, new AbortController().signal);
+    // Retire captured membership before module cleanup can wait on its source worker.
+    this.moduleSourceExists &&= false;
     for (const cleanup of moduleCleanups) {
       try {
         await this.invoke(cleanup, this.lease({ cleanup: true }));
@@ -755,8 +757,6 @@ export class PluginInstance {
     this.moduleLoader = undefined;
     this.setupCache = undefined;
     this.captureModuleRecovery = undefined;
-    // Release captured paths without reopening the never-bound bundled-library fallback.
-    this.moduleSourceExists &&= false;
     this.slots.clear();
     for (const failure of terminalFailures) {
       if (!failures.includes(failure)) {

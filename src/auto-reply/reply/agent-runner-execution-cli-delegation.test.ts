@@ -14,6 +14,7 @@ import {
   initialFallbackAttemptOptions,
   requireMockCall,
   setupAgentRunnerExecutionTestState,
+  runFallbackCandidate,
 } from "./agent-runner-execution.test-support.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
@@ -48,12 +49,9 @@ function resolveMockedCliGrantCapability() {
 describe("executeAgentTurn: CLI delegation grants", () => {
   it("keeps primary CLI completion grants unrestricted", async () => {
     state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("codex-cli", "gpt-5.4", initialFallbackAttemptOptions(params)),
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
+    state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+      runFallbackCandidate(params, "codex-cli", "gpt-5.4"),
+    );
     state.runCliAgentMock.mockResolvedValue({ payloads: [{ text: "done" }], meta: {} });
     const followupRun = createFollowupRun();
     followupRun.run.provider = "codex-cli";
@@ -98,16 +96,14 @@ describe("executeAgentTurn: CLI delegation grants", () => {
 
   it("restricts a sticky rate-limit fallback CLI completion grant that runs first", async () => {
     state.isCliProviderMock.mockImplementation((provider) => provider === "codex-cli");
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run(
+    state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+      runFallbackCandidate(
+        params,
         "codex-cli",
         "gpt-5.4",
         fallbackAttemptOptions(params, "rate_limit"),
       ),
-      provider: "codex-cli",
-      model: "gpt-5.4",
-      attempts: [],
-    }));
+    );
     state.runCliAgentMock.mockResolvedValue({ payloads: [{ text: "done" }], meta: {} });
     const followupRun = createFollowupRun();
     followupRun.run.inputProvenance = {

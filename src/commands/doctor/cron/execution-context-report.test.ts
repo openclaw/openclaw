@@ -89,7 +89,14 @@ describe("scheduled-run access review", () => {
       {
         job: { id: "job-1", name: "Morning digest", enabled: true },
         ownerCheck: "checked",
-        fields: [expect.objectContaining({ field: "ownerEmbedded", legacy: true, context: false })],
+        fields: [
+          expect.objectContaining({
+            field: "ownerEmbedded",
+            legacy: "owner",
+            context: "non-owner",
+            label: "loss",
+          }),
+        ],
       },
     ]);
     expect(formatScheduledContextReport(report)).toContain(
@@ -179,7 +186,7 @@ describe("scheduled-run access review", () => {
         cliBackend: "claude-cli",
       }),
     );
-    // Only the owner context differs from today's CLI owner bit.
+    // Only the owner context gains owner-only tools on the CLI backend.
     expect(report.runtimeOwner).toEqual([
       { job: expect.objectContaining({ id: "job-1" }), cliBackend: "claude-cli" },
     ]);

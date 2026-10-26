@@ -4,11 +4,18 @@ import type { ChatFastModeSelectValue } from "../../../lib/chat/model-select-sta
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
+import { ChatAccessProgramControl } from "./chat-access-program-control.tsx";
 import { formatEffortLabel, type ChatEffortPickerParams } from "./chat-effort-picker.tsx";
+import { ChatPreferenceSegments } from "./chat-preference-segments.tsx";
 
 type ChatEffortPickerPanelProps = Pick<
   ChatEffortPickerParams,
-  "fastMode" | "sessionKey" | "thinkingDisabled" | "onFastModeSelect" | "onThinkingSelect"
+  | "accessProgram"
+  | "fastMode"
+  | "sessionKey"
+  | "thinkingDisabled"
+  | "onFastModeSelect"
+  | "onThinkingSelect"
 > & {
   view: {
     sliderStops: ChatEffortPickerParams["thinking"]["options"];
@@ -23,7 +30,6 @@ type ChatEffortPickerPanelProps = Pick<
     reasoningValueLabel: string;
     speedOptions: { value: ChatFastModeSelectValue; label: string; disabled?: boolean }[];
     selectedSpeed: string;
-    tabbableSpeedIndex: number;
     onlyStop: ChatEffortPickerParams["thinking"]["options"][number] | undefined;
     onlyStopSelected: boolean;
   };
@@ -31,41 +37,12 @@ type ChatEffortPickerPanelProps = Pick<
 
 export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
   const view = () => props.view;
-  const speedButtons = new Set<HTMLButtonElement>();
   const previewLabels = new Set<HTMLSpanElement>();
   let committedLabel: HTMLSpanElement | undefined;
   // Catalog and status refreshes must not overwrite an uncommitted native drag.
   const committedSliderValue = createMemo(() => String(view().sliderIndex));
   const sliderFillPercent = (index: number, count: number) =>
     count > 1 ? (index / (count - 1)) * 100 : 0;
-  const onSpeedKeyDown = (event: KeyboardEvent) => {
-    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) {
-      return;
-    }
-    const group = event.currentTarget;
-    if (!(group instanceof HTMLElement)) {
-      return;
-    }
-    const options = [...speedButtons]
-      .filter((button) => !button.disabled)
-      .toSorted((left, right) =>
-        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-      );
-    if (options.length === 0) {
-      return;
-    }
-    const current = options.findIndex((option) => option === document.activeElement);
-    const next =
-      event.key === "Home"
-        ? 0
-        : event.key === "End"
-          ? options.length - 1
-          : (current + (["ArrowLeft", "ArrowUp"].includes(event.key) ? -1 : 1) + options.length) %
-            options.length;
-    event.preventDefault();
-    options[next]?.focus();
-    options[next]?.click();
-  };
   const syncSliderPreview = (input: HTMLInputElement, previewIndex?: number) => {
     const preview = previewIndex === undefined ? undefined : view().sliderStops[previewIndex];
     const index = previewIndex ?? view().sliderIndex;
@@ -116,6 +93,7 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
         view().showReasoning ? "chat.modelControls.effort" : "chat.modelControls.fastMode",
       )}
     >
+      {props.accessProgram && <ChatAccessProgramControl {...props.accessProgram} />}
       {view().showReasoning && (
         <div class="chat-controls__reasoning-panel">
           <div class="chat-controls__reasoning-head">
@@ -240,42 +218,18 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
       {props.fastMode.supported && (
         <div class="chat-controls__speed-panel">
           <span class="chat-controls__effort-heading">{t("chat.modelControls.speed")}</span>
-          <div
-            class="chat-controls__speed-options"
-            role="radiogroup"
-            aria-label={t("chat.modelControls.speed")}
-            onKeyDown={onSpeedKeyDown}
-          >
-            <For each={view().speedOptions} keyed={(option) => option.value}>
-              {(option, index) => (
-                <button
-                  ref={elementRef<HTMLButtonElement>((element) => {
-                    speedButtons.add(element);
-                    return () => speedButtons.delete(element);
-                  })}
-                  type="button"
-                  role="radio"
-                  class="chat-controls__speed-option"
-                  data-chat-speed-option={option().value}
-                  aria-checked={option().value === view().selectedSpeed ? "true" : "false"}
-                  tabindex={index() === view().tabbableSpeedIndex ? 0 : -1}
-                  disabled={props.fastMode.disabled || option().disabled}
-                  onClick={(event: MouseEvent) => {
-                    event.stopPropagation();
-                    if (
-                      !props.fastMode.disabled &&
-                      !option().disabled &&
-                      option().value !== props.fastMode.persistedOverride
-                    ) {
-                      void props.onFastModeSelect(option().value, props.sessionKey);
-                    }
-                  }}
-                >
-                  {option().label}
-                </button>
-              )}
-            </For>
-          </div>
+          <ChatPreferenceSegments
+            kind="speed"
+            label={t("chat.modelControls.speed")}
+            options={view().speedOptions}
+            selected={view().selectedSpeed}
+            disabled={props.fastMode.disabled}
+            onSelect={(value) => {
+              if (value !== props.fastMode.persistedOverride) {
+                void props.onFastModeSelect(value, props.sessionKey);
+              }
+            }}
+          />
         </div>
       )}
     </div>

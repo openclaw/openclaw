@@ -29,7 +29,11 @@ export function connectShellIdle(
         .queryRenderedElements("openclaw-chat-pane")
         .filter((pane) => pane.presented && pane.visuallyPresented);
       const routeId = context.router.getState().matches[0]?.routeId;
+      const pluginsReady = host
+        .queryRenderedElements("openclaw-plugin-page")
+        .every((page) => !context.plugins.isLoading(page.pluginId ?? ""));
       return (
+        pluginsReady &&
         (!routeId || !isSessionRouteId(routeId) || panes.length > 0) &&
         panes.every(
           (pane) =>

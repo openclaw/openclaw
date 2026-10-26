@@ -31,6 +31,15 @@ const sessionAllowlist = (
 ) => toSessionToolAllowlist(collectAllowedToolNames({ tools, clientTools: clients }));
 
 describe("tool name allowlists", () => {
+  it("sorts a fresh allowlist without changing caller order or retaining its output", () => {
+    const names = Object.freeze(["write", "read", "write", "exec"]);
+    const allowlist = toSessionToolAllowlist(names);
+    expect(allowlist).toEqual(["exec", "read", "write"]);
+    expect(names).toEqual(["write", "read", "write", "exec"]);
+    allowlist.push("child-only");
+    expect(toSessionToolAllowlist(names.values())).toEqual(["exec", "read", "write"]);
+  });
+
   it("collects exact registered custom-tool names for the agent session allowlist", () => {
     const allowlist = toSessionToolAllowlist(
       collectRegisteredToolNames([

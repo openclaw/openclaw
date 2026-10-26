@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isValidBase64 } from "@openclaw/media-core/base64";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveNativeModelPrimary } from "../agents/agent-scope.js";
@@ -27,12 +28,9 @@ import {
 } from "../sessions/session-title-source.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
+import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import type { ChatAttachment } from "./chat-attachments.js";
-import {
-  claimDashboardTitleRefinement,
-  readDashboardRefinementSource,
-} from "./dashboard-session-title-refinement.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import {
   hasExplicitSessionName,
@@ -40,6 +38,10 @@ import {
   resolveExplicitSessionName,
   sessionTitleRequests,
 } from "./session-title-state.js";
+import {
+  readSessionTranscriptBoundedMessageTailPageAsync,
+  type SessionTranscriptReadScope,
+} from "./session-transcript-readers.js";
 import { readSessionTitleFieldsFromTranscriptAsync } from "./session-transcript-title-reader.js";
 
 type DashboardSessionTitleModelEntry = Pick<
@@ -53,6 +55,29 @@ type DashboardSessionTitleModelEntry = Pick<
   | "modelSelectionLocked"
   | "providerOverride"
 >;
+
+async function readDashboardRefinementSource(
+  scope: SessionTranscriptReadScope,
+  currentMessage: string,
+  skillCommands: SkillCommandSpec[],
+): Promise<string> {
+  const page = await readSessionTranscriptBoundedMessageTailPageAsync(scope, {
+    maxMessages: 40,
+    maxBytes: 32_000,
+    offset: 0,
+  });
+  const messages = page.events.flatMap(({ event }) => {
+    const message = asOptionalRecord(asOptionalRecord(event)?.message);
+    const text = message?.role === "user" ? extractFirstTextBlock(message) : undefined;
+    const source = text ? resolveSessionTitleSource(text, skillCommands) : undefined;
+    return source ? [source] : [];
+  });
+  // The accepted current turn may not have reached transcript storage yet.
+  return truncateUtf16Safe(
+    ["Latest task:", currentMessage, "Recent context:", ...messages.slice(-6)].join("\n"),
+    SESSION_TITLE_SOURCE_MAX_CHARS,
+  );
+}
 
 const DASHBOARD_SESSION_TITLE_MAX_CHARS = 60;
 const WORKTREE_SESSION_TITLE_WAIT_MS = 30_000;
@@ -498,7 +523,32 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     }
     refinementSource = task;
     // Claim before inference so concurrent follow-ups retain their own admission.
-    refinementName = await claimDashboardTitleRefinement(params);
+    await patchSessionEntryCore(
+      {
+        agentId: params.agentId,
+        storePath: params.storePath,
+        sessionKey: resolveStoredSessionKeyForAgentStore(params),
+      },
+      (current) => {
+        refinementName = undefined;
+        const refinementState = current.titleRefinement;
+        if (
+          current.sessionId !== params.sessionId ||
+          !refinementState ||
+          refinementState.remainingMessages <= 0 ||
+          !matchesGeneratedSessionTitle(current, refinementState.generatedName)
+        ) {
+          return null;
+        }
+        const remainingMessages = refinementState.remainingMessages - 1;
+        // Claim before inference; a failed attempt leaves the existing name and is not retried.
+        if (!remainingMessages) {
+          refinementName = refinementState.generatedName;
+        }
+        return { titleRefinement: { ...refinementState, remainingMessages } };
+      },
+      { requireWriteSuccess: true, ...sessionEntryCommitGuardOptions(params.commitGuard) },
+    );
     if (!refinementName) {
       return false;
     }

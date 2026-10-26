@@ -2446,7 +2446,7 @@ describe("runPreparedReply media-only handling", () => {
       }
       await runPreparedReply(params);
       expect(requireRunReplyAgentCall().followupRun.run.bootstrapUserProfileId).toBe(
-        kind === "session-internal" ? undefined : "carol",
+        kind === "session-internal" ? "alice" : "carol",
       );
     },
   );

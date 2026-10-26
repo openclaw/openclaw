@@ -362,7 +362,9 @@ it("cancels admission and rechecks authority without sending queued requests", a
   await vi.advanceTimersByTimeAsync(60_000);
 });
 
-it("releases request callbacks while completed streams remain readable", async ({ signal }) => {
+it("releases admitted request callbacks across completion, retry, and abandoned consumption", async ({
+  signal,
+}) => {
   // V8 collection proof runs in Node even when the surrounding suite uses Bun.
   const result = await runNodeScript(
     [
@@ -371,7 +373,7 @@ it("releases request callbacks while completed streams remain readable", async (
       "./scripts/tsx.mjs",
       "scripts/perf/provider-rate-limit-retention.ts",
       "--turns",
-      "4",
+      "11",
       "--payload-bytes",
       "8",
     ],
@@ -387,7 +389,7 @@ it("releases request callbacks while completed streams remain readable", async (
   expect(result.error, result.stderr).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout)).toMatchObject({
-    turns: 4,
+    turns: 11,
     retainedCallbacks: 0,
     retainedPayloadBytes: 0,
   });

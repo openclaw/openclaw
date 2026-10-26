@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 273752,
-  "reason": "PR #183553 keeps the inline-view contract in the shared boot group, avoiding Chat evaluation on New Session. Original interleaved measurements reduced local script CPU median 8.29% and unused boot JavaScript 55.95%. Against the exact merged main parent db38cc106695, same-host builds measure startup 274248 to 273752 B gzip (-496 B), with seven startup JS requests, one CSS request, and unchanged CSS. Record the measured integrated head.",
+  "startupJsGzipBytes": 271935,
+  "reason": "Same-host uncached 8937cb4 to 92174fc builds measure startup 271947 to 271935 B gzip (-12 B), Chat +1451 B and New Session +29 B (within build variance), with unchanged CSS bytes and JS/CSS request counts. The lazy highlighting worker cuts 5000-line code/diff CPU by 18-70%; avoiding leaf-subtree table scans cuts dense-code CPU median/p95 by 65.9%/64.3%. Record the measured integrated startup head.",
   "updatedAt": "2026-10-25"
 }

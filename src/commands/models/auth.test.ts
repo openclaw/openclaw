@@ -10,6 +10,7 @@ import type {
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.js";
+import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import { registerModelsAuthAuthorityTests } from "./auth-authority.test-support.js";
 
 type AuthRunCall = { signal?: AbortSignal };
@@ -217,12 +218,6 @@ function createProvider(
 
 function useProvider(id: string, label: string, auth?: ProviderPlugin["auth"]) {
   mocks.resolvePluginProvidersCore.mockReturnValue([createProvider(id, label, auth)]);
-}
-
-function expectNoCalls(...callbacks: unknown[]) {
-  for (const callback of callbacks) {
-    expect(callback).not.toHaveBeenCalled();
-  }
 }
 
 function createOpenAISetupProvider(

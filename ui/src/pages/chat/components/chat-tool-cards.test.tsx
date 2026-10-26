@@ -10,14 +10,17 @@ import {
 } from "../../../components/mcp-app-security.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 import {
   resolveCollapsedToolArgumentPreview,
   extractToolCardsCached,
 } from "../../../lib/chat/tool-cards.ts";
+import { mountSolid as mountComponent } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
+import { DiffBlock } from "./chat-diff-render.solid.tsx";
 import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
 import { createMessageEntry, createToolGroup } from "./chat-message.test-support.ts";
 import { mountCard, mountPreview } from "./chat-tool-cards.test-support.tsx";
@@ -108,12 +111,14 @@ it("switches a completed patch between mutually exclusive diff and raw bodies", 
   const expectPanels = (raw: boolean) =>
     expect([diffBody?.hidden, rawBody?.hidden]).toEqual([raw, !raw]);
   expectPanels(false);
+  expect(query(rawBody, "code")).toBeNull();
 
   tabs[1]?.click();
   await waitForSolid(() =>
     expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]),
   );
   expectPanels(true);
+  expect(query(diffBody, ".chat-diff")).toBe(diff);
   expect(query(rawBody, "code")?.textContent).toBe("Applied patch");
 
   await mountCard(
@@ -130,7 +135,28 @@ it("switches a completed patch between mutually exclusive diff and raw bodies", 
     expect(rawBody?.hidden).toBe(false);
     expect(tabList?.getAttribute("aria-label")).toBe("Tool detail view");
   });
+  tabs[0]?.click();
+  await waitForSolid(() => expectPanels(false));
+  expect(query(rawBody, "code")?.textContent).toBe("Applied patch");
+  expect(textOf(diffBody!, ".chat-diff__row--add .chat-diff__text")).toBe("new");
   container.remove();
+});
+
+it("scans unnumbered diff lines once while rendering every row", () => {
+  let numberReads = 0;
+  const lines: DiffLine[] = Array.from({ length: 256 }, (_, index) => ({
+    kind: "ctx",
+    text: `line ${index}`,
+    get lineNo() {
+      numberReads += 1;
+      return undefined;
+    },
+  }));
+  const view = mountComponent(DiffBlock, { lines });
+  onTestFinished(view.dispose);
+  expect(view.container.querySelectorAll(".chat-diff__row")).toHaveLength(lines.length);
+  expect(view.container.querySelector(".chat-diff__gutter")).toBeNull();
+  expect(numberReads).toBeLessThanOrEqual(lines.length * 2);
 });
 
 it.each([
@@ -154,6 +180,7 @@ it.each([
   const rawBody = query(container, '[id$="-raw-panel"]');
   expect(rawBody?.hidden).toBe(false);
   expect(query(rawBody, "code")?.textContent).toBe(outputText);
+  expect(query(container, ".chat-diff")).toBeNull();
   container.remove();
 });
 
