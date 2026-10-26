@@ -196,6 +196,11 @@ function expectDeliverReplyCall(index: number, text: string, fields?: Record<str
   expect(params.replies).toEqual([{ text }]);
 }
 
+function expectDeliveredTexts(...texts: string[]) {
+  expect(deliverRepliesMock).toHaveBeenCalledTimes(texts.length);
+  texts.forEach((text, index) => expectDeliverReplyCall(index, text));
+}
+
 function progressAccount(
   progress: Record<string, unknown> = { toolProgress: true, label: "Working" },
 ) {
@@ -942,12 +947,10 @@ it("completes native sources with one visible work session before final text", a
   expect(stopSlackStreamMock).toHaveBeenCalledOnce();
   expectNoCalls(deliverRepliesMock, createSlackDraftStreamMock);
 });
-it.each([
-  { agents: ["alice", "bob"], withMedia: true },
-  { agents: ["alice", "bob"], withMedia: false },
-])(
-  "binds group-thread completion hooks and media to the participant: $agents (media: $withMedia)",
-  async ({ agents, withMedia }) => {
+it.each([true, false])(
+  "binds group-thread completion hooks and media to each participant (media: %s)",
+  async (withMedia) => {
+    const agents = ["alice", "bob"];
     useRealChannelInboundTurn = true;
     mockedNativeStreaming = true;
     const { resolveGroupThreadMentionFacts } = await import("openclaw/plugin-sdk/channel-inbound");
@@ -1052,7 +1055,7 @@ it.each(["native literal", "split table"] as const)(
   "delivers %s finals through the normal sender instead of a preview edit",
   async (scenario) => {
     const literal = scenario === "native literal";
-    mockedNativeStreaming = scenario === "native literal";
+    mockedNativeStreaming = literal;
     if (literal) {
       finalizeSlackPreviewEditMock.mockResolvedValue(undefined);
     }
@@ -1188,8 +1191,7 @@ it("gates native progress previews before message_sending hooks", async () => {
     startSlackStreamMock,
     appendSlackStreamMock,
   );
-  expect(deliverRepliesMock).toHaveBeenCalledOnce();
-  expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  expectDeliveredTexts(FINAL_REPLY_TEXT);
 });
 
 it("posts the final below a human message received while the preview was sealing", async () => {
@@ -1203,8 +1205,7 @@ it("posts the final below a human message received while the preview was sealing
   await dispatch();
 
   expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
-  expect(deliverRepliesMock).toHaveBeenCalledOnce();
-  expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  expectDeliveredTexts(FINAL_REPLY_TEXT);
 });
 
 it.each([false, true])("preserves custom authorship with native streaming %s", async (native) => {
@@ -1753,8 +1754,7 @@ it("keeps final fallback in the planned thread when native Slack progress start 
 
   expect(startSlackStreamMock).toHaveBeenCalledTimes(1);
   expectNoCalls(appendSlackStreamMock, stopSlackStreamMock);
-  expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-  expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  expectDeliveredTexts(FINAL_REPLY_TEXT);
 });
 
 it("places a native-streamed final below a later human message in the same thread", async () => {
@@ -2407,8 +2407,7 @@ it("suppresses reasoning payloads during a definite stream-rejection fallback", 
 
   await dispatch();
 
-  expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-  expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  expectDeliveredTexts(FINAL_REPLY_TEXT);
 });
 
 it("keeps same-content tool and final payloads distinct after preview fallback", async () => {
@@ -2417,9 +2416,7 @@ it("keeps same-content tool and final payloads distinct after preview fallback",
   await dispatch();
 
   expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
-  expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
-  expectDeliverReplyCall(0, SAME_TEXT);
-  expectDeliverReplyCall(1, SAME_TEXT);
+  expectDeliveredTexts(SAME_TEXT, SAME_TEXT);
 });
 
 it("keeps multi-part block replies in the first reply thread after the plan is consumed", async () => {
@@ -2428,9 +2425,7 @@ it("keeps multi-part block replies in the first reply thread after the plan is c
 
   await dispatch({ replyToMode: "first" });
 
-  expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
-  expectDeliverReplyCall(0, "first block");
-  expectDeliverReplyCall(1, "second block");
+  expectDeliveredTexts("first block", "second block");
 });
 
 it("preserves normal final delivery when stale-preview cleanup fails", async () => {
@@ -2593,8 +2588,7 @@ it.each(["update", "completion"])(
     await dispatch();
 
     expect(stopSlackStreamMock).not.toHaveBeenCalled();
-    expect(deliverRepliesMock).toHaveBeenCalledOnce();
-    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+    expectDeliveredTexts(FINAL_REPLY_TEXT);
     expect(emitSlackMessageSentHooksMock).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         content: "acknowledged narration",
@@ -2757,13 +2751,9 @@ it("caps the card fallback text at the draft limit while keeping the long blocks
   expect(JSON.stringify(blocks)).toContain("Approval required:");
 });
 
-it.each([
-  { firstSend: "delivered", messageId: "171234.567" },
-  // The first Slack post is still queued or in flight, so no message id exists yet.
-  { firstSend: "pending", messageId: undefined },
-])(
-  "deletes a working card once a resolved approval was its last visible row (first send $firstSend)",
-  async ({ messageId }) => {
+it.each(["171234.567", undefined])(
+  "deletes a working card once a resolved approval was its last visible row (message id: %s)",
+  async (messageId) => {
     const draftStream = useDraftStream();
     draftStream.messageId = () => messageId;
     mockedReplyOptionEvents = [
