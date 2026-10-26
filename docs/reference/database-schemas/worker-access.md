@@ -2220,13 +2220,6 @@ fresh-message and pending-input checks retain their effect boundaries; the final
 grant rechecks live authority and the append's current custody facts before COMMIT.
 FIFO, refusal, timeout, stored data, and update behavior are unchanged.
 
-Ordinary append receipts omit an unchanged session entry when the worker confirms
-the command's retained preimage token. Settlement restores a detached entry from
-that preimage before observers or the replica consume the outcome. Changed entries,
-initialization, and turn results retain their full payloads and existing aliases.
-The receipt's new write token still controls replica currency; a preimage reference
-does not grant authority or change when the commit becomes durable.
-
 A cold actor read hydrates its entry, participants, membership, pending-input
 custody, and transcript metadata in one autocommit statement. A cold phase
 command uses that same statement inside its own write transaction, without a
@@ -5862,6 +5855,8 @@ workers still require native exit before replacement. Schema and update behavior
 Cold-storage maintenance preparation uses this same idle worker, including empty
 sweeps. Each preparation closes its scoped read-only handles before replying;
 selection, configuration checks, and commit authority remain per request.
+Preparation loads its read-only selection and archive encoding helpers without
+initializing the writable database lifecycle or transcript restoration machinery.
 
 Single-message lookups and display-message counts use that same history worker.
 Session-message broadcasts await the stored content and sequence in their existing

@@ -274,21 +274,18 @@ describe("catalog and thinking selection", () => {
         ],
       },
     });
-    const ambient = vi
+    using ambient = vi
       .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")
       .mockReturnValue({ levels: [{ id: "off" }], defaultLevel: "off" });
-    try {
-      const state = await createInitialState({}, provider, model, {
-        hasModelDirective: true,
-        preparedModelCatalog,
-      });
-      await expect(
-        state.resolveDefaultThinkingLevel({ provider, model, agentRuntime: "codex" }),
-      ).resolves.toBe("ultra");
-      expect(ambient).not.toHaveBeenCalled();
-    } finally {
-      ambient.mockRestore();
-    }
+
+    const state = await createInitialState({}, provider, model, {
+      hasModelDirective: true,
+      preparedModelCatalog,
+    });
+    await expect(
+      state.resolveDefaultThinkingLevel({ provider, model, agentRuntime: "codex" }),
+    ).resolves.toBe("ultra");
+    expect(ambient).not.toHaveBeenCalled();
   });
 });
 

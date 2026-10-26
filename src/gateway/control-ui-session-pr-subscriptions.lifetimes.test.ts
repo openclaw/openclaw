@@ -149,6 +149,9 @@ describe("recipient publication lifetimes", () => {
           const prepared = {
             ...target,
             assertCurrent: () => {
+              if (connId === "recipient" && holdRecipient) {
+                throw new Error("Recipient preparation pending");
+              }
               if (boundary === "selection" && captured !== generation) {
                 throw new Error("Prepared selection changed");
               }
@@ -405,10 +408,18 @@ describe("recipient publication lifetimes", () => {
 
   it("checks the recipient's prepared authority when another watcher joins before send", async () => {
     const access = new AbortController();
-    const recipientTarget = { ...target, assertCurrent: () => access.signal.throwIfAborted() };
+    let holdRecipient = false;
+    const recipientTarget = {
+      ...target,
+      assertCurrent: () => {
+        if (holdRecipient) {
+          throw new Error("Recipient preparation pending");
+        }
+        access.signal.throwIfAborted();
+      },
+    };
     const recipient = hold(recipientTarget);
     const joining = hold(target);
-    let holdRecipient = false;
     let snapshot = READY;
     const active = start({
       load: async () => snapshot,

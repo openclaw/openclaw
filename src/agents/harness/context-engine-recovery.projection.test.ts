@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as reconciliation from "../../config/sessions/session-transcript-reconcile.js";
 import { useReconcileWorkerObserver } from "../../config/sessions/session-transcript-reconcile.test-support.js";
@@ -113,12 +113,7 @@ it.each([false, true])(
           agentId: target.agentId,
           path: admission.storePath,
         });
-        await Promise.race([
-          held.promise,
-          joined.then(() => {
-            throw new Error("expected a deferred projection rebuild");
-          }),
-        ]);
+        await awaitGateBeforeSettlement(held.promise, joined, "projection rebuilt early");
         const terminalEntryId = sessionManager.getLeafId();
         assert(terminalEntryId, "recovery must retain a terminal entry");
         const record = vi.fn();
@@ -149,14 +144,8 @@ it.each([false, true])(
             record,
           },
         });
-        const phase = await Promise.race([
-          waiting.promise.then(() => "waiting"),
-          outcome.then(() => "finished"),
-        ]);
+        await awaitGateBeforeSettlement(waiting.promise, outcome, "finalization bypassed recovery");
         expect(record).not.toHaveBeenCalled();
-        expect(phase, "finalization must not finish without its recovered terminal anchor").toBe(
-          "waiting",
-        );
         if (cancel) {
           controller.abort(new Error("cancelled recovery"));
           await expect(outcome).rejects.toMatchObject({ name: "AbortError" });

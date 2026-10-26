@@ -1286,6 +1286,7 @@ src/infra/startup-migration-checkpoint.ts
 src/infra/state-database-maintenance.ts
 src/infra/state-lease-process-owner.ts
 src/infra/state-migrations.agent-owner-guidance.ts
+src/infra/state-legacy-cron-presence.ts
 src/infra/state-migrations.cron-run-logs.ts
 src/infra/state-migrations.media-persistence-targets.ts
 src/infra/state-migrations.receipts.ts
@@ -1720,6 +1721,7 @@ src/process/exec-runner.ts
 src/process/exec-spawn.ts
 src/process/exec-termination.ts
 src/process/exec.ts
+src/process/gateway-work-admission-state.ts
 src/process/gateway-work-admission.ts
 src/process/kill-tree.ts
 src/process/linux-oom-score.ts
@@ -2001,6 +2003,7 @@ src/state/openclaw-state-db-content-version.ts
 src/state/openclaw-state-db-cache.wal.ts
 src/state/openclaw-state-db-contract.ts
 src/state/openclaw-state-db-cron-delivery-migration.ts
+src/state/openclaw-state-db-cron-identity-migration.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts
 src/state/openclaw-state-db-engine.ts
@@ -2354,6 +2357,7 @@ packages/ai/src/transports/json-unsafe-integers.ts
 packages/ai/src/transports/model-request-body.ts
 packages/ai/src/transports/model-transport-debug.ts
 packages/ai/src/transports/model-transport-url.ts
+packages/ai/src/transports/openai-reasoning-compat.ts
 packages/ai/src/transports/openai-responses-contracts.ts
 packages/ai/src/transports/openai-responses-service-tier.ts
 packages/ai/src/transports/openai-responses-stream-errors.ts
@@ -2677,6 +2681,8 @@ src/gateway/worker-environments/workspace-conflicts.ts
 src/infra/sibling-temp-file.ts
 src/interactive/payload.ts
 src/media/media-reference.ts
+src/media/inbound-media-path.ts
+src/media/store-path.ts
 src/media/store.shared.ts
 src/media/store.ts
 src/sessions/session-run-error-presentation.ts

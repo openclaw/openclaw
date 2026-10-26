@@ -8,11 +8,9 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { prepareSessionColdBatchInWorker } from "./session-cold-storage-prepare.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
-import {
-  mutateSessionColdTranscriptInWorker,
-  prepareSessionColdBatchInWorker,
-} from "./session-cold-storage-worker.js";
+import { mutateSessionColdTranscriptInWorker } from "./session-cold-storage-worker.js";
 import {
   createSessionColdStorageFixture,
   currentId,

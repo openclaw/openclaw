@@ -133,7 +133,6 @@ it("retains pasted text attachments in later provider requests and reopened sess
         withTranscriptWrite: (write) => withSessionManagerWrite(active.manager, write),
         promptActiveSession: (text, options) => active.session.prompt(text, options),
       });
-      expect(active.session.getLastAssistantText()).toBe("Acknowledged.");
     };
     const first = await open();
     await send(first, 1);

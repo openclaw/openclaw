@@ -306,6 +306,24 @@ it.each(["unresolved import", "blocked output"])(
   },
 );
 
+it("finalizes raw browser-fixture assets when precompression is omitted", async () => {
+  const config = createConfig();
+  config.plugins = config.plugins?.filter(
+    (plugin) => !(plugin && "name" in plugin && plugin.name === "control-ui-precompressed-assets"),
+  );
+
+  const { names, html, worker } = await buildOutput(config);
+
+  expect(names.some((name) => name.endsWith(".br") || name.endsWith(".gz"))).toBe(false);
+  const entry = names.find((name) => /^index-.*\.js$/u.test(name));
+  expect(entry).toBeDefined();
+  expect(html).toContain(entry);
+  const identity = readBuiltIdentity(html);
+  expect(worker).toContain(`const EMBEDDED_CACHE_VERSION = "${identity.buildId}";`);
+  expect(offlineAssets(worker)).toContain(`assets/${entry}`);
+  expect(JSON.parse(await readOutput(".build-inputs.json"))).toBeInstanceOf(Array);
+});
+
 it("reports completed compression work before build completion at a bounded cadence", async () => {
   const config = createConfig("info");
   let clockMs = 0;

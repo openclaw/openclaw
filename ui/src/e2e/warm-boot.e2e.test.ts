@@ -4,8 +4,9 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { captureUiProofEnabled, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -158,8 +159,12 @@ suite.define(() => {
     "reconciles the cached shell, roster, and transcript with a %s profile",
     (profile) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const capture = (name: string) =>
-          page.screenshot({ path: path.join(suite.artifactDir, name) });
+        const capture = async (name: string) => {
+          await waitForControlUiProofSurface(page.locator("body"), []);
+          if (captureUiProofEnabled) {
+            await page.screenshot({ path: path.join(suite.artifactDir, name) });
+          }
+        };
         const timestamp = Date.now();
         const imported = profile === "imported";
         const shortTail = profile === "short-tail";

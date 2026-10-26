@@ -25,6 +25,12 @@ agent model: openai/gpt-6-astra (thinking=medium, fast=on)
 
 If a plugin reload supersedes startup plugin loading, the model line, loaded-plugin summary, and channel warnings use the replacement configuration and plugin metadata.
 
+Completed `startup phase:` lines include `rssMb` (resident memory for the whole
+process, including workers) and `heapUsedMb` (used JavaScript heap in the main
+isolate). Both values are in MiB and are sampled when the phase finishes, so
+service journals can attribute startup memory growth before readiness. They are
+point-in-time readings, not peak memory measurements.
+
 ## File-based logger
 
 - Default rolling log files are under `/tmp/openclaw/` (one file per day), dated by the gateway host's local timezone. The default profile uses `openclaw-YYYY-MM-DD.log`. Named profiles use `openclaw-<profile>-YYYY-MM-DD.log` (for example, `openclaw-dev-YYYY-MM-DD.log`). If that directory is unsafe or unwritable (wrong owner, world-writable, a symlink), OpenClaw falls back to a user-scoped `os.tmpdir()/openclaw-<uid>` path instead. On Windows it always uses that OS-tmpdir fallback.

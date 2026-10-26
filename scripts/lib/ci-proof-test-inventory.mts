@@ -3529,7 +3529,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/state/openclaw-state-db-readonly.reader-cleanup.test.ts",
   "src/state/openclaw-state-db-readonly.test.ts",
   "src/state/openclaw-state-db-readonly.worker-lifecycle.test.ts",
-  "src/state/openclaw-state-db-restart-handoff-migration.test.ts",
   "src/state/openclaw-state-db-schema-migration-required.test.ts",
   "src/state/openclaw-state-db-schema-repair.windows.test.ts",
   "src/state/openclaw-state-db.permissions.test.ts",

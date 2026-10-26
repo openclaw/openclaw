@@ -7,7 +7,6 @@ import {
   Errored,
   For,
   isPending,
-  latest,
   Loading,
   Show,
 } from "solid-js";
@@ -29,127 +28,15 @@ import {
   workspaceCatalogFilters,
   workspaceCatalogSearch,
   workspaceSessionFiles,
-  type WorkspaceCatalogRow,
 } from "./chat-session-workspace-catalog.ts";
 import { createSessionWorkspaceRead } from "./chat-session-workspace-read.ts";
-import { RailRow, WorkspaceFilename } from "./chat-session-workspace-row.tsx";
+import { RailRow, WorkspaceFilename, WorkspaceRows } from "./chat-session-workspace-row.tsx";
 import type { SessionWorkspaceFilter } from "./chat-sidebar-content-types.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 import { hasTranscriptAttachments } from "./chat-transcript-attachments.ts";
 import "../../../styles/session-panel-rail.css";
 import "./chat-session-workspace-desktop.css";
 import { FileDisclosure } from "./file-disclosure.tsx";
-
-function DirectoryBranch(props: {
-  row: WorkspaceCatalogRow;
-  workspace: SessionWorkspaceProps;
-  childrenByPath: ReadonlyMap<string, readonly WorkspaceCatalogRow[]>;
-  depth: number;
-}) {
-  return (
-    <div class="workspace-desktop__branch">
-      <Show
-        when={props.row.directory}
-        fallback={<RailRow file={props.row} workspace={props.workspace} depth={props.depth} />}
-      >
-        {(isDirectory) => {
-          const path = () => props.row.workspacePath ?? props.row.path;
-          const expanded = createMemo(
-            () => props.workspace.navigation?.expandedPaths.includes(path()) ?? false,
-          );
-          const active = createMemo(
-            () =>
-              props.workspace.navigation?.treeVisible !== false &&
-              !props.workspace.navigation?.searchOpen,
-          );
-          const [instant, setInstant] = createSignal(true);
-          const directory = createMemo(() => props.workspace.directories?.[path()]);
-          const readResult = createMemo(
-            () => ({ pending: props.workspace.directories?.[path()]?.readResult }),
-            { equals: (previous, next) => previous.pending === next.pending },
-          );
-          const read = createMemo(async () => {
-            const current = directory();
-            const pending = readResult().pending;
-            await pending;
-            if (current?.error != null) {
-              throw new Error(current.error || t("chat.workspaceFiles.folderUnavailable"));
-            }
-            return null;
-          });
-          const browser = () =>
-            props.workspace.directories?.[path()]?.browser ??
-            (!props.workspace.list?.browser?.search &&
-            props.workspace.list?.browser?.path === path()
-              ? props.workspace.list.browser
-              : undefined);
-          return (
-            <>
-              <RailRow
-                file={props.row}
-                workspace={props.workspace}
-                directory={isDirectory()}
-                depth={props.depth}
-                expanded={expanded()}
-                onToggle={(immediate) => {
-                  setInstant(immediate);
-                  props.workspace.onToggleDirectory?.(path());
-                }}
-              />
-              <FileDisclosure
-                variant="folder"
-                open={expanded()}
-                active={active()}
-                instant={instant()}
-              >
-                <Errored
-                  fallback={(error) => (
-                    <div class="workspace-desktop__notice" role="alert">
-                      {formatUiError(error())}
-                    </div>
-                  )}
-                >
-                  <Loading
-                    on={directory()}
-                    fallback={
-                      <div class="workspace-desktop__notice" role="status">
-                        {t("chat.workspaceFiles.loading")}
-                      </div>
-                    }
-                  >
-                    {latest(read)}
-                    <Show when={isPending(read)}>
-                      <div class="workspace-desktop__notice" role="status">
-                        {t("chat.workspaceFiles.loading")}
-                      </div>
-                    </Show>
-                  </Loading>
-                </Errored>
-                <Show when={browser()?.truncated}>
-                  <div class="workspace-desktop__notice" role="status">
-                    {t("chat.workspaceFiles.truncated")}
-                  </div>
-                </Show>
-                <div role="list">
-                  <For each={props.childrenByPath.get(path()) ?? []} keyed={(row) => row.key}>
-                    {(row) => (
-                      <DirectoryBranch
-                        row={row()}
-                        workspace={props.workspace}
-                        childrenByPath={props.childrenByPath}
-                        depth={props.depth + 1}
-                      />
-                    )}
-                  </For>
-                </div>
-              </FileDisclosure>
-            </>
-          );
-        }}
-      </Show>
-    </div>
-  );
-}
 
 function WorkspaceGroup(props: {
   label?: string;
@@ -159,10 +46,11 @@ function WorkspaceGroup(props: {
   class?: string;
   animate?: boolean;
   active?: boolean;
+  contentRef?: (element: HTMLElement) => void;
 }) {
   const [instant, setInstant] = createSignal(true);
   return (
-    <section class={props.class}>
+    <section class={props.class} ref={(element) => props.contentRef?.(element)}>
       <Show when={props.label}>
         <button
           class="workspace-desktop__heading"
@@ -266,6 +154,7 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
   const searchValue = liveValue(() => props.workspace.browserSearch);
   let searchButton: HTMLButtonElement | undefined;
   const [treeScroll, setTreeScroll] = createSignal<HTMLDivElement>();
+  const [treeContent, setTreeContent] = createSignal<HTMLElement>();
   const [sessionScroll, setSessionScroll] = createSignal<HTMLDivElement>();
   // Directory records mutate in place; retain only the immutable browser inputs
   // so navigation publications do not rebuild and re-sort the complete tree.
@@ -355,7 +244,8 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
       }
     },
   });
-  // A new owner snapshot reapplies offsets after catalog reveal, even when the numbers match.
+  // Restore on navigation/reveal, not every snapshot: native scroll events can
+  // reach the owner after a folder click has already published its snapshot.
   const savedScroll = createMemo(() => ({
     tree: navigation()?.treeScroll,
     session: navigation()?.sessionScroll,
@@ -367,14 +257,27 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
   const Contents = (content: { pending: boolean }) => {
     createScrollPosition(() => ({
       restore: {
-        identity: [savedScroll(), treeScroll()],
+        identity: [
+          scope(),
+          treeScroll(),
+          navigation()?.searchOpen,
+          navigation()?.treeVisible,
+          savedScroll().tree,
+        ],
         target: treeScroll(),
         top: savedScroll().tree ?? 0,
       },
     }));
     createScrollPosition(() => ({
       restore: {
-        identity: [savedScroll(), sessionScroll()],
+        identity: [
+          scope(),
+          sessionScroll(),
+          navigation()?.searchOpen,
+          navigation()?.treeVisible,
+          navigation()?.sessionExpanded,
+          savedScroll().session,
+        ],
         target: sessionScroll(),
         top: savedScroll().session ?? 0,
       },
@@ -477,6 +380,7 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
               }
             >
               <WorkspaceGroup
+                contentRef={setTreeContent}
                 label={
                   props.workspace.folderView
                     ? undefined
@@ -487,18 +391,19 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
                 expanded={expanded().includes(root())}
                 onToggle={() => props.workspace.onToggleDirectory?.(root())}
               >
-                <div role="list">
-                  <For each={childrenByPath().get(root()) ?? []} keyed={(row) => row.key}>
-                    {(row) => (
-                      <DirectoryBranch
-                        row={row()}
-                        workspace={props.workspace}
-                        childrenByPath={childrenByPath()}
-                        depth={0}
-                      />
-                    )}
-                  </For>
-                </div>
+                <WorkspaceRows
+                  rows={childrenByPath().get(root()) ?? []}
+                  workspace={props.workspace}
+                  childrenByPath={childrenByPath()}
+                  depth={0}
+                  viewport={treeScroll()}
+                  content={treeContent()}
+                  active={
+                    navigation()?.treeVisible !== false &&
+                    !navigation()?.searchOpen &&
+                    expanded().includes(root())
+                  }
+                />
                 <Show when={directoryBrowser(root())?.truncated}>
                   <div class="workspace-desktop__notice" role="status">
                     {t("chat.workspaceFiles.truncated")}

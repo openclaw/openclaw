@@ -319,6 +319,13 @@ export const stateEngineSchema: StoreSchema = {
       )}
         ${statePostgresVersionSql(33)}`,
     },
+    {
+      version: 34,
+      fromSchema: statePostgresSchema,
+      schema: statePostgresSchema,
+      // The state owner's beforeMigrate hook binds identity before this atomic version advance.
+      sql: statePostgresVersionSql(34),
+    },
   ],
 };
 

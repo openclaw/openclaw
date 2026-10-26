@@ -2,7 +2,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
-import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { applyMergePatch } from "../../../src/config/merge-patch.js";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -71,7 +71,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
     server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const { wsEndpoint } = inject("controlUiE2eChromium");
+    if (!wsEndpoint) {
+      throw new Error("Control UI E2E requires its shared Chromium server");
+    }
+    browser = await chromium.connect(wsEndpoint);
   });
 
   afterAll(async () => {

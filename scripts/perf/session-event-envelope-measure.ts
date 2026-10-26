@@ -2,14 +2,17 @@
  * Session event owner microbenchmark: 65 recipients, staggered histories, row deltas,
  * field references and legacy envelopes. Synthetic prepared rows replace only the
  * presentation boundary; the actual event projector and delivery planner run unchanged.
+ * The diagnostic sink is inert and access revision fixed; retention accounting still runs.
  * This measures owner CPU/allocation, not authorization or whole-Gateway latency.
  *
  * node --expose-gc --experimental-test-module-mocks --import ./scripts/tsx.mjs \
  *   scripts/perf/session-event-envelope-measure.ts --events 3000
- * Add --owner src/gateway/.baseline.ts for a saved source sibling, and --allocations
+ * Add --owner src/gateway/.baseline.ts for a saved source sibling, --delivery-owner
+ * src/gateway/.delivery-baseline.ts to compare delta preparation, and --allocations
  * for a separate sampled-allocation pass. Alternate baseline/candidate timing and
  * allocation runs. Acceptance: identical payload digest, lower allocation and CPU;
  * report absolute costs and spread, and do not infer whole-Gateway tail changes.
+ * --fresh-fields replaces every nested field per event to measure misses separately.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -24,13 +27,16 @@ import { parseArgs } from "node:util";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
 import type { SessionRowProjection } from "../../src/gateway/session-row-projection.js";
 import type { GatewaySessionRow } from "../../src/gateway/session-utils.types.js";
+import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.js";
 
 const { values } = parseArgs({
   options: {
     owner: { type: "string", default: "src/gateway/session-event-projection.ts" },
+    "delivery-owner": { type: "string", default: "src/gateway/session-ancestor-references.ts" },
     events: { type: "string", default: "3000" },
     clients: { type: "string", default: "65" },
     allocations: { type: "boolean", default: false },
+    "fresh-fields": { type: "boolean", default: false },
   },
 });
 const events = Number(values.events);
@@ -56,12 +62,20 @@ mock.module(new URL("../../src/gateway/session-event-payload.ts", import.meta.ur
     },
   },
 });
+mock.module(new URL("../../src/infra/diagnostic-events.ts", import.meta.url), {
+  namedExports: { emitTrustedDiagnosticEvent: () => {} },
+});
+mock.module(new URL("../../src/gateway/gateway-access-revision.ts", import.meta.url), {
+  namedExports: { readGatewayAccessRevision: () => 0 },
+});
 const {
   prepareSessionEventProjection,
 }: typeof import("../../src/gateway/session-event-projection.js") = await import(
   pathToFileURL(owner).href
 );
-const { ConnectionSessionRows } = await import("../../src/gateway/session-ancestor-references.js");
+const deliveryOwner = path.resolve(values["delivery-owner"]);
+const { ConnectionSessionRows }: typeof import("../../src/gateway/session-ancestor-references.js") =
+  await import(pathToFileURL(deliveryOwner).href);
 const fields = Object.fromEntries(
   `createdActor owner participants participantCount visibility channel subject groupChannel space
    chatType origin archived archivedAt archivedBy archiveReason pinned sidebarRoot pinnedAt
@@ -83,7 +97,7 @@ const fields = Object.fromEntries(
     .map((name) => [name, null]),
 );
 // Optional row fields are absent while the event envelope carries null tombstones.
-const rowFields = {
+const rowFields = freezeTrustedJsonSnapshot({
   createdActor: { type: "human", id: "synthetic-profile" },
   participantCount: 0,
   channel: "webchat",
@@ -136,7 +150,11 @@ const rowFields = {
   suppressErrorNotice: false,
   lastRunId: "synthetic-run",
   hasAutomation: false,
-} satisfies Partial<GatewaySessionRow>;
+  activeRunIds: ["synthetic-run"],
+  childSessions: ["agent:main:synthetic-child"],
+  participants: [],
+  lastAssistantMessage: { text: "Synthetic streamed progress with tool calls", timestamp: 1 },
+} satisfies Partial<GatewaySessionRow>);
 const record = { entry: { sessionId: "synthetic-session", lifecycleRevision: "1" } };
 // The fixture implements exactly the owner-facing read operations; presentation is mocked above.
 const projection = {
@@ -173,8 +191,17 @@ const context: Parameters<ReturnType<typeof prepareSessionEventProjection>>[3] =
 };
 const prepare = prepareSessionEventProjection(projection);
 function publish(index: number, digest?: ReturnType<typeof createHash>) {
-  row = Object.freeze({
+  row = freezeTrustedJsonSnapshot({
     ...rowFields,
+    ...(values["fresh-fields"]
+      ? {
+          createdActor: { ...rowFields.createdActor },
+          activeRunIds: [...rowFields.activeRunIds],
+          childSessions: [...rowFields.childSessions],
+          participants: [],
+          lastAssistantMessage: { ...rowFields.lastAssistantMessage },
+        }
+      : {}),
     key,
     agentId: "main",
     kind: "direct",
@@ -189,10 +216,6 @@ function publish(index: number, digest?: ReturnType<typeof createHash>) {
     outputTokens: index,
     startedAt: 1,
     hasActiveRun: true,
-    activeRunIds: ["synthetic-run"],
-    childSessions: ["agent:main:synthetic-child"],
-    participants: [],
-    lastAssistantMessage: { text: "Synthetic streamed progress with tool calls", timestamp: 1 },
   });
   const project = prepare(
     "sessions.changed",
@@ -258,9 +281,11 @@ console.log(
   JSON.stringify({
     owner,
     ownerSha256,
+    deliveryOwnerSha256: createHash("sha256").update(readFileSync(deliveryOwner)).digest("hex"),
     node: process.version,
     events,
     clients,
+    freshFields: values["fresh-fields"],
     mode: values.allocations ? "allocation" : "timing",
     elapsedMs,
     threadCpuMs: (cpu.user + cpu.system) / 1000,

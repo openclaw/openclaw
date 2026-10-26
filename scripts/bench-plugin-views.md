@@ -45,7 +45,7 @@ choose and report the timed topologies separately. The other
 plugins retain the supported default 20-result Memory search and the Nostr
 settings/profile editor. Nostr has no feed renderer.
 Workboard covers search, clearing search, selecting, scrolling, opening a card,
-dragging to another column, and a live update. Memory covers search, expansion and
+closing the card, dragging to another column, and a live update. Memory covers search, expansion and
 scrolling. Every meaningful state change has a visible assertion; drag waits for
 the move RPC and the card rendered in its destination within the timed interval.
 The move targets the gap after the destination's first card and checks the
@@ -182,3 +182,23 @@ Use at least ten pairs for timing claims; on a noisy host add an A/A control and
 twenty CPU pairs. A clean cell has median regression at most 5% and no worse p95;
 a >20% attributable regression blocks. Report incomplete scenarios as failures,
 never as a performance improvement.
+
+## Repeated view lifetime
+
+Use `--plugins workboard,mcp-relay --leak-rounds 5 --pairs 1` separately from
+timing, coverage and trace runs. Each round opens the view, verifies 50 updates,
+then navigates away in the same document. Workboard receives a changed card
+snapshot on each event. MCP Relay refreshes a changed grant and receives an
+unrelated host publication on each cycle. Both paths assert their visible result.
+The normal cold and warm setup precedes the closed baseline.
+
+Each closed sample records heap after two explicit GCs, DOM nodes, documents,
+and event listeners. Baseline/final raw heap snapshots and native detached-node
+summaries live beside the incremental `leak-check.json`. These include the host
+and synthetic transport: inspect retainers and request-history growth before
+attributing an increase to the plugin. Stable endpoint counts alone do not prove
+leak freedom. The command reports measurements without declaring a leak verdict.
+
+After the primary MCP closed snapshots, the probe focuses the host composer and
+records separate post-focus counters. Those diagnostics never replace the raw
+closed-view samples; they help attribute retention by native event machinery.

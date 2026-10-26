@@ -371,6 +371,7 @@ describe("managed worktree pending slots", () => {
       expect(await create(1, "project-second")).toEqual({
         record: results[1]!.record,
         materialized: false,
+        sourceRoot: repoRoot,
       });
     } finally {
       release.resolve();

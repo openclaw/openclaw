@@ -155,6 +155,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/connect-command.tsx":
       // Creation fetches these together; keep their compression without a whole route.
       return "route-controls-runtime";
+    case "ui/src/components/solid/hub-page-header.tsx":
+    case "ui/src/components/solid/settings-workspace.tsx":
+    case "ui/src/components/solid/settings-select.tsx":
+      // Only page chrome belongs here; shared controls also serve lazy Chat panels.
+      return "route-chrome";
     case "node_modules/typebox/build/guard/guard.mjs":
     case "node_modules/typebox/build/guard/globals.mjs":
     case "node_modules/typebox/build/guard/index.mjs":
@@ -226,7 +231,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/export.ts":
       return "chat-export-runtime";
     case "ui/src/lib/sessions/session-mutation-operations.runtime.ts":
-    case "ui/src/lib/sessions/session-mutation-refresh.ts":
     case "ui/src/lib/sessions/create.ts":
     case "ui/src/lib/sessions/session-patch-row-facts.ts":
     case "src/shared/session-unread.ts":
@@ -273,6 +277,23 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/plugins/plugins-page.tsx":
       return "plugins-page";
     case "ui/src/pages/cron/cron-page.tsx":
+    case "ui/src/pages/cron/cron-page-state.ts":
+    case "ui/src/pages/cron/cron-page-presentation.ts":
+    case "ui/src/pages/cron/delivery-conversations.ts":
+    case "ui/src/pages/cron/event-editor.ts":
+    case "ui/src/pages/cron/event-source.ts":
+    case "ui/src/pages/cron/route-model.ts":
+    case "ui/src/pages/cron/run-transcript.tsx":
+    case "ui/src/pages/cron/suggestions.ts":
+    case "ui/src/pages/cron/view-props.ts":
+    case "ui/src/pages/cron/view-controls.tsx":
+    case "ui/src/pages/cron/view-job-status.tsx":
+    case "ui/src/pages/cron/view-jobs-filter.tsx":
+    case "ui/src/pages/cron/view-list.tsx":
+    case "ui/src/pages/cron/view-runs.tsx":
+    case "ui/src/pages/cron/view.tsx":
+    case "src/cron/run-link.ts":
+      // These modules already load on first visit; detail/editor views stay lazy.
       return "cron-page";
     case "packages/gateway-protocol/src/capability-consent-error-details.ts":
     case "packages/gateway-protocol/src/install-policy-warning-error-details.ts":

@@ -106,6 +106,64 @@ try {
   });
 });
 
+it("defaults to full and rejects borrowers broader than their connected parent", async () => {
+  const root = tempDirs.make("vitest-worker-presets-");
+  const ownerUrl = copyWorkerRunFixture(root);
+  const borrower = writeFixture(
+    root,
+    "preset-borrower.mjs",
+    `import assert from 'node:assert/strict';
+import { createVitestWorkerRun } from ${JSON.stringify(ownerUrl)};
+const [full, runtime] = JSON.parse(process.argv[2]);
+try {
+  for (const [parent, requested, expected] of [
+    [{directory: full.directory}, 'runtime', 'full'],
+    [full, 'runtime', 'full'],
+    [runtime, undefined, 'runtime'],
+    [runtime, 'runtime', 'runtime'],
+  ]) {
+    const owner = createVitestWorkerRun(process.env, parent, requested);
+    try {
+      assert.equal(owner.descriptor.preset, expected);
+      assert.equal(owner.descriptor.directory, parent.directory);
+    } finally {
+      await owner.dispose();
+    }
+  }
+  assert.throws(() => createVitestWorkerRun(process.env, runtime, 'full'),
+    /Runtime compiled subprocess owner cannot serve a full preset borrower/);
+} finally {
+  process.disconnect();
+}
+`,
+  );
+  const probe = writeFixture(
+    root,
+    "preset-owner.mjs",
+    `import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import fs from 'node:fs';
+import { createVitestWorkerRun } from ${JSON.stringify(ownerUrl)};
+const full = createVitestWorkerRun();
+const explicit = createVitestWorkerRun(process.env, undefined, 'full');
+const runtime = createVitestWorkerRun(process.env, undefined, 'runtime');
+const owners = [full, explicit, runtime];
+try {
+  assert.deepEqual(owners.map(owner => owner.descriptor.preset), ['full', 'full', 'runtime']);
+  const child = spawn(process.execPath, [${JSON.stringify(borrower)}, JSON.stringify([full.descriptor, runtime.descriptor])], {
+    cwd: ${JSON.stringify(root)}, stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+  });
+  await full.borrow(child, once(child, 'close').then(result => assert.deepEqual(result, [0, null])));
+} finally {
+  await Promise.all(owners.map(owner => owner.dispose()));
+}
+assert(owners.every(owner => !fs.existsSync(owner.descriptor.directory)));
+`,
+  );
+  await runProbe(root, probe, {});
+});
+
 function fixture(lateMetadata: boolean, reusesReleasedSlot: boolean) {
   const root = tempDirs.make("vitest-worker-slots-");
   const ownerUrl = copyWorkerRunFixture(root);

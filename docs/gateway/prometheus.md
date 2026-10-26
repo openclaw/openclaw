@@ -247,6 +247,9 @@ memory, realtime, and other messages. Totals survive worker retirement and are
 published with memory samples. Posts queued on a worker-bound port count when
 accepted by the port, even if cancellation later prevents handing that port to a
 worker. These counters describe transport work, not confirmed delivery.
+Retained-worker `ref()` and `unref()` update host-owned process liveness locally;
+they do not send lifecycle messages to the supervisor. Active work, pending
+samples, and unfinished native cleanup still keep the host alive.
 
 Payload bytes use existing encoded buffer sizes or inexpensive owner estimates;
 they exclude transport framing and do not measure structured-clone allocations.

@@ -14,11 +14,6 @@ const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
 const CLAUDE_CLI_PROVIDER_ID = "claude-cli";
 
-type CliExecutionAuthProfileSelection = {
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-};
-
 class CliExecutionAuthProfileError extends Error {
   override name = "CliExecutionAuthProfileError";
 }
@@ -43,7 +38,10 @@ export function selectCliExecutionAuthProfile(params: {
   authProfileProvider: string;
   config: OpenClawConfig;
   store: AuthProfileStore;
-  selected?: CliExecutionAuthProfileSelection;
+  selected?: {
+    authProfileId?: string;
+    authProfileIdSource?: "auto" | "user";
+  };
   sessionBinding?: CliSessionBinding;
   readinessMode?: "execution" | "read-only";
   metadataSnapshot?: PluginMetadataSnapshot;

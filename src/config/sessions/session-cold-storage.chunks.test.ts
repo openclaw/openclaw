@@ -13,10 +13,10 @@ import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-wr
 import { embedSessionColdArchivesInSnapshot } from "./session-cold-storage-backup.js";
 import { readSessionColdChunks } from "./session-cold-storage-chunks.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
+import { prepareSessionColdBatchInWorker } from "./session-cold-storage-prepare.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import {
   mutateSessionColdTranscriptInWorker,
-  prepareSessionColdBatchInWorker,
   prepareSessionColdRestoreInWorker,
 } from "./session-cold-storage-worker.js";
 import {

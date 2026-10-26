@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, vi } from "vitest";
@@ -70,12 +71,6 @@ export const staffRole: GatewayRoles["definitions"][string] = {
   scopes: ["operator.admin"],
 };
 
-function requestUrl(input: Parameters<typeof fetch>[0]): URL {
-  return new URL(input instanceof Request ? input.url : input);
-}
-
-type PolicyFixture = ReturnType<typeof namedPolicy>;
-
 export function namedPolicy(
   targets: VisitorTarget[] = ["first@example.com"],
   name = visitorConfig.policyName,
@@ -133,9 +128,7 @@ export function visitorProfileFixture(
 ) {
   let profiles = initial;
   const response = async (method: string, params?: Record<string, unknown>) => {
-    if (method !== "users.list") {
-      throw new Error("Unexpected Gateway request");
-    }
+    assert.equal(method, "users.list");
     const requested = params?.githubAccountIds;
     return {
       profiles,
@@ -156,13 +149,12 @@ export function visitorProfileFixture(
           .filter((identity) => identity.profileId === profileId)
           .map((identity) => identity.accountId),
       );
-      if (
-        !profile ||
-        emails.some((email) => !profile.emails.includes(email)) ||
-        githubAccountIds?.some((accountId) => !linkedAccounts.has(accountId))
-      ) {
-        throw new Error("Profile bindings changed");
-      }
+      assert(
+        profile &&
+          emails.every((email) => profile.emails.includes(email)) &&
+          !githubAccountIds?.some((accountId) => !linkedAccounts.has(accountId)),
+        "Profile bindings changed",
+      );
     };
     assertCurrent();
     return await run(assertCurrent);
@@ -263,17 +255,13 @@ export function visitorFixture(
   };
   const response = (result: unknown) => Response.json({ success: true, result });
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
-    const url = requestUrl(input);
+    const url = new URL(input instanceof Request ? input.url : input);
     const method = init?.method ?? "GET";
     const collection = url.pathname === policiesPath;
     const detail = url.pathname === `${policiesPath}/visitors`;
-    if (url.origin !== "https://api.cloudflare.com" || !url.pathname.startsWith(policiesPath)) {
-      throw new Error("Unexpected Cloudflare endpoint");
-    }
+    assert(url.origin === "https://api.cloudflare.com" && url.pathname.startsWith(policiesPath));
     if (method === "GET") {
-      if (!collection && !(detail && cloudflare.policy)) {
-        throw new Error("Unknown policy read");
-      }
+      assert(collection || (detail && cloudflare.policy));
       return response(
         collection ? (cloudflare.policy ? [cloudflare.policy] : []) : cloudflare.policy,
       );
@@ -285,10 +273,8 @@ export function visitorFixture(
     if (method === "DELETE" && detail) {
       cloudflare.policy = undefined;
     } else if ((method === "POST" && collection) || (method === "PUT" && detail)) {
-      if (typeof init?.body !== "string") {
-        throw new Error("Expected a JSON policy");
-      }
-      const body = JSON.parse(init.body) as Omit<PolicyFixture, "id">;
+      assert(typeof init?.body === "string");
+      const body = JSON.parse(init.body) as Omit<ReturnType<typeof namedPolicy>, "id">;
       cloudflare.policy = { ...body, id: "visitors" };
     } else {
       throw new Error("Unexpected policy mutation");

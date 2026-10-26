@@ -10,11 +10,8 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { showToast } from "../../lib/toast.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import {
-  activePlacementSession,
-  createGatewayBrowserClientFixture,
-  createTestChatPane,
-} from "./chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
+import { activePlacementSession, createTestChatPane } from "./chat-pane.test-support.ts";
 import {
   readFileDraft,
   reviewRetainedFileDrafts,

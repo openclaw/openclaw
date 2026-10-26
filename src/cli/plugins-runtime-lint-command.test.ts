@@ -8,6 +8,22 @@ import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { registerPluginsCli } from "./plugins-cli.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
+
+async function lint(root: string) {
+  const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  const program = new Command().exitOverride();
+  registerPluginsCli(program);
+  await program.parseAsync(["plugins", "lint", "--root", root, "--json"], { from: "user" });
+  return writeJson;
+}
+
+const incomplete = (warning: Record<string, unknown>, fields = {}) =>
+  expect.objectContaining({
+    complete: false,
+    ...fields,
+    warnings: [expect.objectContaining({ ruleId: "scan-incomplete", ...warning })],
+  });
 
 describe("plugins lint", () => {
   it("reports an omitted source-directory link while ignoring node_modules links", async () => {
@@ -17,23 +33,9 @@ describe("plugins lint", () => {
     await fs.writeFile(path.join(generated, "index.js"), "Buffer.concat = () => null;");
     await fs.symlink(generated, path.join(root, "runtime.assets"), "junction");
     await fs.symlink(generated, path.join(root, "node_modules"), "junction");
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    try {
-      const program = new Command().exitOverride();
-      registerPluginsCli(program);
-      await program.parseAsync(["plugins", "lint", "--root", root, "--json"], { from: "user" });
-      expect(writeJson).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          complete: false,
-          scannedFiles: 0,
-          warnings: [
-            expect.objectContaining({ ruleId: "scan-incomplete", file: "runtime.assets" }),
-          ],
-        }),
-      );
-    } finally {
-      writeJson.mockRestore();
-    }
+    expect(await lint(root)).toHaveBeenCalledExactlyOnceWith(
+      incomplete({ file: "runtime.assets" }, { scannedFiles: 0 }),
+    );
   });
 
   it.each([false, true])(
@@ -50,85 +52,40 @@ describe("plugins lint", () => {
           "peer-optional": { optional: true },
         },
       });
-      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      try {
-        const program = new Command().exitOverride();
-        registerPluginsCli(program);
-        await program.parseAsync(["plugins", "lint", "--root", root, "--json"], { from: "user" });
-        expect(writeJson).toHaveBeenCalledExactlyOnceWith({
-          complete: optional,
-          scannedFiles: 0,
-          scannedPackages: 1,
-          warnings: optional
-            ? []
-            : [
-                expect.objectContaining({
-                  ruleId: "scan-incomplete",
-                  message: expect.stringContaining('"peer-required"'),
-                }),
-                expect.objectContaining({
-                  ruleId: "scan-incomplete",
-                  message: expect.stringContaining('"required"'),
-                }),
-              ],
-        });
-      } finally {
-        writeJson.mockRestore();
-      }
+      expect(await lint(root)).toHaveBeenCalledExactlyOnceWith({
+        complete: optional,
+        scannedFiles: 0,
+        scannedPackages: 1,
+        warnings: optional
+          ? []
+          : ["peer-required", "required"].map((name) =>
+              expect.objectContaining({
+                ruleId: "scan-incomplete",
+                message: expect.stringContaining(`"${name}"`),
+              }),
+            ),
+      });
     },
   );
 
-  it.each([null, "invalid"])(
-    "reports a malformed dependency map %s as incomplete",
-    async (dependencies) => {
-      const root = tempDirs.make("plugin-runtime-lint-invalid-map-");
-      await writeFixtureJson(path.join(root, "package.json"), {
-        name: "invalid-map",
-        dependencies,
-      });
-      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      try {
-        const program = new Command().exitOverride();
-        registerPluginsCli(program);
-        await program.parseAsync(["plugins", "lint", "--root", root, "--json"], { from: "user" });
-        expect(writeJson).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            complete: false,
-            warnings: [
-              expect.objectContaining({
-                ruleId: "scan-incomplete",
-                message: expect.stringContaining("dependencies"),
-              }),
-            ],
-          }),
-        );
-      } finally {
-        writeJson.mockRestore();
-      }
-    },
-  );
+  it("reports a malformed dependency map as incomplete", async () => {
+    const root = tempDirs.make("plugin-runtime-lint-invalid-map-");
+    await writeFixtureJson(path.join(root, "package.json"), {
+      name: "invalid-map",
+      dependencies: null,
+    });
+    expect(await lint(root)).toHaveBeenCalledExactlyOnceWith(
+      incomplete({ message: expect.stringContaining("dependencies") }),
+    );
+  });
 
   it("reports incomplete parsing as a warning", async () => {
     const root = tempDirs.make("plugin-runtime-lint-incomplete-");
     await writeFixtureJson(path.join(root, "package.json"), { name: "parse-fixture" });
     await fs.writeFile(path.join(root, "invalid.ts"), "const broken = ;");
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     const exit = vi.spyOn(defaultRuntime, "exit");
-    try {
-      const program = new Command().exitOverride();
-      registerPluginsCli(program);
-      await program.parseAsync(["plugins", "lint", "--root", root, "--json"], { from: "user" });
-      expect(writeJson).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          complete: false,
-          warnings: [expect.objectContaining({ ruleId: "scan-incomplete", file: "invalid.ts" })],
-        }),
-      );
-      expect(exit).not.toHaveBeenCalled();
-    } finally {
-      writeJson.mockRestore();
-      exit.mockRestore();
-    }
+    expect(await lint(root)).toHaveBeenCalledExactlyOnceWith(incomplete({ file: "invalid.ts" }));
+    expect(exit).not.toHaveBeenCalled();
   });
 
   it.each(["missing-root", "malformed-dependency"] as const)(
@@ -144,22 +101,9 @@ describe("plugins lint", () => {
         await fs.mkdir(dependency, { recursive: true });
         await fs.writeFile(path.join(dependency, "package.json"), "{ broken");
       }
-      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-      try {
-        const program = new Command().exitOverride();
-        registerPluginsCli(program);
-        await program.parseAsync(["plugins", "lint", "--root", root, "--json"], { from: "user" });
-        expect(writeJson).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            complete: false,
-            warnings: [
-              expect.objectContaining({ ruleId: "scan-incomplete", file: "package.json" }),
-            ],
-          }),
-        );
-      } finally {
-        writeJson.mockRestore();
-      }
+      expect(await lint(root)).toHaveBeenCalledExactlyOnceWith(
+        incomplete({ file: "package.json" }),
+      );
     },
   );
 });

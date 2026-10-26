@@ -1,10 +1,15 @@
 import type { createTeamScaleDuplicateReadFixture } from "./control-ui-duplicate-read-fixture.ts";
+import type { ControlUiMockPresenceUser } from "./control-ui-mock-presence.ts";
+import type { ControlUiSessionFixture } from "./control-ui-session-fixtures.ts";
 
 export function createTeamScaleHistoryFixture(options: {
   messageCount: number;
   inlineWidgets: number;
   now: number;
   largeSnapshot?: boolean;
+  historyStateReceipt?: boolean;
+  sessionInfo: ControlUiSessionFixture;
+  sender?: ControlUiMockPresenceUser;
   attachments?: ReturnType<typeof createTeamScaleDuplicateReadFixture>["attachments"];
 }) {
   const messageIds = Array.from(
@@ -15,7 +20,17 @@ export function createTeamScaleHistoryFixture(options: {
   const historyMessages = messageIds.map((id, index) => ({
     role:
       options.largeSnapshot && index % 4 === 2 ? "toolResult" : index % 2 ? "assistant" : "user",
-    __openclaw: { id, seq: index + 1 },
+    __openclaw: {
+      id,
+      seq: index + 1,
+      ...(options.sender && index % 2 === 0 && !(options.largeSnapshot && index % 4 === 2)
+        ? {
+            senderIdentity: options.sender.identity,
+            senderName: options.sender.name,
+            senderProfileAvatarUrl: options.sender.avatarUrl,
+          }
+        : {}),
+    },
     ...(options.largeSnapshot
       ? {
           idempotencyKey: `synthetic-message-${index}`,
@@ -48,5 +63,24 @@ export function createTeamScaleHistoryFixture(options: {
       },
     ],
   }));
-  return { messageIds, historyMessages };
+  const configuredHistory =
+    options.largeSnapshot || options.historyStateReceipt
+      ? {
+          messages: historyMessages,
+          sessionId: options.sessionInfo.sessionId,
+          sessionInfo: options.sessionInfo,
+          hasMore: false,
+          totalMessages: options.messageCount,
+          metadata: { commands: [], models: [] },
+          ...(options.historyStateReceipt
+            ? {
+                stateRevision: {
+                  sessionInfo: "fixture-session-v1",
+                  commands: "fixture-commands-v1",
+                },
+              }
+            : {}),
+        }
+      : undefined;
+  return { messageIds, historyMessages, configuredHistory };
 }

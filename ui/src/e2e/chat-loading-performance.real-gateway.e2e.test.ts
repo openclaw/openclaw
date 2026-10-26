@@ -148,18 +148,6 @@ suite.define(() => {
       }
       return JSON.parse(result.stdout) as Record<string, unknown>;
     };
-    const call = (method: string, params: Record<string, unknown> = {}) =>
-      cliJson(["gateway", "call", method, "--params", JSON.stringify(params), "--json"]);
-    const syntheticViewer = await call("users.list");
-    expect(
-      Array.isArray(syntheticViewer.profiles) &&
-        syntheticViewer.profiles.some(
-          (profile) =>
-            isRecord(profile) &&
-            profile.id === "gateway-owner" &&
-            profile.displayName === "Synthetic Viewer",
-        ),
-    ).toBe(true);
     const sessions = [
       { key: selectedKey, label: "Synthetic loading proof", count: transcriptLength },
       { key: homeKey, label: "Synthetic Home", count: transcriptLength },
@@ -199,6 +187,16 @@ suite.define(() => {
           },
         );
         setupClient = client;
+        const syntheticViewer = await client.request("users.list", {}, { signal });
+        expect(
+          Array.isArray(syntheticViewer.profiles) &&
+            syntheticViewer.profiles.some(
+              (profile) =>
+                isRecord(profile) &&
+                profile.id === "gateway-owner" &&
+                profile.displayName === "Synthetic Viewer",
+            ),
+        ).toBe(true);
         for (const session of sessions) {
           signal.throwIfAborted();
           const created = await client.request(

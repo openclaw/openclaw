@@ -27,19 +27,14 @@ const uiE2eIncludePatterns = [
 export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
-  "ui/src/e2e/agent-switch-roster.e2e.test.ts",
-  "ui/src/e2e/approval-bootstrap.e2e.test.ts",
   "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
   "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
-  "ui/src/e2e/browser-auth-recovery.e2e.test.ts",
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-code-block-fences.e2e.test.ts",
   "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-daybreak.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-html-publication.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-json-tree.e2e.test.ts",
   "ui/src/e2e/chat-loading-geometry.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts",
@@ -60,22 +55,18 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/config-raw-save.e2e.test.ts",
   "ui/src/e2e/control-ui-shell-routing.e2e.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
-  "ui/src/e2e/cron-loading.e2e.test.ts",
   "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
   "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
-  "ui/src/e2e/gateway-foreground-recovery.e2e.test.ts",
   "ui/src/e2e/initial-connect-splash.e2e.test.ts",
   "ui/src/e2e/locale-offline-retry.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
   "ui/src/e2e/memory-overview-source.e2e.test.ts",
-  "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
   "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/mount-recovery.e2e.test.ts",
   "ui/src/e2e/native-notifications-loading.e2e.test.ts",
-  "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
   "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
   "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
@@ -84,19 +75,16 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/quiet-automations.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-management.delete.e2e.test.ts",
-  "ui/src/e2e/session-management.promotion.e2e.test.ts",
   "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
   "ui/src/e2e/shell-module-loading.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
   "ui/src/e2e/sidebar-boot-imports.e2e.test.ts",
+  "ui/src/e2e/stale-build-recovery.production.e2e.test.ts",
   "ui/src/e2e/terminal-fonts.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
-  "ui/src/pages/agents-home/claws-catalog.e2e.test.ts",
-  "ui/src/pages/claws/creator-review.e2e.test.ts",
   "ui/src/pages/plugins/plugins-base-path.e2e.test.ts",
   "ui/src/pages/workboard/workboard-distribution.e2e.test.ts",
-  "ui/src/pages/workboard/workboard-selection-focus.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
 
 export const uiE2eRuntimeBudgetTestFile = resolveUiTypeScriptPath(
@@ -105,12 +93,19 @@ export const uiE2eRuntimeBudgetTestFile = resolveUiTypeScriptPath(
 
 // These independent fixture/build owners do not share the source optimizer cache.
 // New files stay bundled unless they own every UI server they use.
+export const uiE2eProductionArtifactTestFiles = [
+  "ui/src/e2e/service-worker-update.e2e.test.ts",
+  "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
+  "ui/src/e2e/stale-build-recovery.production.e2e.test.ts",
+].map((file) => resolveUiTypeScriptPath(file));
+
 const uiE2eStandaloneTestFiles = [
+  ...uiE2eProductionArtifactTestFiles,
   "ui/src/e2e/board-fixture.e2e.test.ts",
   "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
   "ui/src/e2e/control-ui-build-publication.e2e.test.ts",
   "ui/src/e2e/control-ui-stale-build-reload.e2e.test.ts",
-  "ui/src/e2e/service-worker-update.e2e.test.ts",
+  "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
 
 // Real Gateways never overlap the parallel phase when the CI skip is absent.
@@ -135,12 +130,23 @@ export function createUiE2eVitestConfig(
   const exclude = [
     ...(baseTest.exclude ?? []).filter((pattern) => pattern !== vitestE2eTestGlob),
     ...realGatewayExclude,
+    ...(env.OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT === "1"
+      ? uiE2eProductionArtifactTestFiles
+      : []),
   ];
   const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-  const include =
+  const selectedInclude =
     includeFromEnv ??
     narrowIncludePatternsForCli(uiE2eIncludePatterns, argv) ??
     uiE2eIncludePatterns;
+  // ui-e2e-production-artifact-contract-v1: older frozen targets keep these tests in ordinary shards.
+  const include = env.OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT
+    ? (intersectIncludePatterns(
+        uiE2eProductionArtifactTestFiles,
+        selectedInclude,
+        matchesVitestGlob,
+      ) ?? [])
+    : selectedInclude;
   const serialInclude = (
     intersectIncludePatterns(uiE2eSerialTestFiles, include, matchesVitestGlob) ?? []
   ).toSorted();
@@ -182,6 +188,12 @@ export function createUiE2eVitestConfig(
       // the inline projects when `projects` is present.
       include,
       maxWorkers,
+      // A partial plan containing only delegated fixtures legitimately has no
+      // ordinary tests; all other empty selections retain Vitest's failure.
+      passWithNoTests:
+        env.OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT === "1" &&
+        include.length > 0 &&
+        include.every((file) => uiE2eProductionArtifactTestFiles.includes(file)),
       // ui-e2e-projects-contract-v1: frozen-target preflight may select these projects.
       // Each project already composes the complete shared config and must not inherit it again.
       projects: [
@@ -239,7 +251,13 @@ export function createUiE2eVitestConfig(
         },
       ],
       // Refit needs native file totals; verbose still reports cases to the output watchdog.
-      reporters: [...baseTest.reporters, "default"],
+      reporters: [
+        ...baseTest.reporters,
+        "default",
+        ...(env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR
+          ? ["./scripts/lib/vitest-resource-reporter.mts"]
+          : []),
+      ],
       sequence: { ...baseSequence, sequencer: UiE2eSequencer },
     },
   });

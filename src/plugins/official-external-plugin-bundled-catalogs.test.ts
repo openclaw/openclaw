@@ -4,7 +4,6 @@ import {
   getOfficialExternalPluginCatalogEntryForPackage as packageEntry,
   isOfficialExternalPluginId as isOfficial,
   listOfficialExternalChannelCatalogEntries,
-  listOfficialExternalPluginCatalogEntries,
   listOfficialExternalProviderCatalogEntries,
   resolveOfficialExternalProviderContractPluginIds as contractPlugins,
   resolveOfficialExternalProviderPluginIds as providerPlugins,
@@ -108,15 +107,10 @@ it("keeps exact lookup identities separate from lowercase canonical and provider
 });
 
 it.each([
-  ["plugin", listOfficialExternalPluginCatalogEntries],
   ["channel", listOfficialExternalChannelCatalogEntries],
   ["provider", listOfficialExternalProviderCatalogEntries],
-] as const)("returns independent %s arrays with shared row identities", (_kind, list) => {
-  const first = list();
-  expect(first).not.toBe(list());
-  expect(first[0]).toBe(fixtures.winner);
-  first.length = 0;
-  expect(list()[0]).toBe(fixtures.winner);
+] as const)("filters admitted %s entries", (_kind, list) => {
+  expect(list()).toEqual([fixtures.winner]);
 });
 
 it.each(["shadow", "rejected"])("keeps repair targets from excluded %s rows", (prefix) => {

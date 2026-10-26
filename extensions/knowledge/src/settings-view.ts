@@ -1,14 +1,15 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
-import { contract } from "./contract.js";
+import type { contract } from "./contract.js";
 import { loadVocabulary } from "./inspection-client.js";
 import { ontologyView } from "./ontology-view.js";
 import type { Page } from "./page-context.js";
-import { el, human, label, time } from "./page-dom.js";
+import { button, el, human, label, time } from "./page-dom.js";
+import { andList, recordsText } from "./store-entries.js";
+import type { StoreChange } from "./stores-contract.js";
 import {
   accessText,
   maintenanceSection,
   settingsShell,
-  storeDialog,
   storeLabel,
   storeNotice,
   storeOf,
@@ -16,11 +17,12 @@ import {
   type SettingsSection,
   vaultFacts,
 } from "./stores-view.js";
+import { icon } from "./ui-icons.js";
 
 /** Settings screen for the current section: stores, vocabulary, status or maintenance. */
-export async function settings(ui: Page, n: number, target: HTMLElement) {
+export async function settings(ui: Page, n: number, settingsTarget: HTMLElement) {
   const {
-    s,
+    s: state,
     base,
     feature,
     announcer,
@@ -29,28 +31,28 @@ export async function settings(ui: Page, n: number, target: HTMLElement) {
     viewedAgent,
     open,
     load,
-    refresh,
+    refresh: refreshPage,
     renderStoreContext,
     navigate,
     openSettings,
   } = ui;
-  const agent = viewedAgent(),
-    who = displayName(agent),
-    entry = s.storesSnapshot && storeOf(s.storesSnapshot, agent);
-  const heading: Record<SettingsSection, [string, string]> = {
+  const viewedId = viewedAgent(),
+    viewedName = displayName(viewedId),
+    viewedStore = state.storesSnapshot && storeOf(state.storesSnapshot, viewedId);
+  const sectionHeadings: Record<SettingsSection, [string, string]> = {
     stores: [
       "Stores & sharing",
       "Each agent gets its own knowledge store unless you assign it to a shared one.",
     ],
     vocab: [
       "Vocabulary",
-      `The kinds of pages and connections ${who} can save${entry ? ` in ${storeLabel(entry, displayName)}` : ""}.`,
+      `The kinds of pages and connections ${viewedName} can save${viewedStore ? ` in ${storeLabel(viewedStore, displayName)}` : ""}.`,
     ],
     status: [
       "Vault status",
-      entry
-        ? `Showing ${storeLabel(entry, displayName)}, the store ${who} uses.`
-        : `Showing ${who}’s store.`,
+      viewedStore
+        ? `Showing ${storeLabel(viewedStore, displayName)}, the store ${viewedName} uses.`
+        : `Showing ${viewedName}’s store.`,
     ],
     maintenance: [
       "Maintenance",
@@ -58,39 +60,344 @@ export async function settings(ui: Page, n: number, target: HTMLElement) {
     ],
   };
   const shell = settingsShell(
-    s.settingsSection,
+    state.settingsSection,
     (section) => {
-      s.settingsSection = section;
+      state.settingsSection = section;
       void load();
     },
     () => navigate("recent"),
-    heading[s.settingsSection],
+    sectionHeadings[state.settingsSection],
   );
-  if (s.settingsSection === "stores") {
-    s.storesSnapshot = await base.invoke("stores_snapshot", {});
+  if (state.settingsSection === "stores") {
+    state.storesSnapshot = await base.invoke("stores_snapshot", {});
     if (!live(n)) {
       return;
     }
     renderStoreContext();
     shell.slot.append(
-      storesSection(s.storesSnapshot, agent, displayName, (changing, mode) => {
-        storeDialog(
-          mode,
-          changing,
-          s.storesSnapshot!,
-          displayName,
-          (change) =>
-            base.invoke("stores_change", {
+      storesSection(state.storesSnapshot, viewedId, displayName, (changing, mode) => {
+        // Keep assignment inputs on rejection and report the observed save outcome.
+        const agentId = changing,
+          snapshot = state.storesSnapshot!,
+          names = displayName;
+
+        const who = names(agentId),
+          current = storeOf(snapshot, agentId);
+        const dialog = el("dialog", undefined, "knowledge-store-dialog knowledge-surface"),
+          // SAFETY: only focus() is called on it, which every focusable HTML or SVG element implements.
+          previousFocus = document.activeElement as HTMLElement | null;
+        const heading = el("h3"),
+          body = el("div", undefined, "knowledge-store-dialog-body"),
+          effect = el("div", undefined, "knowledge-effect"),
+          feedback = el("p", "", "knowledge-dialog-feedback");
+        feedback.setAttribute("role", "status");
+        feedback.setAttribute("aria-live", "polite");
+        const cancel = button("Cancel", () => close(), "knowledge-quiet"),
+          submit = button("", () => void run(), "knowledge-button knowledge-primary");
+        let saving = false;
+        const close = () => {
+          dialog.close();
+          dialog.remove();
+          previousFocus?.focus();
+        };
+        // Escape and backdrop dismissal close the view; an accepted save is never "cancelled".
+        dialog.addEventListener("cancel", (event) => {
+          event.preventDefault();
+          close();
+        });
+        let collect: () => StoreChange | undefined = () => undefined;
+        let submitLabel = () => "Save";
+        const refresh = () => {
+          submit.disabled = saving || !collect();
+          submit.textContent = saving ? "Saving…" : submitLabel();
+          renderEffect();
+        };
+        let renderEffect = () => {};
+
+        if (mode === "share_existing") {
+          heading.textContent = `Share ${who}’s knowledge`;
+          const nameField = el("label", undefined, "knowledge-field"),
+            input = el("input");
+          input.maxLength = 80;
+          input.placeholder = "e.g. Team";
+          input.autocomplete = "off";
+          const hint = el(
+            "small",
+            `${who}’s existing store gets this name. It isn’t copied or replaced.`,
+          );
+          nameField.append(el("span", "Store name"), input, hint);
+          const picks = el("fieldset", undefined, "knowledge-choices");
+          picks.append(el("legend", "Agents to add"));
+          const chosen = new Set<string>();
+          for (const agent of snapshot.agents.filter((a) => a.id !== agentId)) {
+            const entry = storeOf(snapshot, agent.id);
+            const note =
+              !agent.supported || !entry
+                ? (agent.issue ?? "Unavailable")
+                : entry.kind === "named"
+                  ? `Uses ${storeLabel(entry, names)}. It will switch to the new store.`
+                  : entry.state === "unprovisioned"
+                    ? "No store yet"
+                    : `Uses ${storeLabel(entry, names)}`;
+            picks.append(
+              choice(
+                "checkbox",
+                `share-${agent.id}`,
+                names(agent.id),
+                note,
+                !agent.supported || !entry,
+                (checked) => {
+                  if (checked) {
+                    chosen.add(agent.id);
+                  } else {
+                    chosen.delete(agent.id);
+                  }
+                  refresh();
+                },
+              ),
+            );
+          }
+          const taken = () => {
+            const value = input.value.trim().toLowerCase();
+            return (
+              value &&
+              snapshot.stores.some((s) => s.kind === "named" && s.label.toLowerCase() === value)
+            );
+          };
+          input.addEventListener("input", () => {
+            hint.textContent = taken()
+              ? `A store with this name already exists. To join it, use “Use shared store…” instead.`
+              : `${who}’s existing store gets this name. It isn’t copied or replaced.`;
+            hint.classList.toggle("knowledge-error", Boolean(taken()));
+            refresh();
+          });
+          collect = () =>
+            input.value.trim() && !taken() && chosen.size
+              ? { kind: "share_existing", label: input.value.trim(), agents: [...chosen] }
+              : undefined;
+          renderEffect = () => {
+            effect.replaceChildren();
+            if (!chosen.size) {
+              return;
+            }
+            const name = input.value.trim() || "the new store",
+              joiners = [...chosen];
+            effect.append(
+              el(
+                "p",
+                `${andList(joiners.map(names))} will be able to read and update the knowledge already saved in ${name} from owner-direct conversations.`,
+              ),
+            );
+            for (const joiner of joiners) {
+              const entry = storeOf(snapshot, joiner);
+              if (entry && entry.state !== "unprovisioned") {
+                effect.append(
+                  el(
+                    "p",
+                    `${names(joiner)} will switch from ${storeLabel(entry, names)}. ${storeLabel(entry, names)} remains unchanged.`,
+                  ),
+                );
+              }
+            }
+            effect.append(
+              el(
+                "p",
+                "Group chats still see only their own conversation’s knowledge.",
+                "knowledge-muted",
+              ),
+            );
+          };
+          submitLabel = () => "Share store";
+          body.append(nameField, picks);
+        } else if (mode === "use_named") {
+          heading.textContent = `Use a shared store for ${who}`;
+          const targets = snapshot.stores.filter(
+            (s) => s.kind === "named" && s.binding !== current?.binding,
+          );
+          let target = targets.find(
+            (s) => s.state !== "unavailable" && s.state !== "recovery-required",
+          );
+          const picks = el("fieldset", undefined, "knowledge-choices");
+          picks.append(el("legend", "Shared store"));
+          for (const entry of targets) {
+            const blocked = entry.state === "unavailable" || entry.state === "recovery-required";
+            const note = blocked
+              ? "Couldn’t be opened; needs recovery first."
+              : `${entry.members.length ? `Used by ${andList(entry.members.map(names))}` : "No agents assigned"}${recordsText(entry) ? ` · ${recordsText(entry).toLowerCase()}` : ""}`;
+            picks.append(
+              choice(
+                "radio",
+                `use-${entry.key}`,
+                entry.label,
+                note,
+                blocked,
+                () => {
+                  target = entry;
+                  refresh();
+                },
+                entry === target,
+                "knowledge-store-target",
+              ),
+            );
+          }
+          collect = () => (target?.key ? { kind: "use_named", store: target.key } : undefined);
+          renderEffect = () => {
+            effect.replaceChildren();
+            if (!target) {
+              return;
+            }
+            effect.append(
+              el(
+                "p",
+                `${who} will use ${target.label}.${current ? ` Nothing from ${storeLabel(current, names)} will be moved or merged.` : ""}`,
+              ),
+            );
+            effect.append(
+              el(
+                "p",
+                `${who} can read and update the knowledge already saved in ${target.label}${target.members.length ? `, alongside ${andList(target.members.map(names))}` : ""}.`,
+              ),
+            );
+            if (current) {
+              effect.append(
+                el(
+                  "p",
+                  `${who} stops using ${storeLabel(current, names)} from now on. Anything it already retrieved into its conversations can’t be taken back.`,
+                  "knowledge-muted",
+                ),
+              );
+            }
+            effect.append(
+              el(
+                "p",
+                "Group chats still see only their own conversation’s knowledge.",
+                "knowledge-muted",
+              ),
+            );
+          };
+          submitLabel = () => (target ? `Use ${target.label}` : "Use store");
+          body.append(picks);
+        } else {
+          heading.textContent = `Use own store for ${who}`;
+          const own = snapshot.stores.find((s) => s.binding === `agent:${agentId}`),
+            blocked = own?.state === "unavailable" || own?.state === "recovery-required";
+          const summary = el("div", undefined, "knowledge-own-choice");
+          if (blocked) {
+            summary.append(
+              el("strong", `${who}’s previous store needs recovery`),
+              el(
+                "span",
+                "It couldn’t be opened, so it can’t be resumed or replaced from here.",
+                "knowledge-muted",
+              ),
+            );
+          } else if (own && own.state !== "unprovisioned") {
+            summary.append(
+              el("strong", `Resume ${who}’s previous store.`),
+              el(
+                "span",
+                `${storeLabel(own, names)}${recordsText(own) ? ` · ${recordsText(own).toLowerCase()}` : ""}, as it was left.`,
+                "knowledge-muted",
+              ),
+            );
+          } else {
+            summary.append(
+              el("strong", `Use a new, empty store for ${who}.`),
+              el(
+                "span",
+                "Created on first authorized use. Viewing it here does not create it.",
+                "knowledge-muted",
+              ),
+            );
+          }
+          collect = () => (blocked ? undefined : { kind: "use_own" });
+          renderEffect = () => {
+            effect.replaceChildren();
+            if (!current) {
+              return;
+            }
+            const staying = current.members.filter((a) => a !== agentId);
+            effect.append(
+              el(
+                "p",
+                `Nothing in ${storeLabel(current, names)} is copied or removed${staying.length ? `; ${andList(staying.map(names))} keep${staying.length === 1 ? "s" : ""} using it` : "; it is kept even with no agents assigned"}.`,
+              ),
+            );
+            effect.append(
+              el(
+                "p",
+                `${who} stops using ${storeLabel(current, names)} from now on. Anything it already retrieved into its conversations can’t be taken back.`,
+                "knowledge-muted",
+              ),
+            );
+          };
+          submitLabel = () => "Use own store";
+          body.append(summary);
+        }
+
+        // Save once; keep the dialog and inputs unless the change was applied.
+        async function run() {
+          const next = collect();
+          if (!next || saving) {
+            return;
+          }
+          saving = true;
+          refresh();
+          feedback.textContent = "";
+          feedback.className = "knowledge-dialog-feedback";
+          try {
+            const result = await base.invoke("stores_change", {
               requestId: crypto.randomUUID(),
-              expectedRevision: s.storesSnapshot!.revision,
+              expectedRevision: state.storesSnapshot!.revision,
               agent: changing,
-              change,
-            }),
-          (result) => assignmentApplied(ui, result, changing),
-        );
+              change: next,
+            });
+            if (result.outcome === "applied") {
+              close();
+              assignmentApplied(ui, result, changing);
+              return;
+            }
+            feedback.textContent =
+              result.outcome === "pending" || result.outcome === "unknown"
+                ? `Checking whether the change was saved… ${result.message}`
+                : result.message;
+            feedback.classList.add(
+              result.outcome === "pending" || result.outcome === "unknown"
+                ? "knowledge-muted"
+                : "knowledge-error",
+            );
+            if (result.outcome === "conflict" && result.snapshot) {
+              assignmentApplied(ui, result, changing);
+            }
+          } catch (error) {
+            feedback.textContent = `The assignment was not changed. ${error instanceof Error ? error.message : String(error)}`;
+            feedback.classList.add("knowledge-error");
+          } finally {
+            saving = false;
+            if (dialog.open) {
+              refresh();
+            }
+          }
+        }
+        const closeButton = button("", () => close(), "knowledge-icon-button");
+        closeButton.setAttribute("aria-label", "Close");
+        closeButton.append(icon("x", 14));
+        const top = el("div", undefined, "knowledge-store-dialog-head");
+        top.append(heading, closeButton);
+        const footer = el("div", undefined, "knowledge-actions");
+        footer.append(cancel, submit);
+        dialog.setAttribute("aria-labelledby", "knowledge-store-dialog-title");
+        heading.id = "knowledge-store-dialog-title";
+        body.append(effect);
+        dialog.append(top, body, feedback, footer);
+        // Inside the page so its styles apply; the modal top layer handles stacking.
+        (document.querySelector(".knowledge-page") ?? document.body).append(dialog);
+        dialog.showModal();
+        refresh();
+        (dialog.querySelector<HTMLElement>("input:not(:disabled)") ?? submit).focus();
       }),
     );
-  } else if (s.settingsSection === "maintenance") {
+  } else if (state.settingsSection === "maintenance") {
     const status = await base.invoke("maintenance_status", {});
     if (!live(n)) {
       return;
@@ -102,19 +409,19 @@ export async function settings(ui: Page, n: number, target: HTMLElement) {
           `${new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time(at)}`,
       ),
     );
-  } else if (s.storeState !== "ready") {
+  } else if (state.storeState !== "ready") {
     shell.slot.append(
       storeNotice(
-        entry,
-        s.storeState,
-        s.storeMessage,
-        who,
+        viewedStore,
+        state.storeState,
+        state.storeMessage,
+        viewedName,
         displayName,
         () => openSettings("stores"),
-        () => void refresh(),
+        () => void refreshPage(),
       ),
     );
-  } else if (s.settingsSection === "vocab") {
+  } else if (state.settingsSection === "vocab") {
     const result = await loadVocabulary(feature, true);
     if (!live(n)) {
       return;
@@ -132,18 +439,21 @@ export async function settings(ui: Page, n: number, target: HTMLElement) {
     const facts: [string, string | Node][] = [
       [
         "Store",
-        entry
-          ? `${storeLabel(entry, displayName)} · ${entry.kind === "named" ? "shared store" : "own store"}`
+        viewedStore
+          ? `${storeLabel(viewedStore, displayName)} · ${viewedStore.kind === "named" ? "shared store" : "own store"}`
           : "Unknown",
       ],
-      ["Used by", entry?.members.length ? entry.members.map(displayName).join(", ") : "No agents"],
+      [
+        "Used by",
+        viewedStore?.members.length ? viewedStore.members.map(displayName).join(", ") : "No agents",
+      ],
       [
         "Access",
-        `${entry ? accessText(entry, agent, displayName) + ". " : ""}Read and update from owner-direct conversations. Group chats see only their own conversation’s knowledge.`,
+        `${viewedStore ? accessText(viewedStore, viewedId, displayName) + ". " : ""}Read and update from owner-direct conversations. Group chats see only their own conversation’s knowledge.`,
       ],
       [
         "Changes",
-        `Made by ${entry?.members.length ? entry.members.map(displayName).join(", ") : who} in chat. These pages only read.`,
+        `Made by ${viewedStore?.members.length ? viewedStore.members.map(displayName).join(", ") : viewedName} in chat. These pages only read.`,
       ],
       [
         "Live",
@@ -176,7 +486,7 @@ export async function settings(ui: Page, n: number, target: HTMLElement) {
     }
     shell.slot.append(list);
   }
-  target.replaceChildren(shell.root, announcer);
+  settingsTarget.replaceChildren(shell.root, announcer);
 }
 
 // After an applied assignment, refresh facts; reset the reading view if the viewed store moved.
@@ -207,4 +517,30 @@ function assignmentApplied(
     void load(true);
   }
   void refresh();
+}
+
+function choice(
+  type: "checkbox" | "radio",
+  id: string,
+  title: string,
+  note: string,
+  disabled: boolean,
+  onChange: (checked: boolean) => void,
+  checked = false,
+  name?: string,
+) {
+  const row = el("label", undefined, "knowledge-choice"),
+    input = el("input");
+  input.type = type;
+  input.id = id;
+  input.disabled = disabled;
+  input.checked = checked;
+  if (name) {
+    input.name = name;
+  }
+  input.addEventListener("change", () => onChange(input.checked));
+  const copy = el("span");
+  copy.append(el("span", title), el("small", note));
+  row.append(input, copy);
+  return row;
 }

@@ -3,6 +3,7 @@ import { promiseHooks, queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readResponseWithLimit } from "../http-body.js";
+import { makeStallingStream } from "../http-body.test-support.js";
 import { responseWithAbortSignal, wrapGuardedBodyStream } from "./guarded-body-stream.js";
 
 it("releases abandoned bodies before and after attaching their abort listener", async () => {
@@ -10,12 +11,7 @@ it("releases abandoned bodies before and after attaching their abort listener", 
   async function abandon(mode: "prefetched" | "unread" | "partial") {
     const cleaned = createDeferredCore();
     const cancel = vi.fn();
-    const source = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array([1]));
-      },
-      cancel,
-    });
+    const source = makeStallingStream([new Uint8Array([1])], cancel);
     const wrapped = wrapGuardedBodyStream({
       body: source,
       cleanup: cleaned.resolve,

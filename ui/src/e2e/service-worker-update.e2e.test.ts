@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, webkit, type Browser, type Page } from "playwright";
-import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
@@ -22,6 +22,7 @@ import {
   refreshProductionControlUiE2e,
   resolvePlaywrightChromiumExecutablePath,
   startProductionControlUiE2eServer,
+  startCopiedProductionControlUiE2eServer,
   type ControlUiE2eProductionServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
@@ -365,16 +366,16 @@ describe("Control UI service-worker production update E2E", () => {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
     outDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-service-worker-update-"));
-    server = await startProductionControlUiE2eServer(
-      outDir,
-      buildA,
-      createControlUiMockBootstrapConfig({
-        assistantAgentId: "research",
-        defaultAgentId: "research",
-        serverBuildId: buildA,
-        terminalEnabled: true,
-      }),
-    );
+    const bootstrap = createControlUiMockBootstrapConfig({
+      assistantAgentId: "research",
+      defaultAgentId: "research",
+      serverBuildId: buildA,
+      terminalEnabled: true,
+    });
+    const prebuilt = inject("controlUiE2ePrebuiltAssets");
+    server = prebuilt
+      ? await startCopiedProductionControlUiE2eServer(prebuilt.root, outDir, buildA, bootstrap)
+      : await startProductionControlUiE2eServer(outDir, buildA, bootstrap);
     browser = useWebKit
       ? await webkit.launch()
       : await chromium.launch({ executablePath: chromiumExecutablePath });

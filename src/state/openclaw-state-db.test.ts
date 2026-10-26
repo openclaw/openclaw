@@ -52,8 +52,10 @@ import {
 } from "./openclaw-state-db-corruption.test-support.js";
 import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
 import {
+  expectV2026_7_1_2CronHistoryPreserved,
   markStateDatabaseVersion,
   materializeV2026_7_1_2StateDatabase,
+  V2026_7_1_2_STATE_MIGRATION_CHANGES,
 } from "./openclaw-state-db-historical-fixtures.test-support.js";
 import { runHotRollbackJournalRecoveryProbe } from "./openclaw-state-db-hot-journal.test-support.js";
 import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
@@ -1650,21 +1652,7 @@ describe("openclaw state database", () => {
       pathname: fixture.databasePath,
     });
 
-    await expectRepair(options, [
-      "Discarded retired shared-state commitments rows, table, and indexes",
-      "Retired six dead shared-state tables (v10)",
-      "Retired legacy skill curator lifecycle and proposal origin-run tables",
-      "Folded singleton state tables into config_machine_state (v12)",
-      "Migrated shared state audit event ledger → versioned message lifecycle schema",
-      "Derived meeting transcript selectors and bounded delivery retention columns (v21)",
-      "Promoted portable ACP resume keys and cursor identities (v22)",
-      "Consolidated shared state tables (v13)",
-      "Qualified historical cron creator attribution as unknown (v14)",
-      "Removed redundant conversation binding target projections (v15)",
-      "Replaced retained task indexes with ordered cron history indexes (v24)",
-      "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
-      "Migrated shared state tables to SQLite STRICT typing (46)",
-    ]);
+    await expectRepair(options, V2026_7_1_2_STATE_MIGRATION_CHANGES);
     const migrated = openOpenClawStateDatabase(options);
     const native = requireNativeSqliteDatabase(migrated.db);
     expectCurrentStateVersion(native);
@@ -1718,13 +1706,7 @@ describe("openclaw state database", () => {
       { scope: "fixture-scope", event_key: "event-b", sequence: 2 },
       { scope: "other-scope", event_key: "event-c", sequence: 1 },
     ]);
-    expectRecord(migrated.db, "task_runs WHERE runtime = 'cron' AND source_id = 'fixture-cron'", {
-      task_id: "cron-runlog-import:fixture-cron:1500:1",
-      runtime: "cron",
-      source_id: "fixture-cron",
-      status: "succeeded",
-      ended_at: 1500,
-    });
+    expectV2026_7_1_2CronHistoryPreserved(migrated.db);
     expectRow(
       migrated.db,
       `SELECT task_runs.task_id, task_runs.status, task_delivery_state.last_notified_event_at
@@ -1750,6 +1732,7 @@ describe("openclaw state database", () => {
     const reopened = openOpenClawStateDatabase(options);
     expectRows(reopened.db, "PRAGMA integrity_check").toEqual([{ integrity_check: "ok" }]);
     expectRows(reopened.db, "PRAGMA foreign_key_check").toEqual([]);
+    expectV2026_7_1_2CronHistoryPreserved(reopened.db);
   });
 
   it("refuses retirement and leaves an inbound foreign-key dependency unchanged through doctor repair", async () => {

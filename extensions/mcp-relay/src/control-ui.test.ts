@@ -67,6 +67,7 @@ function fixture(responses: unknown[], props: Record<string, string> = {}) {
   return {
     request,
     connection: host.connection,
+    dispose: () => view?.dispose?.(),
     publish: () => subscribers.forEach((listener) => listener()),
     navigate: (requestId: string) => view?.update?.({ ...context, props: { request: requestId } }),
   };
@@ -124,6 +125,49 @@ it("pairs within the caller's ceiling without a browser-supplied principal", asy
     ceiling: ["operator.read", "operator.write"],
   });
   expect(body()).toContain("https://relay.example/mcp");
+});
+
+it("empties retained view roots and ignores detached controls and pending replies after disposal", async () => {
+  const pending = Promise.withResolvers<unknown>();
+  const grant = {
+    grantId: "grant-owned",
+    clientName: "Personal app",
+    principal: caller.principal,
+    ceiling: ["operator.read"],
+    createdAt: 1_800_000_000_000,
+  };
+  const { request, dispose, publish } = fixture([{ ...grants, grants: [grant] }, pending.promise]);
+  await shows("Personal app");
+  const page = document.querySelector(".mcp-connected-apps")!;
+  const overlay = page.nextElementSibling!;
+  const pair = button("Pair with code")!;
+  const revoke = button("Revoke")!;
+  pair.click();
+  const dialog = overlay.firstElementChild!;
+  click("Create pairing code");
+  expect(request).toHaveBeenCalledTimes(2);
+  const pairingReply = request.mock.results[1]?.value;
+
+  dispose();
+  expect(page.childNodes).toHaveLength(0);
+  expect(overlay.childNodes).toHaveLength(0);
+  expect(document.body.contains(page)).toBe(false);
+  pair.click();
+  revoke.click();
+  publish();
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(page.childNodes).toHaveLength(0);
+  expect(overlay.childNodes).toHaveLength(0);
+
+  pending.resolve({
+    code: "ABCDE-FGHIJ",
+    expiresAt: 1_800_000_000_000,
+    mcpUrl: "https://relay.example/mcp",
+  });
+  await pairingReply;
+  expect(dialog.textContent).not.toContain("ABCDE-FGHIJ");
+  expect(overlay.childNodes).toHaveLength(0);
+  expect(request).toHaveBeenCalledTimes(2);
 });
 
 it("retains rows while refreshing and renders the authoritative reply on settlement", async () => {

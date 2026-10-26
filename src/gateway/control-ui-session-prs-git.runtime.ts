@@ -39,7 +39,7 @@ export async function readCheckoutGitRevision(
       return await readCheckoutDiffRevision(root, diffPaths, summaryOnly, timing);
     }
     const head = readGitHead(root, { maxDepth: 1 });
-    const checkout = readCheckoutHead(root);
+    const checkout = readCheckoutHead(root, head);
     const defaultRef = readDefaultRef(checkout);
     if (
       !head ||

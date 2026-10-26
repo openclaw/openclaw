@@ -1,5 +1,5 @@
 import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   asFiniteNumber,
   isRecord,

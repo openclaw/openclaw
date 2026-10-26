@@ -297,6 +297,7 @@ function renderCiGateEnvironment(
     ),
     run_check_plan: "false",
     reuse_browser_extension_build: "false",
+    reuse_control_ui_i18n_setup: "false",
     shared_sdk_declarations: "false",
     compatibility_target: "false",
     release_scope: "full",
@@ -304,17 +305,23 @@ function renderCiGateEnvironment(
   };
   const jobResults: string = step.env.JOB_RESULTS;
   return jobResults.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) => {
-    const result = expression.match(/^\$\{\{\s*needs\.([\w-]+)\.result\s*\}\}$/u);
-    if (result) {
-      return results[expectDefined(result[1], expression)] ?? "success";
-    }
+    const rendered = expression.replace(/\bneeds\.([\w-]+)\.result\b/gu, (_, job: string) =>
+      JSON.stringify(results[job] ?? "success"),
+    );
     return String(
-      evaluateWorkflowExpression(expression, {
+      evaluateWorkflowExpression(rendered, {
         eventName: "workflow_dispatch",
         repository: "openclaw/openclaw",
         runAttempt: 1,
         failureReportResult: results["pr-failure-report"] ?? "success",
         ...context,
+        additionalNeeds: {
+          "build-artifacts": {
+            result: "success",
+            outputs: { control_ui_i18n_result: "success" },
+          },
+          ...context.additionalNeeds,
+        },
         preflightOutputs,
       }) ?? "",
     );
@@ -2625,6 +2632,13 @@ describe("ci workflow guards", () => {
       });
       expect(manifest.status, manifest.output).toBe(0);
       expect(manifest.outputs.validation_tier).toBe(tier);
+      const controlRows = JSON.parse(
+        expectDefined(manifest.outputs.ui_e2e_matrix, "UI matrix"),
+      ).include.filter((row: { task: string }) => row.task === "control-ui") as Array<{
+        vitest_max_workers: number;
+      }>;
+      expect(controlRows).toHaveLength(release ? 12 : 6);
+      expect(controlRows.reduce((total, row) => total + row.vitest_max_workers, 0)).toBe(24);
       for (const family of [
         "run_build_artifacts",
         "run_ios_build",
@@ -3141,7 +3155,6 @@ describe("ci workflow guards", () => {
             result: "success" as const,
             outputs: {
               published_driver_artifact_id: "fixture-package",
-              browser_runtime_artifact_id: "fixture-browser-runtime",
             },
           },
         },
@@ -3360,14 +3373,12 @@ describe("ci workflow guards", () => {
         expect(manifest.outputs.hybrid_hosted_offload).toBe(String(baseRows <= 40));
         expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBe(baseRows);
         expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(hosted.length);
-        expect(hosted.length).toBe(baseRows <= 40 ? baseRows + 2 : baseRows);
-        const browserJob =
-          manifest.outputs.reuse_browser_extension_build === "true"
-            ? "checks-ui-browser-extension"
-            : "checks-ui-e2e";
-        for (const name of ["security-fast", browserJob]) {
-          expect(hosted.includes(name), name).toBe(baseRows <= 40);
-        }
+        const standaloneBrowser = manifest.outputs.reuse_browser_extension_build !== "true";
+        expect(hosted.length).toBe(
+          baseRows <= 40 ? baseRows + 1 + Number(standaloneBrowser) : baseRows,
+        );
+        expect(hosted.includes("security-fast")).toBe(baseRows <= 40);
+        expect(hosted.includes("checks-ui-e2e")).toBe(baseRows <= 40 && standaloneBrowser);
         for (const name of [
           "qa-smoke-ci-profile",
           "checks-ui-e2e-real-gateway",
@@ -3381,7 +3392,6 @@ describe("ci workflow guards", () => {
         expect(hosted).toContain("preflight");
         expect(hosted).toContain("ci-gate");
         expect(hosted.filter((name) => name === "checks-ui")).toHaveLength(0);
-        expect(hosted.filter((name) => name === browserJob)).toHaveLength(baseRows <= 40 ? 1 : 0);
       }
     });
 
@@ -3628,14 +3638,16 @@ describe("ci workflow guards", () => {
       }
       const baseline = manifestWithHostedNodeRows(0);
       const originalBase = Number(baseline.outputs.hybrid_hosted_base_rows);
+      const offloadRows = 1 + Number(baseline.outputs.reuse_browser_extension_build !== "true");
       for (const healthy of ["true", "false", ""]) {
-        for (const baseRows of [30, 31, 32, 33, 34, 35, 36, 40, 41, 45, 46]) {
+        for (const baseRows of [30, 31, 32, 33, 34, 35, 36, 37, 40, 41, 45, 46]) {
           const manifest = manifestWithHostedNodeRows(baseRows - originalBase, {
             scopeEnv: { OPENCLAW_CI_HOSTED_HEALTHY: healthy },
           });
           expect(manifest.status, manifest.output).toBe(0);
-          const admitted = healthy === "true" && baseRows <= 35;
-          const mainAdmitted = admitted && baseRows <= 33;
+          // Reserve eight check rows even though one stays on Blacksmith; main adds two.
+          const admitted = healthy === "true" && baseRows + offloadRows + 8 <= 45;
+          const mainAdmitted = admitted && baseRows + offloadRows + 10 <= 45;
           expect(manifest.outputs.hybrid_hosted_checks).toBe(String(admitted));
           expect(manifest.outputs.hybrid_hosted_main_checks).toBe(String(mainAdmitted));
           const hosted = emittedHostedRows(manifest.outputs);
@@ -5895,10 +5907,15 @@ describe("ci workflow guards", () => {
       const coverage = (outputs: Record<string, string>) =>
         Object.fromEntries(
           Object.entries(outputs).filter(
-            ([key]) => !key.startsWith("hybrid_hosted_") && key !== "check_additional_matrix",
+            ([key]) =>
+              !key.startsWith("hybrid_hosted_") &&
+              key !== "check_additional_matrix" &&
+              key !== "reuse_control_ui_i18n_setup",
           ),
         );
       expect(coverage(qualification.outputs)).toEqual(coverage(ordinaryPush.outputs));
+      expect(ordinaryPush.outputs.reuse_control_ui_i18n_setup).toBe("true");
+      expect(qualification.outputs.reuse_control_ui_i18n_setup).toBe("false");
       const rows = JSON.parse(qualification.outputs.checks_node_core_nondist_matrix!).include;
       expect(rows).toHaveLength(1);
       expect(rows[0].test_runtime_policy).toBe("bun-all");
@@ -9282,6 +9299,13 @@ describe("ci workflow guards", () => {
       });
       expect(manifest.status, manifest.output).toBe(0);
       expect(manifest.outputs.run_control_ui_i18n).toBe(String(runUiVerification));
+      expect(manifest.outputs.reuse_control_ui_i18n_setup).toBe(
+        String(
+          runUiVerification &&
+            manifest.outputs.run_build_artifacts === "true" &&
+            eventName !== "workflow_dispatch",
+        ),
+      );
       expect(manifest.outputs.run_node).toBe(String(eventName !== "pull_request"));
       expect(manifest.outputs.run_check).toBe(
         String(eventName !== "pull_request" || changedPath.endsWith(".ts")),
@@ -10445,9 +10469,9 @@ describe("ci workflow guards", () => {
     ).toBe(selected.mocked.length + selected.browser.length > 0);
     expect(manifest.outputs.run_ui_real_gateway).toBe(String(!isPr && selected.real.length > 0));
     expect(JSON.parse(expectDefined(manifest.outputs.ui_test_matrix, "UI matrix")).include).toEqual(
-      expectedUi.map((_, index) => ({ shard: index + 1 })),
+      expectedUi.slice(0, 3).map((_, index) => ({ shard: index + 1 })),
     );
-    expect(manifest.outputs.ui_test_shard_count).toBe(String(expectedUi.length));
+    expect(manifest.outputs.ui_test_shard_count).toBe(String(Math.min(3, expectedUi.length)));
     expect(
       resolveSelectedUiIncludes(
         expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI selection"),
@@ -10705,7 +10729,7 @@ describe("ci workflow guards", () => {
       expect(manifest.outputs.run_ui_tests).toBe(String(selected));
       expect(
         JSON.parse(expectDefined(manifest.outputs.ui_test_matrix, "UI matrix")).include,
-      ).toEqual(expectedUi.map((_, index) => ({ shard: index + 1 })));
+      ).toEqual(expectedUi.slice(0, 3).map((_, index) => ({ shard: index + 1 })));
       expect(
         resolveSelectedUiIncludes(
           expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI selection"),
@@ -10753,33 +10777,71 @@ describe("ci workflow guards", () => {
         .include as Array<{ task: string }>;
       expect(rows.filter((row) => row.task === "browser-extension")).toHaveLength(reuse ? 0 : 1);
       const workflow = readCiWorkflow();
-      for (const result of ["success", "failure"] as const) {
+      const browserProof = expectDefined(
+        workflow.jobs["build-artifacts"].steps.find(
+          (step: WorkflowStep) => step.name === "Test browser extension bootstrap end-to-end",
+        ),
+        "public-build browser proof",
+      );
+      for (const [buildOutcome, cacheHit, chromiumOutcome, expected] of [
+        ["success", "false", "success", reuse],
+        ["skipped", "true", "success", reuse],
+        ["failure", "false", "success", false],
+        ["success", "false", "failure", false],
+      ] as const) {
         expect(
-          evaluateWorkflowCondition(workflow.jobs["checks-ui-browser-extension"].if, {
+          evaluateWorkflowCondition(browserProof.if, {
             eventName,
             repository: "openclaw/openclaw",
             runAttempt: 1,
             preflightOutputs: manifest.outputs,
-            additionalNeeds: {
-              "build-artifacts": {
-                result,
-                outputs: { browser_runtime_artifact_id: "fixture-browser-runtime" },
-              },
+            steps: {
+              dist_build: { outputs: {}, outcome: buildOutcome },
+              dist_build_cache: { outputs: { "cache-hit": cacheHit } },
+              browser_chromium: { outputs: {}, outcome: chromiumOutcome },
             },
           }),
-        ).toBe(reuse);
+        ).toBe(expected);
       }
-      expect(
-        evaluateWorkflowCondition(workflow.jobs["checks-ui-browser-extension"].if, {
-          eventName,
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-          preflightOutputs: manifest.outputs,
-          additionalNeeds: {
-            "build-artifacts": { result: "failure", outputs: { browser_runtime_artifact_id: "" } },
-          },
-        }),
-      ).toBe(false);
+    },
+  );
+
+  it.each([false, true])(
+    "runs production artifact fixtures only when the target owns the split (supported: %s)",
+    (supported) => {
+      const step = expectDefined(
+        readCiWorkflow().jobs["build-artifacts"].steps.find(
+          (candidate: WorkflowStep) =>
+            candidate.name === "Test production Control UI deployment fixtures",
+        ),
+        "production deployment proof",
+      );
+      const root = tempDirs.make("openclaw-production-artifact-command-");
+      mkdirSync(path.join(root, "test/vitest"), { recursive: true });
+      mkdirSync(path.join(root, "scripts"), { recursive: true });
+      writeFileSync(
+        path.join(root, "test/vitest/vitest.ui-e2e.config.ts"),
+        supported ? "// ui-e2e-production-artifact-contract-v1" : "export default {};",
+      );
+      const receipt = path.join(root, "invocation.json");
+      writeFileSync(
+        path.join(root, "scripts/run-vitest.mjs"),
+        `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(receipt)}, JSON.stringify(process.argv.slice(2)));`,
+      );
+      const result = runWorkflowShellScript(step.run, { cwd: root });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(existsSync(receipt)).toBe(supported);
+      if (supported) {
+        expect(JSON.parse(readFileSync(receipt, "utf8"))).toEqual([
+          "run",
+          "--config",
+          "test/vitest/vitest.ui-e2e.config.ts",
+          "--configLoader",
+          "runner",
+          "--maxWorkers",
+          "2",
+        ]);
+      }
     },
   );
 
@@ -10787,7 +10849,6 @@ describe("ci workflow guards", () => {
     const workflow = readCiWorkflow();
     const ui = workflow.jobs["checks-ui"];
     const uiE2e = workflow.jobs["checks-ui-e2e"];
-    const uiBrowser = workflow.jobs["checks-ui-browser-extension"];
     const uiE2eRealGateway = workflow.jobs["checks-ui-e2e-real-gateway"];
 
     expect(readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")).toContain(
@@ -10801,7 +10862,11 @@ describe("ci workflow guards", () => {
     );
     expect(uiE2e["runs-on"]).not.toBe(ui["runs-on"]);
     expect(uiE2e["timeout-minutes"]).toBe(25);
-    expect(uiE2e.env).toEqual({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" });
+    expect(uiE2e.env).toEqual({
+      OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1",
+      OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT:
+        "${{ needs.preflight.outputs.reuse_browser_extension_build == 'true' && needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true' && '1' || '0' }}",
+    });
     expect(uiE2e.strategy["fail-fast"]).toBe(false);
     expect(uiE2e.strategy["max-parallel"]).toBe(14);
     expect(uiE2e.strategy.matrix).toBe("${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}");
@@ -10852,32 +10917,77 @@ describe("ci workflow guards", () => {
       }
     }
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e");
-    expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-browser-extension");
+    expect(workflow.jobs["ci-gate"].needs).toContain("build-artifacts");
+    expect(workflow.jobs["checks-ui-browser-extension"]).toBeUndefined();
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e-real-gateway");
-    expect(uiBrowser.needs).toEqual(["preflight", "build-artifacts"]);
-    expect(uiBrowser.if).toBe(
-      "${{ !cancelled() && needs.preflight.outputs.reuse_browser_extension_build == 'true' && needs.build-artifacts.outputs.browser_runtime_artifact_id != '' }}",
-    );
-    expect(uiBrowser["runs-on"]).toBe(uiE2e["runs-on"]);
-    expect(uiBrowser.strategy).toEqual({
-      "fail-fast": false,
-      "max-parallel": 1,
-      matrix: { task: ["browser-extension"] },
-    });
+    const artifactSteps = workflow.jobs["build-artifacts"].steps as WorkflowStep[];
     const browserScenario = expectDefined(
-      uiBrowser.steps.find(
+      artifactSteps.find(
         (step: WorkflowStep) => step.name === "Test browser extension bootstrap end-to-end",
       ),
-      "prebuilt browser extension proof",
+      "public-build browser extension proof",
     );
     expect(browserScenario.run).toContain(
-      "node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
+      "extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
+    );
+    expect(browserScenario.run).toContain(
+      "--config test/vitest/vitest.extension-browser.config.ts",
     );
     expect(browserScenario.run).not.toContain("qaRuntime");
-    const artifactSteps = workflow.jobs["build-artifacts"].steps as WorkflowStep[];
-    expect(artifactSteps.findIndex((step) => step.id === "browser_runtime_package")).toBeLessThan(
-      artifactSteps.findIndex((step) => step.id === "built_artifact_checks"),
+    expect(browserScenario.env).toEqual({
+      OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1",
+      OPENCLAW_BROWSER_EXTENSION_E2E: "1",
+      OPENCLAW_E2E_WORKERS: "1",
+    });
+    const productionScenario = expectDefined(
+      artifactSteps.find(
+        (step: WorkflowStep) => step.name === "Test production Control UI deployment fixtures",
+      ),
+      "public-build production deployment proof",
     );
+    expect(productionScenario.env).toMatchObject({
+      OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1",
+      OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT: "${{ github.workspace }}/dist/control-ui",
+    });
+    expect(productionScenario.run).toContain("ui-e2e-production-artifact-contract-v1");
+    expect(productionScenario.run).toContain("--config test/vitest/vitest.ui-e2e.config.ts");
+    expect(productionScenario.run).toContain("--maxWorkers 2");
+    const productionCondition = expectDefined(
+      productionScenario.if,
+      "production fixture condition",
+    );
+    for (const reuse of [false, true]) {
+      for (const runUi of [false, true]) {
+        for (const compatibility of [false, true]) {
+          const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: {
+              reuse_browser_extension_build: String(reuse),
+              run_ui_e2e: String(runUi),
+              compatibility_target: String(compatibility),
+            },
+            steps: {
+              dist_build: { outputs: {}, outcome: "success" },
+              dist_build_cache: { outputs: { "cache-hit": "false" } },
+              browser_chromium: { outputs: {}, outcome: "success" },
+            },
+          };
+          const delegated = reuse && runUi && !compatibility;
+          expect(
+            evaluateWorkflowExpression(uiE2e.env.OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT, context),
+          ).toBe(delegated ? "1" : "0");
+          expect(evaluateWorkflowCondition(productionCondition, context)).toBe(delegated);
+        }
+      }
+    }
+    const buildIndex = artifactSteps.findIndex((step) => step.id === "dist_build");
+    const checksIndex = artifactSteps.findIndex((step) => step.id === "built_artifact_checks");
+    for (const scenario of [browserScenario, productionScenario]) {
+      expect(artifactSteps.indexOf(scenario)).toBeGreaterThan(buildIndex);
+      expect(artifactSteps.indexOf(scenario)).toBeLessThan(checksIndex);
+    }
 
     expect(uiE2eRealGateway.permissions).toEqual(uiE2e.permissions);
     expect(uiE2eRealGateway.needs).toEqual(uiE2e.needs);
@@ -10935,13 +11045,6 @@ describe("ci workflow guards", () => {
       blacksmithRunner: "blacksmith-16vcpu-ubuntu-2404",
     }));
     const routedUiE2eJobs = [
-      {
-        job: uiBrowser,
-        name: "checks-ui-browser-extension",
-        setup: uiBrowser.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
-        matrix: { task: "browser-extension" },
-        blacksmithRunner: "blacksmith-8vcpu-ubuntu-2404",
-      },
       ...expectedUiE2eMatrices
         .flatMap(({ include }) => include)
         .map((matrix) => ({
@@ -11351,8 +11454,23 @@ describe("ci workflow guards", () => {
       (step: WorkflowStep) => step.name === "Check Control UI locale parity",
     );
 
-    expect(buildArtifactSteps).not.toContainEqual(
-      expect.objectContaining({ run: "pnpm ui:i18n:check" }),
+    const builtSource = buildArtifactSteps.find(
+      (step: WorkflowStep) => step.id === "control_ui_i18n_source",
+    );
+    const builtParity = buildArtifactSteps.find(
+      (step: WorkflowStep) => step.id === "control_ui_i18n_parity",
+    );
+    expect(builtSource.run).toBe(sourceStep.run);
+    expect(builtParity.run).toBe(localeStep.run);
+    expect(builtSource["continue-on-error"]).toBe(true);
+    expect(builtParity["continue-on-error"]).toBe(true);
+    expect(buildArtifactSteps.indexOf(builtSource)).toBeLessThan(
+      buildArtifactSteps.findIndex((step: WorkflowStep) => step.name === "Build dist"),
+    );
+    expect(
+      buildArtifactSteps.findIndex((step: WorkflowStep) => step.id === "control_ui_i18n_result"),
+    ).toBeGreaterThan(
+      buildArtifactSteps.findIndex((step: WorkflowStep) => step.id === "built_artifact_checks"),
     );
     expect(JSON.parse(readFileSync("package.json", "utf8")).scripts["test:ui"]).not.toContain(
       "ui:i18n:check",
@@ -11363,7 +11481,9 @@ describe("ci workflow guards", () => {
       "keeps shipped locales structurally aligned with English",
     );
     expect(localeJob.needs).toEqual(["preflight"]);
-    expect(localeJob.if).toBe("needs.preflight.outputs.run_control_ui_i18n == 'true'");
+    expect(localeJob.if).toBe(
+      "needs.preflight.outputs.run_control_ui_i18n == 'true' && needs.preflight.outputs.reuse_control_ui_i18n_setup != 'true'",
+    );
     expect(localeJob["continue-on-error"]).toBeUndefined();
     expect(localeJob.env.COMPATIBILITY_TARGET).toBe(
       "${{ needs.preflight.outputs.compatibility_target }}",
@@ -11428,6 +11548,95 @@ describe("ci workflow guards", () => {
       'dispatch_child ci.yml "$dispatch_run_name"',
     );
   });
+
+  it.each([
+    { source: "success", parity: "success", strict: "true", result: "success" },
+    { source: "success", parity: "failure", strict: "false", result: "success" },
+    { source: "success", parity: "failure", strict: "true", result: "failure" },
+    { source: "failure", parity: "success", strict: "false", result: "failure" },
+    { source: "skipped", parity: "skipped", strict: "false", result: "failure" },
+    { source: "success", parity: "skipped", strict: "false", result: "failure" },
+    { source: "", parity: "success", strict: "false", result: "failure" },
+    { source: "success", parity: "", strict: "false", result: "failure" },
+  ])("settles shared i18n proof ($source/$parity, strict=$strict)", (entry) => {
+    const step = readCiWorkflow().jobs["build-artifacts"].steps.find(
+      (candidate: WorkflowStep) => candidate.id === "control_ui_i18n_result",
+    );
+    const root = tempDirs.make("openclaw-ci-shared-i18n-result-");
+    const output = path.join(root, "output");
+    const summary = path.join(root, "summary");
+    const run = runWorkflowShellScript(step.run, {
+      env: {
+        ...process.env,
+        SOURCE_RESULT: entry.source,
+        PARITY_RESULT: entry.parity,
+        STRICT_PARITY: entry.strict,
+        GITHUB_OUTPUT: output,
+        GITHUB_STEP_SUMMARY: summary,
+      },
+    });
+    expect(run.status, `${run.stdout}${run.stderr}`).toBe(entry.result === "success" ? 0 : 1);
+    const outputs = readWorkflowOutputs(output);
+    expect(outputs).toEqual({ result: entry.result });
+    expect(readFileSync(summary, "utf8")).toContain(
+      `source=${entry.source}, parity=${entry.parity}, strict=${entry.strict}`,
+    );
+    const gateRow = renderCiGateEnvironment(
+      {
+        preflightOutputs: {
+          run_control_ui_i18n: "true",
+          reuse_control_ui_i18n_setup: "true",
+        },
+        additionalNeeds: {
+          "build-artifacts": {
+            result: "success",
+            outputs: { control_ui_i18n_result: expectDefined(outputs.result, "i18n result") },
+          },
+        },
+      },
+      { "control-ui-i18n": "skipped" },
+    )
+      .split("\n")
+      .find((row) => row.startsWith("control-ui-i18n="));
+    const gate = runCiGateFixture(
+      `preflight=success|true\n${expectDefined(gateRow, "i18n gate row")}`,
+    );
+    expect(gate.status, `${gate.stdout}${gate.stderr}`).toBe(entry.result === "success" ? 0 : 1);
+  });
+
+  it.each([
+    { reuse: "false", selected: "true", dedicated: "success", built: "failure", exitCode: 0 },
+    { reuse: "false", selected: "true", dedicated: "failure", built: "success", exitCode: 1 },
+    { reuse: "false", selected: "true", dedicated: "skipped", built: "success", exitCode: 1 },
+    { reuse: "true", selected: "true", dedicated: "success", built: "", exitCode: 1 },
+    { reuse: "true", selected: "true", dedicated: "success", built: "skipped", exitCode: 1 },
+    { reuse: "false", selected: "false", dedicated: "skipped", built: "", exitCode: 0 },
+  ])(
+    "gates i18n selected=$selected reuse=$reuse dedicated=$dedicated built=$built",
+    ({ reuse, selected, dedicated, built, exitCode }) => {
+      const gateRow = renderCiGateEnvironment(
+        {
+          preflightOutputs: {
+            run_control_ui_i18n: selected,
+            reuse_control_ui_i18n_setup: reuse,
+          },
+          additionalNeeds: {
+            "build-artifacts": {
+              result: "success",
+              outputs: { control_ui_i18n_result: built },
+            },
+          },
+        },
+        { "control-ui-i18n": dedicated },
+      )
+        .split("\n")
+        .find((row) => row.startsWith("control-ui-i18n="));
+      const gate = runCiGateFixture(
+        `preflight=success|true\n${expectDefined(gateRow, "i18n gate row")}`,
+      );
+      expect(gate.status, `${gate.stdout}${gate.stderr}`).toBe(exitCode);
+    },
+  );
 
   it.each([
     { selected: false, exitCode: 0 },
@@ -12387,7 +12596,6 @@ describe("ci workflow guards", () => {
       "native-i18n",
       "checks-ui",
       "checks-ui-e2e",
-      "checks-ui-browser-extension",
       "checks-ui-e2e-real-gateway",
       "control-ui-i18n",
       "checks-baseline-ratchets",
@@ -12442,6 +12650,12 @@ describe("ci workflow guards", () => {
       requiredJobs.map((job) => `${job}=\${{ needs.${job}.result }}|true`),
     );
     for (const job of selectedJobs) {
+      if (job === "control-ui-i18n") {
+        expect(verifyStep.env.JOB_RESULTS).toContain(
+          "control-ui-i18n=${{ needs.preflight.outputs.reuse_control_ui_i18n_setup == 'true' && (needs.build-artifacts.outputs.control_ui_i18n_result || 'missing') || needs.control-ui-i18n.result }}|",
+        );
+        continue;
+      }
       expect(verifyStep.env.JOB_RESULTS).toContain(
         job === "pr-failure-report"
           ? "pr-failure-report=${{ (github.run_attempt != 1 || needs.preflight.outputs.run_checks_node_core_nondist != 'true') && 'skipped' || needs.pr-failure-report.result }}|"
@@ -12465,6 +12679,13 @@ describe("ci workflow guards", () => {
       const job = expectDefined(match[1], row);
       const selection = expectDefined(match[3], row);
       expect(match[2], row).toBe(job);
+      if (job === "control-ui-i18n") {
+        expect(selection).toBe("needs.preflight.outputs.run_control_ui_i18n");
+        expect(workflow.jobs[job].if).toBe(
+          "needs.preflight.outputs.run_control_ui_i18n == 'true' && needs.preflight.outputs.reuse_control_ui_i18n_setup != 'true'",
+        );
+        continue;
+      }
       if (job === "pr-failure-report") {
         // Reporting covers every PR; gate eligibility preserves the original allowance.
         expect(selection).toBe(
@@ -12492,7 +12713,6 @@ describe("ci workflow guards", () => {
           "",
         )
         .replace(/needs\.build-artifacts\.outputs\.published_driver_artifact_id != ''\s*&&\s*/u, "")
-        .replace(/\s*&&\s*needs\.build-artifacts\.outputs\.browser_runtime_artifact_id != ''/u, "")
         .replace(
           /\s*&&\s*\(needs\.build-artifacts\.result == 'success' \|\| needs\.build-artifacts\.result == 'skipped'\)$/u,
           "",

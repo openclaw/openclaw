@@ -103,15 +103,12 @@ export const usageMessage = (
 export const writeUsage = (
   target: Parameters<typeof persistSessionTranscriptTurn>[0],
   cwd: string,
-  tokens: number,
-  timestamp: number,
-  cost = 0.01,
-  output = 0,
+  ...usage: Parameters<typeof usageMessage>
 ) =>
   persistSessionTranscriptTurn(target, {
     cwd,
     updateMode: "none",
-    messages: [{ message: usageMessage(tokens, timestamp, cost, output), now: timestamp }],
+    messages: [{ message: usageMessage(...usage), now: usage[1] }],
   });
 
 export const contextReport = (generatedAt: number, ordinal = 0): SessionSystemPromptReport => ({

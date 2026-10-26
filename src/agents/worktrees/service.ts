@@ -67,7 +67,6 @@ import { removeSettledManagedWorktree, type RemoveWorktreeParams } from "./remov
 import {
   resolveRepository,
   resolveRepositoryIdentity,
-  resolveRepositoryPaths,
   type ResolvedRepository,
 } from "./repository-paths.js";
 import {
@@ -194,12 +193,12 @@ export class ManagedWorktreeService {
 
   async createWithOutcome(
     params: CreateManagedWorktreeParams,
-  ): Promise<ManagedWorktreeCreationOutcome> {
+  ): Promise<ManagedWorktreeCreationOutcome & { sourceRoot: string }> {
     return withWorktreePreparationTiming("managed", () =>
       withWorktreeRunEnd(this.env, async () => {
         params.signal?.throwIfAborted();
         const repository = await resolveRepository(params.repoRoot);
-        return await withWorktreeBasePreparation(repository, async (prepareBase) =>
+        const outcome = await withWorktreeBasePreparation(repository, async (prepareBase) =>
           createWithWorktreeAllocation(
             { ...params, env: this.env },
             async (guard, publication) =>
@@ -231,6 +230,7 @@ export class ManagedWorktreeService {
             (record) => this.rollbackPreparation(record, params.withRollback),
           ),
         );
+        return { ...outcome, sourceRoot: repository.sourceRoot };
       }),
     );
   }
@@ -726,18 +726,6 @@ export class ManagedWorktreeService {
       ownerKind,
       ownerId,
     );
-  }
-
-  /** Resolves the canonical registry root and the caller's own checkout root. */
-  async resolveRepositoryPaths(repoRoot: string): Promise<{
-    canonicalRoot: string;
-    sourceRoot: string;
-  }> {
-    const resolved = await resolveRepositoryPaths(repoRoot);
-    return {
-      canonicalRoot: resolved.canonicalRoot,
-      sourceRoot: resolved.sourceRoot,
-    };
   }
 
   /** Resolves the repository facts shared by managed worktrees and project discovery. */

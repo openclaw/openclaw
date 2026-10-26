@@ -171,6 +171,7 @@ function repairOpenedStateSchema(
             return [];
           }
           const applied = migrateBoundedStateSchema(db, previousVersion, {
+            env,
             versionMigrationOnly: true,
           });
           if (!applied) {
@@ -339,7 +340,7 @@ function repairOpenedStateSchema(
         }
         if (previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
           openClawStateMigrationAssertions.get(previousVersion)?.(db, { pathname });
-          const boundedChanges = migrateBoundedStateSchema(db, previousVersion);
+          const boundedChanges = migrateBoundedStateSchema(db, previousVersion, { env });
           if (boundedChanges) {
             applied.push(...boundedChanges);
             markCurrentStateSchemaVersion(db);
@@ -395,7 +396,7 @@ function repairOpenedStateSchema(
           }
           ensureAdditiveStateColumns(db, "repair");
           for (const migration of versionedStateMigrations) {
-            if (migration.migrate(db, previousVersion)) {
+            if (migration.migrate(db, previousVersion, { env })) {
               applied.push(migration.applied);
             }
           }

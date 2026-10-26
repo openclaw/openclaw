@@ -122,21 +122,18 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       const first = deliveredCallArg();
       const due = child.requesterSettleWake?.nextAttemptAt;
       expect(due).toBeTypeOf("number");
-      const clock = vi.spyOn(Date, "now").mockReturnValue(due!);
-      try {
-        expect(await wake()).toBe(true);
-        const retry = deliverSpy.mock.calls[1]?.[0];
-        expect(first.directIdempotencyKey).toBe(requesterSettleKey("run-b"));
-        expect(retry?.directIdempotencyKey).toBe(
-          requesterSettleKey(privateCompletion ? "run-b" : "run-b:retry-1"),
-        );
-        if (privateCompletion) {
-          expect(retry?.triggerMessage).toBe(first.triggerMessage);
-        } else {
-          expect(retry?.triggerMessage).toContain("Continue from the current transcript");
-        }
-      } finally {
-        clock.mockRestore();
+      using _ = vi.spyOn(Date, "now").mockReturnValue(due!);
+
+      expect(await wake()).toBe(true);
+      const retry = deliverSpy.mock.calls[1]?.[0];
+      expect(first.directIdempotencyKey).toBe(requesterSettleKey("run-b"));
+      expect(retry?.directIdempotencyKey).toBe(
+        requesterSettleKey(privateCompletion ? "run-b" : "run-b:retry-1"),
+      );
+      if (privateCompletion) {
+        expect(retry?.triggerMessage).toBe(first.triggerMessage);
+      } else {
+        expect(retry?.triggerMessage).toContain("Continue from the current transcript");
       }
     },
   );

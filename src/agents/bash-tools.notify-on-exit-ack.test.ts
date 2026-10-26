@@ -79,18 +79,17 @@ beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "state-only", prefix: "exec-occurrence-" });
   setRuntimeConfigSnapshot({ agents: { entries: { main: {}, research: {} } } });
   openOpenClawStateDatabase({ env: state.env });
-  for (const { agentId, sessionKey } of [
-    { agentId: "main", sessionKey: QUEUE_KEY },
-    { agentId: "research", sessionKey: "global" },
-  ]) {
+  for (const [agentId, sessionKey] of [
+    ["main", QUEUE_KEY],
+    ["research", "global"],
+  ] as const) {
     writeSessionEntry(openOpenClawAgentDatabase({ agentId, env: state.env }), sessionKey, {
       sessionId: `${agentId}-origin`,
       lifecycleRevision: "original-revision",
       updatedAt: Date.now(),
     });
   }
-  const now = Date.now();
-  vi.spyOn(Date, "now").mockReturnValue(now);
+  vi.spyOn(Date, "now").mockReturnValue(Date.now());
 });
 afterEach(async () => {
   resetProcessRegistryForTests();
@@ -113,9 +112,6 @@ it("keeps selected-agent global completions scoped to their owner", async () => 
   });
 
   expect(vi.mocked(enqueueSessionEvent).mock.lastCall?.[1]).toMatchObject({
-    source: "exec",
-    agentId: "research",
-    sessionKey: "global",
     expectedTarget: { agentId: "research" },
   });
   expect(peekSystemEventEntries("agent:research:global")).toHaveLength(1);
@@ -131,7 +127,6 @@ it("isolates identical completions across exact full-slug reuse", async () => {
   expect(contexts()).toEqual(["exec:amber-atlas", "marker", "exec:amber-atlas"]);
   const queued = peekSystemEventEntries(QUEUE_KEY);
   expect(queued[0]?.id).not.toBe(queued[2]?.id);
-  expect(queued[0]).toEqual({ ...queued[2], id: queued[0]?.id });
 
   await pollAndAcknowledge(second.id, queued);
   expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);

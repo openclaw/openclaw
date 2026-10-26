@@ -1,7 +1,9 @@
 // Owner microbenchmark, not a whole-Gateway load test. Run separate CPU and allocation passes:
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-pr-currency-measure.ts
 //   --output .local/currency.json [--allocations] [--base-owner-suffix base]
-// --base-owner-suffix compares control-ui-session-pr-{read,source}.<suffix>.ts with current owners.
+// --base-owner-suffix compares control-ui-session-pr-{read,source,subscriptions}.<suffix>.ts.
+// --subscriptions measures passive watcher polls with a runtime publication per poll;
+// iterations must be divisible by 64 and count watcher validations, not polls.
 // Both arms share one prepared fixture; five pairs alternate AB/BA without rebuilding state.
 // Fixture setup is excluded: 10k persisted rows, 40 configured agents, 64 retained readers.
 // Each arm acquires one physical source, then checks it at every reader's final assertion.
@@ -28,6 +30,7 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "4000" },
     warmup: { type: "string", default: "1000" },
     allocations: { type: "boolean", default: false },
+    subscriptions: { type: "boolean", default: false },
     "base-owner-suffix": { type: "string" },
     pairs: { type: "string", default: "5" },
     output: { type: "string" },
@@ -51,12 +54,20 @@ const sources = [
     `../../src/gateway/control-ui-session-pr-source${suffix}.ts`,
     import.meta.url,
   );
+  const subscriptionsUrl = new URL(
+    `../../src/gateway/control-ui-session-pr-subscriptions${suffix}.ts`,
+    import.meta.url,
+  );
   return {
     name,
     url,
     sha256: createHash("sha256").update(readFileSync(url)).digest("hex"),
     sourceUrl,
     sourceSha256: createHash("sha256").update(readFileSync(sourceUrl)).digest("hex"),
+    subscriptionsUrl,
+    subscriptionsSha256: values.subscriptions
+      ? createHash("sha256").update(readFileSync(subscriptionsUrl)).digest("hex")
+      : undefined,
   };
 });
 const scratch = path.resolve(".local");
@@ -68,6 +79,9 @@ for (const directory of ["home", "tmp"]) {
 }
 const sessionCount = 10_000;
 const readerCount = 64;
+if (values.subscriptions) {
+  assert.equal(iterations % readerCount, 0, "--iterations must be divisible by 64");
+}
 const childrenPerRoot = 4;
 const agentIds = ["main", ...Array.from({ length: 39 }, (_, i) => `worker-${i}`)];
 const cfg: OpenClawConfig = {
@@ -99,6 +113,8 @@ const [
   { createSessionRowProjection },
   { ensureProfileForEmail },
   { prepareGatewayRecipientProfile },
+  { GatewayScheduler },
+  { sessionChanges },
 ] = await Promise.all([
   import("../../src/config/runtime-snapshot.js"),
   import("../../src/config/sessions/session-accessor.sqlite-entry-store.js"),
@@ -107,6 +123,8 @@ const [
   import("../../src/gateway/session-row-projection.js"),
   import("../../src/state/user-profiles.js"),
   import("../../src/gateway/expected-profile.js"),
+  import("../../src/infra/gateway-scheduler.js"),
+  import("../../src/sessions/session-row-changes.js"),
 ]);
 const owners = await Promise.all(
   sources.map(async (source) => {
@@ -120,7 +138,10 @@ const owners = await Promise.all(
     }: typeof import("../../src/gateway/control-ui-session-pr-source.js") = await import(
       source.sourceUrl.href
     );
-    return { ...source, createControlUiSessionPrRead, withControlUiSessionPrSource };
+    const subscriptions:
+      | typeof import("../../src/gateway/control-ui-session-pr-subscriptions.js")
+      | undefined = values.subscriptions ? await import(source.subscriptionsUrl.href) : undefined;
+    return { ...source, createControlUiSessionPrRead, withControlUiSessionPrSource, subscriptions };
   }),
 );
 const profile = ensureProfileForEmail("currency-reader@example.test");
@@ -135,6 +156,8 @@ const observer = new PerformanceObserver((list) => {
     gc.push({ start: entry.startTime, ms: entry.duration });
   }
 });
+const schedulers: InstanceType<typeof GatewayScheduler>[] = [];
+const stopSubscriptions: (() => Promise<void>)[] = [];
 try {
   runOpenClawAgentWriteTransaction(
     (database) => {
@@ -192,6 +215,7 @@ try {
       };
       prepareGatewayRecipientProfile(client);
       const read = owner.createControlUiSessionPrRead({
+        taskReceiptsOnly: values.subscriptions,
         client,
         sessionKey: keyFor(index),
         getRuntimeConfig: () => cfg,
@@ -208,7 +232,7 @@ try {
     }
     const source = targets[0]!.readSource;
     assert(targets.every((target) => target?.readSource.path === source.path));
-    const run = (count: number) =>
+    let run = (count: number) =>
       owner.withControlUiSessionPrSource(source, async (assertSourceCurrent) => {
         for (let index = 0; index < count; index++) {
           const slot = index % readerCount;
@@ -218,6 +242,37 @@ try {
           target!.assertCurrent!();
         }
       });
+    if (owner.subscriptions) {
+      const scheduler = new GatewayScheduler();
+      schedulers.push(scheduler);
+      const subscriptions = owner.subscriptions.createControlUiSessionPullRequestSubscriptions({
+        scheduler,
+        getSessionRowProjection: () => projection,
+        broadcastToConnIds: () => {},
+        isConnectionActive: () => true,
+        prepareRead: async (connId) => reads[Number(connId)],
+      });
+      stopSubscriptions.push(subscriptions.stop);
+      for (let index = 0; index < readerCount; index++) {
+        await subscriptions.replace(
+          String(index),
+          [],
+          new Set(),
+          undefined,
+          new Set([keyFor(index)]),
+        );
+      }
+      run = async (count) => {
+        for (let index = 0; index < Math.ceil(count / readerCount); index++) {
+          sessionChanges.emit({
+            agentId: "main",
+            sessionKey: keyFor(index % readerCount),
+            scope: "runtime",
+          });
+          await subscriptions.pollNow();
+        }
+      };
+    }
     await run(warmup);
     arms.push({ owner, run });
   }
@@ -295,17 +350,24 @@ try {
       source.sourceSha256,
       "Physical source owner changed during measurement",
     );
+    if (values.subscriptions) {
+      assert.equal(
+        createHash("sha256").update(readFileSync(source.subscriptionsUrl)).digest("hex"),
+        source.subscriptionsSha256,
+      );
+    }
   }
   const result = {
     scope:
       "real in-process PR reader, physical source and final currency assertions; no transport or whole-Gateway claim",
     node: process.version,
-    owners: sources.map(({ name, url, sha256, sourceUrl, sourceSha256 }) => ({
+    owners: sources.map(({ name, url, sha256, sourceUrl, sourceSha256, subscriptionsSha256 }) => ({
       name,
       path: url.pathname,
       sha256,
       sourcePath: sourceUrl.pathname,
       sourceSha256,
+      subscriptionsSha256,
     })),
     workload: {
       sessionCount,
@@ -315,6 +377,7 @@ try {
       iterations,
       warmup,
       pairs,
+      subscriptions: values.subscriptions,
     },
     allocationMode: values.allocations,
     samples,
@@ -325,6 +388,12 @@ try {
   }
   process.stdout.write(output);
 } finally {
+  for (const stop of stopSubscriptions) {
+    await stop();
+  }
+  for (const scheduler of schedulers) {
+    await scheduler.stop();
+  }
   observer.disconnect();
   if (inspectorConnected) {
     inspector.disconnect();

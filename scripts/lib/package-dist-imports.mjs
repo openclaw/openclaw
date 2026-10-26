@@ -93,8 +93,23 @@ function resolvesCommonJs(importedPath, fileSet, packageJsons) {
   return loadIndex(importedPath);
 }
 
-function appendImportEdges(source, importerPath, imports, sourceType, includeTypeScript) {
+function appendImportEdges(
+  source,
+  importerPath,
+  imports,
+  sourceType,
+  includeTypeScript,
+  onNodeLoaderReference,
+  onStaticImport,
+) {
   function visit(node) {
+    if (
+      onNodeLoaderReference &&
+      ((node.type === "Identifier" && (node.name === "require" || node.name === "createRequire")) ||
+        (node.type === "Literal" && (node.value === "require" || node.value === "createRequire")))
+    ) {
+      onNodeLoaderReference();
+    }
     // These leaves cannot contain import edges; avoid allocating property lists for them.
     if (node.type === "Identifier" || node.type === "Literal" || node.type === "TemplateElement") {
       return;
@@ -104,11 +119,13 @@ function appendImportEdges(source, importerPath, imports, sourceType, includeTyp
     if (
       node.type === "ImportDeclaration" ||
       node.type === "ExportNamedDeclaration" ||
-      node.type === "ExportAllDeclaration"
+      node.type === "ExportAllDeclaration" ||
+      node.type === "ImportExpression"
     ) {
       specifier = literal(node.source);
-    } else if (node.type === "ImportExpression") {
-      specifier = literal(node.source);
+      if (node.source?.type === "Literal" && typeof node.source.value === "string") {
+        onStaticImport?.(node.source.value);
+      }
     } else if (
       node.type === "CallExpression" &&
       node.callee.type === "Identifier" &&
@@ -247,6 +264,8 @@ export function collectPackageDistImports(params) {
       imports,
       sourceTypeFor(importerPath, packageJsons),
       params.includeTypeScript,
+      params.onNodeLoaderReference,
+      params.onStaticImport,
     );
   }
 

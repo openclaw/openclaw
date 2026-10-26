@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { exactBoardWidgetHeightPx, FINE_POINTER_QUERY } from "../../lib/board/grid.ts";
 import "./board-view.tsx";
+import { createMediaQueryList } from "../../test-helpers/media-query.ts";
 import {
   boardWidget,
   callbacks,
@@ -39,16 +40,9 @@ describe("board widget sizing", () => {
   });
 
   it("lets a dashboard document fit tall HTML content without an inner scroll viewport", async () => {
-    vi.spyOn(window, "matchMedia").mockImplementation((media) => ({
-      media,
-      matches: media === FINE_POINTER_QUERY,
-      onchange: null,
-      addListener() {},
-      removeListener() {},
-      addEventListener() {},
-      removeEventListener() {},
-      dispatchEvent: () => true,
-    }));
+    vi.spyOn(window, "matchMedia").mockImplementation((media) =>
+      createMediaQueryList(media, media === FINE_POINTER_QUERY),
+    );
     const view = await mount();
     view.fitAutoContent = true;
     await view.updateComplete;

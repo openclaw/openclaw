@@ -8,6 +8,8 @@ import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
+} from "./chat-application-context.test-support.ts";
+import {
   createRenderTestChatPane,
   connectPaneTestView,
   type TestChatPane,
@@ -96,11 +98,6 @@ it.each([
       person("Riley", {
         ts: 2,
         lastInputSeconds: 150,
-        onlineSince: 2,
-        lastActivityAt: 2,
-        platform: "linux",
-        deviceFamily: "Desktop",
-        timeZone: "Europe/Vienna",
       }),
       person("self", { ts: 2, lastInputSeconds: 10 }),
     ],

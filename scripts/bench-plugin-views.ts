@@ -42,6 +42,7 @@ import {
   exerciseRemainingPlugin,
   remainingPluginReady,
 } from "./lib/plugin-view-benchmark-flows.ts";
+import { runPluginViewLeakCheck } from "./lib/plugin-view-leak-check.ts";
 
 const { values } = parseArgs({
   options: {
@@ -63,6 +64,7 @@ const { values } = parseArgs({
     coverage: { type: "boolean", default: false },
     "thread-cpu-time": { type: "boolean", default: false },
     "loads-only": { type: "boolean", default: false },
+    "leak-rounds": { type: "string", default: "0" },
     "whatsapp-locale-proof": { type: "boolean", default: false },
   },
 });
@@ -71,6 +73,7 @@ const pairOffset = Number(values["pair-offset"]);
 const cardCount = Number(values.cards);
 const itemCount = Number(values.items);
 const columnCount = Number(values.columns);
+const leakRounds = Number(values["leak-rounds"]);
 const windowedVariants = new Set(
   values["windowed-variants"].split(",").filter(Boolean).map(Number),
 );
@@ -87,6 +90,13 @@ if (
   itemCount < 50 ||
   itemCount > 1000 ||
   ![6, 9].includes(columnCount) ||
+  !Number.isInteger(leakRounds) ||
+  leakRounds < 0 ||
+  (leakRounds > 0 &&
+    (values.trace ||
+      values.coverage ||
+      values["loads-only"] ||
+      pluginIds.some((id) => id !== "workboard" && id !== "mcp-relay"))) ||
   [...windowedVariants].some((variant) => !Number.isInteger(variant) || variant < 0) ||
   pluginIds.some(
     (id) => !["workboard", "memory-core", "nostr", ...remainingPluginIds].includes(id),
@@ -743,7 +753,7 @@ try {
               const after = await metrics(cdp);
               const requestsAfter = await requestCounts();
               const longTasks = await page.evaluate(
-                ({ navigation: isNavigation, start: startMark }) => {
+                ({ navigation: isNavigation, start: startMark, end: endMark }) => {
                   const state = (
                     window as Window & {
                       pluginBenchmark?: { longTasks: Array<{ start: number; duration: number }> };
@@ -752,13 +762,14 @@ try {
                   const boundary = isNavigation
                     ? 0
                     : (performance.getEntriesByName(startMark)[0]?.startTime ?? 0);
+                  const endBoundary = performance.getEntriesByName(endMark)[0]!.startTime;
                   return (
                     state?.longTasks
-                      .filter((entry) => entry.start >= boundary)
+                      .filter((entry) => entry.start >= boundary && entry.start < endBoundary)
                       .map((entry) => entry.duration) ?? []
                   );
                 },
-                { navigation, start },
+                { navigation, start, end },
               );
               const measured: Step = {
                 id,
@@ -1031,6 +1042,109 @@ try {
             if (values.coverage) {
               sample.warmCoverage = await stopCoverage("warm");
             }
+            if (leakRounds > 0) {
+              sample.pluginObservations = {
+                leakCheck: await runPluginViewLeakCheck({
+                  page,
+                  cdp,
+                  outputDir: path.join(output, `${prefix}-leak`),
+                  rounds: leakRounds,
+                  updatesPerRound: 50,
+                  metadata: { plugin, profile, root: bundle.root, browser: sample.browserVersion },
+                  open: async () => {
+                    await navigate(`/${route}`);
+                    await ready();
+                  },
+                  close: async () => {
+                    await navigate("/new");
+                    await expect(
+                      page.locator(".workboard-board--page, .mcp-connected-apps"),
+                    ).toHaveCount(0);
+                    await expect(page.locator(".new-session-page__message")).toBeEditable();
+                  },
+                  settle: () => frames(page),
+                  update: async (sequence) => {
+                    if (plugin === "workboard") {
+                      const title = `Leak cycle ${sequence}`;
+                      const cards = seed.cards.map((card, index) =>
+                        index === 0
+                          ? { ...card, title, updatedAt: card.updatedAt + sequence }
+                          : card,
+                      );
+                      await page.evaluate(
+                        (payload) => {
+                          const fixtureGateway = (
+                            window as Window & {
+                              openclawControlUiE2eGateway?: ControlUiMockGateway;
+                            }
+                          ).openclawControlUiE2eGateway!;
+                          fixtureGateway.setRequestHandler("workboard.cards.list", ({ respond }) =>
+                            respond(payload),
+                          );
+                        },
+                        { cards, statuses, boards: seed.boards },
+                      );
+                      await gateway.emitGatewayEvent("plugin.workboard.changed", {
+                        epoch: "benchmark-leak",
+                        revision: sequence,
+                      });
+                      await expect(page.locator('[data-card-id="bench-0"] h3')).toHaveText(title);
+                    } else if (remainingFixture?.plugin === "mcp-relay") {
+                      const name = `Leak cycle ${sequence}`;
+                      const snapshot = {
+                        ...remainingFixture.snapshot,
+                        grants: remainingFixture.snapshot.grants.map((grant, index) =>
+                          index === 1 ? { ...grant, clientName: name } : grant,
+                        ),
+                      };
+                      await page.evaluate((payload) => {
+                        const fixtureGateway = (
+                          window as Window & {
+                            openclawControlUiE2eGateway?: ControlUiMockGateway;
+                          }
+                        ).openclawControlUiE2eGateway!;
+                        fixtureGateway.setRequestHandler("mcp-relay.grants", ({ respond }) =>
+                          respond(payload),
+                        );
+                      }, snapshot);
+                      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+                      await expect(page.locator(".mcp-connected-apps__grant h2").nth(1)).toHaveText(
+                        name,
+                      );
+                      await gateway.emitGatewayEvent("chat.metadata.changed", {
+                        agentId: "main",
+                        usageUpdatedAt: remainingFixture.now + sequence,
+                      });
+                      await page.waitForFunction(
+                        (expected) =>
+                          (
+                            window as Window & {
+                              pluginBenchmarkMcpDelivery?: { usageUpdatedAt: number };
+                            }
+                          ).pluginBenchmarkMcpDelivery?.usageUpdatedAt === expected,
+                        remainingFixture.now + sequence,
+                      );
+                      await frames(page);
+                    }
+                  },
+                }),
+              };
+              if (plugin === "mcp-relay") {
+                // Keep the unmodified closed samples above. A later host interaction
+                // supplies a separate diagnostic for the retained native event.
+                await page.locator(".new-session-page__message").focus();
+                await expect(page.locator(".new-session-page__message")).toBeFocused();
+                await frames(page);
+                await cdp.send("HeapProfiler.collectGarbage");
+                await cdp.send("HeapProfiler.collectGarbage");
+                sample.pluginObservations.afterHostFocus = {
+                  heap: await cdp.send("Runtime.getHeapUsage"),
+                  dom: await cdp.send("Memory.getDOMCounters"),
+                };
+              }
+              sample.status = "passed";
+              continue;
+            }
             if (plugin === "workboard" && !values["loads-only"]) {
               const menuTrigger = page.locator(".workboard-card__menu-trigger").nth(1);
               await menuTrigger.focus();
@@ -1097,7 +1211,11 @@ try {
                   await expect(dependencies.nth(1)).toContainText("Benchmark card 001");
                 }
               });
-              await page.keyboard.press("Escape");
+              await step("close-card", async () => {
+                await page.keyboard.press("Escape");
+                await expect(page.locator(".workboard-detail")).toHaveCount(0);
+                await expect(cardToOpen).toBeFocused();
+              });
               const source = page
                 .locator(".workboard-column")
                 .nth(0)
@@ -1431,16 +1549,20 @@ try {
                       node.callFrame.url.includes(`/plugins/control-ui/${plugin}/`) ||
                       node.callFrame.url.includes(`/assets/plugins/${plugin}/`),
                   )?.callFrame.url ?? asset.descriptor.entryUrl;
-                const mapped = await mapColdLoadCpuProfile(cpuProfile, {
+                const pluginMapped = await mapColdLoadCpuProfile(cpuProfile, {
                   assetBaseUrl: new URL(".", new URL(pluginFrame, server.baseUrl)).href,
                   assetDirectory: asset.directory,
+                });
+                const mapped = await mapColdLoadCpuProfile(pluginMapped.profile, {
+                  assetBaseUrl: new URL("assets/", server.baseUrl).href,
+                  assetDirectory: path.join(values["bundle-dir"], "assets"),
                 });
                 await writeFile(
                   path.join(output, `${prefix}-cpu.json`),
                   JSON.stringify(
                     {
-                      mappedFrames: mapped.mappedFrames,
-                      unmappedFrames: mapped.unmappedFrames,
+                      mappedFrames: pluginMapped.mappedFrames + mapped.mappedFrames,
+                      unmappedFrames: pluginMapped.unmappedFrames + mapped.unmappedFrames,
                       ...summarizeCpuProfile(mapped.profile, { includeTables: true }),
                     },
                     null,

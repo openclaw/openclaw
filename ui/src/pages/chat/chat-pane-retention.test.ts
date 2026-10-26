@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
-import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 
 describe("chat pane retained full messages", () => {
   it.each(["session lifecycle", "authenticated owner"] as const)(

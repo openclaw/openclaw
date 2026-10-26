@@ -108,6 +108,27 @@ describe("createDoctorPrompter", () => {
     expect(confirmMock).not.toHaveBeenCalled();
   });
 
+  it("requires an explicit interactive choice for an ambiguous repair under --fix", async () => {
+    const prompt = {
+      message: "Select the default cron partition",
+      options: [{ value: "old", label: "Old partition" }],
+    };
+    selectMock.mockResolvedValueOnce("old");
+    await expect(
+      makePrompter({ repair: true }).selectRuntimeRepair(prompt, undefined),
+    ).resolves.toBe("old");
+    for (const options of [{ yes: true }, { repair: true, nonInteractive: true }]) {
+      await expect(
+        makePrompter(options).selectRuntimeRepair(prompt, undefined),
+      ).resolves.toBeUndefined();
+    }
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    await expect(
+      makePrompter({ repair: true }).selectRuntimeRepair(prompt, undefined),
+    ).resolves.toBeUndefined();
+    expect(selectMock).toHaveBeenCalledOnce();
+  });
+
   it.each([false, true])("honors interactive consent with force alone: %s", async (approved) => {
     confirmMock.mockResolvedValueOnce(approved);
     const repair = makePrompter({ force: true });

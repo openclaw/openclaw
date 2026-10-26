@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createCronJob, createStateWithRequest } from "./cron.test-support.ts";
+import { createCronJob } from "../../test-helpers/cron.ts";
+import { createStateWithRequest } from "./cron.test-support.ts";
 import * as cron from "./index.ts";
 
 function job(id: string) {
