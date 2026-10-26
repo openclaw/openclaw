@@ -606,7 +606,7 @@ it.each(
     await pane.refreshTaskSuggestions();
     expect(pane.tasks.suggestions).toEqual([]);
     // Retained handlers cannot revive a retired operation after reconciliation removes it.
-    originalProps.onAcceptTaskSuggestion?.(suggestion, "local");
+    await originalProps.onAcceptTaskSuggestion?.(suggestion, "local");
     expect(navigate).not.toHaveBeenCalled();
     expect(acceptCalls(request)).toHaveLength(1);
     if (phase === "starting") {
