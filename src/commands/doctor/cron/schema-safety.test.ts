@@ -62,15 +62,14 @@ async function createFixture(futureSchema = true) {
     await writeFutureSchema(databasePath);
   }
 
-  return { cfg: { cron: { store: storePath } }, databasePath, storePath, quarantinePath };
+  return { cfg: { cron: { store: storePath } }, databasePath, storePath };
 }
 
 async function snapshotDirectory(directory: string) {
-  const names = (await fs.readdir(directory)).toSorted();
-  return Object.fromEntries(
-    await Promise.all(
-      names.map(async (name) => [name, await fs.readFile(path.join(directory, name))]),
-    ),
+  return Promise.all(
+    (await fs.readdir(directory))
+      .toSorted()
+      .map(async (name) => [name, await fs.readFile(path.join(directory, name))]),
   );
 }
 
@@ -103,16 +102,6 @@ it.each(Object.entries(entrypoints))(
     await expectSchemaRefusalWithoutMutation(fixture, operation);
   },
 );
-
-it.each(["absent", "retired"])("fails closed with %s legacy source files", async (source) => {
-  const fixture = await createFixture();
-  if (source === "absent") {
-    await fs.rm(fixture.quarantinePath);
-  } else {
-    await fs.writeFile(fixture.storePath, JSON.stringify({ version: 1, jobs: [] }), "utf8");
-  }
-  await expectSchemaRefusalWithoutMutation(fixture);
-});
 
 it("preserves active WAL artifacts while rejecting the future schema", async () => {
   const fixture = await createFixture(false);

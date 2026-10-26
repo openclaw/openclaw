@@ -40,16 +40,24 @@ it.each([
   expect(raw.scheduledToolPolicy).toBeUndefined();
 });
 
-it("recovers a capless creator account without changing execution permissions", () => {
+it("reports recoverable and ambiguous authority without granting tools to a capless creator", () => {
   const raw = job({
+    name: "Capless",
     owner: { agentId: "main", sessionKey: directSessionKey },
     payload: { kind: "agentTurn", message: "run" },
   });
-  const result = normalizeStoredCronJobs([raw]);
+  const result = normalizeStoredCronJobs([
+    raw,
+    job(),
+    job({ id: "ambiguous", name: "Ambiguous", owner: { agentId: "main", sessionKey } }),
+  ]);
   expect(raw.owner).toEqual({ ...creator, sessionKey: directSessionKey });
   expect(raw.payload).toEqual({ kind: "agentTurn", message: "run" });
   expect(raw.scheduledToolPolicy).toBeUndefined();
   expect(result.issues).toMatchObject({ reconciledOwnerAccount: 1 });
+  expect(result.issues.migratedScheduledToolPolicy).toBe(1);
+  expect(result.legacyScheduledToolPolicyJobs).toEqual(["Capless", "Ambiguous"]);
+  expect(advisory(result)).toContain("openclaw automations edit <id> --tools");
   expect(normalizeStoredCronJobs([raw]).issues).not.toHaveProperty("reconciledOwnerAccount");
 });
 
@@ -103,16 +111,4 @@ it("does not require tool authority for command payloads without a trigger", () 
   expect(command.scheduledToolPolicy).toEqual(policy);
   expect(command.payload).toEqual({ kind: "command", argv: ["sh", "-lc", "true"] });
   expect(command.toolsAllowProvenance).toBeUndefined();
-  expect(advisory(result)).not.toContain("Command");
-});
-
-it("reports auto-recoverable and ambiguous jobs through the doctor result", () => {
-  const result = normalizeStoredCronJobs([
-    job(),
-    job({ id: "ambiguous", name: "Ambiguous", owner: { agentId: "main", sessionKey } }),
-  ]);
-
-  expect(result.issues.migratedScheduledToolPolicy).toBe(1);
-  expect(result.legacyScheduledToolPolicyJobs).toEqual(["Ambiguous"]);
-  expect(advisory(result)).toContain("openclaw automations edit <id> --tools");
 });

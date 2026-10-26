@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../../agents/auth-profiles/upsert-with-lock.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -8,6 +8,8 @@ import { PluginLoaderCacheState } from "../../../plugins/loader-cache-state.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { withDoctorConfigMaintenance } from "../../doctor-config-flow.test-support.js";
 import { maybeRepairCronInferenceBindings } from "./inference-binding-migration.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 it("shares runtime preparation across mixed-provider cron repairs without changing bindings", async () => {
   await withOpenClawTestState(
@@ -27,13 +29,9 @@ it("shares runtime preparation across mixed-provider cron repairs without changi
         Array.from({ length: count }, (_, i) => [
           `agent-${i}`,
           {
-            name: `Synthetic agent ${i} ${"x".repeat(400)}`,
             agentDir: state.agentDir(`agent-${i}`),
             workspace: state.path(`workspace-${i}`),
             model: { primary: `${providers[i % 3]}/${models[i % 3]}` },
-            tools: { allow: ["read", "write", "exec"] },
-            thinkingDefault: "off" as const,
-            humanDelay: { mode: "off" as const },
           },
         ]),
       );
@@ -75,32 +73,28 @@ it("shares runtime preparation across mixed-provider cron repairs without changi
         }
         return clone(value, options);
       });
-      try {
-        const result = await withDoctorConfigMaintenance(() =>
-          maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
-        );
-        const repaired = (await loadCronJobsStore(storePath)).jobs;
-        expect(result.warnings).toEqual([]);
-        expect(repaired).toEqual(
-          jobs.map((job, i) =>
-            Object.assign({}, job, {
-              inferenceBinding: {
-                version: 1,
-                provider: providers[i % 3],
-                profileId: `${providers[i % 3]}:default`,
-                authorizationId: expect.any(String),
-                authRequirement: "api-key",
-                source: "auto",
-              },
-            }),
-          ),
-        );
-        expect(fetch).not.toHaveBeenCalled();
-        expect(configClones).toBeLessThanOrEqual(providers.length * 4);
-        expect(load.mock.calls.length).toBeLessThanOrEqual(providers.length * 2);
-      } finally {
-        vi.restoreAllMocks();
-      }
+      const result = await withDoctorConfigMaintenance(() =>
+        maybeRepairCronInferenceBindings({ cfg, shouldRepair: true }),
+      );
+      const repaired = (await loadCronJobsStore(storePath)).jobs;
+      expect(result.warnings).toEqual([]);
+      expect(repaired).toEqual(
+        jobs.map((job, i) =>
+          Object.assign({}, job, {
+            inferenceBinding: {
+              version: 1,
+              provider: providers[i % 3],
+              profileId: `${providers[i % 3]}:default`,
+              authorizationId: expect.any(String),
+              authRequirement: "api-key",
+              source: "auto",
+            },
+          }),
+        ),
+      );
+      expect(fetch).not.toHaveBeenCalled();
+      expect(configClones).toBeLessThanOrEqual(providers.length * 4);
+      expect(load.mock.calls.length).toBeLessThanOrEqual(providers.length * 2);
     },
   );
 });
