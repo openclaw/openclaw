@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 it.each(["key", "session-id"] as const)(
-  "keeps Incognito text out of formatted logs for a %s while retaining lifecycle state",
+  "hides Incognito text for a %s but retains lifecycle events",
   async (identity) => {
     const logs = (["debug", "warn", "error"] as const).map((level) =>
       vi.spyOn(diagnosticLogger, level).mockImplementation(() => {}),
@@ -55,16 +55,8 @@ it.each(["key", "session-id"] as const)(
         : "SYNTHETIC_ORDINARY_DIAGNOSTIC_TEXT";
       const failure = { outcome: "error", reason: marker, error: marker } as const;
       const failed = { ...ref, ...failure };
-      logMessageDispatchCompleted({
-        ...failed,
-        source: "test",
-        durationMs: 1,
-      });
-      logMessageProcessed({
-        ...failed,
-        agentId: "main",
-        channel: "webchat",
-      });
+      logMessageDispatchCompleted({ ...failed, source: "test", durationMs: 1 });
+      logMessageProcessed({ ...failed, agentId: "main", channel: "webchat" });
       for (const next of ["processing", "idle"] as const) {
         logSessionStateChange({ ...ref, state: next, reason: marker });
         expect(state.state).toBe(next);

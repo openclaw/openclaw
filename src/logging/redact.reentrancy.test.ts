@@ -7,26 +7,21 @@ import {
   resolveRedactOptions,
 } from "./redact.js";
 
-function sharedPatternMatching(input: string): RegExp {
+function withSharedPattern(input: string, run: (pattern: RegExp) => void) {
   const pattern = resolveRedactOptions({ mode: "tools" }).patterns.find(
     (candidate): candidate is RegExp =>
       candidate instanceof RegExp && new RegExp(candidate.source, candidate.flags).test(input),
   );
   assert(pattern, `No built-in regex matches synthetic fixture ${input}`);
-  const compiled = compileSafeRegexDetailed(pattern.source, pattern.flags);
-  assert(compiled.regex, "The built-in fixture regex must compile");
-  return compiled.regex;
-}
-
-function withSharedPattern(fixture: string, run: (pattern: RegExp) => void) {
-  const pattern = sharedPatternMatching(fixture);
-  const { source, flags, lastIndex } = pattern;
+  const { regex } = compileSafeRegexDetailed(pattern.source, pattern.flags);
+  assert(regex, "The built-in fixture regex must compile");
+  const { source, flags, lastIndex } = regex;
   try {
-    run(pattern);
+    run(regex);
   } finally {
     vi.restoreAllMocks();
-    pattern.compile(source, flags);
-    pattern.lastIndex = lastIndex;
+    regex.compile(source, flags);
+    regex.lastIndex = lastIndex;
   }
 }
 

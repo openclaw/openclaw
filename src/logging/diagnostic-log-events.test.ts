@@ -16,7 +16,7 @@ import { getChildLogger, resetLogger, setLoggerOverride, toPinoLikeLogger } from
 
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SPAN_ID = "00f067aa0ba902b7";
-const PROTO_KEY = "__proto__";
+const BLOCKED_KEYS = ["__proto__", "constructor", "prototype"];
 type LogRecord = Extract<DiagnosticEventPayload, { type: "log.record" }>;
 
 async function logRecord(write: () => void) {
@@ -86,51 +86,41 @@ it("uses active request trace context for unbound log records", async () => {
   expect(metadata).toMatchObject({ trusted: false, trustedTraceContext: true });
 });
 
-it("redacts and bounds internal log records before diagnostic emission", async () => {
+it("redacts and bounds internal log messages and attributes", async () => {
   const secret = "ghp_abcdefghijklmnopqrstuvwxyz123456"; // pragma: allowlist secret
+  const secretKey = "sk-1234567890abcdef1234567890abcdef"; // pragma: allowlist secret
+  const structured: Record<string, unknown> = Object.assign(Object.create(null), {
+    safe: "ok",
+    token: secret,
+    password: "hunter2",
+    longValue: "x".repeat(5000),
+    nested: { secret },
+    "bad key": "drop-me",
+    [secretKey]: "secret-key",
+  });
+  for (const key of BLOCKED_KEYS) {
+    structured[key] = "pollute";
+  }
+  for (let index = 0; index < 1000; index += 1) {
+    structured[`extra${index}`] = index;
+  }
   const { event } = await logRecord(() =>
     toPinoLikeLogger(tracedLogger(), "info").info(
-      {
-        token: secret,
-        password: "hunter2",
-        longValue: "x".repeat(5000),
-        nested: { secret },
-        "bad key": "drop-me",
-      },
+      structured,
       { raw: secret },
       `secret=${secret} ${"y".repeat(5000)}`,
     ),
   );
+  const attributes = event.attributes ?? {};
   expect(event.message).not.toContain(secret);
   expect(event.message.length).toBeLessThanOrEqual(4200);
-  expect(event.attributes?.token).not.toBe(secret);
-  expect(event.attributes?.password).toBe("***");
+  expect(attributes.token).not.toBe(secret);
+  expect(attributes.password).toBe("***");
   expect(JSON.stringify(event)).not.toContain("hunter2");
-  expect(String(event.attributes?.token)).toContain("…");
-  expect(String(event.attributes?.longValue).length).toBeLessThanOrEqual(2100);
-  expectAbsentKeys(event.attributes ?? {}, ["nested", "bad key"]);
-  expectAbsentKeys(event, ["argsJson"]);
-});
-
-it("drops sensitive, blocked, and excess log attribute keys without copying large objects", async () => {
-  const structured = Object.create(null) as Record<string, unknown>;
-  structured.safe = "ok";
-  structured[PROTO_KEY] = "pollute";
-  structured["constructor"] = "pollute";
-  structured["prototype"] = "pollute";
-  structured["sk-1234567890abcdef1234567890abcdef"] = "secret-key"; // pragma: allowlist secret
-  for (let index = 0; index < 1000; index += 1) {
-    structured[`extra${index}`] = index;
-  }
-
-  const { event } = await logRecord(() => tracedLogger().info(structured, "bounded attrs"));
-  const attributes = event.attributes ?? {};
+  expect(String(attributes.token)).toContain("…");
+  expect(String(attributes.longValue).length).toBeLessThanOrEqual(2100);
   expect(attributes.safe).toBe("ok");
   expect(Object.keys(attributes)).toHaveLength(32);
-  expectAbsentKeys(attributes, [
-    PROTO_KEY,
-    "constructor",
-    "prototype",
-    "sk-1234567890abcdef1234567890abcdef", // pragma: allowlist secret
-  ]);
+  expectAbsentKeys(attributes, ["nested", "bad key", secretKey, ...BLOCKED_KEYS]);
+  expectAbsentKeys(event, ["argsJson"]);
 });
