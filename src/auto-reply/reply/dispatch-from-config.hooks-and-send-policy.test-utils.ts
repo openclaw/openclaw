@@ -43,6 +43,7 @@ import {
   describe1BeforeEach0,
   describe2BeforeEach0,
   createMessageToolOnlyDispatchArgs,
+  mockPluginBoundDiscordBinding,
 } from "./dispatch-from-config.test-support.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
@@ -1552,14 +1553,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       },
       { receiveMessages: false },
     );
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-archived",
       targetSessionKey: "plugin-binding:codex:archived",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:archived-test",
-      },
+      conversationId: "channel:archived-test",
       pluginRoot: "/tmp/plugin",
     });
     const archivedAt = Date.now() - 1_000;
@@ -1922,14 +1919,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     // process the message with delivery suppressed. See #53328.
     setNoAbort();
     mockPluginBindingClaim();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-deny",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:deny-test",
-      },
+      conversationId: "channel:deny-test",
       pluginRoot: "/tmp/plugin",
     });
     sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");

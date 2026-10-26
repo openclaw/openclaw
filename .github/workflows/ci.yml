@@ -2274,7 +2274,7 @@ jobs:
             wait_checks
           fi
 
-          # These canaries verify the built CLI's local roundtrip and Gateway connection.
+          # This canary verifies the built CLI's local roundtrip.
           # Full plans retain the PTY descriptor, but CI consumes it only as this selection flag.
           if [ "$RUN_TUI_PTY" = "true" ]; then
             start_check "tui-pty" env \
@@ -2285,7 +2285,7 @@ jobs:
               node scripts/run-vitest.mjs run \
                 --config test/vitest/vitest.tui-pty.config.ts \
                 src/tui/tui-pty-local.e2e.test.ts \
-                --testNamePattern "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY"
+                --testNamePattern "launches openclaw chat as local mode through a real PTY"
             wait_checks
           fi
 

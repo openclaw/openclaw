@@ -193,11 +193,21 @@ unrelated host publication on each cycle. Both paths assert their visible result
 The normal cold and warm setup precedes the closed baseline.
 
 Each closed sample records heap after two explicit GCs, DOM nodes, documents,
-and event listeners. Baseline/final raw heap snapshots and native detached-node
+event listeners, and the synthetic Gateway's retained request count. Baseline,
+midpoint and final raw heap snapshots and native detached-node
 summaries live beside the incremental `leak-check.json`. These include the host
 and synthetic transport: inspect retainers and request-history growth before
 attributing an increase to the plugin. Stable endpoint counts alone do not prove
 leak freedom. The command reports measurements without declaring a leak verdict.
+
+For the 0/500/1,000-update census, use `--leak-rounds 20`: the midpoint snapshot
+follows round 10 and the final follows round 20. These are closed-view retained
+heaps in one document, not live-view allocation samples. After preserving the
+final snapshot, the probe clears only the synthetic Gateway request-history
+array and captures a separate post-GC diagnostic. This tests that known fixture
+retaining path without replacing the primary counts or changing application
+state. `scripts.json` maps heap location script IDs to URLs; the debugger is
+enabled only after the heap captures to avoid changing the measured JIT state.
 
 After the primary MCP closed snapshots, the probe focuses the host composer and
 records separate post-focus counters. Those diagnostics never replace the raw

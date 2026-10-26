@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
 import { createGatewayDispatchStartupTrace } from "../cli/startup-trace.js";
 import { measureDoctorConfigPreflightStep } from "../commands/doctor-config-preflight-measure.js";
+import { captureWorkerStartObserver } from "../infra/worker-request-diagnostics.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const eventLoopDelay = vi.hoisted(() => ({
@@ -44,6 +45,38 @@ describe("gateway startup trace", () => {
     process.argv = originalArgv;
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it("attributes overlapping plugin worker starts without counting unrelated recovery", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "0");
+    const info = vi.fn();
+    const trace = createGatewayStartupTrace({ info } as never);
+    const startWorker = (script: string) => {
+      captureWorkerStartObserver(new URL(script, import.meta.url))?.();
+    };
+    const first = "plugins.gateway-load.plugin.first";
+    const second = "plugins.gateway-load.plugin.second";
+    try {
+      const preparing = trace.run(first, async () => {
+        await Promise.resolve();
+        startWorker("plugin-generation-preparation.worker.js");
+      });
+      trace.run(second, () => startWorker("git-operation.worker.js"));
+      startWorker("session-transcript.worker.js");
+      trace.detail(second, [["loadAndRegisterMs", 1]]);
+      await preparing;
+      trace.detail(first, [["loadAndRegisterMs", 2]]);
+      trace.detail("plugins.gateway-load.plugin.fast", [["loadAndRegisterMs", 1]]);
+      trace.detail("plugins.gateway-load.plugin.slow", [["loadAndRegisterMs", 250]]);
+      await Promise.resolve();
+      expect(info.mock.calls.map(([message]) => message)).toEqual([
+        `startup trace: ${second} loadAndRegisterMs=1.0 workersStarted=1 workerScripts=git-operation.worker.js:1`,
+        `startup trace: ${first} loadAndRegisterMs=2.0 workersStarted=1 workerScripts=plugin-generation-preparation.worker.js:1`,
+        "startup trace: plugins.gateway-load.plugin.slow loadAndRegisterMs=250.0 workersStarted=0 workerScripts=none",
+      ]);
+    } finally {
+      trace.close();
+    }
   });
 
   it.each(["0", "1"])(

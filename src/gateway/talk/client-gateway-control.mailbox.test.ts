@@ -8,6 +8,7 @@ import { getExistingSessionControllerMailbox } from "../../sessions/session-cont
 import { resetSessionControllerStateForTest } from "../../sessions/session-lifecycle-admission.test-support.js";
 import type { AgentInputRecoveryAdmission } from "../../state/agent-input-recovery.types.js";
 import { createChatRunState } from "../server-chat-state.js";
+import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createControlFixture } from "./client-control-fixture.test-support.js";
 
 const { config, coreParams, mocks } = await vi.hoisted(
@@ -103,9 +104,14 @@ function recoveryGate() {
 function createOwner(
   flushTranscript: () => Promise<void> = async () => undefined,
   inputRecovery?: AgentInputRecoveryAdmission,
+  boundGateway = false,
 ) {
+  const context: GatewayRequestContext = Object.assign(controlContext(), { inputRecovery });
+  if (boundGateway) {
+    context.resolveGatewayContext = () => context;
+  }
   const runner = createConsultRunner({
-    context: { logGateway: { warn: vi.fn() } } as never,
+    context,
     sessionTarget,
     ownerConnId: "conn-talk",
     getVoiceSessionId: () => "voice-talk",
@@ -117,7 +123,7 @@ function createOwner(
     runToolAgentConsult: runner.runArgs,
     runAgentConsult: runner.runOwnedArgs,
     flushTranscript,
-    context: Object.assign(controlContext(), { inputRecovery }),
+    context,
   });
   owner.control.bindBridge(bridge);
   owner.activate();
@@ -182,6 +188,19 @@ beforeEach(() => {
 });
 
 afterEach(resetSessionControllerStateForTest);
+
+it("runs a Gateway-bound voice consult outside the request scope", async () => {
+  const { enqueue, owner, expectResults } = createOwner(undefined, undefined, true);
+  const task = enqueue("consult", "configure the Dial");
+  try {
+    await vi.waitFor(() => expect(order).toEqual(["configure the Dial"]));
+    task.release();
+    await expectResults("configure the Dial");
+  } finally {
+    task.release();
+    await owner.close();
+  }
+});
 
 it.each([
   ["consult", "consult", ["first", "second"]],

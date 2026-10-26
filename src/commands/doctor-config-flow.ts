@@ -281,7 +281,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
   changesPanelSink.emit(legacyStep.changeLines);
 
-  const { MODEL_METADATA_CORRUPTION_AUDIT_LIMIT, repairGeneratedModelMetadataCorruption } =
+  const { repairGeneratedModelMetadataCorruption } =
     await import("./doctor/shared/model-metadata-corruption-repair.js");
   const modelMetadataRepair = runWithCurrentPluginMetadata(state.candidate, () =>
     repairGeneratedModelMetadataCorruption({
@@ -289,11 +289,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       authoredRoot: snapshot.parsed,
       configPath: snapshot.path,
       currentHash: hashConfigRaw(snapshot.raw),
-      auditRecords: readRecentConfigAuditRecords({
-        env: process.env,
-        homedir,
-        limit: MODEL_METADATA_CORRUPTION_AUDIT_LIMIT,
-      }),
+      loadAuditRecords: () =>
+        readRecentConfigAuditRecords({ env: process.env, homedir, limit: 2048 }),
     }),
   );
   applyConfigMutation(

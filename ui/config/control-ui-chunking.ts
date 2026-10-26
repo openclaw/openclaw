@@ -77,6 +77,16 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/pages/chat/components/chat-ci-automation-control.tsx":
+    case "ui/src/pages/chat/components/chat-ci-automation.tsx":
+    case "ui/src/pages/chat/components/chat-ci-details.tsx":
+    case "ui/src/pages/chat/components/chat-ci-disclosure.ts":
+    case "ui/src/pages/chat/components/chat-ci-gateway-updates.ts":
+    case "ui/src/i18n/locales/en-chat-ci.ts":
+    case "ui/src/lib/session-pr-automation.ts":
+    case "ui/src/lib/session-pr-automation-spec.ts":
+      // Shared readers load with the first CI panel; row copy controls remain independent.
+      return "chat-ci-automation-control";
     case "ui/src/styles/agents.css":
     case "ui/src/styles/agent-emoji-picker.css":
     case "ui/src/styles/multi-select.css":

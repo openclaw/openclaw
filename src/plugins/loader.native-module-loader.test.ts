@@ -40,21 +40,19 @@ function writePreSplitSdkBridgeConsumerFixture() {
   };
   write(
     "dist/index.js",
-    [
-      'import assert from "node:assert/strict";',
-      'import { createRequire } from "node:module";',
-      'import dependency from "../dependency.cjs";',
-      ...Object.entries(imports).map(
-        ([subpath, names]) => `import { ${names} } from "openclaw/plugin-sdk/${subpath}";`,
-      ),
-      'export default { id: "sdk-bridge-consumer", register() {',
-      '  assert.equal(dependency, createRequire(import.meta.url)("../dependency.cjs"));',
-      "  assert.equal(dependency.answer, 42);",
-      "  assert.equal(dependency.default.answer, 17);",
-      `  const bridged = [${Object.values(imports).join(", ")}];`,
-      '  if (bridged.some((entry) => typeof entry !== "function")) throw new Error("missing bridge");',
-      "} };",
-    ].join("\n"),
+    `import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import dependency from "../dependency.cjs";
+${Object.entries(imports)
+  .map(([subpath, names]) => `import { ${names} } from "openclaw/plugin-sdk/${subpath}";`)
+  .join("\n")}
+export default { id: "sdk-bridge-consumer", register() {
+  assert.equal(dependency, createRequire(import.meta.url)("../dependency.cjs"));
+  assert.equal(dependency.answer, 42);
+  assert.equal(dependency.default.answer, 17);
+  const bridged = [${Object.values(imports).join(", ")}];
+  if (bridged.some((entry) => typeof entry !== "function")) throw new Error("missing bridge");
+} };`,
   );
   return pluginRoot;
 }

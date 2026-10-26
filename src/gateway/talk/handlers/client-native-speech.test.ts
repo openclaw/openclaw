@@ -11,35 +11,44 @@ import {
 describe("client speech through the public native Talk transport", () => {
   installNativePluginTestHooks();
 
-  it("submits exact speech with operator.talk and rejects invalid UTF-8 byte lengths", async () => {
-    await withNativePlugin(async (fixture) => {
-      const { socket } = await connectNativeSession(fixture);
-      const text = "The dial is ready.";
-      expect(await fixture.invoke("talk.client.say", { text })).toEqual({ accepted: true });
-      const message = socket.sent.find((frame) =>
-        frame.includes("Internal OpenClaw voice playback result."),
+  it.each([
+    { caller: "Talk operator", scopes: ["operator.read", "operator.talk"] },
+    { caller: "administrator", scopes: ["operator.admin"] },
+  ])(
+    "submits exact speech for $caller and rejects invalid UTF-8 byte lengths",
+    async ({ scopes }) => {
+      await withNativePlugin(
+        async (fixture) => {
+          const { socket } = await connectNativeSession(fixture);
+          const text = "The dial is ready.";
+          expect(await fixture.invoke("talk.client.say", { text })).toEqual({ accepted: true });
+          const message = socket.sent.find((frame) =>
+            frame.includes("Internal OpenClaw voice playback result."),
+          );
+          expect(message).toBeDefined();
+          expect(message).toContain("The dial is ready.");
+          expect(upstream.runEmbeddedAgent).not.toHaveBeenCalled();
+          expect(await fixture.invoke("talk.client.say", { text: "é".repeat(512) })).toEqual({
+            accepted: true,
+          });
+          for (const params of [
+            { text: " " },
+            { text: "é".repeat(512) + "a" },
+            { text: "a".repeat(1025) },
+            { text, voiceSessionId: undefined },
+            { text, unexpected: true },
+          ]) {
+            expect(await fixture.invokeResponse("talk.client.say", params)).toMatchObject([
+              false,
+              undefined,
+              { code: "INVALID_REQUEST" },
+            ]);
+          }
+        },
+        { operatorScopes: scopes },
       );
-      expect(message).toBeDefined();
-      expect(message).toContain("The dial is ready.");
-      expect(upstream.runEmbeddedAgent).not.toHaveBeenCalled();
-      expect(await fixture.invoke("talk.client.say", { text: "é".repeat(512) })).toEqual({
-        accepted: true,
-      });
-      for (const params of [
-        { text: " " },
-        { text: "é".repeat(512) + "a" },
-        { text: "a".repeat(1025) },
-        { text, voiceSessionId: undefined },
-        { text, unexpected: true },
-      ]) {
-        expect(await fixture.invokeResponse("talk.client.say", params)).toMatchObject([
-          false,
-          undefined,
-          { code: "INVALID_REQUEST" },
-        ]);
-      }
-    });
-  });
+    },
+  );
 
   it("keeps an active native task's final response after a playback echo", async () => {
     await withParkedNativeTask(async ({ invoke, socket, activeRun, settleBackend }) => {

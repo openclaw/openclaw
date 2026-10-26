@@ -1650,7 +1650,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cli/claws-cli.inspect.test.ts",
   "src/cli/cli-process-child.test-helpers.test.ts",
   "src/cli/cold-command-plugin-imports.process.test.ts",
-  "src/cli/command-bootstrap.test.ts",
   "src/cli/command-execution-startup.test.ts",
   "src/cli/command-secret-gateway.test.ts",
   "src/cli/command-secret-targets.import.test.ts",

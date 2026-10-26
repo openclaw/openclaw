@@ -158,6 +158,8 @@ describe("production lint suppressions", () => {
         // Thread assembly orders fresh Map-spread arrays without mutating posts or caller inputs.
         "extensions/x/src/thread.ts|unicorn/no-array-reverse|1",
         "extensions/x/src/thread.ts|unicorn/no-array-sort|2",
+        // The Talk readiness probe calls the saved media method with its original receiver.
+        "scripts/bench-control-ui-talk.ts|typescript/unbound-method|1",
         // The fault observer preserves methods for restoration and supplies each database receiver through .call.
         "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs|typescript/unbound-method|2",
         "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|no-underscore-dangle|1",

@@ -111,7 +111,7 @@ export function prepareSessionEventProjection(
       string,
       {
         row: GatewaySessionRow;
-        rowFields?: Array<[string, unknown]>;
+        rowFields?: string[];
         rowFieldIndices?: Map<string, number>;
         ancestors: ReturnType<typeof prepareSessionAncestor>[] | undefined;
         hiddenAncestors: Array<{ key: string; histories: Map<object, object> }>;
@@ -238,19 +238,19 @@ export function prepareSessionEventProjection(
       if (!projected) {
         let refs = fieldRefs ? delivery.fieldRefs : undefined;
         if (fieldRefs && !refs) {
-          // Indices address the reconstructed full row, independent of patch insertion order.
-          const fields = (audience.rowFields ??= Object.entries(row)
-            .filter(([, value]) => value !== undefined)
-            .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
-          audience.rowFieldIndices ??= new Map(fields.map(([field], index) => [field, index]));
+          // Names index the immutable full row; values need no per-audience entry tuples.
+          const fields = (audience.rowFields ??= Object.keys(row)
+            .filter((field) => Reflect.get(row, field) !== undefined)
+            .toSorted());
+          audience.rowFieldIndices ??= new Map(fields.map((field, index) => [field, index]));
           refs = { indices: [], omitted: new Uint8Array(fields.length) };
           for (let index = 0; index < fields.length; index++) {
-            const [field, value] = fields[index]!;
+            const field = fields[index]!;
             if (
               field !== "key" &&
               field !== "agentId" &&
               Object.hasOwn(delivery.payload, field) &&
-              isDeepStrictEqual(delivery.payload[field], value)
+              isDeepStrictEqual(delivery.payload[field], Reflect.get(row, field))
             ) {
               refs.indices.push(index);
               refs.omitted[index] = 1;
