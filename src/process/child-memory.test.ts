@@ -90,6 +90,34 @@ it("counts descendants from nonleader threads and swapped memory, then stops sam
   stop();
 });
 
+it("does not tokenize empty thread children but still discovers their new descendants", async () => {
+  const files: Record<string, string> = {
+    "/proc/100/status": "VmRSS:\t32 kB\nVmSwap:\t0 kB\n",
+    "/proc/200/status": "VmRSS:\t32 kB\nVmSwap:\t80 kB\n",
+  };
+  const tids = Array.from({ length: 16 }, (_, index) => String(100 + index));
+  for (const tid of tids) {
+    files[`/proc/100/task/${tid}/children`] = "";
+  }
+  mockFiles(files);
+  procfs.readdir.mockResolvedValue(tids);
+  const split = vi.spyOn(String.prototype, "split");
+  const { onLimit, stop } = watch();
+  await vi.advanceTimersByTimeAsync(1000);
+  const emptyTokenizations = split.mock.calls.filter(
+    ([separator], index) =>
+      split.mock.contexts[index] === "" &&
+      separator instanceof RegExp &&
+      separator.source === "\\s+",
+  );
+  expect(emptyTokenizations).toHaveLength(0);
+  expect(onLimit).not.toHaveBeenCalled();
+  files["/proc/100/task/115/children"] = "200 ";
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(onLimit).toHaveBeenCalledExactlyOnceWith(144 * 1024);
+  stop();
+});
+
 it.each(["half the bound", "new descendants"])(
   "samples quiet trees every five seconds and returns to one second at %s",
   async (growth) => {

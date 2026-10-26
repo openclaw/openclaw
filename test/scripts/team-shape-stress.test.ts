@@ -463,6 +463,7 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
     roundMs: 60_000,
     churnMs: 6_000,
     operatorModelPolicy: false,
+    workerHeapSnapshot: false,
   });
   expect(parseStressOptions(["--output", "/unused", "--smoke-seconds", "1"])).toMatchObject({
     durationMs: 1_000,
@@ -473,6 +474,9 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
   });
   expect(parseStressOptions(["--output", "/unused", "--mode", "retention"])).toMatchObject({
     mode: "retention",
+  });
+  expect(parseStressOptions(["--output", "/unused", "--worker-heap-snapshot"])).toMatchObject({
+    workerHeapSnapshot: true,
   });
   expect(
     parseStressOptions([

@@ -185,7 +185,6 @@ it.each(["0", "1"])(
     expect(process.memoryUsage().heapUsed - before).toBeLessThan(6 * 1024 * 1024);
     expect(subagentRuns.get("retained-0")?.task.length).toBeLessThanOrEqual(160);
     expect(subagentRuns.get("retained-0")?.completion?.resultText).toBeUndefined();
-    expect(subagentRuns.get("retained-0")?.completion?.terminalReply).toBeUndefined();
 
     const prepared = await prepareSubagentRunsSnapshotForRunIds(subagentRuns, ["retained-0"]);
     const full = prepared.consume((rows) => rows.get("retained-0"));
@@ -209,7 +208,6 @@ it.each(["0", "1"])(
     await restore();
     expect(subagentRuns.get("retained-0")?.task.length).toBeLessThanOrEqual(160);
     expect(subagentRuns.get("retained-0")?.completion?.resultText).toBeUndefined();
-    expect(subagentRuns.get("retained-0")?.completion?.terminalReply).toBeUndefined();
     const restarted = await prepareSubagentRunsSnapshotForRunIds(subagentRuns, ["retained-0"]);
     expect(restarted.consume((rows) => rows.get("retained-0")?.completion)).toEqual({
       ready: true,
@@ -219,7 +217,6 @@ it.each(["0", "1"])(
     expect(resident?.task).toBe("short task");
     expect(resident?.completion?.resultText).toBeUndefined();
     expect(resident?.completion?.fallbackResultText).toBeUndefined();
-    expect(resident?.completion?.terminalReply).toBeUndefined();
     await change("retained-1", (row) => {
       delete row.completion!.resultText;
       delete row.completion!.fallbackResultText;

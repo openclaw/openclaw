@@ -24,6 +24,7 @@ import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import {
   createInteractionFixture,
+  installInteractionNavigationPreloadObserver,
   settleSidebarBackgroundWork,
 } from "./lib/control-ui-interaction-scenarios.ts";
 import { summarizeInteractionTrace } from "./lib/control-ui-interaction-trace.ts";
@@ -527,6 +528,7 @@ try {
             const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
             const page = await context.newPage();
             page.setDefaultTimeout(30_000);
+            await page.addInitScript(installInteractionNavigationPreloadObserver);
             const errors: string[] = [];
             page.on("pageerror", (error) => errors.push(String(error)));
             let cdp: CDPSession | undefined;

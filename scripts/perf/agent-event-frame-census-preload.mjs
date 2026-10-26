@@ -7,7 +7,9 @@
 // In the profile, Map directly below native enterWith below eventEnterWith owns
 // frame-copy allocation. Census/stack-label allocations are not production work.
 // No store values or event payloads are recorded; map keys, undefined occupancy,
-// call sites, and operation counts describe synchronous agent-event dispatch.
+// call sites, and operation counts describe synchronous agent-event dispatch,
+// RPC handler prefixes, worker sends, and plugin invocations. Async continuations
+// are excluded: an async handler's census ends as soon as its first await yields.
 import hooks from "node:async_hooks";
 import { writeFileSync } from "node:fs";
 import { Session } from "node:inspector";
@@ -97,13 +99,12 @@ if (isMainThread) {
     return { size: frame?.size ?? 0, keys };
   };
   globalThis[Symbol.for("openclaw.frame-census")] = {
-    begin(event) {
-      if (!enabled) {
+    begin(stream) {
+      if (!enabled || stream === undefined) {
         return undefined;
       }
       const parent = active;
       const state = snapshot();
-      const stream = event.stream;
       const group = (events[stream] ??= {
         events: 0,
         copies: 0,
@@ -173,32 +174,85 @@ if (isMainThread) {
   registerHooks({
     load(url, context, nextLoad) {
       const result = nextLoad(url, context);
-      if (!/\/agent-events-[^/]+\.mjs$/.test(url) || result.source == null) {
+      if (!url.includes("/dist/") || result.source == null) {
         return result;
       }
       const source =
         typeof result.source === "string" ? result.source : new TextDecoder().decode(result.source);
-      const program = parse(source, { ecmaVersion: "latest", sourceType: "module" });
-      const node = program.body.find(
-        (candidate) =>
-          candidate.type === "FunctionDeclaration" && candidate.id.name === "dispatchAgentEvent",
-      );
-      if (!node) {
-        throw new Error(`Missing dispatchAgentEvent in ${url}`);
+      if (
+        !/function (?:dispatchAgentEvent|handleGatewayRequest|sendWorkerTaskInput)\b|class PluginInstance\b|PluginInstance\s*=\s*class\b/.test(
+          source,
+        )
+      ) {
+        return result;
       }
-      const begin = node.body.start + 1;
-      const end = node.body.end - 1;
-      const census = 'globalThis[Symbol.for("openclaw.frame-census")]';
-      installed.push({ url, function: node.id.name });
-      return {
-        ...result,
-        source:
-          source.slice(0, begin) +
-          `\nconst __census = ${census}.begin(event); try {\n` +
-          source.slice(begin, end) +
-          `\n} finally { ${census}.end(__census); }\n` +
-          source.slice(end),
+      const program = parse(source, { ecmaVersion: "latest", sourceType: "module" });
+      const targets = [];
+      const visit = (node, className) => {
+        if (!node || typeof node !== "object") {
+          return;
+        }
+        if (node.type === "VariableDeclarator" && node.init?.type === "ClassExpression") {
+          visit(node.init, node.id?.name);
+          return;
+        }
+        const currentClass =
+          node.type === "ClassDeclaration" || node.type === "ClassExpression"
+            ? (node.id?.name ?? className)
+            : className;
+        const name = node.type === "FunctionDeclaration" ? node.id?.name : undefined;
+        if (name === "dispatchAgentEvent" || name === "handleGatewayRequest") {
+          const argument = node.params[0];
+          if (argument.type !== "Identifier") {
+            throw new Error(`Unsupported ${name} parameter in ${url}`);
+          }
+          const label =
+            name === "dispatchAgentEvent"
+              ? `${argument.name}.stream`
+              : `(["chat.send", "sessions.list"].includes(${argument.name}.req.method) ? "rpc:" + ${argument.name}.req.method : undefined)`;
+          targets.push({ node, name, label });
+        } else if (name === "sendWorkerTaskInput") {
+          targets.push({ node, name, label: '"worker:dispatch"' });
+        } else if (
+          currentClass === "PluginInstance" &&
+          node.type === "MethodDefinition" &&
+          node.key.name === "invoke"
+        ) {
+          targets.push({
+            node: node.value,
+            name: "PluginInstance.invoke",
+            label: '"plugin:invoke"',
+          });
+        }
+        for (const value of Object.values(node)) {
+          if (Array.isArray(value)) {
+            for (const child of value) {
+              visit(child, currentClass);
+            }
+          } else if (value && typeof value === "object") {
+            visit(value, currentClass);
+          }
+        }
       };
+      visit(program);
+      const census = 'globalThis[Symbol.for("openclaw.frame-census")]';
+      let instrumented = source;
+      for (const { node, name, label } of targets.toSorted((a, b) => b.node.start - a.node.start)) {
+        const begin = node.body.start + 1;
+        const end = node.body.end - 1;
+        // Invoke the async body lexically but restore the global census before
+        // yielding, so overlapping RPC continuations cannot borrow this label.
+        const asyncBegin = node.async ? "return (async () => {" : "";
+        const asyncEnd = node.async ? "})();" : "";
+        installed.push({ url, function: name });
+        instrumented =
+          instrumented.slice(0, begin) +
+          `\nconst __census = ${census}.begin(${label}); try { ${asyncBegin}\n` +
+          instrumented.slice(begin, end) +
+          `\n${asyncEnd} } finally { ${census}.end(__census); }\n` +
+          instrumented.slice(end);
+      }
+      return { ...result, source: instrumented };
     },
   });
   const inspector = new Session();
@@ -218,7 +272,7 @@ if (isMainThread) {
           node: process.version,
           complete,
           scope:
-            "Synchronous dispatchAgentEvent and its subscribers, main isolate only. Diagnostic instrumentation; not timing evidence.",
+            "Entry frames and synchronous prefixes: dispatchAgentEvent, chat.send/sessions.list RPCs, worker sends, PluginInstance.invoke. Async continuations excluded; main isolate only. Diagnostic instrumentation; not timing evidence.",
           installed,
           events,
           patterns: [...patterns.values()],

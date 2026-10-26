@@ -1,3 +1,5 @@
+import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
@@ -24,6 +26,58 @@ import { observePersonActivityData } from "../person-activity-data.ts";
 import { personActivityRouting } from "../person-activity-link.ts";
 import type { createPortaledHovercardOwner } from "../portaled-hovercard.ts";
 
+const SESSION_PEOPLE_FRESH_MS = 5 * 60_000;
+const SESSION_PEOPLE_RETRY_MS = 30_000;
+const SESSION_PEOPLE_TIMEOUT_MS = 15_000;
+const MAX_SESSION_PEOPLE_READS = 16;
+type SessionPeopleRead = { expiresAt: number; read: Promise<UsersMentionableResult | null> };
+// Keyed by handshake: reconnects and auth changes retire every cached session roster.
+const sessionPeople = new WeakMap<object, Map<string, SessionPeopleRead>>();
+
+/** Session-scoped people for callers without directory access; one bounded read per label. */
+function readSessionPeople(
+  hello: object,
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  query: string,
+) {
+  let reads = sessionPeople.get(hello);
+  if (!reads) {
+    reads = new Map();
+    sessionPeople.set(hello, reads);
+  }
+  const key = JSON.stringify([sessionKey, query]);
+  const cached = reads.get(key);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.read;
+  }
+  reads.delete(key);
+  if (reads.size >= MAX_SESSION_PEOPLE_READS) {
+    reads.delete(reads.keys().next().value!);
+  }
+  const entry: SessionPeopleRead = {
+    expiresAt: Number.POSITIVE_INFINITY,
+    read: client
+      .request<UsersMentionableResult>(
+        "users.mentionable",
+        { sessionKey, query },
+        { timeoutMs: SESSION_PEOPLE_TIMEOUT_MS },
+      )
+      .then(
+        (result) => {
+          entry.expiresAt = Date.now() + SESSION_PEOPLE_FRESH_MS;
+          return result;
+        },
+        () => {
+          entry.expiresAt = Date.now() + SESSION_PEOPLE_RETRY_MS;
+          return null;
+        },
+      ),
+  };
+  reads.set(key, entry);
+  return entry.read;
+}
+
 /** The trigger owns the portal; an opened card owns its directory and activity reads. */
 export function createPersonReferenceCard(options: {
   host: HTMLElement;
@@ -37,10 +91,14 @@ export function createPersonReferenceCard(options: {
 }) {
   const { host, card, context, profileId, label, connection, portal, close } = options;
   let activity: ReturnType<typeof observePersonActivityData> | undefined;
+  let fallbackIdentity: PresenceViewer["identity"];
   const activityExpiry = createPresenceActivityLifecycle(() => {
     const profile = context ? profileDirectory(context.gateway).get(profileId()) : undefined;
     return projectPresencePayload(activity?.data?.presencePayload).users.filter((user) =>
-      presenceMatchesProfile(user, profile && { type: "profile", id: profile.id }),
+      presenceMatchesProfile(
+        user,
+        profile ? { type: "profile", id: profile.id } : fallbackIdentity,
+      ),
     );
   }, renderCard);
 
@@ -66,6 +124,9 @@ export function createPersonReferenceCard(options: {
           avatarUrl: profileAvatarUrl(profile),
           watchedSessions: [],
         };
+      } else if (!directory.result) {
+        // Only a refused or failed directory falls back; an answered miss stays unresolved.
+        resolved = await resolveSessionPerson(context.gateway, scope.client, requestedId);
       }
     } catch {
       // An unavailable or unauthorized profile remains an explicit, unresolved reference.
@@ -75,6 +136,38 @@ export function createPersonReferenceCard(options: {
     }
     activityExpiry.sync();
     return resolved;
+  }
+
+  /**
+   * Callers without directory access (guests) still see the mention's person: the session's
+   * mention roster supplies an exact profile match, otherwise the transcript label stands in.
+   */
+  async function resolveSessionPerson(
+    gateway: ApplicationContext["gateway"],
+    client: GatewayBrowserClient,
+    requestedId: string,
+  ): Promise<PresenceViewer | null> {
+    const sessionKey = host.closest<HTMLElement>("[data-chat-session-key]")?.dataset.chatSessionKey;
+    const { hello, selfUser } = gateway.snapshot;
+    if (!sessionKey || !hello) {
+      return null;
+    }
+    const name = label().replace(/^@/u, "").trim();
+    // The roster excludes the caller, so their own mention never needs the read.
+    const user =
+      selfUser?.identity?.id === requestedId
+        ? undefined
+        : (await readSessionPeople(hello, client, sessionKey, name.slice(0, 128)))?.users.find(
+            (candidate) => candidate.profileId === requestedId,
+          );
+    fallbackIdentity = { type: "profile", id: requestedId };
+    return {
+      id: requestedId,
+      identity: fallbackIdentity,
+      name: user?.displayName || name || t("presence.card.person"),
+      avatarUrl: user?.avatarUrl,
+      watchedSessions: [],
+    };
   }
 
   const personRead = connection.capture() ? loadPerson() : null;

@@ -6,6 +6,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import { zstdDecompressSync } from "node:zlib";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
@@ -17,6 +19,7 @@ import type { ModelCatalogResult, SessionsListResult } from "../api/types.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
@@ -554,6 +557,53 @@ suite.define(() => {
           colorScheme: "dark",
         },
         async ({ page }) => {
+          let choice = 0;
+          let preferencePatch = { sent: 0, acknowledged: 0, rejected: 0, automatic: false };
+          const pendingPreferences = new Map<string, number>();
+          page.on("websocket", (socket) => {
+            socket.on("framesent", ({ payload }) => {
+              let frame: ReturnType<typeof asOptionalRecord>;
+              try {
+                frame = asOptionalRecord(JSON.parse(String(payload)));
+              } catch {
+                return;
+              }
+              const params = asOptionalRecord(frame?.params);
+              if (
+                frame?.type === "req" &&
+                frame.method === "sessions.patch" &&
+                typeof frame.id === "string" &&
+                params?.key === key &&
+                Object.hasOwn(params, "cyberAccessProgram")
+              ) {
+                if (pendingPreferences.size === 32) {
+                  pendingPreferences.delete(pendingPreferences.keys().next().value!);
+                }
+                pendingPreferences.set(frame.id, choice);
+                preferencePatch.sent += 1;
+                preferencePatch.automatic = params.cyberAccessProgram === null;
+                recordControlUiE2eFailureFacts(page, { preferencePatch });
+              }
+            });
+            socket.on("framereceived", ({ payload }) => {
+              let frame: ReturnType<typeof asOptionalRecord>;
+              try {
+                frame = asOptionalRecord(JSON.parse(String(payload)));
+              } catch {
+                return;
+              }
+              if (frame?.type !== "res" || typeof frame.id !== "string") {
+                return;
+              }
+              const attemptedChoice = pendingPreferences.get(frame.id);
+              pendingPreferences.delete(frame.id);
+              if (attemptedChoice === choice) {
+                preferencePatch[frame.ok === true ? "acknowledged" : "rejected"] += 1;
+                recordControlUiE2eFailureFacts(page, { preferencePatch });
+              }
+            });
+            socket.on("close", () => pendingPreferences.clear());
+          });
           await pairControlUiPage(page, runCli);
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
           await waitForControlUiGatewayReady(page);
@@ -587,15 +637,61 @@ suite.define(() => {
             return result.sessions.find((entry) => entry.key === key)!;
           };
           const choose = async (value: string) => {
+            choice += 1;
+            preferencePatch = { sent: 0, acknowledged: 0, rejected: 0, automatic: false };
+            recordControlUiE2eFailureFacts(page, {
+              preferenceChoice: choice,
+              preferenceExpectedAutomatic: value === "",
+              preferenceMobile: mobile,
+              preferencePatch,
+            });
             await open();
             if (value) {
               await select.locator(`[data-chat-access-option="${value}"]`).click();
             } else {
               await picker.locator("[data-chat-access-default]").click();
             }
-            await expect
-              .poll(async () => (await row()).cyberAccessProgram)
-              .toBe(value || undefined);
+            try {
+              await expect
+                .poll(async () => (await row()).cyberAccessProgram)
+                .toBe(value || undefined);
+            } catch (error) {
+              await withTimeout(
+                page.evaluate((expected) => {
+                  const element = document.querySelector(".chat-controls__effort-picker");
+                  const selected = [
+                    ...(element?.querySelectorAll(
+                      '[data-chat-access-option][aria-checked="true"]',
+                    ) ?? []),
+                  ];
+                  return {
+                    preferencePickerPresent: Boolean(element),
+                    preferenceMenuOpen: element?.hasAttribute("open") ?? false,
+                    preferenceResetDisabled:
+                      element?.querySelector<HTMLButtonElement>("[data-chat-access-default]")
+                        ?.disabled ?? null,
+                    preferenceAnyChecked: selected.length > 0,
+                    preferenceExpectedChecked:
+                      Boolean(element) &&
+                      (expected
+                        ? selected.some(
+                            (option) => option.getAttribute("data-chat-access-option") === expected,
+                          )
+                        : selected.length === 0),
+                    preferenceSnapshot: Boolean(element?.closest("[data-composer-catalog-state]")),
+                  };
+                }, value),
+                500,
+              )
+                .then((facts) =>
+                  recordControlUiE2eFailureFacts(page, {
+                    ...facts,
+                    preferenceDomRead: true,
+                  }),
+                )
+                .catch(() => recordControlUiE2eFailureFacts(page, { preferenceDomRead: false }));
+              throw error;
+            }
           };
           const send = async (text: string) =>
             evaluateControlUiContext(

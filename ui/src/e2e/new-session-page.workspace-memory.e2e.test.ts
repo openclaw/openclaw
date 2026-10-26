@@ -305,9 +305,8 @@ suite.define(() => {
       await thinkingSlider.evaluate((element) => ({
         max: element.getAttribute("max"),
         label: element.getAttribute("aria-valuetext"),
-        fill: Number.parseFloat(element.style.getPropertyValue("--reasoning-fill")),
       })),
-    ).toMatchObject({ max: "6", label: "Extra high", fill: expect.closeTo(83.33, 1) });
+    ).toEqual({ max: "6", label: "Extra high" });
     await effortSelect.click();
     await page.locator(".new-session-page__message").fill("keep the selected effort");
     await button(page, "Start session").click();

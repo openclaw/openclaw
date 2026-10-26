@@ -11,7 +11,7 @@ registerSessionOrganizationEnglish();
 const LISTED_AUTOMATION_LIMIT = 10;
 
 /** A conversation the operator is about to archive or delete. */
-export type SessionAutomationTarget = {
+type SessionAutomationTarget = {
   key: string;
   agentId?: string;
   label?: string;

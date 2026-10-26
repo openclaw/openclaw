@@ -19,7 +19,7 @@ export const toolsForServer = (
       (tool): tool is McpToolEntry =>
         tool.source === "mcp" && tool.mcpServer === serverName && Boolean(tool.mcpToolName),
     );
-export const MCP_DISCOVERY_NOTICE_IDS = new Set([
+const MCP_DISCOVERY_NOTICE_IDS = new Set([
   "mcp-not-yet-connected",
   "mcp-not-yet-listed",
   "mcp-stale-catalog",

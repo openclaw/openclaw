@@ -7,7 +7,7 @@
  *
  * node --expose-gc --experimental-test-module-mocks --import ./scripts/tsx.mjs \
  *   scripts/perf/session-event-envelope-measure.ts --events 3000
- * Add --owner src/gateway/.baseline.ts for a saved source sibling, --delivery-owner
+ * Add --owner .local/base-projection.ts for a saved projection source, --delivery-owner
  * src/gateway/.delivery-baseline.ts to compare delta preparation, and --allocations
  * for a separate sampled-allocation pass. Alternate baseline/candidate timing and
  * allocation runs. Acceptance: identical payload digest, lower allocation and CPU;
@@ -19,19 +19,25 @@
  * Add --no-turbo-inlining to Node for callee attribution. Compare --clients 1/10/60
  * with --audiences 1/8/8 to distinguish single-recipient and audience fanout costs.
  * --sessions 64 rotates changing rows through the connection-owned delivery histories.
- * --encode-envelopes includes JSON encoding once per distinct projected payload,
- * checking object-shape costs as well as projection; it does not measure transport.
+ * --reuse-envelope certifies the fixture's producer-owned envelope for both revisions.
+ * --encode-envelopes includes payload encoding once per distinct projected payload.
+ * The baseline encoder mirrors the broadcaster's plain-envelope path; the candidate
+ * uses its prepared encoder when present. This excludes transport/authorization;
+ * session-event-field-order.ts separately compares complete real-broadcaster frames.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { mock } from "node:test";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionEventProjection } from "../../src/gateway/server-broadcast-types.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
 import type { SessionRowProjection } from "../../src/gateway/session-row-projection.js";
 import type { GatewaySessionRow } from "../../src/gateway/session-utils.types.js";
@@ -48,6 +54,7 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     profile: { type: "string" },
     "encode-envelopes": { type: "boolean", default: false },
+    "reuse-envelope": { type: "boolean", default: false },
     "fresh-fields": { type: "boolean", default: false },
   },
 });
@@ -88,11 +95,26 @@ mock.module(new URL("../../src/infra/diagnostic-events.ts", import.meta.url), {
 mock.module(new URL("../../src/gateway/gateway-access-revision.ts", import.meta.url), {
   namedExports: { readGatewayAccessRevision: () => 0 },
 });
+const ownerUrl = new URL("../../src/gateway/session-event-projection.ts", import.meta.url).href;
+const loadedOwnerUrl = pathToFileURL(owner).href === ownerUrl ? ownerUrl : `${ownerUrl}?baseline`;
+const ownerHook =
+  loadedOwnerUrl === ownerUrl
+    ? undefined
+    : registerHooks({
+        load(url, context, nextLoad) {
+          return url === loadedOwnerUrl
+            ? {
+                format: "module-typescript",
+                source: readFileSync(owner, "utf8"),
+                shortCircuit: true,
+              }
+            : nextLoad(url, context);
+        },
+      });
 const {
   prepareSessionEventProjection,
-}: typeof import("../../src/gateway/session-event-projection.js") = await import(
-  pathToFileURL(owner).href
-);
+}: typeof import("../../src/gateway/session-event-projection.js") = await import(loadedOwnerUrl);
+ownerHook?.deregister();
 const deliveryOwner = path.resolve(values["delivery-owner"]);
 const { ConnectionSessionRows }: typeof import("../../src/gateway/session-ancestor-references.js") =
   await import(pathToFileURL(deliveryOwner).href);
@@ -209,10 +231,51 @@ const context: Parameters<ReturnType<typeof prepareSessionEventProjection>>[3] =
   references: (client) => references.get(client)!,
   createRunProjector: () => () => ({ active: false }),
 };
-const prepare = prepareSessionEventProjection(projection);
+const prepare = prepareSessionEventProjection(
+  projection,
+  undefined,
+  values["reuse-envelope"]
+    ? { ancestors: [], reuseEnvelope: true, encodeMessage: true }
+    : undefined,
+);
+
+function encodeEnvelope(result: SessionEventProjection): readonly Buffer[] {
+  if (result.serializePayload) {
+    return result.serializePayload();
+  }
+  // Match serializeFrameField for this fixture's plain, mutable projected envelope.
+  assert(isRecord(result.payload) && result.serializeSession);
+  const envelope = result.payload;
+  const sessionJSON = result.serializeSession();
+  const messageBytes = result.serializeMessage?.();
+  const { session, message } = envelope;
+  envelope.session = undefined;
+  if (messageBytes) {
+    envelope.message = undefined;
+  }
+  let fieldJSON: string;
+  try {
+    fieldJSON = JSON.stringify({ payload: envelope });
+  } finally {
+    envelope.session = session;
+    if (messageBytes) {
+      envelope.message = message;
+    }
+  }
+  const prefix = `,${fieldJSON.slice(1, -2)}${fieldJSON.endsWith("{}}") ? "" : ","}`;
+  const suffix = `"session":${sessionJSON}}`;
+  return messageBytes
+    ? [Buffer.from(prefix), messageBytes, Buffer.from(suffix)]
+    : [Buffer.from(`${prefix}${suffix}`)];
+}
+
 let envelopeEncodings = 0;
 let envelopeBytes = 0;
-function publish(index: number, digest?: ReturnType<typeof createHash>) {
+function publish(
+  index: number,
+  digest?: ReturnType<typeof createHash>,
+  wireDigest?: ReturnType<typeof createHash>,
+) {
   key = `agent:main:stream-envelope-${index % sessions}`;
   record.entry.sessionId = `synthetic-session-${index % sessions}`;
   row = freezeTrustedJsonSnapshot({
@@ -251,7 +314,8 @@ function publish(index: number, digest?: ReturnType<typeof createHash>) {
     context,
   );
   assert(project);
-  const encodedPayloads = values["encode-envelopes"] ? new Set<unknown>() : undefined;
+  const encodedPayloads =
+    values["encode-envelopes"] || wireDigest ? new Map<unknown, readonly Buffer[]>() : undefined;
   for (const [position, peer] of peers.entries()) {
     // Staggered delivery creates distinct live histories without growing the recipient set.
     if (index % 17 === position % 17) {
@@ -259,10 +323,17 @@ function publish(index: number, digest?: ReturnType<typeof createHash>) {
     }
     const result = project(peer.client);
     assert(result);
-    if (encodedPayloads && !encodedPayloads.has(result.payload)) {
-      encodedPayloads.add(result.payload);
-      envelopeBytes += Buffer.byteLength(JSON.stringify({ payload: result.payload }));
-      envelopeEncodings++;
+    if (encodedPayloads) {
+      let encoded = encodedPayloads.get(result.payload);
+      if (!encoded) {
+        encoded = encodeEnvelope(result);
+        encodedPayloads.set(result.payload, encoded);
+        envelopeBytes += encoded.reduce((bytes, segment) => bytes + segment.byteLength, 0);
+        envelopeEncodings++;
+      }
+      for (const segment of encoded) {
+        wireDigest?.update(segment);
+      }
     }
     digest?.update(JSON.stringify(result.payload));
     result.delivered?.(peer.client);
@@ -313,8 +384,9 @@ for (const peer of peers) {
   peer.rows.clear();
 }
 const digest = createHash("sha256");
+const wireDigest = createHash("sha256");
 for (let index = 0; index < events; index++) {
-  publish(index, digest);
+  publish(index, digest, wireDigest);
 }
 console.log(
   JSON.stringify({
@@ -328,12 +400,14 @@ console.log(
     sessions,
     freshFields: values["fresh-fields"],
     encodeEnvelopes: values["encode-envelopes"],
+    reuseEnvelope: values["reuse-envelope"],
     ...measuredEncoding,
     mode: values.allocations ? "allocation" : "timing",
     elapsedMs,
     threadCpuMs: (cpu.user + cpu.system) / 1000,
     sampledBytes,
     payloadDigest: digest.digest("hex"),
+    wireDigest: wireDigest.digest("hex"),
     hostLoadBefore,
     hostLoadAfter: loadavg(),
     memoryBefore,

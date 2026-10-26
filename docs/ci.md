@@ -304,6 +304,12 @@ Additional hybrid check offloads require [fresh hosted assignment evidence](/ci/
 Windows keeps its complete explicit test inventory in five [measured project-aligned shards](/ci/runners#runner-backend-modes) for main and release validation. Windows-owner PRs retain the complete family; unrelated PRs omit it.
 
 Real-Gateway browser checks use [job budgets matched to their selected runner](/ci/runners#blacksmith-runner-capacity).
+They restore the protected full-build cache and still run private-QA preparation.
+The Control UI step can reuse public build content because backend-only private
+plugins do not change its output. Native UI declarations, assets, source plugin
+discovery, and Vite-consumed inputs remain part of its validated cache identity.
+Existing UI test bodies do not invalidate an otherwise unchanged bundle; their
+complete path inventory still invalidates new or removed glob matches.
 
 Control UI, repo E2E, and native live browser CI restore the Chromium revision pinned by the selected target's installed Playwright package, with separate OS/architecture cache keys and no fallback prefixes. The protected-main Vitest cache warmer publishes the browser cache in its short dependency job for both Linux backends; PR and release jobs remain restore-only. A cache miss still installs the managed browser, and current targets use the installer's `--require-playwright-chromium` mode rather than substituting system Chrome. Historical targets retain their Playwright installer and Linux dependency setup. Browser startup diagnostics include provider, page, WebSocket, and Chromium process events to diagnose a session-readiness timeout even when it is reported only after unrelated unit work finishes.
 
