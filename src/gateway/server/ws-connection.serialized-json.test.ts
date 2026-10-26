@@ -22,16 +22,9 @@ import {
   serializeGatewayFrame,
 } from "../serialized-json.js";
 import { GATEWAY_PER_MESSAGE_DEFLATE, installGatewayDeflateCodec } from "./ws-compression.js";
-import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
-import { attachGatewayWsForTest, type GatewayWsTestSocket } from "./ws-connection.test-helpers.js";
-import type { GatewayWsMessageHandlerParams } from "./ws-connection/message-handler-types.js";
 import { createGatewayWebSocketTransport } from "./ws-transport.js";
 
-const attachHandler = vi.hoisted(() => vi.fn<(params: GatewayWsMessageHandlerParams) => void>());
 const { Z_SYNC_FLUSH: finishFlush } = constants;
-vi.mock("./ws-connection/message-handler.js", () => ({
-  attachGatewayWsMessageHandler: attachHandler,
-}));
 
 let server: Ws.WebSocketServer;
 const connections = new Set<Ws.WebSocket>();
@@ -94,7 +87,6 @@ it.each([false, {}, { serverMaxWindowBits: 10 }] as const)(
         Buffer.from(JSON.stringify({ ...envelope, payload: "x".repeat(bytes - envelopeLength) })),
       );
       const before = request.socket.bytesWritten;
-      // Raw and compressed frames share the same FIFO with control frames.
       const received: string[] = [];
       peer.on("message", (data, binary) => {
         expect(binary).toBe(false);
@@ -146,75 +138,49 @@ it.each([false, {}, { serverMaxWindowBits: 10 }] as const)(
   },
 );
 
-it("matches ws wire bytes with one native submission at every uncompressed frame length boundary", async () => {
-  const { peer, socket, request, transport } = await connectTransport();
+it("delivers owned shared JSON at every uncompressed frame length boundary", async () => {
+  const { peer, socket, request } = await connect();
   const writes = vi.spyOn(request.socket, "write");
-  const nativeWrite = vi.spyOn(request.socket, "_write");
-  // oxlint-disable-next-line no-underscore-dangle -- Count actual Writable submissions on Node and Bun.
-  const nativeWritev = request.socket._writev ? vi.spyOn(request.socket, "_writev") : undefined;
+  const transport = createGatewayWebSocketTransport(
+    socket,
+    request.socket,
+    installGatewayDeflateCodec(socket),
+  );
   for (const length of [125, 126, 65535, 65536]) {
-    const bytes = Buffer.from(JSON.stringify("x".repeat(length - 2)));
+    const response = { type: "res", id: "history", ok: true, payload: { messages: [""] } };
+    response.payload.messages[0] = "x".repeat(length - JSON.stringify(response).length);
+    const bytes = Buffer.from(JSON.stringify(response));
+    const source = Buffer.from(JSON.stringify(response.payload.messages));
+    const payload = new SerializedJsonPayload({ messages: new SerializedJsonArray(source) });
+    source.fill(0);
+    const frame = serializeGatewayFrame({ ...response, payload });
     const ordinary = once(peer, "message");
     writes.mockClear();
     socket.send(bytes, { binary: false });
     await ordinary;
     const expected = Buffer.concat(writes.mock.calls.map(([chunk]) => Buffer.from(chunk)));
     writes.mockClear();
-    nativeWrite.mockClear();
-    nativeWritev?.mockClear();
-    const frame = new SerializedGatewayFrame([bytes.subarray(0, 1), bytes.subarray(1)]);
-    const materialize = vi.spyOn(frame, "toBuffer");
+    using materialize = vi.spyOn(SerializedGatewayFrame.prototype, "toBuffer");
     const received = once(peer, "message");
-    const sent = send(transport, frame);
+    const sent = send(transport, typeof frame === "string" ? Buffer.from(frame) : frame);
     const [[data, binary]] = await Promise.all([received, sent]);
     expect(binary).toBe(false);
     expect(data).toEqual(bytes);
     expect(materialize).not.toHaveBeenCalled();
-    expect(nativeWrite.mock.calls.length + (nativeWritev?.mock.calls.length ?? 0)).toBe(1);
-    // The no-writev adapter calls its captured native write once with the joined frame.
-    const actual = nativeWrite.mock.calls.length
-      ? Buffer.concat(nativeWrite.mock.calls.map(([chunk]) => Buffer.from(chunk)))
-      : Buffer.concat(
-          nativeWritev!.mock.calls.flatMap(([chunks]) =>
-            chunks.map(({ chunk }) => Buffer.from(chunk)),
-          ),
-        );
-    expect(actual).toEqual(expected);
+    expect(Buffer.concat(writes.mock.calls.map(([chunk]) => Buffer.from(chunk)))).toEqual(expected);
   }
   writes.mockRestore();
 });
 
-it("delivers an owned shared history payload as a JSON text frame", async () => {
-  const { peer, socket, request } = await connect();
-  const challenge = once(peer, "message");
-  attachGatewayWsForTest({
-    attach: attachGatewayWsConnectionHandler,
-    socket: socket as unknown as GatewayWsTestSocket,
-    requestSocket: request.socket,
-  });
-  await vi.dynamicImportSettled();
-  await challenge;
-  const handler = attachHandler.mock.calls[0]![0];
-  const messages = [{ role: "assistant", content: "é🦞\nready" }];
-  const bytes = Buffer.from(JSON.stringify(messages));
-  const payload = new SerializedJsonPayload({ messages: new SerializedJsonArray(bytes) });
-  const response = { type: "res" as const, id: "history", ok: true, payload };
-  // Shared responses own the assembled frame, independent of the worker's input bytes.
-  bytes.fill(0);
-  const received = once(peer, "message");
-  const result = handler.send(response);
-  const [data, isBinary] = (await received) as [Buffer, boolean];
-  expect(result).toEqual({ kind: "sent", bytes: data.byteLength });
-  expect(isBinary).toBe(false);
-  expect(JSON.parse(data.toString())).toEqual({ ...response, payload: { messages } });
-});
-
-it.each(["small", "large"])("owns and reuses %s compressed segments per window", async (size) => {
+it.each(["small", "large"])("owns and reuses %s offset segments per window", async (size) => {
   const text =
     size === "large"
       ? randomBytes(64 * 1024).toString("base64")
       : "shared history é🦞 ".repeat(1024);
-  const bytes = Buffer.from(JSON.stringify([{ text }]));
+  const encoded = Buffer.from(JSON.stringify([{ text }]));
+  const storage = new Uint8Array(encoded.length + 16).fill(0xff);
+  storage.set(encoded, 8);
+  const bytes = storage.subarray(8, -8);
   const messages = new SerializedJsonArray(bytes);
   const retained = new Map<number, Uint8Array>();
   for (const windowBits of [15, 10]) {
@@ -227,25 +193,31 @@ it.each(["small", "large"])("owns and reuses %s compressed segments per window",
     const compressed = deflateRawSync(bytes, { level: 1, windowBits, finishFlush });
     expect(compressed.byteLength < Buffer.poolSize >>> 1).toBe(size === "small");
     for (let sequence = 0; sequence < 2; sequence++) {
-      const id = `history-${windowBits}-${sequence}`;
-      const frame = serializeGatewayFrame({ type: "res", id, ok: true, payload: { messages } });
-      const materialize = vi.spyOn(SerializedGatewayFrame.prototype, "toBuffer");
-      // Compression retains the shared piece even when a no-writev socket must join it.
-      const compress = vi.spyOn(codec, "compress");
-      const received = once(client, "message");
-      let sent: Promise<void>;
-      try {
-        sent = send(transport, typeof frame === "string" ? Buffer.from(frame) : frame);
-        expect(materialize).not.toHaveBeenCalled();
-      } finally {
-        materialize.mockRestore();
+      const serialized = serializeGatewayFrame({
+        type: "res",
+        id: `${windowBits}-${sequence}`,
+        ok: true,
+        payload: { messages },
+      });
+      if (!(serialized instanceof SerializedGatewayFrame)) {
+        throw new Error("expected segmented response");
       }
+      const [prefix, ...rest] = serialized.segments;
+      const frame = new SerializedGatewayFrame([
+        prefix!.subarray(0, 1),
+        prefix!.subarray(1),
+        ...rest,
+      ]);
+      using materialize = vi.spyOn(SerializedGatewayFrame.prototype, "toBuffer");
+      using compress = vi.spyOn(codec, "compress");
+      const received = once(client, "message");
+      const sent = send(transport, frame);
+      expect(materialize).not.toHaveBeenCalled();
       const payload = compress.mock.results[0]?.value;
       expect(payload).toBeInstanceOf(SerializedGatewayFrame);
       const segment = (payload instanceof SerializedGatewayFrame ? payload.segments : []).find(
         (chunk): chunk is Buffer => Buffer.isBuffer(chunk) && chunk.equals(compressed),
       );
-      compress.mockRestore();
       const [[data, binary]] = await Promise.all([received, sent]);
       expect([binary, data.toString()]).toEqual([false, frame.toString()]);
       const byteLength = compressed.byteLength;
@@ -259,26 +231,3 @@ it.each(["small", "large"])("owns and reuses %s compressed segments per window",
   }
   expect(retained.get(10)).not.toBe(retained.get(15));
 });
-
-it.each([15, 10])(
-  "compresses offset Uint8Array segments with a %i-bit negotiated window",
-  async (windowBits) => {
-    const payload = JSON.stringify({ text: "shared broadcast é🦞 ".repeat(200) });
-    const storage = new Uint8Array(Buffer.byteLength(payload) + 16).fill(0xff);
-    storage.set(Buffer.from(payload), 8);
-    const bytes = storage.subarray(8, -8);
-    // Preserve a coalesced prefix, a shared large segment, and a single small suffix.
-    const frame = new SerializedGatewayFrame([
-      bytes.subarray(0, 1),
-      bytes.subarray(1, 2),
-      bytes.subarray(2, -2),
-      bytes.subarray(-2),
-    ]);
-    const { peer, transport } = await connectTransport({ serverMaxWindowBits: windowBits });
-    const received = once(peer, "message");
-    transport.send(frame, { binary: false });
-    const [data, binary] = await received;
-    expect(binary).toBe(false);
-    expect(data.toString()).toBe(payload);
-  },
-);

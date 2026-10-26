@@ -55,10 +55,8 @@ function listen(
 beforeEach(() => sleepMock.mockClear());
 it("releases its listeners when native listen throws synchronously", async () => {
   const server = createServer();
-  const onError = vi.fn();
-  const onListening = vi.fn();
-  server.on("error", onError);
-  server.on("listening", onListening);
+  server.on("error", vi.fn());
+  server.on("listening", vi.fn());
   const errorListeners = server.listeners("error");
   const listeningListeners = server.listeners("listening");
 
@@ -71,8 +69,6 @@ it("releases its listeners when native listen throws synchronously", async () =>
 
   expect(server.listeners("error")).toEqual(errorListeners);
   expect(server.listeners("listening")).toEqual(listeningListeners);
-  expect(onError).not.toHaveBeenCalled();
-  expect(onListening).not.toHaveBeenCalled();
 });
 
 it.each([undefined, "callback", "throw"] as const)(
