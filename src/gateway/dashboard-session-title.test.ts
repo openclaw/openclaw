@@ -84,6 +84,16 @@ function mockSessionUpdate(current: SessionEntry): void {
   });
 }
 
+function mutableSession(entry: InternalSessionEntry = baseEntry) {
+  const session = { entry: { ...entry } };
+  mocks.load.mockImplementation(() => session.entry);
+  mocks.patch.mockImplementation(async (_scope, update) => {
+    const patch = await update(session.entry);
+    return (session.entry = patch ? { ...session.entry, ...patch } : session.entry);
+  });
+  return session;
+}
+
 function pendingLabel(once = false) {
   const started = createDeferredCore();
   const label = createDeferredCore<string>();
@@ -221,7 +231,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
           { name: "review", skillName: "review", description: "Review a task" },
         ]);
       }
-      let current: InternalSessionEntry = {
+      const session = mutableSession({
         ...baseEntry,
         ...(prepared
           ? {
@@ -233,14 +243,6 @@ describe("maybeGenerateDashboardSessionTitle", () => {
               },
             }
           : {}),
-      };
-      mocks.load.mockImplementation(() => current);
-      mocks.patch.mockImplementation(async (_scope, update) => {
-        const patch = await update(current);
-        if (patch) {
-          current = { ...current, ...patch };
-        }
-        return current;
       });
       const params = { ...titleDefaults };
       await maybeGenerateDashboardSessionTitle({
@@ -267,12 +269,12 @@ describe("maybeGenerateDashboardSessionTitle", () => {
           userMessage: taskMessage("Investigate signing"),
         });
       }
-      expect(current.displayName).toBe("Release Planning");
+      expect(session.entry.displayName).toBe("Release Planning");
       await maybeGenerateDashboardSessionTitle({
         ...params,
         userMessage: taskMessage("Fix the certificate"),
       });
-      expect(current.displayName).toBe("Fix release signing");
+      expect(session.entry.displayName).toBe("Fix release signing");
       expect(mocks.generate.mock.calls.at(-1)?.[0].userMessage).toContain("Fix the certificate");
       expect(mocks.generate.mock.calls.at(-1)?.[0].userMessage).toContain("fails during signing");
       for (let index = 0; index < 8; index++) {
@@ -283,15 +285,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   );
 
   it("does not overwrite a manual rename while the one-time refinement is in flight", async () => {
-    let current: SessionEntry = { ...baseEntry };
-    mocks.load.mockImplementation(() => current);
-    mocks.patch.mockImplementation(async (_scope, update) => {
-      const patch = await update(current);
-      if (patch) {
-        current = { ...current, ...patch };
-      }
-      return current;
-    });
+    const session = mutableSession();
     await maybeGenerateDashboardSessionTitle(titleDefaults);
     for (let index = 0; index < 5; index++) {
       await maybeGenerateDashboardSessionTitle(titleDefaults);
@@ -299,10 +293,10 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     const pending = pendingLabel();
     const refinement = maybeGenerateDashboardSessionTitle(titleDefaults);
     await pending.started;
-    current = { ...current, displayName: "My release" };
+    session.entry = { ...session.entry, displayName: "My release" };
     pending.resolve("Fix release signing");
     await expect(refinement).resolves.toBe(false);
-    expect(current.displayName).toBe("My release");
+    expect(session.entry.displayName).toBe("My release");
   });
 
   it("titles over an Android platform auto-label without treating it as a rename", async () => {
