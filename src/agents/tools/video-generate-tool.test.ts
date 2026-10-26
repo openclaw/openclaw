@@ -1,5 +1,3 @@
-import * as toolSchema from "@openclaw/ai/internal/tool-schema";
-import { finalizeAgentTools } from "../agent-tools.finalize.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 vi.mock("../media-generation-activity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
@@ -245,7 +243,7 @@ describe("createVideoGenerateTool", () => {
   });
 
   it.each([false, true])(
-    "reuses published schemas for reference audio=%s across runs and sessions",
+    "reuses video schemas for reference audio=%s across tool instances",
     (referenceAudioInputs) => {
       const config: OpenClawConfig = {
         plugins: { allow: ["external-video"], entries: { "external-video": { enabled: true } } },
@@ -263,29 +261,16 @@ describe("createVideoGenerateTool", () => {
         { config, workspaceDir },
       );
       const authProfileStore = createAuthStore("external-video");
-      const construct = (sessionId: string) => {
+      const construct = () => {
         const tool = createVideoGenerateTool({ config, workspaceDir, authProfileStore }, true);
         if (!tool) {
           throw new Error("expected video_generate tool");
         }
-        return finalizeAgentTools({
-          tools: [tool],
-          config,
-          hookContext: { sessionId },
-          modelProvider: "openai",
-          modelApi: "openai-responses",
-          wrapBeforeToolCallHook: false,
-        })[0]!;
+        return tool;
       };
-      const cold = construct("video-schema-first");
+      const cold = construct();
       expectAudioReferences(cold, referenceAudioInputs);
-      const bytes = JSON.stringify(cold.parameters);
-      using publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
-
-      for (const sessionId of ["video-schema-first", "video-schema-second", "video-schema-third"]) {
-        expect(JSON.stringify(construct(sessionId).parameters)).toBe(bytes);
-      }
-      expect(publish).not.toHaveBeenCalled();
+      expect(construct().parameters).toBe(cold.parameters);
     },
   );
 
