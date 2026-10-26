@@ -643,9 +643,13 @@ describe("browser tab selection and ownership", () => {
   ])(
     "reports a close once the tab leaves the target list (%s)",
     async (_label, listsBeforeGone) => {
+      vi.useFakeTimers();
       const { openclaw, runtime, closeRequests } = closingTab(listsBeforeGone);
 
-      await expect(openclaw.closeTab("POPUP")).resolves.toBe("POPUP");
+      const closing = openclaw.closeTab("POPUP");
+      await vi.advanceTimersByTimeAsync(CLOSE_TAB_VERIFY_POLL_MS * listsBeforeGone);
+
+      await expect(closing).resolves.toBe("POPUP");
 
       expect(closeRequests()).toBe(1);
       expect(runtime.lastTargetId).toBeNull();
