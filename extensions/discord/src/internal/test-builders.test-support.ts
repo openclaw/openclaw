@@ -120,23 +120,20 @@ export function createInternalInteractionPayload(
 export const createInternalComponentInteractionPayload = interactivePayload(
   InteractionType.MessageComponent,
 );
-
 export const createInternalModalInteractionPayload = interactivePayload(
   InteractionType.ModalSubmit,
 );
 
 function interactivePayload(type: InteractionType.MessageComponent | InteractionType.ModalSubmit) {
   return ({ data, ...rest }: RawInteractionOverrides): RawInteraction =>
-    ({
-      application_id: "app1",
-      version: 1,
+    createInternalInteractionPayload({
+      ...rest,
+      type,
       data: {
         ...(type === InteractionType.MessageComponent
           ? { component_type: ComponentType.Button, custom_id: "component1" }
           : { custom_id: "modal1", components: [] }),
         ...data,
       },
-      ...rest,
-      type,
-    }) as unknown as RawInteraction;
+    });
 }
