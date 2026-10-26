@@ -46,7 +46,13 @@ function packageIdentity() {
   };
 }
 function assertConfig() {
-  const plugin = readJson(configPath).plugins.entries["session-share"];
+  const config = readJson(configPath);
+  assert.equal(
+    config.agents?.defaults?.models?.["openai/*"]?.agentRuntime?.id,
+    "openclaw",
+    "Upgrade changed the data-only fixture runtime",
+  );
+  const plugin = config.plugins.entries["session-share"];
   assert.equal(plugin.enabled, true);
   assert.deepEqual(plugin.config.share, shareConfig, "Upgrade changed source sharing selection");
   assert.equal(Object.hasOwn(plugin.config.share, "involvingProfileId"), false);
@@ -209,7 +215,12 @@ if (mode === "configure") {
     },
     agents: {
       entries: { main: {} },
-      defaults: { workspace: process.env.OPENCLAW_TEST_WORKSPACE_DIR, skipBootstrap: true },
+      defaults: {
+        workspace: process.env.OPENCLAW_TEST_WORKSPACE_DIR,
+        skipBootstrap: true,
+        // This data-only fixture must not inherit an implicit external agent runtime.
+        models: { "openai/*": { agentRuntime: { id: "openclaw" } } },
+      },
     },
     plugins: {
       allow: ["session-share"],
