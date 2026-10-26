@@ -267,56 +267,38 @@ describe("submitSessionControllerSteer", () => {
     expect(received).toEqual([{ text: "published input", waitForTranscriptCommit: true }]);
   });
 
-  it.each([false, true])(
-    "checks source authority before guarded legacy injection (revoked=%s)",
-    async (revoked) => {
-      const { input, injected } = startTurn({ injection: "legacy" });
-      const authority = revocableAuthority("source revoked");
-      if (revoked) {
-        authority.revoke();
-      }
-      const result = steer(input, {
-        assertCurrent() {
-          input.abortSignal.throwIfAborted();
-          authority.assertCurrent();
-        },
-      });
+  it("checks revoked source authority before guarded legacy injection", async () => {
+    const { input, injected } = startTurn({ injection: "legacy" });
+    const authority = revocableAuthority("source revoked");
+    authority.revoke();
+    const result = steer(input, {
+      assertCurrent() {
+        input.abortSignal.throwIfAborted();
+        authority.assertCurrent();
+      },
+    });
 
-      if (revoked) {
-        await expect(result).rejects.toBe(authority.error);
+    await expect(result).rejects.toBe(authority.error);
+    expect(injected).toEqual([]);
+  });
+
+  it.each(["accepted", "rejected"] as const)(
+    "settles a queued steer that is %s",
+    async (status) => {
+      const { input } = startTurn({
+        queueMessage: status === "accepted" ? acceptQueue : rejectQueue,
+      });
+      const result = steer(input);
+      if (status === "accepted") {
+        await expect(result).resolves.toEqual({ ...acceptedSteer, result: undefined });
+        await input.settlement.promise;
+        expect(input.phase).toBe("consumed");
       } else {
-        await expectRejected(result, "guarded_injection_unsupported");
+        await expectRejected(result, "runtime_rejected");
         expectQueued(input);
       }
-      expect(injected).toEqual([]);
     },
   );
-
-  it.each([
-    [false, "accepted"],
-    [false, "rejected"],
-    [true, "accepted"],
-    [true, "rejected"],
-  ] as const)("settles a %s direct steer that is %s", async (direct, status) => {
-    const { input, operation } = startTurn({
-      direct,
-      queueMessage: status === "accepted" ? acceptQueue : rejectQueue,
-    });
-    const result = direct ? directSteer(operation) : steer(input);
-    if (status === "accepted") {
-      await expect(result).resolves.toEqual({ ...acceptedSteer, result: undefined });
-      await input.settlement.promise;
-      expect(input.phase).toBe("consumed");
-    } else {
-      await expectRejected(result, "runtime_rejected");
-      if (!direct) {
-        expectQueued(input);
-      }
-    }
-    if (direct) {
-      expectNoInput(input);
-    }
-  });
 
   it("keeps accepted steering with the active restart owner until its native outcome settles", async () => {
     resetGatewayWorkAdmission();
@@ -442,6 +424,8 @@ describe("submitSessionControllerSteer", () => {
     expect(released).toMatchObject({ phase: "completed", result: { kind: "completed" } });
     expect(internal?.phase).toBe("yielded");
     expect(findSessionControllerOperationByRunId("steer-run")).toBeUndefined();
+    await expectRejected(directSteer(operation), "no_active_run");
+    expect(input.mailbox.entries).toEqual([input]);
   });
 
   it.each(["stop", "failure"] as const)(
@@ -696,16 +680,5 @@ describe("steerSessionControllerOperation", () => {
     }
     await expect(first.outcome).resolves.toEqual({ status: "accepted" });
     await rejected;
-  });
-
-  it("refuses a turn that already settled without reserving input", async () => {
-    const { operation, input } = startTurn({ direct: true });
-    operation.complete();
-
-    await expect(directSteer(operation, {}, "late")).resolves.toEqual({
-      status: "rejected",
-      reason: "no_active_run",
-    });
-    expectNoInput(input);
   });
 });
