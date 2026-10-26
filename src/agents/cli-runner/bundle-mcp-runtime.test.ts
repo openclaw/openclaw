@@ -10,6 +10,7 @@ describe("writeTemporaryBundleMcpJson", () => {
 
   beforeEach(async () => {
     base = await tempRoot.setup();
+    vi.spyOn(os, "tmpdir").mockReturnValue(base);
   });
 
   afterEach(async () => {
@@ -17,24 +18,29 @@ describe("writeTemporaryBundleMcpJson", () => {
     await tempRoot.cleanup();
   });
 
-  it("removes the temporary directory when the credential write fails", async () => {
-    vi.spyOn(os, "tmpdir").mockReturnValue(base);
+  it("removes a partially written config and preserves the write error", async () => {
     const error = Object.assign(new Error("No space left on device"), { code: "ENOSPC" });
-    vi.spyOn(fs, "writeFile").mockRejectedValueOnce(error);
+    const writeFile = fs.writeFile.bind(fs);
+    vi.spyOn(fs, "writeFile").mockImplementationOnce(async (target) => {
+      await writeFile(target, '{"Authorization":"Bearer synthetic-secret', "utf-8");
+      throw error;
+    });
 
     await expect(
       writeTemporaryBundleMcpJson(
         "openclaw-cli-mcp-",
-        {
-          mcpServers: {
-            openclaw: { headers: { Authorization: "Bearer synthetic-secret" } },
-          },
-        },
+        { mcpServers: { openclaw: { headers: { Authorization: "Bearer synthetic-secret" } } } },
         "mcp.json",
         false,
       ),
     ).rejects.toBe(error);
+    await expect(fs.readdir(base)).resolves.toEqual([]);
+  });
 
+  it("removes the directory when the atomic writer rejects a filename", async () => {
+    await expect(
+      writeTemporaryBundleMcpJson("openclaw-gemini-mcp-", {}, `${"x".repeat(300)}.json`),
+    ).rejects.toThrow();
     await expect(fs.readdir(base)).resolves.toEqual([]);
   });
 });
