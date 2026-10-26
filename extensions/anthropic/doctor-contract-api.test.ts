@@ -1,25 +1,18 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig as Config } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { normalizeCompatibilityConfig } from "./doctor-contract-api.js";
 
 const opus = "anthropic/claude-opus-5";
 const sonnet = "anthropic/claude-sonnet-5";
 const cli = { agentRuntime: { id: "claude-cli" } };
-const pinned = {
-  [opus]: { ...cli, alias: "Opus" },
-  "anthropic/claude-sonnet-4-6": cli,
-  "openai/gpt-5.2": {},
-};
-type Defaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
+const pinned = { [opus]: { ...cli, alias: "Opus" }, "openai/gpt-5.2": {} };
+type Defaults = NonNullable<NonNullable<Config["agents"]>["defaults"]>;
 // Native login (#129052) seeded pinned rows but no wildcard or auth profile.
-function config(
-  defaults: Partial<Defaults> = {},
-  extra: Partial<OpenClawConfig> = {},
-): OpenClawConfig {
+function config(defaults: Partial<Defaults> = {}, extra: Partial<Config> = {}): Config {
   const model = { primary: opus, fallbacks: ["openai/gpt-5.2"] };
   return { agents: { defaults: { model, models: pinned, ...defaults } }, ...extra };
 }
-function provider(apiKey?: string, agentRuntime?: { id: string }): OpenClawConfig {
+function provider(apiKey?: string, agentRuntime?: { id: string }): Config {
   return config(
     {},
     { models: { providers: { anthropic: { baseUrl: "", models: [], apiKey, agentRuntime } } } },
@@ -35,8 +28,11 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
-it("adds the Claude CLI wildcard to an earlier sign-in, idempotently", () => {
-  const cfg = config();
+it.each<[string, Config]>([
+  ["earlier sign-in", config()],
+  ["retired provider marker", provider("anthropic:claude-cli")],
+  ["string default model", config({ model: opus })],
+])("repairs %s idempotently", (_name, cfg) => {
   const result = normalizeCompatibilityConfig({ cfg });
   expect(result.changes).toHaveLength(1);
   expect(result.config.agents?.defaults).toEqual({
@@ -49,25 +45,14 @@ it("adds the Claude CLI wildcard to an earlier sign-in, idempotently", () => {
   });
 });
 
-it.each<[string, OpenClawConfig]>([
-  ["retired provider marker", provider("anthropic:claude-cli")],
-  ["string default model", config({ model: opus })],
-])("repairs a %s", (_name, cfg) => {
-  expect(normalizeCompatibilityConfig({ cfg }).changes).toHaveLength(1);
-});
-
-it.each<[string, OpenClawConfig]>([
+it.each<[string, Config, string?]>([
   ["authored wildcard runtime", models({ "anthropic/*": { agentRuntime: { id: "openclaw" } } })],
   ["authored wildcard alias", models({ "anthropic/*": { alias: "Claude" } })],
   ["empty config", {}],
-  ["non-CLI entries", models({ [opus]: {}, [sonnet]: { agentRuntime: { id: "openclaw" } } })],
   // The API primary's credential may live only in the auth store, invisible to repair.
   [
     "API primary with CLI fallback",
-    models(
-      { "anthropic/claude-opus-4-6": { alias: "Opus" }, [sonnet]: cli },
-      { primary: "anthropic/claude-opus-4-6", fallbacks: [sonnet] },
-    ),
+    models({ [opus]: { alias: "Opus" }, [sonnet]: cli }, { primary: opus, fallbacks: [sonnet] }),
   ],
   ["non-Anthropic primary", models({ [opus]: cli, "openai/gpt-5.2": {} }, "openai/gpt-5.2")],
   [
@@ -80,12 +65,8 @@ it.each<[string, OpenClawConfig]>([
   ["provider API key", provider("sk-ant-placeholder")],
   ["config env key", config({}, { env: { vars: { ANTHROPIC_API_KEY: "placeholder" } } })],
   ["provider runtime", provider(undefined, { id: "openclaw" })],
-])("leaves %s unchanged", (_name, cfg) => {
-  expect(normalizeCompatibilityConfig({ cfg })).toEqual({ config: cfg, changes: [] });
-});
-
-it("preserves a sign-in when the process has an Anthropic API key", () => {
-  vi.stubEnv("ANTHROPIC_API_KEY", "placeholder");
-  const cfg = config();
+  ["process API key", config(), "placeholder"],
+])("leaves %s unchanged", (_name, cfg, apiKey) => {
+  vi.stubEnv("ANTHROPIC_API_KEY", apiKey ?? "");
   expect(normalizeCompatibilityConfig({ cfg })).toEqual({ config: cfg, changes: [] });
 });
