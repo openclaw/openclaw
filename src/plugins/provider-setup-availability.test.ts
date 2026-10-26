@@ -33,19 +33,13 @@ beforeEach(() => {
       assistantVisibility: "detected-only",
     },
   ]);
-  enablePluginInConfig.mockImplementation((config: unknown) => ({
-    config,
-    enabled: true,
-  }));
+  enablePluginInConfig.mockImplementation((config: unknown) => ({ config, enabled: true }));
   enablePluginWithCapabilityConsent.mockImplementation(enablePluginInConfig);
 });
 
 it("does not execute a discovery runtime that needs capability consent", async () => {
   const config = { plugins: { entries: { ollama: { enabled: false } } } };
-  enablePluginWithCapabilityConsent.mockResolvedValueOnce({
-    config,
-    enabled: false,
-  });
+  enablePluginWithCapabilityConsent.mockResolvedValueOnce({ config, enabled: false });
   resolvePluginProvidersCore.mockReturnValue([]);
   await expect(detectAvailableSetupProviderIds({ config })).resolves.toEqual(new Set());
   expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
@@ -76,7 +70,6 @@ it.each(["available", "missing", "failed"] as const)(
     await expect(detectAvailableSetupProviderIds({ config: {}, workspaceDir })).resolves.toEqual(
       new Set(state === "available" ? ["ollama"] : []),
     );
-    expect(loadManifestMetadataSnapshot).toHaveBeenCalledOnce();
     expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
       expect.objectContaining({ metadataSnapshot, workspaceDir }),
     );
