@@ -8,7 +8,7 @@ import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { deviceGatewayEnv } from "./device-gateway.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 
 const suite = createControlUiE2eSuite({

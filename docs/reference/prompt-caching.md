@@ -521,12 +521,22 @@ diagnostics:
 
 ### What to inspect
 
-Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per completed foreground model request alongside its stable system-prefix, volatile-suffix, and tools fingerprints, and flag cache-read drops from the previous request, including reported zero reads; billing totals remain separate. A flagged drop lists the tracked changes since the last request (`model`, `cacheRetention`, `transport`, `streamStrategy`, `systemPrompt`, `systemPromptSuffix`, `tools`, `aggregateToolResultTruncation`). Trace results require cache tracing (`diagnostics.cacheTrace.enabled` or `OPENCLAW_CACHE_TRACE=1`) and identify each request within its attempt.
+Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per completed foreground model request alongside its stable system-prefix, volatile-suffix, and tools fingerprints, and flag cache-read drops from the previous request, including reported zero reads; billing totals remain separate. A flagged drop lists the tracked changes since the last request (`model`, `cacheRetention`, `transport`, `streamStrategy`, `systemPrompt`, `systemPromptSuffix`, `tools`, `aggregateToolResultTruncation`). `systemPrompt` and `systemPromptSuffix` changes name the sections that changed: built-in sections such as `Skills` or `Runtime` by name, any other heading by its heading line (for example `## Silent Replies`), and text before the first heading as `Other`. Only section digests are kept, never section text; long heading lines, very many headings, and long change lists are capped. Trace results require cache tracing (`diagnostics.cacheTrace.enabled` or `OPENCLAW_CACHE_TRACE=1`) and identify each request within its attempt.
 
 When an adapter marks cache telemetry unavailable, observations omit its cache
 read/write counts and preserve the last measured comparison baseline. A later
 reported zero still counts as a measured miss. This distinction applies to local
 engines with optional cache metrics as well as compatible cloud APIs.
+
+On routes that pin the system prompt, the `[prompt-cache] cache read dropped`
+warning includes `systemPromptSeries=pinned` when the saved series was reused,
+or `systemPromptSeries=restarted:<reason>` when the attempt restarted it.
+Reasons are `new` (no saved series), `history` (compaction or a history rewrite),
+`model-change` (a model-change entry after the checkpoint), or `route:<part>`.
+The route part names the first changed element: `provider`, `model`, `api`,
+`baseUrl`, `inHistorySystemUpdates`, or `personalProfile`. Only these reason
+tokens are reported, never profile IDs, route-key contents, or prompt text.
+Routes without a system-prompt series omit the field.
 
 The comparison baseline resets when the session ID changes, even if an isolated cron job reuses its provider cache key. Session reset, deletion, shutdown, and completion of a detached Skill Workshop review release the retired session's diagnostic fingerprints; active sessions keep their cross-turn baselines. A fresh transcript can legitimately reuse fewer tokens than the previous run's final request. Within a session, `no tracked cache input change` means the tracked fingerprints stayed stable; it does not prove identical final provider payloads or diagnose cache expiry. Compare request timing and final payloads before attributing a drop to provider caching.
 

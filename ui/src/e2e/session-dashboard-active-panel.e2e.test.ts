@@ -8,6 +8,7 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { board } from "./chat-layout-fixtures.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -61,19 +62,15 @@ suite.define(() => {
               boardPresentation: "split",
             },
           ],
-          historyMessages: Array.from({ length: 20 }, (_, index) => ({
-            role: index % 2 ? "assistant" : "user",
-            content: [
-              {
-                type: "text",
-                text:
-                  index % 2
-                    ? `Check ${index}: the release verification passed. The package and installation checks are complete. Keep the remaining documentation work visible in the dashboard.`
-                    : `Review release item ${index}. Keep the draft and dashboard note while I compare the results.`,
-              },
-            ],
-            timestamp: 1700000000000 + index,
-          })),
+          historyMessages: Array.from({ length: 20 }, (_, index) =>
+            chatMessage(
+              index % 2 ? "assistant" : "user",
+              index % 2
+                ? `Check ${index}: the release verification passed. The package and installation checks are complete. Keep the remaining documentation work visible in the dashboard.`
+                : `Review release item ${index}. Keep the draft and dashboard note while I compare the results.`,
+              { timestamp: 1700000000000 + index },
+            ),
+          ),
           featureMethods: [
             "board.get",
             "chat.metadata",

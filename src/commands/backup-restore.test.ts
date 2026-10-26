@@ -111,6 +111,27 @@ async function writeUnextractableArchive(archivePath: string) {
 }
 
 describe("backupRestoreCommand", () => {
+  it.skipIf(process.platform === "win32")(
+    "escapes terminal controls in restore output while preserving the restored payload",
+    async () => {
+      await withState(async (state) => {
+        const text = "café\u001b[31m\nforged\tend\rrow\u0007";
+        const archive = state.path(`${text}.tar.gz`);
+        const target = state.path(`restored-${text}`);
+        await writeArchive({ archivePath: archive });
+        const runtime = createTestRuntime();
+        const result = await backupRestoreCommand(runtime, { archive, target });
+        const report = vi.mocked(runtime.log).mock.calls.flat().join("\n");
+        expect(report).toContain("café\\nforged\\tend\\rrow");
+        expect(report.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+        expect(report).not.toContain("\nforged");
+        expect(result.targetPath).toBe(target);
+        expect(result.archivePath).toBe(archive);
+        expect(await fs.readFile(path.join(target, DEFAULT_PAYLOAD_PATH), "utf8")).toBe("{}\n");
+      });
+    },
+  );
+
   it("selects a captured config payload from a legacy relative alias without following live paths", async () => {
     await withState(async (state) => {
       const archiveRoot = "backup";

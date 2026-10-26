@@ -1,3 +1,4 @@
+import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
 import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
@@ -622,8 +623,7 @@ it("shares actor revisions and isolates explicit policy copies", async () => {
           if (copy.entry) {
             copy.entry.sessionId = "policy-mutated";
           }
-          copy.version = { epoch: "policy-mutated", sequence: -1 };
-          copy.dependencySessionIds.length = 0;
+          copy.target = { ...copy.target, sessionKey: "policy-mutated" };
         },
       },
     );
@@ -646,7 +646,7 @@ it("shares actor revisions and isolates explicit policy copies", async () => {
   });
 });
 
-it("admits tool appends once per transaction boundary without transferring transcript indexes", async () => {
+it("admits tool appends once per transaction boundary without transferring replica state", async () => {
   await withActor(async ({ actor, admissions }) => {
     const initial = await actor.read(authority);
     const append = messageAppend(actor, initial.entry!.sessionId, {
@@ -671,9 +671,12 @@ it("admits tool appends once per transaction boundary without transferring trans
         },
       });
       const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+      assert(isRecord(facts) && isRecord(facts.snapshot));
       expect(
-        isRecord(facts) && isRecord(facts.snapshot) && Object.hasOwn(facts.snapshot, "transcript"),
-      ).toBe(false);
+        serialize(facts.snapshot).byteLength -
+          serialize(facts.snapshot.target).byteLength -
+          serialize(facts.snapshot.entry).byteLength,
+      ).toBeLessThan(32);
     }
     const committed = actor.snapshot(authority)!;
     expect(committed.transcript.version.rawSeq).toBeGreaterThan(

@@ -6,6 +6,7 @@ import {
   mergeTransportHeaders,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { asOptionalRecord, normalizeFastMode } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { classifyOpenAIBaseUrl } from "./base-url.js";
 import { resolveNativeWebSearch } from "./native-web-search-policy.js";
 import { resolveOpenAIModelServiceTiers } from "./service-tier-policy.js";
 import { TOKEN_SHARING_AUTH_FLOW } from "./token-sharing.js";
@@ -39,6 +40,51 @@ export function wrapOpenAIResponsesStream(ctx: ProviderWrapStreamFnContext) {
           }
           return requested === "ultrafast" ? true : requested;
         },
+      },
+    };
+  }
+  const configuredAccessPrograms = ctx.extraParams?.accessPrograms;
+  if (configuredAccessPrograms !== undefined) {
+    const accessPrograms = asOptionalRecord(configuredAccessPrograms);
+    const cyber = accessPrograms?.cyber;
+    if (
+      !accessPrograms ||
+      Object.keys(accessPrograms).some((key) => key !== "cyber") ||
+      (cyber !== undefined &&
+        !["standard", "daybreak_blue", "daybreak_red"].some((value) => value === cyber))
+    ) {
+      throw new Error(
+        'OpenAI params.accessPrograms must be {} or { cyber: "standard" | "daybreak_blue" | "daybreak_red" }.',
+      );
+    }
+    const underlying = streamContext.streamFn ?? streamSimple;
+    streamContext = {
+      ...streamContext,
+      streamFn: (model, context, options) => {
+        if (
+          !(
+            (model.api === "openai-responses" &&
+              classifyOpenAIBaseUrl(model.baseUrl) === "platform") ||
+            (model.api === "openai-chatgpt-responses" &&
+              classifyOpenAIBaseUrl(model.baseUrl) === "chatgpt")
+          )
+        ) {
+          throw new Error(
+            "OpenAI params.accessPrograms requires an official OpenAI Platform or ChatGPT Responses endpoint.",
+          );
+        }
+        return underlying(model, context, {
+          ...options,
+          onPayload: async (payload, payloadModel) => {
+            const transformed = await options?.onPayload?.(payload, payloadModel);
+            const request = asOptionalRecord(transformed ?? payload);
+            if (!request) {
+              throw new Error("OpenAI access programs require a Responses request object.");
+            }
+            // Program selection and speed are independent; neither grants account access.
+            return { ...request, access_programs: cyber === undefined ? {} : { cyber } };
+          },
+        });
       },
     };
   }

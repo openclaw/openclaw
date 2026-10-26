@@ -38,6 +38,7 @@ import {
 } from "./subagent-control-native.test-support.js";
 import { prepareSubagentKillSession } from "./subagent-control-session.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
+import { mutateCleanup } from "./subagent-registry-sweep-cleanup.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import { registerSubagentSweepKillCustodyTests } from "./subagent-registry-sweeper-kill-custody.test-support.js";
 import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
@@ -137,6 +138,31 @@ describe("subagent registry recovery scheduling", () => {
   });
 
   registerSubagentSweepRetainedAuthorityTests(recoverRow, killSessionEntry);
+
+  it("isolates cleanup changes without copying the immutable run payload", async () => {
+    const { entry, runs } = createHarness({}, archivedRun());
+    const execution = { ...entry.execution };
+    using clone = vi.spyOn(globalThis, "structuredClone");
+
+    const updated = await mutateCleanup(
+      runs,
+      entry,
+      () => true,
+      (draft) => {
+        draft.execution.suppressSessionEffects = true;
+        draft.contextEngineCleanupCompletedAt = 123;
+      },
+    );
+
+    expect(entry.execution).toEqual(execution);
+    expect(entry.contextEngineCleanupCompletedAt).toBeUndefined();
+    expect(updated).toMatchObject({
+      execution: { suppressSessionEffects: true },
+      contextEngineCleanupCompletedAt: 123,
+    });
+    expect(runs.get(entry.runId)).toEqual(updated);
+    expect(clone.mock.calls.some(([value]) => value === entry)).toBe(false);
+  });
 
   it.each(["terminal", "running"] as const)(
     "only gives ended %s children requester-wake priority over suspended delivery cleanup",

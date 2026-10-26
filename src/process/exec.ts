@@ -314,7 +314,9 @@ export async function runCommandBuffered(
         : Math.max(0, maxCombinedOutputBytes - combinedBytes);
     const remaining = Math.max(0, Math.min(maxBytes - capturedBytes[stream], combinedRemaining));
     if (remaining > 0) {
-      const captured = copyOwnedBuffer(chunk.subarray(0, remaining));
+      // Pipe chunks stay immutable until concatenation; only clipped views need owned storage.
+      const captured =
+        chunk.byteLength > remaining ? copyOwnedBuffer(chunk.subarray(0, remaining)) : chunk;
       chunks[stream].push(captured);
       capturedBytes[stream] += captured.byteLength;
     }

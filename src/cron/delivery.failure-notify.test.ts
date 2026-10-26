@@ -101,6 +101,30 @@ describe("sendCronAnnouncePayloadStrict", () => {
     );
   });
 
+  it.each(["telegram", "discord", "signal"])(
+    "formats the inspection link for %s",
+    async (channel) => {
+      const inspectionUrl = "https://control.example/chat/main/cron/job-1/run/run-1";
+      await send({
+        target: { channel, to: "123" },
+        inspectionUrl,
+        payload: [{ text: "First update" }, { text: "Automation finished" }],
+      });
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payloads: [
+            { text: "First update" },
+            {
+              text: `Automation finished\n${channel === "signal" ? `Inspect: ${inspectionUrl}` : `[Inspect run](${inspectionUrl})`}`,
+            },
+          ],
+        }),
+        undefined,
+        undefined,
+      );
+    },
+  );
+
   it("retries a proven not-dispatched failure through the notification sender", async () => {
     vi.useFakeTimers();
     const signal = new AbortController().signal;

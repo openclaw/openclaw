@@ -299,7 +299,7 @@ suite.define(() => {
     expect(response?.status()).toBe(200);
     await gateway.waitForRequest("config.get");
     await gateway.waitForRequest("users.prefs.get");
-    await gateway.waitForRequest("chat.startup");
+    await gateway.waitForRequest("sessions.messages.subscribe");
     await expectLightTheme(page);
 
     await gateway.setOnline(false);

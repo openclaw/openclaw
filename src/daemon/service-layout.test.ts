@@ -9,6 +9,28 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 describe("summarizeGatewayServiceLayout", () => {
+  it("identifies the standalone executable as the entrypoint even when it is named bun", async () => {
+    const root = dirs.make("standalone-service-layout-");
+    const executable = path.join(root, "bun");
+    await fs.writeFile(executable, "");
+    await fs.writeFile(
+      path.join(root, "manifest.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        mode: "aot",
+        executable: { path: "bun" },
+        runtime: { path: "runtime" },
+        openclaw: { version: "2026.10.25" },
+        bun: { version: "1.4.4" },
+      }),
+    );
+    await expect(
+      summarizeGatewayServiceLayout({
+        programArguments: [executable, "gateway", "--port", "19876"],
+      }),
+    ).resolves.toHaveProperty("entrypoint", executable);
+  });
+
   it("preserves optional physical fields and lexical source paths on probe failure", async () => {
     vi.spyOn(fs, "realpath").mockRejectedValue(
       Object.assign(new Error("denied"), { code: "EACCES" }),

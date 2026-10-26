@@ -82,8 +82,8 @@ function observeModelCallIterator<T>(
     // terminal event first, but the abandoned iterator still needs return() cleanup.
     let iteratorSettled = false;
     try {
-      for (;;) {
-        const next = await iterator.next();
+      for (const advanceSource = iterator.next.bind(iterator); ;) {
+        const next = await advanceSource();
         if (next.done) {
           iteratorSettled = true;
           break;

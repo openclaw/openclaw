@@ -1438,14 +1438,14 @@ describe("runPreparedReply media-only handling", () => {
           suppressedFactIndexes: [1],
         },
       });
-      expect(followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
-        __openclaw: {
-          mediaImageLayout: {
-            slots: [{ kind: "inline", factIndex: 1 }],
-            suppressedFactIndexes: [2],
-          },
-        },
-      });
+      // A failed pre-read skips this run only; the recorded image remains retryable.
+      const recorded = followupRun.userTurnTranscriptRecorder?.message;
+      expect(recorded).toHaveProperty("__openclaw.mediaImageLayout.slots", [
+        { kind: "inline", factIndex: 1 },
+        { kind: "offloaded", factIndex: 2 },
+      ]);
+      expect(recorded).not.toHaveProperty("__openclaw.mediaImageLayout.suppressedFactIndexes");
+      expect(recorded).not.toHaveProperty(["__openclaw", "media", 2, "hydrationSuppressed"]);
     },
   );
 
@@ -2446,7 +2446,7 @@ describe("runPreparedReply media-only handling", () => {
       }
       await runPreparedReply(params);
       expect(requireRunReplyAgentCall().followupRun.run.bootstrapUserProfileId).toBe(
-        kind === "session-internal" ? undefined : "carol",
+        kind === "session-internal" ? "alice" : "carol",
       );
     },
   );

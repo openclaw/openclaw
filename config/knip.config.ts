@@ -90,6 +90,8 @@ const repositoryScriptEntries = [
   "apps/android/scripts/build-release-artifacts.ts!",
   // scripts/README.md invokes this warm-interaction benchmark CLI by path.
   "scripts/bench-control-ui-interactions.ts!",
+  // The opt-in projection benchmark builds its browser fixture through this CLI.
+  "scripts/build-control-ui-projection-fixture.mts!",
   // scripts/README.md invokes these exact memory-search benchmarks by path.
   "scripts/bench-memory-search.mjs!",
   "scripts/bench-memory-search-sqlite.mjs!",
@@ -165,6 +167,9 @@ const repositoryScriptEntries = [
   "scripts/perf/health-cron-fixture.ts!",
   // #183020 invokes this synthetic category-registration workload by path.
   "scripts/perf/session-group-registration-measure.ts!",
+  // Its source header documents this owner-level field-order benchmark.
+  "scripts/perf/session-event-field-order.ts!",
+  "scripts/perf/session-array-encoding.ts!",
   "scripts/perf/session-pr-subscriptions-measure.ts!",
   "scripts/perf/session-tool-surface-measure.ts!",
   "scripts/perf/subagent-maintenance-capture-measure.ts!",
@@ -223,6 +228,7 @@ const repositoryScriptEntries = [
   "scripts/perf/state-path-resolution-measure.ts!",
   // Maintained guides and source headers invoke these proof commands by exact path.
   "scripts/bench-control-ui-media.ts!",
+  "scripts/bench-control-ui-css.ts!",
   "scripts/bench-control-ui-rich-boot.ts!",
   "scripts/bench-control-ui-wire.ts!",
   "scripts/bench-dynamic-validators.mts!",
@@ -291,6 +297,69 @@ const repositoryScriptEntries = [
   "scripts/perf/shared-skills-measure.ts!",
   "scripts/perf/sqlite-snapshot-maintenance.mjs!",
   "scripts/perf/system-prompt-pool-retention.ts!",
+  // Maintained source headers, guides, and recorded proof commands invoke these exact roots.
+  "scripts/bench-control-ui-route-leaks.ts!",
+  "scripts/bench-plugin-views.ts!",
+  "scripts/perf/agent-db-borrower-gateway-proof.ts!",
+  "scripts/perf/agent-revalidation.ts!",
+  "scripts/perf/agent-roster-ids-measure.ts!",
+  "scripts/perf/agent-roster-validation-measure.mjs!",
+  "scripts/perf/attempt-abort-retention.ts!",
+  "scripts/perf/board-layout-measure.mjs!",
+  "scripts/perf/channel-run-admission-measure.mjs!",
+  "scripts/perf/chat-history-param-validation-measure.mjs!",
+  "scripts/perf/codex-catalog-hydrate-measure.ts!",
+  "scripts/perf/cron-continuation-snapshot-measure.ts!",
+  "scripts/perf/cron-history-plan-measure.ts!",
+  "scripts/perf/cron-list-projection-measure.mjs!",
+  "scripts/perf/cron-list-revision-measure.ts!",
+  "scripts/perf/embedded-runner-array-copies.ts!",
+  "scripts/perf/gateway-clone-measure.ts!",
+  "scripts/perf/gateway-snapshot-freeze-measure.mjs!",
+  "scripts/perf/gateway-ui-rpc-measure.ts!",
+  "scripts/perf/github-base-refresh-measure.ts!",
+  "scripts/perf/ingress-blocked-lanes.ts!",
+  "scripts/perf/lease-main-thread-renewal.mjs!",
+  "scripts/perf/media-selection-measure.ts!",
+  "scripts/perf/model-catalog-runtime-measure.ts!",
+  "scripts/perf/model-suppression-resolver.ts!",
+  "scripts/perf/node-event-session-source-measure.mjs!",
+  "scripts/perf/onboarding-readback-measure.ts!",
+  "scripts/perf/owned-snapshot-copies-measure.mjs!",
+  "scripts/perf/plugin-config-publication-measure.mjs!",
+  "scripts/perf/plugin-metadata-frame-measure.ts!",
+  "scripts/perf/plugin-sdk-defensive-measure.ts!",
+  "scripts/perf/presence-delivery-measure.ts!",
+  "scripts/perf/project-publication-fetch-measure.ts!",
+  "scripts/perf/provider-rate-limit-http-retention.ts!",
+  "scripts/perf/provider-route-overrides.ts!",
+  "scripts/perf/reply-classification-publication-measure.ts!",
+  "scripts/perf/runtime-source-projection-measure.ts!",
+  "scripts/perf/session-child-owner-measure.ts!",
+  "scripts/perf/session-initialization-measure.ts!",
+  "scripts/perf/session-list-order-measure.mjs!",
+  "scripts/perf/session-pr-currency-measure.ts!",
+  "scripts/perf/session-run-progress-measure.ts!",
+  "scripts/perf/session-tool-pin-measure.ts!",
+  "scripts/perf/sidebar-presentation-measure.ts!",
+  "scripts/perf/source-kind-progress-equality-measure.ts!",
+  "scripts/perf/sqlite-reclamation-retention.ts!",
+  "scripts/perf/state-db-cache-admission-measure.ts!",
+  "scripts/perf/stream-dispatch-scope-measure.ts!",
+  "scripts/perf/subagent-mutation-clone-measure.ts!",
+  "scripts/perf/telegram-entity-sort-measure.mjs!",
+  "scripts/perf/tool-result-owned-freeze-measure.ts!",
+  "scripts/perf/tool-search-allowlist-measure.ts!",
+  "scripts/perf/tools-catalog-copy-measure.ts!",
+  "scripts/perf/trajectory-skills-metadata-measure.ts!",
+  "scripts/perf/transcript-checkpoint-retention.ts!",
+  "scripts/perf/trusted-tool-matcher-measure.mjs!",
+  "scripts/perf/turn-participants-measure.ts!",
+  "scripts/perf/usage-aggregate-measure.ts!",
+  "scripts/perf/user-github-readback-measure.ts!",
+  "scripts/perf/worker-reconcile-shutdown.ts!",
+  "scripts/perf/worker-request-diagnostics-measure.ts!",
+  "scripts/perf/worker-transcript-batch-measure.ts!",
   // Live proof and test owners spawn or preload these children through computed paths.
   "scripts/perf/bench-ingress-bridge.mjs!",
   "scripts/perf/child-memory-fixture.cjs!",
@@ -1306,6 +1375,21 @@ const config = {
     // Mirror config parsing, redaction mapping, cap fitting, and the runner are
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
+    // Knowledge's focused tests assert response budgets, link parsing, keyword
+    // expressions, flush request IDs, descriptor paths, memory-index pinning and
+    // labels, compact search limits and the worker operation table through these
+    // seams; production reaches them through service handlers and the prompt hook.
+    "extensions/knowledge/src/connections.ts": ["exports"],
+    "extensions/knowledge/src/ingestion-contract.ts": ["exports", "types"],
+    "extensions/knowledge/src/inspection.ts": ["exports"],
+    "extensions/knowledge/src/markdown-links.ts": ["exports"],
+    "extensions/knowledge/src/memory-index-hook.ts": ["exports"],
+    "extensions/knowledge/src/memory-index.ts": ["exports"],
+    "extensions/knowledge/src/retrieval.ts": ["exports"],
+    "extensions/knowledge/src/search-detail.ts": ["exports"],
+    "extensions/knowledge/src/service.ts": ["exports"],
+    "extensions/knowledge/src/source-descriptors.ts": ["exports"],
+    "extensions/knowledge/src/storage-host.ts": ["exports"],
     "src/infra/heartbeat-wake.ts": ["exports"],
     // Lazy loaders import these modules opaquely (media-understanding runner, config model
     // validation), which Knip counts as using every export until a bare namespace reference
@@ -1562,6 +1646,18 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/kilocode`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/kimi-coding`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/knowledge`]: {
+      ...bundledPluginWorkspace([
+        // knowledge-source-ingest/SKILL.md has agents run these bundled scripts by path.
+        "skills/knowledge-source-ingest/scripts/chat-transcript.mjs!",
+        "skills/knowledge-source-ingest/scripts/discrawl-normalize.mjs!",
+        "skills/knowledge-source-ingest/scripts/source-manifest.mjs!",
+        // skill-packaging.test.ts runs this skill-reference generator with --check.
+        "scripts/sync-skill-references.mjs",
+      ]),
+      // discrawl-normalize.mjs reads the user's own Discord archive through the discrawl CLI.
+      ignoreBinaries: ["discrawl"],
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/matrix`]: bundledPluginWorkspace([
       // The monitor lazy-loads outbound behavior on inbound-only processes.
       "src/matrix/send.ts!",

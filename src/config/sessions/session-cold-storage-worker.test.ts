@@ -76,7 +76,7 @@ it("rejects oversized raw event bytes without preparing a transcript snapshot", 
       sessionId: historicalId,
       lowerBoundBytes: fixture.original.events
         .filter((event) => event.session_id === historicalId)
-        .reduce((bytes, event) => bytes + Buffer.byteLength(event.event_json), 0),
+        .reduce((bytes, event) => Math.max(bytes, Buffer.byteLength(event.event_json)), 0),
     },
   ]);
   expect(batch.envelopeBytes).toBe(0);
@@ -104,7 +104,7 @@ it("bounds UTF-16 stores by UTF-8 bytes instead of stored UTF-16 bytes", async (
   });
   const utf8Bytes = utf16.original.events
     .filter((event) => event.session_id === historicalId)
-    .reduce((bytes, event) => bytes + Buffer.byteLength(event.event_json), 0);
+    .reduce((bytes, event) => Math.max(bytes, Buffer.byteLength(event.event_json)), 0);
   const [oversized] = batch.oversizedTranscripts;
   expect(oversized?.sessionId).toBe(historicalId);
   // Stored UTF-16 bytes double ASCII text; a larger "lower bound" would skip archivable windows.

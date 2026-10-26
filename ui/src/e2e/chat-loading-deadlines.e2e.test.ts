@@ -129,6 +129,7 @@ suite.define(() => {
       const diagnostic =
         "Agent main has not completed startup inspection and preparation. Run Doctor if inspection cannot complete.";
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         awaitInitialRoster: false,
         sessionKey: "agent:main:main",
         methodResponses: {
@@ -180,6 +181,7 @@ suite.define(() => {
           });
         }
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: method !== "chat.startup",
           sessionKey: "agent:main:main",
           heldMethods: [method],
           historyMessages: [{ role: "assistant", content: readyText }],
@@ -277,6 +279,7 @@ suite.define(() => {
         const diagnostic = "⚠️ ✉️ Message failed: delivery unavailable near 🧭";
         const renderedDiagnostic = "Message failed: delivery unavailable near 🧭";
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: false,
           sessionKey,
           // Account recovery can replace startup with a scoped history request.
           heldMethods: ["chat.startup", "chat.history", "chat.send"],

@@ -2,7 +2,11 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { baseProps, renderConfigInto } from "./config-view.test-support.tsx";
+import {
+  baseProps,
+  renderConfigInto,
+  requiredConfigElement as element,
+} from "./config-view.test-support.tsx";
 import type { ConfigProps } from "./view.tsx";
 import "../../styles.css";
 
@@ -42,19 +46,6 @@ describe("config raw editing and redaction", () => {
       throw new Error(`Expected button with text "${label}"`);
     }
     return button;
-  }
-
-  function element<T extends Element>(
-    container: HTMLElement,
-    selector: string,
-    constructor: new () => T,
-  ): T {
-    const found = container.querySelector(selector);
-    expect(found).toBeInstanceOf(constructor);
-    if (!(found instanceof constructor)) {
-      throw new Error(`Expected element matching "${selector}"`);
-    }
-    return found;
   }
 
   function openDiff(container: HTMLElement) {

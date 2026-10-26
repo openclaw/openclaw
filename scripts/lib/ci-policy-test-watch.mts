@@ -243,7 +243,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   })),
   // Filename-launched workers and native subprocess owners are not static imports.
   ...[
-    "extensions/browser/chrome-extension/background.creation-lifecycle.test.ts",
     "extensions/browser/chrome-extension/background.initial-target.test.ts",
     "extensions/browser/chrome-extension/background.relay-lifecycle.test.ts",
   ].map((testFile): PolicyTestWatch => ({
@@ -536,7 +535,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/boards/sqlite-board-store.worker.ts"],
   })),
   ...[
-    "src/cli/capability-cli/model.account-secrets.provenance.test.ts",
+    "src/cli/capability-cli/model.resources.test.ts",
     "src/commands/models/list.probe.resources.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
@@ -1366,13 +1365,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "scripts/verify-pr-hosted-gates.{mjs,mts}",
     ],
   })),
-  {
-    testFile: "extensions/browser/chrome-extension/background.fetch-continuation.test.ts",
-    watchGlobs: [
-      "extensions/browser/chrome-extension/background.js",
-      "extensions/browser/chrome-extension/modules/relay-command-handler.js",
-    ],
-  },
   {
     testFile: "extensions/crabbox/src/crabbox-worker-desktop-windows.test.ts",
     watchGlobs: ["extensions/crabbox/src/crabbox-worker-provider.ts"],

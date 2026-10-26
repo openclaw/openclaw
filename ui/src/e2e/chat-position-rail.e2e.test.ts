@@ -363,9 +363,9 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   await markerForIndex(5).press("ArrowDown");
   await expect.poll(focusedMarkerId).toBe("position-rail-6");
   await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 6");
-  expect(await readStyle(markerForIndex(6).locator(".chat-position-rail__tick"), "width")).toBe(
-    "8px",
-  );
+  await expect
+    .poll(() => readStyle(markerForIndex(6).locator(".chat-position-rail__tick"), "width"))
+    .toBe("8px");
   await showMarker(120);
   await markerForIndex(120).focus();
   await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 120");

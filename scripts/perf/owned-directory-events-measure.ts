@@ -1,4 +1,8 @@
 // Source-owner measurement: real subscriptions, replayed native event callbacks.
+// node --expose-gc --import ./scripts/tsx.mjs scripts/perf/owned-directory-events-measure.ts
+//   --state-dir <new-directory> [--owner <frozen-owner.ts>] [--allocations]
+// macOS selects the in-process native adapter during subscription setup only;
+// this measures owner delivery, not macOS helper-process transport or filesystem throughput.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import type { HeapProfiler } from "node:inspector";
@@ -29,7 +33,7 @@ const { values } = parseArgs({
 });
 assert.ok(values["state-dir"], "--state-dir must name a new synthetic directory");
 assert.ok(global.gc, "Run with --expose-gc");
-assert.equal(process.platform, "linux", "Native callback replay uses the Linux watch adapter");
+assert.ok(["linux", "darwin"].includes(process.platform), "Native callback replay requires Unix");
 const integer = (name: "operations" | "start-at", min: number) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
 const operations = integer("operations", 1);
@@ -72,7 +76,9 @@ native.watch = (filename, options, listener) => {
 const subscriptions: Array<{ close(): void }> = [];
 let directNotifications = 0;
 let descendantNotifications = 0;
+const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 try {
+  Object.defineProperty(process, "platform", { ...platform, value: "linux" });
   subscriptions.push(
     observeOwnedDirectory(
       root,
@@ -94,6 +100,7 @@ try {
     ),
   );
 } finally {
+  Object.defineProperty(process, "platform", platform);
   native.watch = originalWatch;
 }
 assert.equal(callbacks.length, 1, "Both subscriptions share the real root watch");

@@ -34,21 +34,19 @@ type SnapshotTool = {
   startedAt: number;
   deadlineAtMs?: number;
 };
-type SnapshotActivity = DiagnosticArgumentChurnActivity &
-  DiagnosticRepeatedRequestActivity & {
-    activeEmbeddedRuns: ReadonlyMap<
-      string,
-      { runId: string; sequence: number; generation?: object }
-    >;
-    activeModelCalls: ReadonlyMap<string, unknown>;
-    activeCoreModelCalls: ReadonlyMap<object, ReadonlyMap<string, { requestTimeoutMs?: number }>>;
-    activeTools: ReadonlyMap<string, SnapshotTool>;
-    lastProgressAt: number;
-    lastProgressReason?: string;
-  };
-
 export function buildDiagnosticSessionActivitySnapshot(
-  activity: SnapshotActivity,
+  activity: DiagnosticArgumentChurnActivity &
+    DiagnosticRepeatedRequestActivity & {
+      activeEmbeddedRuns: ReadonlyMap<
+        string,
+        { runId: string; sequence: number; generation?: object }
+      >;
+      activeModelCalls: ReadonlyMap<string, unknown>;
+      activeCoreModelCalls: ReadonlyMap<object, ReadonlyMap<string, { requestTimeoutMs?: number }>>;
+      activeTools: ReadonlyMap<string, SnapshotTool>;
+      lastProgressAt: number;
+      lastProgressReason?: string;
+    },
   now: number,
 ): DiagnosticSessionActivitySnapshot {
   const currentOwner = resolveCurrentDiagnosticRun(activity.activeEmbeddedRuns.values());

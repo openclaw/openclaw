@@ -9,6 +9,7 @@ import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { textContent } from "./chat-flow.test-support.ts";
 import {
   activateChatHeaderPanelAction,
   dockChatSidePanel,
@@ -58,12 +59,9 @@ beforeEach(() => {
 const historyMessages = Array.from({ length: 10 }, (_, index) => ({
   id: `rail-tabs-${index}`,
   role: index % 2 === 0 ? "user" : "assistant",
-  content: [
-    {
-      type: "text",
-      text: `Checkpoint ${index + 1}: keep the conversation visible while working with session tools.`,
-    },
-  ],
+  content: textContent(
+    `Checkpoint ${index + 1}: keep the conversation visible while working with session tools.`,
+  ),
   timestamp: Date.now() - (10 - index) * 60_000,
 }));
 

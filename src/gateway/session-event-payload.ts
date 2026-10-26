@@ -139,6 +139,7 @@ export function buildGatewaySessionSnapshot(params: {
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
     childSessions: sessionRow.childSessions,
     thinkingLevel: sessionRow.thinkingLevel ?? null,
+    cyberAccessProgram: sessionRow.cyberAccessProgram ?? null,
     fastMode: sessionRow.fastMode,
     effectiveFastMode: sessionRow.effectiveFastMode,
     effectiveFastModeSource: sessionRow.effectiveFastModeSource,

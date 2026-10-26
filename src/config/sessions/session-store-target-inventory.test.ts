@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { prepareConfigRuntimeEnv } from "../config-env-vars.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
+import * as sessionPaths from "./paths.js";
 import { SessionStoreRegistryReadRequired } from "./session-sqlite-target.js";
 import {
   captureSessionStoreReadCandidates,
@@ -75,6 +76,37 @@ test("shares published config while recapturing candidates and following config 
   expect(replacement.env).not.toBe(original.env);
   expect(replacement.paths.get("main")?.configured).toBe(cfg.session!.store);
   expect(original.config.session?.store).toBe(path.join(root, "custom.json"));
+});
+
+test("derives configured paths once per publication across interleaved inventory requests", () => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  cfg.agents = { entries: { main: {}, helper: {}, third: {} } };
+  setRuntimeConfigSnapshot(cfg);
+  const resolve = vi.spyOn(sessionPaths, "resolveSessionStorePathCore");
+  for (let index = 0; index < 20; index++) {
+    const agentId = index % 2 ? "helper" : "main";
+    const inventory = prepareSessionStoreTargetInventory(cfg, [agentId]);
+    expect([...inventory.paths.keys()]).toEqual(
+      agentId === "main" ? ["main", "helper", "third"] : ["helper", "main", "third"],
+    );
+  }
+  expect(resolve).toHaveBeenCalledTimes(6);
+
+  // Detached requests cannot replace the active publication's prepared paths.
+  prepareSessionStoreTargetInventory({ agents: { entries: { other: {} } } }, ["other"], env);
+  const calls = resolve.mock.calls.length;
+  prepare();
+  expect(resolve).toHaveBeenCalledTimes(calls);
+
+  cfg.session = { store: path.join(root, "replacement", "{agentId}.json") };
+  cfg.agents = { entries: { main: {}, replacement: {} } };
+  setRuntimeConfigSnapshot(cfg);
+  const current = prepareSessionStoreTargetInventory(cfg, ["replacement"]);
+  expect([...current.paths.keys()]).toEqual(["replacement", "main"]);
+  expect(current.paths.get("replacement")?.configured).toBe(
+    path.join(root, "replacement", "replacement.json"),
+  );
+  expect(resolve).toHaveBeenCalledTimes(calls + 4);
 });
 
 test("refreshes published inventory environments after env publication and rollback", () => {

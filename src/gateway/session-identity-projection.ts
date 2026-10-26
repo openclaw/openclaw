@@ -301,10 +301,13 @@ export function resolveSessionListProfileReference(
   if (identities.get(reference) && (!allowedProfileIds || allowedProfileIds.has(exact))) {
     return ok(exact);
   }
-  const prefix = /^[0-9a-f]{8,32}$/.test(reference);
+  // Compare retained IDs directly; normalizing each association allocates per visible row.
+  const prefix = /^[0-9a-f]{8,32}$/.test(reference)
+    ? new RegExp(`^-*${reference.split("").join("-*")}`, "i")
+    : undefined;
   const matches = new Set<string>();
   const matchesReference = (id: string | undefined) => {
-    if (id && prefix && id.replaceAll("-", "").toLowerCase().startsWith(reference)) {
+    if (id && prefix?.test(id)) {
       matches.add(resolveSessionProfileId(id, identities));
     }
     return id === reference;

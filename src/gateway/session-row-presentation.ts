@@ -24,7 +24,10 @@ import {
   sessionRowsRevision,
   type SessionRowGeneration,
 } from "./session-row-identity.js";
-import type { SessionRowReadView } from "./session-row-prepared-read.js";
+import {
+  projectPreparedSessionRunState,
+  type SessionRowReadView,
+} from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
@@ -45,11 +48,14 @@ import {
 } from "./session-sharing-policy.js";
 import { prepareProjectedSessionSharing } from "./session-sharing.js";
 import { sessionTitleRequests } from "./session-title-state.js";
-import { matchesSessionArchiveFilter, resolveSessionChildOwners } from "./session-utils-core.js";
+import {
+  matchesSessionArchiveFilter,
+  resolveSessionChildOwners,
+  shouldPropagateChildActivity,
+} from "./session-utils-core.js";
 import {
   applyGatewaySessionRowMode,
   projectGatewaySessionActiveRun,
-  projectGatewaySessionRunState,
 } from "./session-utils-display.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
@@ -298,12 +304,8 @@ export function prepareProjectedSessionPresentation(
   const preparedRowContext = { ...rowContext, subagentRuns };
   const runState = (
     key: string,
-    {
-      entry,
-      parsedKey,
-    }: Pick<records.MaterializedRow["materialized"]["source"], "entry" | "parsedKey">,
-  ) =>
-    projectGatewaySessionRunState({ key, entry, parsedKey, now, rowContext: preparedRowContext });
+    source: Pick<records.MaterializedRow["materialized"]["source"], "entry" | "parsedKey">,
+  ) => projectPreparedSessionRunState(key, source, now, preparedRowContext);
   const active = (
     record: Pick<records.MaterializedRow, "key" | "entry" | "agentId" | "storeTarget">,
   ) =>
@@ -340,19 +342,18 @@ export function prepareProjectedSessionPresentation(
     ]);
     return publicationState?.lists.get(key) ?? { key, refs: 0, bytes: 0, historyRefs: 0 };
   };
-  const viewer = (value: SessionSharingTarget, sharingRole = sharing.roleForTarget(value)) => ({
-    visibility: resolveSessionVisibility(value.entry),
-    ...(profileId && !value.entry.incognito && !isIncognitoSessionKey(value.canonicalKey)
-      ? {
-          hiddenFromInvolvingMe:
-            (rowContext.identityProjection?.involvement ?? projectSessionProfileInvolvements)(
-              value.entry,
-              profiles,
-            ).get(profileId)?.hidden ?? false,
-        }
-      : {}),
-    sharingRole,
-    sendDisabledReason:
+  const viewerFacts: Partial<GatewaySessionRow> = {};
+  const viewer = (value: SessionSharingTarget, sharingRole = sharing.roleForTarget(value)) => {
+    viewerFacts.visibility = resolveSessionVisibility(value.entry);
+    viewerFacts.hiddenFromInvolvingMe =
+      profileId && !value.entry.incognito && !isIncognitoSessionKey(value.canonicalKey)
+        ? ((rowContext.identityProjection?.involvement ?? projectSessionProfileInvolvements)(
+            value.entry,
+            profiles,
+          ).get(profileId)?.hidden ?? false)
+        : undefined;
+    viewerFacts.sharingRole = sharingRole;
+    viewerFacts.sendDisabledReason =
       authorizeSessionAgentRun(
         { cfg: policyConfig, client: client ?? null, target: value },
         { policy: sharing.policy },
@@ -360,8 +361,9 @@ export function prepareProjectedSessionPresentation(
       sharing.authorizeTarget(value, sharingRole)?.message ??
       (resolveSendPolicy({ cfg, entry: value.entry, sessionKey: value.canonicalKey }) === "deny"
         ? "send blocked by session policy"
-        : null),
-  });
+        : null);
+    return viewerFacts;
+  };
   const projectModels = (row: GatewaySessionRow, view?: SessionRowView) => {
     const projected = models?.session(row) ?? row;
     if (projected === row || !view) {
@@ -494,15 +496,13 @@ export function prepareProjectedSessionPresentation(
         }
       }
       for (const child of record.materialized.source.childLinks ?? []) {
-        const { key, entry, parsedKey } = child;
+        const { key, entry } = child;
         const childActive = runState(key, child).fields.hasActiveSubagentRun;
         facts.push(
           key,
-          childActive,
+          childActive && shouldPropagateChildActivity(key, entry, record.key),
           resolveSessionChildOwners({
-            key,
-            entry,
-            parsedKey,
+            ...child,
             now,
             subagentRuns,
             hasActiveRun: childActive,
@@ -517,22 +517,22 @@ export function prepareProjectedSessionPresentation(
     }
     const views = published?.views;
     const value = published?.target ?? toProjectedSessionSharingTarget(record);
-    const viewerFacts = client === undefined ? undefined : viewer(value);
+    const recipientView = client === undefined ? undefined : viewer(value);
     const canEnsure =
       client !== undefined && preparedFacts?.activitySummary
         ? !authorizeIncognitoSessionTarget({
             client: client ?? null,
             sessionKey: value.canonicalKey,
             target: value,
-          }) && !sharing.authorizeTarget(value, viewerFacts?.sharingRole)
+          }) && !sharing.authorizeTarget(value, recipientView?.sharingRole)
         : undefined;
     const signature = views && optionKey(options);
     recipientFacts.length = 0;
     recipientFacts.push(
-      viewerFacts?.visibility,
-      viewerFacts?.hiddenFromInvolvingMe,
-      viewerFacts?.sharingRole,
-      viewerFacts?.sendDisabledReason,
+      recipientView?.visibility,
+      recipientView?.hiddenFromInvolvingMe,
+      recipientView?.sharingRole,
+      recipientView?.sendDisabledReason,
       canEnsure,
       excludedChildKeys?.size ?? 0,
       excludedSwarmKeys?.size ?? 0,
@@ -585,8 +585,8 @@ export function prepareProjectedSessionPresentation(
     if (options.includeActivitySummary === false) {
       row.activitySummary = undefined;
     }
-    if (viewerFacts) {
-      Object.assign(row, viewerFacts);
+    if (recipientView) {
+      Object.assign(row, recipientView);
       if (row.activitySummary) {
         row.activitySummary = { ...row.activitySummary, canEnsure: canEnsure === true };
       }

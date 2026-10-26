@@ -4613,6 +4613,17 @@ For concurrent comparisons, pass the same future Unix millisecond timestamp with
 `--start-at` to both processes. They wait after warmup and explicit GC; a missed
 start deadline fails the run. The report records the actual measured start time.
 
+For the 10,800-row selection comparison, add `--team-shape --iterations 720`.
+This uses 4,300 subagents, 4,400 archived dashboards, 400 open dashboards, and
+1,700 other sessions, including global/unknown sentinels. It adds involving-me,
+owner-first, and owner-count requests to the three visibility scopes. Use
+`--reference-only` to isolate reference resolution over prepared visible identities,
+or `--selection` for complete page selection and facets. Compare each mode's golden
+outputs between revisions. Run `--mode timing` separately from the default
+`--mode allocation` so CPU comparisons exclude allocation-sampler overhead.
+These owner probes exclude transport and full row presentation; use the Team-shape
+stress harness for those boundaries and its populated subagent registry.
+
 For long RPC allocation windows, use `--warmup-operations` to warm fewer requests
 than the measured `--operations` count. For example, `--scenario sessions.list
 --warmup-operations 25000 --operations 100000 --rounds 1 --allocations --trace-gc

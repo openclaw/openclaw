@@ -11,6 +11,7 @@ import {
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import {
   publicationMethods,
   publicationOptions,
@@ -48,12 +49,7 @@ const scenario: ControlUiMockGatewayScenario = {
       createdActor: { type: "human", id: "demo-reader", label: "Demo reader" },
     },
   ],
-  historyMessages: [
-    {
-      role: "assistant",
-      content: [{ type: "text", text: "The review document and pull request are ready." }],
-    },
-  ],
+  historyMessages: [chatMessage("assistant", "The review document and pull request are ready.")],
 };
 const repository = { owner: "synthetic", repo: "layout-demo" };
 const pullRequest = (number: number) => ({
@@ -165,6 +161,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           ...scenario,
           authMethod: "trusted-proxy",
+          subscriptionInitialHistory: false,
           authMode: "trusted-proxy",
           heldMethods: ["connect", "chat.startup"],
           methodResponses: {

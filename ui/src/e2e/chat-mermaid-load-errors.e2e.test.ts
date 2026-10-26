@@ -41,7 +41,7 @@ suite.define(() => {
           ],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         const failure = page.getByText(/check proxy or authentication rules/u);
         await failure.waitFor({ timeout: 25_000 });
         expect(blocked).toBeGreaterThan(0);

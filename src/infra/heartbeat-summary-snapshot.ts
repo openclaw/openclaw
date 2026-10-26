@@ -5,17 +5,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import type { CronJob } from "../cron/types.js";
 
-type HeartbeatSummary = {
-  enabled: boolean;
-  every: string;
-  everyMs: number | null;
-  prompt: string;
-  target: string;
-  model?: string;
-  session?: string;
-  ackMaxChars: number;
-};
-
 function resolveHeartbeatSummaryJobs(
   cfg: OpenClawConfig,
   jobs: readonly CronJob[],
@@ -37,7 +26,7 @@ export async function readHeartbeatSummarySnapshot(
   return resolveHeartbeatSummaryJobs(cfg, jobs);
 }
 
-export function projectHeartbeatSummary(job?: CronJob): HeartbeatSummary {
+export function projectHeartbeatSummary(job?: CronJob) {
   const enabled = Boolean(job?.enabled && !job.state.autoDisabled);
   const everyMs = job?.schedule.kind === "every" ? job.schedule.everyMs : null;
   return {

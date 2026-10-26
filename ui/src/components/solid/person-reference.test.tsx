@@ -11,6 +11,7 @@ import {
   type SessionNavigationIntent,
 } from "../../lib/sessions/navigation-handoff.ts";
 import { createSidebarTestRouter } from "../../test-helpers/app-sidebar-router.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   createSessionOwnerMenuHarness,
@@ -159,12 +160,9 @@ it.each(["immediate", "deferred", "reconnected"] as const)(
     const { context: ownerContext, publish } = createSessionOwnerMenuHarness();
     const sessionResult = ownerContext.sessions.state.result;
     assert(sessionResult, "The session owner harness provides a canonical roster");
-    Object.assign(sessionResult, {
-      ts: 1,
-      path: "",
-      count: 1,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [
+    Object.assign(
+      sessionResult,
+      sessionListResult(1, [
         {
           key: "agent:main:review",
           label: "Review launch notes",
@@ -176,8 +174,8 @@ it.each(["immediate", "deferred", "reconnected"] as const)(
             identity: { type: "profile", id: "profile-ada" },
           },
         },
-      ],
-    });
+      ]),
+    );
     const context = {
       ...ownerContext,
       basePath: "",

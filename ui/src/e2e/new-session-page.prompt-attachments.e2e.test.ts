@@ -5,6 +5,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   tooltipTitleText,
@@ -311,7 +312,7 @@ suite.define(() => {
         },
       });
       await startPrompt(page, message, sessionKey);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await page.getByText("SKILL.md", { exact: true }).waitFor();
 
       await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
@@ -336,7 +337,7 @@ suite.define(() => {
         ),
       });
       await startPrompt(page, message, sessionKey);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
 
       const socketsBeforeReconnect = await gateway.getSocketCount();
@@ -376,9 +377,7 @@ suite.define(() => {
             : { contentType: "image/png", body: imageBytes },
         );
       });
-      const authoritative = {
-        role: "user",
-        content: [{ type: "text", text: message }],
+      const authoritative = chatMessage("user", message, {
         timestamp: Date.now(),
         __openclaw: {
           id: "persisted-image-prompt",
@@ -387,9 +386,10 @@ suite.define(() => {
           media: [{ path: source, contentType: "image/png", fileName: "pixel.png" }],
           mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
         },
-      };
+      });
       const responses = initialPromptResponses(sessionKey, runId, "single-image-prompt");
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         deferredMethods: ["chat.startup"],
         methodResponses: {
           ...responses,

@@ -206,6 +206,7 @@ suite.define(() => {
           modelProvider: "openai",
         };
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: false,
           sessionKey,
           assistantName: "Observatory",
           // The typed hold applies again after reload and releases the normal hello payload.

@@ -8,6 +8,8 @@
 // Trace allocations in a separate pass with matching fixture treatment on both sides:
 // either fresh fixtures or consistently warmed post-timing state.
 // wholeSoakCpu includes idle gaps; listFilterCounts proves measured search coverage.
+// Team fanout checks use continuous foreground receipts and committed injection IDs;
+// timed event counts can split unrelated background broadcasts at window boundaries.
 // --stress-worktree-fanout instead uses prepared fixture worktrees and retains reconnect/filter churn.
 // Worker-churn load (isolated built Gateway; run baseline/candidate on fresh identical fixtures):
 // node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts --state-dir .local/worker-base \
@@ -126,6 +128,7 @@ import {
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { TEAM_STRESS_PLUGIN_IDS } from "./team-shape-stress-fixture.ts";
+import { createTeamStressFanoutReceipts } from "./team-shape-stress-receipts.ts";
 
 const { values } = parseArgs({
   options: {
@@ -181,6 +184,7 @@ const { values } = parseArgs({
     "usage-rpc": { type: "boolean", default: false },
     "node-policy-churn": { type: "boolean", default: false },
     "team-stress": { type: "boolean", default: false },
+    "operator-model-policy": { type: "boolean", default: false },
     "team-stress-churn-ms": { type: "string", default: "1000" },
     "team-stress-list-weight": { type: "string", default: "2" },
     "team-stress-allocation-sampling": { type: "boolean", default: false },
@@ -1050,6 +1054,12 @@ const teamStressTargets =
 if (values["team-stress"] && teamStressTargets.length === 0) {
   throw new Error("--team-stress requires unarchived fixture targets");
 }
+const teamStressFanout = values["team-stress"]
+  ? createTeamStressFanoutReceipts(
+      clientCount,
+      teamStressTargets.map((target) => target.sessionKey),
+    )
+  : undefined;
 type StartupTarget = {
   sessionKey: string;
   shortId?: string;
@@ -1624,6 +1634,7 @@ const authorityEmail = "operator@authority.example.test";
 const authorityOrigin = "https://authority.example.test";
 const fixtureDirectPassword = "synthetic-connected-github-local-caller";
 const trustedProxyScenario =
+  values["operator-model-policy"] ||
   values["operator-access-policy"] ||
   values["github-options-connected"] ||
   values["presence-deltas"];
@@ -1739,6 +1750,15 @@ if (trustedProxyScenario) {
           scopes: ["operator.admin"],
           agents: "*",
           sessions: { others: "write" },
+          ...(values["operator-model-policy"]
+            ? {
+                modelPolicy: {
+                  sourceAgent: "main",
+                  allow: ["openai/*"],
+                  deny: ["openai/blocked-*"],
+                },
+              }
+            : {}),
           ...(values["operator-access-policy"]
             ? { accessPolicyPlugin: "synthetic-operator-access" }
             : {}),
@@ -1941,6 +1961,7 @@ async function stressSubagentEvents(body: unknown, input: unknown, purpose: stri
       throw new Error("stress subagent spawn did not return an accepted native child");
     }
     state.accepted = { runId: accepted.runId, childSessionKey: accepted.childSessionKey };
+    teamStressFanout?.trackForeground([accepted.childSessionKey], false);
     state.phase = "yield-issued";
     return functionCallEvents(
       "sessions_yield",
@@ -2743,6 +2764,9 @@ const env = {
     : {}),
   TMPDIR: path.join(root, "tmp"),
   OPENAI_API_KEY: "synthetic-fixture",
+  ...(values["operator-model-policy"] && values["team-stress-allocation-sampling"]
+    ? { OPENCLAW_BENCH_OPERATOR_MODEL_POLICY_COUNTS: "1" }
+    : {}),
   ...(values["github-options-connected"]
     ? {
         GH_TOKEN: "synthetic-github-options",
@@ -3749,6 +3773,7 @@ async function startStressSubagent(
   client: ReturnType<typeof createGatewayWsClient>,
   current: NonNullable<typeof cohort>,
 ) {
+  teamStressFanout?.trackForeground([stressParentKey], false);
   await rpc(client, "sessions.reset", { key: stressParentKey });
   let releaseChild!: () => void;
   const childReady = new Promise<void>((resolve) => {
@@ -3860,6 +3885,7 @@ async function runRound(
   measuredRound?: number,
   roundKeys = keys,
 ) {
+  teamStressFanout?.trackForeground(roundKeys);
   const cronOperatorJob = values["cron-operator-turn"] ? cronOperatorJobs[0] : undefined;
   if (values["cron-operator-turn"] && !cronOperatorJob?.id) {
     throw new Error("Cron operator fixture is not ready");
@@ -4305,14 +4331,16 @@ async function drainEvents(requireSubscriberQuiet = true) {
     assertGatewayAlive();
     if (
       activeStreams === 0 &&
-      (!requireSubscriberQuiet || performance.now() - lastSubscriberEventAt >= 1000)
+      (!requireSubscriberQuiet ||
+        (performance.now() - lastSubscriberEventAt >= 1000 &&
+          !teamStressFanout?.pendingInjections().length))
     ) {
       return;
     }
     await delay(50);
   }
   throw new Error(
-    `model streams and subscriber events did not drain within ${timeoutMs}ms: activeStreams=${activeStreams}, subscriberQuietMs=${Math.round(performance.now() - lastSubscriberEventAt)}, lastEvent=${lastSubscriberEventName}`,
+    `model streams and subscriber events did not drain within ${timeoutMs}ms: activeStreams=${activeStreams}, subscriberQuietMs=${Math.round(performance.now() - lastSubscriberEventAt)}, lastEvent=${lastSubscriberEventName}, pendingInjectionReceipts=${JSON.stringify(teamStressFanout?.pendingInjections() ?? [])}`,
   );
 }
 async function ensureRecaps(client: ReturnType<typeof createGatewayWsClient>) {
@@ -4537,6 +4565,7 @@ async function connectClient(index: number) {
         previousSeq = event.seq;
       }
       const payload = isRecord(event.payload) ? event.payload : undefined;
+      teamStressFanout?.observe(index, event.event, payload);
       if (
         index === 0 &&
         event.event === "chat" &&
@@ -5121,6 +5150,18 @@ try {
       }
       validateDashboardRpc(method, await rpc(sender, method, params));
     }
+  }
+  if (values["operator-model-policy"]) {
+    const catalog = await rpc(sender, "models.list", { agentId: "main" });
+    if (
+      !isRecord(catalog) ||
+      !isRecord(catalog.modelSelectionPolicy) ||
+      catalog.modelSelectionPolicy.restricted !== true ||
+      catalog.modelSelectionPolicy.defaultModel !== "openai/gpt-4.1"
+    ) {
+      throw new Error("Synthetic operator did not acquire its model policy");
+    }
+    writeFileSync(path.join(output, "operator-model-policy.json"), JSON.stringify(catalog));
   }
   if (reloadPluginId || scopePluginId || values["team-stress"]) {
     const inventory = await rpc(sender, "plugins.list", {});
@@ -5938,6 +5979,7 @@ try {
                 throw new Error("Team stress timestamp write did not commit");
               }
               teamStressWrites++;
+              teamStressFanout?.expectInjection(target.sessionKey, injected.messageId);
               await Promise.race([
                 delay(Math.max(0, teamStressChurnMs - (performance.now() - started)), undefined, {
                   ref: false,
@@ -5959,6 +6001,9 @@ try {
               }
               const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
                 signal: AbortSignal.timeout(10_000),
+                ...(trustedProxyScenario
+                  ? { headers: { ...clientConnection.headers, origin: authorityOrigin } }
+                  : {}),
               });
               if (!response.ok) {
                 throw new Error(`Team stress Prometheus scrape failed: HTTP ${response.status}`);
@@ -6440,7 +6485,10 @@ try {
         `Deep history reached only ${historicalReplayRequests}/${sessionCount} foreground turns`,
       );
     }
-    for (const event of turnScenario ? ["session.message", "sessions.changed"] : []) {
+    teamStressFanout?.assertComplete();
+    for (const event of turnScenario && !teamStressFanout
+      ? ["session.message", "sessions.changed"]
+      : []) {
       const expected = perClientCounters[0]?.get(event) ?? 0;
       if (!expected || perClientCounters.some((counts) => counts.get(event) !== expected)) {
         throw new Error(

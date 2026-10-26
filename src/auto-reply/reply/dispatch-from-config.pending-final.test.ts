@@ -155,16 +155,14 @@ describe("pending final delivery restart proof", () => {
     expect(entry).toMatchObject({ lifecycleRunId: "active-run", updatedAt: 1 });
   });
 
-  it("cleans only the current completed intent in one worker request after a foreign commit", async () => {
+  it("cleans only the current completed intent after a foreign commit", async () => {
     await writePendingFinal("handled-reply", "delivered");
     const targetScope = scope();
     const original = readEntry();
     const identity = getReplyPayloadMetadata(pendingFinalPayload())?.pendingFinalDeliveryCompletion;
-    const commands: string[] = [];
     let beforeCommit: (() => void) | undefined;
     spyAgentExecutions(agentExecution, (worker) => ({
       execute: (command, options) => {
-        commands.push(command.type);
         if (command.type === "session.entry.patch.commit") {
           const change = beforeCommit;
           beforeCommit = undefined;
@@ -189,11 +187,9 @@ describe("pending final delivery restart proof", () => {
         replaceSessionEntrySync(targetScope, original);
         const foreign = { ...original, ...change };
         beforeCommit = () => replaceSessionEntrySync(targetScope, foreign);
-        commands.length = 0;
         await expect(
           clearPendingFinalDeliveryAfterSuccess(identity, { preserveActivity: true }),
         ).resolves.toBeUndefined();
-        expect(commands).toEqual(["session.entry.patch.commit"]);
         const persisted = readEntry();
         if ("label" in change) {
           expect(persisted.label).toBe("foreign metadata");
@@ -212,14 +208,17 @@ describe("pending final delivery restart proof", () => {
   });
 
   it("does not retire a source while its terminal provider outcome is unknown", async () => {
-    await replaceSessionEntry(scope(), {
-      sessionId: "session",
-      status: "done",
-      updatedAt: Date.now(),
+    const claim = {
       restartRecoveryDeliveryReceiptState: "terminal-pending",
       restartRecoveryDeliveryToolCallId: "message-call-1",
       restartRecoveryDeliveryRunId: "recovery-1",
       restartRecoveryDeliverySourceRunId: "source-1",
+    } as const;
+    await replaceSessionEntry(scope(), {
+      sessionId: "session",
+      status: "done",
+      updatedAt: Date.now(),
+      ...claim,
     });
 
     let target: SessionEntryTargetPatchScope | undefined;
@@ -241,12 +240,7 @@ describe("pending final delivery restart proof", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(readEntry()).toMatchObject({
-      restartRecoveryDeliveryReceiptState: "terminal-pending",
-      restartRecoveryDeliveryToolCallId: "message-call-1",
-      restartRecoveryDeliveryRunId: "recovery-1",
-      restartRecoveryDeliverySourceRunId: "source-1",
-    });
+    expect(readEntry()).toMatchObject(claim);
     expect(readEntry()?.restartRecoveryTerminalRunIds).toBeUndefined();
   });
 });

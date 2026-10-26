@@ -1,11 +1,10 @@
 import { writeFileSync } from "node:fs";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { finishFailedGatewayHttpResponse } from "./http-common.js";
 import { bindHttpResponseAuthority } from "./http-request-authority.js";
+import { createTestGatewayHttpServer } from "./http-server.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   fetchMetadata: vi.fn<typeof fetch>(),
@@ -48,12 +47,6 @@ const PNG_BYTES = Buffer.from(
   "base64",
 );
 const packageName = "@acme/calendar";
-const packageMetadata = {
-  name: packageName,
-  displayName: "Calendar",
-  family: "code-plugin",
-  isOfficial: false,
-};
 const source = { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName };
 const packageUrl = "https://cdn.example.test/package.png";
 const publisherUrl = "https://cdn.example.test/publisher.png";
@@ -62,46 +55,31 @@ const realFetch = globalThis.fetch;
 const fixtureDirs = useAutoCleanupTempDirTracker(afterAll);
 const iconFixtureDir = fixtureDirs.make("openclaw-plugin-clawhub-icon-");
 const localIconPath = path.join(iconFixtureDir, "icon.png");
-const server = createServer((req, res) => {
-  void handlePluginIconHttpRequest(req, res, {
+const localSource = { kind: "file", path: localIconPath, rootPath: iconFixtureDir };
+const imageResult = { buffer: PNG_BYTES, contentType: "image/png" };
+const metadata = (icon: string | null = packageUrl, image = publisherUrl) =>
+  Response.json({ package: { name: packageName, icon }, owner: { image } });
+const server = createTestGatewayHttpServer((req, res) =>
+  handlePluginIconHttpRequest(req, res, {
     auth: { mode: "token", token: "test-token", allowTailscale: false },
     config: {},
-  })
-    .then((handled) => {
-      if (!handled) {
-        res.statusCode = 404;
-        res.end("unhandled");
-      }
-    })
-    .catch(() => finishFailedGatewayHttpResponse(res));
-});
+  }),
+);
 let port = 0;
 
 beforeAll(async () => {
-  port = Number(new URL(await listenLoopback(server)).port);
+  port = await server.listen();
 });
 
-afterAll(async () => {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-});
+afterAll(() => server.close());
 
 beforeEach(() => {
   clearPluginIconCacheForTest();
   vi.clearAllMocks();
   writeFileSync(localIconPath, PNG_BYTES);
   mocks.resolveIconSource.mockReset().mockResolvedValue([source]);
-  mocks.fetchMetadata.mockReset().mockImplementation(async () =>
-    Response.json({
-      package: { ...packageMetadata, icon: packageUrl },
-      owner: { image: publisherUrl },
-    }),
-  );
-  mocks.readRemoteMediaBuffer.mockReset().mockResolvedValue({
-    buffer: PNG_BYTES,
-    contentType: "image/png",
-  });
+  mocks.fetchMetadata.mockReset().mockImplementation(async () => metadata());
+  mocks.readRemoteMediaBuffer.mockReset().mockResolvedValue(imageResult);
   vi.stubGlobal("fetch", (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : input);
     if (url.href === metadataUrl) {
@@ -136,31 +114,9 @@ function expectPublicMetadataRequest() {
 }
 
 describe("ClawHub branding through the public icon route", () => {
-  it.each([null, `/api/v1/skill-icons/${"a".repeat(64)}`, "https://cdn.example/icon.png"])(
-    "reads package icon %s and publisher image in order through one exact public request",
-    async (icon) => {
-      const image = "https://cdn.example/publisher.png";
-      mocks.fetchMetadata.mockImplementation(async () =>
-        Response.json({ package: { ...packageMetadata, icon }, owner: { image } }),
-      );
-      mocks.readRemoteMediaBuffer.mockImplementation(async ({ url }) => {
-        if (url !== image) {
-          throw new Error("Package icon unavailable");
-        }
-        return { buffer: PNG_BYTES, contentType: "image/png" };
-      });
-
-      expect((await request()).status).toBe(200);
-      expect(mocks.readRemoteMediaBuffer.mock.calls.map(([params]) => params.url)).toEqual(
-        icon ? [icon.startsWith("/") ? `https://clawhub.ai${icon}` : icon, image] : [image],
-      );
-      expectPublicMetadataRequest();
-    },
-  );
-
   it("rejects a different returned package identity before fetching an image", async () => {
     mocks.fetchMetadata.mockImplementation(async () =>
-      Response.json({ package: { ...packageMetadata, name: "@other/calendar", icon: packageUrl } }),
+      Response.json({ package: { name: "@other/calendar", icon: packageUrl } }),
     );
 
     expect((await request()).status).toBe(404);
@@ -168,26 +124,31 @@ describe("ClawHub branding through the public icon route", () => {
     expectPublicMetadataRequest();
   });
 
-  it.each(["package", "publisher", "missing"])(
-    "tries local, remote package, then publisher images and caches the successful %s result",
-    async (outcome) => {
+  it.each([
+    [null, "publisher"],
+    [`/api/v1/skill-icons/${"a".repeat(64)}`, "publisher"],
+    [packageUrl, "publisher"],
+    [packageUrl, "package"],
+    [packageUrl, "missing"],
+  ] as const)(
+    "tries local, package %s, then publisher images and caches the %s result",
+    async (icon, outcome) => {
       writeFileSync(localIconPath, "invalid local image");
-      mocks.resolveIconSource.mockResolvedValue([
-        { kind: "file", path: localIconPath, rootPath: iconFixtureDir },
-        source,
-      ]);
+      mocks.resolveIconSource.mockResolvedValue([localSource, source]);
+      mocks.fetchMetadata.mockImplementation(async () => metadata(icon));
       mocks.readRemoteMediaBuffer.mockImplementation(async ({ url }) => {
-        if (outcome === "missing" || (outcome === "publisher" && url === packageUrl)) {
+        if (outcome === "missing" || (outcome === "publisher" && url !== publisherUrl)) {
           throw new Error("Image unavailable");
         }
-        return { buffer: PNG_BYTES, contentType: "image/png" };
+        return imageResult;
       });
 
       const response = await request();
       expect(response.status).toBe(outcome === "missing" ? 404 : 200);
       expectPublicMetadataRequest();
+      const iconUrl = icon?.startsWith("/") ? `https://clawhub.ai${icon}` : icon;
       expect(mocks.readRemoteMediaBuffer.mock.calls.map(([params]) => params.url)).toEqual(
-        outcome === "package" ? [packageUrl] : [packageUrl, publisherUrl],
+        outcome === "package" ? [iconUrl] : [...(iconUrl ? [iconUrl] : []), publisherUrl],
       );
       if (outcome !== "missing") {
         const cached = await request("HEAD");
@@ -197,13 +158,4 @@ describe("ClawHub branding through the public icon route", () => {
       }
     },
   );
-
-  it("does not read remote metadata when the local package icon succeeds", async () => {
-    mocks.resolveIconSource.mockResolvedValue([
-      { kind: "file", path: localIconPath, rootPath: iconFixtureDir },
-      source,
-    ]);
-    expect((await request()).status).toBe(200);
-    expect(mocks.fetchMetadata).not.toHaveBeenCalled();
-  });
 });

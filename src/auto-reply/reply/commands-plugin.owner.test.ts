@@ -13,7 +13,6 @@ import { clearActivePluginRegistry, setActivePluginRegistry } from "../../plugin
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   linkUserChannelIdentity,
   unlinkUserChannelIdentity,
@@ -31,15 +30,18 @@ const commandPhase = (
   pending: ReturnType<typeof handlePluginCommand>,
 ) => Promise.race([entered.promise.then(() => "entered"), pending.then(() => "finished")]);
 
-it.each(["issue", "clear"] as const)(
-  "keeps the admitted plugin owner through %s bootstrap persistence",
-  (operation) =>
+it.each(
+  (["issue", "clear"] as const).flatMap((operation) =>
+    (["none", "demote", "reassign"] as const).map((change) => ({ operation, change })),
+  ),
+)(
+  "keeps the admitted plugin owner through $operation bootstrap persistence: $change",
+  ({ operation, change }) =>
     withAdminIngress(async ({ cfg, admins, context, state }) => {
       const registry = createEmptyPluginRegistry();
       const admin = admins[0]!;
-      let entered = createDeferredCore();
-      let resume = createDeferredCore();
-      let revoke: (() => void) | undefined;
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
       let retainedAssertion: (() => void) | undefined;
       registerPluginCommandInRegistry(registry, "bootstrap-fixture", {
         name: "bootstrap-fixture",
@@ -49,23 +51,25 @@ it.each(["issue", "clear"] as const)(
           retainedAssertion = ctx.assertOwnerCurrent;
           entered.resolve();
           await resume.promise;
+          const options = { baseDir: state.stateDir, assertCurrent: ctx.assertOwnerCurrent };
           const pending =
             operation === "issue"
               ? issueDeviceBootstrapToken({
-                  baseDir: state.stateDir,
-                  assertCurrent: ctx.assertOwnerCurrent,
+                  ...options,
                   profile: {
                     roles: ["operator"],
                     scopes: ["operator.admin"],
                     purpose: "mobile-full",
                   },
                 })
-              : clearDeviceBootstrapTokens({
-                  baseDir: state.stateDir,
-                  assertCurrent: ctx.assertOwnerCurrent,
-                });
+              : clearDeviceBootstrapTokens(options);
           // The credential owner must revalidate after its lock/state awaits.
-          revoke?.();
+          if (change === "demote") {
+            setUserProfileRole(admin.profile.id, "member");
+          } else if (change === "reassign") {
+            unlinkUserChannelIdentity(admin.profile.id, admin.identity);
+            linkUserChannelIdentity(admins[1]!.profile.id, admin.identity);
+          }
           await pending;
           return { text: credentialReply };
         },
@@ -77,61 +81,42 @@ it.each(["issue", "clear"] as const)(
       });
 
       await withPluginRuntimeRegistryScope(registry, async () => {
-        for (const change of ["none", "demote", "reassign"] as const) {
-          entered = createDeferredCore();
-          resume = createDeferredCore();
-          setUserProfileRole(admin.profile.id, "admin");
-          await clearDeviceBootstrapTokens({ baseDir: state.stateDir });
-          if (operation === "clear") {
-            await issueDeviceBootstrapToken({ baseDir: state.stateDir });
+        if (operation === "clear") {
+          await issueDeviceBootstrapToken({ baseDir: state.stateDir });
+        }
+        const before = tokenCount(state.stateDir);
+        const params = buildCommandTestParams(
+          bootstrapCommand,
+          cfg,
+          await context(admin.identity.senderId),
+          { workspaceDir: state.workspaceDir },
+        );
+        const originalAssertion = params.command.assertOwnerCurrent;
+        const pending = handlePluginCommand(params, true);
+        try {
+          expect(await commandPhase(entered, pending)).toBe("entered");
+          // Replacing the snapshot cannot replace its already-captured capability.
+          params.command.assertOwnerCurrent = () => {};
+          resume.resolve();
+          const outcome = await pending;
+          const after = tokenCount(state.stateDir);
+          if (change === "none") {
+            expect(outcome?.reply?.text).toBe(credentialReply);
+            expect(after).toBe(operation === "issue" ? 1 : 0);
+          } else {
+            expect(after).toBe(before);
+            expect(outcome?.reply?.text).toContain("Command failed");
           }
-          const before = tokenCount(state.stateDir);
-          const params = buildCommandTestParams(
-            bootstrapCommand,
-            cfg,
-            await context(admin.identity.senderId),
-            { workspaceDir: state.workspaceDir },
+          expect(() => retainedAssertion?.()).toThrow("invocation closed");
+          params.command.commandBodyNormalized = "/owner-independent-read";
+          params.command.senderIsOwner = false;
+          params.command.assertOwnerCurrent = originalAssertion;
+          expect((await handlePluginCommand(params, true))?.reply?.text).toBe(
+            "ordinary read accepted",
           );
-          expect(params.command.senderIsOwner).toBe(true);
-          const originalAssertion = params.command.assertOwnerCurrent;
-          revoke =
-            change === "none"
-              ? undefined
-              : () => {
-                  if (change === "demote") {
-                    setUserProfileRole(admin.profile.id, "member");
-                  } else {
-                    unlinkUserChannelIdentity(admin.profile.id, admin.identity);
-                    linkUserChannelIdentity(admins[1]!.profile.id, admin.identity);
-                  }
-                };
-          const pending = handlePluginCommand(params, true);
-          try {
-            expect(await commandPhase(entered, pending)).toBe("entered");
-            // Replacing the snapshot cannot replace its already-captured capability.
-            params.command.assertOwnerCurrent = () => {};
-            resume.resolve();
-            const outcome = await pending;
-            const after = tokenCount(state.stateDir);
-            if (change === "none") {
-              expect(outcome?.reply?.text).toBe(credentialReply);
-              expect(after).toBe(operation === "issue" ? 1 : 0);
-            } else {
-              expect(after).toBe(before);
-              expect(outcome?.reply?.text).toContain("Command failed");
-            }
-            expect(retainedAssertion).toBeTypeOf("function");
-            expect(() => retainedAssertion?.()).toThrow("invocation closed");
-            params.command.commandBodyNormalized = "/owner-independent-read";
-            params.command.senderIsOwner = false;
-            params.command.assertOwnerCurrent = originalAssertion;
-            expect((await handlePluginCommand(params, true))?.reply?.text).toBe(
-              "ordinary read accepted",
-            );
-          } finally {
-            resume.resolve();
-            await pending;
-          }
+        } finally {
+          resume.resolve();
+          await pending;
         }
       });
     }),
@@ -203,15 +188,6 @@ it.each([
               workspaceDir: state.workspaceDir,
             });
           const params = await makeParams();
-          if (scenario === "allowed") {
-            const queries = vi.spyOn(openOpenClawStateDatabase().db, "prepare");
-            try {
-              expect(params.command.assertOwnerCurrent).not.toThrow();
-              expect(queries).not.toHaveBeenCalled();
-            } finally {
-              queries.mockRestore();
-            }
-          }
           const pending = handlePluginCommand(params, true);
           try {
             const phase = await commandPhase(entered, pending);

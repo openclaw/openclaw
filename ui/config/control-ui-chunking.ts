@@ -77,6 +77,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/styles/agents.css":
+    case "ui/src/styles/agent-emoji-picker.css":
+    case "ui/src/styles/multi-select.css":
+      // Overview always uses these controls; share styles without loading route renderers.
+      return "agents-styles";
     case "ui/src/pages/chat/components/chat-details-people.css":
     case "ui/src/pages/chat/components/chat-outputs.css":
     case "ui/src/pages/chat/components/chat-details-environment-desktop.css":
@@ -92,6 +97,66 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/image-download.ts":
     case "ui/src/lib/download.ts":
     case "src/shared/markdown-code.ts":
+    case "src/shared/html-escape.ts":
+    case "src/shared/shell-quote.ts":
+    case "src/utils/message-channel-constants.ts":
+    case "src/utils/string-readers.ts":
+    case "ui/src/components/file-kind.ts":
+    case "ui/src/lib/reactive/application-native.ts":
+    case "ui/src/lib/reactive/visible-poll.ts":
+    case "ui/src/lib/chat/follow-up-mode.ts":
+    case "ui/src/lib/sessions/context-budget.ts":
+    case "ui/src/lib/sessions/session-archive-reason.ts":
+    case "ui/src/lib/sessions/session-message-subscriptions.runtime.ts":
+    case "packages/gateway-client/src/session-subscriptions.ts":
+    case "ui/src/pages/labs/labs-feature-state.ts":
+    case "ui/src/pages/labs/claws-lab-feature.ts":
+    case "ui/src/i18n/locales/en-session-organization-shared.ts":
+    case "ui/src/i18n/locales/en-session-skill-library.ts":
+    case "ui/src/pages/plugins/detail-tabs.ts":
+    case "ui/src/components/confirm-dialog.ts":
+    case "ui/src/components/confirm-dialog-loading.tsx":
+    case "ui/src/components/menu-surface.ts":
+    case "ui/src/components/session-menu-access.ts":
+    case "ui/src/components/session-menu-data.ts":
+    case "ui/src/components/session-placement-action.ts":
+    case "ui/src/lib/editor-links.ts":
+    case "ui/src/lib/sessions/session-menu-navigation.ts":
+    case "src/config/required-worker-profile.ts":
+    case "ui/src/app/native-editor-locality.runtime.ts":
+    case "ui/src/app/native-gateways.runtime.ts":
+    case "ui/src/pages/plugins/icon-loader.ts":
+    case "ui/src/pages/plugins/plugin-icon-owner.ts":
+    case "ui/src/components/solid/panel-loading-skeleton.tsx":
+    case "ui/src/lib/session-progress-cards.ts":
+      // These shared helpers load together in Chat without retaining its renderers.
+      return "deferred-ui-support";
+    case "ui/src/styles/panel-loading-skeleton.css":
+      // Keep the inline string with its renderer so recursive Chat grouping cannot capture it.
+      return "deferred-ui-support";
+    case "ui/src/lib/page-request.ts":
+    case "ui/src/lib/model-catalog-reader.ts":
+    case "ui/src/components/lobster-pet-contract.ts":
+    case "ui/src/lib/mac-form-factor.ts":
+    case "ui/src/pages/new-session/model-location.ts":
+    case "ui/src/components/agent-select.tsx":
+    case "ui/src/components/agent-select-registration.ts":
+    case "ui/src/lib/sessions/session-placement-recovery.ts":
+    case "ui/src/components/solid/connect-command.tsx":
+      // Creation fetches these together; keep their compression without a whole route.
+      return "route-controls-runtime";
+    case "node_modules/typebox/build/guard/guard.mjs":
+    case "node_modules/typebox/build/guard/globals.mjs":
+    case "node_modules/typebox/build/guard/index.mjs":
+    case "node_modules/typebox/build/guard/unicode/unicode.mjs":
+    case "node_modules/typebox/build/guard/unicode/unicode_segment.mjs":
+      // Protocol consumers share guards without evaluating the Chat route.
+      return "deferred-ui-support";
+    case "packages/markdown-core/src/assistant-transcript.ts":
+    case "packages/markdown-core/src/assistant-transcript-headers.ts":
+    case "packages/markdown-core/src/html-tags.ts":
+    case "packages/markdown-core/src/ir-metadata.ts":
+      // Text annotations also serve plain-text consumers without loading the parser.
       return "deferred-ui-support";
     case "ui/src/pages/chat/components/chat-image-preview-size.ts":
     case "ui/src/pages/chat/components/chat-image-rendition.ts":
@@ -159,9 +224,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Session actions must not import whole route chunks through earlier boot captures.
       return "session-mutation-runtime";
     case "ui/src/lib/chat/emoji.ts":
-    case "node_modules/markdown-it-emoji/lib/data/full.mjs":
-      // Shortcode input owns the catalog; earlier boot captures must not keep it eager.
+      // Typed shortcodes need Markdown context parsing; a visual picker does not.
       return "emoji-runtime";
+    case "node_modules/markdown-it-emoji/lib/data/full.mjs":
+      return "emoji-catalog-runtime";
     case "ui/src/components/mascot-animator.ts":
       // Only visible mascots request motion; stale boot captures must not keep it eager.
       return "mascot-motion-runtime";
@@ -216,6 +282,34 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/styles/sidebar-update-card.css":
       return "sidebar-update-runtime";
     case "ui/src/components/markdown-parser.ts":
+    case "ui/src/components/markdown.ts":
+    case "ui/src/components/github-link-target.ts":
+    case "ui/src/components/markdown-assistant-transcript.ts":
+    case "ui/src/components/markdown-audio-transcript.ts":
+    case "ui/src/components/markdown-code-blocks.ts":
+    case "ui/src/components/markdown-copy.ts":
+    case "ui/src/components/markdown-details.ts":
+    case "ui/src/components/markdown-file-links.ts":
+    case "ui/src/components/markdown-github-refs.ts":
+    case "ui/src/components/markdown-hex-colors.ts":
+    case "ui/src/components/markdown-human-mentions.ts":
+    case "ui/src/components/markdown-icon.ts":
+    case "ui/src/components/markdown-json.ts":
+    case "ui/src/components/markdown-link-boundary.ts":
+    case "ui/src/components/markdown-raw-content.ts":
+    case "ui/src/components/markdown-render-options.ts":
+    case "ui/src/components/markdown-sanitizer.ts":
+    case "ui/src/components/markdown-session-links.ts":
+    case "ui/src/components/markdown-streaming-state.ts":
+    case "ui/src/components/markdown-tables.ts":
+    case "ui/src/components/markdown-text-replacements.ts":
+    case "ui/src/components/markdown-text.ts":
+    case "ui/src/lib/markdown-content.ts":
+    case "ui/src/i18n/locales/en-chat-media.ts":
+    case "ui/src/i18n/locales/en-code-blocks.ts":
+    case "ui/src/i18n/locales/en-file-preview.ts":
+    case "src/shared/text/citation-control-markers.ts":
+      // Parser extensions and sanitization are shared by non-Chat documents.
       return "markdown-runtime";
     case "ui/src/components/markdown-live.ts":
     case "ui/src/components/markdown-streaming.ts":
@@ -253,6 +347,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
   if (
     moduleIdIncludesPackage(id, "dompurify") ||
     moduleIdIncludesPackage(id, "markdown-it") ||
+    moduleIdIncludesPackage(id, "markdown-it-cjk-friendly") ||
+    moduleIdIncludesPackage(id, "get-east-asian-width") ||
+    moduleIdIncludesPackage(id, "jsonc-parser") ||
     moduleIdIncludesPackage(id, "entities") ||
     moduleIdIncludesPackage(id, "linkify-it") ||
     moduleIdIncludesPackage(id, "mdurl") ||
@@ -297,15 +394,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
         test: () => true,
         tags: ["$initial"] as ["$initial"],
         priority: 10,
-        maxSize: 1024 * 1024,
-      },
-      {
-        name: "control-ui-lib",
-        test: (id: string) => normalizeModuleId(id).includes("/ui/src/lib/"),
-        tags: ["$initial"] as ["$initial"],
-        priority: 11,
-        // Keep initial state owners and utilities together across core entry points.
-        maxSize: 1024 * 1024,
+        // The initial graph is already eager; one dictionary avoids serial h1 requests.
+        maxSize: 4096 * 1024,
       },
       ...(options.includeBootGroups === false
         ? []
@@ -332,12 +422,11 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // them (and therefore other routes) into its eagerly imported chunk.
                 priority: 8 - index,
                 includeDependenciesRecursively: true,
-                // Shared boot needs a smaller partition cap because its dense chat
-                // modules can exceed the compressed-size budget after regrouping.
-                // Chat-only code can share a larger compression dictionary;
-                // shipped byte/request budgets still bound the output.
+                // Keep each measured boot partition together instead of queueing
+                // several fragments over HTTP/1.1. Shared and route-only code
+                // retain separate groups and their existing lazy boundaries.
                 minSize: (route === "chat" ? 384 : 128) * 1024,
-                maxSize: (route === "shared" ? 1280 : route === "chat" ? 1664 : 1408) * 1024,
+                maxSize: (route === "shared" || route === "chat" ? 5120 : 1408) * 1024,
               };
             }),
             ...(["shared", "new", "chat"] as const).map((route) => {
@@ -346,9 +435,12 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
               );
               if (route === "shared") {
                 styles.add("ui/src/components/solid/text-overflow.css");
+                // Document styles also serve Agents without loading Chat's visible renderers.
+                styles.add("ui/src/styles/sidebar-markdown.css");
               }
               if (route === "chat") {
                 styles.delete("ui/src/components/solid/text-overflow.css");
+                styles.delete("ui/src/styles/sidebar-markdown.css");
                 // These optional views share the route's preloaded stylesheet.
                 styles.add("ui/src/pages/chat/components/chat-pane-mobile-header.css");
                 styles.add("ui/src/pages/chat/components/chat-pane-mobile-composition.css");

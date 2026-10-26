@@ -464,6 +464,7 @@ export function ApplicationShell(props: {
               connected: view().gatewayConnected,
               canGrant: view().overlaySnapshot.approvalCanGrant,
               errors: view().overlaySnapshot.approvalErrors,
+              nodeNames: view().overlaySnapshot.approvalNodeNames,
               onDecision: (
                 approvalId: string,
                 decision: Parameters<

@@ -13,6 +13,7 @@ import { resolvePluginNpmGenerationProjectDir } from "../../../plugins/install-p
 import { readPersistedInstalledPluginIndexInstallRecordsAsync as readRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { createPluginCache, withPluginCache } from "../../../plugins/plugin-cache.js";
+import { writeArtifact as writeText } from "../../../plugins/public-surface.test-support.js";
 import { seedInstalledPluginIndex } from "../../../plugins/test-helpers/installed-plugin-index.js";
 import { convergePluginReleaseCohort } from "../../../plugins/update-cohort.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../../state/openclaw-state-db-cache.js";
@@ -65,12 +66,7 @@ const HOST_VERSION = "2026.9.4";
 const NEW_EXPORT = "registerNativeHookRelayForBundledRuntime";
 const OLD_EXPORT = "registerRetainedNativeHookRelayForBundledRuntime";
 const LINK_TYPE = process.platform === "win32" ? "junction" : "dir";
-
-function writeText(filePath: string, value: string): string {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, value);
-  return filePath;
-}
+const SDK = "plugin-sdk/native-hook-relay-runtime";
 const writeJson = (filePath: string, value: unknown) => writeText(filePath, JSON.stringify(value));
 
 function writeCodexPackage(root: string, sdkExport: string, version = HOST_VERSION): string {
@@ -93,7 +89,7 @@ function writeCodexPackage(root: string, sdkExport: string, version = HOST_VERSI
   });
   const entry = writeText(
     path.join(root, "dist", "index.js"),
-    `import { ${sdkExport} } from "openclaw/plugin-sdk/native-hook-relay-runtime";
+    `import { ${sdkExport} } from "openclaw/${SDK}";
 export function runTurn() { return ${sdkExport}(); }
 export default { id: "codex", register() {} };
 `,
@@ -104,14 +100,11 @@ export default { id: "codex", register() {} };
 }
 
 function importAndRun(entry: string, env: NodeJS.ProcessEnv) {
+  const script =
+    "const plugin = await import(process.argv[1]); process.stdout.write(plugin.runTurn());";
   return spawnSync(
     process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      "const plugin = await import(process.argv[1]); process.stdout.write(plugin.runTurn());",
-      pathToFileURL(entry).href,
-    ],
+    ["--input-type=module", "--eval", script, pathToFileURL(entry).href],
     { encoding: "utf8", env: { ...env, PATH: process.env.PATH } },
   );
 }
@@ -140,9 +133,7 @@ it.each([
       name: "openclaw",
       version: HOST_VERSION,
       type: "module",
-      exports: {
-        "./plugin-sdk/native-hook-relay-runtime": "./dist/plugin-sdk/native-hook-relay-runtime.js",
-      },
+      exports: { [`./${SDK}`]: `./dist/${SDK}.js` },
     });
     if (packaged) {
       writeJson(path.join(hostRoot, "dist", "build-info.json"), {
@@ -155,7 +146,7 @@ it.each([
       fs.writeFileSync(path.join(hostRoot, "pnpm-workspace.yaml"), "packages: []\n");
     }
     writeText(
-      path.join(hostRoot, "dist", "plugin-sdk", "native-hook-relay-runtime.js"),
+      path.join(hostRoot, "dist", `${SDK}.js`),
       `export function ${NEW_EXPORT}() { return "synthetic turn completed"; }\n`,
     );
     writeCodexPackage(bundledDir, NEW_EXPORT);

@@ -146,7 +146,7 @@ describe("Markdown table interactions", () => {
     Object.defineProperty(otherViewport, "scrollWidth", { configurable: true, get: otherWidth });
     Object.defineProperty(viewport, "scrollWidth", { configurable: true, get: changedWidth });
 
-    shell.querySelector("td")!.firstChild!.textContent = "Shorter";
+    shell.querySelector("td")!.innerHTML = "<code>Shorter</code>";
     await Promise.resolve();
     await Promise.resolve();
     expect(changedWidth).not.toHaveBeenCalled();
@@ -162,6 +162,35 @@ describe("Markdown table interactions", () => {
     await Promise.resolve();
     expect(changedWidth).not.toHaveBeenCalled();
     expect(otherWidth).not.toHaveBeenCalled();
+  });
+
+  it("discovers nested tables in code and releases removed tables even after they are emptied", async () => {
+    vi.stubGlobal("MutationObserver", originalMutationObserver);
+    const { owner } = interactiveOwner();
+    const pre = document.createElement("pre");
+    pre.innerHTML = `<code data-code-highlight>${toSanitizedMarkdownHtml(table, interactiveOptions)}</code>`;
+    query(owner, ".chat-text").append(pre);
+    const shell = query(pre, ".markdown-table");
+    const viewport = query(shell, ".markdown-table__viewport");
+    const nestedTable = query(viewport, "table");
+    const resize = ResizeObserverMock.mock.results.at(-1)!.value;
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(query(shell, ".markdown-table__expand").textContent).toBe("Expand table");
+    expect(resize.observe).toHaveBeenCalledWith(viewport);
+    expect(resize.observe).toHaveBeenCalledWith(nestedTable);
+
+    nestedTable.replaceChildren();
+    nestedTable.remove();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resize.unobserve).toHaveBeenCalledWith(nestedTable);
+
+    pre.remove();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resize.unobserve).toHaveBeenCalledWith(viewport);
   });
 
   it("announces copy outcomes without stale success and resets their feedback", async () => {

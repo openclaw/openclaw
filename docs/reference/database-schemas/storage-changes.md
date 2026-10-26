@@ -145,6 +145,8 @@ fragment activation/dependencies and the expected catalog for the state owner;
 it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
 
+### PostgreSQL index ordering migrations
+
 Explicit PostgreSQL index keys use native ordering for canonical NOT NULL and
 primary-key columns, and for direct keys proven non-null by the index's own
 `IS NOT NULL` predicate. Other nullable columns and expression keys retain SQLite's
@@ -189,10 +191,10 @@ SET LOCAL standard_conforming_strings = on;
 COMMIT;
 ```
 
-Use a disposable schema for this readiness check; it does not enable shared-state
-PostgreSQL support or migrate an existing store.
+Use a disposable schema for this generation check; it does not configure runtime
+engine selection or migrate an existing store.
 
-Both engines use the same shared-state schema version (currently 25). Every
+Both engines use the same [shared-state schema version](/reference/database-schemas/state-schema-history). Every
 future version change must supply both engines' forward migration and catalog
 equivalence proof together. JSON stays canonical: a query/index projection is
 derived once in TypeScript and committed in the same statement as its JSON.
@@ -203,7 +205,7 @@ owner's retired index names and the canonical replacement index definitions.
 It contains forward DDL only; the caller supplies the transaction, namespace,
 and version publication. PostgreSQL conformance verifies the upgraded index
 definitions against a fresh schema and preserves retained rows and local indexes.
-This readiness artifact does not enable shared-state PostgreSQL runtime support.
+Applying this artifact alone does not configure PostgreSQL runtime selection.
 
 Schema 25 adds `state-v24-v25.postgres.sql`, a metadata-only forward migration
 registered with the existing PostgreSQL engine owner. It updates the shared-state
@@ -255,6 +257,7 @@ SQL/concurrency conformance or a choice of per-agent PostgreSQL topology.
 
 `pnpm check:database-dialect-ratchet` keeps mechanical, design, and engine-maintenance counts shrink-only against the Git base by scanning only differing production `.ts`/`.mts`/`.sql` files under `src/`, `extensions/`, and `packages/` (excluding tests and fixtures); `--staged` reads the index, `--full-tree` reports totals, and the `sqliteStringSet` owner subset is reported within mechanical debt.
 SQLite primitive owners listed in `SQLITE_PRIMITIVE_OWNERS` may grow engine-maintenance constructs, and consumers call them.
+The inventory also classifies a few file-scoped constructs with no PostgreSQL SQL equivalent as owned engine maintenance; other constructs in those files stay counted. Knowledge's `extensions/knowledge/src/retrieval.ts` owns `fts5`, `temp-schema`, and `rowid` for its keyword index, a rebuildable cache in each Knowledge store's own `state.sqlite` that never opens the selected Gateway engine.
 The lexical gate examines `.sql` files minus comments, all static parts of templates whose tag's final identifier ends in `sql` (case-insensitive), strings and untagged templates starting after whitespace and `(` with an uppercase SQL statement keyword, and the `orReplace`/`orIgnore`/`orAbort`/`orFail`/`orRollback` method calls; construct regexes remain case-insensitive, exclude SQL double-quoted text, require `name(` for functions, and require `PRAGMA <name>` or `pragma_<name>(` for `data_version`/`schema_version`/`user_version`.
 Prose, fragments without a statement prefix, and substitutions are ignored, accepting under-counts for assembled SQL; both revisions use identical rules without type, symbol, import, or SQL token-role analysis, and runtime behavior and schemas are unchanged.
 

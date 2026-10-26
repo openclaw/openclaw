@@ -1,11 +1,9 @@
-import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import {
   readExecRequestOwners,
   withExecRequestOwners,
 } from "../../../infra/exec-request-context.js";
-import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCanonicalGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
 import { runWithAgentToolSourceExecutionScope } from "../../agent-tool-source-execution-guard.js";
@@ -21,6 +19,7 @@ import { activateSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import { materializeSubagentAttachments } from "./subagent-attachments.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
+import { buildSubagentChildPrompt } from "./subagent-spawn-child-prompt.js";
 import {
   bindSubagentSpawnCleanup,
   cleanupFailedSpawnBeforeAgentStart,
@@ -62,7 +61,6 @@ import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 import { bindThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
 import { emitSessionLifecycleEvent, mergeDeliveryContext } from "./subagent-spawn.runtime.js";
-import { buildSubagentSpawnEnvelope } from "./subagent-system-prompt.js";
 
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 
@@ -114,6 +112,7 @@ export async function spawnSubagentDirect(
     childDepth,
     maxSpawnDepth,
     childIdem,
+    blind,
   } = requestResolution.resolved;
   let threadBindingReady = false;
   let hasBoundThreadDeliveryOrigin = false;
@@ -211,6 +210,7 @@ export async function spawnSubagentDirect(
         modelPatch: plan.initialSessionPatch,
         swarmGroupId,
         collect: params.collect === true,
+        blind,
         outputSchema: params.outputSchema,
         firstAdmission: childPlan.resolved.firstAdmission,
       }),
@@ -308,30 +308,28 @@ export async function spawnSubagentDirect(
         : expectsCompletionMessage
           ? "announce"
           : "quiet";
-    const envelope = buildSubagentSpawnEnvelope({
-      completionMode,
-      completionTarget: params.completionTarget,
-      soleCollectorChild: soleImplicitMember,
-      spawnMode,
-      task: params.task,
-      requesterSessionKey: ctx.agentSessionKey,
-      requesterOrigin: childSessionOrigin,
-      childSessionKey,
-      label: label || undefined,
-      acpEnabled: isAcpRuntimeSpawnAvailable({
-        config: cfg,
-        sandboxed: childRuntimeSandboxed,
-      }),
-      nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
-        surface: "subagent",
-      }),
-      childDepth,
-      maxSpawnDepth,
+    const childPrompt = buildSubagentChildPrompt({
+      config: cfg,
+      sandboxed: childRuntimeSandboxed,
+      structuredOutput: Boolean(params.outputSchema),
+      applyProfile: systemPrompt,
+      envelope: {
+        completionMode,
+        completionTarget: params.completionTarget,
+        soleCollectorChild: soleImplicitMember,
+        spawnMode,
+        task: params.task,
+        requesterSessionKey: ctx.agentSessionKey,
+        requesterOrigin: childSessionOrigin,
+        childSessionKey,
+        label: label || undefined,
+        childDepth,
+        maxSpawnDepth,
+        blind,
+      },
     });
-    let childSystemPrompt = systemPrompt(envelope.systemPrompt);
-    if (params.outputSchema) {
-      childSystemPrompt = `${childSystemPrompt}\n\nCall structured_output with {"result": <your final result>} until one payload is accepted, with at most one retry after a rejected attempt. The result value must match the requested JSON Schema. Do not call structured_output again after acceptance.`;
-    }
+    const { envelope } = childPrompt;
+    let childSystemPrompt = childPrompt.systemPrompt;
 
     const materializedAttachments = await runWithAgentToolSourceExecutionScope(assertActive, () =>
       materializeSubagentAttachments({

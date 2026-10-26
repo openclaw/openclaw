@@ -253,7 +253,7 @@ async function scanArchivedTranscript(
   let seq = 1;
   const scan = async (source: Readable) => {
     for await (const record of readTranscriptArchiveRecords(source, maxRecordBytes)) {
-      const event: unknown = JSON.parse(record.toString("utf8"));
+      const event: unknown = JSON.parse(record);
       if (!headerRead) {
         if (!isRecord(event) || event.type !== "session" || event.id !== sessionId) {
           throw new Error("Archived transcript header does not match its registered session.");

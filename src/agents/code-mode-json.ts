@@ -5,6 +5,7 @@ import {
   fitCodeModeResultReference,
   type CodeModeResultReference,
 } from "./code-mode-result-preview.js";
+import { estimateToolResultTextChars } from "./embedded-agent-runner/tool-result-text-budget.js";
 import { toolResultFitsBudget, type ToolResultBudget } from "./tool-result-limits.js";
 import {
   renderToolSearchControlText,
@@ -93,6 +94,13 @@ const TRUNCATION_GUIDANCE = "Output truncated; rerun with narrower args.";
 const RETAINED_GUIDANCE =
   "Full result saved for this run; use results.load(reference.id) in a later exec.";
 
+function jsonBudget(text: string) {
+  return {
+    chars: estimateToolResultTextChars(text),
+    contextChars: estimateToolResultTextChars(text, { minimumRawWeight: 2 }),
+  };
+}
+
 function retainedMarker(reference: CodeModeResultReference, maxBytes: number) {
   const overhead =
     jsonUtf8Bytes({ truncated: true, reference: null, guidance: RETAINED_GUIDANCE }) - 4;
@@ -113,6 +121,7 @@ function createTruncationMarker(
     prefix: "",
   };
   const fixedBytes = jsonUtf8Bytes(marker) - 2 - String(originalBytes).length;
+  let fixedBudget: ReturnType<typeof jsonBudget> | undefined;
   const fit = createJsonPrefixFitter(
     source.json,
     maxBytes,
@@ -122,7 +131,17 @@ function createTruncationMarker(
     const prefix = fit(limit);
     const omittedBytes = originalBytes - prefix.bytes;
     return {
-      marker: { ...marker, omittedBytes, prefix: prefix.text },
+      marker() {
+        return { ...marker, omittedBytes, prefix: prefix.text };
+      },
+      budget() {
+        const fixed = (fixedBudget ??= jsonBudget(JSON.stringify(marker)));
+        const digits = String(omittedBytes).length - String(originalBytes).length;
+        return {
+          chars: fixed.chars - 2 + digits + prefix.budget.chars,
+          contextChars: fixed.contextChars - 4 + digits * 2 + prefix.budget.contextChars,
+        };
+      },
       prefixBytes: prefix.bytes,
       jsonBytes: fixedBytes + String(omittedBytes).length + prefix.jsonBytes,
     };
@@ -134,14 +153,25 @@ function createErrorFitter(error: string, maxBytes: number) {
   const fit = createJsonPrefixFitter(error, maxBytes, () => suffix.length);
   return (limit: number) => {
     const prefix = fit(limit);
-    return { text: `${prefix.text}${suffix}`, jsonBytes: prefix.jsonBytes + suffix.length };
+    return {
+      text() {
+        return `${prefix.text}${suffix}`;
+      },
+      budget() {
+        return {
+          chars: prefix.budget.chars + suffix.length,
+          contextChars: prefix.budget.contextChars + suffix.length * 2,
+        };
+      },
+      jsonBytes: prefix.jsonBytes + suffix.length,
+    };
   };
 }
 
 export function boundCodeModeError(error: string, maxBytes: number): string {
   return jsonUtf8Bytes(error) <= maxBytes
     ? error
-    : createErrorFitter(error, maxBytes)(maxBytes).text;
+    : createErrorFitter(error, maxBytes)(maxBytes).text();
 }
 
 type DeliveryReceipt =
@@ -215,7 +245,18 @@ export class CodeModeOutputState {
     retainValue?: (source: CodeModeJsonSource) => CodeModeValueRetention,
   ): T & DeliveredChannels {
     const fit = (channels: TerminalChannels) => {
-      const project = this.createProjector(channels);
+      const project = this.createProjector(channels, metadata);
+      const fitsTrial = (limit: number) => {
+        // Network content needs the sanitizer's complete rendered text.
+        if (networkContent || !this.modelBudget) {
+          return fits(project(limit));
+        }
+        const measured = project(limit, "budget");
+        return (
+          measured.chars <= this.modelBudget.maxChars &&
+          measured.contextChars <= this.modelBudget.maxContextChars
+        );
+      };
       const fits = (candidate: ReturnType<typeof project>) => {
         const rendered = renderToolSearchControlText(
           serializeToolSearchControlResult({ ...metadata, ...candidate.channels }, true),
@@ -227,18 +268,17 @@ export class CodeModeOutputState {
       if ((this.modelBudget || networkContent) && !fits(projection)) {
         let low = 0;
         let high = this.maxBytes - 1;
-        let best: typeof projection | undefined;
+        let best: number | undefined;
         while (low <= high) {
           const middle = Math.floor((low + high) / 2);
-          const candidate = project(middle);
-          if (fits(candidate)) {
-            best = candidate;
+          if (fitsTrial(middle)) {
+            best = middle;
             low = middle + 1;
           } else {
             high = middle - 1;
           }
         }
-        return best;
+        return best === undefined ? undefined : project(best);
       }
       return projection;
     };
@@ -283,7 +323,7 @@ export class CodeModeOutputState {
       }
     }
     const prior = this.delivered;
-    const { channels, receipt } = projection;
+    const { receipt, channels } = projection;
     // Trial projections never acknowledge delivery. Charge the cumulative output
     // before suppressing earlier entries or an unchanged replacement summary.
     this.delivered = receipt;
@@ -298,7 +338,7 @@ export class CodeModeOutputState {
     return { ...metadata, ...channels, output };
   }
 
-  private createProjector(params: TerminalChannels) {
+  private createProjector(params: TerminalChannels, metadata: object) {
     const { count, source } = this.source;
     const { value, error: fullError, reference } = params;
     const outputBytes = count === 0 ? 0 : sourceBytes(source);
@@ -318,77 +358,127 @@ export class CodeModeOutputState {
     // Reuse decoded channels only within this fit; later deliveries need fresh objects.
     let completeOutput: unknown[] | undefined;
     let completeValue: { value: unknown } | undefined;
+    let envelopeBudget: ReturnType<typeof jsonBudget> | undefined;
+    let completeOutputBudget: ReturnType<typeof jsonBudget> | undefined;
+    let completeValueBudget: ReturnType<typeof jsonBudget> | undefined;
+    let completeErrorBudget: ReturnType<typeof jsonBudget> | undefined;
     let outputMarker: ReturnType<typeof createTruncationMarker> | undefined;
     let valueMarker: ReturnType<typeof createTruncationMarker> | undefined;
     let errorFitter: ReturnType<typeof createErrorFitter> | undefined;
-    return (
-      maxBytes: number,
-    ): {
+    const sourceLimit = this.maxBytes;
+    type Projection = {
       channels: DeliveredChannels;
       receipt: DeliveryReceipt;
       valueTruncated: boolean;
       referenceUsed: boolean;
-    } => {
+    };
+    function project(maxBytes: number, mode: "budget"): ReturnType<typeof jsonBudget>;
+    function project(maxBytes: number, mode?: "channels"): Projection;
+    function project(
+      maxBytes: number,
+      mode = "channels",
+    ): Projection | ReturnType<typeof jsonBudget> {
       // Short channels donate their unused share; diagnostics retain their leading cause.
       const errorAllowance =
         maxBytes - Math.min(outputBytes + valueBytes, Math.floor(maxBytes / 2));
       const fittedError =
         fullError !== undefined && errorBytes > errorAllowance
-          ? (errorFitter ??= createErrorFitter(fullError, this.maxBytes))(errorAllowance)
+          ? (errorFitter ??= createErrorFitter(fullError, sourceLimit))(errorAllowance)
           : undefined;
-      const error = fittedError?.text ?? fullError;
       const remaining = maxBytes - (fittedError?.jsonBytes ?? errorBytes);
       const valueReservation = Math.max(
         Math.floor(remaining / 2),
         remaining >= referenceBytes + minimumOutputBytes ? referenceBytes : 0,
       );
       const outputAllowance = remaining - Math.min(valueBytes, valueReservation);
-      let output: unknown[];
+      let fittedOutput: ReturnType<ReturnType<typeof createTruncationMarker>> | undefined;
       let chargedOutputBytes: number;
-      let receipt: DeliveryReceipt;
       if (outputBytes <= outputAllowance) {
         // A retained prefix has originalBytes > maxBytes and cannot fit this allowance.
-        // SAFETY: Complete output sources encode normalized arrays, never guest metadata.
-        output = completeOutput ??= JSON.parse(source.json) as unknown[];
         chargedOutputBytes = outputBytes;
-        receipt = { kind: "entries", count };
       } else {
-        const fitted = (outputMarker ??= createTruncationMarker(source, this.maxBytes))(
-          outputAllowance - 2,
-        );
-        output = [fitted.marker];
+        const fitted = (fittedOutput = (outputMarker ??= createTruncationMarker(
+          source,
+          sourceLimit,
+        ))(outputAllowance - 2));
         chargedOutputBytes = fitted.jsonBytes + 2;
-        receipt = { kind: "summary", originalBytes: outputBytes, prefixBytes: fitted.prefixBytes };
       }
       const valueAllowance = remaining - chargedOutputBytes;
       const saved = reference ? retainedMarker(reference, valueAllowance) : undefined;
       const valueTruncated =
         value !== undefined &&
         (reference !== undefined || value.kind !== "complete" || valueBytes > valueAllowance);
+      const fittedValue =
+        value && !saved && valueTruncated
+          ? (valueMarker ??= createTruncationMarker(value, sourceLimit, params.valueGuidance))(
+              valueAllowance,
+            )
+          : undefined;
+      if (mode === "budget") {
+        if (!envelopeBudget) {
+          const placeholders = {
+            output: null,
+            ...(params.value === undefined ? {} : { value: null }),
+            ...(params.error === undefined ? {} : { error: null }),
+          };
+          const measured = jsonBudget(
+            serializeToolSearchControlResult({ ...metadata, ...placeholders }, true),
+          );
+          const nullChars = Object.keys(placeholders).length * 4;
+          envelopeBudget = {
+            chars: measured.chars - nullChars,
+            contextChars: measured.contextChars - nullChars * 2,
+          };
+        }
+        const outputBudget =
+          fittedOutput?.budget() ?? (completeOutputBudget ??= jsonBudget(source.json));
+        const valueBudget =
+          value === undefined
+            ? undefined
+            : saved
+              ? jsonBudget(JSON.stringify(saved))
+              : (fittedValue?.budget() ?? (completeValueBudget ??= jsonBudget(value.json)));
+        const errorBudget =
+          fullError === undefined
+            ? undefined
+            : (fittedError?.budget() ??
+              (completeErrorBudget ??= jsonBudget(JSON.stringify(fullError))));
+        return {
+          chars:
+            envelopeBudget.chars +
+            outputBudget.chars +
+            (fittedOutput ? 2 : 0) +
+            (valueBudget?.chars ?? 0) +
+            (errorBudget?.chars ?? 0),
+          contextChars:
+            envelopeBudget.contextChars +
+            outputBudget.contextChars +
+            (fittedOutput ? 4 : 0) +
+            (valueBudget?.contextChars ?? 0) +
+            (errorBudget?.contextChars ?? 0),
+        };
+      }
       return {
-        receipt,
+        receipt: fittedOutput
+          ? { kind: "summary", originalBytes: outputBytes, prefixBytes: fittedOutput.prefixBytes }
+          : { kind: "entries", count },
         valueTruncated,
         referenceUsed: saved !== undefined,
         channels: {
-          output,
+          output: fittedOutput
+            ? [fittedOutput.marker()]
+            : (completeOutput ??= JSON.parse(source.json) as unknown[]), // SAFETY: Complete sources encode normalized arrays.
           ...(value === undefined
             ? {}
             : saved
               ? { value: saved }
-              : !reference &&
-                  value.kind === "complete" &&
-                  valueBytes <= remaining - chargedOutputBytes
-                ? (completeValue ??= { value: JSON.parse(value.json) as unknown })
-                : {
-                    value: (valueMarker ??= createTruncationMarker(
-                      value,
-                      this.maxBytes,
-                      params.valueGuidance,
-                    ))(remaining - chargedOutputBytes).marker,
-                  }),
-          ...(error === undefined ? {} : { error }),
+              : fittedValue
+                ? { value: fittedValue.marker() }
+                : (completeValue ??= { value: JSON.parse(value.json) as unknown })),
+          ...(fullError === undefined ? {} : { error: fittedError?.text() ?? fullError }),
         },
       };
-    };
+    }
+    return project;
   }
 }

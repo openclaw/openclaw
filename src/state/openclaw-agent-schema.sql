@@ -525,6 +525,22 @@ CREATE TABLE IF NOT EXISTS session_transcript_cold_archives (
   CHECK ((storage = 'file' AND archive_blob IS NULL) OR (storage = 'sqlite' AND archive_blob IS NOT NULL))
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS session_transcript_cold_archive_chunks (
+  session_id TEXT NOT NULL,
+  chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+  archive_name TEXT NOT NULL UNIQUE,
+  archive_sha256 TEXT NOT NULL CHECK (length(archive_sha256) = 64),
+  first_seq INTEGER NOT NULL,
+  last_seq INTEGER NOT NULL CHECK (last_seq >= first_seq),
+  event_count INTEGER NOT NULL CHECK (event_count >= 1),
+  raw_bytes INTEGER NOT NULL CHECK (raw_bytes >= 0),
+  archive_bytes INTEGER NOT NULL CHECK (archive_bytes >= 0),
+  archive_blob BLOB,
+  PRIMARY KEY (session_id, chunk_index),
+  FOREIGN KEY (session_id) REFERENCES session_transcript_cold_archives(session_id) ON DELETE CASCADE,
+  CHECK (length(archive_name) > 0 AND archive_name NOT IN ('.', '..') AND archive_name NOT LIKE '%/%' AND archive_name NOT LIKE '%\%')
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS transcript_rewrite_watermarks (
   session_id TEXT NOT NULL PRIMARY KEY,
   generation TEXT NOT NULL,
