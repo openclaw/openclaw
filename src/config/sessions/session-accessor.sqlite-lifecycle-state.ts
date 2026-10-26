@@ -3,6 +3,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import {
   retireSqliteDatabaseWriteScopes,
   sqliteSessionIdWriteScope,
@@ -48,6 +49,7 @@ import {
 import { getSessionKysely, withSqliteSessionDatabase } from "./session-accessor.sqlite-scope.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { shouldRemoveSessionEntry } from "./session-entry-lifecycle-removal.js";
+import { drainSessionTranscriptIndexInTransaction } from "./session-transcript-index-drain.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
@@ -96,6 +98,54 @@ export function deleteMaterializedSessionStatePlans(
     }
   }
   return archivedTranscripts;
+}
+
+/**
+ * One bounded transaction of derived-index drain ahead of the entry's deletion transaction.
+ * It drains only windows that deletion would remove now; a changed or still-referenced window
+ * is left intact, so the deletion transaction alone decides refusal.
+ */
+export function drainSessionStateTranscriptIndexes(
+  database: OpenClawAgentDatabase,
+  targets: readonly Pick<SessionStateDeletePlan, "sessionId" | "snapshot">[],
+  excludedSessionKeys: ReadonlySet<string>,
+  budget: { maxRows: number; maxBytes: number },
+): { deletedRows: number; complete: boolean } {
+  if (isPostgresSqlConnection(database.db)) {
+    return { deletedRows: 0, complete: true };
+  }
+  const referencedSessionIds = readReferencedSessionIds(
+    database,
+    excludedSessionKeys,
+    targets.map(({ sessionId }) => sessionId),
+  );
+  const drainable = targets.filter(
+    ({ sessionId }) =>
+      !referencedSessionIds.has(sessionId) && !readSessionColdTranscript(database.db, sessionId),
+  );
+  if (
+    drainable.some(
+      ({ sessionId, snapshot }) =>
+        !sqliteSessionStateDeleteSnapshotsEqual(
+          readSessionStateDeleteSnapshot(database.db, sessionId),
+          snapshot,
+        ),
+    )
+  ) {
+    return { deletedRows: 0, complete: true };
+  }
+  // One window's batch per transaction; drained windows report exhausted without deleting.
+  for (const [index, { sessionId }] of drainable.entries()) {
+    const drained = drainSessionTranscriptIndexInTransaction(database.db, sessionId, budget);
+    const last = index === drainable.length - 1;
+    if (!drained.exhausted || (drained.deletedRows > 0 && !last)) {
+      return { deletedRows: drained.deletedRows, complete: false };
+    }
+    if (last) {
+      return { deletedRows: drained.deletedRows, complete: true };
+    }
+  }
+  return { deletedRows: 0, complete: true };
 }
 
 // Builds delete plans from the session ids owned by an entry after callers

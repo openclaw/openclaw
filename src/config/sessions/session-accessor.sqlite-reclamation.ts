@@ -28,6 +28,7 @@ import {
   assertPlannedLifecycleArtifactEntriesUnchanged,
   deleteMaterializedSessionStatePlans,
   deletePlannedLifecycleArtifactEntries,
+  drainSessionStateTranscriptIndexes,
   projectSessionEntryLifecycleRemovalsInDatabase,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
@@ -125,6 +126,9 @@ export function reclaimSqliteSessionInTransaction(
   return result;
 }
 
+/** Per-transaction drain bound: one window, 256 derived rows, 4 MiB of FTS text. */
+export const SESSION_TRANSCRIPT_INDEX_DRAIN_BUDGET = { maxRows: 256, maxBytes: 4 * 1024 * 1024 };
+
 function reclaimSqliteRowsInTransaction(
   plan: Exclude<SqliteSessionReclamationPlan, { kind: "maintenance-pages" }>,
   callbacks: SqliteSessionReclamationCallbacks,
@@ -187,6 +191,26 @@ function reclaimSqliteRowsInTransaction(
   }
   if (plan.kind === "archive-publish-prepare" || plan.kind === "archive-publish-record") {
     return reclaimSessionArchivePublicationInTransaction(plan, callbacks);
+  }
+  if (plan.kind === "transcript-index-drain") {
+    return runOpenClawAgentWriteTransaction(
+      (database) => {
+        callbacks.beforeMutation?.();
+        const result: SqliteSessionReclamationResult = {
+          kind: plan.kind,
+          value: drainSessionStateTranscriptIndexes(
+            database,
+            plan.targets,
+            new Set(plan.excludedSessionKeys),
+            SESSION_TRANSCRIPT_INDEX_DRAIN_BUDGET,
+          ),
+        };
+        callbacks.onCommit?.(database);
+        return result;
+      },
+      plan.databaseOptions,
+      { operationLabel: "session.reclaim.index-drain" },
+    );
   }
   if (
     plan.kind === "maintenance-plan" ||

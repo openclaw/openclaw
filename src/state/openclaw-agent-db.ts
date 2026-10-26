@@ -37,6 +37,7 @@ import {
 import { SqliteWorkerOpenRefusedError } from "../infra/sqlite-worker-contract.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { recordSqliteWritePhase } from "../infra/sqlite-write-phase-observer.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   assertAgentCreationClaimCurrent,
@@ -294,6 +295,7 @@ function* openOpenClawAgentDatabaseSteps(
         undefined,
         captureVerification,
       );
+  recordSqliteWritePhase({ kind: "phase", phase: "lease-prepare" });
   if (pending) {
     pending.assertHeld = () =>
       assertOpenClawAgentDatabaseLease(leaseId, {

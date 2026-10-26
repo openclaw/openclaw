@@ -264,6 +264,13 @@ export type SqliteSessionReclamationPlan =
       nowMs: number;
     })
   | (SessionReclamationPlanBase & { kind: "maintenance-pages"; maxPages?: number })
+  | (SessionReclamationPlanBase & {
+      /** Exact windows the following deletion plans to remove; never carries archive bytes. */
+      excludedSessionKeys: string[];
+      kind: "transcript-index-drain";
+      materializedPlans: [];
+      targets: Pick<SessionStateDeletePlan, "sessionId" | "snapshot">[];
+    })
   | (SessionReclamationPlanBase & SessionMaintenanceMetadataCommand & { materializedPlans: [] })
   | (SessionReclamationPlanBase & {
       agentId: string;
@@ -309,6 +316,7 @@ type SqliteSessionReclamationValue =
   | { kind: "archive-publish-prepare"; value: TranscriptArchivePublishPlan[] }
   | { kind: "archive-publish-record"; value: true }
   | { kind: "maintenance-pages"; value: SqliteWalReclamationResult }
+  | { kind: "transcript-index-drain"; value: { deletedRows: number; complete: boolean } }
   | SessionMaintenanceMetadataResult
   | {
       kind: "maintenance-finalize";

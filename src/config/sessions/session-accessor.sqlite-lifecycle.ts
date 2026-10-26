@@ -52,6 +52,7 @@ import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.
 import { publishCommittedSessionEntryRemoval } from "./session-accessor.sqlite-identity.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
+  drainSessionTranscriptIndexesBeforeReclamation,
   runSessionDeletionPlanning,
   runSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation-run.js";
@@ -452,7 +453,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               if (checked.value.kind === "expected-entry-mismatch") {
                 return DELETE_EXPECTED_ENTRY_MISMATCH;
               }
-              const reclamationPlan: SqliteSessionReclamationPlan = {
+              const reclamationPlan = {
                 databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
                 deleteParams: prepareReclamationDeleteParams(generation.deleteParams),
                 kind: "historical-generation",
@@ -460,7 +461,8 @@ async function deleteSqliteSessionEntryLifecycleLocked(
                 preparedTargetSnapshot: prepared.targetSnapshot,
                 protectedSessionIds: [...new Set(checked.value.protectedSessionIds)],
                 sessionId,
-              };
+              } satisfies SqliteSessionReclamationPlan;
+              await drainBeforeDeletion(reclamationPlan, assertDeletionCurrent);
               const reclaimed = await runSqliteSessionReclamation({
                 diagnostics,
                 assertCommitAllowed: assertDeletionCurrent,
@@ -496,13 +498,14 @@ async function deleteSqliteSessionEntryLifecycleLocked(
             const materializedPlans = await materializeSessionStateDeletePlans(prepared.entryPlans);
             const diagnostics: SqliteSessionReclamationDiagnostics = {};
             // The reclamation transaction rereads the exact target immediately before mutation.
-            const reclamationPlan: SqliteSessionReclamationPlan = {
+            const reclamationPlan = {
               databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
               deleteParams: prepareReclamationDeleteParams(params),
               kind: "entry",
               materializedPlans,
               preparedTargetSnapshot: prepared.targetSnapshot,
-            };
+            } satisfies SqliteSessionReclamationPlan;
+            await drainBeforeDeletion(reclamationPlan, assertDeletionCurrent);
             const onWorkerResult = (_result: unknown, databaseIdentity: string | symbol) => {
               committedDatabaseIdentity = databaseIdentity;
             };
@@ -585,6 +588,23 @@ async function deleteSqliteSessionEntryLifecycleLocked(
   } finally {
     await execution?.release();
   }
+}
+
+/** Excludes the deletion target from reference checks, exactly as its commit transaction does. */
+async function drainBeforeDeletion(
+  plan: Extract<SqliteSessionReclamationPlan, { kind: "entry" | "historical-generation" }>,
+  assertCommitAllowed: () => void,
+): Promise<void> {
+  await drainSessionTranscriptIndexesBeforeReclamation({
+    assertCommitAllowed,
+    databaseOptions: plan.databaseOptions,
+    excludedSessionKeys: [
+      plan.deleteParams.target.canonicalKey,
+      ...plan.deleteParams.target.storeKeys,
+      ...plan.preparedTargetSnapshot.map(({ sessionKey }) => sessionKey),
+    ],
+    materializedPlans: plan.materializedPlans,
+  });
 }
 
 export async function deleteSessionEntryLifecycle(

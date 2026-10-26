@@ -115,6 +115,7 @@ export function collectReclamationChangedSessionKeys(
         ),
       ];
     case "lifecycle-projection-plan":
+    case "transcript-index-drain":
       return [];
     case "maintenance-plan":
       return result.value.archivedEntries.map(({ sessionKey }) => sessionKey);

@@ -11,6 +11,7 @@ import {
 } from "../infra/sqlite-post-commit.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
+import { recordSqliteWritePhase } from "../infra/sqlite-write-phase-observer.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGatewayShutdownCleanupSignal } from "../process/gateway-work-admission.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -148,6 +149,11 @@ export function startAgentDatabaseOpenTiming(
   let elapsedMs = 0;
   const phaseDurationsMs = { open: 0, validation: 0, configuration: 0, schema: 0, registration: 0 };
   return (phase: keyof typeof phaseDurationsMs): void => {
+    // Handle registration completes the open; validation and configuration prepare its schema.
+    recordSqliteWritePhase({
+      kind: "phase",
+      phase: phase === "open" || phase === "registration" ? "open" : "schema",
+    });
     const completedMs = Math.floor(performance.now() - startedAt);
     phaseDurationsMs[phase] = completedMs - elapsedMs;
     elapsedMs = completedMs;

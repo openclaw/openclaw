@@ -163,6 +163,7 @@ function messageKind(message: unknown, fallback: WorkerMessageKind): WorkerMessa
       case "admission":
       case "admission-request":
       case "admission-release":
+      case "admission-phases":
         return "admission";
       case "commit-request":
         return "authority";

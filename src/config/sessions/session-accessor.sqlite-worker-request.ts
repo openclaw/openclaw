@@ -8,6 +8,10 @@ import {
 } from "../../infra/gateway-state-owner.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  sqliteWritePhaseClockMs,
+  type SqliteWritePhaseReport,
+} from "../../infra/sqlite-write-phase-observer.js";
 import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -132,6 +136,11 @@ export type SqliteMutationWorkerMessage<Result> =
   | { type: "refused"; operationId: number; settled: true }
   | { type: "commit-request"; operationId: number }
   | { type: "admission-request" | "admission-release"; operationId: number }
+  | {
+      type: "admission-phases";
+      operationId: number;
+      phases: SqliteWritePhaseReport;
+    }
   | {
       type: "reclaimed";
       operationId: number;
@@ -263,6 +272,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
       completed = true;
       if (admission) {
         admission.diagnostics.releaseCause = code === undefined ? "worker-release" : "worker-exit";
+        admission.diagnostics.releasedAtMs = sqliteWritePhaseClockMs();
         admission.released.resolve();
       }
       worker.off("message", receive);
@@ -312,11 +322,12 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
           workerError ??= toStringifiedError(failure);
         }
       } else if (message.type === "admission-request") {
-        const requested = {
+        const requested: {
+          released: Deferred;
+          diagnostics: SqliteSessionReclamationAdmissionDiagnostics;
+        } = {
           released: createDeferredCore(),
-          diagnostics: {
-            admissionId: ++admissionId,
-          } satisfies SqliteSessionReclamationAdmissionDiagnostics,
+          diagnostics: { admissionId: ++admissionId, operationId },
         };
         admission = requested;
         const task = params
@@ -382,6 +393,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                   )
                 : undefined;
             try {
+              requested.diagnostics.grantedAtMs = sqliteWritePhaseClockMs();
               worker.postMessage(
                 {
                   type: "admission",
@@ -433,9 +445,14 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
             await requested.released.promise;
           });
         admissionTasks.push(task);
+      } else if (message.type === "admission-phases") {
+        if (admission && admission.diagnostics.grantedAtMs !== undefined) {
+          admission.diagnostics.phases = message.phases;
+        }
       } else if (message.type === "admission-release") {
         if (admission) {
           admission.diagnostics.releaseCause = "preliminary-release";
+          admission.diagnostics.releasedAtMs = sqliteWritePhaseClockMs();
           admission.released.resolve();
           admission = undefined;
         }

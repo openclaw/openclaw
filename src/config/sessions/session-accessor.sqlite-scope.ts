@@ -6,6 +6,7 @@ import { isMainThread, threadId } from "node:worker_threads";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { withSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
+import { sqliteWritePhaseLogFields } from "../../infra/sqlite-write-phase-observer.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { assertAgentSessionWriteAdmission } from "../../sessions/session-agent-work-admission.js";
@@ -199,6 +200,18 @@ export async function runExclusiveSqliteSessionWrite<T>(
       ? {
           reclamationAdmissionId: diagnostics.reclamationAdmission.admissionId,
           reclamationAdmissionReleaseCause: diagnostics.reclamationAdmission.releaseCause,
+          ...(diagnostics.reclamationAdmission.operationId !== undefined
+            ? { reclamationOperationId: diagnostics.reclamationAdmission.operationId }
+            : {}),
+          ...(diagnostics.reclamationAdmission.phases
+            ? {
+                reclamationAdmissionPhases: sqliteWritePhaseLogFields({
+                  report: diagnostics.reclamationAdmission.phases,
+                  grantedAtMs: diagnostics.reclamationAdmission.grantedAtMs,
+                  releasedAtMs: diagnostics.reclamationAdmission.releasedAtMs,
+                }),
+              }
+            : {}),
         }
       : {}),
     storePath,
@@ -250,7 +263,26 @@ export async function runExclusiveSqliteSessionWrite<T>(
   } finally {
     if (sessionWriteDiagnostics.hasSubscribers) {
       // Profiling retains fixed owner categories and timings, never database or admission identities.
-      sessionWriteDiagnostics.publish({ ...timingFields(completedAt), writer, outcome });
+      const admission = diagnostics?.reclamationAdmission;
+      const phases = admission?.phases
+        ? sqliteWritePhaseLogFields({
+            report: admission.phases,
+            grantedAtMs: admission.grantedAtMs,
+            releasedAtMs: admission.releasedAtMs,
+          })
+        : undefined;
+      sessionWriteDiagnostics.publish({
+        ...timingFields(completedAt),
+        writer,
+        outcome,
+        ...(phases
+          ? {
+              admissionPhasesMs: phases.phasesMs,
+              nativeTransactionMs: phases.nativeTransactionMs,
+              nativeTransactionOpenAtRelease: phases.nativeTransactionOpenAtRelease,
+            }
+          : {}),
+      });
     }
   }
 }

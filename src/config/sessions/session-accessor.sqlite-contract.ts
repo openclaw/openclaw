@@ -1,4 +1,5 @@
 import type { SqliteWalHealth } from "../../infra/sqlite-wal-checkpoint.js";
+import type { SqliteWritePhaseReport } from "../../infra/sqlite-write-phase-observer.js";
 import type {
   SessionEntrySummary,
   TranscriptEvent,
@@ -91,6 +92,7 @@ export type SqliteSessionReclamationDiagnostics = {
     | "maintenance-statistics"
     | "maintenance-age"
     | "maintenance-pages"
+    | "transcript-index-drain"
     | "cold-batch"
     | "cold-maintain"
     | "cold-restore";
@@ -100,7 +102,13 @@ export type SqliteSessionReclamationDiagnostics = {
 /** One validated request owns this record until its observed release event. */
 export type SqliteSessionReclamationAdmissionDiagnostics = {
   admissionId: number;
+  operationId?: number;
   releaseCause?: "preliminary-release" | "worker-release" | "worker-exit";
+  /** Monotonic process clock (`sqliteWritePhaseClockMs`), shared with the Worker's report. */
+  grantedAtMs?: number;
+  releasedAtMs?: number;
+  /** Worker-side subphases of this grant; timings and native transaction state only. */
+  phases?: SqliteWritePhaseReport;
 };
 
 export type SqliteSessionDatabaseAdmissionDiagnostics = {

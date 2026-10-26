@@ -32,6 +32,7 @@ import {
 import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 import type { SqliteWorkerDatabaseContext } from "./sqlite-worker-database-context.js";
 import { normalizeDatabasePath } from "./sqlite-worker-identity.js";
+import { recordSqliteWritePhase } from "./sqlite-write-phase-observer.js";
 
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
 const DEFAULT_SLOW_TRANSACTION_HOLD_MS = 1_000;
@@ -397,6 +398,7 @@ function runSqliteTransactionSync<T>(
     sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
     step: "begin",
   });
+  recordSqliteWritePhase({ kind: "transaction", step: "begin" });
   if (timing) {
     timing.transactions.count += 1;
   }
@@ -416,6 +418,8 @@ export function runSqliteReservedTransactionSync<T>(
   if (isMainThread || !db.isTransaction) {
     throw new Error("SQLite reserved settlement requires a worker-owned transaction");
   }
+  // The closed fence acquired BEGIN elsewhere; native state is open from here on.
+  recordSqliteWritePhase({ kind: "transaction", step: "begin" });
   return settleSqliteTransactionSync(db, operation, "immediate", 0, undefined, options, true);
 }
 
@@ -436,6 +440,7 @@ function settleSqliteTransactionSync<T>(
   const commit = () => {
     const startedAt = Date.now();
     const databaseAdmissionWaitBeforeCommit = timing?.databaseAdmissionWaitMs ?? 0;
+    recordSqliteWritePhase({ kind: "transaction", step: "commit-start" });
     try {
       prepareSqliteTransactionCommit(db);
       execTimedTransactionStep({ db, options, sql: "COMMIT", step: "commit" });
@@ -446,6 +451,7 @@ function settleSqliteTransactionSync<T>(
         startedAt -
         ((timing?.databaseAdmissionWaitMs ?? 0) - databaseAdmissionWaitBeforeCommit);
     }
+    recordSqliteWritePhase({ kind: "transaction", step: "commit-end" });
   };
   let commitStarted = false;
   try {
@@ -461,7 +467,11 @@ function settleSqliteTransactionSync<T>(
     }
     return result;
   } catch (error) {
-    abortImmediateTransaction(db, error, commitStarted);
+    try {
+      abortImmediateTransaction(db, error, commitStarted);
+    } finally {
+      recordSqliteWritePhase({ kind: "transaction", step: "rollback" });
+    }
     assertTransactionUsable(db);
     throw error;
   } finally {

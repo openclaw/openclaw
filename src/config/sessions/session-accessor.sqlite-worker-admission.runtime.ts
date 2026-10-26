@@ -1,5 +1,9 @@
 import { MessagePort } from "node:worker_threads";
 import { withSqliteWorkerOperationAdmissionAsync } from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  createSqliteWritePhaseRecorder,
+  withSqliteWritePhaseObserver,
+} from "../../infra/sqlite-write-phase-observer.js";
 import type { OpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   withOpenClawAgentDatabaseAdmission,
@@ -64,13 +68,26 @@ export function withWorkerWriteAdmission<T>(
         admission.integrityRevoked,
       );
     const metadata = admission.databaseAdmissionPort;
+    // Subphases split this grant's writer hold; the parent's aggregate span stays unchanged.
+    const phases = createSqliteWritePhaseRecorder();
     const value = await (async () => {
       try {
-        return metadata instanceof MessagePort
-          ? await withSqliteWorkerOperationAdmissionAsync({ port: metadata }, invoke)
-          : await invoke();
+        return await withSqliteWritePhaseObserver(phases, () =>
+          metadata instanceof MessagePort
+            ? withSqliteWorkerOperationAdmissionAsync({ port: metadata }, invoke)
+            : invoke(),
+        );
       } finally {
         metadata?.close();
+        try {
+          port.postMessage({
+            type: "admission-phases",
+            operationId,
+            phases: phases.finish(),
+          });
+        } catch {
+          // Diagnostics cannot replace the grant's own outcome.
+        }
       }
     })();
     if (!finalAdmission) {

@@ -18,6 +18,7 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   isOpenClawDatabaseMaintenanceWorkerAccess,
 } from "../../state/openclaw-state-db-async-lifecycle.js";
+import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import type {
   DeleteSessionEntryLifecycleParams,
   SqliteSessionReclamationDiagnostics,
@@ -45,6 +46,7 @@ import type { SqliteReclamationClaim } from "./session-accessor.sqlite-reclamati
 import {
   reclaimSqliteSessionInTransaction,
   resolveSessionReclamationDatabaseOptions,
+  SESSION_TRANSCRIPT_INDEX_DRAIN_BUDGET,
 } from "./session-accessor.sqlite-reclamation.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
@@ -142,6 +144,45 @@ type SqliteSessionReclamationReply<Kind extends SqliteSessionReclamationPlan["ki
       | (Kind extends "maintenance-plan" | "maintenance-age" ? "maintenance-plan-stale" : never);
   }
 >;
+
+/**
+ * Drain large windows' derived transcript index in bounded batches before their deletion
+ * transaction. Each batch is its own request and writer turn, so foreground writers queue
+ * between batches; every incomplete batch deletes at least one row.
+ */
+export async function drainSessionTranscriptIndexesBeforeReclamation(params: {
+  assertCommitAllowed?: () => void;
+  databaseOptions: SqliteSessionReclamationPlan["databaseOptions"];
+  excludedSessionKeys: readonly string[];
+  materializedPlans: readonly MaterializedSessionStateDeletePlan[];
+}): Promise<void> {
+  const targets = params.materializedPlans
+    .filter(
+      ({ snapshot }) =>
+        snapshot.lastSeq !== null &&
+        snapshot.lastSeq >= SESSION_TRANSCRIPT_INDEX_DRAIN_BUDGET.maxRows,
+    )
+    .map(({ sessionId, snapshot }) => ({ sessionId, snapshot }));
+  if (targets.length === 0) {
+    return;
+  }
+  const excludedSessionKeys = [...new Set(params.excludedSessionKeys)];
+  while (true) {
+    const drained = await runSqliteSessionReclamation({
+      assertCommitAllowed: params.assertCommitAllowed,
+      plan: {
+        kind: "transcript-index-drain",
+        databaseOptions: params.databaseOptions,
+        excludedSessionKeys,
+        materializedPlans: [],
+        targets,
+      },
+    });
+    if (drained.value.complete) {
+      return;
+    }
+  }
+}
 
 export function runSqliteSessionReclamation<Plan extends SqliteSessionReclamationPlan>(
   params: Omit<SqliteSessionReclamationParams, "plan"> & { plan: Plan },
@@ -495,6 +536,7 @@ async function runPreparedSqliteSessionReclamation(
                 "lifecycle-projection-plan",
                 "archive-publish-prepare",
                 "maintenance-pages",
+                "transcript-index-drain",
               ].includes(plan.kind)
             ) {
               conversations.begin();

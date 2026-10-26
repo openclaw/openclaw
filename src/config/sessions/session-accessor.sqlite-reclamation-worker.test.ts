@@ -385,3 +385,34 @@ test("retains a selected maintenance row protected after native preparation", ()
     ).resolves.toEqual({ kind: "maintenance-plan-stale" });
     expect(loadSessionEntry(victim)).toEqual(originalVictim);
   }));
+
+test("reports each write grant's subphases and native transaction state to the parent", () =>
+  withState(async (state) => {
+    const { scope, plan } = createEntryFixture(state, "synthetic-phase-session");
+    const reports: Extract<SqliteReclamationWorkerMessage, { type: "admission-phases" }>[] = [];
+    observeWorkers((message) => {
+      if (message.type === "admission-phases") {
+        reports.push(message);
+      }
+    });
+    await runSqliteSessionReclamation({ plan });
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    const final = expectDefined(reports.at(-1), "final grant phase report").phases;
+    expect(final.nativeTransactions).toBeGreaterThanOrEqual(1);
+    expect(final.nativeTransactionOpenAtEnd).toBe(false);
+    expect(final.spans.map((span) => span.phase)).toEqual(
+      expect.arrayContaining(["lease-prepare", "mutation", "commit", "release"]),
+    );
+    expect(
+      final.spans.filter((span) => span.phase === "commit").every((span) => span.nativeTransaction),
+    ).toBe(true);
+    for (const { phases } of reports) {
+      const total = Object.values(phases.totalsMs).reduce((sum, ms) => sum + ms, 0);
+      expect(total).toBeCloseTo(phases.endMs - phases.startMs, 3);
+    }
+    // Timing only: no SQL text, session identity or storage path crosses the channel.
+    const serialized = JSON.stringify(reports);
+    expect(serialized).not.toContain("synthetic-phase-session");
+    expect(serialized).not.toContain(plan.databaseOptions.path);
+    expect(serialized).not.toMatch(/DELETE|INSERT|SELECT/i);
+  }));

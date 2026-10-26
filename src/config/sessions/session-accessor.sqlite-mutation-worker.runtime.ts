@@ -5,6 +5,7 @@ import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-con
 import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
 import { onSqliteWalCheckpoint } from "../../infra/sqlite-wal-checkpoint.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
+import { recordSqliteWritePhase } from "../../infra/sqlite-write-phase-observer.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
 import { recordOpenClawAgentCanonicalValidation } from "../../state/openclaw-agent-canonical-validation-receipt.js";
 import {
@@ -360,6 +361,7 @@ export async function runReclamationWorkerPort(
                   throw new Error("SQLite session reclamation database owner is no longer current");
                 }
                 assertOpenClawAgentDatabaseLease(lease.leaseId, options);
+                recordSqliteWritePhase({ kind: "phase", phase: "lease-prepare" });
                 if (
                   request.type === "prepare" &&
                   (typeof nativeIdentity.identity !== "string" ||

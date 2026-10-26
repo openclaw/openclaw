@@ -20,6 +20,7 @@ import {
 } from "../infra/sqlite-transaction.js";
 import { registerDeferredSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { recordSqliteWritePhase } from "../infra/sqlite-write-phase-observer.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -431,6 +432,8 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
           pending.integrityRevoked = integrityRevoked;
           const step = failure ? steps.throw(failure.error) : steps.next();
           if (!step.done) {
+            // Schema reads before an off-admission integrity check end this grant.
+            recordSqliteWritePhase({ kind: "phase", phase: "schema" });
             suspended = true;
             return { done: false as const, check: step.value };
           }
@@ -444,6 +447,8 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
               ? undefined
               : registerDeferredSqliteWalWriteAdmission(step.value.db);
           flushMaintenance?.(assertOperationCurrent);
+          // Handle publication and deferred WAL admission precede the caller's operation.
+          recordSqliteWritePhase({ kind: "phase", phase: "open" });
           const result = await operation(step.value);
           flushMaintenance?.(assertOperationCurrent);
           return { done: true as const, result };
