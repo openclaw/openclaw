@@ -54,21 +54,20 @@ async function fixture(count = 1) {
   return { base, source, owner, privateRoot, destination, candidateRoot, plan, request };
 }
 
-async function withWorker<
+function createWorker<
   Input = UpdateCandidatePluginFileRequest,
   Output = UpdateCandidatePluginFileReply,
->(run: (worker: WorkerTaskPool<Input, Output>) => Promise<void>) {
+>() {
   const worker = new WorkerTaskPool<Input, Output>({
     workerUrl: resolveRuntimeProcessEntrypointUrl("updateCandidateState"),
     maxWorkers: 1,
     maxPendingTasks: 1,
     restartOnError: false,
   });
-  try {
-    await run(worker);
-  } finally {
-    await worker.close();
-  }
+  return {
+    run: (request: Input) => worker.run(request, {}),
+    [Symbol.asyncDispose]: () => worker.close(),
+  };
 }
 
 it.each(["auto", "off"] as const)(
@@ -115,24 +114,21 @@ it.each(["root", "ancestor", "destination", "source"] as const)(
       await fs.chmod(f.request.entry.path, 0o600);
       await fs.writeFile(f.request.entry.path, "altered payload!");
     }
-    await withWorker(async (worker) => {
-      const reply = await worker.run(f.request, {});
-      expect(reply.type).toBe("failed");
-      expect(await fs.readdir(f.destination)).toEqual(
-        replacement === "destination" ? ["0.txt"] : [],
-      );
-      if (replacement === "source") {
-        expect(reply).toMatchObject({
-          error: { message: expect.stringContaining("changed after snapshot inventory") },
-        });
-      } else {
-        expect(await fs.readFile(f.request.entry.path, "utf8")).toBe("plugin payload 0");
-      }
-      if (replacement === "destination") {
-        expect(reply).toMatchObject({ code: "already-exists" });
-        expect(await fs.readFile(f.request.destination, "utf8")).toBe("existing private bytes");
-      }
-    });
+    await using worker = createWorker();
+    const reply = await worker.run(f.request);
+    expect(reply.type).toBe("failed");
+    expect(await fs.readdir(f.destination)).toEqual(replacement === "destination" ? ["0.txt"] : []);
+    if (replacement === "source") {
+      expect(reply).toMatchObject({
+        error: { message: expect.stringContaining("changed after snapshot inventory") },
+      });
+    } else {
+      expect(await fs.readFile(f.request.entry.path, "utf8")).toBe("plugin payload 0");
+    }
+    if (replacement === "destination") {
+      expect(reply).toMatchObject({ code: "already-exists" });
+      expect(await fs.readFile(f.request.destination, "utf8")).toBe("existing private bytes");
+    }
   },
 );
 
@@ -146,25 +142,22 @@ it.each(["file", "parent"] as const)(
       filePath: entry.path,
       expected: await fs.lstat(entry.path, { bigint: true }),
     };
-    await withWorker<UpdateCandidatePluginHashRequest, UpdateCandidatePluginHashReply>(
-      async (worker) => {
-        expect(await worker.run(request, {})).toEqual({ type: "hashed", sha256: entry.sha256 });
-        const original = await fs.readFile(entry.path);
-        await fs.rename(
-          replacement === "file" ? entry.path : f.source,
-          path.join(f.base, "retired"),
-        );
-        if (replacement === "parent") {
-          await fs.mkdir(f.source);
-        }
-        await fs.writeFile(entry.path, original, { mode: entry.mode });
-        const reply = await worker.run(request, {});
-        expect(reply).toMatchObject({
-          type: "failed",
-          error: { message: expect.stringContaining("File changed while hashing snapshot") },
-        });
-        expect(await fs.readdir(f.destination)).toEqual([]);
-      },
-    );
+    await using worker = createWorker<
+      UpdateCandidatePluginHashRequest,
+      UpdateCandidatePluginHashReply
+    >();
+    expect(await worker.run(request)).toEqual({ type: "hashed", sha256: entry.sha256 });
+    const original = await fs.readFile(entry.path);
+    await fs.rename(replacement === "file" ? entry.path : f.source, path.join(f.base, "retired"));
+    if (replacement === "parent") {
+      await fs.mkdir(f.source);
+    }
+    await fs.writeFile(entry.path, original, { mode: entry.mode });
+    const reply = await worker.run(request);
+    expect(reply).toMatchObject({
+      type: "failed",
+      error: { message: expect.stringContaining("File changed while hashing snapshot") },
+    });
+    expect(await fs.readdir(f.destination)).toEqual([]);
   },
 );
