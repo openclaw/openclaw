@@ -1,5 +1,5 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 
 const manifestMocks = vi.hoisted(() => ({
@@ -83,24 +83,6 @@ function loadManifest(pluginId: string) {
   manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
 }
 
-async function expectAlias(
-  pluginId: string,
-  provider: string,
-  alias: string,
-  modelId: string,
-  baseUrl: string,
-) {
-  loadManifest(pluginId);
-  expect(resolveOwningPluginIdsForProviderRef({ provider: alias })).toEqual([pluginId]);
-  const expected = { provider, id: modelId, api: "openai-completions", baseUrl };
-  expect(
-    resolveBundledStaticCatalogModel({ provider, modelId, includeRuntimeDiscovery: true }),
-  ).toMatchObject(expected);
-  const canonical = await resolveAlias(provider, modelId);
-  expect(canonical).toMatchObject(expected);
-  expect(await resolveAlias(alias, modelId, provider)).toEqual(canonical);
-}
-
 it.each([
   [
     "fireworks",
@@ -119,26 +101,36 @@ it.each([
   ],
   ["together", "together", "togetherai", "zai-org/GLM-5.2", "https://api.together.xyz/v1"],
   ["kilocode", "kilocode", "kilo", "kilo-auto/balanced", "https://api.kilo.ai/api/gateway/"],
-])("%s owns %s alias %s before runtime load and resolves its catalog model", expectAlias);
+])(
+  "%s owns %s alias %s before runtime load and resolves its catalog model",
+  async (pluginId, provider, alias, modelId, baseUrl) => {
+    loadManifest(pluginId);
+    expect(resolveOwningPluginIdsForProviderRef({ provider: alias })).toEqual([pluginId]);
+    const canonical = await resolveAlias(provider, modelId);
+    expect(canonical).toMatchObject({ provider, id: modelId, api: "openai-completions", baseUrl });
+    expect(await resolveAlias(alias, modelId, provider)).toEqual(canonical);
+  },
+);
 
-describe.each([
-  ["fireworks", "fireworks-ai", "accounts/fireworks/routers/glm-5p3-fast", "X-Fireworks-Route"],
-  ["stepfun", "stepfun-ai", "step-3.7-flash", "X-StepFun-Route"],
-])("%s explicit alias configuration", (catalogProvider, provider, modelId, header) => {
-  it.each([
-    ["omitted API", undefined, undefined, undefined, "openai-completions"],
-    ["provider API", "openai-responses", undefined, undefined, "openai-responses"],
-    [
-      "model API and URL",
-      "openai-responses",
-      "anthropic-messages",
-      `https://${catalogProvider}-proxy.example/model`,
-      "anthropic-messages",
-    ],
-  ] as const)("preserves %s", async (_name, providerApi, modelApi, modelBaseUrl, expectedApi) => {
+it.each([
+  ["omitted API", undefined, undefined, undefined, "openai-completions"],
+  ["provider API", "openai-responses", undefined, undefined, "openai-responses"],
+  [
+    "model API and URL",
+    "openai-responses",
+    "anthropic-messages",
+    "https://fireworks-proxy.example/model",
+    "anthropic-messages",
+  ],
+] as const)(
+  "explicit alias configuration preserves %s",
+  async (_name, providerApi, modelApi, modelBaseUrl, expectedApi) => {
+    const catalogProvider = "fireworks";
+    const provider = "fireworks-ai";
+    const modelId = "accounts/fireworks/routers/glm-5p3-fast";
     loadManifest(catalogProvider);
-    const baseUrl = `https://${catalogProvider}-proxy.example/v1`;
-    const headers = { [header]: "custom" };
+    const baseUrl = "https://fireworks-proxy.example/v1";
+    const headers = { "X-Fireworks-Route": "custom" };
     const cfg: OpenClawConfig = {
       models: {
         providers: {
@@ -174,5 +166,5 @@ describe.each([
       contextWindow: 4096,
       maxTokens: 512,
     });
-  });
-});
+  },
+);

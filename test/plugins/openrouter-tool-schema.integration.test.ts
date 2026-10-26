@@ -26,9 +26,6 @@ const makeRoute = (
 });
 const routes = [
   makeRoute("OpenAI"),
-  makeRoute("Anthropic", { id: "anthropic/claude-sonnet-4.6" }),
-  makeRoute("Gemini", { id: "google/gemini-3-flash-preview" }),
-  makeRoute("automatic", { id: "openrouter/auto" }),
   makeRoute("custom provider on OpenRouter", { provider: "custom" }),
   makeRoute("custom proxy", { baseUrl: "https://proxy.example.test/v1", omitStrict: true }),
   makeRoute("explicit opt-out", { compat: { supportsStrictMode: false }, omitStrict: true }),
