@@ -396,6 +396,30 @@ describe("sidebar projection memo", () => {
     },
   );
 
+  it("re-arms snoozed visibility for the next deadline without a new list", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const first = session("first-wake", { snoozedUntil: 11_000, snoozedAt: 9_000 });
+    const second = session("second-wake", { snoozedUntil: 12_000, snoozedAt: 9_000 });
+    const { sidebar, row, sessions } = await mount([first, second]);
+    sidebar.sessionsStatusFilter = "snoozed";
+    await settleLitElement(sidebar);
+    expect(row(first.key)).not.toBeNull();
+    expect(row(second.key)).not.toBeNull();
+    const reads = sessions.list.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(11_001 - Date.now());
+    await settleLitElement(sidebar);
+    expect(row(first.key)).toBeNull();
+    expect(row(second.key)).not.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(12_001 - Date.now());
+    await settleLitElement(sidebar);
+    expect(row(first.key)).toBeNull();
+    expect(row(second.key)).toBeNull();
+    expect(sessions.list).toHaveBeenCalledTimes(reads);
+  });
+
   it("updates timed attention, questions, and approvals without replacing the row", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
