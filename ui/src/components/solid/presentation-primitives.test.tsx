@@ -93,31 +93,32 @@ describe("Solid presentation primitives", () => {
     expect(view.queryByRole("button")).toBeNull();
   });
 
-  it("closes a retained loading modal through the current callback from either control", () => {
-    const original = vi.fn();
-    const close = vi.fn();
-    const retry = vi.fn();
-    const state: LazyElementState = { status: "loading", element: { label: "Workspace panel" } };
-    const [updated, setUpdated] = createSignal(false);
-    const view = render(() => (
-      <LazyElementModal state={state} onRetry={retry} onClose={updated() ? close : original} />
-    ));
-    const modal = view.container.querySelector("openclaw-modal-dialog")!;
-    const button = view.getByRole("button", { name: "Close" });
-    setUpdated(true);
-    flush();
-    expect(view.container.querySelector("openclaw-modal-dialog")).toBe(modal);
-    expect(view.getByRole("button", { name: "Close" })).toBe(button);
-    for (const closeModal of [
-      () => fireEvent.click(button),
-      () => fireEvent(modal, new Event("modal-cancel", { bubbles: true })),
-    ]) {
-      closeModal();
+  it.each(["button", "modal-cancel"])(
+    "closes a retained loading modal through the current callback (%s)",
+    (source) => {
+      const original = vi.fn();
+      const close = vi.fn();
+      const retry = vi.fn();
+      const state: LazyElementState = { status: "loading", element: { label: "Workspace panel" } };
+      const [updated, setUpdated] = createSignal(false);
+      const view = render(() => (
+        <LazyElementModal state={state} onRetry={retry} onClose={updated() ? close : original} />
+      ));
+      const modal = view.container.querySelector("openclaw-modal-dialog")!;
+      const button = view.getByRole("button", { name: "Close" });
+      setUpdated(true);
+      flush();
+      expect(view.container.querySelector("openclaw-modal-dialog")).toBe(modal);
+      expect(view.getByRole("button", { name: "Close" })).toBe(button);
+      if (source === "button") {
+        fireEvent.click(button);
+      } else {
+        fireEvent(modal, new Event("modal-cancel", { bubbles: true }));
+      }
       expect(close).toHaveBeenCalledOnce();
       expect(original).not.toHaveBeenCalled();
-      close.mockClear();
-    }
-  });
+    },
+  );
 
   it("keeps icon-button semantics synchronized with disabled and busy props", () => {
     const click = vi.fn();
@@ -135,11 +136,13 @@ describe("Solid presentation primitives", () => {
       />
     ));
     const button = view.getByRole<HTMLButtonElement>("button", { name: "Open file" });
-    expect([button.disabled, button.getAttribute("aria-busy")]).toEqual([true, "true"]);
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-busy")).toBe("true");
     expect(button.hasAttribute("data-new-tab-action")).toBe(true);
     setBusy(false);
     flush();
-    expect([button.disabled, button.getAttribute("aria-busy")]).toEqual([false, "false"]);
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-busy")).toBe("false");
     fireEvent.click(button);
     expect(click).toHaveBeenCalledOnce();
     expect(original).not.toHaveBeenCalled();

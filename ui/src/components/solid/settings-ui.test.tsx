@@ -107,6 +107,7 @@ it("registers keyed radio refs without untracked reads and retains focused input
   ));
   flush();
   const last = view.container.querySelector<HTMLInputElement>('input[value="last"]')!;
+  expect(inputRef).toHaveBeenCalledTimes(3);
   expect(inputRef).toHaveBeenCalledWith("last", last);
   last.focus();
   setChoices([
@@ -120,5 +121,6 @@ it("registers keyed radio refs without untracked reads and retains focused input
   expect(last.checked).toBe(true);
   expect(view.getByRole("radio", { name: "Last updated" })).toBe(last);
   expect(document.activeElement).toBe(last);
+  expect(inputRef).toHaveBeenCalledTimes(3);
   expect(warnings).not.toHaveBeenCalledWith(expect.stringContaining("STRICT_READ_UNTRACKED"));
 });
