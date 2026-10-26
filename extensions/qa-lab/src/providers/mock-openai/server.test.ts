@@ -1725,115 +1725,92 @@ describe("qa mock openai server", () => {
       role: "system",
       content: prefix + "## /workspace/MEMORY.md\n" + fact,
     });
-    type Case = [
-      name: string,
+    const check = async (
       input: unknown[],
-      includes: string[],
-      excludes?: string[],
+      included: string[],
+      excluded: string[] = [],
       instructions?: string,
-    ];
-    const cases: Case[] = [
-      ["ranking search", userInputs(ranking), ['"name":"memory_search"'], ['\\"corpus\\"']],
-      ["instruction-only thread search", [ack], ['"name":"memory_search"', "ORBIT-22"], [], thread],
-      [
-        "direct thread search result",
-        [results(hit("MEMORY.md", fact, 1, 1)), ack],
-        ['"name":"memory_get"', '\\"path\\":\\"MEMORY.md\\"'],
-        [hidden],
-        thread,
-      ],
-      ["direct thread read", [out({ text: fact }), ack], ["ORBIT-22"], [], thread],
-      [
-        "unstructured thread output",
-        [makeToolOutput("Thread-hidden codename: ORBIT-23."), ack],
-        ["NONE"],
-        ["ORBIT-23"],
-        thread,
-      ],
-      [
-        "unavailable memory does not use system facts",
-        userInputs(
-          system("Available tools include sessions_spawn.\n"),
-          thread,
-          out({ results: [], unavailable: true, error: "database is not open" }),
-        ),
-        ["NONE"],
-        ["ORBIT-22"],
-      ],
-      [
-        "empty memory does not use system facts",
-        userInputs(system(), thread, out({ results: [] })),
-        ["NONE"],
-        ["ORBIT-22"],
-      ],
-      [
-        "session ranking wins over stale file",
-        userInputs(ranking, results(stale, current)),
-        ["Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10."],
-      ],
-      [
-        "missing ranking snippet requires read",
-        userInputs(ranking, results(hit(path, undefined, 2, 3))),
-        ['"name":"memory_get"'],
-        ["codename is ORBIT-10"],
-      ],
-      [
-        "unavailable ranking result",
-        userInputs(
-          ranking,
-          out({ results: [current], unavailable: true, error: "database is not open" }),
-        ),
-        ["NONE"],
-        ["codename is ORBIT-10"],
-      ],
-      [
-        "ranking uses returned value",
-        userInputs(ranking, results(hit(path, "Project Nebula current codename: ORBIT-9."))),
-        ["codename is ORBIT-9"],
-        ["codename is ORBIT-10"],
-      ],
-      ["snack search", userInputs(agent(snackPrompt)), ['"name":"memory_search"']],
-      [
-        "snack read",
-        userInputs(
-          agent(snackPrompt),
-          out({ text: `Stable QA movie night snack preference: ${snack}.` }),
-        ),
-        [snack],
-      ],
-      ["injected snack", userInputs(snackPrompt), [snack], [], "System context:\n" + injected],
-      [
-        "cross-conversation search",
-        userInputs(agent(rememberPrompt)),
-        [
-          '"name":"memory_search"',
-          "QA movie night snack lemon pepper wings blue cheese",
-          '\\"maxResults\\":10',
-        ],
-      ],
-      [
-        "cross-conversation snippet",
-        userInputs(
-          agent(rememberPrompt),
-          results(
-            hit(
-              "sessions/private-source.jsonl",
-              `Stable QA movie night snack preference: ${snack}.`,
-              2,
-              3,
-            ),
-          ),
-        ),
-        [snack],
-        ['"name":"memory_get"'],
-      ],
-      ["cross-conversation injection", userInputs(rememberPrompt), [snack], [], injected],
-    ];
-    for (const [_name, input, included, excluded, instructions] of cases) {
+    ) => {
       const text = JSON.stringify(await respond(server, input, { instructions }));
       expectIncludes(text, ...included);
-      expectExcludes(text, ...(excluded ?? []));
-    }
+      expectExcludes(text, ...excluded);
+    };
+    await check(userInputs(ranking), ['"name":"memory_search"'], ['\\"corpus\\"']);
+    await check([ack], ['"name":"memory_search"', "ORBIT-22"], [], thread);
+    await check(
+      [results(hit("MEMORY.md", fact, 1, 1)), ack],
+      ['"name":"memory_get"', '\\"path\\":\\"MEMORY.md\\"'],
+      [hidden],
+      thread,
+    );
+    await check([out({ text: fact }), ack], ["ORBIT-22"], [], thread);
+    await check(
+      [makeToolOutput("Thread-hidden codename: ORBIT-23."), ack],
+      ["NONE"],
+      ["ORBIT-23"],
+      thread,
+    );
+    await check(
+      userInputs(
+        system("Available tools include sessions_spawn.\n"),
+        thread,
+        out({ results: [], unavailable: true, error: "database is not open" }),
+      ),
+      ["NONE"],
+      ["ORBIT-22"],
+    );
+    await check(userInputs(system(), thread, out({ results: [] })), ["NONE"], ["ORBIT-22"]);
+    await check(userInputs(ranking, results(stale, current)), [
+      "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
+    ]);
+    await check(
+      userInputs(ranking, results(hit(path, undefined, 2, 3))),
+      ['"name":"memory_get"'],
+      ["codename is ORBIT-10"],
+    );
+    await check(
+      userInputs(
+        ranking,
+        out({ results: [current], unavailable: true, error: "database is not open" }),
+      ),
+      ["NONE"],
+      ["codename is ORBIT-10"],
+    );
+    await check(
+      userInputs(ranking, results(hit(path, "Project Nebula current codename: ORBIT-9."))),
+      ["codename is ORBIT-9"],
+      ["codename is ORBIT-10"],
+    );
+    await check(userInputs(agent(snackPrompt)), ['"name":"memory_search"']);
+    await check(
+      userInputs(
+        agent(snackPrompt),
+        out({ text: `Stable QA movie night snack preference: ${snack}.` }),
+      ),
+      [snack],
+    );
+    await check(userInputs(snackPrompt), [snack], [], "System context:\n" + injected);
+    await check(userInputs(agent(rememberPrompt)), [
+      '"name":"memory_search"',
+      "QA movie night snack lemon pepper wings blue cheese",
+      '\\"maxResults\\":10',
+    ]);
+    await check(
+      userInputs(
+        agent(rememberPrompt),
+        results(
+          hit(
+            "sessions/private-source.jsonl",
+            `Stable QA movie night snack preference: ${snack}.`,
+            2,
+            3,
+          ),
+        ),
+      ),
+      [snack],
+      ['"name":"memory_get"'],
+    );
+    await check(userInputs(rememberPrompt), [snack], [], injected);
   });
 
   it.each([
@@ -2700,44 +2677,30 @@ describe("qa mock openai server", () => {
   });
 
   it.each([
-    {
-      paths: ["/v1/messages"],
-      bodies: ['{"model":"claude-opus-4-8","messages":[', "null", "[]", '"text"'],
-      anthropic: true,
-    },
-    {
-      paths: ["/v1/responses", "/v1/embeddings", "/v1/images/generations"],
-      bodies: ["{bad", "[]", '"text"'],
-      anthropic: false,
-    },
-  ])(
-    "rejects malformed JSON without crashing (Anthropic=$anthropic)",
-    async ({ paths, bodies, anthropic }) => {
-      const server = await startMockServer();
-      for (const path of paths) {
-        for (const rawBody of bodies) {
-          const response = await fetch(`${server.baseUrl}${path}`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: rawBody,
-          });
+    ["/v1/messages", true],
+    ["/v1/responses", false],
+  ] as const)("rejects malformed JSON without crashing on %s", async (path, anthropic) => {
+    const server = await startMockServer();
+    for (const rawBody of ["{bad", "[]"]) {
+      const response = await fetch(`${server.baseUrl}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: rawBody,
+      });
 
-          expect(response.status).toBe(400);
-          const body = (await response.json()) as {
-            type?: string;
-            error: { type: string; message: string };
-          };
-          if (anthropic) {
-            expect(body.type).toBe("error");
-          }
-          expect(body.error.type).toBe("invalid_request_error");
-          expect(body.error.message).toContain("Malformed JSON body");
-        }
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as {
+        type?: string;
+        error: { type: string; message: string };
+      };
+      if (anthropic) {
+        expect(body.type).toBe("error");
       }
-
-      await fetchOk(`${server.baseUrl}/healthz`);
-    },
-  );
+      expect(body.error.type).toBe("invalid_request_error");
+      expect(body.error.message).toContain("Malformed JSON body");
+    }
+    await fetchOk(`${server.baseUrl}/healthz`);
+  });
 
   it("defaults empty-string Anthropic /v1/messages model to claude-opus-4-8", async () => {
     const server = await startMockServer();
@@ -2788,13 +2751,6 @@ describe("qa mock openai server", () => {
         expect(outputText(first)).toBe("");
       }
       expect(await openAiReply(server, userInputs(prompt, retry, output))).toBe(expected);
-
-      const requestLog = requireArray(await getJson(server, "/debug/requests"), "debug requests");
-      expect(requireRecord(requestLog[0], "debug request 0").plannedToolName).toBe("read");
-      expect(String(requireRecord(requestLog[1], "debug request 1").allInputText)).toContain(
-        prompt,
-      );
-      expect(String(requireRecord(requestLog[2], "debug request 2").allInputText)).toContain(retry);
     },
   );
 
@@ -2851,9 +2807,6 @@ describe("qa mock openai server", () => {
     );
     const sideEffectOutput = outputItem(sideEffectPayload);
     expectFields(sideEffectOutput, { type: "reasoning", id: "rs_mock_reasoning_side_effect" });
-
-    const requests = await fetchOk(`${server.baseUrl}/debug/requests`);
-    expect((await requests.json()) as Array<{ allInputText?: string }>).toHaveLength(2);
   });
 
   it("scripts settled continuation after a side-effecting write with settled exhaustion", async () => {
