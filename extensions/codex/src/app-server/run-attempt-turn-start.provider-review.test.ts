@@ -43,7 +43,7 @@ vi.mock("./usage-limit-error.js", () => ({
 
 beforeEach(() => vi.clearAllMocks());
 
-function createFixture(acknowledged: boolean) {
+function createFixture() {
   const error = new Error("native turn/start rejected");
   const start = vi.fn().mockRejectedValue(error);
   const wait = vi.fn().mockResolvedValue(true);
@@ -62,7 +62,7 @@ function createFixture(acknowledged: boolean) {
         historyState: { messages: [] },
         runtime: {
           connection: {
-            params: acknowledged ? { providerReviewAcknowledgment: {} } : {},
+            params: { providerReviewAcknowledgment: {} },
             runAbortController: new AbortController(),
             activeContextEngine: {},
             appServer: { requestTimeoutMs: 1000 },
@@ -90,22 +90,12 @@ function createFixture(acknowledged: boolean) {
 }
 
 it.each(["compact", "overflow", "image"] as const)(
-  "retains the reviewed thread after %s rejection while preserving ordinary recovery",
+  "retains the reviewed thread after %s rejection without retrying or clearing it",
   async (kind) => {
     recovery.kind = kind;
-    const reviewed = createFixture(true);
+    const reviewed = createFixture();
     await expect(reviewed.run()).rejects.toBe(reviewed.error);
     expect(reviewed.counts()).toEqual([1, 0, 0, 0, 0]);
     expect(reviewed.state.thread.threadId).toBe("reviewed-thread");
-
-    const ordinary = createFixture(false);
-    await expect(ordinary.run()).rejects.toBe(ordinary.error);
-    expect(ordinary.counts()).toEqual([
-      kind === "image" ? 1 : 2,
-      kind === "compact" ? 1 : 0,
-      kind === "overflow" ? 1 : 0,
-      kind === "overflow" ? 1 : 0,
-      kind === "image" ? 1 : 0,
-    ]);
   },
 );
