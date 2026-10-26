@@ -25,7 +25,8 @@ function source(prompt = "source", cap: number | false = 50) {
   }
   return { run, begin, end };
 }
-function expectOutcomes({ end }: ReturnType<typeof source>, outcomes: readonly unknown[]) {
+function expectOutcomes({ begin, end }: ReturnType<typeof source>, outcomes: readonly unknown[]) {
+  expect(begin).toHaveBeenCalledTimes(outcomes.length);
   expect(end.mock.calls).toEqual(outcomes.map((outcome) => [outcome]));
 }
 

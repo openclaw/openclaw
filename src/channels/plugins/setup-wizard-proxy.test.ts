@@ -5,7 +5,7 @@ import {
   runSetupWizardFinalize,
   runSetupWizardPrepare,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import {
   createAllowlistSetupWizardProxy,
   createDelegatedSetupWizardProxy,
@@ -36,8 +36,9 @@ it("falls back when delegated surfaces are absent", async () => {
     fallbackResolvedGroupAllowlist: (entries) => entries.map((input) => ({ input })),
   });
 
-  const { promptAllowFrom, resolveAllowFromEntries, resolveGroupAllowlist } =
-    createBase.mock.calls[0][0];
+  const call = createBase.mock.calls[0];
+  assert(call);
+  const { promptAllowFrom, resolveAllowFromEntries, resolveGroupAllowlist } = call[0];
   expect(await promptFrom({ promptAllowFrom })).toStrictEqual({});
   expect(
     await resolveEntries({ resolveEntries: resolveAllowFromEntries, entries: ["alice"] }),
