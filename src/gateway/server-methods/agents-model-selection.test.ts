@@ -12,7 +12,6 @@ const fixture = vi.hoisted(() => {
     config,
     beforeWrite: () => {},
     current: true,
-    choice: vi.fn<typeof preparePublishedModelRuntimeChoice>(),
   };
 });
 
@@ -33,7 +32,15 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
   },
 }));
 vi.mock("../../agents/model-runtime-choice.js", () => ({
-  preparePublishedModelRuntimeChoice: fixture.choice,
+  preparePublishedModelRuntimeChoice: async ({
+    runtimeId,
+  }: Parameters<typeof preparePublishedModelRuntimeChoice>[0]): ReturnType<
+    typeof preparePublishedModelRuntimeChoice
+  > => ({
+    kind: "ready",
+    runtimeId: runtimeId ?? "openclaw",
+    validate: () => (fixture.current ? undefined : "Replaced"),
+  }),
 }));
 
 const { agentsHandlers } = await import("./agents.js");
@@ -44,15 +51,9 @@ function update(params: Record<string, unknown>) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks();
   fixture.config = { agents: { entries: { main: {} } } };
   fixture.beforeWrite = () => {};
   fixture.current = true;
-  fixture.choice.mockReset().mockImplementation(async ({ runtimeId }) => ({
-    kind: "ready",
-    runtimeId: runtimeId ?? "openclaw",
-    validate: () => (fixture.current ? undefined : "Replaced"),
-  }));
 });
 
 const model = "acp-opencode/fixture-model";
@@ -64,16 +65,13 @@ it.each([false, true])(
       fixture.config = {};
     }
     expectRpcResult(await update(request), { ok: true, agentId: "main" });
-    expect(
-      implicit ? fixture.config.agents?.defaults : fixture.config.agents?.entries?.main,
-    ).toMatchObject({
+    const selection = {
       model,
       models: { [model]: { agentRuntime: { id: "acp-opencode" } } },
+    };
+    expect(fixture.config).toEqual({
+      agents: implicit ? { defaults: selection } : { defaults: {}, entries: { main: selection } },
     });
-    if (implicit) {
-      expect(fixture.config.agents?.entries).toBeUndefined();
-    }
-    expect([fixture.config.auth, fixture.config.wizard]).toEqual([undefined, undefined]);
   },
 );
 it("rechecks catalog ownership at the final config write", async () => {
