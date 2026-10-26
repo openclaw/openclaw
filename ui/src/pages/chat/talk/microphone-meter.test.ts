@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { createFrameClock } from "../../../test-helpers/animation-frame-clock.ts";
 import { createMicrophoneMeter } from "./microphone-meter.ts";
@@ -109,7 +110,16 @@ function mount(
       clock.flush(time);
     },
     intersect(value: boolean) {
-      const entry = { target: host, isIntersecting: value } as IntersectionObserverEntry;
+      const bounds = host.getBoundingClientRect();
+      const entry: IntersectionObserverEntry = {
+        target: host,
+        isIntersecting: value,
+        boundingClientRect: bounds,
+        intersectionRatio: value ? 1 : 0,
+        intersectionRect: bounds,
+        rootBounds: null,
+        time: now,
+      };
       observation.intersect?.([entry], {} as IntersectionObserver);
     },
     reduce(value: boolean) {
@@ -224,7 +234,7 @@ it("refreshes a settled meter for palette and display-density changes without a 
   try {
     view.advance(0);
     expect(view.clock.frames.size).toBe(0);
-    view.bars[0].style.backgroundColor = "rgb(20, 30, 200)";
+    expectDefined(view.bars[0], "first meter bar").style.backgroundColor = "rgb(20, 30, 200)";
     document.documentElement.setAttribute("data-theme", "canvas-meter-test");
     await Promise.resolve();
     expect(view.context.fillStyle).toBe("rgb(20, 30, 200)");
@@ -234,7 +244,7 @@ it("refreshes a settled meter for palette and display-density changes without a 
     expect(view.clock.frames.size).toBe(0);
 
     vi.stubGlobal("devicePixelRatio", 1.25);
-    queries[0].dispatchEvent(new Event("change"));
+    expectDefined(queries[0], "density query").dispatchEvent(new Event("change"));
     expect(matchMedia).toHaveBeenLastCalledWith("(resolution: 1.25dppx)");
     expect(view.context.setTransform).toHaveBeenLastCalledWith(1.25, 0, 0, 1.25, 0, 0);
     expect(view.context.shadowBlur).toBe(6.25);

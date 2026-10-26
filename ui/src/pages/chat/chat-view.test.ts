@@ -1841,7 +1841,10 @@ describe("chat voice controls", () => {
       expect(Array.from(host.querySelectorAll(".agent-chat__voice-activity-bar"))).toEqual(bars);
       expect(host.getAttribute("data-level")).toBe("0.8");
       expect(canvas.hasAttribute("data-ready")).toBe(false);
-      requireElement(container, '[aria-label="Stop voice input"]', "Stop voice input").click();
+      expectDefined(
+        container.querySelector<HTMLButtonElement>('[aria-label="Stop voice input"]'),
+        "Stop voice input",
+      ).click();
       expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
     } finally {
       disposeChatView(container);

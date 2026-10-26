@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -31,7 +32,7 @@ it("keeps silence in CSS and preserves the first level transition when activity 
 
     source.set(0.6);
     expect(renderer.create).toHaveBeenCalledOnce();
-    const active = renderer.create.mock.results[0].value;
+    const active = expectDefined(renderer.create.mock.results[0], "active renderer").value;
     expect(vi.mocked(active.setLevel).mock.calls).toEqual([[0], [0.6]]);
     expect(host?.getAttribute("data-level")).toBe("0.6");
     expect(Array.from(view.container.querySelectorAll(".agent-chat__voice-activity-bar"))).toEqual(
@@ -59,7 +60,7 @@ it("keeps the host and bars while replacing only the status/source canvas lifeti
     const host = view.container.querySelector("openclaw-microphone-activity");
     const bars = Array.from(view.container.querySelectorAll(".agent-chat__voice-activity-bar"));
     const firstCanvas = host?.querySelector("canvas");
-    const first = renderer.create.mock.results[0].value;
+    const first = expectDefined(renderer.create.mock.results[0], "first renderer").value;
     expect(bars).toHaveLength(7);
     expect(first.setLevel).toHaveBeenLastCalledWith(0.2);
 
@@ -74,19 +75,21 @@ it("keeps the host and bars while replacing only the status/source canvas lifeti
     await waitForSolid(() => expect(renderer.create).toHaveBeenCalledTimes(2));
     expect(first.dispose).toHaveBeenCalledOnce();
     expect(host?.querySelector("canvas")).not.toBe(firstCanvas);
-    expect(renderer.create.mock.calls[1][3]).toBe("thinking");
-    expect(renderer.create.mock.results[1].value.setLevel).toHaveBeenLastCalledWith(0.8);
+    expect(expectDefined(renderer.create.mock.calls[1], "thinking renderer call")[3]).toBe(
+      "thinking",
+    );
+    const second = expectDefined(renderer.create.mock.results[1], "second renderer").value;
+    expect(second.setLevel).toHaveBeenLastCalledWith(0.8);
     expect(view.container.querySelector("openclaw-microphone-activity")).toBe(host);
     expect(Array.from(view.container.querySelectorAll(".agent-chat__voice-activity-bar"))).toEqual(
       bars,
     );
 
-    const second = renderer.create.mock.results[1].value;
     const replacement = new RealtimeTalkLevelSignal();
     replacement.set(0.35);
     setSource(replacement);
     await waitForSolid(() => expect(renderer.create).toHaveBeenCalledTimes(3));
-    const third = renderer.create.mock.results[2].value;
+    const third = expectDefined(renderer.create.mock.results[2], "third renderer").value;
     expect(second.dispose).toHaveBeenCalledOnce();
     expect(third.setLevel).toHaveBeenLastCalledWith(0.35);
     const retiredCalls = vi.mocked(second.setLevel).mock.calls.length;
@@ -128,7 +131,7 @@ it("uses CSS while connecting and adopts the live source when the meter becomes 
 
     setStatus("listening");
     await waitForSolid(() => expect(renderer.create).toHaveBeenCalledTimes(1));
-    const active = renderer.create.mock.results[0].value;
+    const active = expectDefined(renderer.create.mock.results[0], "active renderer").value;
     expect(active.setLevel).toHaveBeenLastCalledWith(0.6);
     expect(Array.from(view.container.querySelectorAll(".agent-chat__voice-activity-bar"))).toEqual(
       bars,
@@ -147,8 +150,11 @@ it("uses CSS while connecting and adopts the live source when the meter becomes 
 
     setStatus("thinking");
     await waitForSolid(() => expect(renderer.create).toHaveBeenCalledTimes(2));
-    expect(renderer.create.mock.calls[1][3]).toBe("thinking");
-    expect(renderer.create.mock.results[1].value.setLevel).toHaveBeenLastCalledWith(0.35);
+    expect(expectDefined(renderer.create.mock.calls[1], "thinking renderer call")[3]).toBe(
+      "thinking",
+    );
+    const thinking = expectDefined(renderer.create.mock.results[1], "thinking renderer").value;
+    expect(thinking.setLevel).toHaveBeenLastCalledWith(0.35);
   } finally {
     view.unmount();
   }
