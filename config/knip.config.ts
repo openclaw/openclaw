@@ -366,6 +366,7 @@ const repositoryScriptEntries = [
   // Maintained source headers invoke these standalone measurement commands by exact path.
   "scripts/perf/agent-fresh-array-copy-measure.ts!",
   "scripts/perf/agent-object-copy-measure.ts!",
+  "scripts/perf/agent-stream-update-measure.ts!",
   "scripts/perf/chat-display-admission-measure.mjs!",
   "scripts/perf/core-fresh-array-copies-measure.mjs!",
   "scripts/perf/delivery-info-measure.ts!",
