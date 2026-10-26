@@ -12,6 +12,41 @@ export function installPaneChromeProbe() {
   type Signature = { nodes: number; hash: number; truncated: boolean };
   type Frame = { at: number; regions: Record<Region, Signature>; composerHeight: number };
   const frames: Frame[] = [];
+  const detailsFrames: Array<{ at: number; sections: unknown[] }> = [];
+  let detailsSignature = "";
+  const sampleDetails = (at: number) => {
+    const sections = Array.from(document.querySelectorAll(".chat-details[data-desktop]"))
+      .filter((panel) => panel.getBoundingClientRect().width > 0 && !panel.closest("[inert]"))
+      .flatMap((panel) =>
+        Array.from(
+          panel.querySelectorAll(
+            "[data-details-group], [data-progress-card-placement='details'], [data-panel-skeleton]",
+          ),
+        ).map((section) => {
+          const box = section.getBoundingClientRect();
+          const panelBox = panel.getBoundingClientRect();
+          return {
+            section:
+              section.getAttribute("data-details-group") ??
+              section.getAttribute("data-progress-card-placement") ??
+              "skeleton",
+            top: Math.round(box.top - panelBox.top),
+            height: Math.round(box.height),
+            visible: box.height > 0 && box.top < panelBox.bottom && box.bottom > panelBox.top,
+            nodes: section.querySelectorAll("*").length,
+            images: Array.from(section.querySelectorAll("img")).map((image) => ({
+              loaded: image.complete && image.naturalWidth > 0,
+              src: image.getAttribute("src"),
+            })),
+          };
+        }),
+      );
+    const nextSignature = JSON.stringify(sections);
+    if (nextSignature !== detailsSignature && detailsFrames.length < 256) {
+      detailsSignature = nextSignature;
+      detailsFrames.push({ at, sections });
+    }
+  };
   const shifts: Array<{ at: number; value: number; regions: Region[] }> = [];
   const nodeRegions = new WeakMap<Node, Region>();
   const regions = Object.keys(selectors) as Region[];
@@ -109,6 +144,7 @@ export function installPaneChromeProbe() {
   shiftObserver.observe({ type: "layout-shift", buffered: true });
   return {
     sample(at: number) {
+      sampleDetails(at);
       if (!dirty) {
         return;
       }
@@ -157,6 +193,7 @@ export function installPaneChromeProbe() {
         changesAfterContent: firstTranscriptPaint === null ? null : changes.length,
         changes,
         frames,
+        detailsFrames,
         shifts,
         clsAfterContent: afterContent.reduce((sum, shift) => sum + shift.value, 0),
         byRegion: Object.fromEntries(
