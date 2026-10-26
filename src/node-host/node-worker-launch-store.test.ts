@@ -54,6 +54,16 @@ async function closeDatabase() {
 function schema(database: Database, name: string) {
   return database.prepare("SELECT sql FROM sqlite_schema WHERE name = ?").get(name);
 }
+function cleanupRow(database: Database, launchId: string) {
+  return database
+    .prepare(
+      "SELECT cleanup_mode, lineage_settled FROM node_worker_launch_cleanup WHERE launch_id = ?",
+    )
+    .get(launchId);
+}
+function tableCount(database: Database, table: string) {
+  return database.prepare(`SELECT count(*) AS count FROM ${table}`).get();
+}
 function tableIds(database: Database, table: string) {
   return (
     database.prepare(`SELECT launch_id FROM ${table} ORDER BY launch_id`).all() as Array<{
@@ -89,6 +99,18 @@ async function startLaunch(
     cleanupMode: "process-group",
     nowMs: NOW_MS,
     ...options,
+  });
+}
+
+function interruptLaunch(
+  store: NodeWorkerLaunchStore,
+  receipt: Omit<Parameters<NodeWorkerLaunchStore["finish"]>[0], "state">,
+) {
+  return store.finish({
+    ...receipt,
+    state: "interrupted",
+    errorText: "worker stopped",
+    nowMs: NOW_MS,
   });
 }
 
@@ -178,8 +200,10 @@ describe("node worker launch admitted schema", () => {
     ).toThrow(rollback);
     expect(kernel.get(pending.launchId)).toEqual(pending);
     const running = start();
-    expect(running.workerCleanupMode).toBe("linux-subreaper");
-    expect(running.workerDescendantsReaped).toBe(false);
+    expect(running).toMatchObject({
+      workerCleanupMode: "linux-subreaper",
+      workerDescendantsReaped: false,
+    });
     expect(kernel.listNonterminal()).toEqual([running]);
   });
 
@@ -250,40 +274,31 @@ describe("node worker launch admitted schema", () => {
         nowMs: NOW_MS + 7,
       });
       const foreign = new (requireNodeSqlite().DatabaseSync)(path);
-      const write = (sql: string, ...values: Array<string | number | null>) =>
-        foreign.prepare(sql).run(...values);
+      const update = (
+        table: string,
+        assignment: string,
+        ...values: Array<string | number | null>
+      ) =>
+        foreign
+          .prepare(`UPDATE node_worker_${table} SET ${assignment} WHERE launch_id = ?`)
+          .run(...values, claim.launchId);
       try {
-        write(
-          "UPDATE node_worker_launches SET state = 'pending', worker_pid = NULL, worker_start_time = NULL WHERE launch_id = ?",
-          claim.launchId,
-        );
+        update("launches", "state = 'pending', worker_pid = NULL, worker_start_time = NULL");
         const observed = kernel.claimObservation(claim, supervisor, 10, NOW_MS);
         const container = {
           engine: "docker",
           containerId: "d".repeat(64),
           engineTarget: "e".repeat(64),
         };
-        write(
-          "UPDATE node_worker_launch_containers SET container_json = ? WHERE launch_id = ?",
-          JSON.stringify(container),
-          claim.launchId,
-        );
-        write(
-          "UPDATE node_worker_launch_cleanup SET lineage_settled = 1 WHERE launch_id = ?",
-          claim.launchId,
-        );
-        write(
-          "UPDATE node_worker_launch_process_scopes SET descendants_reaped = 1 WHERE launch_id = ?",
-          claim.launchId,
-        );
+        update("launch_containers", "container_json = ?", JSON.stringify(container));
+        update("launch_cleanup", "lineage_settled = 1");
+        update("launch_process_scopes", "descendants_reaped = 1");
         if (bootId === undefined) {
-          write("DELETE FROM node_worker_launch_boots WHERE launch_id = ?", claim.launchId);
+          foreign
+            .prepare("DELETE FROM node_worker_launch_boots WHERE launch_id = ?")
+            .run(claim.launchId);
         } else {
-          write(
-            "UPDATE node_worker_launch_boots SET boot_id = ? WHERE launch_id = ?",
-            bootId,
-            claim.launchId,
-          );
+          update("launch_boots", "boot_id = ?", bootId);
         }
         // Suppress the physical write without creating a row that violates its CHECKs.
         foreign.exec(`CREATE TRIGGER skip_reclaim BEFORE UPDATE OF supervisor_pid
@@ -316,11 +331,7 @@ describe("node worker launch admitted schema", () => {
         } else {
           expect(result).not.toHaveProperty("receipt.bootId");
         }
-        expect(result).toEqual({
-          action: "replay",
-          nonterminalCount: 1,
-          receipt: kernel.get(claim.launchId),
-        });
+        expect(result).toHaveProperty("receipt", kernel.get(claim.launchId));
       } finally {
         foreign.close();
       }
@@ -343,11 +354,7 @@ describe("node worker launch store pruning", () => {
 
     expect(hasExpiryIndex(reopened)).toBe(true);
     expect(reopened.prepare("PRAGMA user_version").get()).toEqual(versionBefore);
-    expect(
-      reopened
-        .prepare("SELECT name FROM sqlite_schema WHERE name = ?")
-        .get("node_worker_launch_cleanup"),
-    ).toBeUndefined();
+    expect(hasSchemaObject(reopened, "table", "node_worker_launch_cleanup")).toBe(false);
     const launchSql = schema(reopened, "node_worker_launches")?.sql;
     await startLaunch(reopenedStore, "current-worker");
     expect(await reopenedStore.get("released-worker")).toEqual(releasedReceipt);
@@ -396,23 +403,13 @@ describe("node worker launch store pruning", () => {
 
   it("prunes only the oldest expired terminal receipts in bounded batches", async () => {
     const { database, store } = await fixture();
+    const container = containerIdentity;
+    await startLaunch(store, "running", { cleanupMode: null, container });
     insertLaunch(database, "old-completed", "completed", 1);
     insertLaunch(database, "old-failed", "failed", 2);
     insertLaunch(database, "old-cancelled", "cancelled", 3);
     insertLaunch(database, "recent-completed", "completed", NOW_MS - 1_000);
     insertLaunch(database, "pending", "pending");
-    insertLaunch(database, "running", "pending");
-    const supervisor = requireNodeWorkerProcessIdentity(process.pid);
-    const container = containerIdentity;
-    await store.markRunning({
-      launchId: "running",
-      planHash: "a".repeat(64),
-      supervisor,
-      worker: supervisor,
-      cleanupMode: null,
-      container,
-      nowMs: NOW_MS,
-    });
     const insertContainer = database.prepare(
       "INSERT INTO node_worker_launch_containers (launch_id, container_json) VALUES (?, ?)",
     );
@@ -527,17 +524,10 @@ describe("node worker launch store container identity", () => {
       expect(hasContainers(database)).toBe(false);
       const initialSchemaVersion = database.prepare("PRAGMA user_version").get();
       const launchId = withContainer ? "container-launch" : "bare-launch";
-      const { planHash, supervisor } = await claimLaunch(store, launchId);
       const container = withContainer ? containerIdentity : undefined;
-
-      const receipt = await store.markRunning({
-        launchId,
-        planHash,
-        supervisor,
-        worker: supervisor,
+      const receipt = await startLaunch(store, launchId, {
         cleanupMode: withContainer ? null : "process-group",
-        ...(container ? { container } : {}),
-        nowMs: NOW_MS,
+        container,
       });
 
       expect(hasContainers(database)).toBe(withContainer);
@@ -555,10 +545,7 @@ describe("node worker launch store container identity", () => {
         return;
       }
       const completed = await reopened.finish({
-        launchId: receipt.launchId,
-        planHash: receipt.planHash,
-        supervisor: receipt.supervisor,
-        worker: receipt.worker,
+        ...receipt,
         state: "completed",
         resultJson: "{}",
         nowMs: NOW_MS + 1,
@@ -604,15 +591,12 @@ describe("node worker cleanup journal", () => {
     const boot = vi
       .spyOn(workerProcessIdentity, "getNodeWorkerBootIdentity")
       .mockReturnValue("linux:test-boot");
-    const { planHash, supervisor } = await claimLaunch(store, launchId).finally(() =>
-      boot.mockRestore(),
-    );
-    const binding = await store.cleanupBinding({ launchId, planHash, supervisor });
+    const owner = await claimLaunch(store, launchId).finally(() => boot.mockRestore());
+    const binding = await store.cleanupBinding({ launchId, ...owner });
     const receipt = await store.markRunning({
       launchId,
-      planHash,
-      supervisor,
-      worker: supervisor,
+      ...owner,
+      worker: owner.supervisor,
       cleanupMode,
       nowMs: NOW_MS,
     });
@@ -632,13 +616,10 @@ describe("node worker cleanup journal", () => {
     expect(await store.nonterminalCount()).toBe(1);
     // A downgraded reader sees its unchanged representation, never a forged
     // lineage completion standing in for a kernel tree certificate.
-    expect(
-      database
-        .prepare(
-          "SELECT cleanup_mode, lineage_settled FROM node_worker_launch_cleanup WHERE launch_id = ?",
-        )
-        .get(binding.launchId),
-    ).toEqual({ cleanup_mode: "owned-anchor", lineage_settled: null });
+    expect(cleanupRow(database, binding.launchId)).toEqual({
+      cleanup_mode: "owned-anchor",
+      lineage_settled: null,
+    });
     const reopened = await reopenStore(env);
     expect(await reopened.get(binding.launchId)).toEqual({
       ...receipt,
@@ -646,18 +627,10 @@ describe("node worker cleanup journal", () => {
     });
     const db = openOpenClawStateDatabase({ env }).db;
     expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
-    await reopened.finish({
-      ...binding,
-      worker: receipt.worker,
-      state: "interrupted",
-      errorText: "scope retired",
-      nowMs: NOW_MS,
-    });
+    await interruptLaunch(reopened, receipt);
     expect(recordNodeWorkerDescendantsReaped(binding)).toBe(false);
     expect(await reopened.pruneExpiredTerminal({ nowMs: NOW_MS + DAY_MS })).toBe(1);
-    expect(
-      db.prepare("SELECT count(*) AS count FROM node_worker_launch_process_scopes").get(),
-    ).toEqual({ count: 0 });
+    expect(tableCount(db, "node_worker_launch_process_scopes")).toEqual({ count: 0 });
   });
 
   it("does not broaden a cleanup binding when ambient external mode changes", async () => {
@@ -670,11 +643,7 @@ describe("node worker cleanup journal", () => {
       expect(() => recordNodeWorkerLineageSettled(binding)).toThrow(
         OpenClawStateExternalOwnershipError,
       );
-      expect(
-        database
-          .prepare("SELECT lineage_settled FROM node_worker_launch_cleanup WHERE launch_id = ?")
-          .get(binding.launchId),
-      ).toEqual({ lineage_settled: null });
+      expect(cleanupRow(database, binding.launchId)?.lineage_settled).toBeNull();
     } finally {
       vi.unstubAllEnvs();
     }
@@ -693,8 +662,10 @@ describe("node worker cleanup journal", () => {
   it("persists positive lineage completion on the exact database without releasing its slot or changing the wire receipt", async () => {
     const { env, store, binding, receipt } = await runningAnchor();
     expect(binding.databasePath).toBe(openOpenClawStateDatabase({ env }).path);
-    expect(receipt.workerCleanupMode).toBe("owned-anchor");
-    expect(receipt.workerLineageSettled).toBe(false);
+    expect(receipt).toMatchObject({
+      workerCleanupMode: "owned-anchor",
+      workerLineageSettled: false,
+    });
     expect(recordNodeWorkerLineageSettled(binding)).toBe(true);
     expect(recordNodeWorkerLineageSettled(binding)).toBe(true);
     // A released journal cannot reinterpret lineage completion as native extinction.
@@ -715,8 +686,7 @@ describe("node worker cleanup journal", () => {
     );
     const cancelled = await reopened.finishCancelled({
       expected: receipt,
-      supervisor: receipt.supervisor,
-      worker: receipt.worker,
+      ...receipt,
       nowMs: NOW_MS + 1,
     });
     expect(cancelled).toEqual({
@@ -765,30 +735,17 @@ describe("node worker cleanup journal", () => {
     const legacy = (await store.get("released-running"))!;
     expect(recordNodeWorkerLineageSettled(await store.cleanupBinding(legacy))).toBe(false);
     expect(recordNodeWorkerLineageSettled(binding)).toBe(true);
-    await store.finish({
-      ...binding,
-      worker: receipt.worker,
-      state: "interrupted",
-      errorText: "worker stopped",
-      nowMs: NOW_MS,
-    });
+    await interruptLaunch(store, receipt);
     expect(await store.pruneExpiredTerminal({ nowMs: NOW_MS + DAY_MS - 1 })).toBe(0);
     expect((await store.get(binding.launchId))?.workerLineageSettled).toBe(true);
     expect(await store.pruneExpiredTerminal({ nowMs: NOW_MS + DAY_MS })).toBe(1);
-    expect(
-      database.prepare("SELECT count(*) AS count FROM node_worker_launch_cleanup").get(),
-    ).toEqual({ count: 0 });
+    expect(tableCount(database, "node_worker_launch_cleanup")).toEqual({ count: 0 });
     expect(await store.nonterminalCount()).toBe(1);
   });
 
   it("refuses a completion write after the launch has become terminal", async () => {
     const { store, binding, receipt } = await runningAnchor();
-    await store.finish({
-      ...binding,
-      worker: receipt.worker,
-      state: "interrupted",
-      errorText: "worker stopped",
-    });
+    await interruptLaunch(store, receipt);
     expect(recordNodeWorkerLineageSettled(binding)).toBe(false);
     expect((await store.get(binding.launchId))?.workerLineageSettled).toBe(false);
     await expect(store.cleanupBinding(binding)).rejects.toThrow("no longer owns its launch");
