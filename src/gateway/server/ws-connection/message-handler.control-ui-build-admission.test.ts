@@ -38,6 +38,22 @@ const gatewayConfig = {
     controlUi: { allowedOrigins: ["*"] },
   },
 };
+const client = { id: "openclaw-control-ui", version: "2026.8.1", platform: "web", mode: "webchat" };
+const deviceContext = {
+  clientId: client.id,
+  clientMode: client.mode,
+  role: "operator",
+  scopes: [],
+};
+function profile() {
+  return {
+    id: "profile-1",
+    displayName: null,
+    avatarRevision: "0",
+    hasAvatar: false,
+    updatedAt: 1,
+  };
+}
 
 vi.mock("../../../config/config.js", () => ({
   getRuntimeConfig: () => gatewayConfig,
@@ -51,21 +67,9 @@ vi.mock("../../../infra/system-presence.js", () => ({
 }));
 vi.mock("../../../state/user-profiles.js", () => ({
   adoptTailscaleProfileAvatar: vi.fn(),
-  ensureProfileForEmail: vi.fn(async () => ({
-    id: "profile-1",
-    displayName: null,
-    avatarRevision: "0",
-    hasAvatar: false,
-    updatedAt: 1,
-  })),
+  ensureProfileForEmail: vi.fn(async () => profile()),
   ensureProfileForTailscaleIdentity: vi.fn(),
-  getUserProfileDisplay: vi.fn(() => ({
-    id: "profile-1",
-    displayName: null,
-    avatarRevision: "0",
-    hasAvatar: false,
-    updatedAt: 1,
-  })),
+  getUserProfileDisplay: vi.fn(profile),
 }));
 vi.mock("../../server-methods.js", () => ({
   handleGatewayRequest: handleGatewayRequestMock,
@@ -115,11 +119,8 @@ async function prepareSignedControlUiDevice(nonce: string) {
   await requestDevicePairing({
     deviceId: identity.deviceId,
     publicKey,
-    platform: "web",
-    clientId: "openclaw-control-ui",
-    clientMode: "webchat",
-    role: "operator",
-    scopes: [],
+    platform: client.platform,
+    ...deviceContext,
     remoteIp: "127.0.0.1",
     silent: true,
   });
@@ -127,10 +128,7 @@ async function prepareSignedControlUiDevice(nonce: string) {
   const signedAtMs = Date.now();
   const payload = buildDeviceAuthPayload({
     deviceId: identity.deviceId,
-    clientId: "openclaw-control-ui",
-    clientMode: "webchat",
-    role: "operator",
-    scopes: [],
+    ...deviceContext,
     signedAtMs,
     token: "test-token",
     nonce,
@@ -154,9 +152,7 @@ function withDeadline<T>(promise: Promise<T>, label: string): Promise<T> {
   ]);
 }
 
-beforeEach(() => {
-  setRuntimeConfigSnapshot(gatewayConfig);
-});
+beforeEach(() => setRuntimeConfigSnapshot(gatewayConfig));
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
@@ -198,11 +194,7 @@ describe("Control UI build admission over WebSocket", () => {
         requestOrigin:
           typeof request.headers.origin === "string" ? request.headers.origin : undefined,
         connectNonce: "legacy-build-nonce",
-        getResolvedAuth: () => ({
-          mode: "token",
-          token: "test-token",
-          allowTailscale: false,
-        }),
+        getResolvedAuth: () => ({ ...gatewayConfig.gateway.auth, allowTailscale: false }),
         buildRequestContext: () =>
           ({
             broadcast: vi.fn(),
@@ -231,29 +223,14 @@ describe("Control UI build admission over WebSocket", () => {
     const ws = new WebSocket(`ws://127.0.0.1:${address.port}`, { headers: { origin } });
     try {
       await withDeadline(once(ws, "open"), "open");
-      const response = withDeadline(
-        new Promise<Record<string, unknown>>((resolve) => {
-          ws.once("message", (data) => {
-            resolve(JSON.parse(rawDataToString(data)) as Record<string, unknown>);
-          });
-        }),
-        "connect rejection",
-      );
-      const closed = new Promise<number>((resolve) => {
-        ws.once("close", resolve);
-      });
+      const response = withDeadline(once(ws, "message"), "connect rejection");
+      const closed = once(ws, "close");
       ws.send(
         JSON.stringify(
           gatewayRequest("connect-legacy-build", "connect", {
             minProtocol: protocol,
             maxProtocol: protocol,
-            client: {
-              id: "openclaw-control-ui",
-              version: "2026.8.1",
-              platform: "web",
-              mode: "webchat",
-              ...(buildId ? { buildId } : {}),
-            },
+            client: { ...client, ...(buildId ? { buildId } : {}) },
             role: "operator",
             caps: [],
             auth: { token: "test-token" },
@@ -262,7 +239,9 @@ describe("Control UI build admission over WebSocket", () => {
         ),
       );
 
-      const rejection = await response;
+      const rejection = JSON.parse(rawDataToString((await response)[0])) as {
+        error?: { details?: unknown };
+      };
       expect(rejection).toMatchObject({
         ok: false,
         error: {
@@ -285,13 +264,9 @@ describe("Control UI build admission over WebSocket", () => {
           },
         },
       });
-      expect(
-        readControlUiBuildMismatchId(
-          (rejection.error as { details?: unknown } | undefined)?.details,
-        ),
-      ).toBe("gateway-build");
+      expect(readControlUiBuildMismatchId(rejection.error?.details)).toBe("gateway-build");
       ws.send(JSON.stringify(gatewayRequest("post-rejection-rpc", "health", {})));
-      expect(await withDeadline(closed, "socket close")).toBe(
+      expect((await withDeadline(closed, "socket close"))[0]).toBe(
         protocol === PROTOCOL_VERSION ? 1008 : 1002,
       );
       expect(handler?.getClient()).toBeNull();

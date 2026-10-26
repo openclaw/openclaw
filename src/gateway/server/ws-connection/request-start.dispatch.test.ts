@@ -3,6 +3,7 @@ import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import type { ResponseFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
@@ -14,7 +15,6 @@ import {
   createDispatchTestHarness,
   createOperatorWsClient,
   requestFrame,
-  type GatewayTestResponseFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 // Compile the real router before injecting the scheduler clock.
 import "../../server-methods.js";
@@ -30,13 +30,10 @@ async function reconnectWave(expire: boolean) {
   let peak = 0;
   let now = 0;
   const starts: string[] = [];
-  const startedAt = new Map<string, number>();
   const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const handler: GatewayRequestHandler = async ({ req, respond }) => {
     starts.push(req.id);
-    startedAt.set(req.id, now);
-    // Only the snapshot variant has cold roster work. Event enrollment is cheap.
     if (
       req.method === "models.list" ||
       req.method === "sessions.messages.subscribe" ||
@@ -102,21 +99,14 @@ async function reconnectWave(expire: boolean) {
     }
     await fixtures[0]!.sendRequest("queue-drained", "health");
     await nextTurn();
-    const early = Object.fromEntries(
-      ["events", "models.list", ...reads, "mutation-first", "mutation-second"].map((label) => [
-        label,
-        Array.from({ length: operators }, (_, index) => startedAt.get(`${index}:${label}`)).filter(
-          (time) => time === 0,
-        ).length,
-      ]),
-    );
+    const early = (label: string) => starts.filter((id) => id.endsWith(`:${label}`)).length;
     expect(active).toBe(4);
-    expect(early["mutation-first"]).toBe(0);
-    expect(early["mutation-second"]).toBe(0);
+    expect([early("mutation-first"), early("mutation-second")]).toEqual([0, 0]);
+    const earlyEvents = early("events");
+    const earlyModels = early("models.list");
     now = expire ? 30_000 : 1_000;
     if (expire) {
       await vi.advanceTimersByTimeAsync(30_000);
-      // Settle wave timeouts before releasing holders, so their model timings stay separate.
       await Promise.all(waveCalls);
     } else {
       coldRead.resolve();
@@ -128,22 +118,12 @@ async function reconnectWave(expire: boolean) {
           .filter((event) => event.phase === "dispatch" && event.method === method)
           .flatMap((event) => (event.queueWaitMs === undefined ? [] : [event.queueWaitMs]))
           .toSorted((a, b) => a - b);
-        return [
-          method,
-          {
-            count: waits.length,
-            min: waits[0],
-            median: waits[Math.floor(waits.length / 2)],
-            max: waits.at(-1),
-          },
-        ];
+        return [method, waits];
       }),
     );
     const responses = fixtures
       .slice(4)
-      .flatMap((fixture) =>
-        fixture.send.mock.calls.map(([frame]) => frame as GatewayTestResponseFrame),
-      );
+      .flatMap((fixture) => fixture.send.mock.calls.map(([frame]) => frame as ResponseFrame));
     const timeouts = responses.filter(
       (frame) => asOptionalRecord(frame.error?.details)?.reason === "request-start-timeout",
     ).length;
@@ -165,7 +145,7 @@ async function reconnectWave(expire: boolean) {
         approvals < first
       );
     });
-    return { early, queue, peak, timeouts, errors, mutationOrder };
+    return { earlyEvents, earlyModels, queue, peak, timeouts, errors, mutationOrder };
   } finally {
     coldRead.resolve();
     vi.useRealTimers();
@@ -177,30 +157,26 @@ async function reconnectWave(expire: boolean) {
 
 it("starts independent boot reads past parked snapshot preparations", async () => {
   const result = await reconnectWave(true);
-  console.info("L192_WAVE " + JSON.stringify(result));
   expect(result.errors).toEqual([]);
   expect(result.peak).toBeLessThanOrEqual(4);
-  expect(result.early["models.list"]).toBe(0);
-  expect(result.queue["models.list"]).toEqual({
-    count: 16,
-    min: 30_000,
-    median: 30_000,
-    max: 30_000,
-  });
+  expect(result.earlyModels).toBe(0);
+  expect(result.queue["models.list"]).toEqual(Array(operators).fill(30_000));
   expect
-    .soft(result.early.events, "event-only subscription starts without preparation capacity")
+    .soft(result.earlyEvents, "event-only subscription starts without preparation capacity")
     .toBe(16);
   expect.soft(result.timeouts, "only preparations and ordered mutations time out").toBe(80);
   for (const method of reads) {
     expect
-      .soft(result.queue[method]?.median, `${method} queue wait behind parked preparation`)
+      .soft(
+        result.queue[method]?.[Math.floor(result.queue[method].length / 2)],
+        `${method} queue wait behind parked preparation`,
+      )
       .toBe(0);
   }
 });
 
 it("preserves mutation start order when the cold preparation is released", async () => {
   const result = await reconnectWave(false);
-  console.info("L192_ORDERING " + JSON.stringify(result));
   expect(result.errors).toEqual([]);
   expect(result.peak).toBeLessThanOrEqual(4);
   expect(result.timeouts).toBe(0);
