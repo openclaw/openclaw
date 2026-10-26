@@ -289,7 +289,6 @@ const repositoryScriptEntries = [
   "scripts/generate-social-preview.mts!",
   "scripts/perf/audio-queue-pool-retention.ts!",
   "scripts/perf/browser-playwright-import.mjs!",
-  "scripts/perf/browser-playwright-load-preload.mjs!",
   "scripts/perf/browser-playwright-load.ts!",
   "scripts/perf/catalog-worker-retention-measure.ts!",
   "scripts/perf/codex-catalog-reconcile-measure.ts!",
