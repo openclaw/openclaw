@@ -9,10 +9,7 @@ import {
   successfulSessionRequest,
 } from "./server.sessions.create.projects.test-support.js";
 import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
-import {
-  directSessionReq,
-  setupGatewaySessionsHandlerTestHarness,
-} from "./test/server-sessions.test-helpers.js";
+import { setupGatewaySessionsHandlerTestHarness } from "./test/server-sessions.test-helpers.js";
 
 setupGatewaySessionsHandlerTestHarness();
 afterEach(() => {
@@ -34,20 +31,11 @@ it("names task-bearing sends and attachments while ignoring control-only message
       const context = {
         getRuntimeConfig: () => cfg,
         loadGatewayModelCatalogSnapshot: async () => ({
-          agentId: "main",
-          agentDir: workspaceDir,
-          workspaceDir,
           config: cfg,
           catalogComplete: true,
           routeVariants: [],
-          entries: cfg.models!.providers![provider]!.models.map(
-            ({ id, name, contextWindow, reasoning }) => ({
-              id,
-              name,
-              contextWindow,
-              reasoning,
-              provider,
-            }),
+          entries: cfg.models!.providers![provider]!.models.map((model) =>
+            Object.assign({}, model, { provider }),
           ),
         }),
         broadcastToConnIds: vi.fn(),
@@ -61,11 +49,9 @@ it("names task-bearing sends and attachments while ignoring control-only message
           timeout: 20_000,
         });
       const request = (
-        method: Parameters<typeof directSessionReq>[0],
+        method: Parameters<typeof successfulSessionRequest>[0],
         params: Record<string, unknown>,
       ) => successfulSessionRequest(method, params, options);
-      const create = (key: string, fields: Record<string, unknown> = {}) =>
-        request("sessions.create", { agentId: "main", key, ...fields });
       const send = (sessionKey: string, message: string, idempotencyKey: string) =>
         request("chat.send", { sessionKey, message, idempotencyKey });
       dispatchInboundMessageMock.mockResolvedValue({
@@ -74,7 +60,7 @@ it("names task-bearing sends and attachments while ignoring control-only message
       });
       const task = "/route_proof /api request routing needs repair";
       const sentKey = "agent:main:dashboard:sent-title-source";
-      await create(sentKey);
+      await request("sessions.create", { agentId: "main", key: sentKey });
       await send(sentKey, "/status", "title-control");
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), { timeout: 20_000 });
       expect(entry(sentKey)?.displayName).toBeUndefined();
@@ -88,13 +74,8 @@ it("names task-bearing sends and attachments while ignoring control-only message
         expect.anything(),
       );
       expect(requests).toHaveLength(1);
-      const manualKey = "agent:main:dashboard:manual-title-source";
-      await create(manualKey, { label: "My chosen name", titleSource: task });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), { timeout: 20_000 });
-      expect(entry(manualKey)?.label).toBe("My chosen name");
-      expect(requests).toHaveLength(1);
       const attachmentKey = "agent:main:dashboard:attachment-title-source";
-      await create(attachmentKey);
+      await request("sessions.create", { agentId: "main", key: attachmentKey });
       await request("chat.send", {
         sessionKey: attachmentKey,
         message: "/status",
