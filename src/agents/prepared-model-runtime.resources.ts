@@ -225,12 +225,14 @@ export function acquirePreparedModelRuntimeSnapshotInvocation(
   if (registry) {
     state.registries.get(registry)?.assertOpen();
   }
-  const scope = registry
-    ? new PluginInvocationScope(registry, collectRegistryInvocationInstances(registry), {
-        retained: true,
-        parent: pluginInvocationContext.getStore(),
-      })
-    : undefined;
+  const overlapInstances = registry && collectRegistryInvocationInstances(registry, true);
+  const scope =
+    registry && overlapInstances?.size
+      ? new PluginInvocationScope(registry, overlapInstances, {
+          retained: true,
+          parent: pluginInvocationContext.getStore(),
+        })
+      : undefined;
   let claim: ReturnType<typeof retainPreparedModelRuntimeSnapshotResources>;
   try {
     claim = retainPreparedModelRuntimeSnapshotResources(snapshot);

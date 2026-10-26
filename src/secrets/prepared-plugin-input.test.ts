@@ -19,17 +19,17 @@ import {
 const secretRef = { source: "env", provider: "default", id: "PREPARED_PLUGIN_KEY" } as const;
 const pluginId = "loaded-prepared-secret-owner";
 
-function configWithSecret(value: unknown): OpenClawConfig {
+function configWithSecret(value: unknown, enabled = true): OpenClawConfig {
   return {
-    plugins: { entries: { [pluginId]: { enabled: true, config: { apiKey: value } } } },
+    plugins: { entries: { [pluginId]: { enabled, config: { apiKey: value } } } },
   } as OpenClawConfig;
 }
 
-function activate(value: string): void {
+function activate(value: string, enabled = true): void {
   activateSecretsRuntimeSnapshotState({
     snapshot: {
-      sourceConfig: configWithSecret(secretRef),
-      config: configWithSecret(value),
+      sourceConfig: configWithSecret(secretRef, enabled),
+      config: configWithSecret(value, enabled),
       authStores: [],
       authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
       authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),

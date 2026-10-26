@@ -35,7 +35,11 @@ it.each(["draining", "replacing"] as const)(
   "keeps an admitted turn on its own generation while plugins are %s",
   async (phase) => {
     const { registry } = createTestPluginRegistry();
-    const record = createPluginRecord({ id: "retained-model", status: "loaded" });
+    const record = createPluginRecord({
+      id: "retained-model",
+      status: "loaded",
+      generationOverlap: true,
+    });
     registry.plugins.push(record);
     const instance = new PluginInstance(record.id, { record, registry });
     fixture.mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
@@ -105,6 +109,45 @@ it.each(["draining", "replacing"] as const)(
     }
   },
 );
+
+it("retains callable authority only for the opted-in plugin in a mixed generation", async () => {
+  const { registry } = createTestPluginRegistry();
+  const createInstance = (generationOverlap: boolean) => {
+    const record = createPluginRecord({
+      id: generationOverlap ? "overlapping-model" : "ordinary-model",
+      status: "loaded",
+      generationOverlap,
+    });
+    registry.plugins.push(record);
+    return new PluginInstance(record.id, { record, registry });
+  };
+  const ordinary = createInstance(false);
+  const overlapping = createInstance(true);
+  const instances = [ordinary, overlapping];
+  fixture.mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+  const input = await publishConfigured();
+  const lease = await acquire(input);
+  try {
+    expect(ordinary.hasRetainedConsumers).toBe(false);
+    expect(overlapping.hasRetainedConsumers).toBe(true);
+    for (const instance of instances) {
+      const call = instance.wrap(() => instance.pluginId);
+      expect(lease.run(call)).toBe(instance.pluginId);
+      instance.quiesce();
+      if (instance === ordinary) {
+        expect(() => lease.run(call)).toThrow("reloaded or disabled");
+      } else {
+        expect(lease.run(call)).toBe(instance.pluginId);
+      }
+    }
+  } finally {
+    await lease[Symbol.asyncDispose]();
+    for (const instance of instances) {
+      expect(instance.hasRetainedConsumers).toBe(false);
+      await instance.dispose();
+    }
+  }
+});
 
 it.each(["call", "consumer"] as const)(
   "refuses a model wait from the %s an external reload is draining",

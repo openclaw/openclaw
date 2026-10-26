@@ -332,8 +332,7 @@ export class PluginInstance {
       const refusal = parent ? undefined : this.refuseFreshCall(this.accepting);
       throw refusal?.replacement ? refusal : new Error(`Plugin ${this.pluginId} is retiring`);
     }
-    const released = createDeferredCore();
-    const token = { active: true, completion: released.promise, registry, kind };
+    const token = { active: true, registry, kind };
     this.consumers.set(token, token);
     const reference = this.referenceDiagnostics.record(
       token,
@@ -346,7 +345,6 @@ export class PluginInstance {
     const release = () => {
       token.active = false;
       if (this.consumers.delete(token)) {
-        released.resolve();
         this.waiters.forEach((wake) => wake());
       }
     };
@@ -603,10 +601,7 @@ export class PluginInstance {
     }
   }
 
-  private async waitForCalls(
-    ignored: (token: object) => boolean,
-    signal?: AbortSignal,
-  ): Promise<void> {
+  private waitForCalls(ignored: (token: object) => boolean, signal?: AbortSignal): Promise<void> {
     // Reload owns its observation budget; disposal keeps its independent deadline.
     return waitForPluginInstanceSettlement(
       this.pluginId,
@@ -649,8 +644,7 @@ export class PluginInstance {
                 this.invoke(cleanup, this.lease({ cleanup: true }), terminalFailures),
               );
             try {
-              // Owner-joined work often stops only when its cleanup runs; draining it
-              // first would hold disposal until the deadline.
+              // Owner-joined work stops in cleanup; draining it first would wait until the deadline.
               await this.waitForCalls((token) => this.calls.get(token)?.ownerJoined === true);
             } catch (error) {
               failures.push(
@@ -662,13 +656,14 @@ export class PluginInstance {
               );
             }
             // Revoke ordinary call tokens even when they miss their drain deadline.
-            // Owner-joined work keeps its token until it settles. Logical consumers
-            // retain only their own scope through engine disposal; physical cleanup
-            // waits for those consumers to close.
+            // Owner-joined work keeps its token; physical cleanup joins retained consumers.
             this.callsExpired = true;
-            while (this.consumers.size > 0) {
-              await Promise.all([...this.consumers.values()].map(({ completion }) => completion));
-            }
+            await waitForPluginInstanceSettlement(
+              this.pluginId,
+              this.waiters,
+              () => this.consumers.size === 0,
+              new AbortController().signal,
+            );
             if (beforeCleanup) {
               // Host hooks own their bounds; explicit cleanup starts its budget after they settle.
               try {

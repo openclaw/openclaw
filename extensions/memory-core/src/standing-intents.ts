@@ -126,7 +126,7 @@ export function startStandingIntentMaintenance(params: {
   const targets = new Map(
     params.agentIds.map((agentId) => {
       const options = captureMemoryAgentDatabaseOptions(agentId);
-      return [options.path, { agentId, options }] as const;
+      return [options.path, { agentId, options, facts: { empty: false } }] as const;
     }),
   );
   const jobs = new Map<string, ReturnType<PluginServiceSchedulerV1["schedule"]>>();
@@ -168,11 +168,8 @@ export function startStandingIntentMaintenance(params: {
     }
   });
   maintenance.schedule = schedule;
-  const ownedFacts = new Map<string, { empty: boolean }>();
   // Restart must process overdue expiry/cooldown before trusting a retained deadline.
-  for (const path of targets.keys()) {
-    const facts = { empty: false };
-    ownedFacts.set(path, facts);
+  for (const [path, { facts }] of targets) {
     lifecycleFacts.set(path, facts);
     schedule(path, null);
   }
@@ -186,7 +183,7 @@ export function startStandingIntentMaintenance(params: {
     for (const job of jobs.values()) {
       job.cancel();
     }
-    for (const [path, facts] of ownedFacts) {
+    for (const [path, { facts }] of targets) {
       if (lifecycleFacts.get(path) === facts) {
         lifecycleFacts.delete(path);
       }

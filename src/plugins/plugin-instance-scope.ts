@@ -26,7 +26,6 @@ export type PluginInstanceCall = {
 
 export type PluginInstanceConsumerState = {
   active: boolean;
-  completion: Promise<void>;
   registry?: PluginRegistry;
   kind: "work" | "custody";
 };

@@ -333,9 +333,8 @@ export function createPdfTool(options?: {
       });
       acquiredRuntime = signal ? await abortable(signal, acquireRuntime) : await acquireRuntime;
     }
-    const selectedRuntime = acquiredRuntime;
+    const preparedRuntime = acquiredRuntime;
     const analyze = async () => {
-      const preparedRuntime = selectedRuntime;
       const runtimeAgentDir = preparedRuntime.agentDir;
       const runtimeWorkspaceDir = preparedRuntime.workspaceDir ?? workspaceDir;
       const runtimeAuthProfileStore = hasExplicitPdfToolModelConfig(preparedRuntime.config)

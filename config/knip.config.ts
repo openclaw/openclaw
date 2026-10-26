@@ -424,6 +424,7 @@ const repositoryScriptEntries = [
   "scripts/perf/placement-preservation-measure.ts!",
   "scripts/perf/plugin-inspection-retention.ts!",
   "scripts/perf/plugin-invocation-scope-measure.ts!",
+  "scripts/perf/prepared-plugin-lease-measure.mjs!",
   "scripts/perf/plugin-state-polling.mts!",
   "scripts/perf/private-array-copies-measure.mjs!",
   "scripts/perf/process-output-pool-retention.ts!",
