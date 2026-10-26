@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
@@ -8,7 +6,6 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { resolveMemoryWikiAgentConfig } from "./config.js";
 import { createWikiCorpusSupplement } from "./corpus-supplement.js";
-import { renderWikiMarkdown } from "./markdown.js";
 import { assertToolDetailsRecord, registerMemoryCoreTools } from "./memory-core.test-support.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -20,35 +17,9 @@ const appConfig = {
   agents: { entries: { main: {}, secondary: {} } },
 } as OpenClawConfig;
 
-async function writeBridgePage(
-  rootDir: string,
-  slug: string,
-  title: string,
-  agentIds: readonly string[],
-  marker: string,
-): Promise<void> {
-  await fs.writeFile(
-    path.join(rootDir, "sources", `${slug}.md`),
-    renderWikiMarkdown({
-      frontmatter: {
-        pageType: "source",
-        id: `source.${slug}`,
-        title,
-        sourceType: "memory-bridge",
-        sourcePath: `/tmp/${slug}/MEMORY.md`,
-        bridgeRelativePath: "MEMORY.md",
-        bridgeWorkspaceDir: `/tmp/${slug}`,
-        bridgeAgentIds: agentIds,
-      },
-      body: `# ${title}\n\n${marker}\n`,
-    }),
-    "utf8",
-  );
-}
-
 describe("memory-wiki corpus supplement visibility", () => {
   it("enforces bridge ownership through registered corpus fallbacks", async () => {
-    const { rootDir, config } = await createVault({
+    const { page, config } = await createVault({
       initialize: true,
       config: { vault: { scope: "global" } },
     });
@@ -57,7 +28,20 @@ describe("memory-wiki corpus supplement visibility", () => {
       ["main-private", "Main Private", ["main"], "REDACTED-OWN-MARKER"],
       ["unowned-private", "Unowned Private", [], "REDACTED-UNOWNED-MARKER"],
     ] as const) {
-      await writeBridgePage(rootDir, slug, title, agentIds, marker);
+      await page(
+        `sources/${slug}.md`,
+        {
+          pageType: "source",
+          id: `source.${slug}`,
+          title,
+          sourceType: "memory-bridge",
+          sourcePath: `/tmp/${slug}/MEMORY.md`,
+          bridgeRelativePath: "MEMORY.md",
+          bridgeWorkspaceDir: `/tmp/${slug}`,
+          bridgeAgentIds: agentIds,
+        },
+        `# ${title}\n\n${marker}\n`,
+      );
     }
     const supplement = createWikiCorpusSupplement({
       getAppConfig: () => appConfig,

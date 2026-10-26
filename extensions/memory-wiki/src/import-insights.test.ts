@@ -133,25 +133,11 @@ describe("compiled import insights", () => {
       totalItems: 2,
       totalClusters: 2,
     });
-    const healthCluster = result.clusters[0];
-    expect(healthCluster).toMatchObject({
-      key: "topic/health",
-      label: "Health",
-      itemCount: 1,
-      highRiskCount: 1,
-      withheldCount: 1,
-    });
-
-    const travelCluster = result.clusters[1];
-    expect(travelCluster).toMatchObject({
-      key: "topic/travel",
-      label: "Travel",
-      itemCount: 1,
-      preferenceSignalCount: 1,
-    });
-
-    const travelItem = travelCluster?.items[0];
-    expect(travelItem).toMatchObject({
+    expect(result.clusters).toMatchObject([
+      { key: "topic/health", label: "Health", itemCount: 1, highRiskCount: 1, withheldCount: 1 },
+      { key: "topic/travel", label: "Travel", itemCount: 1, preferenceSignalCount: 1 },
+    ]);
+    expect(result.clusters[1]?.items[0]).toMatchObject({
       title: "BA flight receipts process",
       riskReasons: [],
       activeBranchMessages: 0,
@@ -170,18 +156,17 @@ describe("compiled import insights", () => {
     const healthItem = result.clusters
       .flatMap((cluster) => cluster.items)
       .find((item) => item.title === "Migraine Medication Advice");
-    expect(healthItem?.summary).toBe(
-      "Sensitive health chat withheld from durable-memory extraction because it touches health.",
-    );
     expect(healthItem).toMatchObject({
+      summary:
+        "Sensitive health chat withheld from durable-memory extraction because it touches health.",
       candidateSignals: [],
       correctionSignals: [],
       preferenceSignals: [],
       userMessageCount: 1,
       assistantMessageCount: 1,
     });
-    expect(healthItem?.firstUserLine).toBeUndefined();
-    expect(healthItem?.lastUserLine).toBeUndefined();
-    expect(healthItem?.assistantOpener).toBeUndefined();
+    for (const field of ["firstUserLine", "lastUserLine", "assistantOpener"] as const) {
+      expect(healthItem?.[field]).toBeUndefined();
+    }
   });
 });
