@@ -25,37 +25,33 @@ async function standaloneCheck(schema: XSchema, options?: StandaloneValidatorOpt
   return (value: unknown): boolean => check(value) === true;
 }
 
+const prototypeValue = (beta = 2) => ({ ["__proto__"]: { kind: "data" }, alpha: 1, beta });
+const literals = [
+  "Guard.CodePointCount",
+  "Hashing.Hash",
+  "Function('return 1')",
+  "import('example')",
+];
+const sharedOptions = { shareSchemaFunctions: true, hoistSchemaFunctions: true };
 const cases: Array<[name: string, schema: XSchema, accepted: unknown[], rejected: unknown[]]> = [
   ["decimal multiples", Type.Number({ multipleOf: 0.01 }), [0, 1.2, 0.29], [0.001, 1.234, "1.20"]],
   [
     "structural constants and own prototype-looking keys independent of property order",
-    { const: { ["__proto__"]: { kind: "data" }, alpha: 1, beta: 2 } },
+    { const: prototypeValue() },
+    [prototypeValue(), { beta: 2, alpha: 1, ["__proto__"]: { kind: "data" } }],
     [
-      { ["__proto__"]: { kind: "data" }, alpha: 1, beta: 2 },
-      { beta: 2, alpha: 1, ["__proto__"]: { kind: "data" } },
-    ],
-    [
-      { ["__proto__"]: { kind: "data" }, alpha: 1, beta: 3 },
-      { ["__proto__"]: { kind: "data" }, alpha: 1, beta: 2, extra: true },
+      prototypeValue(3),
+      { ...prototypeValue(), extra: true },
       { __proto__: { kind: "data" }, alpha: 1, beta: 2 },
     ],
   ],
   [
     "literal data containing compiler helper names",
     Type.Union([
-      Type.Literal("Guard.CodePointCount"),
-      Type.Literal("Hashing.Hash"),
-      Type.Literal("Function('return 1')"),
-      Type.Literal("import('example')"),
+      ...literals.map((literal) => Type.Literal(literal)),
       Type.String({ pattern: "^Guard\\.NotAHelper$" }),
     ]),
-    [
-      "Guard.CodePointCount",
-      "Hashing.Hash",
-      "Guard.NotAHelper",
-      "Function('return 1')",
-      "import('example')",
-    ],
+    [...literals, "Guard.NotAHelper"],
     ["CodePointCount", "Hash", "NotAHelper"],
   ],
   [
@@ -102,11 +98,10 @@ const cases: Array<[name: string, schema: XSchema, accepted: unknown[], rejected
 describe("standalone TypeBox checks", () => {
   it("emits the same shared module regardless of earlier compilations", async () => {
     const entries = [{ name: "check", schema: Type.Array(Type.Number(), { minItems: 1 }) }];
-    const options = { shareSchemaFunctions: true, hoistSchemaFunctions: true };
-    const first = await compileStandaloneValidators(entries, options);
-    expect(await compileStandaloneValidators(entries, options)).toBe(first);
+    const first = await compileStandaloneValidators(entries, sharedOptions);
+    expect(await compileStandaloneValidators(entries, sharedOptions)).toBe(first);
     Build(Type.Object({}, { propertyNames: { type: "string" } }));
-    expect(await compileStandaloneValidators(entries, options)).toBe(first);
+    expect(await compileStandaloneValidators(entries, sharedOptions)).toBe(first);
   });
 
   it("lets consumers tree-shake unused checks from a shared schema pool", async () => {
@@ -116,7 +111,7 @@ describe("standalone TypeBox checks", () => {
         { name: "keep", schema: Type.String() },
         { name: "discard", schema: Type.Literal(marker) },
       ],
-      { shareSchemaFunctions: true, hoistSchemaFunctions: true },
+      sharedOptions,
     );
     expect(source).toContain(marker);
     const bundled = await build({
@@ -146,11 +141,7 @@ describe("standalone TypeBox checks", () => {
   it.each(cases)(
     "preserves %s with runtime code generation disabled",
     async (_name, schema, accepted, rejected) => {
-      for (const options of [
-        {},
-        { shareSchemaFunctions: true },
-        { shareSchemaFunctions: true, hoistSchemaFunctions: true },
-      ]) {
+      for (const options of [{}, { shareSchemaFunctions: true }, sharedOptions]) {
         const check = await standaloneCheck(schema, options);
         for (const value of accepted) {
           expect(check(value)).toBe(true);
