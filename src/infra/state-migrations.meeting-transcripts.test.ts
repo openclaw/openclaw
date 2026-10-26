@@ -55,6 +55,9 @@ function jsonLines(body: string) {
 }
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const date = "2026-07-01";
+const migrationTime = "2026-07-02T00-00-00-000Z";
+const migrationNow = () => Date.parse("2026-07-02T00:00:00.000Z");
 
 afterEach(closeDatabase);
 
@@ -66,7 +69,6 @@ type LegacyOptions = {
 };
 
 async function seedLegacySession(stateDir: string, sessionId: string, options: LegacyOptions = {}) {
-  const date = "2026-07-01";
   const sessionDir = await mkdir(stateDir, "transcripts", date, sessionId);
   const write = (name: string, data: unknown) =>
     fs.writeFile(path.join(sessionDir, name), JSON.stringify(data) + "\n");
@@ -118,6 +120,8 @@ function harness() {
     root,
     detect,
     store,
+    sessionPath: (id: string, day = date) => path.join(root, day, id),
+    archivePath: (kind = "migrated") => `${root}.${kind}-${migrationTime}`,
     async native(sessionId: string, text?: string) {
       const session = nativeSession(sessionId);
       await store.writeSession(session);
@@ -183,11 +187,11 @@ function harness() {
   };
 }
 
-function nativeSession(sessionId: string, date = "2026-07-02") {
+function nativeSession(sessionId: string, day = "2026-07-02") {
   return {
     sessionId,
     source: { providerId: "manual-transcript" },
-    startedAt: `${date}T10:00:00.000Z`,
+    startedAt: `${day}T10:00:00.000Z`,
   };
 }
 
@@ -205,6 +209,16 @@ async function migrateClean(options?: Parameters<typeof h.migrate>[0]) {
   const result = await h.migrate(options);
   expect(result.warnings).toEqual([]);
   return result;
+}
+
+function expectImported(snapshot: ReturnType<typeof h.snapshot>, sessionId: string) {
+  expect(snapshot).toMatchObject({
+    sessions: [{ session_id: sessionId }],
+    runs: [{ status: "imported", finished_at: null }],
+    sources: [{ status: "imported", removed_source: 0 }],
+  });
+  expect(snapshot.utterances).toHaveLength(2);
+  expect(snapshot.summaries).toHaveLength(1);
 }
 
 describe("meeting transcript Doctor migration", () => {
@@ -312,7 +326,7 @@ describe("meeting transcript Doctor migration", () => {
           ? await h.seed("invalid", { invalidTranscript: true })
           : path.join(h.root, "2026-07-03", "late-session");
       const result = await h.migrate({
-        now: () => Date.parse("2026-07-02T00:00:00.000Z"),
+        now: migrationNow,
         testHooks:
           failure === "invalid transcript"
             ? {}
@@ -336,19 +350,14 @@ describe("meeting transcript Doctor migration", () => {
         expect(result.changes).toEqual([
           "Imported 1 meeting transcript session into shared SQLite state",
         ]);
-        const imported = h.snapshot();
-        expect(imported.sessions).toMatchObject([{ session_id: "verified" }]);
-        expect(imported.utterances).toHaveLength(2);
-        expect(imported.summaries).toHaveLength(1);
-        expect(imported.runs).toMatchObject([{ status: "imported", finished_at: null }]);
-        expect(imported.sources).toMatchObject([{ status: "imported", removed_source: 0 }]);
+        expectImported(h.snapshot(), "verified");
       }
     },
   );
 
   it("resumes durable imported receipts after a native archive rename failure", async () => {
     const source = await h.seed("archive-retry");
-    const archiveRoot = path.join(h.stateDir, "transcripts.migrated-2026-07-02T00-00-00-000Z");
+    const archiveRoot = h.archivePath();
     const blocker = path.join(archiveRoot, "unrelated");
     const rename = fs.rename;
     const archive = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
@@ -358,12 +367,7 @@ describe("meeting transcript Doctor migration", () => {
       }
       return rename(from, to);
     });
-    let failed: Awaited<ReturnType<typeof h.migrate>>;
-    try {
-      failed = await h.migrate({ now: () => Date.parse("2026-07-02T00:00:00.000Z") });
-    } finally {
-      archive.mockRestore();
-    }
+    const failed = await h.migrate({ now: migrationNow }).finally(() => archive.mockRestore());
     expect(failed.changes).toEqual([
       "Imported 1 meeting transcript session into shared SQLite state",
     ]);
@@ -374,10 +378,7 @@ describe("meeting transcript Doctor migration", () => {
     await expectFile(blocker, "keep");
     await closeDatabase();
     const pending = h.snapshot();
-    expect(pending.sessions).toMatchObject([{ session_id: "archive-retry" }]);
-    expect(pending.utterances).toHaveLength(2);
-    expect(pending.summaries).toHaveLength(1);
-    expect(pending.runs).toMatchObject([{ status: "imported", finished_at: null }]);
+    expectImported(pending, "archive-retry");
     const runId = pending.runs[0]!.id;
     expect(JSON.parse(pending.runs[0]!.report_json)).toMatchObject({ archiveRoot });
     expect(pending.sources).toMatchObject([
@@ -391,9 +392,9 @@ describe("meeting transcript Doctor migration", () => {
     ]);
     await closeDatabase();
     const completed = h.snapshot();
-    expect(completed.sessions).toEqual(pending.sessions);
-    expect(completed.utterances).toEqual(pending.utterances);
-    expect(completed.summaries).toEqual(pending.summaries);
+    for (const table of ["sessions", "utterances", "summaries"] as const) {
+      expect(completed[table]).toEqual(pending[table]);
+    }
     expect(completed.runs).toMatchObject([{ id: runId, status: "completed" }]);
     expect(completed.runs[0]!.finished_at).not.toBeNull();
     expect(completed.sources).toMatchObject([
@@ -411,19 +412,13 @@ describe("meeting transcript Doctor migration", () => {
 
     const result = await migrateClean({
       detected,
-      now: () => Date.parse("2026-07-02T00:00:00.000Z"),
+      now: migrationNow,
     });
 
     expect(result.changes.join("\n")).toContain("incomplete meeting transcript directory");
     await expectMissing(path.join(partialDir, "transcript.jsonl"));
     await expectExists(
-      path.join(
-        h.stateDir,
-        "transcripts.partials-recovered-2026-07-02T00-00-00-000Z",
-        "2026-07-01",
-        "partial-only",
-        "transcript.jsonl",
-      ),
+      path.join(h.archivePath("partials-recovered"), date, "partial-only", "transcript.jsonl"),
     );
   });
 
@@ -431,7 +426,7 @@ describe("meeting transcript Doctor migration", () => {
     const archivedStateDir = tempDirs.make("openclaw-meeting-transcripts-archive-");
     const archivedSessionDir = await seedLegacySession(archivedStateDir, "recreated-export");
     const archiveRoot = path.join(archivedStateDir, "transcripts");
-    const destination = path.join(h.root, "2026-07-01", "recreated-export");
+    const destination = h.sessionPath("recreated-export");
     await fs.mkdir(path.dirname(destination), { recursive: true });
     await fs.cp(archivedSessionDir, destination, { recursive: true });
 
@@ -544,17 +539,15 @@ describe("meeting transcript Doctor migration", () => {
         "UPDATE meeting_transcript_sessions SET export_pending_json = ? WHERE session_id = ?",
       )
       .run('["transcript.jsonl"]', session.sessionId);
-    await fs.writeFile(path.join(h.store.sessionDir(session), "transcript.jsonl"), '{"text":');
+    const transcriptPath = path.join(h.store.sessionDir(session), "transcript.jsonl");
+    await fs.writeFile(transcriptPath, '{"text":');
 
     const detected = h.detect();
     expect(detected).toMatchObject({ hasLegacy: false });
     await expect(h.migrate({ detected })).resolves.toEqual({ changes: [], warnings: [] });
 
     await h.store.materializeSessionArtifacts(session, "transcript");
-    const exported = await fs.readFile(
-      path.join(h.store.sessionDir(session), "transcript.jsonl"),
-      "utf8",
-    );
+    const exported = await fs.readFile(transcriptPath, "utf8");
     expect(jsonLines(exported).map((line) => line.text)).toEqual(["first", "second"]);
   });
 
@@ -585,18 +578,16 @@ describe("meeting transcript Doctor migration", () => {
 
   it("resolves a case-renamed export directory by metadata identity", async () => {
     const { session, artifacts } = await h.native("Capital", "case-stable transcript");
-    const renamedDir = path.join(h.root, "2026-07-02", "capital");
+    const renamedDir = h.sessionPath("capital", "2026-07-02");
+    const renamedMetadata = path.join(renamedDir, "METADATA.JSON");
     await fs.rename(artifacts.sessionDir, renamedDir);
-    await fs.rename(path.join(renamedDir, "metadata.json"), path.join(renamedDir, "METADATA.JSON"));
+    await fs.rename(path.join(renamedDir, "metadata.json"), renamedMetadata);
 
     expect(h.detect()).toMatchObject({ hasLegacy: false });
-    await fs.rm(path.join(renamedDir, "METADATA.JSON"));
+    await fs.rm(renamedMetadata);
     const metadataLessDetected = h.detect();
     expect(metadataLessDetected.hasLegacy).toBe(!fsSync.existsSync(artifacts.sessionDir));
-    await fs.writeFile(
-      path.join(renamedDir, "METADATA.JSON"),
-      `${JSON.stringify(session, null, 2)}\n `,
-    );
+    await fs.writeFile(renamedMetadata, `${JSON.stringify(session, null, 2)}\n `);
     const detected = h.detect();
     expect(detected.hasLegacy).toBe(true);
 
@@ -610,8 +601,7 @@ describe("meeting transcript Doctor migration", () => {
 
 async function seedStoredSession(sessionId: string, options: { historicalSlug?: string } = {}) {
   const session = {
-    sessionId,
-    startedAt: "2026-07-01T10:00:00.000Z",
+    ...nativeSession(sessionId, date),
     stoppedAt: "2026-07-01T10:30:00.000Z",
     source: { providerId: "manual-transcript", channelId: "room" },
     title: "Stored notes",

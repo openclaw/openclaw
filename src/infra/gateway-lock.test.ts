@@ -116,6 +116,10 @@ function expectContention(env: NodeJS.ProcessEnv, options: Omit<GatewayLockOptio
   return expect(acquireForTest(env, options)).rejects.toBeInstanceOf(GatewayLockError);
 }
 
+function observation(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = "darwin") {
+  return { env, lockDir: resolveTestLockDir(env), platform };
+}
+
 async function withLock(
   env: NodeJS.ProcessEnv,
   options: Omit<GatewayLockOptions, "env">,
@@ -278,26 +282,17 @@ describe("gateway lock", () => {
       await fs.writeFile(configA, "{}", "utf8");
       await fs.writeFile(configB, "{}", "utf8");
       await fs.symlink(stateDir, stateAlias);
-      const envA = {
-        ...process.env,
-        OPENCLAW_CONFIG_PATH: configA,
-        OPENCLAW_STATE_DIR: stateDir,
-      };
+      const envA = { ...process.env, OPENCLAW_CONFIG_PATH: configA, OPENCLAW_STATE_DIR: stateDir };
       const envB = {
         ...process.env,
         OPENCLAW_CONFIG_PATH: configB,
         OPENCLAW_STATE_DIR: stateAlias,
       };
       await withLock(envA, { platform: "darwin" }, async () => {
-        vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessCmdline").mockImplementation(
-          () => ["openclaw-gateway"],
-        );
-        await expect(
-          acquireForTest(envB, {
-            platform: "darwin",
-            timeoutMs: 15,
-          }),
-        ).rejects.toBeInstanceOf(GatewayLockError);
+        vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessCmdline").mockReturnValue([
+          "openclaw-gateway",
+        ]);
+        await expectContention(envB, { platform: "darwin", timeoutMs: 15 });
       });
     },
   );
@@ -307,7 +302,7 @@ describe("gateway lock", () => {
     vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessCmdline").mockReturnValue([
       "openclaw-gateway",
     ]);
-    const options = { env, lockDir: resolveTestLockDir(env), platform: "darwin" as const };
+    const options = observation(env);
     const firstLock = expectGatewayLock(await acquireForTest(env, { ...options, port: 48789 }));
     const first = await readActiveGatewayLockIdentity(options);
     const namespace = {
@@ -369,11 +364,7 @@ describe("gateway lock", () => {
         });
       }
       mockProcessIdentity(state === "unknown owner" ? null : ["openclaw-gateway"]);
-      const options = {
-        env,
-        lockDir: resolveTestLockDir(env),
-        platform: "linux" as const,
-      };
+      const options = observation(env, "linux");
       await expect(readActiveGatewayLockPort(options)).resolves.toBeUndefined();
       await expect(
         readActiveGatewayLockIdentity({ ...options, requireInspection: true }),
@@ -395,19 +386,10 @@ describe("gateway lock", () => {
     const env = await makeEnv();
     const { stateLockPath } = await writeLockFile(env, {}, true);
 
-    vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
-      () => 222,
+    vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockReturnValue(222);
+    const attempts = await Promise.allSettled(
+      [80, 25].map((timeoutMs) => acquireForTest(env, { platform: "linux", timeoutMs })),
     );
-    const attempts = await Promise.allSettled([
-      acquireForTest(env, {
-        platform: "linux",
-        timeoutMs: 80,
-      }),
-      acquireForTest(env, {
-        platform: "linux",
-        timeoutMs: 25,
-      }),
-    ]);
     const acquired = attempts.filter(
       (result): result is PromiseFulfilledResult<GatewayLock> =>
         result.status === "fulfilled" && result.value !== null,
@@ -446,10 +428,7 @@ describe("gateway lock", () => {
       }
       return startTimeReads >= 3 ? 333 : 222;
     });
-    await expectContention(env, {
-      platform: "linux",
-      timeoutMs: 25,
-    });
+    await expectContention(env, { platform: "linux", timeoutMs: 25 });
 
     expect(JSON.parse(await fs.readFile(stateLockPath, "utf8"))).toMatchObject(replacement);
   });
@@ -483,11 +462,7 @@ describe("gateway lock", () => {
     });
 
     mockProcessIdentity(null);
-    const pending = acquireForTest(env, {
-      timeoutMs: 20,
-      platform: "linux",
-    });
-    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
+    await expectContention(env, { timeoutMs: 20, platform: "linux" });
 
     statSpy.mockRestore();
     await expect(fs.readFile(lockPath, "utf8")).resolves.toBe(original);
@@ -501,9 +476,7 @@ describe("gateway lock", () => {
 
     mockProcessIdentity(["/usr/local/bin/openclaw", "gateway", "run"], 111);
     await expect(
-      acquireGatewayLock({
-        env,
-        allowInTests: true,
+      acquireForTest(env, {
         timeoutMs: 5,
         pollIntervalMs: Number.MAX_SAFE_INTEGER,
         platform: "darwin",
@@ -512,7 +485,6 @@ describe("gateway lock", () => {
           sleepDelays.push(ms);
           now = 10;
         },
-        lockDir: resolveTestLockDir(env),
       }),
     ).rejects.toBeInstanceOf(GatewayLockError);
 
@@ -538,15 +510,7 @@ describe("gateway lock", () => {
       vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessCmdline").mockReturnValue([
         "openclaw-gateway",
       ]);
-      await expect(
-        acquireGatewayLock({
-          allowInTests: true,
-          env,
-          lockDir: resolveTestLockDir(env),
-          platform: "darwin",
-          timeoutMs: 15,
-        }),
-      ).rejects.toBeInstanceOf(GatewayLockError);
+      await expectContention(env, { platform: "darwin", timeoutMs: 15 });
     } finally {
       await lock.release();
     }
@@ -554,10 +518,7 @@ describe("gateway lock", () => {
 
   it("returns null in test env unless allowInTests is set", async () => {
     const env = await makeEnv();
-    const lock = await acquireGatewayLock({
-      env: { ...env, VITEST: "1" },
-      lockDir: resolveTestLockDir(env),
-    });
+    const lock = await acquireGatewayLock(observation({ ...env, VITEST: "1" }));
     expect(lock).toBeNull();
   });
 
@@ -638,54 +599,36 @@ describe("gateway lock", () => {
 
   it("observes embedded custody only when requested", async () => {
     const env = await makeEnv();
-    const lockDir = resolveTestLockDir(env);
+    const options = observation(env);
     const port = 28789;
     mockProcessIdentity(["openclaw", "agent", "--local", "--message", "hello"]);
-    const lock = await acquireGatewayLock({
-      allowInTests: true,
+    await withLock(
       env,
-      lockDir,
-      platform: "darwin",
-      port,
-      role: "agent-embedded",
-      timeoutMs: 30,
-    });
-    expect(lock).not.toBeNull();
-    if (!lock) {
-      throw new Error("Expected embedded agent Gateway lock");
-    }
-
-    try {
-      await expect(
-        readActiveGatewayLockIdentity({
-          env,
-          lockDir,
-          platform: "darwin",
-        }),
-      ).resolves.toBeUndefined();
-      await expect(
-        readActiveGatewayLockIdentity({
-          env,
-          lockDir,
-          platform: "darwin",
-          includeEmbedded: true,
-          requireInspection: true,
-        }),
-      ).resolves.toMatchObject({ pid: process.pid, port });
-      await expect(
-        acquireGatewayLock({
-          allowInTests: true,
-          env,
-          lockDir,
-          platform: "darwin",
-          pollIntervalMs: 2,
-          sleep: nativeSleep,
-          timeoutMs: 15,
-        }),
-      ).rejects.toThrow("failed to acquire gateway state ownership");
-    } finally {
-      await lock.release();
-    }
+      {
+        platform: "darwin",
+        port,
+        role: "agent-embedded",
+        timeoutMs: 30,
+      },
+      async () => {
+        await expect(readActiveGatewayLockIdentity(options)).resolves.toBeUndefined();
+        await expect(
+          readActiveGatewayLockIdentity({
+            ...options,
+            includeEmbedded: true,
+            requireInspection: true,
+          }),
+        ).resolves.toMatchObject({ pid: process.pid, port });
+        await expect(
+          acquireForTest(env, {
+            platform: "darwin",
+            pollIntervalMs: 2,
+            sleep: nativeSleep,
+            timeoutMs: 15,
+          }),
+        ).rejects.toThrow("failed to acquire gateway state ownership");
+      },
+    );
   });
 
   it("keeps startup excluded while concurrent releases join resource drainage", async () => {
