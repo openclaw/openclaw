@@ -5798,7 +5798,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1",
       'start_check "channels"',
       'start_check "gateway-watch"',
-      "for name in channels core-support-boundary discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton sqlite-session-lifecycle startup-memory tui-pty; do",
+      "for name in channels core-support-boundary source-support discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton sqlite-session-lifecycle startup-memory tui-pty; do",
       "wait_checks()",
     ]);
     for (const slice of [
@@ -5829,6 +5829,124 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "${{ runner.temp }}/discord-component-attachments.log",
     ]);
     expect(run.match(/wait_checks$/gmu)).toHaveLength(9);
+  });
+
+  it.each([
+    {
+      name: "shared",
+      channels: true,
+      core: true,
+      supported: true,
+      expected: ["source-support|||--max-old-space-size=8192|1"],
+    },
+    {
+      name: "failed shared runner",
+      channels: true,
+      core: true,
+      supported: true,
+      failure: "source-support",
+      expected: ["source-support|||--max-old-space-size=8192|1"],
+    },
+    {
+      name: "channels only",
+      channels: true,
+      core: false,
+      supported: true,
+      expected: ["channels|--max-old-space-size=8192|1|--max-old-space-size=8192|1"],
+    },
+    {
+      name: "core only",
+      channels: false,
+      core: true,
+      supported: true,
+      expected: ["core-support-boundary|--max-old-space-size=8192|2|--max-old-space-size=8192|1"],
+    },
+    {
+      name: "older target",
+      channels: true,
+      core: true,
+      supported: false,
+      failure: "channels",
+      expected: [
+        "channels|--max-old-space-size=8192|1|--max-old-space-size=8192|1",
+        "core-support-boundary|--max-old-space-size=8192|2|--max-old-space-size=8192|1",
+      ],
+    },
+    {
+      name: "different compiler heaps",
+      channels: true,
+      core: true,
+      supported: true,
+      heap: "--max-old-space-size=4096",
+      failure: "core-support-boundary",
+      expected: [
+        "channels|--max-old-space-size=4096|1|--max-old-space-size=4096|1",
+        "core-support-boundary|--max-old-space-size=8192|2|--max-old-space-size=4096|1",
+      ],
+    },
+  ])("dispatches built source checks and preserves failures: $name", (scenario) => {
+    const step = requiredWorkflowStep(
+      readCiWorkflow().jobs["build-artifacts"].steps,
+      "Run built artifact checks",
+    );
+    const directory = tempDirs.make("openclaw-built-source-checks-");
+    const bin = path.join(directory, "bin");
+    const calls = path.join(directory, "calls");
+    mkdirSync(bin);
+    mkdirSync(path.join(directory, "scripts"));
+    writeFileSync(calls, "");
+    if (scenario.supported) {
+      writeFileSync(path.join(directory, "scripts/test-built-source-verifiers.mts"), "");
+    }
+    // Stub only external commands; selection, joining, and failure aggregation run the real shell.
+    for (const command of ["node", "pnpm"]) {
+      writeExecutable(path.join(bin, command), [
+        "#!/bin/sh",
+        'name=""',
+        'case "$(basename "$0") $*" in',
+        "  *scripts/test-built-source-verifiers.mts) name=source-support ;;",
+        '  "pnpm test:channels") name=channels ;;',
+        "  *test/vitest/vitest.full-core-support-boundary.config.ts) name=core-support-boundary ;;",
+        "esac",
+        'if [ -n "$name" ]; then',
+        '  printf "%s|%s|%s|%s|%s\\n" "$name" "${NODE_OPTIONS:-}" "${OPENCLAW_VITEST_MAX_WORKERS:-}" "$CHANNEL_NODE_OPTIONS" "$CHANNEL_MAX_WORKERS" >> "$CHECK_CALLS"',
+        '  if [ "$name" = "$FAIL_CHECK" ]; then exit 7; fi',
+        "fi",
+      ]);
+    }
+    const heap = scenario.heap ?? "--max-old-space-size=8192";
+    const result = runWorkflowShellScript(step.run, {
+      linuxWorkflow: true,
+      cwd: directory,
+      env: {
+        ...process.env,
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        RUNNER_TEMP: directory,
+        CHECK_CALLS: calls,
+        FAIL_CHECK: scenario.failure ?? "",
+        NODE_OPTIONS: "",
+        OPENCLAW_VITEST_MAX_WORKERS: "",
+        CHANNEL_NODE_OPTIONS: heap,
+        CHANNEL_MAX_WORKERS: "1",
+        RUN_CHANNELS: String(scenario.channels),
+        RUN_CORE_SUPPORT_BOUNDARY: String(scenario.core),
+        RUN_DOCTOR_PLUGIN_INDEX: "false",
+        RUN_SQLITE_SESSION_LIFECYCLE: "false",
+        RUN_GATEWAY_WATCH: "false",
+        RUN_DISCORD_COMPONENT_PROOF: "false",
+        RUN_TUI_PTY: "false",
+        PARALLEL_GATEWAY_WATCH: "true",
+        PARALLEL_BUILT_VERIFIERS: "true",
+        FROZEN_TARGET: String(!scenario.supported),
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(scenario.failure ? 1 : 0);
+    expect(readFileSync(calls, "utf8").trim().split("\n").toSorted()).toEqual(
+      scenario.expected.toSorted(),
+    );
+    if (scenario.failure) {
+      expect(result.stdout).toContain(`::error title=${scenario.failure} failed::`);
+    }
   });
 
   it.each([

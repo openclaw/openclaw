@@ -2092,6 +2092,7 @@ jobs:
           declare -A results=(
             ["channels"]="skipped"
             ["core-support-boundary"]="skipped"
+            ["source-support"]="skipped"
             ["discord-component-attachments"]="skipped"
             ["doctor-plugin-index"]="skipped"
             ["gateway-watch"]="skipped"
@@ -2240,18 +2241,22 @@ jobs:
               test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts
           fi
 
-          if [ "$RUN_CHANNELS" = "true" ]; then
-            start_check "channels" env \
-              NODE_OPTIONS="$CHANNEL_NODE_OPTIONS" \
-              OPENCLAW_VITEST_MAX_WORKERS="$CHANNEL_MAX_WORKERS" \
-              pnpm test:channels
-          fi
+          if [ "$RUN_CHANNELS" = "true" ] && [ "$RUN_CORE_SUPPORT_BOUNDARY" = "true" ] && [ "$CHANNEL_NODE_OPTIONS" = "--max-old-space-size=8192" ] && [[ -f scripts/test-built-source-verifiers.mts ]]; then
+            start_check "source-support" node --import ./scripts/tsx.mjs scripts/test-built-source-verifiers.mts
+          else
+            if [ "$RUN_CHANNELS" = "true" ]; then
+              start_check "channels" env \
+                NODE_OPTIONS="$CHANNEL_NODE_OPTIONS" \
+                OPENCLAW_VITEST_MAX_WORKERS="$CHANNEL_MAX_WORKERS" \
+                pnpm test:channels
+            fi
 
-          if [ "$RUN_CORE_SUPPORT_BOUNDARY" = "true" ]; then
-            start_check "core-support-boundary" env \
-              NODE_OPTIONS=--max-old-space-size=8192 \
-              OPENCLAW_VITEST_MAX_WORKERS=2 \
-              node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
+            if [ "$RUN_CORE_SUPPORT_BOUNDARY" = "true" ]; then
+              start_check "core-support-boundary" env \
+                NODE_OPTIONS=--max-old-space-size=8192 \
+                OPENCLAW_VITEST_MAX_WORKERS=2 \
+                node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
+            fi
           fi
 
           if [ "$RUN_DISCORD_COMPONENT_PROOF" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" = "true" ]; then
@@ -2298,7 +2303,7 @@ jobs:
             echo "::error title=startup assets failed::cli startup asset build failed"
             failures=1
           fi
-          for name in channels core-support-boundary discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton sqlite-session-lifecycle startup-memory tui-pty; do
+          for name in channels core-support-boundary source-support discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton sqlite-session-lifecycle startup-memory tui-pty; do
             if [ "${results[$name]}" = "failure" ]; then
               echo "::error title=${name} failed::${name} failed"
               failures=1

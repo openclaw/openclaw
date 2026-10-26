@@ -903,6 +903,8 @@ const repositoryScriptEntries = [
   "scripts/github/security-review.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
+  // The artifact producer invokes this shared test compiler owner by path.
+  "scripts/test-built-source-verifiers.mts",
   // CI launches the desktop resize proof through its bootstrap path.
   "scripts/test-desktop-resize-real.mts!",
   // Native shell UI tests connect to this manually launched loopback Gateway fixture.
