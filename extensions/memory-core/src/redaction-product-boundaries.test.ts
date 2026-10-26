@@ -18,7 +18,7 @@ vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
 }));
 
 import { runDreamingSweepPhases } from "./dreaming-phases.js";
-import { applyShortTermPromotions, type PromotionCandidate } from "./short-term-promotion.js";
+import { applyShortTermPromotions } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness, createPromotionCandidateForTest } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
@@ -32,27 +32,6 @@ async function createWorkspace(prefix: string): Promise<string> {
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
   clearRuntimeConfigSnapshot();
   return workspaceDir;
-}
-
-function promotionCandidate(
-  key: string,
-  line: number,
-  originClass: "agent" | "owner" | "untrusted",
-  sourcePath: string,
-  snippet: string,
-): PromotionCandidate {
-  return createPromotionCandidateForTest({
-    key,
-    path: sourcePath,
-    startLine: line,
-    endLine: line,
-    snippet,
-    provenance: {
-      originClass,
-      sessionKind: "interactive",
-      observedAt: Date.parse("2026-08-02T18:00:00.000Z"),
-    },
-  });
 }
 
 afterEach(() => {
@@ -138,11 +117,26 @@ describe("memory-core transcript and promotion boundaries", () => {
 
     const applied = await applyShortTermPromotions({
       workspaceDir,
-      candidates: [
-        promotionCandidate(cleanKey, 1, "owner", sourcePath, cleanText),
-        promotionCandidate(contaminatedKey, 2, "agent", sourcePath, contaminatedText),
-        promotionCandidate(untrustedKey, 3, "untrusted", sourcePath, untrustedText),
-      ],
+      candidates: (
+        [
+          [cleanKey, "owner", cleanText],
+          [contaminatedKey, "agent", contaminatedText],
+          [untrustedKey, "untrusted", untrustedText],
+        ] as const
+      ).map(([key, originClass, snippet], index) =>
+        createPromotionCandidateForTest({
+          key,
+          path: sourcePath,
+          startLine: index + 1,
+          endLine: index + 1,
+          snippet,
+          provenance: {
+            originClass,
+            sessionKind: "interactive",
+            observedAt: Date.parse("2026-08-02T18:00:00.000Z"),
+          },
+        }),
+      ),
       limit: 3,
       minScore: 0.9,
       minRecallCount: 3,

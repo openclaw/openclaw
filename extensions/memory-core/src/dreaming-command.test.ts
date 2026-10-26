@@ -27,26 +27,13 @@ function createHarness(initialConfig: OpenClawConfig = {}) {
         const draft = structuredClone(runtimeConfig);
         mutate(draft);
         runtimeConfig = draft;
-        return {
-          path: "/tmp/openclaw.json",
-          previousHash: null,
-          persistedHash: null,
-          snapshot: {},
-          nextConfig: runtimeConfig,
-          afterWrite: { mode: "auto" },
-          followUp: { mode: "auto", requiresRestart: false },
-          result: undefined,
-        };
+        return { nextConfig: runtimeConfig };
       }),
     },
   } as unknown as OpenClawPluginApi["runtime"];
 
-  const api = {
-    runtime,
-  } as unknown as OpenClawPluginApi;
-
   return {
-    api,
+    api: { runtime } as unknown as OpenClawPluginApi,
     runtime,
     getRuntimeConfig: () => runtimeConfig,
   };
@@ -134,7 +121,6 @@ describe("memory-core /dreaming command", () => {
     const result = await runDreamingCommand(harness, "status");
 
     expect(result.text).toContain("Dreaming status:");
-    // Dreaming is enabled by default; the fixture sets no explicit enabled flag.
     expect(result.text).toContain("- enabled: on (America/Los_Angeles)");
     expect(result.text).toContain("- sweep cadence: 15 */8 * * *");
     expect(result.text).toContain("- promotion policy: score>=0.75, recalls>=3, uniqueQueries>=3");
