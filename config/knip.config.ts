@@ -356,6 +356,7 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-source-demand.mts!",
   "scripts/perf/responses-continuation-measure.mjs!",
   "scripts/perf/responses-continuation.ts!",
+  "scripts/perf/responses-history-conversion.ts!",
   "scripts/perf/schema-validator-cache-measure.ts!",
   "scripts/perf/session-lifecycle-boot.ts!",
   "scripts/perf/shared-skills-measure.ts!",
