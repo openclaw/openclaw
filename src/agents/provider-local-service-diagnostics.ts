@@ -48,9 +48,10 @@ export function captureLocalServiceOutput(
     ...collectRequestHeaderSecretValues(healthHeaders ?? {}),
   ];
   const secretValues = [
-    ...new Set(values.flatMap((value) => [value, ...value.split(/\r?\n/u)])),
+    ...new Set(values.flatMap((value) => [value].concat(value.split(/\r?\n/u)))),
   ].filter(Boolean);
-  redactors.set(diagnostics, (text) => {
+  redactors.set(diagnostics, (rawText) => {
+    let text = rawText;
     if (truncated) {
       // A cut line can contain an unrecognizable credential suffix. Keep complete lines only.
       const newline = text.indexOf("\n");
