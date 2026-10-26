@@ -159,6 +159,10 @@ it.each([
     if (sonnet) {
       omitted.push("service_tier", ...(adaptive ? ["speed"] : []));
       expect(beta?.includes("thinking-binding-controls-2026-08-01") ?? false).toBe(adaptive);
+      if (adaptive) {
+        expect(payload.fallbacks).toBe("default");
+        expect(beta).toContain("server-side-fallback-2026-07-01");
+      }
     }
     if (haiku) {
       omitted.push("service_tier", "fallbacks", "speed");

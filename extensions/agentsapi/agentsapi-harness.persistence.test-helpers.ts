@@ -97,7 +97,10 @@ function createHarnessFixture(runtime: PluginRuntime) {
 function createBindingRuntime(env: NodeJS.ProcessEnv, current: () => OpenClawConfig) {
   setRuntimeConfigSnapshot(current());
   const runtime = createPluginRuntimeMock({ config: { current } });
-  runtime.state.openKeyedStoreV2 = <T>(options, authority) => {
+  runtime.state.openKeyedStoreV2 = <T>(
+    options: Parameters<typeof runtime.state.openKeyedStoreV2>[0],
+    authority?: Parameters<typeof runtime.state.openKeyedStoreV2>[1],
+  ) => {
     const store = createPluginStateKeyedStoreForTests<T>("agentsapi", { ...options, env });
     return authority ? store.withCurrent(authority) : store;
   };
@@ -120,8 +123,9 @@ export async function createAttempt(stateDir: string) {
     ...target,
     entry: { sessionId: target.sessionId, updatedAt: Date.now() },
   });
+  const params = createAttemptParams();
   return {
-    ...createAttemptParams({ hostCapabilities: { createToolSurfaceAsync: async () => [] } }),
+    ...params,
     ...target,
     sessionTarget: target,
     sessionFile: path.join(stateDir, "session.jsonl"),
@@ -131,6 +135,7 @@ export async function createAttempt(stateDir: string) {
     runId: "persisted-run",
     prompt: "Continue the retained conversation.",
     timeoutMs: 5_000,
+    hostCapabilities: { ...params.hostCapabilities, createToolSurfaceAsync: async () => [] },
   } satisfies AgentHarnessAttemptParamsV2;
 }
 

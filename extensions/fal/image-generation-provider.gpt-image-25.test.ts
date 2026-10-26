@@ -1,6 +1,6 @@
 import { generateImage } from "openclaw/plugin-sdk/image-generation-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -75,7 +75,8 @@ it.each([
     background: "transparent",
     ...(edit ? { inputImages: references(16), inferredResolution: "4K" as const } : {}),
   });
-  const request = fetchWithSsrFGuardMock.mock.calls[0][0];
+  const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
+  assert(request, "Expected an image generation request");
   expect(request.url).toBe(`https://fal.run/${edit ? editModel : model}`);
   expect(JSON.parse(String(request.init.body))).toEqual({
     prompt: "A sticker",
