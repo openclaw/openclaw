@@ -91,49 +91,27 @@ export function createFinalizeMocks() {
             progressMessage: `${serviceNoun} service restarted.`,
           },
     resetFinalizeMocks: () => {
-      mocks.runTui.mockClear();
-      mocks.restoreTerminalState.mockClear();
+      // mockReset restores vi.fn's original implementation; these retain overrides.
+      const clearOnly = new Set([
+        "runTui",
+        "restoreTerminalState",
+        "setupWizardShellCompletion",
+        "gatewayServiceInstall",
+        "resolveGatewayInstallToken",
+      ]);
+      for (const [name, mock] of Object.entries(mocks)) {
+        if (clearOnly.has(name)) {
+          mock.mockClear();
+        } else {
+          mock.mockReset();
+        }
+      }
       mocks.probeGatewayReachable.mockReset().mockResolvedValue({ ok: false, detail: "offline" });
-      mocks.waitForGatewayReachable.mockReset().mockResolvedValue({ ok: true });
-      mocks.resolveControlUiHandoffTarget.mockReset().mockImplementation(async ({ config }) => ({
-        documentUrl: "http://127.0.0.1:18789/",
-        tlsConfig: config.gateway?.tls,
-      }));
-      mocks.waitForControlUiDocument.mockReset().mockResolvedValue({ ready: true });
-      mocks.resolveAdvertisedControlUiLinks.mockReset().mockResolvedValue({
-        httpUrl: "http://127.0.0.1:18789",
-        wsUrl: "ws://127.0.0.1:18789",
-      });
-      mocks.resolveLocalControlUiProbeLinks.mockReset().mockReturnValue({
-        httpUrl: "http://127.0.0.1:18789",
-        wsUrl: "ws://127.0.0.1:18789",
-      });
-      mocks.setupWizardShellCompletion.mockClear();
-      mocks.gatewayServiceInstall.mockClear();
-      mocks.gatewayServiceIsLoaded.mockReset().mockResolvedValue(false);
       mocks.gatewayServiceReadCommand.mockReset().mockResolvedValue(null);
-      mocks.startGatewayService.mockReset();
-      mocks.gatewayServiceRestart.mockReset().mockResolvedValue({ outcome: "completed" });
-      mocks.gatewayServiceUninstall.mockReset();
-      mocks.resolveGatewayInstallToken.mockClear();
-      mocks.isSystemdUserServiceAvailable.mockReset().mockResolvedValue(true);
-      mocks.resolveSystemdUserServiceAccount.mockReset().mockReturnValue("test-user");
-      mocks.readSystemdUserLingerStatus.mockReset().mockResolvedValue({
-        user: "test-user",
-        linger: "yes",
-      });
-      mocks.resolveSetupSecretInputString.mockReset().mockResolvedValue(undefined);
-      mocks.resolveExistingKey.mockReset().mockReturnValue(undefined);
-      mocks.hasExistingKey.mockReset().mockReturnValue(false);
-      mocks.hasKeyInEnv.mockReset().mockReturnValue(false);
-      mocks.listConfiguredWebSearchProviders.mockReset().mockReturnValue([]);
-      mocks.hasAuthProfileForProvider.mockReset().mockReturnValue(false);
-      mocks.isContainerEnvironment.mockReset().mockReturnValue(false);
       mocks.startOnboardingGatewayProcess.mockReset().mockResolvedValue({
         wait: new Promise<void>(() => {}),
         close: vi.fn(async () => {}),
       });
-      mocks.loadModelCatalog.mockReset().mockResolvedValue([]);
     },
   };
 }
