@@ -100,7 +100,7 @@ async function publishMaintainedBundle(params: {
       params.assertCurrent();
       return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      if (extractErrorCode(error) === "ENOENT") {
         return false;
       }
       throw error;
@@ -130,7 +130,7 @@ async function publishMaintainedBundle(params: {
         durability: "fail-closed",
       });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !(await matchesExisting())) {
+      if (extractErrorCode(error) !== "EEXIST" || !(await matchesExisting())) {
         throw error;
       }
     }

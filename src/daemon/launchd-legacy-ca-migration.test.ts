@@ -19,7 +19,10 @@ import {
 import { GatewayServiceAuthorityError } from "./service-update-authority.js";
 
 const native = vi.hoisted(() => ({ exec: vi.fn() }));
-vi.mock("./exec-file.js", () => ({ execFileUtf8: native.exec }));
+vi.mock("./exec-file.js", async (original) => ({
+  ...(await original<typeof import("./exec-file.js")>()),
+  execFileUtf8: native.exec,
+}));
 vi.mock("./launchd-system.js", async (original) => ({
   ...(await original<typeof import("./launchd-system.js")>()),
   assertNoSystemLaunchDaemonOwnership: vi.fn().mockResolvedValue(undefined),
@@ -32,7 +35,7 @@ const stock = gunzipSync(
   await fs.readFile(new URL("./fixtures/legacy-ca/openbsd-1.22.2.1.pem.gz", import.meta.url)),
 );
 const programArguments = ["/usr/local/bin/node", "/opt/openclaw/openclaw.mjs", "gateway"];
-let legacy: Buffer;
+let legacy = Buffer.alloc(0);
 let legacyFailure: Error | undefined;
 beforeEach(() => {
   legacy = Buffer.concat([stock, Buffer.from(privatePem)]);
