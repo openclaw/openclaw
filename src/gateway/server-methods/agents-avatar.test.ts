@@ -45,7 +45,7 @@ beforeEach(() => {
   release.mockReset();
 });
 
-it("loads the agents RPC family without loading the avatar parser", async () => {
+it("registers avatar generation without loading its parser", async () => {
   const result = await runNodeScript(
     [
       "--import",
@@ -58,10 +58,9 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   if (specifier === "parse5") throw new Error("Agents RPC registration loaded the avatar parser");
   return nextResolve(specifier, context);
 } });
-const { agentsHandlers } = await import(${JSON.stringify(new URL("./agents.ts", import.meta.url).href)});
-assert.equal(typeof agentsHandlers["agents.list"], "function");
-assert.equal(typeof agentsHandlers["agents.avatar.generate"], "function");
-console.log("agents-family-import-ok");`,
+const { agentAvatarGenerateHandler } = await import(${JSON.stringify(new URL("./agents-avatar.ts", import.meta.url).href)});
+assert.equal(typeof agentAvatarGenerateHandler, "function");
+console.log("avatar-handler-import-ok");`,
     ],
     {
       PATH: process.env.PATH,
@@ -70,8 +69,9 @@ console.log("agents-family-import-ok");`,
     },
     30_000,
   );
+  expect(result.error, result.stderr).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toContain("agents-family-import-ok");
+  expect(result.stdout).toContain("avatar-handler-import-ok");
 });
 
 it.each([
