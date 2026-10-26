@@ -1,515 +1,185 @@
-# Talk performance, round 2
-
-Baseline: `5f71bbf09e6` (current `origin/main` at the start of this round).
-
-## Workload and acceptance, recorded before measurement
-
-Use `scripts/bench-control-ui-talk.ts` with the production Control UI, synthetic
-oscillator microphone, native audio-element playback, and the existing synthetic
-provider contract. Every browser run is headless. Hidden observations must report
-`document.visibilityState === "hidden"`.
-
-Measure ordinary listening, speaking, and responding on desktop (1440×1000) and mobile
-(390×844), at 1× and 4× CPU. Separately measure idle and listening with keyboard
-focus on Stop and its tooltip continuously open. Diagnostic traces, callback
-counters, frame samples, and screenshots are separate from paired CPU windows.
-
-Compare task/script/layout/style CPU per second using Chromium's timestamp
-interval. Keep renderer-process CPU as raw deltas from its wider endpoint calls;
-those calls do not record a separate duration for a precise per-second rate. Rank
-source-mapped samples and inspect native tasks as well as JavaScript. Count
-analyser reads, timer/rAF/observer callbacks, and visible meter writes. Record host
-load and use a base/base A/A control because this is a shared Mac.
-
-For candidate changes, use at least ten serial interleaved pairs; use twenty
-when A/A shows noise. Target a 40% reduction in 4× task CPU for ordinary speaking,
-listening, and idle with the tooltip. A clean measured 5% win is landable even if
-the target remains open. Preserve visuals, frame behavior, audio behavior, and
-latency: median regression ≤5% and p95 no worse, or ten additional pairs put the
-cell inside the acceptance band. A >20% attributable regression blocks landing.
-
-Investigate hidden caption reveal separately with A/A, comparing wall latency,
-renderer task CPU, and dispatch/scheduling gaps. Native `play()` resolution is a
-local playback-start probe, not provider or acoustic latency. No battery-life
-claim follows from this synthetic benchmark.
-
-The round-2 runner explicitly clears hover/focus tooltips for ordinary cells and
-does not install a transcript observer when no transcript is expected. Earlier
-ordinary samples could retain the Stop hover tooltip. Both bundles use this same
-corrected runner; these results must not be combined with round-1 samples.
-`speaking` is microphone activity; `responding` exercises the TTS `thinking`
-animation via a valid synthetic response lifecycle, with native playback active.
-Listening and connected-idle both retain the silent native audio graph. They do
-not claim that real browser audio has stopped. Diagnostic observer counts include
-fixture-owned observers.
-
-## Results
-
-The initial instrumented baseline (one 3-second observation per cell; host load
-58–83) ranks native frame processing first. Values below are task CPU ms/s;
-single traced samples identify owners and are not acceptance results.
-
-| State            | Desktop 1× | Desktop 4× | Mobile 1× | Mobile 4× |
-| ---------------- | ---------: | ---------: | --------: | --------: |
-| Listening        |       2.74 |      10.11 |      1.75 |      3.56 |
-| Speaking         |      35.89 |     147.71 |     32.73 |    132.65 |
-| Responding / TTS |      32.32 |     105.84 |     23.04 |     85.98 |
-| Idle             |       1.22 |      29.94 |      2.04 |      3.11 |
-
-`ScheduledActionSendBeginMainFrame` is the posting location attached to native
-main-frame tasks, not a sampled native hotspot. On desktop 4×, speaking/responding
-contained 173/181 main-frame tasks and 171/181 style updates of seven elements
-over three seconds, with no layout or paint events. Their nested style CPU was
-44.35/17.42 ms/s, prepaint 21.20/23.66 ms/s, and internal intersection processing
-7.24/9.81 ms/s; these categories must not be added together. Speaking wrote the
-seven bar styles about ten times per second; responding wrote none but maintained
-the CSS animation's native frame work. The trace does not identify which native
-intersection targets contribute or establish anchor-positioning as the cause.
-
-Quiet ordinary listening and idle produced no meter writes, observer deliveries,
-or JavaScript rAF callbacks. The analyser still sampled approximately 10 times
-per second. One desktop 4× idle observation contained 34.7 ms of GC and is not a
-steady idle estimate. Across the complete diagnostic run, sampled Talk audio
-math accounted for 0.710 ms; no PCM/base64 processing path is involved in the
-native WebRTC fixture. These single traced samples identify owners; paired
-untraced comparisons below determine acceptance.
-
-All four speaking traces contained zero GC events. Responding contained zero
-except desktop 1× (two events, 4.56 ms total). The desktop 4× idle outlier above
-contained two events totaling 34.72 ms; mobile idle contained one short event at
-each rate (0.61/1.37 ms). GC does not explain the continuous active-frame cost.
-
-### Initial stationary-tooltip results (v2; provisional)
-
-These observations predate the strict in-window network check. The completed v4
-confirmation below is the acceptance evidence; this table is retained history.
-
-Twenty interleaved pairs per viewport, untraced three-second intervals at 4×.
-All 320 observations passed. CPU entries are median / p95 in ms/s.
-
-| Viewport / state             |     Base task | Candidate task | Median change |      A/A base | A/A comparison |
-| ---------------------------- | ------------: | -------------: | ------------: | ------------: | -------------: |
-| Desktop, listening + tooltip | 36.32 / 43.78 |   6.99 / 10.89 |        −80.8% | 35.58 / 40.17 |  37.34 / 43.70 |
-| Desktop, idle + tooltip      | 33.21 / 40.12 |    4.40 / 7.22 |        −86.8% | 31.07 / 34.76 |  33.93 / 37.77 |
-| Mobile, listening + tooltip  | 34.12 / 40.65 |   7.52 / 13.55 |        −78.0% | 33.91 / 39.31 |  34.89 / 39.89 |
-| Mobile, idle + tooltip       | 31.16 / 35.45 |    4.30 / 5.68 |        −86.2% | 30.78 / 35.70 |  30.58 / 35.19 |
-
-| Viewport / state   | Base min–max ms/s | Candidate min–max ms/s |
-| ------------------ | ----------------: | ---------------------: |
-| Desktop, listening |       31.08–48.11 |             2.52–17.73 |
-| Desktop, idle      |       25.37–51.43 |              1.24–8.89 |
-| Mobile, listening  |       27.48–52.34 |             4.20–14.56 |
-| Mobile, idle       |       26.57–36.04 |              1.41–6.04 |
-
-Host one-minute load ranged from 20.20 to 78.14. The A/A median idle increase
-is about 9%, confirming measurable host variation.
-Both candidate CPU p95s improve substantially;
-the effect is much larger than the unchanged control's movement.
-
-The frozen candidate predates the final paint-property filter and border-box
-observer fixes. These stationary fixtures have no ancestor animation or changing
-anchor box, so neither fix changes their measured work. The final source passed its production build, strict asset check, and the
-focused Chromium and WebKit behavior checks.
-
-### Cold native playback-start probe
-
-Twenty browser starts per side, first `play()` call per browser, median / p95 ms:
-
-| Viewport   |            Base |       Candidate |        A/A base |  A/A comparison |
-| ---------- | --------------: | --------------: | --------------: | --------------: |
-| Desktop 4× | 305.60 / 385.00 | 332.20 / 418.60 | 339.90 / 431.50 | 321.25 / 398.00 |
-| Mobile 4×  | 285.50 / 379.70 | 284.20 / 809.10 | 308.90 / 415.90 | 313.80 / 485.20 |
-
-Cold native playback is noisy on this shared host. Candidate maxima reached
-807.5 ms desktop and 2,378.4 ms mobile; unchanged A/A maxima reached 1,686.4 ms
-and 730.8 ms. The mobile candidate tail is outside the band in this early partial-interval
-measurement. It is retained here as adverse evidence. The final whole-gesture
-check below supplies a second unlock-clip observation, not remote-stream
-acceptance; neither probe measures end-to-end acoustic audio latency.
-
-### Stationary tooltip diagnostic
-
-One 3-second base/head pair per cell, with counters and inspected screenshots:
-
-| State                                      |   Desktop 1× |    Desktop 4× |    Mobile 1× |    Mobile 4× |
-| ------------------------------------------ | -----------: | ------------: | -----------: | -----------: |
-| Listening + Stop tooltip, base → head ms/s | 14.26 → 4.02 | 34.62 → 10.64 | 12.81 → 5.71 | 32.13 → 9.22 |
-| Idle + Stop tooltip, base → head ms/s      | 12.45 → 3.08 |  31.29 → 4.39 | 11.43 → 0.88 | 29.88 → 2.51 |
-| rAF callbacks/s, base → head               |     60.5 → 0 |      60.2 → 0 |     60.3 → 0 |     60.2 → 0 |
-
-All 16 observations passed. Stop focus, its open tooltip, and document focus
-remained active. There were no recurring mutation, resize, or intersection
-callbacks in the candidate window. Analyser sampling remained approximately
-10 Hz; meter writes remained zero. These instrumented samples establish the
-removed work; the untraced 20-pair A/B and A/A results above establish its size.
-
-The owner now watches position, resize, ancestor mutations, scrolling, and
-signaled transform/motion-path animation instead of polling every frame.
-The independent review found that the initial animation filter also followed
-paint-only color/shadow animations; the revised filter leaves those stationary.
-Layout changes remain observed. Accepted edge cases: unannounced
-pure-scale WAAPI on unchanged ancestors and fully clipped motion can await a
-subsequent invalidation; current callers do not use that pattern. Position
-observer delivery can trail motion by one rendering frame. Hidden mutations can
-still deliver observer callbacks; this does not claim all hidden callbacks stop.
-
-### Native-audio counterfactual
-
-A separate same-bundle diagnostic suspended both native AudioContexts and paused
-the audio element on one side only. Endpoint checks confirmed suspension.
-The normal A/A sides remained untouched. Task CPU differences were inconsistent
-with the A/A spread, so this is not evidence for a product change. Every hidden
-sample reported `visibilityState === "hidden"`, zero analyser reads, and zero
-JavaScript animation callbacks. This fixture does not measure real WebRTC codec
-or network CPU: its peer connection and SDP/provider messages are synthetic.
-
-## Rejected experiments
-
-A 30 Hz direct-DOM prototype retained the seven bars and interpolated their
-transforms outside Solid. One desktop 4× diagnostic pair changed speaking
-173.45 → 145.60 ms/s (−16.1%) and responding 136.92 → 129.17 (−5.7%), while
-script CPU increased. A single-canvas 30 Hz prototype instead changed speaking
-161.83 → 85.52 (−47.2%) and responding 143.79 → 65.22 (−54.6%). Inspected
-synthetic frame captures looked consistent. These are single diagnostic pairs,
-not acceptance results. The subsequent production canvas, visual coverage, and
-repeated 4× comparison are recorded below. Neither prototype is part of the
-tooltip change.
-
-A direct `transform` binding in place of the seven inherited `--talk-bar-scale`
-properties did not remove the active rendering cost. In a single instrumented
-pilot, desktop 4× speaking changed 113.27 → 110.58 ms/s, while mobile changed
-111.23 → 123.29 ms/s. At 1× the changes were 28.47 → 28.02 and 28.18 → 31.80 ms/s.
-This is not a clean win; the binding and CSS changes were removed. These pilot
-numbers are diagnostic, not calibrated effect sizes.
-
-The compositor diagnostic confirms that all seven responding bars already own
-accelerated transform and opacity layers. Their main-thread cost cannot be
-attributed simply to missing layer promotion. Moving status keyframes from
-`transform` to individual `scale` produced no established improvement (one
-instrumented desktop 4× pair: 118.21 → 105.96 ms/s). It remains an experiment,
-not a production change.
-
-Removing only the Stop trigger's anchor name did not improve ordinary speaking
-(one 4× diagnostic pair: 122.54 → 122.24 ms/s). The responding difference was
-97.51 → 93.02 ms/s in that same single pair, below a justified win. No production
-anchor-name change was retained from this test.
-
-A `contain: layout style` meter boundary likewise did not improve speaking
-(one 4× pair: 126.33 → 131.36 ms/s); responding changed 99.22 → 97.16 ms/s.
-The CSS-only experiment was not promoted to production.
-
-Removing all document anchor names likewise failed to improve the active state
-(one 4× pair: speaking 116.55 → 132.46 ms/s; responding 92.12 → 98.71 ms/s).
-This rules out retaining a speculative anchor-registration rewrite in this PR.
-
-An AudioWorklet is not a free battery optimization: the current analyser owner
-scans 512 samples at 10 Hz (5,120 JavaScript samples/s), while an audio processor
-at 48 kHz normally runs approximately 375 callbacks/s. A gated ring buffer could
-avoid continuous RMS scans, but still adds quantum callbacks and copying. No
-worklet change is included without whole-renderer/audio-process evidence.
-
-## Measurement limits
-
-Callback counters start before process snapshots and stop after the final
-snapshots, so their observation window is slightly wider than the CDP CPU
-interval. Rates reported against that interval are approximate; a zero recurring
-callback count remains exact. `hiddenAndReveal` adds two sampled intervals and
-omits the intervening artifact/inspection gap; it is not continuous end-to-end
-CPU. Renderer-process CPU at 4× includes all renderer threads and the CPU-throttling
-mechanism; its roughly 800–1,000 ms/s in quiet cells is not evidence of browser
-audio cost or battery drain. Page task/script CPU and source-attributed work are
-the acceptance metrics. External transcript delivery targets 20 Hz but can catch up in bursts under
-host load. Browser-local reveal latency avoids Node polling and restoration
-delays; reveal CPU includes fixture scans and all application visibility handlers.
-
-The earlier isolated review found no actionable P0–P2 issues after narrowing
-geometry animation tracking and observing the anchor's border box. The latter
-matches the rectangle mirrored by the proxy and covers stylesheet-driven padding
-shrinkage without an anchor attribute mutation. Final Chromium and WebKit runs
-each passed all 19 overlay cases. UI typecheck, scoped UI lint, and production
-Knip passed. The final production build, strict asset check, scripts typecheck,
-and scoped scripts lint also passed.
-
-## Final overlay assets
-
-Same-host frozen production builds: startup JavaScript 271,312 → 271,570 B gzip
-(+258 B), with five startup requests unchanged. Startup CSS remains 31,981 B
-and one request. Chat boot grows 1,233,436 → 1,234,299 B (+863 B); New Session
-grows 750,062 → 751,016 B (+954 B). The strict checker reports no violations
-or warnings. This small shared-owner cost accompanies the measured 78–87%
-stationary-tooltip CPU reduction in the initial comparison; the final v4 table
-below supersedes that effect size. No audio or transcript owner changes.
-
-## Reveal attribution
-
-A same-head diagnostic (16 observations, four per viewport/rate) verified hidden
-state, all 20 offered caption chunks, and retained transcript-row identity.
-Visibility-to-DOM ranges were 11.6–13.6 ms desktop 1×, 88.7–104.0 ms desktop 4×,
-9.5–15.4 ms mobile 1×, and 98.5–121.0 ms mobile 4×. These small cells diagnose
-the path; they are not tail acceptance samples.
-
-A separate desktop 4× reveal-only profile measured 98.7 ms visibility-to-DOM
-and 135.0 ms to the second browser animation frame. Reveal task/script CPU was
-153.669/131.455 ms. Solid flush accounted for 117.540 ms inclusive, including
-38.69 ms in the parked whole-frame projection and 33.72 ms in `runtime.render`.
-`renderChatPaneLayout` and `renderPaneHeader` contributed 13.78 and 8.10 ms
-inclusive. Nested numbers must not be added. Fixture/evaluation samples were
-2.27 ms. The external profiler's artifact writes inflate its Node wall clock,
-so only browser-local clocks are used here.
-
-Relaxing hidden parking would change lifecycle behavior. A naive shallow
-projection of all ChatProps also eagerly reads its live `stream` getter,
-subscribing hidden panes to each delta. Neither change is accepted; the paired
-results below do not justify changing the hidden-parking contract.
-
-## Final-head reveal calibration
-
-Two serial ten-pair runs: 160/160 observations passed, all natively hidden and
-all retaining their caption row through reveal. Each cell has 20 samples per
-side. One-minute host load ranged 15.77–49.39. Values are median / p95.
-
-| Viewport / comparison |      Unlock play base → head (ms) |     Reveal frame base → head (ms) |      Reveal task base → head (ms) |
-| --------------------- | --------------------------------: | --------------------------------: | --------------------------------: |
-| Desktop / AB          | 280.95 / 324.00 → 297.20 / 368.60 | 122.90 / 151.80 → 127.10 / 149.40 | 132.65 / 161.44 → 137.14 / 161.95 |
-| Desktop / AA          | 294.80 / 737.30 → 284.50 / 732.30 | 125.15 / 144.50 → 126.75 / 147.00 | 134.94 / 155.18 → 136.28 / 157.28 |
-| Mobile / AB           | 262.40 / 353.20 → 269.45 / 297.30 | 118.40 / 142.70 → 125.30 / 142.60 | 129.45 / 153.83 → 134.76 / 154.16 |
-| Mobile / AA           | 279.40 / 367.60 → 276.55 / 359.10 | 120.05 / 159.40 → 124.25 / 135.60 | 130.59 / 168.00 → 135.08 / 146.70 |
-
-| Viewport / comparison | Paired unlock play median | Paired reveal frame median | Paired reveal task median | Paired reveal script median |
-| --------------------- | ------------------------: | -------------------------: | ------------------------: | --------------------------: |
-| Desktop / AB          |                   +18.84% |                     +1.91% |                    +2.38% |                      +4.59% |
-| Desktop / AA          |                    -3.64% |                     +1.69% |                    +2.36% |                      +3.89% |
-| Mobile / AB           |                    -0.34% |                     +0.84% |                    +0.61% |                      +0.08% |
-| Mobile / AA           |                    +4.04% |                     +1.96% |                    +3.08% |                      +1.91% |
-
-The mobile raw reveal-frame median rises 5.8%, while its paired median rises
-0.84% and p95 is unchanged. Reveal task medians remain within 5%; task p95
-changes below 1% are noise under the campaign rule. These isolated desktop play-duration samples fail the band and do not by
-themselves establish unchanged cold latency; the whole-gesture probe below
-rechecks the unlock clip on the same final builds. Remote-stream readiness is a
-separate boundary, measured by the later source-classified probe.
-
-## Playback interval attribution
-
-A separate four-observation, desktop-4× startup profile spans Start through the
-native readiness assertion. Base/head task CPU was 478.95/495.87 ms and script
-CPU 200.29/213.41 ms; unchanged A/A was 531.36/451.19 and 223.96/191.70 ms.
-This tiny traced cell diagnoses the boundary and establishes no effect size.
-The first native play promise lasted 168.8/186.9 ms, while the wider measured
-interval lasted 706.28/611.96 ms. Unchanged A/A showed the same disagreement
-(206.8/276.5 ms versus 680.51/505.90 ms). The browser-local Start-gesture probe
-below separates that partial duration from gesture-to-unlock readiness.
-
-The CPU profile itself extends beyond the bounded CDP metric interval. Its
-raw sampled totals must not be treated as interval CPU percentages.
-
-## Whole-gesture startup check
-
-Twenty serial interleaved A/B and A/A pairs on desktop at 4× completed all
-80/80 observations. This untraced, browser-local probe starts on the actual
-Start pointerdown and ends when the first native `play()` promise resolves.
-It uses the same frozen base-current and head-final builds as final calibration.
-
-| Metric (median / p95)       |        A/B base |        A/B head |       A/A first |      A/A second |
-| --------------------------- | --------------: | --------------: | --------------: | --------------: |
-| Gesture to unlock ready, ms | 288.65 / 439.90 | 281.95 / 335.30 | 268.00 / 368.10 | 294.90 / 335.70 |
-| Native play duration, ms    | 271.90 / 419.20 | 265.40 / 320.20 | 252.00 / 351.50 | 276.35 / 319.70 |
-| Startup task CPU, ms        | 451.76 / 898.94 | 474.32 / 752.55 | 484.79 / 729.25 | 488.67 / 803.11 |
-| Startup script CPU, ms      | 200.83 / 219.00 | 196.91 / 219.69 | 196.05 / 225.25 | 199.74 / 217.23 |
-| Startup style CPU, ms       |   45.21 / 59.49 |   45.98 / 70.48 |   47.91 / 77.05 |   47.79 / 60.42 |
-
-Paired median gesture changes are −2.14% A/B and +8.39% A/A. Paired startup
-task/script CPU changes are +1.14%/−2.26% A/B and −6.10%/+1.90% A/A.
-One-minute host load ranged 15.18–41.02 (median 26.93).
-The style subphase has +5.12% paired median and +18.5% raw p95; this is
-disclosed rather than described as an all-subphase win. Overall task median
-changes +4.99%, with a lower p95; script median improves and its p95 changes
-+0.3%. No audio owner changed. Gesture-to-unlock readiness is inside the
-acceptance band in this population; the earlier isolated play-duration
-regression did not reproduce here. Its exact cause is not established. This
-unlock probe does not establish remote-stream, acoustic, provider, codec, or
-network latency.
-
-## Reproduction
-
-Use Node 26.12.1, `NODE_DISABLE_COMPILE_CACHE=1`, the pinned package installation,
-and two complete production bundles from `pnpm ui:build` (base and candidate).
-The stationary-tooltip acceptance command is:
-
-```sh
-pnpm exec tsx scripts/bench-control-ui-talk.ts \
-  --bundle-dir "$BASE_BUNDLE" --compare-bundle-dir "$HEAD_BUNDLE" \
-  --pairs 20 --duration-ms 3000 --viewport both --cpu-throttle 4 \
-  --states listening,idle --focused-stop --aa --output "$PROOF_DIR"
-```
-
-Use separate one-pair runs with `--counters --first-pair-screenshots` for callback
-counts and pictures, or with `--trace` for source/native attribution. The ordinary
-state selection is `listening,speaking,responding,idle,hidden` at `--cpu-throttle 1,4`.
-Hidden-caption calibration uses `--states hidden-transcribing --external-transcripts
---expect-hidden-parked`. Every recorded browser manifest says `headless: true`.
-
-## Benchmark corrections for steady-state follow-up
-
-The original measurements above used the `neutral-tooltips-v2` workload. Later
-trace inspection found deferred service-worker asset downloads inside some
-ordinary quiet-state windows: page `networkidle` does not observe worker
-requests. The intermediate `network-settled-v3` workload keeps the service worker
-enabled, waits for native worker readiness and 1.5 seconds of context-wide
-network quiet, and rejects a measured window with an in-flight or newly started
-asset GET. Its waiting timers end before CPU sampling. This corrects the
-steady-state workload; it does not reclassify the earlier raw observations.
-
-The optional `--startup-latency` probe records Start pointerdown through the
-first native play readiness using the same browser-local clocks as the completed
-external whole-gesture probe. Its CPU endpoints cover the larger Start sequence.
-The retained external runner and fixture hashes establish source equivalence;
-the original observation manifests remain unchanged.
-
-Publication review: the first attempt ended without an assessment after HTTP
-429 responses (`reviewer_unavailable`). After applying the benchmark corrections,
-a fresh isolated review on the same route completed with no actionable P0–P2
-findings; final source verification passed. The reviewer did not execute the code
-or independently validate the performance measurements.
-
-Before landing, repeat only the focused-tooltip cells with
-`precache-settled-v4`: ten serial interleaved A/B and A/A pairs per desktop/mobile
-viewport at 4×, three-second
-listening/idle windows, with the Stop tooltip focused. Report that confirmation
-separately from v2, and extend to twenty pairs if a cell remains borderline.
-This resolves the discovered network-attribution gap without repeating unrelated
-behavior tests or changing the earlier raw observations.
-
-### Explicit precache completion (v4)
-
-The first v3 canvas campaign stopped at its first contaminated window: 411
-service-worker asset GETs began during desktop A/A pair 2's listening sample.
-The failed run and all preceding rows remain retained; they are not the final
-acceptance campaign. Network quiet can occur while the worker hashes and writes
-cached assets, before the next deferred batch starts.
-
-The v4 benchmark sends the existing version/precache probe with the browser's
-real connection flags, waits for the worker's existing preparation promises via
-its inspector, and verifies the offline shell and every boot/deferred inventory
-URL in its current cache. This changes no production code or worker behavior.
-It then waits for network quiet and retains the strict per-window GET rejection.
-The canvas campaign restarts with the same predeclared sample counts and states;
-the targeted tooltip confirmation also uses v4. No earlier timing table is
-relabeled as v4 evidence.
-
-### Hidden CPU attribution
-
-All eight retained canvas diagnostic hidden traces contain no `MinorGC` or
-`MajorGC` event, and no GC-related phase overlaps their measurement intervals.
-Their sampled JavaScript profiles are over 99.7% idle. At 4×, about 2.3 seconds
-of renderer-main thread CPU accrues between ordinary task slices in each
-three-second window; audio-thread CPU remains about 40 ms. At 1×, renderer-main
-CPU is about 37–50 ms. This is strong evidence consistent with CPU-emulation
-overhead, although no named trace event identifies its exact mechanism. It is
-not evidence of continuous Talk audio or JavaScript work. Later untraced windows
-with heap drops are retained as unexplained spikes, not confirmed GC.
-
-The first readiness-only review hit its 30-minute engine limit without an
-assessment. A longer review on the same route completed with no actionable
-P0–P2 findings and passed final source verification. The separate canvas source
-review also completed cleanly. Neither review independently establishes
-performance acceptance.
-
-### Startup boundary correction
-
-Source inspection identified the first native `play()` call as the short
-gesture-unlock WAV in `GatewaySpeechPlayback.prepare()`. The preceding first-play
-and whole-gesture tables measure that unlock promise, not remote Talk audio
-readiness. The WebRTC stream starts through a later `srcObject` play call. These
-old timings remain recorded, including their adverse tails, but cannot establish
-unchanged remote-stream latency. A source-classified probe will retain both
-boundaries separately before the canvas change is accepted.
-
-The updated probe records every native play call's source kind and outcome,
-without source URLs, and separates the remote-stream promise from the existing
-all-playback readiness wait. It also records startup asset traffic and host load.
-Default startup remains cold and precedes precache completion. An explicit
-`--startup-warm-cache` mode measures a separate cache-settled population; it does
-not relabel or replace cold observations. Steady-state CPU and network windows
-retain the same v4 measurement boundaries.
-
-### Complete v4 canvas comparison at 4×
-
-The production canvas candidate at `2ddbaefcab1` is compared with its own merge
-base `a3151e39a94`; it does not include the separate overlay candidate. Twenty
-serial interleaved A/B and A/A pairs per viewport completed all 800 planned state
-windows. Every window passed the zero-asset-download check, all 160 browser/cache
-identities reconciled, and every hidden endpoint reported native hidden visibility.
-The unchanged A/A controls remain separate; none are subtracted from A/B.
-
-CPU entries below are task ms/s, median / nearest-rank p95. The change column is
-the median of each matched pair's percentage change, rather than a ratio of the
-two marginal medians.
-
-| Viewport / state          |            Base |        Canvas | Paired change | A/A paired change |
-| ------------------------- | --------------: | ------------: | ------------: | ----------------: |
-| Desktop, speaking         |  96.20 / 106.06 | 42.95 / 54.56 |       −56.08% |            +2.29% |
-| Mobile, speaking          | 105.20 / 118.57 | 44.93 / 52.52 |       −57.19% |            −0.65% |
-| Desktop, responding / TTS |   77.16 / 89.14 | 47.02 / 54.29 |       −41.78% |            +0.82% |
-| Mobile, responding / TTS  |   79.72 / 93.20 | 46.23 / 53.79 |       −41.49% |            +0.36% |
-| Desktop, listening        |     1.26 / 1.86 |   1.30 / 1.62 |        +0.90% |            +3.19% |
-| Mobile, listening         |     1.35 / 1.76 |   1.34 / 1.73 |        +2.71% |            +8.23% |
-| Desktop, idle             |     1.46 / 2.05 |   1.56 / 2.05 |        −1.18% |            +9.48% |
-| Mobile, idle              |    1.93 / 33.34 |  2.03 / 22.05 |       −10.31% |           +17.51% |
-| Desktop, hidden           |    0.48 / 93.32 |  0.47 / 46.63 |       −10.03% |           −18.20% |
-| Mobile, hidden            |    0.41 / 95.06 |  0.44 / 40.62 |        −6.90% |           +52.74% |
-
-The canvas trades some JavaScript drawing for much less native frame/style work.
-For example, desktop speaking script CPU is 3.00 → 5.87 ms/s and responding is
-0.42 → 5.03 ms/s; overall task CPU falls by 53.24 and 30.14 ms/s respectively
-when comparing marginal medians. The source-mapped diagnostic and removed style
-updates establish the owner of that saving. This is a main-thread CPU win, not a
-claim that JavaScript execution alone decreased.
-
-Ordinary listening is already near the page-task floor and has no demonstrated
-40% win. The canvas stops settled quiet/hidden painting. All 160 hidden rows have
-zero analyser reads. This acceptance run disables callback instrumentation;
-absence of timer/rAF counter values is not proof of zero callbacks. The separate
-diagnostic supplies those counts. Large hidden spikes also occur in unchanged
-A/A rows; their heap drops alone do not establish GC. Raw process CPU remains
-separately bracketed and is not a battery estimate.
-
-The cold first/unlock-play probe remains adverse: desktop ready median/p95 is
-283.45/352.10 → 301.60/565.80 ms; mobile is 312.75/406.50 → 321.80/530.30 ms.
-Startup task CPU paired medians rise 5.41% and 6.69%. These observations cannot
-be discarded because the active-state win is large. The source-separated probe
-is committed as `a5c58cd9f49`; remote-stream and unlock timing, followed by the
-1× comparison, remain required before accepting the canvas change's latency.
-
-### Final stationary-tooltip confirmation (v4)
-
-Ten serial interleaved A/B and unchanged A/A pairs per viewport completed all
-160 observations and 80 browser/precache identities. All three-second windows
-passed the zero-asset-traffic check. Task CPU improved in every one of the 40
-matched A/B state pairs. This run has no startup-latency instrumentation.
-
-Values are task CPU ms/s, median / nearest-rank p95. Changes are medians of
-matched-pair percentages. The A/A control is reported separately, never subtracted.
-
-| Viewport / state with Stop tooltip |            Base |           Head | Paired change | A/A paired change |
-| ---------------------------------- | --------------: | -------------: | ------------: | ----------------: |
-| Desktop, listening                 | 31.127 / 36.781 |  2.499 / 9.113 |      −92.405% |           −6.703% |
-| Desktop, idle                      | 30.800 / 47.209 |  1.513 / 2.585 |      −95.623% |          −12.061% |
-| Mobile, listening                  | 29.747 / 32.950 | 4.417 / 10.201 |      −85.586% |           +0.255% |
-| Mobile, idle                       | 26.110 / 33.350 |  2.224 / 3.113 |      −92.003% |           +5.580% |
-
-Script CPU paired medians fall 91.2–92.2%; head medians range 0.486–0.568 ms/s.
-The separate diagnostic establishes the removed recurring geometry rAF work;
-this uninstrumented confirmation establishes its CPU effect. These are page-task
-measurements, not audio latency or battery estimates. The unchanged A/A tails
-are noisy, but every A/B pair improves and both candidate p95s fall substantially.
-
-### PR typecheck correction
-
-The first PR run exposed an HTML/SVG union test assignment to readonly
-`className`, plus the narrower core-test ES2023 library declaration reached
-through the new observer import. The test now uses `classList.add`. The existing
-observer owner explicitly references `es2024.collection` for its existing
-`Map.groupBy` calls, as other UI owners already do. Application behavior is
-unchanged. The owner and browser-test files were also formatted with the pinned
-formatter. Final owner/test LOC is 526/395, versus 314/306 at the merge base.
+# Talk performance — round 2 outcome
+
+Round-two starting baseline: `5f71bbf09e6`. The [earlier report at the tooltip merge](https://github.com/openclaw/openclaw/blob/4a97c0a9c637e7ef92cdbcf8183c48293f602e04/report-round2.md) retains the predeclared workload, initial profiles, rejected visual prototypes, provisional cohorts and unlock-probe history. This report records the subsequent accepted comparisons and final disposition; it does not relabel those older measurements.
+
+Round 1 landed [#184003](https://github.com/openclaw/openclaw/pull/184003), [#184132](https://github.com/openclaw/openclaw/pull/184132), and [#184200](https://github.com/openclaw/openclaw/pull/184200). Its reported caption-streaming reductions of 59–71% are prior checkpoint evidence, not new measurements in this report.
+
+Round two landed the tooltip optimization [#184609](https://github.com/openclaw/openclaw/pull/184609), compatible native Base64 conversion [#184879](https://github.com/openclaw/openclaw/pull/184879), and canvas meter [#184961](https://github.com/openclaw/openclaw/pull/184961), merged as `3fb642489fe19a6d5c34644673a0ec9270e72a26`. Their native closeouts are complete. The direct-buffer experiment did not establish a qualifying CPU win and remains unmerged. Final residual profiling is recorded below.
+
+The −40% goal is met in the measured tooltip listening/idle and canvas speaking/4× animated-response cells. These use the WebRTC fixture. It is **not** met for ordinary quiet listening or yet established for native PCM transport. No battery-duration or zero-total-CPU claim is established.
+
+## Results at a glance
+
+| Work                              | Current state                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tooltip geometry                  | [#184609](https://github.com/openclaw/openclaw/pull/184609) merged as `4a97c0a9c637e7ef92cdbcf8183c48293f602e04`; full CI passed; native closeout finished                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Canvas meter                      | Merged [#184961](https://github.com/openclaw/openclaw/pull/184961) as `3fb642489fe19a6d5c34644673a0ec9270e72a26`, reviewed head `248f023fe303` (production source unchanged from measured `925d60b58878`), with `ci:full` and inspected image attached. Prior startup candidates retain adverse results; connecting-markup and tooltip empty-text repairs have clean review; final build, strict assets and Knip pass. The final startup comparison contains 160 browser/precache identities, 160 startup rows and 160 quiet-listening rows: twenty AB pairs and twenty independent A/A pairs per viewport. Eight separate final-source trace observations found no repeated new startup owner requiring a change                                                                                                |
+| Native Base64 + PCM harness       | Compatible encode/decode fast paths and corrected v5 fixture measured at `75712790121`; independent P0–P2 review clean. Three incomplete acceptance attempts retained: 128 and 146 passed samples followed by visibility failures, then 97 passed samples followed by a fixture cancellation failure. Accepted proof totals 200 observations/120 browser identities, including twenty AB pairs and twenty independent A/A pairs for desktop responding. Merged [#184879](https://github.com/openclaw/openclaw/pull/184879) as `e7e2592ba03aa507d7a787523de845fb707d3909`, including the reviewed toolchain-only correction `2be939dee8bc`; emitted fixture JavaScript is identical. Native replacement recovery completed after confirmed auto cancellation; the sole PDF failure matched scheduled main exactly |
+| Additional playback opportunities | Native-only decoder review found unconditional calls break admitted Chrome 135–139; its partial 4× run stopped after 16 completed desktop observations. The combined correction retains existing fallbacks. All 44 unit cases and 108 Chromium/WebKit native/API-absent checks pass; focused UI/script/tooling typechecks, build/strict checks and production Knip pass. Direct AudioBuffer decoding and completion-handler cleanup were measured at `e9b0d3f40255` and rejected: the complete 80-observation comparison showed paired task CPU −4.14% desktop / +2.39% mobile. The commit remains unmerged; no PR was opened                                                                                                                                                                                    |
+
+## Measured steady-state CPU
+
+The predeclared target was −40% task CPU at 4× for ordinary speaking/listening and idle with the tooltip. A clean ≥5% CPU win could land; timing acceptance used median regression ≤5% and no worse p95, with a further ten pairs for a borderline cell. On this noisy shared host, A/A and attributed CPU work governed the final decision; adverse tails remain reported.
+
+All figures are main-thread task **ms/s**, median / nearest-rank p95. CDP `TaskDuration` and `ScriptDuration` use `timeDomain: "threadTicks"`, normalized by the elapsed probe interval; these are not renderer-process total CPU. Change is the median of paired percentages. A/A stays independent; it is not subtracted. The separate PR comparisons are not additive and do not establish one combined percentage reduction.
+
+| State                 | Rate/view  |        Base median / p95; min–max | Candidate median / p95; min–max | Paired change |      A/A |
+| --------------------- | ---------- | --------------------------------: | ------------------------------: | ------------: | -------: |
+| Tooltip listening     | 4× desktop |    31.127 / 36.781; 28.718–36.781 |      2.499 / 9.113; 1.613–9.113 |      −92.405% |  −6.703% |
+| Tooltip idle          | 4× desktop |    30.800 / 47.209; 27.052–47.209 |      1.513 / 2.585; 1.171–2.585 |      −95.623% | −12.061% |
+| Tooltip listening     | 4× mobile  |    29.747 / 32.950; 26.373–32.950 |    4.417 / 10.201; 1.319–10.201 |      −85.586% |  +0.255% |
+| Tooltip idle          | 4× mobile  |    26.110 / 33.350; 22.152–33.350 |      2.224 / 3.113; 1.358–3.113 |      −92.003% |  +5.580% |
+| Speaking              | 4× desktop |  96.195 / 106.059; 85.999–106.645 |  42.954 / 54.560; 36.518–60.461 |      −56.080% |  +2.290% |
+| Speaking              | 4× mobile  | 105.204 / 118.574; 85.295–122.345 |  44.929 / 52.519; 37.140–53.964 |      −57.192% |  −0.647% |
+| Animated response/TTS | 4× desktop |    77.157 / 89.140; 67.906–91.650 |  47.017 / 54.285; 36.274–58.549 |      −41.778% |  +0.823% |
+| Animated response/TTS | 4× mobile  |    79.719 / 93.201; 66.615–93.849 |  46.226 / 53.794; 39.038–73.122 |      −41.486% |  +0.358% |
+| Speaking              | 1× desktop |    27.321 / 31.137; 25.101–31.137 |  14.975 / 18.036; 14.258–18.036 |      −43.422% |  +0.032% |
+| Speaking              | 1× mobile  |    24.483 / 26.153; 23.495–26.153 |  14.014 / 14.778; 12.738–14.778 |      −44.373% |  −4.321% |
+| Animated response/TTS | 1× desktop |    23.146 / 25.877; 19.841–25.877 |  16.649 / 18.741; 13.959–18.741 |      −29.352% |  −4.884% |
+| Animated response/TTS | 1× mobile  |    21.733 / 23.631; 17.363–23.631 |  13.881 / 15.735; 12.509–15.735 |      −36.070% |  −5.773% |
+
+The recorded one-minute host load (minimum / median / p95 / maximum) was 26.965 / 45.856 / 58.785 / 72.739 for the tooltip cohort, 15.571 / 28.598 / 49.351 / 58.650 for canvas 4×, and 18.597 / 28.730 / 37.369 / 51.868 for canvas 1×. These are system load averages, not CPU-utilization percentages; the A/A controls remain separate.
+
+Tooltip proof comprises 160 state observations from 80 browser identities, with ten AB pairs and ten independent A/A pairs per viewport; each browser contributes listening and idle observations. Stationary geometry rAF drops from about 60/s to zero, with no recurring observer delivery. Accepted edges: unannounced pure-scale WAAPI starts or fully clipped movement wait for the next invalidation; observer delivery can trail motion by a frame.
+
+Canvas 4× proof comprises 800 state observations from 160 browser identities, with twenty AB pairs and twenty independent A/A pairs per viewport across five states. The 1× proof comprises 400 state observations from 80 identities, with ten AB pairs and ten independent A/A pairs per viewport across the same five states. These are **reused earlier steady-state cohorts**: subsequent startup repairs keep active rendering math, but have not been remeasured in these cells.
+
+The canvas paints near 30 Hz only while visibly changing. It removes 322–350 speaking style writes per five seconds in a diagnostic; 46–49 level-data writes remain. Active rAF still arrives near display cadence. Desktop 4× script CPU rises (speaking 2.996→5.868 ms/s; responding 0.418→5.030) as larger native frame/style work falls. No repeatable FPS or hardware-wakeup improvement is proven.
+
+A timer-paced alternative was rejected after one instrumented desktop 4× pair. It retained 150 paints and similar frame gaps, but total rAF/timer callbacks rose 301→599, native task count 1,264→1,578, and script CPU 43.470→60.404 ms per five seconds. Task CPU was unchanged (318.835→319.264 ms). Both variants had zero hidden paints/rAF/analyser reads. The experiment did not enter the production candidate.
+
+The separate 16-observation frame/wakeup diagnostic used one AB pair per viewport/rate, without A/A. Native frame callback cadence was 60→60/s in all speaking cells. Desktop 4× and mobile 1× responding changed 55.43→60/s, with frame-gap p95 33.3→16.7 ms; the other responding cells stayed near 60/s. These are callback cadence samples, not physical display presentation or a repeatable FPS win. The fixture installs its own frame sampler: total rAF callbacks include both that sampler and the candidate renderer.
+
+| Diagnostic at 4×, five-second window | Interrupt wakeups, base → canvas | Package-idle wakeups, base → canvas |
+| ------------------------------------ | -------------------------------: | ----------------------------------: |
+| Desktop speaking                     |                  17,061 → 17,101 |                               0 → 0 |
+| Desktop responding                   |                  16,919 → 17,200 |                               0 → 0 |
+| Mobile speaking                      |                  17,550 → 16,534 |                               0 → 0 |
+| Mobile responding                    |                  17,442 → 16,729 |                               0 → 0 |
+
+At 1×, interrupt counts were about 1,200–1,500 per window. The 4× throttling mechanism dominates these totals. No hardware-wakeup or battery improvement is established; the final source-attributed diagnostics below separately report GC.
+
+## Quiet listening, hidden work and reveal
+
+| Surface                  | Completed evidence                                                                                                     | Conclusion                                                                                     |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Quiet desktop 4×         | Earlier twenty-pair task 1.359/1.570→1.365/1.668 ms/s; paired +3.517%, A/A +0.106%                                     | No demonstrated listening win; p95 +6.267%                                                     |
+| Quiet mobile 4×          | Lazy-zero twenty-pair task 1.198/1.469→1.207/1.599 ms/s; paired median +4.958%, A/A +5.680%; script median 0.386→0.368 | Low measured task CPU; p95 +8.85%, target unmet                                                |
+| Hidden mobile 1×         | Dedicated 40-observation confirmation: 0.290/0.724→0.297/0.381 ms/s; paired +2.241%, A/A −6.455%                       | Recorded hidden endpoint; CPU medians fit the band in this cohort, with earlier tails retained |
+| Reveal desktop/mobile 4× | Twenty AB/AA pairs each; paired frame +1.91%/+0.84%; A/A +1.69%/+1.96%; p95 151.8→149.4 / 142.7→142.6 ms               | No attributable reveal regression                                                              |
+
+The quiet/hidden rows use the WebRTC fixture and different frozen candidates (desktop quiet and mobile hidden `36f6f052d9e`, mobile quiet `f30c98429549`); they are not one common-source viewport grid or measurements of native PCM capture. The visible analyser remains at 10 Hz to detect resumed speech, publishing only changed levels. Instrumented native-PCM and timer diagnostics record zero hidden analyser reads and meter animation; the older steady-state CPU cohorts had those counters disabled. A prior mobile hidden tail and a four-rAF sidebar-settlement burst remain documented; “all global idle callbacks are zero” would be false. The 1× hidden confirmation recorded the ending visibility only; it does not independently prove visibility throughout the interval. It overlapped a scoped lint/review preparation, disclosed without excluding observations. The mobile script marginal median decreased, but paired change was +3.115% (A/A +3.592%), so this is not a script-CPU win.
+
+Reveal results cover the historical hidden-transcribing cohorts, not current-head startup or acoustic latency. Raw frame medians were 122.9→127.1 ms desktop and 118.4→125.3 ms mobile. Host load minimum/median/p95/maximum was 15.766/27.546/45.346/49.392.
+
+## Startup tails and acceptance judgment
+
+Remote MediaStream playback is measured separately from the initial disconnected unlock WAV. Readiness includes existing UI polling and synthetic transport. Neither measures acoustic/provider latency.
+
+| Candidate/stage                                                         | Adverse result retained                                                                                                                                                   | Status                                                                                                                          |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Observer-only initialization                                            | Startup script paired +7.914% desktop / +7.614% mobile; A/A +0.519%/+6.533%                                                                                               | Rejected as final proof                                                                                                         |
+| Frozen `36f6f052d9e`, twenty pairs                                      | Mobile remote paired +9.681%, p95 398.3→558.4 ms; readiness +10.027%, p95 466.5→670.1                                                                                     | Failed acceptance                                                                                                               |
+| Lazy-zero `f30c98429549`, original ten                                  | Mobile task +6.175%, script +6.478%; readiness p95 459.5→553.4 ms                                                                                                         | Adverse cohort retained                                                                                                         |
+| Same lazy-zero, combined twenty                                         | Task median +2.523% (A/A +2.300%); script +4.005% (+1.912%). Task p95 +6.516%, script +8.944%, readiness +8.554%                                                          | Medians fit band; tails unresolved                                                                                              |
+| Final `925d60b58878`, first ten AB and ten A/A pairs per viewport       | Startup script paired +2.153% desktop / −5.772% mobile, but task p95 +47.325%/+41.998%; remote-ready p95 706.9→1111.3 / 492.0→910.9 ms                                    | Valid 80-observation run retained in full                                                                                       |
+| Same final source, combined twenty AB and twenty A/A pairs per viewport | Startup script −1.600%/−4.468%; task −3.272%/−8.446%. Remote-ready p95 improves 612.1→531.4 / 476.3→466.2 ms. Observed-readiness p95 remains 672.6→717.3 / 574.5→584.7 ms | Both source/cleanup bindings pass; accepted active-state win under noisy-host CPU/attribution rule, with adverse tails retained |
+
+The earlier lazy-zero mobile candidate `f30c98429549` retained all eighty startup observations across twenty AB and twenty A/A pairs; its remote-promise paired median was +10.962%, despite overall remote resolution +1.030%. These are historical results. For the final-source combined mobile cohort, the corresponding paired medians are −2.481% and −3.366%. Each twenty-observation side uses rank nineteen for p95; interval medians must not be added.
+
+The earlier lazy-zero mobile A/A control also varied sharply: readiness p95 changed −18.877% in the first cohort and +30.537% in the extension, while task p95 changed −16.385% and +14.493%. Its combined A/A task p95 was +0.272%, script −9.629%, and readiness −14.942%. These historical controls are separate from the final-source controls: combined final-source A/A task p95 changes are −31.542% desktop / −30.304% mobile, script +4.809%/−1.970%, and readiness −37.229%/−17.468%. The completed unchanged-source extension and final trace below informed acceptance of the active-state win; adverse startup tails remain disclosed and causally uncertain.
+
+An eight-observation source-mapped diagnostic found a zero-level unready canvas only on candidates and one hover-tooltip open in **all eight** intervals. It identified broad native/DOM, tooltip, module and audio setup work, not a single new canvas owner. A/A task differences were large. This does not waive the failed untraced tails or establish that the canvas caused every delay.
+
+The first final-source cohort completed 18:33:46–18:59:51 UTC on October 26, using 80 browser/precache identities that produced 80 startup rows and 80 quiet-listening rows; native playback assertions and cleanup checks passed. Its task-CPU paired medians are +1.515% desktop and −4.723% mobile; startup CPU here is accumulated milliseconds over Start→readiness, not steady-state ms/s. Readiness paired changes are −0.496%/+7.656%, with p95 791.6→1186.0 / 579.8→1007.5 ms. Desktop remote-play promise time worsens in nine of ten pairs (median 2.65→11.05 ms); mobile unlock/readiness also has systematic adverse samples. A/A tails were noisy, but this first cohort alone did not justify attributing the adverse results solely to noise. Its ten AB pairs and ten independent A/A pairs per viewport are retained unchanged in the completed combined population below.
+
+The mandatory source scans for a remote harness review overlapped this run from 18:44:51.552 to 18:48:01.958 UTC. The scan reported 59,985 files / 688,467,528 bytes; exact per-phase timestamps are unavailable. No build, test, or additional browser ran in that interval. This overlap is recorded, not used to exclude observations.
+
+The unchanged-source extension ran 19:11:06–19:30:17 UTC, with no reported campaign-owned overlap. Its 80 browser identities produced another 80 startup rows and 80 quiet-listening rows, with native playback assertions passing. Its temporary host display-sleep assertion was released after completion. Together, the two cohorts retain 160 distinct browser identities, 160 startup rows and 160 quiet-listening rows, with twenty AB pairs and twenty independent A/A pairs per viewport. Desktop remote-play promise has a +18.420% paired median (raw median 3.95→11.65 ms; p95 48.7→61.1 ms), while unlock-resolution→remote-invocation has +58.049% desktop / +24.033% mobile paired medians. The unlock WAV and WebRTC start are independent branches: the larger derived gap is not added serial work. Second-cohort desktop unlock resolves 12.1 ms earlier while remote invocation is only 5.9 ms later (+1.80%); actual remote and observed readiness improve. Final-head quiet task medians are 1.190→1.264 ms/s desktop and 1.265→1.289 mobile; paired changes +3.413%/+8.673%, against independent A/A −4.003%/+8.643%. No new quiet-listening win is claimed.
+
+A final-source, headless, eight-observation desktop trace ran 19:35:05–19:37:14 UTC. Style recalculation counts fall 32→31 and 35→33, and layout counts are 24→23 and 26→26; all eight rows start exactly seven connecting animations. The larger candidate gaps contain existing tooltip/popover and native frame work, with no meter execution. Candidate style CPU rises 4.476/0.311 ms in the two AB pairs; layout changes −1.322/+1.674 ms. These increases and traced AB script/task increases (+45.136/+23.834 ms script; +87.846/+20.603 ms task) are retained. The two traced pairs are diagnostic, not a replacement acceptance sample. A/A directly records a 421.805 ms wall/324.383 ms thread `AudioOutputDevice::GetOutputDeviceInfo` stall. These nested native times are not additive, and do not explain every tail. Considering the twenty-pair CPU improvement, independent A/A, and absence of a repeated added layout or new startup owner, the active-state win is accepted with the startup tails disclosed. This is not an all-latency-metrics-clean claim.
+
+## Native PCM and remaining owners
+
+The historical pre-fast-path instrumented native-PCM grid has twenty observations, 593 input frames, 199 native output starts and four successful Stop cleanups. Input is 4,096 samples/24 kHz/8,192 bytes; output is 2,400 samples/24 kHz, with native starts and natural completions. PCM responding keeps the UI listening and is distinct from animated WebRTC response/TTS above.
+
+At 4× the largest named capture self-cost is manual Base64 (4.76–16.95 ms per five-second cell). Input callback inclusive cost is 17.45–30.34 ms; output play inclusive 13.03–14.43 ms. These profile costs overlap and are not additive CPU totals. Native PCM hidden task CPU was 14.04–14.30 ms per five seconds at 1× and 57.19–183.58 ms at 4×. Hidden still delivers required capture/protocol traffic; generic program/GC frames cannot be labeled wholly browser-owned.
+
+Historical native Chromium/WebKit checks each pass six encoding fixtures on unchanged helper bytes. The fresh frozen Base64 pair is source-map/file-hash verified. Its first declared 400-observation AB/AA run stopped after 128 passed samples and one candidate idle sample with unexpected hidden visibility. PCM delivery continued, but the observation is invalid; the incomplete run remains retained. A second unchanged-grid attempt stopped after 146 passed rows and one baseline speaking row becoming hidden. No mobile cohort completed in either attempt. The retry failure ended at 16:21:02 UTC, just after a macOS display-off event at 16:20:55 UTC; both failed intervals align with macOS display-off events (15:48:02 and 16:20:55 UTC). A separate native headless probe with a temporary display-sleep assertion verified minimize→hidden, restore→visible, 40 seconds of stable visibility, and assertion cleanup. A third full comparison used this temporary host control without weakening visibility assertions. It stopped after 97 passed rows when an unchanged-base A/A responding setup timed out waiting for the microphone level to reach zero. Its failure screenshot shows Talk had stopped with “Realtime output cancellation was not accepted.” The benchmark advertises barge-in support but omits the required `talk.session.cancelOutput` acknowledgement; the default empty response fails the production contract. The cancellation trigger was not recorded, so residual microphone audio remains a hypothesis. The display assertion was held and cleaned up, but failure-time visibility was not recorded. This is an incomplete fixture, not an accepted performance result. Those fixture gaps were corrected with a faithful cancellation handler and verified-silent transition before synthetic playback. The corrected v5 fixture subsequently completed the first 160-observation comparison; the failures above remain preserved.
+
+The independent decoder review found an admitted-browser regression: Chrome 135 added the invoker commands checked by the current browser gate, while native Base64 conversion arrived in Chrome 140. Both conversions now feature-detect the native API and retain their original fallback. Chrome release notes for [135](https://developer.chrome.com/release-notes/135) and [140](https://developer.chrome.com/release-notes/140) confirm this boundary. The abandoned native-only decoder run stopped at 16:50:29 UTC after 16 completed desktop observations; browsers, temporary display assertion and servers were verified stopped. Those rows cannot validate the corrected combined helper. The current compatible helper passes 44 unit cases and 108 native/API-absent browser checks, plus independent review; its first complete CPU comparison and targeted tail extension are reported below.
+
+The compatible Base64 comparison completed 160 valid observations/80 browser identities, with every observed microphone callback delivered in order to the synthetic WebSocket request handler and all Stop cleanups verified. These are local mock transport receipts, not real server/provider acceptance or acoustic latency. The misleadingly named `endpointAppendCount` counts receipts arriving after the observation window; zero does not mean zero delivered frames. Two receipts across 200 observations arrived 3.5 ms after their windows (4.9 and 5.6 ms after their callbacks); both were retained and paired, with no lost input frame. One belongs to the initial AB mobile responding cell and one to the extension AA desktop responding cell.
+
+| Native PCM, 4×                | Task base → candidate median / p95 ms/s | Paired task | Script base → candidate median / p95 ms/s | Paired script |
+| ----------------------------- | --------------------------------------: | ----------: | ----------------------------------------: | ------------: |
+| Desktop speaking              |       119.899/151.580 → 115.825/144.584 |     −4.922% |               10.832/14.042 → 7.055/8.279 |      −37.012% |
+| Desktop responding (20 pairs) |           24.354/28.139 → 20.122/24.272 |     −15.07% |             18.531/20.730 → 14.487/17.738 |       −24.38% |
+| Mobile speaking               |       114.827/130.595 → 113.135/122.744 |     −0.295% |               10.727/12.523 → 6.783/8.413 |      −38.668% |
+| Mobile responding             |           26.607/29.830 → 18.621/25.850 |    −27.037% |             18.928/20.404 → 14.074/15.626 |      −24.664% |
+
+These are ten AB and ten independent AA pairs per cell, except desktop responding with twenty of each after its targeted extension. The original ten desktop responding pairs had task p95 +9.17%. The approved additional ten AB/AA pairs of **only that cell** completed, preserving all original rows; combined task p95 improves 13.74%, script p95 improves 14.43%. The extension adds 40 valid observations/40 browser identities, for 200 observations and 120 identities total. It ran 18:03:00–18:14:57 UTC and released its owned display-sleep assertion at completion; one-minute host load minimum/median/p95/maximum was 28.411/34.883/40.769/47.199. Combined desktop responding AA paired task is −2.98%, script −2.41%; mobile speaking AA script is +5.808%, so host noise is material. The original complete cohort ran 17:23:58–17:59:07 UTC on October 26, with one-minute load 42.263 at start and 40.341 at finish. No coordinated task-owned browser/build workload overlapped its measured interval. Across all 160 observations, one-minute host load minimum/median/p95/maximum was 23.282/37.652/53.788/56.984; the start/end numbers are launcher endpoints only.
+
+This native PCM cohort covers 4× speaking/responding only; it does not establish final 1× PCM, final quiet/hidden PCM, or visible continuous-transcription CPU. The earlier round-one caption-streaming wins are separate evidence, and hidden-transcribing reveal is not a visible-stream CPU measurement.
+
+Microphone callback→mock append median falls from 1.20–1.50 to 0.45–0.80 ms across the four cells; the aggregate distributions of observation p95s also improve. Output event→schedule medians remain around 0.8–0.9 ms with lower p95s. Scheduled lead varies by 1.333/2.667 ms audio quanta, including a mobile per-observation-p95 median of 0→1.333 ms. Zero-based percentage changes are not meaningful. This supports lower local conversion/delivery cost, not identical acoustic or provider latency. The twenty-pair desktop playback result satisfies tail acceptance. Its tiny style p95 rises 0.4022→0.4316 ms/s, alongside A/A 0.4806→0.5329; the style owner is unchanged and total task p95 improves.
+
+The PCM-output candidate removes the temporary float allocation/copy when decoding PCM16 into an AudioBuffer and replaces per-chunk abortable completion listeners with queue-owned handlers. At 24 kHz mono it avoids 96 kB/s of temporary floats. An initial direct-buffer-only review timed out at 900 seconds without a verdict; the combined candidate has since passed a complete independent P0–P2 review. The combined patch was integrated with the landed native helper as `e9b0d3f40255`. Focused checks and independent review pass, but the complete headless 80-observation comparison did not meet its predeclared ≥5% clean-win rule: paired task CPU is −4.14% desktop / +2.39% mobile, against A/A +5.51%/+1.63%; paired script CPU is −3.79%/−0.32%. All 80 behavior and cleanup contracts passed. The experiment remains unmerged and will not be extended to chase a win. Production LOC is 309→310 including the narrow completion-handler lint comments, audio tests 317→341, and suppression inventory +2 lines. Old direct-buffer-only checks and −43 B startup measurement are historical, not proof of this combined candidate. Removing the copy has no demonstrated qualifying CPU gain; this does not prove that all remaining page-code work is unreachable. Final residual attribution follows on the accepted code.
+
+The rejected direct-buffer run completed 20:03:52.549–20:27:17.332 UTC (23m24.78s), with no heavy lane-owned overlap. One-minute host load was median 28.02, p95 42.02, range 16.81–47.37. Its 80 windows retain the same median 29 input frames, 49 output frames and 48 natural completions; all source/build, visibility, ordering and Stop gates pass.
+
+| Rejected PCM output, 4× | Base task median / p95 ms/s | Candidate task median / p95 ms/s | Paired task | Paired script | A/A task |
+| ----------------------- | --------------------------: | -------------------------------: | ----------: | ------------: | -------: |
+| Desktop responding      |             20.140 / 21.798 |                  19.936 / 21.054 |      −4.14% |        −3.79% |   +5.51% |
+| Mobile responding       |             18.896 / 22.930 |                  18.879 / 21.052 |      +2.39% |        −0.32% |   +1.63% |
+
+Output event→schedule paired medians improve 14.29% desktop and 7.14% mobile. Mobile input callback→append paired median worsens 6.97% (A/A +6.25%), despite its aggregate median falling 0.8→0.7 ms; its per-window-p95 outer p95 rises 1.8→2.1 ms. These subphase results do not rescue the failed primary CPU criterion. The experiment's 96 kB/s allocation removal is structural, with no measured GC or battery claim. All audio tests (16), suppression inventory tests (14), UI and UI-chat test types, lint/format and production Knip pass. Its startup gzip is 271,110→271,037 B with unchanged raw/Brotli sizes and request counts; the small compression change is not claimed as a meaningful win.
+
+## CI and landing history
+
+The Base64 PR's first CI run passed both real-Gateway shards and performance checks but found two harness issues: an overbroad Playwright type cast and an outdated lint-suppression inventory. Their reviewed correction `2be939dee8bc` leaves emitted fixture JavaScript byte-identical. An unrelated main test type error reproduced identically on the exact CI main parent. Replacement run `40383910396` passed the repaired checks and failed only `Session file PDFs > previews linked PDFs above and below the inline cap and downloads fresh bytes`, with the same remote-download error as completed scheduled-main run `40380874869`. Exact-name comparison supported native inherited-failure replacement recovery; the confirmed-cancelled auto request was not re-armed. Merge `e7e2592ba03aa507d7a787523de845fb707d3909` is verified on `origin/main`, and native closeout completed.
+
+Canvas run `40389330637` passed its UI suites and performance check but found new test type errors plus two partial mocks that discarded real exports. Both are ours and are repaired in `d14d85573a42` and `248f023fe303`. The exact UI-chat type leaf and 146 affected tests passed for the type correction; the subsequent export-preserving correction passed both meter suites (8 tests), the mock-export gate, type leaf and lint/format. Both corrections have clean independent P0–P2 reviews. Production files, inspected captures and measured bundles are unchanged. Exact-head full CI `40396737452` then completed with 14 pre-existing picker failures: 11 attachment-menu names and three media-picker names still use old labels after main #184780 changed them. All 11 attachment names and exact errors also fail on scheduled-main run `40396808555`, job `121832213275`. The media-picker file reproduced all three names and selector errors on clean main `f1bf17df378a0bf28f916386351b862f158e0416` (3 failed / 3, 49.40 seconds; local timeout 10 seconds versus CI 30). The newer main 1/7 shard did not run that file; its passing status is not passing-name evidence. Relevant test/support/caller/catalog blobs match the actual tested merge `1b72019dc0938c5138b1053e587ff45638a410d4`. Both real-Gateway shards, all three UI-unit shards, types, lint, ratchets, i18n, performance and the other five UI E2E shards passed. The PR body lists every failing name. Native confirmed-cancelled replacement recovery landed the reviewed head as `3fb642489fe19a6d5c34644673a0ec9270e72a26`; the failed CI was not relabeled green. Main advanced during admission; native verification checked the actual landed parent. The merge is verified on `origin/main`, and native closeout completed.
+
+## Proof, size and closeout
+
+| Change                          | Checks / bytes / LOC                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Landed tooltip                  | Full CI `40327147240` passed on `5b7ad0b37df`. Startup 271,312→271,570 B gzip; CSS 31,981 B/one request. Owner LOC 314→526; tests 306→395                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Final frozen canvas             | Measured production head `925d60b58878` and current reviewed PR head `248f023fe303` have unchanged production source; focused tests, UI typecheck, scoped lint/format, build/strict assets and production Knip pass. Startup 270,997→271,043 B gzip (+46 B), raw 839,954→839,978; five JS requests; CSS 31,981 B/one request. Production LOC 3,947→4,269 (+322), tests 4,724→5,204 (+480), including the test-only CI repairs. The measured-source twenty-AB/twenty-A/A startup comparison and separate eight-observation attribution are complete; the current PR head additionally contains the test-only CI repairs |
+| Compatible Base64 + PCM harness | Final incremental P0–P2 review clean; narrow checks/production Knip passed. CI repair's fixture tests (2), lint inventory (14), exact scripts typecheck, scoped lint/format and full-context review pass; emitted fixture JS is unchanged. Frozen fixed-metadata build 271,007→271,016 B gzip (+9 B); five JS requests/CSS unchanged. Helper 17→25 LOC; helper tests 12→73; runner 1,735→2,014; fixture 737→1,031; fixture tests 18→134; README 454→496; suppression inventory 372→372. Total 3,345→4,145 (+800), mostly proof harness                                                                                 |
+| Visual proof                    | Seventy-two earlier meter frames and thirty-two lazy-zero crops plus four overviews inspected; overlay captures embedded in its merged PR. [Canvas comparison](https://github.com/user-attachments/assets/c15bc282-aa0c-435d-bfcb-a7997ebebd5a) re-inspected and attached to #184961                                                                                                                                                                                                                                                                                                                                   |
+| Measurement window / leases     | Started 2026-10-25 23:21:29 PDT; final residual proof completed October 26 at about 14:12 PDT, approximately 14 h 51 min later. Native report publication follows. No cloud leases acquired or held; active lane checkouts retained                                                                                                                                                                                                                                                                                                                                                                                    |
+
+All browser work is headless. Desktop 1440×1000, mobile 390×844. Steady-state acceptance waits for full service-worker precache and rejects in-window asset traffic. A/A and host-load evidence remain separate; no row is removed to improve the result. Diagnostic instrumentation, GC and wakeups are disclosed and do not establish battery savings.
+
+## Final residual attribution
+
+The final source is the landed canvas merge `3fb642489fe19a6d5c34644673a0ec9270e72a26`. A clean checkout was installed and built once; before/after receipts bind the Git revision, tree, source hashes and all 5,940 emitted files. Both headless runs use that same bundle. The corrected reader validates ten of ten declared observations, four browser/precache identities, exact runner/fixture hashes, clipped CPU/profile intervals, zero sampled asset traffic and both native PCM Stop cleanups. This is one five-second sample per cell at 4×, with tracing/counters enabled, not an effect-size comparison or A/A acceptance run.
+
+| Transport / viewport / state | Task / script CPU ms/s | Main-thread trace GC count / wall ms | Wider-window interval / timeout / rAF / analyser totals |
+| ---------------------------- | ---------------------: | -----------------------------------: | ------------------------------------------------------: |
+| WebRTC / desktop / listening |          2.168 / 0.597 |                            0 / 0.000 |                                         51 / 1 / 0 / 50 |
+| WebRTC / mobile / listening  |          1.879 / 0.375 |                            0 / 0.000 |                                         51 / 1 / 0 / 50 |
+| PCM / desktop / listening    |         13.370 / 4.271 |                           2 / 18.678 |                                        51 / 31 / 0 / 50 |
+| PCM / desktop / speaking     |        73.854 / 12.751 |                            0 / 0.000 |                                      51 / 31 / 285 / 50 |
+| PCM / desktop / responding   |        35.513 / 20.689 |                           5 / 28.579 |                                        52 / 81 / 0 / 50 |
+| PCM / desktop / hidden       |         32.881 / 4.485 |                           2 / 11.019 |                                          1 / 30 / 0 / 0 |
+| PCM / mobile / listening     |         12.458 / 4.495 |                           2 / 14.492 |                                        51 / 31 / 0 / 50 |
+| PCM / mobile / speaking      |        71.860 / 12.696 |                            0 / 0.000 |                                      51 / 30 / 296 / 50 |
+| PCM / mobile / responding    |        41.863 / 22.394 |                           9 / 45.153 |                                        52 / 81 / 4 / 50 |
+| PCM / mobile / hidden        |          6.477 / 4.252 |                            1 / 2.235 |                                          1 / 30 / 0 / 0 |
+
+The CPU columns use their recorded metric interval. Callback counters start before process/CPU sampling and stop afterward; their exact wider duration is not recorded, so the last column contains totals, not callbacks per CPU second. Process CPU also brackets a wider window. Host one-minute load ranged 32.180–40.502; these are system load averages, not utilization percentages. The renderer-process CPU includes other threads and is not substituted for main-thread task CPU.
+
+Quiet WebRTC has no rAF, meter style/data writes, or observer callbacks in either sample. Its mapped meter inclusive sampled wall time is 0.023 ms desktop / 0.038 ms mobile per sample. Mobile also includes 0.963 ms sampled self time in the existing question refresh owner. Those sparse samples cannot prove a zero-cost meter or an allocating owner. The visible analyser still samples at 10 Hz; reducing its frequency would change the resumed-speech feedback contract.
+
+Both hidden PCM observations record `visibilityState === "hidden"` and zero analyser, rAF, meter writes and observer callbacks. Each still delivers 29 input blocks of 4,096 samples at 24 kHz, in order, with no missing receipt. The runner verifies hidden visibility before sampling and records the endpoint; it does not persist continuous visibility history. The remaining one interval and 30 timeouts are compatible with the existing liveness and per-append settlement owners; their counts alone do not identify every callback. Both responding samples deliver 49 native output starts and record 48 natural completions, and both browsers close contexts/end tracks with no post-Stop owned callbacks.
+
+The native PCM output queue has 3.251/3.521 ms sampled self time and 9.975/10.797 ms inclusive wall time in the desktop/mobile responding samples. The direct-buffer restructuring already failed its controlled acceptance comparison, so these samples do not reopen that experiment. Explicit native audio-thread render callbacks are present in every state; they are separate from main-thread work. Generic program and GC samples do not establish that all remaining cost belongs to browser internals, and their durations cannot be added to threadTicks CPU. In particular, the large desktop hidden sampled GC attribution is not a measured allocation cause or a repeatable regression.
+
+The responding profiles also contain shared chat-pane/media/getter work beneath deferred Solid flushes, including late samples near the end of both windows. A source audit finds no status, transcript or shared-snapshot publication in the per-audio-event playback path; unrelated gateway events execute an unchanged chat batch. The asynchronous flush stack does not identify its invalidating origin. Calling this work startup-only or attributing it directly to each PCM packet would be unsupported. No additional safe optimization is established by these single samples.
+
+The defensible closeout is narrower than “all remaining work is browser-owned”: the measured visual/tooltip waste is removed, quiet listening retains a small bounded page-code floor, native PCM retains required capture/protocol/playback work, and the additional measured output restructuring did not qualify. The −40% goal is met for ordinary WebRTC speaking and 4× animated response, and for tooltip listening/idle. It remains unmet for ordinary quiet listening and is not established for native PCM as a whole. No battery-duration, zero-total-CPU, acoustic/provider-latency or universal FPS claim is made.
+
+Detailed evidence names below refer to retained local artifacts under the round-two proof directory, not additional committed files. Public visual proof and the historical report are linked above. Evidence: `report-round2-proposed.md`; `overlay-v4-completed-analysis/summary.md`; `canvas-v4-completed-analysis/summary.md`; `canvas-observer-1x-completed-analysis/summary.md`; `canvas-lazy-startup-mobile-20-pair-analysis/confirmation-note.md`; `canvas-lazy-startup-trace-completed-analysis/summary.md`; `canvas-connecting-mobile-hidden-completed-analysis/summary.md`; `frames-wakeups-completed-analysis/summary.md`; `pcm-native-grid-completed-analysis/summary.md`; `remaining-cost-audit.md`; `base64-native-candidate/{pr-body-draft.md,acceptance-v5-final-summary.json,acceptance-v5-desktop-responding-combined.json,v5-committed-preflight.json,v5-frozen-final/source-before.json,v5-frozen-final/source-after.json}`. Final evidence additionally includes `final-residual/{source-before.json,source-after.json,build.log,analysis/summary.json,analysis/summary.md}`, `canvas-ci-attribution/admin-evidence-248f.json` and `direct-buffer-candidate/native-helper-outcome.md`. Raw, failed and superseded cohorts are retained.
