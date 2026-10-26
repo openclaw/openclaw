@@ -77,6 +77,12 @@ const assistantRecording: readonly AssistantMessageEvent[] = [
   { type: "done", reason: "toolUse", message: recordedAssistant },
 ];
 
+function recordedEvent<T>(recording: readonly T[], index: number): T {
+  const event = recording[index % recording.length];
+  assert(event !== undefined, "recorded fixture must contain an event at every index");
+  return event;
+}
+
 function replay<T>(count: number, value: T, recording?: readonly T[]): AsyncIterable<T> {
   return {
     [Symbol.asyncIterator]() {
@@ -86,7 +92,7 @@ function replay<T>(count: number, value: T, recording?: readonly T[]): AsyncIter
           if (index >= count) {
             return Promise.resolve({ done: true as const, value: undefined });
           }
-          const event = recording ? recording[index % recording.length] : value;
+          const event = recording ? recordedEvent(recording, index) : value;
           index++;
           return Promise.resolve({ done: false as const, value: event });
         },
