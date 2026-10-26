@@ -103,10 +103,9 @@ it("backs up legacy widgets, retires A2UI, and preserves other retired renderers
         expect(backup.prepare("SELECT * FROM board_widgets ORDER BY name").all()).toEqual(original);
 
         using repaired = new DatabaseSync(databasePath, { readOnly: true });
+        const query = sessionSqlFixture(repaired);
         expect(
-          repaired
-            .prepare("SELECT * FROM board_widgets WHERE name NOT LIKE 'converted%' ORDER BY name")
-            .all(),
+          query`SELECT * FROM board_widgets WHERE name NOT LIKE 'converted%' ORDER BY name`.all(),
         ).toEqual(
           original.filter(
             (row) =>
@@ -114,11 +113,7 @@ it("backs up legacy widgets, retires A2UI, and preserves other retired renderers
           ),
         );
         expect(
-          repaired
-            .prepare(
-              "SELECT content_kind, descriptor_json, grant_state, granted_sha, revision FROM board_widgets WHERE name = 'converted'",
-            )
-            .get(),
+          query`SELECT content_kind, descriptor_json, grant_state, granted_sha, revision FROM board_widgets WHERE name = 'converted'`.get(),
         ).toEqual({
           content_kind: "html",
           descriptor_json: null,
@@ -129,15 +124,14 @@ it("backs up legacy widgets, retires A2UI, and preserves other retired renderers
         expect(
           JSON.parse(
             String(
-              repaired.prepare("SELECT manifest FROM board_widgets WHERE name = 'converted'").get()
-                ?.manifest,
+              query`SELECT manifest FROM board_widgets WHERE name = 'converted'`.get()?.manifest,
             ),
           ),
         ).toMatchObject({
           contentOwner: "html",
           nameIdentity: registeredManifest.nameIdentity,
         });
-        expect(repaired.prepare("SELECT title FROM board_tabs").get()?.title).toBe("Main");
+        expect(query`SELECT title FROM board_tabs`.get()?.title).toBe("Main");
         expect(await retireDoctorA2uiWidgets({ cfg: {}, env: state.env })).toMatchObject({
           changes: [],
           warnings: [],

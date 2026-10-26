@@ -1,4 +1,3 @@
-// Sessions default-agent store tests cover default session-store selection and runtime config loading.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
@@ -7,9 +6,10 @@ import { createTestRuntime } from "./test-runtime-config-helpers.js";
 const loadConfigMock = vi.hoisted(() => vi.fn());
 
 const resolveStorePathMock = vi.hoisted(() =>
-  vi.fn((_store: string | undefined, opts?: { agentId?: string }) => {
-    return `/tmp/sessions-${opts?.agentId ?? "missing"}.json`;
-  }),
+  vi.fn(
+    (_store: string | undefined, opts?: { agentId?: string }) =>
+      `/tmp/sessions-${opts?.agentId ?? "missing"}.json`,
+  ),
 );
 const listSessionEntriesMock = vi.hoisted(() =>
   vi.fn<() => Array<{ sessionKey: string; entry: Record<string, unknown> }>>(() => []),
@@ -85,10 +85,6 @@ describe("sessionsCommand default store agent selection", () => {
     vi.clearAllMocks();
     runtime = createTestRuntime();
     loadConfigMock.mockImplementation(() => createSessionsConfig());
-    resolveStorePathMock.mockImplementation(
-      (_store: string | undefined, opts?: { agentId?: string }) =>
-        `/tmp/sessions-${opts?.agentId ?? "missing"}.json`,
-    );
     listSessionEntriesMock.mockImplementation(() => []);
   });
 
@@ -172,16 +168,13 @@ describe("sessionsCommand default store agent selection", () => {
 
     await sessionsCommand({ allAgents: true }, runtime);
 
-    expect(listSessionEntriesMock).toHaveBeenNthCalledWith(1, {
-      agentId: "main",
-      storePath: "/tmp/sessions-main.json",
-      projection: "list",
-    });
-    expect(listSessionEntriesMock).toHaveBeenNthCalledWith(2, {
-      agentId: "voice",
-      storePath: "/tmp/sessions-voice.json",
-      projection: "list",
-    });
+    for (const [index, agentId] of ["main", "voice"].entries()) {
+      expect(listSessionEntriesMock).toHaveBeenNthCalledWith(index + 1, {
+        agentId,
+        storePath: `/tmp/sessions-${agentId}.json`,
+        projection: "list",
+      });
+    }
     expect(runtime.log.mock.calls[0]?.[0]).toContain("Session stores: 2 (main, voice)");
     expect(runtime.log.mock.calls[2]?.[0]).toContain("Agent");
   });
