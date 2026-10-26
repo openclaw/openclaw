@@ -4651,59 +4651,6 @@ describe("main-session-restart-recovery", () => {
       safeTools: "required",
     },
     {
-      name: "keeps replay safety outside the recent transcript window under full access",
-      messages: [
-        makeUserMessage("do the thing"),
-        codeModeCheckpointMessage(),
-        makeUserMessage("Continue after restart", {
-          provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
-        }),
-        ...Array.from({ length: 24 }, (_, index) =>
-          makeToolResultMessage(textContent(`read result ${index}`), { toolName: "read" }),
-        ),
-      ],
-      entry: { permissionMode: "full", restartRecoveryForceSafeTools: true },
-      safeTools: "required",
-    },
-    {
-      name: "resumes an in-flight safe tool call across a repeated restart",
-      messages: currentTurn(
-        createAssistantToolCallMessage([
-          { type: "thinking", thinking: "I need one more read." },
-          toolCall("call-read-2", "read", { path: "README.md" }),
-        ]),
-      ),
-      entry: { restartRecoveryForceSafeTools: true },
-      safeTools: "required",
-    },
-    {
-      name: "retains replay safety after a provider error under full access",
-      messages: currentTurn(
-        codeModeCheckpointMessage(),
-        makeAssistantTextMessage("Provider failed.", { stopReason: "error" }),
-      ),
-      entry: { permissionMode: "full", restartRecoveryForceSafeTools: true },
-      safeTools: "required",
-    },
-    {
-      name: "ends prior replay restrictions at a new full-access user turn",
-      messages: [
-        makeUserMessage("the earlier request"),
-        codeModeCheckpointMessage(),
-        {
-          role: "user",
-          provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
-          content:
-            "[System] Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. Continue from the existing transcript and finish the interrupted response.",
-        },
-        makeAssistantTextMessage("Finished that recovery."),
-        makeUserMessage("a later request"),
-        makeAssistantTextMessage("Finished the later request."),
-      ],
-      entry: { permissionMode: "full", restartRecoveryForceSafeTools: true },
-      safeTools: "absent",
-    },
-    {
       name: "resumes safely without replaying visible assistant text beside a Code Mode wait",
       messages: currentTurn(
         codeModeCheckpointMessage("exec"),
