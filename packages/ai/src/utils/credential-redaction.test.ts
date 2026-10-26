@@ -53,17 +53,11 @@ describe("diagnostic descriptor snapshots", () => {
       enumerable: true,
       get: getter,
     });
-    expect(
-      projectPrepared(
-        { outer: "kept" },
-        {
-          omitField: () => {
-            expect(project(foreign)).toEqual({ safe: "kept" });
-            return false;
-          },
-        },
-      ),
-    ).toEqual({ outer: "kept" });
+    const omitField = () => {
+      expect(project(foreign)).toEqual({ safe: "kept" });
+      return false;
+    };
+    expect(projectPrepared({ outer: "kept" }, { omitField })).toEqual({ outer: "kept" });
     expect(getter).not.toHaveBeenCalled();
   });
 

@@ -10,15 +10,13 @@ function createStream(
   next: () => Promise<IteratorResult<unknown>> = () => new Promise(() => {}),
 ): AsyncIterable<unknown> {
   return {
-    [Symbol.asyncIterator]() {
-      return {
-        next,
-        async return() {
-          onReturn();
-          return { done: true, value: undefined };
-        },
-      };
-    },
+    [Symbol.asyncIterator]: () => ({
+      next,
+      async return() {
+        onReturn();
+        return { done: true, value: undefined };
+      },
+    }),
   };
 }
 
@@ -34,7 +32,7 @@ describe("withFirstStreamEventTimeout", () => {
     const onReturn = vi.fn();
     const abort = vi.fn();
     const onTimeout = vi.fn();
-    const stream = withFirstStreamEventTimeout(createStream(onReturn), {
+    const iterator = withFirstStreamEventTimeout(createStream(onReturn), {
       provider: "local",
       api: "openai-completions",
       model: "test-model",
@@ -42,20 +40,17 @@ describe("withFirstStreamEventTimeout", () => {
       stage: "completions",
       abort,
       onTimeout,
-    });
-    const next = stream[Symbol.asyncIterator]()
-      .next()
-      .catch((error: unknown) => error);
+    })[Symbol.asyncIterator]();
+    const next = iterator.next().catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(5);
     const error = await next;
     expect(error).toBeInstanceOf(Error);
-    expect(error).toHaveProperty("name", "FirstStreamEventTimeoutError");
-    expect(error).toHaveProperty(
-      "message",
-      expect.stringMatching(
+    expect(error).toMatchObject({
+      name: "FirstStreamEventTimeoutError",
+      message: expect.stringMatching(
         /completions HTTP stream opened but did not deliver a first SSE event within 5ms after streaming headers \(first-event timeout\)/,
       ),
-    );
+    });
     expect(onTimeout).toHaveBeenCalledWith(error);
     expect(abort).toHaveBeenCalledWith(error);
     expect(onReturn).toHaveBeenCalledTimes(1);
@@ -71,10 +66,10 @@ describe("withFirstStreamEventTimeout", () => {
   });
 
   it("clamps oversized first-event timeouts before scheduling", async () => {
-    const stream = withFirstStreamEventTimeout(createStream(), {
+    const iterator = withFirstStreamEventTimeout(createStream(), {
       timeoutMs: Number.MAX_SAFE_INTEGER,
-    });
-    const next = expect(stream[Symbol.asyncIterator]().next()).rejects.toThrow(
+    })[Symbol.asyncIterator]();
+    const next = expect(iterator.next()).rejects.toThrow(
       new RegExp(`within ${MAX_TIMER_TIMEOUT_MS}ms`),
     );
     await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
