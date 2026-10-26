@@ -111,7 +111,7 @@ beforeAll(async () => {
 });
 afterAll(async () => await state?.cleanup());
 it("prepares tools without enumerating unrelated attempt state", async () => {
-  const enumerate = vi.fn(Reflect.ownKeys);
+  const enumerate = vi.fn((target: EmbeddedRunAttemptInternalParams) => Reflect.ownKeys(target));
   codingTools.mockReturnValue([createStubTool("read")]);
   await using fixture = await createFixture(
     {},
