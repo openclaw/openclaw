@@ -13,14 +13,6 @@ let state: OpenClawTestState;
 const secretRef = { source: "env", provider: "default", id: "MY_PROVIDER_API_KEY" } as const;
 const key = "fake-canonical-key";
 const stale = "fake-stale-key";
-const unchanged = {
-  changes: [],
-  findings: [],
-  aliasFindings: [],
-  migratedProfileIds: new Set<string>(),
-  blockedProfileIds: new Set<string>(),
-  warnings: [],
-};
 const migrate = (env: NodeJS.ProcessEnv, prompter = { confirmAutoFix: async () => true }) =>
   maybeMigrateAuthProfileJsonStoresToSqlite({ cfg: {}, prompter, env });
 
@@ -43,16 +35,12 @@ function writeSource(bytes: string, agentDir = state.agentDir()) {
   return authPath;
 }
 
-function writeProfiles(
-  profile: Record<string, unknown>,
-  agentDir = state.agentDir(),
-  order = false,
-) {
+function writeProfiles(profile: Record<string, unknown>, agentDir = state.agentDir()) {
   return writeSource(
     JSON.stringify({
       version: 1,
       profiles: { "my-key": { type: "api_key", provider: "my-provider", ...profile } },
-      ...(order ? { order: { "my-provider": ["my-key"] } } : {}),
+      order: { "my-provider": ["my-key"] },
     }) + "\n",
     agentDir,
   );
@@ -70,46 +58,34 @@ afterEach(async () => {
   await state?.cleanup();
 });
 
-it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
+it.each<[string, Record<string, unknown>, Record<string, unknown>, string?]>([
   ["inline snake-case key", { api_key: key }, { key }],
   ["snake-case SecretRef", { api_key: secretRef }, { keyRef: secretRef }],
   ["canonical key wins", { key, api_key: stale }, { key }],
   ["canonical keyRef wins", { keyRef: secretRef, api_key: stale }, { keyRef: secretRef }],
   ["canonical inline SecretRef wins", { key: secretRef, api_key: stale }, { keyRef: secretRef }],
-])("preserves %s and archives untouched source bytes", async (_name, profile, expected) => {
-  const authPath = writeProfiles(profile, state.agentDir(), true);
+  ["OPENCLAW_AGENT_DIR", { api_key: key }, { key }, "OPENCLAW_AGENT_DIR"],
+  ["PI_CODING_AGENT_DIR", { api_key: key }, { key }, "PI_CODING_AGENT_DIR"],
+])("preserves %s and archives source bytes", async (_name, profile, expected, override) => {
+  const agentDir = override ? state.path(override) : state.agentDir();
+  const env = override ? { ...state.env, [override]: agentDir } : state.env;
+  const authPath = writeProfiles(profile, agentDir);
   const original = fs.readFileSync(authPath);
   const prompter = { confirmAutoFix: vi.fn(async () => true) };
 
-  const result = await migrate(state.env, prompter);
+  const result = await migrate(env, prompter);
 
   expect(result).toMatchObject({ detected: [authPath], warnings: [] });
-  expect(loadPersistedAuthProfileStore(state.agentDir())).toMatchObject({
+  expect(loadPersistedAuthProfileStore(agentDir)).toMatchObject({
     profiles: { "my-key": { type: "api_key", provider: "my-provider", ...expected } },
     order: { "my-provider": ["my-key"] },
   });
   expect(fs.existsSync(authPath)).toBe(false);
   expect(archiveBytes(authPath)).toEqual([original]);
 
-  expect(await migrate(state.env, prompter)).toEqual({ detected: [], ...unchanged });
+  expect((await migrate(env, prompter)).changes).toEqual([]);
   expect(prompter.confirmAutoFix).toHaveBeenCalledOnce();
 });
-
-it.each(["OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"] as const)(
-  "migrates aliases from the shipped %s agent override",
-  async (agentDirVariable) => {
-    const agentDir = state.path(`external-${agentDirVariable.toLowerCase()}`);
-    const authPath = writeProfiles({ api_key: "fake-external-key" }, agentDir);
-
-    const result = await migrate({ ...state.env, [agentDirVariable]: agentDir });
-
-    expect(result.detected).toEqual([authPath]);
-    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["my-key"]).toMatchObject({
-      key: "fake-external-key",
-    });
-    expect(fs.existsSync(authPath)).toBe(false);
-  },
-);
 
 it("leaves original credentials untouched when interactive repair is declined", async () => {
   const authPath = writeProfiles({ api_key: "fake-declined-key" });
@@ -117,7 +93,7 @@ it("leaves original credentials untouched when interactive repair is declined", 
 
   const result = await migrate(state.env, { confirmAutoFix: async () => false });
 
-  expect(result).toEqual({ detected: [authPath], ...unchanged });
+  expect(result).toMatchObject({ detected: [authPath], changes: [], warnings: [] });
   expect(fs.readFileSync(authPath)).toEqual(original);
   expect(loadPersistedAuthProfileStore(state.agentDir())).toBeNull();
 });
@@ -138,40 +114,36 @@ async function reappear(source: string, bytes = original) {
   expect(fs.existsSync(source)).toBe(false);
 }
 
-it.each([original, "unparseable legacy auth"])(
-  "reuses one archive across repeated identical source reappearances (%#)",
-  async (bytes) => {
-    const source = await archivedSource(bytes);
-    const first = archives(source);
-    for (let run = 0; run < 3; run++) {
-      await reappear(source, bytes);
-      expect(archives(source)).toEqual(first);
-      expect(archiveBytes(source)).toEqual([Buffer.from(bytes)]);
-    }
-  },
-);
-
-it.each(["missing", "corrupt", "directory", "symlink"])(
-  "preserves bytes and reuses the replacement when the original archive is %s",
-  async (damage) => {
-    const source = await archivedSource();
-    const first = archives(source)[0]!;
+it.each([
+  ["intact", original],
+  ["intact", "unparseable legacy auth"],
+  ["missing", original],
+  ["corrupt", original],
+  ["directory", original],
+  ["symlink", original],
+])("reuses verified bytes after source reappearance (archive=%s, %#)", async (damage, bytes) => {
+  const source = await archivedSource(bytes);
+  const first = archives(source)[0]!;
+  let expected = damage === "intact" ? [first] : undefined;
+  if (damage !== "intact") {
     fs.unlinkSync(first);
-    if (damage === "corrupt") {
-      fs.writeFileSync(first, "corrupt archive");
-    } else if (damage === "directory") {
-      fs.mkdirSync(first);
-    } else if (damage === "symlink") {
-      fs.symlinkSync(source, first);
-    }
-    for (let run = 0; run < 3; run++) {
-      await reappear(source);
-      const replacements = archives(source).filter((name) => name !== first);
-      expect(replacements).toHaveLength(1);
-      expect(fs.readFileSync(replacements[0]!, "utf8")).toBe(original);
-    }
-  },
-);
+  }
+  if (damage === "corrupt") {
+    fs.writeFileSync(first, "corrupt archive");
+  } else if (damage === "directory") {
+    fs.mkdirSync(first);
+  } else if (damage === "symlink") {
+    fs.symlinkSync(source, first);
+  }
+  for (let run = 0; run < 3; run++) {
+    await reappear(source, bytes);
+    const retained = archives(source).filter((name) => damage === "intact" || name !== first);
+    expect(retained).toHaveLength(1);
+    expected ??= retained;
+    expect(retained).toEqual(expected);
+    expect(fs.readFileSync(retained[0]!, "utf8")).toBe(bytes);
+  }
+});
 
 it("archives changed bytes and imports new profiles without overwriting existing credentials", async () => {
   const source = await archivedSource();

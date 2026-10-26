@@ -2,61 +2,53 @@ import fs from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { shouldRequireGatewayTokenForInstall } from "../gateway/auth-install-policy.js";
 import { withSecureTestNodeCommand } from "../secrets/test-node-command.test-support.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function createExecGatewayTokenConfig(
-  markerPath: string,
-  command = process.execPath,
-): OpenClawConfig {
-  const execmain = {
-    source: "exec" as const,
-    command,
-    allowInsecurePath: true,
-    args: [
-      "-e",
-      `const fs = require('node:fs');fs.writeFileSync(${JSON.stringify(markerPath)}, 'executed');process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { 'gateway/token': 'exec-token' } }));`,
-    ],
-  };
-  return {
-    gateway: { auth: { token: { source: "exec", provider: "execmain", id: "gateway/token" } } },
-    secrets: { providers: { execmain } },
-  };
-}
-
-it("reports skipped exec SecretRefs as unavailable without using ambient tokens", async () => {
-  const markerPath = join(tempDirs.make("openclaw-service-token-exec-ref-"), "exec-ran");
-  const resolved = await resolveGatewayAuthTokenForService(
-    createExecGatewayTokenConfig(markerPath),
-    { OPENCLAW_GATEWAY_TOKEN: "ambient-token" },
-  );
-
-  expect(resolved).toEqual({
-    unavailableReason:
-      "gateway.auth.token SecretRef is configured but unavailable because exec SecretRef resolution is disabled.",
-  });
-  await expect(fs.access(markerPath)).rejects.toThrow();
-});
-
-it("executes exec SecretRefs for service token checks when explicitly allowed", async () => {
-  const markerPath = join(tempDirs.make("openclaw-service-token-exec-ref-"), "exec-ran");
-  await withSecureTestNodeCommand(async (command) => {
-    const resolved = await resolveGatewayAuthTokenForService(
-      createExecGatewayTokenConfig(markerPath, command),
-      {},
-      { allowExecSecretRefs: true },
-    );
-
-    expect(resolved).toEqual({ token: "exec-token" });
-    await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("executed");
-  });
-});
+it.each([false, true])(
+  "gates exec SecretRefs without ambient fallback (allowed=%s)",
+  async (allowed) => {
+    const markerPath = join(tempDirs.make("openclaw-service-token-exec-ref-"), "exec-ran");
+    await withSecureTestNodeCommand(async (command) => {
+      const resolved = await resolveGatewayAuthTokenForService(
+        {
+          gateway: {
+            auth: { token: { source: "exec", provider: "execmain", id: "gateway/token" } },
+          },
+          secrets: {
+            providers: {
+              execmain: {
+                source: "exec",
+                command,
+                allowInsecurePath: true,
+                args: [
+                  "-e",
+                  `const fs = require('node:fs');fs.writeFileSync(${JSON.stringify(markerPath)}, 'executed');process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { 'gateway/token': 'exec-token' } }));`,
+                ],
+              },
+            },
+          },
+        },
+        { OPENCLAW_GATEWAY_TOKEN: "ambient-token" },
+        allowed ? { allowExecSecretRefs: true } : undefined,
+      );
+      if (allowed) {
+        expect(resolved).toEqual({ token: "exec-token" });
+        await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("executed");
+      } else {
+        expect(resolved).toEqual({
+          unavailableReason:
+            "gateway.auth.token SecretRef is configured but unavailable because exec SecretRef resolution is disabled.",
+        });
+        await expect(fs.access(markerPath)).rejects.toThrow();
+      }
+    });
+  },
+);
 
 it("does not fall back to OPENCLAW_GATEWAY_TOKEN when a SecretRef resolves to empty", async () => {
   const resolved = await resolveGatewayAuthTokenForService(
@@ -89,11 +81,15 @@ it.each(["OPENCLAW", "CLAWDBOT", "MOLTBOT"])(
   },
 );
 
-it("requires token in inferred mode when password env exists only in shell", async () => {
-  // pragma: allowlist secret
-  await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "password-from-env" }, async () => {
-    expect(shouldRequireGatewayTokenForInstall({ gateway: { auth: {} } }, process.env)).toBe(true);
-  });
+it("requires token in inferred mode when password env exists only in shell", () => {
+  expect(
+    shouldRequireGatewayTokenForInstall(
+      { gateway: { auth: {} } },
+      {
+        OPENCLAW_GATEWAY_PASSWORD: "password-from-env", // pragma: allowlist secret
+      },
+    ),
+  ).toBe(true);
 });
 
 it("blocks install token resolution for tailscale serve with explicit no-auth", async () => {
