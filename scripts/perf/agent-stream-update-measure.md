@@ -104,6 +104,11 @@ node --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --la
 node --expose-gc --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --layer responses-observer --mode timing --events 3000 --turns 20 --warmup 5
 # Repeat with --mode allocation, alternating base/candidate for five pairs.
 node --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --layer responses-observer --mode verify --events 256 --turns 1 --warmup 1
+# The other shared observer owner uses the same four modes:
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --layer model-diagnostics --mode timing --events 3000 --turns 20 --warmup 5
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --layer model-diagnostics --mode allocation --events 3000 --turns 20 --warmup 5
+node --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --layer model-diagnostics --mode promises --events 3000 --turns 1 --warmup 1
+node --import ./scripts/tsx.mjs scripts/perf/agent-stream-update-measure.ts --layer model-diagnostics --mode verify --events 240 --turns 1 --warmup 1
 ```
 
 The observer's verification mode cycles a fixed eight-frame synthetic recording:
@@ -112,13 +117,30 @@ completed tool item, and terminal response with model, service tier, and usage.
 It hashes every delivered frame. The original agent-loop verification above still
 covers the assistant-event and blocking/async tool continuation recording.
 
-The current measured steady-state inventory is below. Other than the observer,
+`model-diagnostics` installs `wrapStreamFnWithDiagnosticModelCallEvents` with the
+real model lifecycle, transport context, and observer; it does not supply a mock
+lifecycle. Its context contains 1,000 synthetic history entries and 40 tools.
+Timing, allocation, and promise modes use ordinary text updates; verification
+cycles a twelve-event assistant recording containing start, thinking, text,
+split tool arguments, a completed tool call, and done. Message timestamps and
+tool identifiers are fixed. The hash includes delivered events and the final
+result, excluding transient diagnostic timestamps and generated child trace IDs.
+Result observation is awaited between requests so one request's diagnostic tail
+cannot leak into the next measurement. This measures the ordinary observer with
+no diagnostic subscribers or plugin hooks; content capture and subscriber sinks
+are separate costs.
+
+The steady-state inventory is below. Other than the two observer owners,
 these rows record remaining work; this change does not rewrite their owners.
+Both observer counts are measured with their real installers. The shared helper
+projects one iterator-result object per delivered event so accessor-backed source
+values are read exactly once.
 
 | Probe layer          | Current forwarding shape                               | Total promises/event |               Added promises/event |
 | -------------------- | ------------------------------------------------------ | -------------------: | ---------------------------------: |
 | `source`             | Native resolved promise                                |                    2 |                                  0 |
 | `responses-observer` | Stable `.then(observe, reject)` continuation           |                    3 |                                  1 |
+| `model-diagnostics`  | Stable continuation inside the real model lifecycle    |                    3 |                                  1 |
 | `response-model`     | `for await` / `yield`                                  |                    6 |                                  4 |
 | `compaction-v2`      | `for await` / `yield`                                  |                    6 |                                  4 |
 | `provider-hook`      | One-time admission, then `yield*`                      |                    4 |                                  2 |

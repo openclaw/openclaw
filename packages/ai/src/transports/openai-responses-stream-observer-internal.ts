@@ -1,4 +1,4 @@
-import type { Model } from "@openclaw/llm-core";
+import { observeAsyncIterator, type Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import {
@@ -66,94 +66,19 @@ export function observeResponsesStream<TEvent>(
   let terminalType: string | undefined;
   let incompleteReason: string | undefined;
   let requestDetails = "";
-  let iterator: AsyncIterator<TEvent> | undefined;
-  let started = false;
-  let closed = false;
-  let reading = false;
-  let active: Promise<IteratorResult<TEvent>>;
-  const queued: Array<{
-    operation: () => Promise<IteratorResult<TEvent>>;
-    promise: Promise<IteratorResult<TEvent>>;
-    resolve: (result: IteratorResult<TEvent>) => void;
-    reject: (error: unknown) => void;
-  }> = [];
-
-  // Serial reads need only the source promise and one stable continuation.
-  // Queued operations resume in the active read's context, like a generator.
-  function enqueue(operation: () => Promise<IteratorResult<TEvent>>) {
-    if (!reading) {
-      reading = true;
-      active = operation();
-      return active;
-    }
-    const next = Promise.withResolvers<IteratorResult<TEvent>>();
-    queued.push({ operation, ...next });
-    return next.promise;
-  }
-  function settled() {
-    const next = queued.shift();
-    if (next) {
-      // Register from the active operation's context, and wait for its public
-      // result: an async cleanup/rejection may still need promise adoption.
-      const advance = () => {
-        active = next.promise;
-        void next.operation().then(next.resolve, next.reject);
-      };
-      void active.then(advance, advance);
-    } else {
-      reading = false;
-    }
-  }
-  function read(): Promise<IteratorResult<TEvent>> {
-    if (closed) {
-      settled();
-      return Promise.resolve({ done: true, value: undefined });
-    }
-    try {
-      if (!started) {
-        startedAt = Date.now();
-        requestDetails =
-          `transport=${transport} requestedTier=${request?.service_tier ?? "unspecified"} ` +
-          `max_output_tokens=${request?.max_output_tokens ?? "provider-default"}`;
-        emitModelTransportDebug(
-          log,
-          `[responses] stream_start provider=${model.provider} api=${model.api} model=${model.id} ${requestDetails}`,
-        );
-        started = true;
-      }
-      iterator ??= stream[Symbol.asyncIterator]();
-      return iterator.next().then(observeNext, rejectRead);
-    } catch (error) {
-      return rejectRead(error);
-    }
-  }
-  function rejectRead(error: unknown): Promise<never> {
-    closed = true;
-    let rejection = error;
-    try {
-      if (started) {
-        finish();
-      }
-    } catch (finishError) {
-      rejection = finishError;
-    } finally {
-      settled();
-    }
-    // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve provider rejection identity.
-    return Promise.reject(rejection);
-  }
-  function observeNext(next: IteratorResult<TEvent>): IteratorResult<TEvent> | Promise<never> {
-    if (next.done) {
-      closed = true;
-      try {
-        finish();
-        return { done: true, value: undefined };
-      } finally {
-        settled();
-      }
-    }
-    try {
-      const event = next.value;
+  return observeAsyncIterator({
+    iterator: () => stream[Symbol.asyncIterator](),
+    onStart() {
+      startedAt = Date.now();
+      requestDetails =
+        `transport=${transport} requestedTier=${request?.service_tier ?? "unspecified"} ` +
+        `max_output_tokens=${request?.max_output_tokens ?? "provider-default"}`;
+      emitModelTransportDebug(
+        log,
+        `[responses] stream_start provider=${model.provider} api=${model.api} model=${model.id} ${requestDetails}`,
+      );
+    },
+    onEvent(event) {
       const record = isRecord(event) ? event : undefined;
       const type = typeof record?.type === "string" ? record.type : "unknown";
       const response = isRecord(record?.response) ? record.response : undefined;
@@ -189,87 +114,17 @@ export function observeResponsesStream<TEvent>(
             `headersToEventMs=${Date.now() - startedAt} type=${type} responseId=${responseId ?? "unknown"}`,
         );
       }
-    } catch (error) {
-      return closeWithError(error);
-    }
-    settled();
-    return next;
-  }
-  async function closeWithError(error: unknown): Promise<never> {
-    closed = true;
-    try {
-      // AsyncIteratorClose preserves a thrown consumer/observer error even if
-      // the source return fails; it does not call the source's throw method.
-      try {
-        await iterator?.return?.();
-      } catch {}
-    } finally {
-      try {
-        finish();
-      } finally {
-        settled();
-      }
-    }
-    throw error;
-  }
-  function finish() {
-    const types = [...eventTypes].map(([type, count]) => `${type}:${count}`).join(",");
-    emitModelTransportDebug(
-      log,
-      `[responses] stream_done provider=${model.provider} api=${model.api} model=${model.id} ` +
-        `${requestDetails} responseId=${responseId ?? "unknown"} servedTier=${servedTier ?? "unknown"} ` +
-        `outputTokens=${outputTokens ?? "unknown"} reasoningTokens=${reasoningTokens ?? "unknown"} ` +
-        `streamDurationMs=${Date.now() - startedAt} elapsedMs=${Date.now() - (requestStartedAt ?? startedAt)} ` +
-        `terminal=${terminalType ?? "none"} incompleteReason=${incompleteReason ?? "none"} events=${eventCount} types=${types}`,
-    );
-  }
-  return {
-    [Symbol.asyncIterator]() {
-      return this;
     },
-    next() {
-      return enqueue(read);
+    onFinally() {
+      const types = [...eventTypes].map(([type, count]) => `${type}:${count}`).join(",");
+      emitModelTransportDebug(
+        log,
+        `[responses] stream_done provider=${model.provider} api=${model.api} model=${model.id} ` +
+          `${requestDetails} responseId=${responseId ?? "unknown"} servedTier=${servedTier ?? "unknown"} ` +
+          `outputTokens=${outputTokens ?? "unknown"} reasoningTokens=${reasoningTokens ?? "unknown"} ` +
+          `streamDurationMs=${Date.now() - startedAt} elapsedMs=${Date.now() - (requestStartedAt ?? startedAt)} ` +
+          `terminal=${terminalType ?? "none"} incompleteReason=${incompleteReason ?? "none"} events=${eventCount} types=${types}`,
+      );
     },
-    return(value) {
-      return enqueue(async () => {
-        let resolved: unknown;
-        try {
-          resolved = await value;
-        } catch (error) {
-          if (started && !closed) {
-            return closeWithError(error);
-          }
-          closed = true;
-          settled();
-          throw error;
-        }
-        try {
-          if (!closed) {
-            closed = true;
-            if (started) {
-              try {
-                await iterator?.return?.();
-              } finally {
-                finish();
-              }
-            }
-          }
-          return { done: true, value: resolved };
-        } finally {
-          settled();
-        }
-      });
-    },
-    throw(error) {
-      return enqueue(() => {
-        if (started && !closed) {
-          return closeWithError(error);
-        }
-        closed = true;
-        settled();
-        // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Preserve consumer rejection identity.
-        return Promise.reject(error);
-      });
-    },
-  };
+  });
 }

@@ -6,12 +6,17 @@ import { writeFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
-import { makeAssistantMessage } from "../../packages/agent-core/src/agent-loop.test-support.js";
+import {
+  makeAssistantMessage,
+  makeTool,
+  user,
+} from "../../packages/agent-core/src/agent-loop.test-support.js";
 import { makeProviderModel } from "../../packages/ai/src/providers/provider-model.test-support.js";
 import type { AssistantMessageEvent } from "../../packages/llm-core/src/types.js";
 import type { MutableAssistantMessageEventStream } from "../../src/agents/stream-compat.js";
 
-type Layer = (events: number) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>;
+type LayerStream = AsyncIterable<unknown> & { result?: () => Promise<unknown> };
+type Layer = (events: number) => LayerStream | Promise<LayerStream>;
 const model = makeProviderModel("openai-responses", "openai", "fixture-model");
 const message = { ...makeAssistantMessage([{ type: "text", text: "x" }]), timestamp: 1 };
 const update: AssistantMessageEvent = {
@@ -42,18 +47,49 @@ const responsesRecording = [
     },
   },
 ];
+const recordedTool = {
+  type: "toolCall" as const,
+  id: "fixture-call",
+  name: "read",
+  arguments: { path: "fixture" },
+};
+const recordedAssistant = {
+  ...makeAssistantMessage([
+    { type: "thinking", thinking: "inspect" },
+    { type: "text", text: "checking" },
+    recordedTool,
+  ]),
+  timestamp: 1,
+  stopReason: "toolUse" as const,
+};
+const assistantRecording: readonly AssistantMessageEvent[] = [
+  { type: "start", partial: recordedAssistant },
+  { type: "thinking_start", contentIndex: 0, partial: recordedAssistant },
+  { type: "thinking_delta", contentIndex: 0, delta: "inspect", partial: recordedAssistant },
+  { type: "thinking_end", contentIndex: 0, content: "inspect", partial: recordedAssistant },
+  { type: "text_start", contentIndex: 1, partial: recordedAssistant },
+  { type: "text_delta", contentIndex: 1, delta: "checking", partial: recordedAssistant },
+  { type: "text_end", contentIndex: 1, content: "checking", partial: recordedAssistant },
+  { type: "toolcall_start", contentIndex: 2, partial: recordedAssistant },
+  { type: "toolcall_delta", contentIndex: 2, delta: '{"path":', partial: recordedAssistant },
+  { type: "toolcall_delta", contentIndex: 2, delta: '"fixture"}', partial: recordedAssistant },
+  { type: "toolcall_end", contentIndex: 2, toolCall: recordedTool, partial: recordedAssistant },
+  { type: "done", reason: "toolUse", message: recordedAssistant },
+];
 
-function replay<T>(count: number, value: T): AsyncIterable<T> {
+function replay<T>(count: number, value: T, recording?: readonly T[]): AsyncIterable<T> {
   return {
     [Symbol.asyncIterator]() {
-      let remaining = count;
+      let index = 0;
       return {
-        next: () =>
-          Promise.resolve(
-            remaining-- > 0
-              ? { done: false as const, value }
-              : { done: true as const, value: undefined },
-          ),
+        next() {
+          if (index >= count) {
+            return Promise.resolve({ done: true as const, value: undefined });
+          }
+          const event = recording ? recording[index % recording.length] : value;
+          index++;
+          return Promise.resolve({ done: false as const, value: event });
+        },
         return: () => Promise.resolve({ done: true as const, value: undefined }),
       };
     },
@@ -79,6 +115,8 @@ async function installers(verify: boolean): Promise<Record<string, Layer>> {
     { streamWithIdleTimeout },
     { default: OpenAI },
     { createResponsesStreamWithRecovery },
+    { wrapStreamFnWithDiagnosticModelCallEvents },
+    { createDiagnosticTraceContext },
   ] = await Promise.all([
     import("../../packages/ai/src/transports/openai-responses-stream-observer-internal.js"),
     import("../../packages/ai/src/transports/openai-transport-shared.js"),
@@ -93,32 +131,39 @@ async function installers(verify: boolean): Promise<Record<string, Layer>> {
     import("../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js"),
     import("openai"),
     import("../../packages/ai/src/transports/openai-responses-replay-internal.js"),
+    import("../../src/agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js"),
+    import("../../src/infra/diagnostic-trace-context.js"),
   ]);
-  const context = { messages: [] };
-  const observerSource = (count: number): AsyncIterable<unknown> => {
-    if (!verify) {
-      return replay(count, rawEvent);
-    }
-    return {
-      [Symbol.asyncIterator]() {
-        let index = 0;
-        return {
-          next: () =>
-            Promise.resolve(
-              index < count
-                ? {
-                    done: false as const,
-                    value: responsesRecording[index++ % responsesRecording.length],
-                  }
-                : { done: true as const, value: undefined },
-            ),
-        };
-      },
-    };
+  const context = {
+    systemPrompt: "synthetic iterator probe",
+    messages: Array.from({ length: 1000 }, (_, index) => user(`synthetic ${index}`, index)),
+    tools: Array.from({ length: 40 }, (_, index) => makeTool(`synthetic_${index}`)),
   };
+  const trace = createDiagnosticTraceContext({
+    traceId: "11111111111111111111111111111111",
+    spanId: "2222222222222222",
+  });
   return {
     source: (count) => replay(count, rawEvent),
-    "responses-observer": (count) => observeResponsesStream(observerSource(count), model),
+    "responses-observer": (count) =>
+      observeResponsesStream(
+        replay<unknown>(count, rawEvent, verify ? responsesRecording : undefined),
+        model,
+      ),
+    "model-diagnostics": (count) =>
+      wrapStreamFnWithDiagnosticModelCallEvents(
+        () => ({
+          ...replay<AssistantMessageEvent>(count, update, verify ? assistantRecording : undefined),
+          result: () => Promise.resolve(verify ? recordedAssistant : message),
+        }),
+        {
+          runId: "fixture-run",
+          provider: model.provider,
+          model: model.id,
+          trace,
+          nextCallId: () => "fixture-model-call",
+        },
+      )(model, context),
     "response-model": (count) =>
       createResponseModelTracker().track(undefined, replay(count, rawEvent)),
     "compaction-v2": (count) =>
@@ -222,9 +267,16 @@ async function installers(verify: boolean): Promise<Record<string, Layer>> {
 
 async function consume(layer: Layer, events: number, record?: ReturnType<typeof createHash>) {
   let count = 0;
-  for await (const event of await layer(events)) {
+  const stream = await layer(events);
+  for await (const event of stream) {
     count++;
     record?.update(JSON.stringify(event));
+  }
+  // Join diagnostic result observation before the next measured request. Its
+  // setup/settlement is constant and disappears from the promise-count slope.
+  if (stream.result) {
+    const result = await stream.result();
+    record?.update(JSON.stringify(result));
   }
   assert.equal(count, events);
 }
