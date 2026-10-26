@@ -29,6 +29,8 @@ import {
 export type SandboxMountPlan = {
   binds: string[];
   protectedTargets: string[];
+  /** Writable self-binds pinning protected mounts' ancestors; upgrade-safe like protectedTargets. */
+  pinnedAncestors?: readonly string[];
   skippedBinds: string[];
   readOnlyWorkspaceSkillMounts: ReturnType<
     typeof resolveSandboxMountSelection
@@ -121,6 +123,7 @@ export async function prepareSandboxMountPlan(params: {
   const binds = new Map<string, string>();
   const planned: Array<(typeof selection.mounts)[number]> = [];
   const protectedTargets = new Set<string>();
+  const pinnedAncestors = new Set<string>();
   for (const mount of selection.mounts) {
     // Keep each self-bind ancestor directly before the first protected mount it pins.
     for (const ancestor of ancestorsByProtectedTarget.get(
@@ -153,6 +156,9 @@ export async function prepareSandboxMountPlan(params: {
       if (mount.source === "protectedSkill") {
         protectedTargets.add(projected.containerPath);
       }
+      if (ancestors.includes(mount as (typeof ancestors)[number])) {
+        pinnedAncestors.add(projected.containerPath);
+      }
       binds.set(
         projected.containerPath,
         `${projected.hostPath}:${projected.containerPath}:${projected.readOnly ? "ro,z" : "z"}`,
@@ -170,6 +176,7 @@ export async function prepareSandboxMountPlan(params: {
   return {
     binds: [...binds.values()],
     protectedTargets: [...protectedTargets],
+    pinnedAncestors: [...pinnedAncestors],
     skippedBinds: selection.skippedBinds,
     readOnlyWorkspaceSkillMounts: selection.readOnlyWorkspaceSkillMounts,
     tmpfs: resolveSandboxTmpfsMounts(params.tmpfs),
@@ -357,7 +364,9 @@ export async function compareSandboxMountPlan(params: {
     return "match";
   }
   const actualTargets = new Set(actual.map((mount) => mount.destination));
-  const added = params.plan.protectedTargets.filter((target) => !actualTargets.has(target));
+  const added = [...params.plan.protectedTargets, ...(params.plan.pinnedAncestors ?? [])].filter(
+    (target) => !actualTargets.has(target),
+  );
   // Only new Gateway-selected read-only overlays can be installed automatically.
   // Existing mounts must match: a previous user bind at a protected target is not
   // evidence that the Gateway owned it, even when it was read-only.
