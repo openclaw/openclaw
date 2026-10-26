@@ -566,6 +566,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-event-envelope-measure.ts!",
   "scripts/perf/session-transcript-path-measure.ts!",
   "scripts/perf/skill-search-copies-measure.ts!",
+  "scripts/perf/skill-snapshot-hydration-measure.ts!",
   "scripts/perf/skill-collision-diagnostics-measure.ts!",
   "scripts/perf/sqlite-worker-reply-measure.ts!",
   "scripts/perf/startup-model-scope-measure.ts!",
