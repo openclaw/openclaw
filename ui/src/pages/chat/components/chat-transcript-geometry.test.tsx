@@ -7,12 +7,12 @@ import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
-import type { ChatWidgetLayout } from "../session-message-cache.ts";
 import {
   cacheChatSessionSnapshot,
   createChatWidgetLayout,
   observeChatCache,
   type ChatMessageCache,
+  type ChatWidgetLayout,
 } from "../session-message-cache.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import {
