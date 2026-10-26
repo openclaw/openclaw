@@ -110,10 +110,13 @@ function fixture(method: "preview" | "detail") {
         url.includes("/issues/")
           ? {
               title: "Preview without reloading",
+              body: "Public issue content",
               state: "open",
+              comments: 0,
               repository_url: `https://api.github.com/repos/octocat/${method}`,
               created_at: "2026-09-21T12:00:00Z",
               updated_at: "2026-09-21T12:00:00Z",
+              user: { login: "octocat" },
             }
           : { id: 123, private: false, visibility: "public" },
       ),
