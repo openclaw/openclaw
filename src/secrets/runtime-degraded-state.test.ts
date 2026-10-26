@@ -94,7 +94,9 @@ it("merges runtime-discovered credential owners and clears them independently", 
 
   expect(ownerIds()).toEqual(["openai", "telegram:work"]);
   expect(() => assertSecretOwnerAvailable("provider", "openai")).not.toThrow();
-  expect(() => assertSecretOwnerAvailable("account", "telegram:work")).toThrow(SecretSurfaceUnavailableError);
+  expect(() => assertSecretOwnerAvailable("account", "telegram:work")).toThrow(
+    SecretSurfaceUnavailableError,
+  );
 
   clearActiveCredentialDegradedOwner("account", "telegram:work");
 

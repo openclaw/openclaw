@@ -102,7 +102,9 @@ describe("AcpSessionManager runtime config", () => {
       lifecycle.push(`close:${handle.cwd ?? "default"}`);
     });
     await f.run("first");
-    await expect(f.manager.updateSessionRuntimeOptions({ ...f.target, patch: { cwd } })).resolves.toEqual({ cwd });
+    await expect(
+      f.manager.updateSessionRuntimeOptions({ ...f.target, patch: { cwd } }),
+    ).resolves.toEqual({ cwd });
     expect([f.persisted.currentMeta.cwd, f.persisted.currentMeta.runtimeOptions]).toEqual([
       cwd,
       { cwd },

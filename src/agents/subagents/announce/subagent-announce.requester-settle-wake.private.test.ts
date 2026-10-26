@@ -113,7 +113,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
   });
 });
 
-
 describe("quiet requester restart continuation", () => {
   it("does not reoffer a confirmed interruption notice in a requester-settle wave", async () => {
     sessionStore[REQUESTER] = { sessionId: "sess-parent" };
