@@ -340,6 +340,7 @@ const rpcCases = [
   { id: "config.schema", method: "config.schema", params: {} },
   { id: "models.authStatus", method: "models.authStatus", params: { agentId: "main" } },
   { id: "system.info", method: "system.info", params: {} },
+  { id: "update.status", method: "update.status", params: {} },
   { id: "talk.config", method: "talk.config", params: {} },
   {
     id: "sessions.branches.list",
