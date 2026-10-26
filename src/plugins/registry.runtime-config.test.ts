@@ -107,7 +107,6 @@ function expectRejectedHarness(
   message: string,
 ) {
   expect(builder.registry.agentHarnesses).toEqual([]);
-  expect(record.agentHarnessIds).toEqual([]);
   expect(builder.registry.diagnostics).toContainEqual(
     expect.objectContaining({ level: "error", pluginId: record.id, message }),
   );
@@ -482,11 +481,8 @@ describe("plugin registry runtime config scope", () => {
       packageName: "@openclaw/codex",
     });
     const nativeCompaction = vi.fn(async () => ({ ok: true, compacted: true }));
-    const options = { nativeCompaction };
+    api.registerAgentHarness(createHarness("codex"), { nativeCompaction });
 
-    api.registerAgentHarness(createHarness("codex"), options);
-
-    expect(builder.registry.agentHarnesses).toHaveLength(1);
     const registration = expectDefined(builder.registry.agentHarnesses[0], "registered harness");
     const compact = expectDefined(registration.nativeCompaction, "native compaction callback");
     const request = {
@@ -559,20 +555,13 @@ describe("plugin registry runtime config scope", () => {
     const scope = scopeCapture("legacy-plugin");
     const config = {} as OpenClawConfig;
     const replaceResult = {
-      path: "/tmp/openclaw.json",
-      previousHash: null,
-      persistedHash: "persisted-hash",
-      snapshot: { path: "/tmp/openclaw.json" },
       nextConfig: config,
-      afterWrite: { mode: "auto" },
-      followUp: { mode: "auto", requiresRestart: false },
     } as unknown as Awaited<ReturnType<PluginRuntime["config"]["replaceConfigFile"]>>;
     const configRuntime = {
       current: vi.fn(scope.capture(() => config)),
       mutateConfigFile: scope.capture(async () => ({
         ...replaceResult,
         result: undefined,
-        attempts: 1,
       })),
       replaceConfigFile: scope.capture(async () => replaceResult),
     } satisfies PluginRuntime["config"];

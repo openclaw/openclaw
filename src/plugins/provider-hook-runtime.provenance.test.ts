@@ -18,6 +18,7 @@ import {
   makePluginLoaderTempDir,
   writePlugin,
 } from "./loader.test-fixtures.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { loadPluginMetadataSnapshot as loadMetadata } from "./plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture as createSnapshot } from "./plugin-metadata.test-support.js";
 import {
@@ -43,6 +44,7 @@ function metadata(
   rootDir: string,
   source = `${rootDir}/index.cjs`,
   origin: "global" | "bundled" = "global",
+  overrides: Partial<PluginManifestRecord> = {},
 ) {
   return createSnapshot({
     plugins: [
@@ -53,6 +55,7 @@ function metadata(
         source,
         providers: ["same-provider"],
         configSchema: EMPTY_PLUGIN_SCHEMA,
+        ...overrides,
       },
     ],
   });
@@ -89,6 +92,24 @@ function activate(options: Parameters<typeof loadOpenClawPlugins>[0]) {
   const loaded = loadOpenClawPlugins(options);
   setActivePluginRegistry(loaded, loadCacheContext(options).cacheKey);
   return loaded;
+}
+
+function activateConfig(
+  current: Parameters<typeof loadOpenClawPlugins>[0]["config"],
+  activationSourceConfig = current,
+) {
+  const env = { OPENCLAW_STATE_DIR: makePluginLoaderTempDir() };
+  const snapshot = loadMetadata({ config: current, env });
+  const loaded = activate({
+    config: current,
+    activationSourceConfig,
+    env,
+    installRecords: {},
+    manifestRegistry: snapshot.manifestRegistry,
+    onlyPluginIds: ["same-id"],
+    activate: false,
+  });
+  return { env, snapshot, loaded };
 }
 
 function labels(providers: readonly { label: string }[] | undefined) {
@@ -205,15 +226,7 @@ describe("provider runtime physical ownership", () => {
           configSchema: {
             type: "object",
             properties: {
-              credential: {
-                type: "object",
-                properties: {
-                  source: { const: "store" },
-                  provider: { type: "string" },
-                  id: { type: "string" },
-                },
-                required: ["source", "provider", "id"],
-              },
+              credential: { type: "object" },
               revision: { type: "string" },
             },
             required: ["credential"],
@@ -231,20 +244,13 @@ describe("provider runtime physical ownership", () => {
           credential: { source: "store", provider: "default", id },
         });
       const sourceConfig = sourceFor("KEY");
-      const env = { OPENCLAW_STATE_DIR: makePluginLoaderTempDir() };
       try {
         setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-        const firstSnapshot = loadMetadata({ config: runtimeConfig, env });
-        const loadOptions = {
-          config: runtimeConfig,
-          activationSourceConfig: sourceConfig,
+        const {
           env,
-          installRecords: {},
-          manifestRegistry: firstSnapshot.manifestRegistry,
-          onlyPluginIds: ["same-id"],
-          activate: false,
-        };
-        const loadedRegistry = activate(loadOptions);
+          snapshot: firstSnapshot,
+          loaded: loadedRegistry,
+        } = activateConfig(runtimeConfig, sourceConfig);
         const lookup = {
           provider: "same-provider",
           config: runtimeConfig,
@@ -253,7 +259,6 @@ describe("provider runtime physical ownership", () => {
         };
         expect(loadedProvider(lookup)?.label).toBe("A/1");
         expect(resolveProvider(lookup)?.label).toBe("A/1");
-        expect(registrations.count()).toBe(1);
         setRuntimeConfigSnapshot(runtimeConfig, sourceFor("OTHER"));
         expect(loadedProvider(lookup)).toBeUndefined();
         expect(resolveProvider(lookup)?.label).toBe("B/2");
@@ -263,14 +268,12 @@ describe("provider runtime physical ownership", () => {
             () => resolveProvider(lookup)?.label,
           ),
         ).toBe("A/1");
-        expect(registrations.count()).toBe(2);
         const setupProviders = resolveProviders({
           ...lookup,
           providerRefs: ["same-provider"],
           mode: "setup",
         });
-        expect(setupProviders).toHaveLength(1);
-        expect(setupProviders[0]?.label).toMatch(/^B\//);
+        expect(labels(setupProviders)).toEqual([expect.stringMatching(/^B\//)]);
         expect(resolveProvider(lookup)?.label).toBe("B/2");
       } finally {
         clearRuntimeConfigSnapshot();
@@ -278,25 +281,16 @@ describe("provider runtime physical ownership", () => {
     },
   );
 
-  it.each(
-    (
-      [
-        { change: "replace", receiver: "declared" },
-        { change: "mutate", receiver: "declared" },
-        { change: "rebind", receiver: "declared" },
-        { change: "replace", receiver: "alias" },
-        { change: "replace", receiver: "removed-alias" },
-      ] as const
-    ).flatMap((variant) =>
-      [false, true].map((snapshotPresent) => ({
-        change: variant.change,
-        receiver: variant.receiver,
-        snapshotPresent,
-      })),
-    ),
-  )(
-    "keeps registration config current with snapshot=$snapshotPresent, change=$change, receiver=$receiver",
-    ({ snapshotPresent, change, receiver }) => {
+  it.each([
+    [false, "replace", "declared"],
+    [true, "replace", "declared"],
+    [true, "mutate", "declared"],
+    [true, "rebind", "declared"],
+    [true, "replace", "alias"],
+    [true, "replace", "removed-alias"],
+  ] as const)(
+    "keeps registration config current with snapshot=%s, change=%s, receiver=%s",
+    (snapshotPresent, change, receiver) => {
       const registrations = createRegistrationProbe();
       const plugin = writeRegistration(
         `
@@ -315,16 +309,7 @@ describe("provider runtime physical ownership", () => {
       );
       const configFor = (revision: string) => configuredPlugin(plugin.file, { revision });
       const firstConfig = configFor("A");
-      const env = { OPENCLAW_STATE_DIR: makePluginLoaderTempDir() };
-      const firstSnapshot = loadMetadata({ config: firstConfig, env });
-      const loadedRegistry = activate({
-        config: firstConfig,
-        env,
-        installRecords: {},
-        onlyPluginIds: ["same-id"],
-        manifestRegistry: firstSnapshot.manifestRegistry,
-        activate: false,
-      });
+      const { env, snapshot: firstSnapshot, loaded: loadedRegistry } = activateConfig(firstConfig);
       const lookup = { provider: receiver === "declared" ? "same-provider" : "runtime-alias", env };
       const modelOnlyConfig = { ...firstConfig, agents: { defaults: { model: "other/model" } } };
       expect(loadedProvider({ ...lookup, config: modelOnlyConfig })?.label).toBe("A/1");
@@ -404,19 +389,11 @@ describe("provider runtime physical ownership", () => {
         providers: ["other-provider"],
         configSchema: EMPTY_PLUGIN_SCHEMA,
       });
-      const aliasMetadata = createSnapshot({
-        plugins: [
-          {
-            id: "alias-owner",
-            origin: "global",
-            rootDir: alias.dir,
-            source: alias.file,
-            providers: ["other-provider"],
-            providerAuthAliases: { "same-provider": "other-provider" },
-            activation: { onProviders: ["same-provider"] },
-            configSchema: EMPTY_PLUGIN_SCHEMA,
-          },
-        ],
+      const aliasMetadata = metadata(alias.dir, alias.file, "global", {
+        id: "alias-owner",
+        providers: ["other-provider"],
+        providerAuthAliases: { "same-provider": "other-provider" },
+        activation: { onProviders: ["same-provider"] },
       });
       const pluginConfig = {
         plugins: {

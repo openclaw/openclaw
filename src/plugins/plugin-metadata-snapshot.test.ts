@@ -338,20 +338,26 @@ describe("plugin metadata snapshot", () => {
     expect(reloaded.finalizePluginMetadataSnapshot(snapshot)).toBe(snapshot);
   });
 
-  it.each(["derived", "persisted"])("keeps an empty %s index authoritative", (source) => {
+  it.each([
+    { source: "derived", empty: true },
+    { source: "persisted", empty: true },
+    { source: "derived", empty: false },
+  ])("retains the $source index and manifest graph (empty: $empty)", ({ source, empty }) => {
     const index = makeIndex();
-    index.plugins = [];
+    const manifestRegistry = makeManifestRegistry();
+    if (empty) {
+      index.plugins = [];
+      manifestRegistry.plugins = [];
+    }
     const discovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
     loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
       source,
       snapshot: index,
       diagnostics: [],
       ...(source === "derived" ? { discovery } : {}),
+      ...(!empty ? { manifestRegistry } : {}),
     });
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
 
     const snapshot = loadPluginMetadataSnapshot({
       config: {},
@@ -366,33 +372,15 @@ describe("plugin metadata snapshot", () => {
       }),
     );
     expect(snapshot.discovery).toBe(source === "derived" ? discovery : undefined);
-    expect(snapshot.plugins).toEqual([]);
-    expect(snapshot.index.plugins).toEqual([]);
-  });
-
-  it("carries a derived manifest graph into snapshot construction without rebuilding it", () => {
-    const index = makeIndex();
-    const manifestRegistry = makeManifestRegistry();
-    const discovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "derived",
-      snapshot: index,
-      diagnostics: [],
-      discovery,
-      manifestRegistry,
-    });
-
-    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {} });
-
-    expect(snapshot.plugins.map((plugin) => plugin.id)).toEqual(["demo"]);
-    expect(snapshot.registrySource).toBe("derived");
-    expect(snapshot.discovery).toBe(discovery);
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        manifestRegistry,
-        includeDisabled: true,
-      }),
-    );
+    expect(snapshot.registrySource).toBe(source);
+    expect(snapshot.plugins.map((plugin) => plugin.id)).toEqual(empty ? [] : ["demo"]);
+    if (empty) {
+      expect(snapshot.index.plugins).toEqual([]);
+    } else {
+      expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ manifestRegistry, includeDisabled: true }),
+      );
+    }
   });
 
   it("reuses an adopted snapshot across config objects until a lifecycle owner replaces it", () => {
