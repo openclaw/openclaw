@@ -695,9 +695,14 @@ These are intentionally guarded by the `ci-workflow-guards`,
   ownership. Test-only files and unrelated runtime changes omit this lane;
   manual runs, unknown paths and older planners retain coverage. Preserve the
   target's existing performance-script capability checks.
+  Current automatic PR, push, and scheduled plans run selected performance proof
+  after tests in the last already-selected UI unit row. Keep the identical base
+  comparison command, fail-closed combined unit gate, and standalone fallback
+  when no unit row is selected or the run is manual, frozen, or compatibility.
+  This removes one setup without adding a build dependency, worker, or unit scope.
 - Eligible Control UI E2E rows request the 16-vCPU class with unchanged live
-  backend/event routing. Compact plans use six mocked Control UI shards with four
-  workers each, matching four observed CPUs per runner and retaining 24 aggregate
+  backend/event routing. Compact plans use five mocked Control UI shards with four
+  workers each, matching four observed CPUs per runner and using 20 aggregate
   worker slots. Private source-server projects remain serial. The conditional
   browser-extension row keeps its existing reuse and routing rules. Hourly main
   uses the same compact plan without a changed-path inventory. Non-main full

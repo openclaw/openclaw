@@ -4,7 +4,6 @@ import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
-  navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
@@ -186,9 +185,8 @@ suite.define(() => {
         { width: 430, height: 860, safeAreaLeft: 0 },
         { width: 932, height: 430, safeAreaLeft: 0 },
         { width: 800, height: 430, safeAreaLeft: 44 },
-      ].map((viewport) =>
-        Object.assign(viewport, { sessionKey: `agent:main:attributed-mobile-${viewport.width}` }),
-      );
+      ];
+      const sessionKey = "agent:main:attributed-mobile";
       await suite.withPage(
         { viewport: { width: 320, height: 860 }, hasTouch: true },
         async ({ page, context }) => {
@@ -196,52 +194,60 @@ suite.define(() => {
           const morgan = profile("profile-morgan", "Morgan");
           const now = Date.now();
           const gateway = await installMockGateway(page, {
-            sessionKey: viewports[0]!.sessionKey,
-            sessions: viewports.map(({ width, sessionKey }) =>
-              createControlUiSessionRow(sessionKey, `Attributed mobile ${width}`, now),
-            ),
+            sessionKey,
+            sessions: [createControlUiSessionRow(sessionKey, "Attributed mobile", now)],
             presenceUsers: profiled ? [{ ...morgan, self: true }] : [],
-            sessionTranscripts: Object.fromEntries(
-              viewports.map(({ sessionKey }) => [
-                sessionKey,
-                {
-                  messages: [
-                    userMessage(morgan, "Keep the phone transcript readable.", now - 20_000),
-                    assistant(
-                      "The response uses the available transcript width.\n\n```ts\nconsole.log('readable code');\n```",
-                      now - 10_000,
-                    ),
-                  ],
-                },
-              ]),
-            ),
+            sessionTranscripts: {
+              [sessionKey]: {
+                messages: [
+                  userMessage(morgan, "Keep the phone transcript readable.", now - 20_000),
+                  assistant(
+                    "The response uses the available transcript width.\n\n```ts\nconsole.log('readable code');\n```",
+                    now - 10_000,
+                  ),
+                ],
+              },
+            },
           });
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, viewports[0]!.sessionKey));
-          for (const { width, height, safeAreaLeft, sessionKey } of viewports) {
-            const label = `${width} × ${height} px (profile: ${profiled})`;
-            await page.evaluate(() => {
-              document.documentElement.dir = "ltr";
-            });
-            await page.setViewportSize({ width, height });
-            await protocol.send("Emulation.setSafeAreaInsetsOverride", {
-              insets: { left: safeAreaLeft, right: 0, top: 0, bottom: 0 },
-            });
-            await navigateToControlUiSession(page, sessionKey);
-            const pane = page.locator(".chat-pane-cache__pane--active");
-            const transcript = pane.locator(".chat-thread-inner");
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          const pane = page.locator(".chat-pane-cache__pane--active");
+          const transcript = pane.locator(".chat-thread-inner");
+          const expectColumn = async (content: Locator, phase: string, label: string) => {
+            const frame = await transcript.boundingBox();
+            const bounds = await content.boundingBox();
+            const columnLabel = `${label}: ${phase}`;
+            expect(frame, columnLabel).not.toBeNull();
+            expect(bounds, columnLabel).not.toBeNull();
+            expect(bounds!.x, columnLabel).toBeCloseTo(frame!.x, 0);
+            expect(bounds!.width, columnLabel).toBeCloseTo(frame!.width, 0);
+          };
+          const atEveryViewport = async (
+            check: (viewport: (typeof viewports)[number], label: string) => Promise<void>,
+            direction = "ltr",
+          ) => {
+            for (const viewport of viewports) {
+              const { width, height, safeAreaLeft } = viewport;
+              const label = `${width} × ${height} px (profile: ${profiled})`;
+              await page.evaluate((dir) => {
+                document.documentElement.dir = dir;
+              }, direction);
+              await page.setViewportSize({ width, height });
+              await protocol.send("Emulation.setSafeAreaInsetsOverride", {
+                insets: { left: safeAreaLeft, right: 0, top: 0, bottom: 0 },
+              });
+              await check(viewport, label);
+            }
+          };
+          // Hold each renderer state while sweeping geometry; the RPC lifecycle is
+          // independent of viewport size and only needs one run per identity mode.
+          await pane
+            .locator(".agent-chat__composer-combobox textarea")
+            .fill("Read the example file.");
+          await atEveryViewport(async ({ width, safeAreaLeft }, label) => {
             await expect(
               transcript.getByText("The response uses the available transcript width."),
               label,
             ).toBeVisible();
-            const expectColumn = async (content: Locator, phase: string) => {
-              const frame = await transcript.boundingBox();
-              const bounds = await content.boundingBox();
-              const columnLabel = `${label}: ${phase}`;
-              expect(frame, columnLabel).not.toBeNull();
-              expect(bounds, columnLabel).not.toBeNull();
-              expect(bounds!.x, columnLabel).toBeCloseTo(frame!.x, 0);
-              expect(bounds!.width, columnLabel).toBeCloseTo(frame!.width, 0);
-            };
             for (const direction of ["ltr", "rtl"]) {
               await page.evaluate((dir) => {
                 document.documentElement.dir = dir;
@@ -249,6 +255,7 @@ suite.define(() => {
               await expectColumn(
                 pane.locator(".agent-chat__composer-shell"),
                 `${direction} composer`,
+                label,
               );
               const frame = await transcript.boundingBox();
               const directionLabel = `${label} (${direction})`;
@@ -261,36 +268,39 @@ suite.define(() => {
               await expectColumn(
                 pane.locator(".chat-group.assistant > .chat-group-messages"),
                 `${direction} assistant`,
+                label,
               );
               await expect(
                 pane.locator(".chat-group .chat-avatar:visible"),
                 directionLabel,
               ).toHaveCount(0);
             }
-            await pane
-              .locator(".agent-chat__composer-combobox textarea")
-              .fill("Read the example file.");
-            await pane.getByRole("button", { name: "Send message" }).click();
-            const request = await gateway.waitForRequest("chat.send", { match: { sessionKey } });
-            const runId = readRunId(request.params);
+            await pane.getByRole("button", { name: "Send message" }).click({ trial: true });
+          });
+          await pane.getByRole("button", { name: "Send message" }).click();
+          const request = await gateway.waitForRequest("chat.send", { match: { sessionKey } });
+          const runId = readRunId(request.params);
+          await atEveryViewport(async (_viewport, label) => {
             await expect(pane.locator(".chat-working-indicator"), label).toBeVisible();
             const working = pane.locator(".chat-group--working > .chat-group-messages");
-            await expectColumn(working, "working indicator");
+            await expectColumn(working, "working indicator", label);
             await expect(working, label).toHaveCSS("padding-inline-start", "0px");
-            const toolCallId = `mobile-read-${width}`;
-            await gateway.emitGatewayEvent("agent", {
-              runId,
-              sessionKey,
-              stream: "tool",
-              seq: 1,
-              ts: Date.now(),
-              data: {
-                name: "read",
-                phase: "start",
-                toolCallId,
-                args: { path: "example.txt" },
-              },
-            });
+          }, "rtl");
+          const toolCallId = "mobile-read";
+          await gateway.emitGatewayEvent("agent", {
+            runId,
+            sessionKey,
+            stream: "tool",
+            seq: 1,
+            ts: Date.now(),
+            data: {
+              name: "read",
+              phase: "start",
+              toolCallId,
+              args: { path: "example.txt" },
+            },
+          });
+          await atEveryViewport(async (_viewport, label) => {
             await expect(
               pane.locator(`[data-message-id^="tool:assistant:${toolCallId}"]`),
               label,
@@ -298,26 +308,29 @@ suite.define(() => {
             await expectColumn(
               pane.locator(".chat-group.assistant > .chat-group-messages").last(),
               "tool response",
+              label,
             );
-            await gateway.emitChatFinal({
-              runId,
-              sessionKey,
-              text: "The example file is readable.",
-            });
+          }, "rtl");
+          await gateway.emitChatFinal({
+            runId,
+            sessionKey,
+            text: "The example file is readable.",
+          });
+          await gateway.emitGatewayEvent("session.message", {
+            sessionKey,
+            messageId: "mobile-peer-message",
+            messageSeq: 5,
+            message: userMessage(
+              profile("profile-riley", "Riley"),
+              "Riley joined this conversation.",
+              Date.now(),
+            ),
+          });
+          await atEveryViewport(async ({ height }, label) => {
             await expect(
               transcript.getByText("The example file is readable."),
               label,
             ).toBeVisible();
-            await gateway.emitGatewayEvent("session.message", {
-              sessionKey,
-              messageId: `mobile-peer-message-${width}`,
-              messageSeq: 5,
-              message: userMessage(
-                profile("profile-riley", "Riley"),
-                "Riley joined this conversation.",
-                Date.now(),
-              ),
-            });
             if (profiled) {
               const peer = pane.locator(".chat-group--peer", {
                 hasText: "Riley joined this conversation.",
@@ -349,9 +362,13 @@ suite.define(() => {
               await expect
                 .poll(() => thread.evaluate((element) => element.scrollTop), { message: label })
                 .toBeGreaterThan(0);
-              await expectColumn(pane.locator(".agent-chat__composer-shell"), "scrolled composer");
+              await expectColumn(
+                pane.locator(".agent-chat__composer-shell"),
+                "scrolled composer",
+                label,
+              );
             }
-          }
+          }, "rtl");
         },
       );
     },

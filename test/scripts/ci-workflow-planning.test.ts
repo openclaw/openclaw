@@ -298,6 +298,7 @@ function renderCiGateEnvironment(
     run_check_plan: "false",
     reuse_browser_extension_build: "false",
     reuse_control_ui_i18n_setup: "false",
+    reuse_control_ui_performance_setup: "false",
     shared_sdk_declarations: "false",
     compatibility_target: "false",
     release_scope: "full",
@@ -2367,9 +2368,12 @@ describe("ci workflow guards", () => {
       runAttempt: 1,
       preflightOutputs: manifest.outputs,
     };
-    for (const name of ["checks-ui", "control-ui-performance"]) {
-      expect(evaluateWorkflowCondition(workflow.jobs[name].if, context)).toBe(true);
-    }
+    expect(evaluateWorkflowCondition(workflow.jobs["checks-ui"].if, context)).toBe(true);
+    expect(manifest.outputs.run_control_ui_performance).toBe("true");
+    expect(manifest.outputs.reuse_control_ui_performance_setup).toBe("true");
+    expect(evaluateWorkflowCondition(workflow.jobs["control-ui-performance"].if, context)).toBe(
+      false,
+    );
     for (const name of ["checks-ui-e2e", "checks-ui-e2e-real-gateway"]) {
       expect(evaluateWorkflowCondition(workflow.jobs[name].if, context)).toBe(false);
     }
@@ -2637,8 +2641,10 @@ describe("ci workflow guards", () => {
       ).include.filter((row: { task: string }) => row.task === "control-ui") as Array<{
         vitest_max_workers: number;
       }>;
-      expect(controlRows).toHaveLength(release ? 12 : 6);
-      expect(controlRows.reduce((total, row) => total + row.vitest_max_workers, 0)).toBe(24);
+      expect(controlRows).toHaveLength(release ? 12 : 5);
+      expect(controlRows.reduce((total, row) => total + row.vitest_max_workers, 0)).toBe(
+        release ? 24 : 20,
+      );
       for (const family of [
         "run_build_artifacts",
         "run_ios_build",
@@ -3958,6 +3964,111 @@ describe("ci workflow guards", () => {
     expect(result.status, result.output).toBe(0);
     expect(result.outputs.run_qa_smoke_ci).toBe(String(fixture.qa));
     expect(result.outputs.run_control_ui_performance).toBe(String(fixture.performance));
+  });
+
+  it.each([
+    { eventName: "pull_request" as const, unit: true, shared: true },
+    { eventName: "push" as const, unit: true, shared: true },
+    { eventName: "schedule" as const, unit: true, shared: true },
+    { eventName: "push" as const, unit: false, shared: false },
+    { eventName: "workflow_dispatch" as const, unit: true, shared: false },
+  ])("shares selected UI performance setup on $eventName (unit=$unit)", (fixture) => {
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: fixture.eventName,
+      changedPaths: ["ui/src/main.ts"],
+      scopeEnv: { OPENCLAW_CI_RUN_UI_TESTS: String(fixture.unit) },
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(manifest.outputs.run_ui_tests).toBe(String(fixture.unit));
+    expect(manifest.outputs.run_control_ui_performance).toBe("true");
+    expect(manifest.outputs.reuse_control_ui_performance_setup).toBe(String(fixture.shared));
+    expect(
+      evaluateWorkflowCondition(readCiWorkflow().jobs["control-ui-performance"].if, {
+        eventName: fixture.eventName,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        preflightOutputs: manifest.outputs,
+      }),
+    ).toBe(!fixture.shared);
+  });
+
+  it("runs shared performance proof once after the last selected unit row, including failures", () => {
+    const job = readCiWorkflow().jobs["checks-ui"];
+    const performance = expectDefined(
+      job.steps.find(
+        (step: WorkflowStep) => step.name === "Check Control UI performance against base",
+      ),
+      "shared performance step",
+    );
+    expect(job.steps.indexOf(performance)).toBeGreaterThan(
+      job.steps.findIndex(
+        (step: WorkflowStep) => step.name === "Test Control UI WebKit overlays and focus",
+      ),
+    );
+    const context = {
+      eventName: "pull_request" as const,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      failed: true,
+      preflightOutputs: { reuse_control_ui_performance_setup: "true", ui_test_shard_count: "3" },
+      steps: { node_setup: { outputs: {}, outcome: "success" as const } },
+    };
+    for (const count of [1, 2, 3]) {
+      for (let shard = 1; shard <= count; shard += 1) {
+        expect(
+          evaluateWorkflowCondition(performance.if, {
+            ...context,
+            matrix: { shard },
+            preflightOutputs: { ...context.preflightOutputs, ui_test_shard_count: String(count) },
+          }),
+        ).toBe(shard === count);
+      }
+    }
+    for (const override of [
+      { cancelled: true },
+      { steps: { node_setup: { outputs: {}, outcome: "failure" as const } } },
+      {
+        preflightOutputs: {
+          ...context.preflightOutputs,
+          reuse_control_ui_performance_setup: "false",
+        },
+      },
+    ]) {
+      expect(
+        evaluateWorkflowCondition(performance.if, {
+          ...context,
+          matrix: { shard: 3 },
+          ...override,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it.each([
+    { reuse: "true", units: "success", dedicated: "skipped", exitCode: 0 },
+    { reuse: "true", units: "failure", dedicated: "success", exitCode: 1 },
+    { reuse: "true", units: "skipped", dedicated: "success", exitCode: 1 },
+    { reuse: "true", units: "cancelled", dedicated: "success", exitCode: 1 },
+    { reuse: "false", units: "success", dedicated: "success", exitCode: 0 },
+    { reuse: "false", units: "success", dedicated: "failure", exitCode: 1 },
+    { reuse: "false", units: "success", dedicated: "skipped", exitCode: 1 },
+  ])("gates UI performance reuse=$reuse units=$units dedicated=$dedicated", (entry) => {
+    const row = renderCiGateEnvironment(
+      {
+        preflightOutputs: {
+          run_control_ui_performance: "true",
+          reuse_control_ui_performance_setup: entry.reuse,
+        },
+      },
+      { "checks-ui": entry.units, "control-ui-performance": entry.dedicated },
+    )
+      .split("\n")
+      .find((value) => value.startsWith("control-ui-performance="));
+    const gate = runCiGateFixture(
+      `preflight=success|true\n${expectDefined(row, "performance gate")}`,
+    );
+    expect(gate.status, `${gate.stdout}${gate.stderr}`).toBe(entry.exitCode);
   });
 
   it.each([
@@ -5910,7 +6021,8 @@ describe("ci workflow guards", () => {
             ([key]) =>
               !key.startsWith("hybrid_hosted_") &&
               key !== "check_additional_matrix" &&
-              key !== "reuse_control_ui_i18n_setup",
+              key !== "reuse_control_ui_i18n_setup" &&
+              key !== "reuse_control_ui_performance_setup",
           ),
         );
       expect(coverage(qualification.outputs)).toEqual(coverage(ordinaryPush.outputs));
@@ -10604,15 +10716,15 @@ describe("ci workflow guards", () => {
         expectDefined(manifest.outputs.ui_e2e_matrix, "browser matrix"),
       ).include;
       expect(rows.map((row: { shard: number }) => row.shard)).toEqual([
-        ...(control ? [1, 2, 3, 4, 5, 6] : []),
+        ...(control ? [1, 2, 3, 4, 5] : []),
         ...(browser && manifest.outputs.reuse_browser_extension_build !== "true"
-          ? [control ? 7 : 1]
+          ? [control ? 6 : 1]
           : []),
       ]);
       for (const row of rows) {
         expect(row).toMatchObject({
-          shard_count: control ? 7 : 1,
-          vitest_shard_count: control ? 6 : 0,
+          shard_count: control ? 6 : 1,
+          vitest_shard_count: control ? 5 : 0,
           vitest_max_workers: 4,
         });
       }
@@ -10873,7 +10985,7 @@ describe("ci workflow guards", () => {
     const expectedUiE2eMatrices = (
       [
         [8, 3],
-        [6, 4],
+        [5, 4],
         [12, 2],
       ] as const
     ).map(([vitestShardCount, workers]) => ({
@@ -12650,6 +12762,12 @@ describe("ci workflow guards", () => {
       requiredJobs.map((job) => `${job}=\${{ needs.${job}.result }}|true`),
     );
     for (const job of selectedJobs) {
+      if (job === "control-ui-performance") {
+        expect(verifyStep.env.JOB_RESULTS).toContain(
+          "control-ui-performance=${{ needs.preflight.outputs.reuse_control_ui_performance_setup == 'true' && needs.checks-ui.result || needs.control-ui-performance.result }}|",
+        );
+        continue;
+      }
       if (job === "control-ui-i18n") {
         expect(verifyStep.env.JOB_RESULTS).toContain(
           "control-ui-i18n=${{ needs.preflight.outputs.reuse_control_ui_i18n_setup == 'true' && (needs.build-artifacts.outputs.control_ui_i18n_result || 'missing') || needs.control-ui-i18n.result }}|",
@@ -12678,6 +12796,13 @@ describe("ci workflow guards", () => {
       );
       const job = expectDefined(match[1], row);
       const selection = expectDefined(match[3], row);
+      if (job === "control-ui-performance") {
+        expect(selection).toBe("needs.preflight.outputs.run_control_ui_performance");
+        expect(workflow.jobs[job].if).toBe(
+          "needs.preflight.outputs.run_control_ui_performance == 'true' && needs.preflight.outputs.reuse_control_ui_performance_setup != 'true'",
+        );
+        continue;
+      }
       expect(match[2], row).toBe(job);
       if (job === "control-ui-i18n") {
         expect(selection).toBe("needs.preflight.outputs.run_control_ui_i18n");

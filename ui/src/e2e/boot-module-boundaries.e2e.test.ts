@@ -11,6 +11,7 @@ import { defineTypographyModuleBoundaryTests } from "./typography-module-boundar
 const tempDirs = createTempDirTracker();
 const buildId = "e2e";
 let buildRoot: string;
+const moduleRequests = new Map<string, RegExp>();
 const suite = createControlUiE2eSuite({
   name: "Control UI module boundaries",
   trackBrowserContexts: true,
@@ -25,6 +26,7 @@ const suite = createControlUiE2eSuite({
       return {
         ...server,
         close: async () => {
+          moduleRequests.clear();
           await server.close();
           tempDirs.cleanup();
         },
@@ -35,7 +37,14 @@ const suite = createControlUiE2eSuite({
     }
   },
 });
-const moduleRequest = (sourcePath: string) => controlUiE2eBuiltModuleRequest(sourcePath, buildRoot);
+const moduleRequest = (sourcePath: string) => {
+  let request = moduleRequests.get(sourcePath);
+  if (!request) {
+    request = controlUiE2eBuiltModuleRequest(sourcePath, buildRoot);
+    moduleRequests.set(sourcePath, request);
+  }
+  return request;
+};
 
 suite.define(() => {
   defineGatewayModuleBoundaryTests(suite, moduleRequest);

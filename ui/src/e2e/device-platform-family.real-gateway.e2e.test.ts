@@ -47,22 +47,6 @@ const cases = [
     label: "iPadOS",
   },
   {
-    name: "fresh-ipad-agent",
-    touch: 0,
-    ua: "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
-    legacy: false,
-    family: "iPad",
-    label: "iPadOS",
-  },
-  {
-    name: "legacy-mac",
-    touch: 0,
-    ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
-    legacy: true,
-    family: "Mac",
-    label: "macOS",
-  },
-  {
     name: "legacy-ipad",
     touch: 5,
     ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",

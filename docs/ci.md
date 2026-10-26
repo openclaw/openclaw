@@ -116,8 +116,15 @@ complete discovery, runtime ownership, and first-shard WebKit selection.
 Two-shard trials did not reduce measured runner minutes and exceeded the
 critical-path budget.
 
-Compact mocked Control UI E2E uses six 16-class jobs with four workers each,
-matching the four observed CPUs per runner and retaining 24 aggregate worker slots.
+Current automatic PR, push, and scheduled runs share the selected Control UI
+performance check with the last already-selected UI unit row. It runs after the
+tests, using the same base-comparison command and checkout, without adding a
+build dependency or selecting new unit work. The required gate uses the combined
+unit result, so a failed or skipped shared check cannot pass. Manual, frozen,
+compatibility, and performance-only plans retain the standalone job.
+
+Compact mocked Control UI E2E uses five 16-class jobs with four workers each,
+matching the four observed CPUs per runner and using 20 aggregate worker slots.
 Private source-server projects stay serial. The conditional browser-extension
 row, noncompact plans, and real-Gateway worker limits retain their existing rules.
 Browser suites that only exercise the rendered UI borrow the invocation's

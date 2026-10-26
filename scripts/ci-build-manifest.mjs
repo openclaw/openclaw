@@ -455,11 +455,11 @@ const includeReleaseOnlyUiTests =
     !isCanonicalRepository ||
     compatibilityTarget ||
     changedPaths === null);
-// Match four observed CPUs per 16-class job while retaining 24 worker slots.
+// Five fuller shards retain four workers per 16-class job.
 // Private source-server projects remain serial.
 const compactUiE2e = supportsUiE2eProjects && !includeReleaseOnlyUiTests;
 let uiE2eJobCount = compactUiE2e
-  ? 7
+  ? 6
   : supportsUiE2eProjects
     ? 13
     : usesHostedRunnerProfile
@@ -1113,6 +1113,13 @@ const runControlUiPerformance =
     changedPaths === null ||
     typeof changedNodeTestPlan.hasControlUiPerformanceAffectingChange !== "function" ||
     changedNodeTestPlan.hasControlUiPerformanceAffectingChange(changedPaths));
+// Reuse an existing unit row without selecting one or changing historical runs.
+const reuseControlUiPerformanceSetup =
+  runControlUiPerformance &&
+  runUiTests &&
+  ["pull_request", "push", "schedule"].includes(workflowEventName) &&
+  !frozenTarget &&
+  !compatibilityTarget;
 const runQaSmokeCi =
   runNodeFull &&
   changedScopeHasQaImpact &&
@@ -1735,6 +1742,7 @@ const manifest = {
     ),
   ),
   run_control_ui_performance: runControlUiPerformance,
+  reuse_control_ui_performance_setup: reuseControlUiPerformanceSetup,
   run_ui_e2e: runControlUiE2e || (runBrowserExtensionE2e && !reuseBrowserExtensionBuild),
   reuse_browser_extension_build: reuseBrowserExtensionBuild,
   run_ui_real_gateway: runUiRealGateway,
@@ -1883,7 +1891,9 @@ if (hybridHostedEligible) {
         (hostedHybridControls ||
           process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY),
     ),
-    "control-ui-performance": count(manifest.run_control_ui_performance),
+    "control-ui-performance": count(
+      manifest.run_control_ui_performance && !manifest.reuse_control_ui_performance_setup,
+    ),
     "published-driver-update": count(manifest.run_published_driver_update),
     "native-i18n": count(manifest.run_native_i18n),
     "control-ui-i18n": count(manifest.run_control_ui_i18n && !manifest.reuse_control_ui_i18n_setup),

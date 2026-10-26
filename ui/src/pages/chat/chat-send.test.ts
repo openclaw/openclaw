@@ -1150,6 +1150,7 @@ describe("handleSendChat", () => {
 
   it("retires a failed queued picker back to the preceding confirmed session row", async () => {
     const firstPatch = createDeferred<unknown>();
+    const firstPatchStarted = createDeferred();
     let patchCount = 0;
     const host = makeChatHost({
       requestHandlers: {
@@ -1163,6 +1164,7 @@ describe("handleSendChat", () => {
         "sessions.patch": () => {
           patchCount += 1;
           if (patchCount === 1) {
+            firstPatchStarted.resolve();
             return firstPatch.promise;
           }
           throw new Error("picker rejected");
@@ -1171,7 +1173,8 @@ describe("handleSendChat", () => {
     });
 
     const slash = patchChatSessionSettings(host, host.sessionKey, { model: "openai/gpt-5-mini" });
-    await waitForFast(() => expect(patchCount).toBe(1));
+    await firstPatchStarted.promise;
+    expect(patchCount).toBe(1);
     const picker = patchChatSessionSettings(host, host.sessionKey, {
       model: "openai/gpt-5",
     });

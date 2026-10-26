@@ -225,6 +225,7 @@ jobs:
       ui_test_groups_gzip_base64: ${{ steps.manifest.outputs.ui_test_groups_gzip_base64 }}
       ui_e2e_test_groups_gzip_base64: ${{ steps.manifest.outputs.ui_e2e_test_groups_gzip_base64 }}
       run_control_ui_performance: ${{ steps.manifest.outputs.run_control_ui_performance }}
+      reuse_control_ui_performance_setup: ${{ steps.manifest.outputs.reuse_control_ui_performance_setup }}
       run_ui_e2e: ${{ steps.manifest.outputs.run_ui_e2e }}
       reuse_browser_extension_build: ${{ steps.manifest.outputs.reuse_browser_extension_build }}
       run_ui_real_gateway: ${{ steps.manifest.outputs.run_ui_real_gateway }}
@@ -2359,7 +2360,7 @@ jobs:
     permissions:
       contents: read
     needs: [preflight]
-    if: needs.preflight.outputs.run_control_ui_performance == 'true'
+    if: needs.preflight.outputs.run_control_ui_performance == 'true' && needs.preflight.outputs.reuse_control_ui_performance_setup != 'true'
     runs-on: &shared_small_linux_runner >-
       ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
       'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
@@ -2404,7 +2405,7 @@ jobs:
 
       - name: Check Control UI performance against base
         shell: bash
-        run: |
+        run: &check_control_ui_performance |
           set -euo pipefail
           if node -e 'process.exit(require("./package.json").scripts?.["ui:check-performance:base"] ? 0 : 1)'; then
             pnpm ui:check-performance:base "$CHECKOUT_BASE_SHA"
@@ -2466,6 +2467,7 @@ jobs:
       matrix: ${{ fromJSON(needs.preflight.outputs.ui_test_matrix) }}
     env:
       COMPATIBILITY_TARGET: *historical_target
+      CHECKOUT_BASE_SHA: *ci_diff_base
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -2527,6 +2529,11 @@ jobs:
         env:
           OPENCLAW_UI_WEBKIT: "1"
         run: pnpm --dir ui test --project=webkit --maxWorkers=3
+
+      - name: Check Control UI performance against base
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.reuse_control_ui_performance_setup == 'true' && matrix.shard == fromJSON(needs.preflight.outputs.ui_test_shard_count) }}
+        shell: bash
+        run: *check_control_ui_performance
 
       - name: Upload Control UI timeout diagnostics
         if: failure()
@@ -6920,7 +6927,7 @@ jobs:
             security-fast=${{ needs.security-fast.result }}|true
             check-plan=${{ needs.check-plan.result }}|${{ needs.preflight.outputs.run_check_plan }}
             build-artifacts=${{ needs.build-artifacts.result }}|${{ needs.preflight.outputs.run_build_artifacts }}
-            control-ui-performance=${{ needs.control-ui-performance.result }}|${{ needs.preflight.outputs.run_control_ui_performance }}
+            control-ui-performance=${{ needs.preflight.outputs.reuse_control_ui_performance_setup == 'true' && needs.checks-ui.result || needs.control-ui-performance.result }}|${{ needs.preflight.outputs.run_control_ui_performance }}
             native-i18n=${{ needs.native-i18n.result }}|${{ needs.preflight.outputs.run_native_i18n }}
             checks-ui=${{ needs.checks-ui.result }}|${{ needs.preflight.outputs.run_ui_tests }}
             checks-ui-e2e=${{ needs.checks-ui-e2e.result }}|${{ needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}

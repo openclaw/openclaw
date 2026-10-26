@@ -43,26 +43,47 @@ function buildPaths(buildRoot: string | undefined) {
   return { assetsDir: path.join(buildRoot, "assets"), html: path.join(buildRoot, "index.html") };
 }
 
+type BuiltModuleSources = { fileName: string; sources: string[] };
+let defaultBuiltModuleCatalog: { assetsDir: string; modules: BuiltModuleSources[] } | undefined;
+
+function readBuiltModuleCatalog(assetsDir: string): BuiltModuleSources[] {
+  return readdirSync(assetsDir)
+    .filter((file) => file.endsWith(".js.map"))
+    .map((file) => {
+      const sourceMap: { sources: string[] } = JSON.parse(
+        readFileSync(path.join(assetsDir, file), "utf8"),
+      );
+      return {
+        fileName: file.slice(0, -".map".length),
+        sources: sourceMap.sources.map((source) => source.replaceAll("\\", "/")),
+      };
+    });
+}
+
 /** Resolve the emitted implementation, including when optimization removes its facade. */
-export function controlUiE2eBuiltModuleRequest(
-  modulePath: string,
-  buildRoot = inject("controlUiE2eBuildRoot"),
-): RegExp {
-  const { assetsDir } = buildPaths(buildRoot);
+export function controlUiE2eBuiltModuleRequest(modulePath: string, buildRoot?: string): RegExp {
+  const { assetsDir } = buildPaths(
+    buildRoot === undefined ? inject("controlUiE2eBuildRoot") : buildRoot,
+  );
   const sourceSuffix = `/${modulePath.replaceAll("\\", "/")}`;
-  const chunks = readdirSync(assetsDir).filter((file) => {
-    if (!file.endsWith(".js.map")) {
-      return false;
+  let modules =
+    buildRoot === undefined && defaultBuiltModuleCatalog?.assetsDir === assetsDir
+      ? defaultBuiltModuleCatalog.modules
+      : undefined;
+  if (!modules) {
+    modules = readBuiltModuleCatalog(assetsDir);
+    // Only the injected build is immutable for this isolated test file's lifetime.
+    if (buildRoot === undefined) {
+      defaultBuiltModuleCatalog = { assetsDir, modules };
     }
-    const sourceMap: { sources: string[] } = JSON.parse(
-      readFileSync(path.join(assetsDir, file), "utf8"),
-    );
-    return sourceMap.sources.some((source) => source.replaceAll("\\", "/").endsWith(sourceSuffix));
-  });
+  }
+  const chunks = modules.filter(({ sources }) =>
+    sources.some((source) => source.endsWith(sourceSuffix)),
+  );
   if (chunks.length !== 1) {
     throw new Error(`Expected one built chunk for ${modulePath}, found ${chunks.length}`);
   }
-  return builtAssetRequest([chunks[0]!.slice(0, -".map".length)]);
+  return builtAssetRequest([chunks[0]!.fileName]);
 }
 
 /** Raw ?url assets retain source bytes instead of participating in module sourcemaps. */

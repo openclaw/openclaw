@@ -711,6 +711,35 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         const colors = await readMenuColors(page);
         expect(colorContrast(colors.foreground, colors.background)).toBeGreaterThanOrEqual(4.5);
 
+        if (mode === "light") {
+          const presentation = await page
+            .locator(".board-widget__menu-panel:popover-open .board-widget__menu-danger")
+            .evaluate((action) => {
+              const menu = action.parentElement;
+              const move = menu?.querySelector('[role="menuitem"][data-value^="move:"]');
+              const preset = menu?.querySelector(".board-widget__preset");
+              const icon = action.querySelector(".board-widget__menu-icon");
+              if (!(move instanceof HTMLElement) || !(preset instanceof HTMLElement)) {
+                throw new Error("board fixture menu did not expose move and resize options");
+              }
+              return {
+                actionFontSize: getComputedStyle(action).fontSize,
+                actionText: action.textContent?.trim(),
+                iconHidden: icon?.getAttribute("aria-hidden"),
+                iconSvg: Boolean(icon?.querySelector("svg")),
+                moveFontSize: getComputedStyle(move).fontSize,
+                presetFontSize: getComputedStyle(preset).fontSize,
+              };
+            });
+          expect(presentation).toMatchObject({
+            actionText: "Delete",
+            actionFontSize: presentation.presetFontSize,
+            moveFontSize: presentation.presetFontSize,
+            iconHidden: "true",
+            iconSvg: true,
+          });
+        }
+
         const widgetBackgrounds = await page
           .locator('[data-test-id="board-widget"]')
           .first()
@@ -747,40 +776,6 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         await context.close();
       }
     },
-  );
-
-  it(
-    "renders consistent menu options with a leading trash icon",
-    withFixturePage(async (page) => {
-      await page.goto(fixtureServer.url, { waitUntil: "domcontentloaded" });
-      await openWidgetMenu(page);
-      const presentation = await page
-        .locator(".board-widget__menu-panel:popover-open .board-widget__menu-danger")
-        .evaluate((action) => {
-          const menu = action.parentElement;
-          const move = menu?.querySelector('[role="menuitem"][data-value^="move:"]');
-          const preset = menu?.querySelector(".board-widget__preset");
-          const icon = action.querySelector(".board-widget__menu-icon");
-          if (!(move instanceof HTMLElement) || !(preset instanceof HTMLElement)) {
-            throw new Error("board fixture menu did not expose move and resize options");
-          }
-          return {
-            actionFontSize: getComputedStyle(action).fontSize,
-            actionText: action.textContent?.trim(),
-            iconHidden: icon?.getAttribute("aria-hidden"),
-            iconSvg: Boolean(icon?.querySelector("svg")),
-            moveFontSize: getComputedStyle(move).fontSize,
-            presetFontSize: getComputedStyle(preset).fontSize,
-          };
-        });
-      expect(presentation).toMatchObject({
-        actionText: "Delete",
-        actionFontSize: presentation.presetFontSize,
-        moveFontSize: presentation.presetFontSize,
-        iconHidden: "true",
-        iconSvg: true,
-      });
-    }),
   );
 
   it(
