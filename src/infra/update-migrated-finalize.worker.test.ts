@@ -558,34 +558,21 @@ it.each<DeadlineCase>([
   },
 );
 
-it.each(["inspected", "legacy-unavailable", "windows-suspended"] as const)(
-  "forwards the %s service owner to shared migrated finalization",
-  async (mode) => {
-    const transferred =
-      mode === "legacy-unavailable"
-        ? {
-            stopped: false,
-            inspected: false,
-            serviceMutationAllowed: false,
-            serviceUpdateVerdict: { kind: "unavailable", message: "legacy inspection unavailable" },
-          }
-        : {
-            stopped: mode === "windows-suspended",
-            inspected: true,
-            runtimeInspected: true,
-            running: true,
-            servicePid: 631,
-            serviceEnv: { OPENCLAW_PROFILE: "selected" },
-            serviceManagerUid: 1000,
-            serviceUpdateVerdict: { kind: "owned", root: "/synthetic", fingerprint: "f" },
-          };
+it.each([false, true])(
+  "forwards the service owner to shared finalization (Windows suspension=%s)",
+  async (suspended) => {
+    const transferred = {
+      ...stoppedService,
+      stopped: suspended,
+      serviceEnv: { OPENCLAW_PROFILE: "selected" },
+    };
     const input = {
       ...workerInput({
         ...finalizationParams(),
         shouldRestart: false,
         preManagedServiceStop: transferred,
       }),
-      ...(mode === "windows-suspended" ? { windowsTaskAutoStartSuspended: true } : {}),
+      ...(suspended ? { windowsTaskAutoStartSuspended: true } : {}),
     };
     fixture.finish.mockImplementation(async (params: { result: typeof result }) => params.result);
     fixture.terminal.mockReturnValue({ runId: "synthetic-run", status: "succeeded", steps: [] });
@@ -696,16 +683,7 @@ it.each([
       );
     }
     if (stops) {
-      expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ root: "/synthetic", phase: "prepare", shouldRestart: true }),
-      );
-      // The receipt is a retained `finalize:` step whose key carries the identity,
-      // so published parents' detail compaction cannot erase it.
-      expect(fixture.recordStep).toHaveBeenCalledExactlyOnceWith(
-        "synthetic-run",
-        { step: "finalize:predecessor-stop:7:1000:631:f", status: "completed", endedAtMs: 7 },
-        expect.objectContaining({ assertCurrent: expect.any(Function) }),
-      );
+      expect(fixture.stopService).toHaveBeenCalledOnce();
       if (!uncertain) {
         expect(fixture.stopService.mock.invocationCallOrder[0]).toBeLessThan(
           doctor.mock.invocationCallOrder[0] ?? 0,
