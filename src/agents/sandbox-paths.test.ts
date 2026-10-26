@@ -144,12 +144,13 @@ describe("assertSandboxPath", () => {
       for (const root of roots) {
         await fs.mkdir(root);
       }
-      const target = path.join(roots[count - 1], "proof.txt");
+      const admittedRoot = path.join(parent, `root-${count - 1}`);
+      const target = path.join(admittedRoot, "proof.txt");
       await fs.writeFile(target, "inside");
       const lstat = vi.spyOn(fsSync, "lstatSync");
       try {
         for (const root of roots) {
-          if (root === roots[count - 1]) {
+          if (root === admittedRoot) {
             await expect(sandboxPath(root, target)).resolves.toMatchObject({ resolved: target });
           } else {
             await expectPathRejection(root, target);
