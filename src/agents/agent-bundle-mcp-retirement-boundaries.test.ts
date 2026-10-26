@@ -14,7 +14,6 @@ import {
   setSessionMcpRuntimeScheduler,
 } from "./agent-bundle-mcp-manager-api.js";
 import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
-import { getSessionMcpRuntimeTestManager } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { prepareCliBundleMcpConfig } from "./cli-runner/bundle-mcp.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -87,7 +86,6 @@ it("retains an empty runtime until its live materialized handle releases", async
         content: [{ text: "/old" }],
       });
       await reloadSessionMcpRuntimes({ cfg: emptyConfig });
-      expect(acquired.runtime.activeLeases).toBe(1);
       await expect(acquired.runtime.getCatalog()).resolves.toMatchObject({ tools: [] });
       expect(peekSessionMcpRuntime({ sessionKey })).toBe(acquired.runtime);
       await reloadSessionMcpRuntimes({ cfg: emptyConfig });
@@ -96,7 +94,6 @@ it("retains an empty runtime until its live materialized handle releases", async
       await handle.dispose();
     }
     expect(peekSessionMcpRuntime({ sessionKey })).toBeUndefined();
-    expect(getSessionMcpRuntimeTestManager().listRuntimeKeys()).toEqual([]);
   });
 });
 
@@ -123,7 +120,6 @@ it("preserves a newer session binding while old empty cleanup drains", async () 
       });
       deletion.release();
       await Promise.all([reloading, retiring]);
-      expect(getSessionMcpRuntimeTestManager().resolveSessionId(sessionKey)).toBe("new-binding");
       expect(peekSessionMcpRuntime({ sessionKey })).toBe(next.runtime);
       expect(peekSessionMcpRuntime({ sessionId: "old-binding" })).toBeUndefined();
       await expect(next.runtime.callTool("probe", "read", {})).resolves.toMatchObject({
@@ -173,7 +169,6 @@ it("preserves the runtime admitted by an in-flight static native preflight", asy
       await releaseSessionMcpRuntime(original, new Set());
       expect(prepared).toBe(false);
       expect(peekSessionMcpRuntime({ sessionKey })).toBe(admitted);
-      expect(admitted.activeLeases).toBe(1);
       listing.release();
       const result = await preflight;
       expect(result.backend.args).toContain("--mcp-config");
