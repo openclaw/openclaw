@@ -13,12 +13,16 @@ import { resolveOcmUpdateManager } from "../../src/infra/ocm-update-client.js";
 const synthetic = Object.fromEntries(
   Array.from({ length: 160 }, (_, i) => [`FIXTURE_ENV_${i}`, `synthetic-${i}`]),
 );
-process.env = {
+// Retain Node's native environment access cost without measuring real credentials.
+for (const key of Object.keys(process.env)) {
+  delete process.env[key];
+}
+Object.assign(process.env, {
   ...synthetic,
   PATH: "/usr/bin:/bin",
   HOME: `${process.cwd()}/.local/update-manager-measure/home`,
   OPENCLAW_STATE_DIR: `${process.cwd()}/.local/update-manager-measure/state`,
-};
+});
 const config = {
   env: { vars: Object.fromEntries(Object.entries(synthetic).slice(0, 40)) },
   plugins: {
