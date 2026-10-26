@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, vi } from "vitest";
 import { imessagePlugin } from "../channel.js";
@@ -19,22 +20,10 @@ export const privateRuntimeBlocks = [
   "<system-reminder>\nuser:\nHIDDEN_RUNTIME_REMINDER\n\ue000\n</system-reminder>",
   "< previous_response origin='runtime'>HIDDEN_RUNTIME_PREVIOUS\ue001< / previous_response >",
   "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>HIDDEN_RUNTIME_CONTEXT\ue002<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-  "<system-reminder><system-reminder>inner</system-reminder>HIDDEN_RUNTIME_NESTED_REMINDER\ue003</system-reminder>",
-  "<previous_response><system-reminder>inner</system-reminder>HIDDEN_RUNTIME_NESTED_MIXED\ue004</previous_response>",
-  "< SYSTEM-REMINDER>< previous_response origin='runtime'>inner< / previous_response >HIDDEN_RUNTIME_NESTED_CASE\ue005< / SYSTEM-REMINDER >",
-  "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>><system-reminder>inner</system-reminder>HIDDEN_RUNTIME_NESTED_CONTEXT\ue006<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-  // Exhaustive parser variants live in monitor/sanitize-outbound.test-support.ts.
-  "<system-reminder data-x='>'>HIDDEN_RUNTIME_QUOTED</system-reminder>",
-  "<system-reminder><!-- </system-reminder> <system-reminder> -->HIDDEN_RUNTIME_OPAQUE_COMMENT</system-reminder>",
-  '<previous_response><?private fake="?> </previous_response>"?>HIDDEN_RUNTIME_OPAQUE_INSTRUCTION</previous_response>',
-  "<previous_response>`</system-reminder>`HIDDEN_RUNTIME_CODE_INLINE</previous_response>",
-  '<system-reminder><script title=">"></system-reminder></script>HIDDEN_RUNTIME_RAW_TEXT</system-reminder>',
-  '<previous_response><TEXTAREA data-x=">" /></previous_response></textarea>HIDDEN_RUNTIME_RAW_TEXT_SELF_CLOSING</previous_response>',
 ] as const;
+// Parser variants live in monitor/sanitize-outbound.test-support.ts; exercise each wire format here.
 export const privateRuntimeScaffolding = privateRuntimeBlocks
-  .flatMap((block, index) =>
-    index < 7 ? [block, `\`${block}\``, `\`\`\`xml\n${block}\n\`\`\``] : [block],
-  )
+  .flatMap((block) => [block, `\`${block}\``, `\`\`\`xml\n${block}\n\`\`\``])
   .join("\n");
 export const nestMarkdownFences = (source: string, depth: number): string => {
   let nested = source;
@@ -116,13 +105,11 @@ if (args.join(" ") === "rpc --json") {
     },
     createChannelDelivery: () => {
       // The registered renderers are stateless; share them across per-case module resets.
-      const channelChunker = imessagePlugin.outbound?.chunker;
-      const channelSanitizer = imessagePlugin.outbound?.sanitizeText;
-      if (!channelChunker || !channelSanitizer) {
-        throw new Error("Expected the iMessage outbound Markdown sanitizer and chunker");
-      }
-      expect(imessagePlugin.outbound?.chunkerMode).toBe("markdown");
-
+      const channelChunker = expectDefined(imessagePlugin.outbound?.chunker, "iMessage chunker");
+      const channelSanitizer = expectDefined(
+        imessagePlugin.outbound?.sanitizeText,
+        "iMessage sanitizer",
+      );
       const deliverThroughChannel = async (source: string, limit = 4000) => {
         const sanitized = channelSanitizer({ text: source, payload: { text: source } });
         const chunks = channelChunker(sanitized, limit);

@@ -1,9 +1,6 @@
 import fs from "node:fs";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import type {
-  OpenKeyedStoreOptions,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import * as initialStateRuntime from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -32,9 +29,7 @@ let imessageTestEnv = createIMessageTestEnv();
 let stateRuntime = initialStateRuntime;
 const reusedStoreCleanups = new Map<string, () => Promise<void>>();
 
-export function createIMessagePluginStateSyncStoreForTest<T>(
-  options: OpenKeyedStoreOptions,
-): PluginStateSyncKeyedStore<T> {
+export function createIMessagePluginStateSyncStoreForTest<T>(options: OpenKeyedStoreOptions) {
   return stateRuntime.createPluginStateSyncKeyedStoreForTests<T>("imessage", {
     ...options,
     env: imessageTestEnv,
@@ -51,31 +46,26 @@ function installRuntime(
   setRuntime({
     state: {
       resolveStateDir: () => imessageTestEnv.OPENCLAW_STATE_DIR,
-      openChannelIngressQueue: (
-        options?: Omit<
-          Parameters<typeof stateRuntime.createChannelIngressQueueForTests>[0],
-          "channelId"
-        >,
-      ) =>
+      openChannelIngressQueue: (options) =>
         stateRuntime.createChannelIngressQueueForTests({
           ...options,
           channelId: "imessage",
           stateDir: options?.stateDir ?? imessageTestEnv.OPENCLAW_STATE_DIR,
         }),
-      openKeyedStoreV2: (failStores
-        ? failStore
-        : (options) => {
-            const store = stateRuntime
-              .createPluginStateKeyedStoreForTests("imessage", {
-                ...options,
-                env: imessageTestEnv,
-              })
-              .withCurrent({ assertCurrent: () => {} });
-            if (reuseDatabase) {
-              reusedStoreCleanups.set(options.namespace, store.clear);
-            }
-            return store;
-          }) as PluginRuntime["state"]["openKeyedStoreV2"],
+      openKeyedStoreV2: <T>(options) => {
+        if (failStores) {
+          return failStore();
+        }
+        const store = stateRuntime.createPluginStateKeyedStoreV2ForTests<T>(
+          "imessage",
+          { ...options, env: imessageTestEnv },
+          { assertCurrent: () => {} },
+        );
+        if (reuseDatabase) {
+          reusedStoreCleanups.set(options.namespace, store.clear);
+        }
+        return store;
+      },
       openSyncKeyedStore: failStores ? failStore : createIMessagePluginStateSyncStoreForTest,
     },
     channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
