@@ -116,7 +116,7 @@ try {
   if (values.mode === "counts") {
     JSON.parse = (...args) => {
       parseCalls++;
-      return originalParse(...args);
+      return Reflect.apply(originalParse, JSON, args);
     };
   }
   const loadBefore = loadavg();
