@@ -48,9 +48,9 @@ it.runIf(process.platform !== "win32")(
           onEffect: (effect) => {
             if (
               effect.type === "worktree.snapshot-capacity" &&
-              effect.input.purpose === "worktree safety snapshot index"
+              effect.input.purpose === "worktree safety snapshot"
             ) {
-              temporaryDirectory = effect.input.demands[0]?.path ?? "";
+              temporaryDirectory = effect.input.demands[1]?.path ?? "";
             }
             return undefined;
           },
