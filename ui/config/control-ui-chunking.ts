@@ -87,6 +87,15 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/components/chat-details-environment-desktop.css":
       // Share styles without making Outputs import the Details renderer.
       return "chat-details-styles";
+    case "node_modules/@tanstack/virtual-core/dist/esm/index.js":
+    case "node_modules/@tanstack/virtual-core/dist/esm/lazy-measurements.js":
+    case "node_modules/@tanstack/virtual-core/dist/esm/utils.js":
+      return "virtual-core-runtime";
+    case "ui/src/pages/claws/creator-flow.ts":
+    case "ui/src/pages/claws/draft-navigation.ts":
+    case "ui/src/i18n/locales/en-agents-home.ts":
+      // Claws and its sidebar action share draft state without loading Chat.
+      return "claws-creator-runtime";
     case "ui/src/components/session-git-diff.tsx":
     case "ui/src/lib/sessions/usage.ts":
     case "src/shared/weak-owner-map.ts":
@@ -145,6 +154,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Shared catalogs and session parameters must not pull Chat into other routes.
       return "deferred-ui-support";
     case "ui/src/lib/page-request.ts":
+    case "ui/src/lib/worktrees/create-worktree.ts":
+    case "ui/src/pages/new-session/rejected-initial-turn.ts":
     case "ui/src/lib/model-catalog-reader.ts":
     case "ui/src/components/lobster-pet-contract.ts":
     case "ui/src/lib/mac-form-factor.ts":
@@ -269,9 +280,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/route-entry.ts":
       // Pending New Session previews must render while the Chat route entry waits.
       return "chat-route-entry";
-    case "ui/src/i18n/locales/en-chat-composer.ts":
-      // New Session shares composer copy; session copy stays with Chat's boot group.
-      return "chat-english";
     case "ui/src/pages/devices/devices-page.tsx":
       return "devices-page";
     case "ui/src/pages/plugins/plugins-page.tsx":
@@ -300,10 +308,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts":
       // Shared protocol readers must not pull the lazy Plugins page into chat.
       return "plugin-contracts-runtime";
-    case "ui/src/components/solid/copy-button.tsx":
-    case "ui/src/components/copy-button-state.ts":
-      // Login recovery also copies commands, before any Chat route can load.
-      return "copy-button-runtime";
     case "ui/src/components/login-gate-solid.tsx":
     case "ui/src/components/login-gate-feedback.ts":
     case "ui/src/i18n/locales/en-login.ts":
