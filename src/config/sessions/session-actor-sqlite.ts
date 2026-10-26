@@ -345,8 +345,8 @@ export function createSqliteSessionActorExecutor(
                 receipt.phaseId === captured.phaseId &&
                 receipt.phase === name
               ) {
-                // SAFETY: The paired worker constructs the typed result; native admission validates its settlement envelope.
                 committed = restoreSessionActorCommittedOutcome(
+                  // SAFETY: The paired worker constructs the typed result; native admission validates its settlement envelope.
                   evidence as SessionActorCommittedWireOutcome<SessionActorPhaseResults[Phase]>,
                   entryReference,
                 );
