@@ -231,6 +231,7 @@ export async function completeEmbeddedAttemptAfterTurn(
       }
     }
     await finalizeHarnessContextEngineTurn({
+      admittedRunContext: attempt.admittedRunContext,
       sessionKey: attempt.sessionKey,
       sessionTarget: attempt.sessionTarget,
       sessionFile: attempt.sessionFile,
