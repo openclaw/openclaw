@@ -49,7 +49,8 @@ async function settle() {
 }
 
 describe("openclaw-ip-location", () => {
-  it("renders the city with its attribution link and clears a removed address", async () => {
+  it("renders attributed locations and clears them while replacing or removing the address", async () => {
+    const replacement = createDeferred<Response>();
     mockFetch(
       jsonResponse({
         found: true,
@@ -57,6 +58,7 @@ describe("openclaw-ip-location", () => {
         region: "Vienna",
         attribution: { text: "IP Geolocation by DB-IP", url: "https://db-ip.com" },
       }),
+      replacement.promise,
     );
     const view = mountLocation("203.0.113.20");
     const element = view.element;
@@ -66,6 +68,12 @@ describe("openclaw-ip-location", () => {
     expect(element.querySelector("a")?.getAttribute("href")).toBe("https://db-ip.com");
     expect(element.querySelector("a")?.getAttribute("aria-label")).toBe("IP Geolocation by DB-IP");
     expect(element.querySelector("a svg")).not.toBeNull();
+
+    view.update({ ip: "203.0.113.25" });
+    flush();
+    expect(view.text()).toBe("");
+    replacement.resolve(located("Berlin", "Germany"));
+    await view.expectText("Berlin, Germany");
 
     view.update({ ip: undefined });
     flush();
@@ -81,21 +89,6 @@ describe("openclaw-ip-location", () => {
     await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
     flush();
     expect(view.text()).toBe("");
-  });
-
-  it("clears the previous location while a replacement address is pending", async () => {
-    const replacement = createDeferred<Response>();
-    const fetchMock = mockFetch(located(), replacement.promise);
-    const view = mountLocation("203.0.113.24");
-    await view.expectText("Vienna, Austria");
-
-    view.update({ ip: "203.0.113.25" });
-    flush();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(view.text()).toBe("");
-
-    replacement.resolve(located("Berlin", "Germany"));
-    await view.expectText("Berlin, Germany");
   });
 
   it("resumes an unavailable lookup when the component remounts", async () => {

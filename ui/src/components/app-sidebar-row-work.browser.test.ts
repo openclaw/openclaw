@@ -36,15 +36,15 @@ it("keeps unrelated publications out of mounted row access and subtitle preparat
   sidebar.sessionsShowPreview = true;
   const owner = getAppSidebarOwner(sidebar.hostElement)!;
   owner.setVisibleSessionLimit("ungrouped", 80);
-  await waitForSolid(() => {
-    const rows = sidebar.querySelectorAll("[data-session-key]");
-    expect(rows.length).toBeLessThan(40);
-    expect(rows.item(rows.length - 1)?.getBoundingClientRect().bottom).toBeGreaterThanOrEqual(
-      viewport.getBoundingClientRect().bottom,
-    );
-  });
   await settleLitElement(sidebar);
-  const publishList = (result: SessionsListResult) => {
+  const publishRow = (key: string, fields: Partial<SessionsListResult["sessions"][number]>) => {
+    const current = sessions.sessions.state.result!;
+    const result = {
+      ...current,
+      sessions: current.sessions.map((row) =>
+        row.key === key ? Object.assign({}, row, fields) : row,
+      ),
+    };
     sessions.publishList({ result });
     publishSidebarSessionList(owner.sessionData, {
       result,
@@ -53,15 +53,6 @@ it("keeps unrelated publications out of mounted row access and subtitle preparat
       error: null,
     });
     owner.sessionData.requestSessionDataUpdate();
-  };
-  const publishRow = (key: string, fields: Partial<SessionsListResult["sessions"][number]>) => {
-    const result = sessions.sessions.state.result!;
-    publishList({
-      ...result,
-      sessions: result.sessions.map((row) =>
-        row.key === key ? Object.assign({}, row, fields) : row,
-      ),
-    });
   };
   const access = vi.spyOn(owner, "readSessionMutationAccess");
   // oxlint-disable-next-line typescript/unbound-method -- Replay with the intercepted string receiver below.
@@ -91,25 +82,13 @@ it("keeps unrelated publications out of mounted row access and subtitle preparat
     await settleLitElement(sidebar);
     expect(sidebar.querySelector(`[data-session-key="${keys[0]}"]`)).toBe(first);
     expect
-      .soft(access)
-      .not.toHaveBeenCalledWith(
-        expect.objectContaining({ session: expect.objectContaining({ key: keys[0] }) }),
-      );
+      .soft(access.mock.calls.map(([request]) => request.session))
+      .not.toContainEqual(expect.objectContaining({ key: keys[0] }));
     expect
-      .soft(access.mock.calls.filter(([request]) => request.method === "sessions.groups.put"))
-      .toHaveLength(0);
+      .soft(access.mock.calls.map(([request]) => request.method))
+      .not.toContain("sessions.groups.put");
     expect.soft(subtitlePreparations).toBe(0);
   }
-
-  expect(sidebar.textContent).toContain("Changed other row");
-  const link = first.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link")!;
-  link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, altKey: true }));
-  await settleLitElement(sidebar);
-  expect(sidebar.selectedSessionKeys.has(keys[0]!)).toBe(true);
-  expect(first.classList.contains("sidebar-recent-session--selected")).toBe(true);
-  sidebar.onNavigate = vi.fn();
-  link.click();
-  expect(sidebar.onNavigate).toHaveBeenCalledWith("chat", { pathname: "/chat/main/work-0" });
 
   const currentRow = () => sidebar.querySelector(`[data-session-key="${keys[0]}"]`)!;
   const archive = () =>

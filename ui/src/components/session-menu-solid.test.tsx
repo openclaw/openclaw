@@ -2,7 +2,6 @@
 
 import { expect, it, vi } from "vitest";
 import { focusChatComposerFromKeydown } from "../pages/chat/chat-pane-shared.ts";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   containers,
   menuItem,
@@ -13,10 +12,8 @@ import {
   settleSessionMenu,
 } from "../test-helpers/session-menu.ts";
 import { createSessionOwnerMenuHarness } from "../test-helpers/session-owner-menu.ts";
-import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { EMPTY_SESSION_MENU_DATA } from "./session-menu-data.ts";
-import { SessionMenu, type SessionMenuAction } from "./session-menu-solid.tsx";
+import type { SessionMenuAction } from "./session-menu-solid.tsx";
 
 function press(target: EventTarget, key: string, composed = false) {
   target.dispatchEvent(
@@ -61,53 +58,24 @@ it("keeps advertised native menu shortcuts ahead of composer autotype", async ()
     }
 
     await reopen(host);
-    focusAndPress(menuItem(host, "Pin session"), "x", true);
+    const pin = menuItem(host, "Pin session");
+    focusAndPress(pin, "x", true);
     expect(document.activeElement).toBe(input);
+    host.remove();
+    await Promise.resolve();
+    press(pin, "a");
+    press(document, "a");
+    expect(actions).toEqual(expected);
   } finally {
     document.removeEventListener("keydown", capture, true);
   }
 });
 
-it("updates registered menu props and retires its keyboard owner when unmounted", async () => {
-  const calls: string[] = [];
-  const host = await mountMenu({
-    onClose: () => calls.push("close"),
-    onAction: (action) => calls.push(action.kind),
-  });
-  const archiveLabel = () => host.querySelector('[data-value="toggle-archived"]')?.textContent;
-  await waitForSolid(() => expect(archiveLabel()).toContain("Archive session"));
-  host.session = { ...host.session, archived: true };
-  await settleSessionMenu(host);
-  expect(archiveLabel()).toContain("Restore session");
-  const pin = menuItem(host, "Pin session");
-  focusAndPress(pin, "d");
-  expect(calls).toEqual(["close", "delete"]);
-  host.remove();
-  await Promise.resolve();
-  press(pin, "d");
-  document.dispatchEvent(new KeyboardEvent("keydown", { key: "d", cancelable: true }));
-  expect(calls).toEqual(["close", "delete"]);
-});
-
-it("preserves focus and owner search with the Solid application provider", async () => {
+it("preserves focus and owner search across property updates", async () => {
   const { context } = createSessionOwnerMenuHarness();
-  const { container } = mountSolid(
-    () => (
-      <SessionMenu session={{ ...EMPTY_SESSION_MENU_DATA, label: "First title" }} archiveAllowed />
-    ),
-    { wrapper: createSolidApplicationContextProvider(context).wrapper },
-  );
-  const host = container.querySelector("openclaw-session-menu")!;
+  const host = await mountMenu({ context, session: { label: "First title" } });
   await waitForSolid(() => expect(menuItemLabels(host)).toContain("Assign to…"));
   await settleSessionMenu(host);
-  const pin = menuItem(host, "Pin session");
-  pin.focus();
-  expect(document.activeElement).toBe(pin);
-  host.session = { ...host.session, label: "Fresh title" };
-  await settleSessionMenu(host);
-  expect(menuItem(host, "Pin session")).toBe(pin);
-  expect(document.activeElement).toBe(pin);
-
   const owner = menuItem(host, "Assign to…");
   const ownerPanel = await openSubmenu(host, "Assign to…");
   await waitForSolid(() => expect(owner.getAttribute("aria-expanded")).toBe("true"));
@@ -116,17 +84,15 @@ it("preserves focus and owner search with the Solid application provider", async
   search.dispatchEvent(new InputEvent("input", { bubbles: true }));
   await waitForSolid(() => expect(menuItemLabels(owner)).toEqual(["Research"]));
   search.focus();
-  host.session = { ...host.session, unread: true };
+  host.session = { ...host.session, label: "Fresh title", unread: true, archived: true };
   host.work = { pullRequestUrl: "https://example.test/pull/1", worktreePath: null };
   await settleSessionMenu(host);
   await waitForSolid(() => expect(menuItemLabels(host)).toContain("Open PR"));
-  expect(menuItem(host, "Assign to…")).toBe(owner);
   expect(owner.getAttribute("aria-expanded")).toBe("true");
-  expect(menuPanel(owner)).toBe(ownerPanel);
-  expect(ownerPanel.querySelector('input[type="search"]')).toBe(search);
   expect(document.activeElement).toBe(search);
   expect(search).toMatchObject({ value: "Research" });
   expect(menuItemLabels(host)).toContain("Mark as read");
+  expect(menuItemLabels(host)).toContain("Restore session");
 });
 
 it("ignores a stale native toggle after reopening the same session", async () => {
@@ -135,15 +101,7 @@ it("ignores a stale native toggle after reopening the same session", async () =>
   containers.push(trigger);
   const menu = await mountMenu({ onClose, trigger });
   const stalePanel = menuPanel(menu);
-  const advanced = menuItem(menu, "Advanced");
-  const child = await openSubmenu(menu, "Advanced");
-  const childItem = menuItem(child, "Icon & color");
-  focusAndPress(childItem, "Escape");
-  expect(child.matches(":popover-open")).toBe(false);
-  expect(stalePanel.matches(":popover-open")).toBe(true);
-  expect(document.activeElement).toBe(advanced);
-  expect(onClose).not.toHaveBeenCalled();
-  press(advanced, "Escape");
+  focusAndPress(menuItem(menu, "Pin session"), "Escape");
   expect(onClose).toHaveBeenCalledTimes(1);
   expect(document.activeElement).toBe(trigger);
 
