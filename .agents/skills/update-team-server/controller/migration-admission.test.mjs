@@ -8,9 +8,21 @@ import { makeReleaseFixture } from "./worker-config-owner-fixture.mjs";
 
 const library = new URL("./release-lib.mjs", import.meta.url).pathname;
 
+function nativeReceipt(f, status, databases = [f.databasePath]) {
+  const identity = path => { const { dev, ino } = statSync(path); return { dev, ino }; };
+  const receipt = { schemaVersion: 1, status, configPath: f.config,
+    stateDir: dirname(dirname(f.databasePath)), databases,
+    databaseIdentities: Object.fromEntries(databases.map(path => [path, identity(path)])),
+    configIdentity: { path: f.config, ...identity(f.config) } };
+  mkdirSync(dirname(f.backupRoot), { recursive: true, mode: 0o700 });
+  const save = () => writeFileSync(`${f.backupRoot}.receipt.json`, JSON.stringify(receipt), { mode: 0o600 });
+  save();
+  return { receipt, save };
+}
+
 function fixture(t) {
   const f = makeReleaseFixture(t), candidate = f.addRelease("b".repeat(40));
-  const run = (command, args = [], input) => spawnSync(process.execPath, [library, command, ...args.map(String)],
+  const run = (command, args, input) => spawnSync(process.execPath, [library, command, ...args.map(String)],
     { env: f.env, input, encoding: "utf8", timeout: 10_000 });
   const ok = result => { assert.ifError(result.error); assert.equal(result.status, 0, result.stderr); return result.stdout.trim(); };
   for (const [release, agent] of [[f.initial, 25], [candidate, 26]]) {
@@ -59,17 +71,10 @@ test("25 to 26 crosses the ordinary activation boundary and delegates migration 
 test("native restoration rebinds replaced files while retaining the original session witness", t => {
   const f = fixture(t); f.ok(f.create());
   const original = f.read(), originalWitness = readFileSync(join(dirname(f.journal), original.originalWitness.name));
-  mkdirSync(dirname(f.backupRoot), { recursive: true, mode: 0o700 });
   for (const path of [f.config, f.databasePath, f.agentDatabasePath]) {
     copyFileSync(path, `${path}.restored`); chmodSync(`${path}.restored`, 0o600); renameSync(`${path}.restored`, path);
   }
-  const identity = path => { const info = statSync(path); return { dev: info.dev, ino: info.ino }; };
-  const receipt = { schemaVersion: 1, status: "restored", configPath: f.config,
-    stateDir: dirname(dirname(f.databasePath)), databases: [f.databasePath, f.agentDatabasePath],
-    databaseIdentities: Object.fromEntries([f.databasePath, f.agentDatabasePath].map(path => [path, identity(path)])),
-    configIdentity: { path: f.config, ...identity(f.config) } };
-  const receiptPath = `${f.backupRoot}.receipt.json`;
-  writeFileSync(receiptPath, JSON.stringify(receipt), { mode: 0o600 });
+  const { receipt, save } = nativeReceipt(f, "restored", [f.databasePath, f.agentDatabasePath]);
   const rebound = JSON.parse(f.ok(f.run("journal-native-state", [f.journal, JSON.stringify(original), f.config, f.databasePath])));
   assert.notEqual(rebound.protectedPaths[1].inode, original.protectedPaths[1].inode);
   assert.deepEqual(readFileSync(join(dirname(f.journal), original.originalWitness.name)), originalWitness);
@@ -77,7 +82,7 @@ test("native restoration rebinds replaced files while retaining the original ses
   f.ok(f.run("session-preservation-verify", [f.initial, f.initial, f.databasePath], projected));
   const saved = readFileSync(f.journal);
   receipt.databaseIdentities[f.databasePath].ino++;
-  writeFileSync(receiptPath, JSON.stringify(receipt));
+  save();
   assert.notEqual(f.run("journal-native-state", [f.journal, JSON.stringify(rebound), f.config, f.databasePath]).status, 0);
   assert.deepEqual(readFileSync(f.journal), saved);
 });
@@ -91,15 +96,8 @@ test("native start permit stays revoked until the selected release matches the c
   assert.equal(existsSync(f.permit), false);
   f.ok(permit("publish")); // No native receipt means no migration effect occurred.
   f.ok(permit("revoke"));
-  mkdirSync(dirname(f.backupRoot), { recursive: true, mode: 0o700 });
-  const identity = path => { const info = statSync(path); return { dev: info.dev, ino: info.ino }; };
-  const receipt = { schemaVersion: 1, status: "backed-up", configPath: f.config,
-    stateDir: dirname(dirname(f.databasePath)), databases: [f.databasePath],
-    databaseIdentities: { [f.databasePath]: identity(f.databasePath) },
-    configIdentity: { path: f.config, ...identity(f.config) } };
-  const save = () => writeFileSync(`${f.backupRoot}.receipt.json`, JSON.stringify(receipt), { mode: 0o600 });
+  const { receipt, save } = nativeReceipt(f, "backed-up");
   const select = release => { unlinkSync(join(f.serving, "current")); symlinkSync(release, join(f.serving, "current")); };
-  save();
   assert.notEqual(permit("publish").status, 0);
   assert.equal(existsSync(f.permit), false);
   receipt.status = "migrated"; save();

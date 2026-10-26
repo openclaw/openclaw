@@ -23,27 +23,18 @@ const profile = {
     clickclackCommandMenu: false,
   },
 };
-const account = {
-  accountId: "sample-account",
-  configured: true,
-  enabled: true,
-  running: true,
-  connected: true,
-  lifecycle: "ready",
-  restartPending: false,
-  lastError: null,
-};
 const channels = {
-  channelAccounts: { "sample-channel": [account] },
+  channelAccounts: { "sample-channel": [{
+    accountId: "sample-account", configured: true, enabled: true,
+    running: true, connected: true, lifecycle: "ready", restartPending: false, lastError: null,
+  }] },
   eventLoop: { degraded: false },
 };
 
-function invoke(args, selected = profile, input) {
+function invoke(args, input, selected = profile) {
   const env = { ...process.env };
-  delete env.OPENCLAW_TEAM_OPERATOR_PROFILE;
-  if (selected !== undefined)
-    env.OPENCLAW_TEAM_OPERATOR_PROFILE =
-      typeof selected === "string" ? selected : JSON.stringify(selected);
+  env.OPENCLAW_TEAM_OPERATOR_PROFILE =
+    typeof selected === "string" ? selected : JSON.stringify(selected);
   return spawnSync(process.execPath, ["--no-warnings", library, ...args], {
     env,
     input: input && JSON.stringify(input),
@@ -67,20 +58,22 @@ function configFixture(t) {
     agents: { entries: { "sample-agent": { model: "fixture/selected-model" } } },
   };
   const pathname = join(root, "config.json");
-  const write = () => writeFileSync(pathname, JSON.stringify(config));
-  write();
-  return { pathname, config, write };
+  const policy = (selected) => {
+    writeFileSync(pathname, JSON.stringify(config));
+    return invoke(["policy", pathname], undefined, selected);
+  };
+  return { config, policy };
 }
 
 test("operator channels select configured account identities", () => {
-  const result = invoke(["channels", "@stdin"], profile, channels);
+  const result = invoke(["channels", "@stdin"], channels);
   assert.equal(result.status, 0, result.stderr);
   const wrong = structuredClone(channels);
   wrong.channelAccounts["sample-channel"][0].accountId = "other-account";
-  assert.notEqual(invoke(["channels", "@stdin"], profile, wrong).status, 0);
+  assert.notEqual(invoke(["channels", "@stdin"], wrong).status, 0);
 });
 
-test("operator channels cannot be omitted, emptied, duplicated, or malformed", () => {
+test("operator profile rejects missing, malformed, or unsafe expectations", () => {
   for (const selected of [
     "",
     "{",
@@ -89,14 +82,15 @@ test("operator channels cannot be omitted, emptied, duplicated, or malformed", (
     { ...profile, channels: [] },
     { ...profile, channels: [...profile.channels, ...profile.channels] },
     { ...profile, channels: [["sample-channel"]] },
+    { ...profile, policy: { ...profile.policy, updateAuto: true } },
   ]) {
-    assert.notEqual(invoke(["channels", "@stdin"], selected, channels).status, 0);
+    assert.notEqual(invoke(["channels", "@stdin"], channels, selected).status, 0);
   }
 });
 
 test("operator policy selects the configured model agent and workspace", (t) => {
   const fixture = configFixture(t);
-  const result = invoke(["policy", fixture.pathname]);
+  const result = fixture.policy();
   assert.equal(result.status, 0, result.stderr);
   const accepted = JSON.parse(result.stdout);
   assert.equal(accepted.model, "fixture/selected-model");
@@ -104,31 +98,18 @@ test("operator policy selects the configured model agent and workspace", (t) => 
   assert.equal(accepted.appServer.extra, "preserved");
   fixture.config.plugins.entries.codex.config.appServer.defaultWorkspaceDir =
     "/srv/other/workspace";
-  fixture.write();
-  assert.notEqual(invoke(["policy", fixture.pathname]).status, 0);
+  assert.notEqual(fixture.policy().status, 0);
 });
 
-test("operator policy rejects missing expectations and missing selected model", (t) => {
+test("operator policy requires a selected or default model and forbids unattended updates", (t) => {
   const fixture = configFixture(t);
-  for (const selected of [
-    "",
-    {},
-    { ...profile, channels: undefined },
-    { ...profile, channels: [] },
-    { modelAgent: "sample-agent", policy: {} },
-    { ...profile, modelAgent: "other-agent" },
-    { ...profile, policy: { ...profile.policy, updateAuto: true } },
-  ]) {
-    assert.notEqual(invoke(["policy", fixture.pathname], selected).status, 0);
-  }
+  assert.notEqual(fixture.policy({ ...profile, modelAgent: "other-agent" }).status, 0);
   fixture.config.agents.defaults = { model: "fixture/default-model" };
-  fixture.write();
-  const fallback = invoke(["policy", fixture.pathname], { ...profile, modelAgent: "other-agent" });
+  const fallback = fixture.policy({ ...profile, modelAgent: "other-agent" });
   assert.equal(fallback.status, 0, fallback.stderr);
   assert.equal(JSON.parse(fallback.stdout).model, "fixture/default-model");
   fixture.config.update.auto.enabled = true;
-  fixture.write();
-  assert.notEqual(invoke(["policy", fixture.pathname], {
+  assert.notEqual(fixture.policy({
     ...profile, policy: { ...profile.policy, updateAuto: true },
   }).status, 0, "operator profile cannot enable unattended updates");
 });
@@ -144,15 +125,13 @@ test("operator policy captures only the selected model fallback policy", (t) => 
     [{ primary: "fixture/selected-model", fallbacks: ["fixture/fallback"] }, ["fixture/fallback"]],
   ]) {
     fixture.config.agents.entries["sample-agent"].model = model;
-    fixture.write();
-    const result = invoke(["policy", fixture.pathname]);
+    const result = fixture.policy();
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout).fallbacks, expected);
   }
   for (const fallbacks of ["fixture/fallback", ["unqualified"], [null]]) {
     fixture.config.agents.entries["sample-agent"].model = { primary: "fixture/selected-model", fallbacks };
-    fixture.write();
-    const result = invoke(["policy", fixture.pathname]);
+    const result = fixture.policy();
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /configured deployment model fallbacks are invalid/);
   }
