@@ -28,7 +28,7 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "./auth-profiles/sqlite.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
-import type { AuthProfileCredential, OAuthCredential } from "./auth-profiles/types.js";
+import type { OAuthCredential } from "./auth-profiles/types.js";
 import { upsertAuthProfileWithLockOrThrow } from "./auth-profiles/upsert-with-lock.js";
 import { resolveInlineProviderApiKeyUsageId } from "./auth-profiles/usage.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
@@ -724,51 +724,33 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
     });
   });
 
-  type BindingOptions = Partial<Pick<ModelProviderConfig, "baseUrl" | "api">> & {
-    provider?: string;
-    profileId?: string;
-    owner?: boolean;
-  };
-  it.each<[string, AuthProfileCredential, RegExp, BindingOptions?]>([
-    [
-      "retired profile",
-      createOAuthRefreshCredential({ provider: "anthropic" }),
-      /anthropic:claude-cli.*retired.*doctor --fix/,
-      {
-        provider: "anthropic",
-        baseUrl: "https://api.anthropic.com",
+  it.each([
+    {
+      provider: "anthropic",
+      cfg: configFor("anthropic", "https://api.anthropic.com", {
         api: "anthropic-messages",
-        profileId: "anthropic:claude-cli",
-      },
-    ],
-    [
-      "different provider endpoint",
-      keyCredential("openrouter", "sk-or-actual-key-b"),
-      /not compatible with this provider entry's auth binding/,
-      { provider: "custom-proxy", baseUrl: "https://example.invalid/v1" },
-    ],
-  ])(
-    "rejects %s instead of sending a profile ID as a literal bearer",
-    async (_name, credential, error, options = {}) => {
-      const {
-        provider = "openrouter-minimax",
-        baseUrl = routerUrl,
-        profileId = "openrouter:key-b",
-        api = "openai-completions",
-        owner = credential.type !== "oauth",
-      } = options;
-      await expect(
-        resolveAuth({
-          provider,
-          cfg: configForProviders({
-            ...(owner
-              ? { openrouter: providerEntry(routerUrl, { api: "openai-completions" }) }
-              : {}),
-            [provider]: providerEntry(baseUrl, { api, apiKey: profileId }),
-          }),
-          store: authStore({ [profileId]: credential }),
+        apiKey: "anthropic:claude-cli",
+      }),
+      store: authStore({
+        "anthropic:claude-cli": createOAuthRefreshCredential({ provider: "anthropic" }),
+      }),
+      error: /anthropic:claude-cli.*retired.*doctor --fix/,
+    },
+    {
+      provider: "custom-proxy",
+      cfg: configForProviders({
+        openrouter: completionProvider(routerUrl),
+        "custom-proxy": completionProvider("https://example.invalid/v1", {
+          apiKey: "openrouter:key-b",
         }),
-      ).rejects.toThrow(error);
+      }),
+      store: keyStore("openrouter", "sk-or-actual-key-b", "openrouter:key-b"),
+      error: /not compatible with this provider entry's auth binding/,
+    },
+  ])(
+    "rejects invalid $provider binding instead of sending a profile ID as a bearer",
+    async ({ error, ...input }) => {
+      await expect(resolveAuth(input)).rejects.toThrow(error);
     },
   );
 });
