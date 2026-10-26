@@ -3,7 +3,7 @@ import { afterAll, vi } from "vitest";
 import { monitorTwitchProvider } from "./monitor.js";
 import { setTwitchRuntime } from "./runtime.js";
 import type { TwitchClientManager } from "./twitch-client.js";
-import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
+import type { TwitchChatMessage } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   createIngress: vi.fn<typeof import("./twitch-ingress.js").createTwitchIngress>(),
@@ -25,7 +25,7 @@ afterAll(() => {
 });
 
 function fixture() {
-  return {
+  const f = {
     core: createPluginRuntimeMock(),
     send: vi
       .fn<TwitchClientManager["sendMessage"]>()
@@ -34,19 +34,6 @@ function fixture() {
     unregister: vi.fn(),
     ingressStop: vi.fn(),
   };
-}
-type Params = Pick<
-  Parameters<typeof monitorTwitchProvider>[0],
-  "account" | "accountId" | "config" | "statusSink"
->;
-export async function withTwitchMonitor<T>(
-  params: Params,
-  run: (
-    f: ReturnType<typeof fixture> & { dispatch: (message: TwitchChatMessage) => Promise<void> },
-  ) => Promise<T>,
-) {
-  const f = fixture();
-  setTwitchRuntime(f.core);
   let handler: ((message: TwitchChatMessage) => void) | undefined;
   const pending: Promise<void>[] = [];
   mocks.manager.mockReturnValue({
@@ -75,6 +62,27 @@ export async function withTwitchMonitor<T>(
       await Promise.allSettled(pending);
     }),
   }));
+  return {
+    ...f,
+    dispatch: async (message: TwitchChatMessage) => {
+      if (!handler) {
+        throw new Error("Expected Twitch message handler");
+      }
+      handler(message);
+      await Promise.all(pending);
+    },
+  };
+}
+type Params = Pick<
+  Parameters<typeof monitorTwitchProvider>[0],
+  "account" | "accountId" | "config" | "statusSink"
+>;
+export async function withTwitchMonitor<T>(
+  params: Params,
+  run: (f: ReturnType<typeof fixture>) => Promise<T>,
+) {
+  const f = fixture();
+  setTwitchRuntime(f.core);
   const monitor = await monitorTwitchProvider({
     ...params,
     channelRuntime: f.core.channel,
@@ -82,26 +90,15 @@ export async function withTwitchMonitor<T>(
     abortSignal: new AbortController().signal,
   });
   try {
-    return await run({
-      ...f,
-      dispatch: async (message) => {
-        if (!handler) {
-          throw new Error("Expected Twitch message handler");
-        }
-        handler(message);
-        await Promise.all(pending);
-      },
-    });
+    return await run(f);
   } finally {
     await monitor.stop();
   }
 }
 
-export async function checkTwitchMessageThroughMonitor(params: {
-  account: TwitchAccountConfig;
-  accountId: string;
-  message: TwitchChatMessage;
-}) {
+export async function checkTwitchMessageThroughMonitor(
+  params: Pick<Params, "account" | "accountId"> & { message: TwitchChatMessage },
+) {
   return withTwitchMonitor({ ...params, config: {} }, async ({ core, dispatch }) => {
     await dispatch(params.message);
     return { allowed: vi.mocked(core.channel.inbound.run).mock.calls.length > 0 };

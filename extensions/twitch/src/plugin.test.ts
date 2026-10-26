@@ -6,11 +6,11 @@ import {
   waitForStartedMocks,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { twitchPlugin } from "./plugin.js";
 import { twitchSetupPlugin } from "./setup-surface.js";
-import { makeTwitchChannelTestConfig } from "./test-fixtures.js";
+import { BASE_TWITCH_TEST_ACCOUNT, makeTwitchChannelTestConfig } from "./test-fixtures.js";
 
 const monitorTwitchProvider = vi.hoisted(() => vi.fn());
 vi.mock("./monitor.js", async (importOriginal) => ({
@@ -20,54 +20,43 @@ vi.mock("./monitor.js", async (importOriginal) => ({
 
 const startAccount = twitchPlugin.gateway!.startAccount!;
 const lifecycleAccount = {
+  ...BASE_TWITCH_TEST_ACCOUNT,
   accountId: "default",
-  username: "testbot",
   accessToken: "oauth:test-token",
-  clientId: "test-client-id",
-  channel: "#testchannel",
   enabled: true,
 };
-function withChannelRuntime(ctx: Parameters<typeof startAccount>[0]) {
-  return { ...ctx, channelRuntime: createPluginRuntimeMock().channel };
-}
-function trackLifecycle() {
-  return startAccountAndTrackLifecycle({
-    startAccount: (ctx) => startAccount(withChannelRuntime(ctx)),
-    account: lifecycleAccount,
-  });
-}
+const startWithRuntime = (ctx: Parameters<typeof startAccount>[0]) =>
+  startAccount({ ...ctx, channelRuntime: createPluginRuntimeMock().channel });
+const trackLifecycle = () =>
+  startAccountAndTrackLifecycle({ startAccount: startWithRuntime, account: lifecycleAccount });
+const stop = vi.fn();
 
 describe("twitch startAccount lifecycle", () => {
-  afterEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    monitorTwitchProvider.mockResolvedValue({ stop });
+  });
 
   it("publishes starting, stays pending until abort, then stops the monitor", async () => {
-    const stop = vi.fn();
-    monitorTwitchProvider.mockResolvedValue({ stop });
-    const { patches, abort, task, isSettled } = trackLifecycle();
+    const lifecycle = trackLifecycle();
     await expectStopPendingUntilAbort({
+      ...lifecycle,
       waitForStarted: async () => {
         await waitForStartedMocks(monitorTwitchProvider)();
-        expectLifecyclePatch(patches, { lifecycle: "starting", running: true });
+        expectLifecyclePatch(lifecycle.patches, { lifecycle: "starting", running: true });
         expect(monitorTwitchProvider).toHaveBeenCalledWith(
           expect.objectContaining({ statusSink: expect.any(Function) }),
         );
       },
-      isSettled,
-      abort,
-      task,
       stop,
     });
   });
 
   it("stops immediately with an already-aborted signal", async () => {
-    const stop = vi.fn();
-    monitorTwitchProvider.mockResolvedValue({ stop });
     const abort = new AbortController();
     abort.abort();
-    await startAccount(
-      withChannelRuntime(
-        createStartAccountContext({ account: lifecycleAccount, abortSignal: abort.signal }),
-      ),
+    await startWithRuntime(
+      createStartAccountContext({ account: lifecycleAccount, abortSignal: abort.signal }),
     );
     expect(monitorTwitchProvider).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();
@@ -89,21 +78,17 @@ describe("twitch startAccount lifecycle", () => {
   });
 });
 
-function multiAccountConfig(defaultAccount?: string, selectedToken = "oauth:secondary-token") {
-  const account = (name: string, accessToken: string) => ({
-    channel: `${name}-channel`,
-    username: name,
-    accessToken,
-    clientId: `${name}-client`,
-    enabled: true,
-  });
+function multiAccountConfig(
+  defaultAccount?: string,
+  selectedToken = "oauth:secondary-token",
+): OpenClawConfig {
   return makeTwitchChannelTestConfig({
     defaultAccount,
     accounts: {
-      default: account("default", "oauth:default-token"),
-      secondary: account("secondary", selectedToken),
+      default: lifecycleAccount,
+      secondary: { ...BASE_TWITCH_TEST_ACCOUNT, enabled: true, accessToken: selectedToken },
     },
-  }) as OpenClawConfig;
+  });
 }
 
 describe("twitchPlugin", () => {
@@ -113,33 +98,31 @@ describe("twitchPlugin", () => {
       twitchPlugin.messaging?.inferTargetChatType?.({ to: "twitch:user:operator" }),
     ).toBeUndefined();
   });
-  it("reproduces the canonical inbound channel session", async () => {
-    const route = await twitchPlugin.messaging?.resolveOutboundSessionRoute?.({
-      cfg: {},
-      agentId: "ops",
-      accountId: "stream",
-      target: "twitch:channel:OpenClaw",
-    });
-
-    expect(route).toMatchObject({
-      sessionKey: "agent:ops:twitch:group:openclaw",
-      baseSessionKey: "agent:ops:twitch:group:openclaw",
-      recipientSessionExact: true,
-      peer: { kind: "group", id: "openclaw" },
-      chatType: "group",
-      to: "openclaw",
-    });
-  });
-
-  it("rejects unsupported direct targets", async () => {
-    const route = await twitchPlugin.messaging?.resolveOutboundSessionRoute?.({
-      cfg: {},
-      agentId: "ops",
-      target: "twitch:dm:alice",
-    });
-
-    expect(route).toBeNull();
-  });
+  it.each([
+    [
+      "twitch:channel:OpenClaw",
+      expect.objectContaining({
+        sessionKey: "agent:ops:twitch:group:openclaw",
+        baseSessionKey: "agent:ops:twitch:group:openclaw",
+        recipientSessionExact: true,
+        peer: { kind: "group", id: "openclaw" },
+        chatType: "group",
+        to: "openclaw",
+      }),
+    ],
+    ["twitch:dm:alice", null],
+  ] as const)(
+    "resolves channel sessions but rejects direct targets: %s",
+    async (target, expected) => {
+      const route = await twitchPlugin.messaging?.resolveOutboundSessionRoute?.({
+        cfg: {},
+        agentId: "ops",
+        accountId: "stream",
+        target,
+      });
+      expect(route).toEqual(expected);
+    },
+  );
   it("uses the resolved account ID for multi-account configs", async () => {
     const cfg = multiAccountConfig();
     const snapshot = await twitchPlugin.status?.buildAccountSnapshot?.({
