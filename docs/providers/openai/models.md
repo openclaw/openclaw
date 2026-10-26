@@ -76,12 +76,13 @@ Before the deadline:
    approved access. Do not infer a replacement from Blue/Red or another account's
    catalog. Listing a model is not proof of Daybreak entitlement.
 2. Run `openclaw doctor --lint --only openai/daybreak-alias-retirement` to locate
-   configured alias references. Replace them with your supported specific model
-   ID, preserving the intended auth profile and runtime. This advisory check has
-   no automatic repair: it does not block updates, guess a replacement, or clear
-   your selection. Review primary/fallback models, model-map keys, per-agent and
-   tool selections, saved session overrides, and scheduled jobs as applicable.
-   Use `/model` to change an existing conversation's model.
+   configured aliases, saved session overrides, and scheduled jobs. The scan is
+   read-only and reports incomplete store reads. To migrate, supply an explicit
+   model and Access choice with [Doctor's model replacement option](/cli/doctor/running#daybreak-alias-migration).
+   Plain `doctor --fix` does not guess a successor or Access program. Locked
+   sessions, unavailable pinned accounts, conflicting target Access settings,
+   and disallowed successors are preserved for manual resolution. Rerun the
+   lint check after repair to find remaining references.
 3. For Responses API use, follow the
    [Daybreak guide](https://developers.openai.com/api/docs/guides/daybreak),
    including its account settings and request requirements. Preserve explicitly

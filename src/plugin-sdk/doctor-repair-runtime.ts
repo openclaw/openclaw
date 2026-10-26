@@ -19,3 +19,14 @@ export {
   repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 export type { OpenClawStateDatabaseSchemaMigration } from "../state/openclaw-state-db.js";
+
+/** Read-only model selector inventory for provider retirement diagnostics. */
+export async function inspectDoctorModelReferences(
+  params: Parameters<
+    typeof import("../commands/doctor/shared/model-reference-inventory.js").inspectDoctorModelReferences
+  >[0],
+) {
+  const { inspectDoctorModelReferences: inspect } =
+    await import("../commands/doctor/shared/model-reference-inventory.js");
+  return inspect(params);
+}
