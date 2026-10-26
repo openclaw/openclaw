@@ -160,10 +160,8 @@ it.each([
   };
   if (scenario === "operator") {
     const respond = vi.fn();
-    await expectDefined(
-      cronHandlers["cron.add"],
-      "cron.add",
-    )({
+    const add = expectDefined(cronHandlers["cron.add"], "cron.add");
+    await add({
       req: { type: "req", id: "operator-create", method: "cron.add", params: definition },
       params: definition,
       respond,
@@ -216,6 +214,10 @@ it.each([
           tools.find((tool) => tool.name === "read"),
           "read tool",
         );
+        const readSentinel = async () =>
+          reads.push(
+            JSON.stringify(await read.execute("scheduled-read", { path: "sentinel.txt" })),
+          );
         if (worktree) {
           expect(hasLiveWorktreeRunLease(process.env, worktree.id)).toBe(true);
         }
@@ -237,16 +239,13 @@ it.each([
           });
           try {
             assertRunActive();
-            reads.push(
-              JSON.stringify(await read.execute("scheduled-read", { path: "sentinel.txt" })),
-            );
+            await readSentinel();
           } catch (error) {
             refusals.push(String(error));
           }
           return { payloads: [{ text: "Read refused" }], meta: { agentMeta: {} } };
         }
-        const result = await read.execute("scheduled-read", { path: "sentinel.txt" });
-        reads.push(JSON.stringify(result));
+        await readSentinel();
         if (worktree) {
           await expect(
             read.execute("outside", { path: path.join(foreignWorkspace, "sentinel.txt") }),

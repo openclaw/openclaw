@@ -26,20 +26,15 @@ import {
   resetAuthorityRunHarness,
   withAuthorityTools,
 } from "./run.authority.test-support.js";
-import {
-  loadRunCronIsolatedAgentTurn,
-  makeCronSession,
-  resolveCronSessionMock,
-  runEmbeddedAgentMock,
-} from "./run.test-harness.js";
+import * as harness from "./run.test-harness.js";
 
-const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const runCronIsolatedAgentTurn = await harness.loadRunCronIsolatedAgentTurn();
 installRequesterCronAuthorityTestHooks();
 
 beforeEach(resetAuthorityRunHarness);
 
 afterEach(() => {
-  runEmbeddedAgentMock.mockReset();
+  harness.runEmbeddedAgentMock.mockReset();
 });
 
 it.each(["allowed", "senderless", "read-only", "disable", "remove"] as const)(
@@ -53,7 +48,9 @@ it.each(["allowed", "senderless", "read-only", "disable", "remove"] as const)(
       session: { store: sessionStorePath },
       tools: { allow: [AUTOMATIONS_TOOL_NAME, "read"] },
     });
-    resolveCronSessionMock.mockReturnValue(makeCronSession({ storePath: sessionStorePath }));
+    harness.resolveCronSessionMock.mockReturnValue(
+      harness.makeCronSession({ storePath: sessionStorePath }),
+    );
     const fixture = createCronFixture(undefined, config);
     const { context } = fixture;
     context.resolveGatewayContext = () => context;
@@ -61,15 +58,14 @@ it.each(["allowed", "senderless", "read-only", "disable", "remove"] as const)(
     const listHandler = vi.fn((options: GatewayRequestHandlerOptions) =>
       expectDefined(cronHandlers["cron.list"], "cron.list")(options),
     );
+    const methods = [
+      ["cron.add", "operator.admin"],
+      ["cron.run", "operator.write"],
+      ["cron.list", "operator.read"],
+    ] as const;
     context.getGatewayMethodRegistry = () =>
       createGatewayMethodRegistry(
-        (
-          [
-            ["cron.add", "operator.admin"],
-            ["cron.run", "operator.write"],
-            ["cron.list", "operator.read"],
-          ] as const
-        ).map(([name, scope]) => ({
+        methods.map(([name, scope]) => ({
           name,
           scope,
           owner: { kind: "core", area: "cron" },
@@ -82,7 +78,7 @@ it.each(["allowed", "senderless", "read-only", "disable", "remove"] as const)(
     let offeredTools: string[] = [];
     let toolResult: unknown;
     let toolError: string | undefined;
-    runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) =>
+    harness.runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) =>
       withAuthorityTools(
         params,
         async (constructed) => {
