@@ -27,6 +27,21 @@ import {
   summarizeScriptCoverage,
 } from "./lib/control-ui-cold-load-trace.ts";
 import { summarizeInteractionTrace } from "./lib/control-ui-interaction-trace.ts";
+import {
+  createClawRouterFixture,
+  createKnowledgeFixture,
+  createMcpRelayFixture,
+  createWhatsAppFixture,
+  createXFixture,
+  installRemainingPluginMock,
+  remainingPluginIds,
+  remainingPluginPages,
+  type RemainingFixture,
+} from "./lib/plugin-view-benchmark-fixtures.ts";
+import {
+  exerciseRemainingPlugin,
+  remainingPluginReady,
+} from "./lib/plugin-view-benchmark-flows.ts";
 
 const { values } = parseArgs({
   options: {
@@ -39,17 +54,20 @@ const { values } = parseArgs({
     pairs: { type: "string", default: "10" },
     "pair-offset": { type: "string", default: "0" },
     cards: { type: "string", default: "300" },
+    items: { type: "string", default: "300" },
     "linked-dependencies": { type: "boolean", default: false },
     output: { type: "string", default: ".artifacts/plugin-views/measure" },
     trace: { type: "boolean", default: false },
     coverage: { type: "boolean", default: false },
     "thread-cpu-time": { type: "boolean", default: false },
     "loads-only": { type: "boolean", default: false },
+    "whatsapp-locale-proof": { type: "boolean", default: false },
   },
 });
 const pairs = Number(values.pairs);
 const pairOffset = Number(values["pair-offset"]);
 const cardCount = Number(values.cards);
+const itemCount = Number(values.items);
 const pluginIds = values.plugins.split(",");
 const profiles = values.profiles.split(",");
 if (
@@ -59,11 +77,16 @@ if (
   pairOffset < 0 ||
   !Number.isInteger(cardCount) ||
   cardCount < 6 ||
-  pluginIds.some((id) => !["workboard", "memory-core", "nostr"].includes(id)) ||
+  !Number.isInteger(itemCount) ||
+  itemCount < 50 ||
+  itemCount > 1000 ||
+  pluginIds.some(
+    (id) => !["workboard", "memory-core", "nostr", ...remainingPluginIds].includes(id),
+  ) ||
   profiles.some((id) => !["local", "remote"].includes(id))
 ) {
   throw new Error(
-    "Use positive --pairs, nonnegative --pair-offset, --cards >= 6, known --plugins and --profiles local,remote",
+    "Use positive --pairs, nonnegative --pair-offset, --cards >= 6, --items 50..1000, known --plugins and --profiles local,remote",
   );
 }
 const output = path.resolve(values.output);
@@ -99,6 +122,7 @@ type Sample = {
   menuReturnFocusAfterRowsChange?: boolean;
   dependencyChildRetainedAfterParentUpdate?: boolean;
   hostPrefetch?: unknown;
+  pluginObservations?: Record<string, unknown>;
   workboardFixture?: {
     generatedAt: number;
     createdAt: number;
@@ -279,6 +303,7 @@ function scenario(
   descriptor: Awaited<ReturnType<typeof loadPlugin>>["descriptor"],
   build: { buildId: string; version: string },
   seed: ReturnType<typeof createWorkboardFixture>,
+  remaining?: RemainingFixture,
 ): ControlUiMockGatewayScenario {
   const common: ControlUiMockGatewayScenario = {
     serverBuildId: build.buildId,
@@ -294,13 +319,62 @@ function scenario(
     methodResponses: {
       "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
       "plugins.controlUi.list": {
-        plugins: plugin === "workboard" ? [descriptor] : [],
+        plugins:
+          plugin === "workboard" || (remaining && remaining.plugin !== "whatsapp")
+            ? [descriptor]
+            : [],
         diagnostics: [],
         revision: descriptor.revision,
       },
       "plugins.controlUi.report": { ok: true },
     },
   };
+  if (remaining) {
+    const methods = {
+      x: ["x.allowlist.list", "x.allowlist.add", "x.allowlist.remove", "x.guests.set"],
+      clawrouter: ["clawrouter.pool.get"],
+      "mcp-relay": [
+        "mcp-relay.grants",
+        "mcp-relay.pair",
+        "mcp-relay.revoke",
+        "mcp-relay.authorize.describe",
+      ],
+      whatsapp: ["web.login.start", "web.login.wait", "channels.status", "channels.pairing.list"],
+      knowledge: ["plugins.sessionAction"],
+    };
+    const page =
+      remaining.plugin === "whatsapp" ? undefined : remainingPluginPages[remaining.plugin];
+    return {
+      ...common,
+      operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+      featureMethods: [...common.featureMethods!, ...methods[remaining.plugin]],
+      ...(remaining.plugin === "knowledge"
+        ? {
+            sessionKey: remaining.sessionKey,
+            mainSessionKey: remaining.sessionKey,
+            sessions: [remaining.session],
+          }
+        : {}),
+      ...(page
+        ? { controlUiTabs: [{ pluginId: remaining.plugin, id: page.id, label: page.label }] }
+        : {}),
+      methodResponses: {
+        ...common.methodResponses,
+        ...(remaining.plugin === "whatsapp"
+          ? {
+              ...(remaining.localeProof ? { "config.get": remaining.configResponse } : {}),
+              "channels.status": remaining.status,
+              "channels.pairing.list": {
+                accounts: [],
+                requests: [],
+                commandOwnerConfigured: true,
+                limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+              },
+            }
+          : {}),
+      },
+    };
+  }
   if (plugin === "workboard") {
     return {
       ...common,
@@ -415,6 +489,18 @@ try {
           const cdp = await context.newCDPSession(page);
           const fixtureTime = Date.now();
           const seed = createWorkboardFixture(fixtureTime);
+          const remainingFixture =
+            plugin === "x"
+              ? createXFixture(itemCount, fixtureTime)
+              : plugin === "clawrouter"
+                ? createClawRouterFixture(fixtureTime)
+                : plugin === "mcp-relay"
+                  ? createMcpRelayFixture(itemCount, fixtureTime)
+                  : plugin === "whatsapp"
+                    ? createWhatsAppFixture(fixtureTime, values["whatsapp-locale-proof"])
+                    : plugin === "knowledge"
+                      ? createKnowledgeFixture(itemCount, fixtureTime)
+                      : undefined;
           const sample: Sample = {
             plugin,
             profile,
@@ -496,8 +582,37 @@ try {
             });
             const gateway = await installMockGateway(
               page,
-              scenario(plugin, asset.descriptor, build, seed),
+              scenario(plugin, asset.descriptor, build, seed, remainingFixture),
             );
+            if (remainingFixture) {
+              await page.addInitScript(installRemainingPluginMock, remainingFixture);
+            }
+            if (plugin === "mcp-relay") {
+              await page.addInitScript(() => {
+                const state = { usageUpdatedAt: 0 };
+                Object.assign(window, { pluginBenchmarkMcpDelivery: state });
+                const prototype = WebSocket.prototype as WebSocket & {
+                  deliver: (frame: unknown) => void;
+                };
+                const deliver = prototype.deliver;
+                prototype.deliver = function (frame) {
+                  deliver.call(this, frame);
+                  const event = frame as {
+                    type?: string;
+                    event?: string;
+                    payload?: { agentId?: string; usageUpdatedAt?: number };
+                  };
+                  if (
+                    this.readyState === WebSocket.OPEN &&
+                    event.type === "event" &&
+                    event.event === "chat.metadata.changed" &&
+                    event.payload?.agentId === "main"
+                  ) {
+                    state.usageUpdatedAt = event.payload.usageUpdatedAt ?? 0;
+                  }
+                };
+              });
+            }
             if (plugin === "workboard") {
               await page.addInitScript(installWorkboardBoardMock, seed);
             }
@@ -564,6 +679,11 @@ try {
               const requests = await gateway.getRequests();
               return requests.reduce<Record<string, number>>((counts, request) => {
                 counts[request.method] = (counts[request.method] ?? 0) + 1;
+                if (request.method === "plugins.sessionAction") {
+                  const params = request.params as { pluginId: string; actionId: string };
+                  const operation = `${request.method}:${params.pluginId}:${params.actionId}`;
+                  counts[operation] = (counts[operation] ?? 0) + 1;
+                }
                 return counts;
               }, {});
             };
@@ -645,13 +765,17 @@ try {
               }
             };
             const route =
-              plugin === "workboard"
-                ? "workboard/benchmark"
-                : plugin === "memory-core"
-                  ? "settings/memory/memories"
-                  : "settings/channels";
+              remainingFixture && remainingFixture.plugin !== "whatsapp"
+                ? `plugin?plugin=${plugin}&id=${remainingPluginPages[remainingFixture.plugin].id}`
+                : plugin === "workboard"
+                  ? "workboard/benchmark"
+                  : plugin === "memory-core"
+                    ? "settings/memory/memories"
+                    : "settings/channels";
             const ready = async () => {
-              if (plugin === "workboard") {
+              if (remainingFixture) {
+                await remainingPluginReady(page, remainingFixture);
+              } else if (plugin === "workboard") {
                 await expect(page.locator(".workboard-card")).toHaveCount(cardCount);
                 await expect(page.locator(".workboard-create")).toBeEnabled();
                 await expect(page.locator(".workboard-card__menu-trigger")).toHaveCount(cardCount);
@@ -784,7 +908,9 @@ try {
             );
             await navigate("/new");
             await expect(
-              page.locator(".workboard-board--page, .memory-memories, openclaw-channels-page"),
+              page.locator(
+                ".workboard-board--page, .memory-memories, openclaw-channels-page, .x-replies, .clawrouter-pool, .knowledge-page, .mcp-connected-apps",
+              ),
             ).toHaveCount(0);
             await expect(page.locator(".new-session-page__message")).toBeVisible();
             await expect(page.locator(".new-session-page__message")).toBeEditable();
@@ -1001,6 +1127,13 @@ try {
                 await last.scrollIntoViewIfNeeded();
                 await expect(last).toBeInViewport();
               });
+            } else if (remainingFixture && !values["loads-only"]) {
+              sample.pluginObservations = await exerciseRemainingPlugin(
+                page,
+                gateway,
+                remainingFixture,
+                step,
+              );
             } else if (!values["loads-only"]) {
               await page.locator(".channels-detail__close").click();
               await step("open-settings", async () => {
@@ -1245,6 +1378,30 @@ await writeFile(
         dependencyParentLinks: linkedDependencies ? (cardCount - rootCount) * 2 : 0,
         dependencyChildLinks: linkedDependencies ? (cardCount - rootCount) * 2 : 0,
         memoryResults: 20,
+        additionalPlugins: {
+          x: {
+            manualEntriesPerAccount: itemCount,
+            githubEntriesPerAccount: Math.ceil(itemCount / 2),
+            accounts: 2,
+          },
+          clawrouter: {
+            grants: 20,
+            models: 20,
+            windowsPerGrant: 4,
+            laneTrafficRows: 20,
+            grantTrafficRows: 380,
+          },
+          "mcp-relay": { grants: itemCount, hostPublications: 20 },
+          whatsapp:
+            "Packaged channel settings, seven status facts, synthetic QR/login; no external account",
+          knowledge: {
+            recentItems: 20,
+            sourceClaims: 60,
+            browseRows: 50,
+            searchResults: 20,
+            sessionActivityItems: 80,
+          },
+        },
         nostr: "settings/profile; no feed renderer exists",
       },
       build,
@@ -1270,6 +1427,7 @@ await writeFile(
         coverage: values.coverage,
         timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
         loadsOnly: values["loads-only"],
+        whatsappLocaleProof: values["whatsapp-locale-proof"],
         pairOffset,
         remote: "100ms delay per HTTP request and synthetic WebSocket response/event delivery",
         warm: "In-document route remount with resident modules; request routing disables HTTP cache",

@@ -3,7 +3,7 @@
 Run the production renderer against immutable assets produced by the official
 plugin builder. Each plugin root contains `<plugin>/dist/openclaw.plugin.json`
 and its declared `dist/control-ui/<generation>/` directory. The host build must
-contain the packaged Memory Core and Nostr settings declarations.
+contain the packaged Memory Core, Nostr and WhatsApp settings declarations.
 
 ```sh
 NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-plugin-views.ts \
@@ -14,10 +14,12 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-plugi
   --output .artifacts/plugin-views/comparison
 ```
 
-Use the same base root for both arguments for an A/A control. Use `--pairs 1
---coverage --trace` in a separate output directory for attribution; instrumentation
-overhead makes those timings unsuitable for untraced comparison. `--plugins`
-accepts a comma-separated subset of `workboard,memory-core,nostr`. `--build-host`
+Use the same base root for both arguments for an A/A control. Collect `--pairs 1
+--coverage --loads-only` and `--pairs 1 --trace` in separate output directories for
+coverage and attribution; instrumentation overhead makes those timings unsuitable
+for untraced comparison. `--plugins` accepts a comma-separated subset of
+`workboard,memory-core,nostr,x,clawrouter,whatsapp,knowledge,mcp-relay`. Its default
+remains the original three plugins. `--build-host`
 explicitly builds the host with `startProductionControlUiE2eServer`; by default the
 script serves an existing production build and never builds plugins.
 For an interrupted campaign, preserve its output and start a separate directory
@@ -90,6 +92,67 @@ Escape returns focus to its current trigger. Timed first activation uses the
 second visible card, including shared-panel rebinding without preopening it.
 Coverage runs record cold navigation and warm route remount separately; warm
 coverage counts resident scripts observed by V8, not new network bytes.
+
+## Remaining plugin surfaces
+
+Collect a report-only baseline with one immutable plugin root and ten samples per
+plugin/profile before comparing a candidate. Omitting `--compare-plugin-root`
+uses one variant, so `--pairs 10` means ten samples for each plugin and profile.
+Start with one sample to prove collection and behavior, retaining failures, before
+releasing the full baseline. Run all browser measurements serially.
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-plugin-views.ts \
+  --bundle-dir .artifacts/plugin-views/host \
+  --plugin-root .artifacts/plugin-views/baseline \
+  --plugins x,clawrouter,whatsapp,knowledge,mcp-relay \
+  --items 300 --pairs 10 --profiles local,remote --thread-cpu-time \
+  --output .artifacts/plugin-views/remaining-baseline
+```
+
+| Plugin     | Production entry path and fixture                                                                                                                                                           | Measured actions and readiness                                                                                                                                                                                    |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| X          | `/plugin?plugin=x&id=replies`; two accounts, `--items` manual rows and half as many GitHub-derived rows per account                                                                         | Exact row counts, primary account and enabled Refresh; typing, same-value refresh, add/remove, guest toggle, account switch and scroll. The first row must retain identity after add. There is no feed/search UI. |
+| ClawRouter | `/plugin?plugin=clawrouter&id=pool`; 20 grants × 20 models, four quota windows each, 20 lane traffic rows and 380 correctly keyed grant traffic rows                                        | 20 grants, 80 windows, 400 model rows and 20 lanes, with settled busy state; same-value refresh, changed refresh and scroll. No drag/filter UI exists.                                                            |
+| WhatsApp   | Packaged settings-only renderer inside `/settings/channels`; seven facts, eight with a phone number                                                                                         | Native channel detail and enabled Show QR; same-value refresh, local synthetic QR, host-owned login completion, phone insertion/removal. No external account or provider is contacted.                            |
+| Knowledge  | `/plugin?plugin=knowledge&id=overview`; one ready isolated store, 20 recent items, one source with 60 claims in three bounded pages, 50 browse rows from `--items` pages, 20 search results | Exact loaded counts; source collapse/expand, source pagination/scroll, browse/claims, suggestions after the existing 200 ms debounce, search, record/markdown continuation and live offer/application.            |
+| MCP Relay  | `/plugin?plugin=mcp-relay&id=connected-apps`; `--items` grants belonging to a synthetic administrator                                                                                       | Exact grant count and enabled pairing; 20 unrelated public chat-metadata events, refresh, pair dialog/code, revoke and consent presentation. Consent decisions and external navigation are excluded.              |
+
+`--items` defaults to 300 and accepts 50–1000. Each individual Knowledge response
+stays bounded; accumulated source claims grow only after explicit pagination.
+Knowledge's separately registered session-activity panel opens through the chat
+header's native Panels control. It covers 40 initial rows, 40 older rows, ordering,
+read filtering and a 5000-character preview. Chat navigation happens outside that
+panel's measured interval and has no navigation-performance claim. These fixtures do not claim real Gateway,
+relay, social-network, provider or account latency.
+WhatsApp uses a 1 × 1 synthetic PNG to measure QR state rendering, so its results
+do not represent the image-decoding cost of a realistic QR code.
+
+X and ClawRouter module activation precedes their page mount; cold coverage starts
+before navigation so it includes that work. WhatsApp loads through the real
+settings placement, not a synthetic standalone page. The warm route leaves each
+surface completely before remounting it. Packaged and dynamic plugin assets both
+retain their official built bytes, revision and digest.
+
+MCP Relay `pluginObservations.hostPublications` records child-list mutation counts,
+added/removed nodes, first-row identity and focused-button identity during unrelated
+host updates. Baseline identity/focus loss is an observation, not an assertion
+that prevents measuring the current implementation. X's keyed-row retention is
+an existing correctness contract and remains asserted. Other scalar facts in
+`pluginObservations` describe the completed workload, not performance thresholds.
+Each MCP host event waits for synthetic WebSocket delivery and a rendered frame,
+including the 100 ms delivery delay in the remote profile.
+Knowledge request counters also break down the `plugins.sessionAction` total by
+plugin and action ID; those keys are subdivisions, not additional transport calls.
+
+For the WhatsApp catalog split, add `--plugins whatsapp --whatsapp-locale-proof`
+to a one-sample diagnostic. It starts in English, changes the public config locale
+to German, English and Swedish while retaining the mounted fact rows, QR image
+and scan control, and asserts one translated-catalog request across those changes.
+It then reloads into a new German document (HTTP cache remains disabled) and
+aborts only the plugin catalog on a final reload to prove usable English fallback.
+The German reload measures new-document readiness, not a fresh browser process.
+This opt-in proof is separate from the normal English timing workload.
 
 Compare task/script/style/layout CPU, long tasks, heap, node counts and loaded/
 unused bytes alongside automation-to-assertion wall time. The latter is not INP.
