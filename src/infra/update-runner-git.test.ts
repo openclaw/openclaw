@@ -480,6 +480,44 @@ describe("Git checkout execution", () => {
     },
   );
 
+  it("preserves operator edits made during the update instead of resetting the checkout", async () => {
+    const target = await advanceRemote();
+    await git(root, "checkout", "-b", "feature");
+    await git(root, "branch", "-D", "main");
+    intercept((argv) =>
+      argv[2] === root && argv.includes("--set-upstream-to")
+        ? (async () => {
+            // The operator works in the checkout while the update is still running.
+            await fs.writeFile(path.join(root, "candidate.txt"), "operator edit\n");
+            await fs.writeFile(path.join(root, "operator-notes.txt"), "keep me\n");
+            return {
+              ...reply(143, "upstream setup failed"),
+              signal: "SIGTERM" as const,
+              termination: "signal" as const,
+            };
+          })()
+        : undefined,
+    );
+
+    const result = await update();
+
+    expect(result).toMatchObject({
+      status: "error",
+      reason: "checkout-failed",
+      recovery: { serviceRestartSafe: false, reason: "source-rollback-failed" },
+      rollbackOutcome: { status: "failed" },
+    });
+    expect(result.steps.map((step) => step.name)).not.toContain("git-rollback-clean");
+    expectStep(result.steps, {
+      name: "git-rollback-preserve",
+      stderrTail: expect.stringContaining("operator-notes.txt"),
+    });
+    expect(await fs.readFile(path.join(root, "candidate.txt"), "utf8")).toBe("operator edit\n");
+    expect(await fs.readFile(path.join(root, "operator-notes.txt"), "utf8")).toBe("keep me\n");
+    expect(await head()).toBe(target);
+    await expectRuntime(root, beforeSha);
+  });
+
   it.each([true, false])(
     "walks back build failures but not confirmed storage exhaustion (capacity: %s)",
     async (capacity) => {
