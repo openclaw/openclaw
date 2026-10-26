@@ -55,7 +55,7 @@ const allowedToolNames = Array.from({ length: 40 }, (_, i) => `synthetic_plugin_
 const calls = Array.from({ length: 64 }, (_, i) => ({
   type: "toolCall" as const,
   id: i % 2 ? `call_${i}|item:${i}` : `toolu_${i}`,
-  name: allowedToolNames[i % allowedToolNames.length],
+  name: `synthetic_plugin_${i % allowedToolNames.length}`,
   arguments: { query: `synthetic task ${i}`, limit: 20 },
 }));
 const messages: AgentMessage[] = [
