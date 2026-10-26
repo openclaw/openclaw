@@ -139,7 +139,7 @@ export function createSidebarSessionWindow(
     }
     publish();
   };
-  createLayoutMeasurement(
+  const scheduleMeasurement = createLayoutMeasurement(
     () => ({ items: inputs(), anchor: scroll.readAnchor() }),
     (request) => {
       const scroller = scroll.element();
@@ -215,7 +215,8 @@ export function createSidebarSessionWindow(
         }
       }
       if (changed) {
-        rebuild();
+        // Publish parent geometry outside the row's ResizeObserver delivery.
+        scheduleMeasurement();
       }
     },
   );
