@@ -10,6 +10,7 @@ import type {
   SessionConnectionScope,
   SessionListSnapshot,
 } from "../lib/sessions/session-capability.ts";
+import { readSessionChangedEvent } from "../lib/sessions/session-row-reconcile.ts";
 import { showToast } from "../lib/toast.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { buildReconciledSidebarZone } from "./app-sidebar-session-navigation-logic.ts";
@@ -34,6 +35,7 @@ type PersonalNavigationHost = {
     | Pick<ApplicationContext, "sessions" | "gateway" | "plugins" | "connectionBootstrap">
     | undefined;
   readonly navigationCatalog: { readonly dashboards: SessionListSnapshot | null };
+  sessionNavigationAgentId(row: Pick<GatewaySessionRow, "key" | "agentId">): string;
   getRouteSessionKey(): string;
   getSessionNavigationState(): SidebarSessionNavigationState;
   findSidebarSessionByKey(key: string): SidebarRecentSession | undefined;
@@ -85,11 +87,15 @@ export function hidePersonalSidebarCatalog(
   });
 }
 
-/** Descriptor snapshots last one connection; loaded rows always supersede them. */
+/** Personal references observe the session owner; seeds only bridge presentation. */
 export function createSidebarPinnedSessions(
   host: Pick<
     PersonalNavigationHost,
-    "sessionDataContext" | "findSidebarSessionByKey" | "navigationCatalog"
+    | "sessionDataContext"
+    | "findSidebarSessionByKey"
+    | "navigationCatalog"
+    | "sidebarEntries"
+    | "sessionNavigationAgentId"
   > & {
     readonly isConnected: boolean;
     readonly sessionData: Pick<SessionDataOwner, "requestSessionDataUpdate">;
@@ -97,33 +103,67 @@ export function createSidebarPinnedSessions(
 ) {
   let source: ApplicationContext["sessions"] | undefined;
   let scope: SessionConnectionScope | null = null;
-  const requested = new Map<string, "pending" | "settled">();
-  const rows = new Map<string, GatewaySessionRow>();
-
-  function synchronize() {
+  type Read = {
+    observation?: ReturnType<ApplicationContext["sessions"]["observeRow"]>;
+    settled: boolean;
+  };
+  const reads = new Map<string, Read>();
+  const seeds = new Map<string, GatewaySessionRow>();
+  function retire(key: string) {
+    reads.get(key)?.observation?.dispose();
+    reads.delete(key);
+    seeds.delete(key);
+  }
+  function dispose() {
+    for (const key of reads.keys()) {
+      retire(key);
+    }
+    seeds.clear();
+    source = undefined;
+    scope = null;
+  }
+  function synchronizeSource() {
     const nextSource = host.sessionDataContext?.sessions;
     if (nextSource !== source || !scope || !nextSource?.isConnectionScopeCurrent(scope)) {
-      requested.clear();
-      rows.clear();
+      dispose();
       source = nextSource;
       scope = source?.captureConnectionScope() ?? null;
     }
     return source;
   }
-
+  function synchronize() {
+    synchronizeSource();
+    const keys = new Set(
+      host.sidebarEntries.flatMap((value) => {
+        const entry = parseSidebarEntry(value);
+        return entry?.type === "session" ? [entry.key] : [];
+      }),
+    );
+    for (const key of reads.keys()) {
+      if (!keys.has(key)) {
+        retire(key);
+      }
+    }
+    for (const key of seeds.keys()) {
+      if (!keys.has(key)) {
+        seeds.delete(key);
+      }
+    }
+    return source;
+  }
   function seed(
     snapshot: readonly Pick<
       GatewaySessionRow,
       "key" | "agentId" | "label" | "icon" | "color" | "pinned" | "archived" | "boardFace"
     >[],
   ): void {
-    synchronize();
+    synchronizeSource();
     if (!scope) {
       return;
     }
     for (const row of snapshot) {
-      if (!rows.has(row.key) && requested.get(row.key) !== "settled") {
-        rows.set(row.key, {
+      if (!seeds.has(row.key) && !reads.get(row.key)?.settled) {
+        seeds.set(row.key, {
           key: row.key,
           kind: "direct",
           updatedAt: null,
@@ -138,63 +178,90 @@ export function createSidebarPinnedSessions(
       }
     }
   }
-
   function get(key: string): GatewaySessionRow | undefined {
     const context = host.sessionDataContext;
-    const currentSource = synchronize();
+    const currentSource = synchronizeSource();
     const currentScope = scope;
     if (!host.isConnected || !currentSource || !currentScope || !context) {
       return undefined;
     }
-    if (!requested.has(key)) {
-      requested.set(key, "pending");
+    let read = reads.get(key);
+    if (!read) {
+      const owned: Read = { settled: false };
+      read = owned;
+      reads.set(key, owned);
       const current = () =>
+        reads.get(key) === owned &&
         source === currentSource &&
         host.sessionDataContext === context &&
         scope === currentScope &&
         currentSource.isConnectionScopeCurrent(currentScope);
-      const publish = (row?: GatewaySessionRow | null) => {
+      const publish = () => {
+        if (current() && host.isConnected) {
+          host.sessionData.requestSessionDataUpdate();
+        }
+      };
+      const invalidate = () => {
         if (!current()) {
           return;
         }
-        requested.set(key, "settled");
-        if (row) {
-          rows.set(key, row);
-        } else if (!rows.delete(key)) {
-          return;
-        }
+        retire(key);
         if (host.isConnected) {
           host.sessionData.requestSessionDataUpdate();
         }
       };
       const describe = async () => {
+        // Register outside the render read phase: a held row can publish immediately.
+        await Promise.resolve();
         if (!current()) {
           return;
         }
-        // The roster can supply a pin while its lookup waits behind foreground bootstrap.
         if (
           !host.isConnected ||
           host.findSidebarSessionByKey(key) ||
           host.navigationCatalog.dashboards?.result?.sessions.some((row) => row.key === key)
         ) {
-          requested.delete(key);
+          reads.delete(key);
           return;
         }
-        await currentSource.describe({ key }).then(
-          (result) => publish(result.session),
-          () => {
-            /* Missing or failed pins stay saved, invisible, and silent. */
-            publish();
+        const observation = currentSource.observeRow(
+          { key, agentId: host.sessionNavigationAgentId({ key }) },
+          publish,
+          {
+            onInvalidate: invalidate,
+            onEvent: (event, result) => {
+              if (
+                !result.generationRejected &&
+                event.event === "sessions.changed" &&
+                (!readSessionChangedEvent(event.payload) ||
+                  owned.observation?.isCurrent() === false)
+              ) {
+                invalidate();
+              }
+            },
           },
         );
+        owned.observation = observation;
+        const reconcile = observation.captureReconcile();
+        const accept = (row?: GatewaySessionRow | null) => {
+          if (!current()) {
+            return;
+          }
+          owned.settled = true;
+          seeds.delete(key);
+          reconcile(row ?? undefined);
+          publish();
+        };
+        await currentSource.describe({ key }).then(
+          (result) => accept(result.session),
+          () => accept(),
+        );
       };
-      // Cached pins can paint while the selected conversation takes the request budget.
       void context.connectionBootstrap.run(describe, describe, { background: true });
     }
-    return rows.get(key);
+    return read.observation?.row ?? (read.settled ? undefined : seeds.get(key));
   }
-
-  return { synchronize, seed, get };
+  return { synchronize, seed, get, dispose };
 }
 
 export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarRecentSession[]) {

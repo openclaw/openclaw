@@ -336,6 +336,12 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   override disconnectedCallback() {
+    // The same host moves between desktop and drawer synchronously.
+    queueMicrotask(() => {
+      if (!this.isConnected) {
+        this.pinnedSessions.dispose();
+      }
+    });
     this.sessionProjection.invalidate();
     this.homeMemos.clear();
     super.disconnectedCallback();
