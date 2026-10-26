@@ -192,6 +192,10 @@ async function fixture() {
     expect(await store.list()).toEqual([]);
     expect(releaseAuthority).toHaveBeenCalledOnce();
   };
+  const expectRetainedRecovery = async () => {
+    await expect(owner.recover()).rejects.toThrow("cleanup is incomplete");
+    await expectCustody({ phase: "stopped", receipt });
+  };
   const input: StartInput = {
     ownerKey: `cron:${source.storeKey}:${job.id}`,
     source,
@@ -249,7 +253,6 @@ async function fixture() {
     clock,
     scheduler,
     owner,
-    controller,
     releaseAuthority,
     input,
     exited,
@@ -258,6 +261,7 @@ async function fixture() {
     seedCustody,
     expectCustody,
     expectReleased,
+    expectRetainedRecovery,
   };
 }
 
@@ -320,7 +324,6 @@ it.each(["stop", "exit", "retirement", "checkpoint retry", "resume retry"] as co
       workspaceDir: canonical,
       sandbox: resolveSandboxConfigForAgent({}, "main"),
     });
-    expect(projection).toBeDefined();
     if (!projection) {
       throw new Error("Expected managed workspace");
     }
@@ -414,19 +417,18 @@ it.each(["caller", "retirement"] as const)(
   "removes a prepared container without START when %s cancels during preparation",
   async (cancellation) => {
     const f = await fixture();
-    const entered = createDeferredCore();
-    const prepared = createDeferredCore<SandboxPersistentExecPreparation>();
-    f.prepare.mockImplementationOnce(({ attemptId }) => {
+    const preparation = createEnteredGate();
+    f.prepare.mockImplementationOnce(async ({ attemptId }) => {
       f.receipt.attemptId = attemptId;
-      entered.resolve();
-      return prepared.promise;
+      await preparation.wait();
+      return f.preparation;
     });
     const starting = f.start();
-    await entered.promise;
+    await preparation.entered;
     const rejected = expect(starting).rejects.toThrow(/cancelled/);
     const cancelled = f.cancel(cancellation, "creator cancelled");
     expect(f.preparation.stop).not.toHaveBeenCalled();
-    prepared.resolve(f.preparation);
+    preparation.release();
     await rejected;
     await cancelled;
     expect(f.preparation.start).not.toHaveBeenCalled();
@@ -556,23 +558,20 @@ it("retains stopped custody through checkpoint failure and registry replacement 
     await updateRegistry(entry);
   };
   await replaceRegistry(replacement);
-  await expect(f.owner.recover()).rejects.toThrow("cleanup is incomplete");
-  await f.expectCustody({ phase: "stopped", receipt: f.receipt });
+  await f.expectRetainedRecovery();
   expect(withSettledLocalWorkspaceProjectionPath).not.toHaveBeenCalled();
   await replaceRegistry(f.registry);
   vi.mocked(withSettledLocalWorkspaceProjectionPath).mockRejectedValueOnce(
     new Error("checkpoint unavailable"),
   );
-  await expect(f.owner.recover()).rejects.toThrow("cleanup is incomplete");
-  await f.expectCustody({ phase: "stopped", receipt: f.receipt });
+  await f.expectRetainedRecovery();
   vi.mocked(withSettledLocalWorkspaceProjectionPath).mockImplementationOnce(
     async (_params, operation) => {
       await replaceRegistry(replacement);
       return await operation();
     },
   );
-  await expect(f.owner.recover()).rejects.toThrow("cleanup is incomplete");
-  await f.expectCustody({ phase: "stopped", receipt: f.receipt });
+  await f.expectRetainedRecovery();
   await replaceRegistry(f.registry);
   vi.mocked(withSettledLocalWorkspaceProjectionPath).mockImplementationOnce(
     async (_params, operation) => {
@@ -580,8 +579,7 @@ it("retains stopped custody through checkpoint failure and registry replacement 
       throw new Error("runtime resume failed after checkpoint");
     },
   );
-  await expect(f.owner.recover()).rejects.toThrow("cleanup is incomplete");
-  await f.expectCustody({ phase: "stopped", receipt: f.receipt });
+  await f.expectRetainedRecovery();
   await f.owner.recover();
   await f.owner.recover();
   expect(await f.store.list()).toEqual([]);

@@ -54,24 +54,15 @@ const completed = { status: "completed", exitCode: 0, timedOut: false } as const
 const localTarget = { key: "local", globalArgs: [] };
 
 function createConfig(backend?: "docker" | "podman", browserEnabled = true): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        sandbox: {
-          mode: "all",
-          scope: "session",
-          workspaceAccess: "none",
-          backend,
-          docker: { image: "openclaw-sandbox:trixie-slim" },
-          browser: {
-            enabled: browserEnabled,
-            image: "openclaw-sandbox-browser:trixie-slim",
-          },
-        },
-      },
-      entries: {},
-    },
-  };
+  const sandbox = {
+    mode: "all",
+    scope: "session",
+    workspaceAccess: "none",
+    backend,
+    docker: { image: "openclaw-sandbox:trixie-slim" },
+    browser: { enabled: browserEnabled, image: "openclaw-sandbox-browser:trixie-slim" },
+  } satisfies NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["sandbox"];
+  return { agents: { defaults: { sandbox }, entries: {} } };
 }
 
 function backendParams(
@@ -109,10 +100,8 @@ const mount = (type: string, source: string, destination: string, writable = tru
   RW: writable,
 });
 
-function assertMasked(
-  bridge: { resolvePath: (input: { filePath: string }) => unknown },
-  paths: string[],
-) {
+type Bridge = { resolvePath: (input: { filePath: string }) => unknown };
+function assertMasked(bridge: Bridge, paths: string[]) {
   for (const filePath of paths) {
     expect(() => bridge.resolvePath({ filePath })).toThrow("container-only");
   }
@@ -627,20 +616,15 @@ it.each([
 });
 
 it.each([
-  {
-    backend: "docker",
-    code: 1,
-    stderr: "permission denied",
-    error: "Failed to remove Docker sandbox runtime sandbox-1: permission denied",
-  },
-  {
-    backend: "docker",
-    code: 1,
-    stderr: "Error response from daemon: No such container: sandbox-1",
-    error: undefined,
-  },
-  { backend: "podman", code: 0, stderr: "", error: undefined },
-])("removes $backend runtime: $stderr", async ({ backend, code, stderr, error }) => {
+  [
+    "docker",
+    1,
+    "permission denied",
+    "Failed to remove Docker sandbox runtime sandbox-1: permission denied",
+  ],
+  ["docker", 1, "Error response from daemon: No such container: sandbox-1", undefined],
+  ["podman", 0, "", undefined],
+] as const)("removes %s runtime (exit %s, %s)", async (backend, code, stderr, error) => {
   mocks.execContainer.mockResolvedValueOnce({ code, stdout: "", stderr });
   const manager = backend === "podman" ? podmanSandboxBackendManager : dockerSandboxBackendManager;
   const entry = runtimeEntry(backend);

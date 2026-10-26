@@ -65,6 +65,18 @@ const outcome = (promise: Promise<void>) =>
     () => undefined,
     (error: unknown) => error,
   );
+function observeOutcome(promise: Promise<unknown>) {
+  let value: unknown = "pending";
+  const settled = promise.then(
+    () => {
+      value = undefined;
+    },
+    (error: unknown) => {
+      value = error;
+    },
+  );
+  return { settled, read: () => value };
+}
 
 beforeEach(() => {
   mocks.spawn.mockReset();
@@ -427,20 +439,12 @@ it.each(["parent", "prepared child", "started child"] as const)(
     const streamJob = { ...job(), streamSandbox: makeCronStreamSandboxTarget() };
     const starting = watchers.start(streamJob);
     await inspecting.promise;
-    let stopOutcome: unknown = "pending";
-    const stopping = watchers.stop(streamJob.id, "disabled").then(
-      () => {
-        stopOutcome = undefined;
-      },
-      (error: unknown) => {
-        stopOutcome = error;
-      },
-    );
+    const stopping = observeOutcome(watchers.stop(streamJob.id, "disabled"));
     await vi.advanceTimersByTimeAsync(20_000);
-    const outcomeAtDeadline = stopOutcome;
+    const outcomeAtDeadline = stopping.read();
     // Join the pre-fix startup timeout too; the held inspection is released only by abort.
     await vi.advanceTimersByTimeAsync(10_000);
-    await Promise.all([starting, stopping]);
+    await Promise.all([starting, stopping.settled]);
     await watchers.stopAll("shutdown");
     expect(outcomeAtDeadline).toBeUndefined();
     expect(watchers.inspect(streamJob.id)).toMatchObject({ state: "stopped" });
@@ -463,21 +467,13 @@ it("interrupts the prepared-container inspection without losing its cleanup iden
       await awaitAbort(signal);
     },
   );
-  let prepareOutcome: unknown = "pending";
-  const preparing = f.prepare().then(
-    () => {
-      prepareOutcome = undefined;
-    },
-    (error: unknown) => {
-      prepareOutcome = error;
-    },
-  );
+  const preparing = observeOutcome(f.prepare());
   await inspecting.promise;
   f.controller.abort(new Error("preparation cancelled"));
   await vi.advanceTimersByTimeAsync(0);
-  const afterCancellation = prepareOutcome;
+  const afterCancellation = preparing.read();
   await vi.advanceTimersByTimeAsync(30_000);
-  await preparing;
+  await preparing.settled;
   // Preparation did not publish a child ID; recovery uses its reserved attempt identity.
   const stopped = await stopDockerPersistentExec({
     target,
