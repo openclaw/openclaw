@@ -153,7 +153,7 @@ operations retain their existing execution deadlines.
 
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 
-If a registered project's checkout is busy, creation releases allocation before waiting for that project. Other repositories can continue reserving and creating workspaces. Once project access is available, creation releases it and retries the reservation with current source, owner, name, and capacity checks. This reservation retry retains the existing 30-second project-access wait budget and remains cancellable.
+If a registered project's checkout is busy, creation releases allocation before waiting for that project. Other repositories can continue reserving and creating workspaces. Once project access is available, creation releases it and retries the reservation with current source, owner, name, and capacity checks. Registered-project source waits share creation's 30-minute contention budget with admission retries and other lease waits, including source acquisition during later preparation phases. These waits remain cancellable.
 
 Source custody inspects managed checkout and Git storage ownership once per operation. Destination protection reuses that inventory while reserving a slot, so ordinary repository creation does not rescan every managed repository under the allocation lease. The inventory ends with the operation; cleanup still checks live dependencies before deleting a checkout.
 
