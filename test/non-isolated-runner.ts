@@ -560,6 +560,11 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     clean("Vitest file completion", () => super.onAfterRunFiles(files));
     clean("Solid roots", cleanupSolid);
     await drain("mock resolution", () => drainMockerResolveMocks(internals.moduleRunner?.mocker));
+    if (!this.config.isolate) {
+      // Lazy modules may still register elements after their rendering root is disposed.
+      // Finish that generation before dropping its tags and resetting the module graph.
+      await drain("dynamic imports", () => vi.dynamicImportSettled());
+    }
     // The last test's scheduled closes must finish before cleanup restores shared state.
     await settleSqliteTestAgentCloses();
     // Restore independent file state even when failed cancellation retains the runtime owners.
