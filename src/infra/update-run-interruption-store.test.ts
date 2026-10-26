@@ -40,40 +40,34 @@ it("publishes interrupted cleanup through workers only against its captured run 
   const context = captureOpenClawStateWorkerContext(options);
   const publish = (input: InterruptedUpdateSettlement, target = context) =>
     persistInterruptedUpdateObservationAsync(target, input);
-  const requireRun = (result: Awaited<ReturnType<typeof publish>>) => {
+  const settle = async (
+    expected: NonNullable<typeof snapshot.run>,
+    cleanup: "pending" | "unknown",
+  ) => {
+    const detail = `Timeout; cleanup ${cleanup === "pending" ? "pending" : "failed"}`;
+    const result = await publish({ expected, cleanup, detail });
+    expect(result).toMatchObject({ accepted: true, run: { status: "running" } });
     if (!result?.run) {
       throw new Error("The write worker did not publish the observation");
     }
     return result.run;
   };
-  const pending = await publish({
-    expected: snapshot.run,
-    detail: "Timeout; cleanup pending",
-    cleanup: "pending",
-  });
-  expect(pending).toMatchObject({ accepted: true, run: { status: "running" } });
-  const captured = requireRun(pending);
-  const failed = await publish({
-    expected: captured,
+  const captured = await settle(snapshot.run, "pending");
+  const expected = await settle(captured, "unknown");
+  const settlement = {
+    step: "reconcile:settle",
+    status: "failed",
     detail: "Timeout; cleanup failed",
-    cleanup: "unknown",
+  };
+  expect(expected).toMatchObject({
+    updatedAtMs: captured.updatedAtMs,
+    steps: expect.arrayContaining([
+      {
+        ...settlement,
+        endedAtMs: captured.steps.find((step) => step.step === "reconcile:settle")?.endedAtMs,
+      },
+    ]),
   });
-  expect(failed).toMatchObject({
-    accepted: true,
-    run: {
-      status: "running",
-      updatedAtMs: captured.updatedAtMs,
-      steps: expect.arrayContaining([
-        {
-          step: "reconcile:settle",
-          status: "failed",
-          endedAtMs: captured.steps.find((step) => step.step === "reconcile:settle")?.endedAtMs,
-          detail: "Timeout; cleanup failed",
-        },
-      ]),
-    },
-  });
-  const expected = requireRun(failed);
   run.step({ step: "warning:fixture:new-owner", status: "completed" });
   await expect(
     publish({ expected, detail: "Stale cleanup completion", cleanup: "confirmed" }),
@@ -82,7 +76,7 @@ it("publishes interrupted cleanup through workers only against its captured run 
     run: {
       status: "running",
       steps: expect.arrayContaining([
-        expect.objectContaining({ step: "reconcile:settle", detail: "Timeout; cleanup failed" }),
+        expect.objectContaining(settlement),
         expect.objectContaining({ step: "warning:fixture:new-owner" }),
       ]),
     },
