@@ -14,15 +14,25 @@ const noPlugin = { providerPlugin: null };
 type Signal = Parameters<typeof classifyFailoverSignal>[0];
 type Options = Parameters<typeof classifyFailoverSignal>[1];
 const classifyWithoutPlugin = (message: string) => classifyFailoverReason(message, noPlugin);
-function expectReason(expected: string, signal: Signal, opts?: Options) {
+const expectReason = (expected: string, signal: Signal, opts?: Options) =>
   expect(classifyFailoverSignal(signal, opts)).toEqual({ kind: "reason", reason: expected });
-}
+const expectRaw = (
+  raw: string,
+  expected: string | null,
+  opts?: Parameters<typeof classifyFailoverReason>[1],
+) => expect(classifyFailoverReason(raw, opts)).toBe(expected);
 const validation = { errorType: "invalid_request_error", code: "unknown_parameter" };
 const validationSignal = (status: number) => ({
   status,
   message: `${status} Unknown parameter: 'logprobs'`,
   ...validation,
 });
+const rateLimitCode = "rate_limit_exceeded";
+const rejected = { code: rateLimitCode, message: "Request rejected" };
+const promptRejection = {
+  code: rateLimitCode,
+  message: "This prompt is longer than the free tier allows for a single request. Shorten it.",
+};
 
 describe("failover classification", () => {
   it("preserves authentication status 403", () => {
@@ -65,43 +75,33 @@ describe("failover classification", () => {
     ["server_error", { status: 500, message: "upstream failure" }],
     ["billing", validationSignal(402)],
     ["overloaded", validationSignal(529)],
-    ["rate_limit", { code: "rate_limit_exceeded", message: "Request rejected" }, noPlugin],
+    ["rate_limit", rejected, noPlugin],
     [
       "rate_limit",
-      { status: 400, code: "rate_limit_exceeded", message: "Request rejected" },
+      { status: 400, ...rejected },
       {
         providerPlugin: { id: "prepared-owner", classifyFailoverReason: () => "rate_limit" },
       },
     ],
-    [
-      "timeout",
-      {
-        message:
-          "504 <!doctype html><html><head><title>504</title></head><body>Cloudflare</body></html>",
-      },
-    ],
+    ["timeout", { message: "504 <!doctype html><html><body>Cloudflare</body></html>" }],
   ] satisfies [string, Signal, Options?][])(
     "HTTP policy: %s for %j",
-    (expected, signal, opts?: Options) => {
-      expectReason(expected, signal, opts);
-    },
+    (expected, signal, opts?: Options) => expectReason(expected, signal, opts),
   );
 
-  it("does not treat a bare leading number and a URL as payment evidence", () => {
-    expect(
-      classifyWithoutPlugin(
-        "402 records processed. See https://example.invalid/organizations/synthetic/settings/keys",
-      ),
-    ).toBeNull();
-  });
+  it("does not treat a bare leading number and a URL as payment evidence", () =>
+    expectRaw(
+      "402 records processed. See https://example.invalid/organizations/synthetic/settings/keys",
+      null,
+      noPlugin,
+    ));
 
   it("preserves request-validation semantics for HTTP 404", () => {
     expectReason("format", validationSignal(404));
-    expect(
-      classifyFailoverReason(
-        '404 {"error":{"type":"invalid_request_error","message":"Unsupported parameter: logprobs"}}',
-      ),
-    ).toBe("format");
+    expectRaw(
+      '404 {"error":{"type":"invalid_request_error","message":"Unsupported parameter: logprobs"}}',
+      "format",
+    );
   });
 
   it("keeps an explicit rejection ahead of context-length message patterns", () => {
@@ -117,24 +117,20 @@ describe("failover classification", () => {
       details: [JSON.stringify(error)],
     });
     for (const separator of [" ", ": "]) {
-      expect(classifyFailoverReason(`502${separator}${JSON.stringify({ error })}`)).toBe("format");
+      expectRaw(`502${separator}${JSON.stringify({ error })}`, "format");
     }
   });
 
   it.each([
     {
       status: 400,
-      code: "rate_limit_exceeded",
-      message:
-        "400 This prompt is longer than the free tier allows for a single request. Shorten it.",
-      details: [
-        '{"code":"rate_limit_exceeded","message":"This prompt is longer than the free tier allows for a single request. Shorten it."}',
-        "rate_limit_exceeded",
-      ],
+      code: promptRejection.code,
+      message: `400 ${promptRejection.message}`,
+      details: [JSON.stringify(promptRejection), rateLimitCode],
     },
     {
       status: 422,
-      message: '422 {"error":{"code":"rate_limit_exceeded","message":"Request rejected"}}',
+      message: `422 ${JSON.stringify({ error: rejected })}`,
     },
   ])("does not replay a rejection based only on its inner code: $status", (signal) => {
     expect(classifyFailoverSignal(signal, noPlugin)).toEqual({
@@ -146,9 +142,9 @@ describe("failover classification", () => {
 
   it("classifies the logged-out response as auth only for claude-cli", () => {
     const message = "Not logged in · Please run /login";
-    expect(classifyFailoverReason(message, { provider: "claude-cli" })).toBe("auth");
-    expect(classifyFailoverReason(message, { provider: "openai" })).toBeNull();
-    expect(classifyFailoverReason(message)).toBeNull();
+    expectRaw(message, "auth", { provider: "claude-cli" });
+    expectRaw(message, null, { provider: "openai" });
+    expectRaw(message, null);
   });
 
   it.each([
@@ -163,20 +159,20 @@ describe("failover classification", () => {
       '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"}}',
       false,
     ],
-  ] as const)("guards message classification with %s: %s", (predicate, message, expected) => {
-    expect(predicate(message)).toBe(expected);
-  });
+  ] as const)("guards message classification with %s: %s", (predicate, message, expected) =>
+    expect(predicate(message)).toBe(expected),
+  );
 
   it("keeps server evidence retryable without a raw timeout match", () => {
     const message = "Proxy notice: Status: Internal Server Error; code:500";
     expect(isTimeoutErrorMessage(message)).toBe(false);
-    expect(classifyFailoverReason(message)).toBe("timeout");
+    expectRaw(message, "timeout");
   });
 
   it("keeps HTTP 429 overload wording in rate-limit backoff and copy", () => {
     const message =
       '429 status code (exceeded limit)\n{"code":1305,"message":"The service may be temporarily overloaded, please try again later."}';
-    expect(classifyFailoverReason(message)).toBe("rate_limit");
+    expectRaw(message, "rate_limit");
     expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: message })).toBe(
       "⚠️ The AI service needs a short break. Please try again in a few minutes.",
     );
