@@ -28,13 +28,22 @@ it("exports saved inline summaries for direct and nested results, without compon
     toolCallId: "call",
     toolName: "show_incident",
   };
-  const markdown = transcript([
-    msg("toolResult", textBlock(view.summary, "text"), {
-      runId: "first",
-      details: { pluginView: view },
-    }),
-    msg("assistant", [{ type: "toolResult", details: { pluginView: view } }], { runId: "second" }),
-  ]);
+  const markdown = buildChatMarkdown(
+    [
+      {
+        role: "toolResult",
+        runId: "first",
+        details: { pluginView: view },
+        content: [{ type: "text", text: view.summary }],
+      },
+      {
+        role: "assistant",
+        runId: "second",
+        content: [{ type: "toolResult", details: { pluginView: view } }],
+      },
+    ],
+    "OpenClaw",
+  );
   expect(markdown?.match(/Incident is investigating\./g)).toHaveLength(2);
   expect(markdown).not.toContain("private-reference");
   expect(markdown).not.toContain("plugin_view");
@@ -127,11 +136,13 @@ it("preserves imported content and attribution", () => {
     '<<<EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>\nSource: External\n---\n' +
     body +
     '\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>';
-  const message = msg("assistant", framed, {
+  const message = {
+    role: "assistant",
     senderLabel: "Imported assistant (123e4567-e89b-12d3-a456-426614174000)",
     __openclaw: { idempotencyKey: "fixture-catalog:thread:message", senderName: "Other name" },
     timestamp: "1000",
-  });
+    content: framed,
+  };
   const original = structuredClone(message);
 
   expect(transcript([message])).toBe(`${header}## Imported assistant\n\n${body}\n`);

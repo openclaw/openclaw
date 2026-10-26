@@ -17,30 +17,14 @@ describe("pull request renderer loading", () => {
     vi.unstubAllGlobals();
   });
 
-  function mount(patch: Partial<ChatPullRequestsProps> = {}) {
-    const initial: ChatPullRequestsProps = {
-      pullRequests: [],
-      status: "ready",
-      onDismiss: vi.fn(),
-      ...patch,
-    };
+  function mount(initial: ChatPullRequestsProps) {
     let update!: Setter<ChatPullRequestsProps>;
     const view = mountSolid(() => {
       const [props, setProps] = createSignal(initial);
       update = setProps;
       return createComponent(ChatPullRequests, merge(props));
     });
-    return {
-      ...view,
-      update,
-      initial,
-      expectNumber: (number: number) =>
-        waitForSolid(() =>
-          expect(view.container.querySelector(".chat-pr__number")?.textContent).toBe(
-            `openclaw/openclaw#${number}`,
-          ),
-        ),
-    };
+    return { ...view, update };
   }
 
   it("keeps an empty chat cold and presents current PR data after the first load", async () => {
@@ -55,19 +39,28 @@ describe("pull request renderer loading", () => {
         "./chat-pull-requests-content.tsx",
       );
     });
-    const view = mount();
-    const { initial } = view;
+    const initial: ChatPullRequestsProps = {
+      pullRequests: [],
+      status: "ready",
+      onDismiss: vi.fn(),
+    };
+    const view = mount(initial);
     expect(view.container.querySelector(".chat-prs")).toBeNull();
     expect(imports).toBe(0);
     view.update({ ...initial, pullRequests: [pullRequest()] });
     await waitForSolid(() => {
+      expect(imports).toBe(1);
       expect(view.getByRole("status", { name: "Loading…" }).getAttribute("aria-busy")).toBe("true");
     });
     const onDismiss = vi.fn();
     const current = pullRequest({ number: 42, title: "Current work" });
     view.update({ ...initial, pullRequests: [current], onDismiss });
     ready.resolve();
-    await view.expectNumber(42);
+    await waitForSolid(() =>
+      expect(view.container.querySelector(".chat-pr__number")?.textContent).toBe(
+        "openclaw/openclaw#42",
+      ),
+    );
     const row = view.container.querySelector(".chat-pr");
     const automation = row?.querySelector("openclaw-chat-ci-automation");
     view.update({ ...initial, pullRequests: [{ ...current, title: "Refreshed work" }], onDismiss });
@@ -77,19 +70,27 @@ describe("pull request renderer loading", () => {
     view.container.querySelector<HTMLButtonElement>(".chat-pr__dismiss")!.click();
     expect(onDismiss).toHaveBeenCalledOnce();
     expect(initial.onDismiss).not.toHaveBeenCalled();
+    expect(imports).toBe(1);
   });
 
   it("keeps a failed PR renderer load visible and retries through the public component", async () => {
     // mock-isolation: fail the actual chunk boundary before any row mounts.
-    const error = new Error("PR renderer chunk could not be loaded");
     vi.doMock("./chat-pull-requests-content.tsx", () => {
-      throw error;
+      throw new Error("PR renderer chunk could not be loaded");
     });
-    const view = mount({ pullRequests: [pullRequest()] });
-    await waitForSolid(() => expect(view.getByRole("alert").textContent).toContain(error.message));
+    const view = mount({ pullRequests: [pullRequest()], status: "ready", onDismiss: vi.fn() });
+    await waitForSolid(() =>
+      expect(view.getByRole("alert").textContent).toContain(
+        "PR renderer chunk could not be loaded",
+      ),
+    );
     vi.doUnmock("./chat-pull-requests-content.tsx");
     view.getByRole("button", { name: "Retry" }).click();
-    await view.expectNumber(103469);
+    await waitForSolid(() =>
+      expect(view.container.querySelector(".chat-pr__number")?.textContent).toBe(
+        "openclaw/openclaw#103469",
+      ),
+    );
   });
 
   it.each(["current", "hidden", "session changed", "dismissed", "unmounted"] as const)(
@@ -119,14 +120,18 @@ describe("pull request renderer loading", () => {
         },
       );
       let presented = true;
-      const view = mount({
+      const initial: ChatPullRequestsProps = {
         pullRequests: [pullRequest()],
         sessionKey: "agent:main:first",
         sessionId: "first",
+        status: "ready",
+        onDismiss: vi.fn(),
         presented: { owner: new EventTarget(), isPresented: () => presented },
+      };
+      const view = mount(initial);
+      await waitForSolid(() => {
+        expect(view.getByRole("button", { name: "Reload" })).toBeTruthy();
       });
-      const { initial } = view;
-      await waitForSolid(() => expect(view.getByRole("button", { name: "Reload" })).toBeTruthy());
       view.getByRole("button", { name: "Reload" }).click();
       await waitForSolid(() => expect(fetchDocument).toHaveBeenCalledOnce());
       if (state === "hidden") {

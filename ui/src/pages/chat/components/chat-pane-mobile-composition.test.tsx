@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { dynamic } from "@solidjs/web";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -7,11 +8,18 @@ import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { offlineDeviceSession } from "../chat-pane.test-support.ts";
 import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
+import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 
 const containers: HTMLElement[] = [];
 
-afterEach(() => containers.splice(0).forEach((container) => container.remove()));
-const mountHeader = mountChatPaneHeader.bind(undefined, containers);
+afterEach(() => {
+  containers.splice(0).forEach((container) => container.remove());
+  vi.restoreAllMocks();
+});
+
+function mountHeader(patch: Partial<ChatPaneHeaderProps> = {}) {
+  return mountChatPaneHeader(containers, patch);
+}
 
 it("clears the device name while replacing its request and ignores retired results", async () => {
   const first = createDeferred<string | undefined>();
@@ -73,6 +81,7 @@ it("retains the People page and lookup across native host replacement and deskto
     mobilePeople: {
       header: [
         { key: "ada", sender: { name: "Ada" }, label: "Ada", firstName: "Ada", viewing: true },
+        { key: "sam", sender: { name: "Sam" }, label: "Sam", firstName: "Sam", viewing: true },
       ],
       viewers: [],
       participants: [],
@@ -91,7 +100,11 @@ it("retains the People page and lookup across native host replacement and deskto
   expect(mentions.activate).not.toHaveBeenCalled();
   trigger.click();
   const renderPage = mobileHost.destination.page!.render!;
-  const mountPage = () => mountSolid(renderPage);
+  const mountPage = () =>
+    mountSolid(() => {
+      const Page = dynamic(() => renderPage);
+      return <Page />;
+    });
   const firstPage = mountPage();
   await waitForSolid(() =>
     expect(firstPage.queryByRole("group", { name: "People" })).not.toBeNull(),

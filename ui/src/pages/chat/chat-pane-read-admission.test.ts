@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow, SessionsPatchResult } from "../../api/types.ts";
@@ -53,10 +53,6 @@ it.each(["visible", "hidden document", "reconnect history", "rejected acknowledg
       },
     });
     const patch = vi.spyOn(sessions, "patch");
-    const expectRead = (count: number, unread: boolean) => {
-      expect(acknowledgements).toBe(count);
-      expect(sessions.state.result?.sessions[0]?.unread).toBe(unread);
-    };
     await sessions.refresh({ agentId: "main", force: true });
     const pane = mount(key);
     const receipt: SessionsPatchResult = {
@@ -84,7 +80,9 @@ it.each(["visible", "hidden document", "reconnect history", "rejected acknowledg
       await withSessionMutationOperations(() => undefined);
       expect(acknowledgements).toBe(1);
       const firstPatch = patch.mock.results[0];
-      assert(firstPatch?.type === "return", "Expected the automatic acknowledgement promise");
+      if (firstPatch?.type !== "return") {
+        throw new Error("Expected the automatic acknowledgement promise");
+      }
       publish(40);
       expect(acknowledgements).toBe(1);
       if (settlement === "hidden document") {
@@ -109,28 +107,35 @@ it.each(["visible", "hidden document", "reconnect history", "rejected acknowledg
           }),
         );
         await expect(firstPatch.value).rejects.toThrow("Synthetic acknowledgement rejection");
-        expectRead(1, true);
+        expect(acknowledgements).toBe(1);
+        expect(sessions.state.result?.sessions[0]?.unread).toBe(true);
         return;
       }
       firstAck.resolve(receipt);
       await expect(firstPatch.value).resolves.toMatchObject({ ok: true });
       if (settlement === "visible") {
-        expectRead(2, false);
+        expect(acknowledgements).toBe(2);
+        expect(sessions.state.result?.sessions[0]?.unread).toBe(false);
         return;
       }
-      expectRead(1, true);
+      expect(acknowledgements).toBe(1);
+      expect(sessions.state.result?.sessions[0]?.unread).toBe(true);
       if (settlement === "hidden document") {
         visibility.mockReturnValue("visible");
         document.dispatchEvent(new Event("visibilitychange"));
       } else {
         const load = getChatHistoryLoadState(pane.state);
-        assert(load.phase === "in-flight", "Expected reconnect history to remain pending");
+        expect(load.phase).toBe("in-flight");
+        if (load.phase !== "in-flight") {
+          throw new Error("Expected reconnect history to remain pending");
+        }
         reconnectHistory.resolve({ messages: [], sessionId, sessionInfo: rows[0] });
         await load.promise;
       }
       await pane.updateComplete;
       await vi.advanceTimersByTimeAsync(32);
-      expectRead(2, false);
+      expect(acknowledgements).toBe(2);
+      expect(sessions.state.result?.sessions[0]?.unread).toBe(false);
     } finally {
       pane.disconnectedCallback();
       firstAck.resolve(receipt);

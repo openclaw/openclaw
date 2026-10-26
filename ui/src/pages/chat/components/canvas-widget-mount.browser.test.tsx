@@ -4,15 +4,17 @@ import { createSignal, Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
+import "../../../components/canvas-widget-view.tsx";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { createSessionScopedOperations } from "../../../lib/sessions/session-scoped-operations.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createApplicationGateway } from "../../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { CanvasWidgetMount } from "./canvas-widget-mount.tsx";
 
 afterEach(() => {
+  cleanupSolid();
   document.body.replaceChildren();
   vi.useRealTimers();
 });
@@ -28,7 +30,7 @@ it.each(["commit", "retirement"])(
       sandboxUrl: "/mcp-app-sandbox?frames=none",
       sandboxPort: 8444,
     };
-    const request = async (method: string, params?: Record<string, unknown>) => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "sessions.messages.subscribe") {
         subscriptions.add(String(params?.subscriptionId));
         return { key };
@@ -49,7 +51,7 @@ it.each(["commit", "retirement"])(
         });
       }
       throw new Error(`Unexpected request: ${method}`);
-    };
+    });
     // SAFETY: This fixture implements the request transport used by the real subscription owner.
     const client = { request } as unknown as GatewayBrowserClient;
     const gateway = createApplicationGateway();
@@ -95,11 +97,13 @@ it.each(["commit", "retirement"])(
     );
     flush();
     const widget = root.container.querySelector("openclaw-canvas-widget-view")!;
+    expect(onElement).toHaveBeenLastCalledWith(widget);
     await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(widget.textContent).toContain("Waiting for the widget result");
     setRow("");
     flush();
+    expect(onElement).toHaveBeenLastCalledWith(undefined);
     expect(widget).toMatchObject({ isConnected: true, presentationActive: false });
     await sessions.unsubscribeMessages(paneSubscription);
     expect(subscriptions.size).toBe(1);
@@ -132,6 +136,8 @@ it.each(["commit", "retirement"])(
     expect(root.container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
     const frame = widget.querySelector("iframe")!;
     expect(frame.srcdoc).toBe(documentView.html);
+    const views = request.mock.calls.filter(([method]) => method === "canvas.document.view");
+    expect(views).toHaveLength(2);
     Object.assign(frame.style, { width: "100%", boxSizing: "border-box" });
     const { width, height } = frame.getBoundingClientRect();
     expect(width).toBeGreaterThan(0);

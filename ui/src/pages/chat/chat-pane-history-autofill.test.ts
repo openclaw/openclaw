@@ -103,6 +103,21 @@ it.each([
   expect(request).not.toHaveBeenCalled();
 });
 
+it.each(["failure", "exhaustion"] as const)("stops automatic fills after %s", async (outcome) => {
+  const { intersect, pane, request } = setup();
+  if (outcome === "failure") {
+    request.mockRejectedValue(new Error("history unavailable"));
+  } else {
+    request.mockResolvedValue(page(1, 3, false));
+  }
+  await intersect();
+  await intersect();
+  expect(request).toHaveBeenCalledOnce();
+  if (outcome === "failure") {
+    expect(pane.historyAutoLoadBlocked).toBe(true);
+  }
+});
+
 it.each([
   ["bounded snapshot", 0, 400],
   ["overflowing first page", 2, 501],

@@ -1,6 +1,7 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiReplacement } from "../../../../src/plugin-sdk/control-ui.js";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "../../components/app-sidebar-session-types.ts";
+import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
 import { createControlUiPluginHost } from "../../plugins/control-ui-host.ts";
 import {
   type ControlUiPluginOwner,
@@ -28,6 +29,8 @@ it.each([false, true])("AppSidebar replacement sessions (delegates: %s)", async 
   const sessions = S.createSessionsHarness("main", initialKeys);
   const context = S.createContext(S.createGateway(client), sessions.sessions, S.TWO_AGENTS);
   context.gateway.snapshot.hello = gatewayHelloForMethods(["plugins.controlUi.list"]);
+  const reportError = vi.fn();
+  Object.assign(context.plugins, { reportError });
   const pluginListeners = new Set<() => void>();
   vi.spyOn(context.plugins, "subscribe").mockImplementation((listener) => {
     pluginListeners.add(listener);
@@ -88,26 +91,35 @@ it.each([false, true])("AppSidebar replacement sessions (delegates: %s)", async 
   );
   const { sidebar } = await S.mountSidebarContext(context);
   const find = (selector: string) => sidebar.querySelector(selector);
+  expect(reportError).not.toHaveBeenCalled();
   const keys = () =>
     Array.from(
       sidebar.querySelectorAll<HTMLElement>("[data-plugin-session-key]"),
       (row) => row.dataset.pluginSessionKey,
     );
+  await settleRoster(sidebar);
+  expect(keys()).toEqual([]);
   selected = true;
   pluginListeners.forEach((notify) => notify());
   await settleRoster(sidebar);
   await vi.waitFor(() => expect(keys()).toEqual(initialKeys));
   const firstReplacement = find('[data-plugin-replacement="sessions"]');
+  expect(firstReplacement).not.toBeNull();
+  const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
   replacement = createReplacement("other-sessions");
   pluginListeners.forEach((notify) => notify());
   await settleRoster(sidebar);
   expect(find('[data-plugin-replacement="other-sessions"]')).not.toBeNull();
   await settleRoster(sidebar);
   expect(firstReplacement?.isConnected).toBe(false);
+  expect(keys()).toEqual(initialKeys);
+  expect(prepare).not.toHaveBeenCalled();
+  prepare.mockRestore();
   await toggleRoster(sidebar);
   await vi.waitFor(() => expect(find(".sidebar-session-toolbar")).not.toBeNull());
   expect(keys()).toEqual(initialKeys);
   await vi.waitFor(() => expect(Boolean(find(".sidebar-agent-roster"))).toBe(delegates));
+
   sessions.publishList(S.createSessionState("main", nextKeys));
   await vi.waitFor(() => expect(keys()).toEqual(nextKeys));
   await toggleRoster(sidebar);
@@ -125,6 +137,7 @@ it.each([false, true])("AppSidebar replacement sessions (delegates: %s)", async 
   const last = wide.result!.sessions.at(-1)!;
   expect(find(`[data-session-key="${last.key}"]`)).toBeNull();
   const lastPluginRow = () => find(`[data-plugin-session-key="${last.key}"]`);
+  expect(lastPluginRow()).not.toBeNull();
   sessions.publishList({
     ...wide,
     result: {

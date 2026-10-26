@@ -71,6 +71,7 @@ it.each(["success", "failure"])("archives via the keyboard with %s feedback", as
   const action = vi.spyOn(pane, "handleHeaderSessionAction");
   const scope = { agentId: "main", expectedSessionId: row.sessionId };
   expect(press(pane).defaultPrevented).toBe(true);
+  expect(action).toHaveBeenCalledExactlyOnceWith({ kind: "toggle-archived" }, row);
   await action.mock.results[0]?.value;
   expect(state.chatMessage).toBe("Keep the unsent foreground draft");
   expect(pane.onPaneSessionChange).not.toHaveBeenCalled();
@@ -83,6 +84,14 @@ it.each(["success", "failure"])("archives via the keyboard with %s feedback", as
       expect.objectContaining({ actionLabel: t("common.undo") }),
     );
     expect(patch).toHaveBeenCalledExactlyOnceWith(row.key, { archived: true }, scope);
+    vi.mocked(showToast).mock.calls.at(-1)?.[0].onAction?.();
+    await vi.waitFor(() =>
+      expect(patch).toHaveBeenCalledWith(
+        row.key,
+        { archived: false },
+        { ...scope, deferListRefresh: true },
+      ),
+    );
   }
 });
 

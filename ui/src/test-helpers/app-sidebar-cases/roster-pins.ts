@@ -25,13 +25,25 @@ function pinnedKeys(sidebar: HTMLElement) {
   ].map((row) => row.dataset.sessionKey);
 }
 
+function expectChipPin(sidebar: HTMLElement) {
+  const lead = sidebar.querySelector(
+    '[data-session-key="agent:main:pinned"] .sidebar-session-indicator',
+  );
+  const glyph = domProbe(lead!);
+  expect(glyph.query(".identity-avatar--agent")).toBeNull();
+  expect(glyph.text(".session-glyph__emoji")).toBe("⭐");
+}
+
 describe("AppSidebar agent roster pins", () => {
   it("lists cross-agent pins in saved order in the Pinned section, not the rail", async () => {
+    const avatarRoute = "/avatar/working?v=pinned-roster";
     const parentKey = "agent:working:pinned";
     const childKey = "agent:recent:recent";
+    const agents = structuredClone(roster);
+    agents.agents.find(({ id }) => id === "working")!.identity = { avatarUrl: avatarRoute };
     const { sidebar, context } = await mountRoster(
-      roster,
-      roster.agents.flatMap((agent, index) => [
+      agents,
+      agents.agents.flatMap((agent, index) => [
         thread(agent.id, "pinned", 10 - index, {
           pinned: true,
           icon: "⭐",
@@ -53,9 +65,11 @@ describe("AppSidebar agent roster pins", () => {
     ];
     sidebar.sidebarEntries = entries;
     await sidebar.updateComplete;
+    expectChipPin(sidebar);
     const onNavigate = vi.fn();
     sidebar.onNavigate = onNavigate;
     await mode(sidebar, "roster");
+
     const rail = dom.all<HTMLElement>(".sidebar-rail [data-sidebar-entry]");
     expect([...rail].map(({ dataset }) => dataset.sidebarEntry)).toEqual([
       "route:usage",
@@ -65,18 +79,32 @@ describe("AppSidebar agent roster pins", () => {
       entry.startsWith("session:") ? [entry.slice("session:".length)] : [],
     );
     expect(pinnedKeys(sidebar)).toEqual(pinned);
-    for (const id of ["working", "main", "recent"]) {
+    for (const [id, face] of [
+      ["working", `img.identity-avatar__image[src="${avatarRoute}"]`],
+      ["main", '[data-avatar="⚓"]'],
+      ["recent", ".identity-avatar__agent-face"],
+    ] as const) {
       const pin = pinnedRow(sidebar, `agent:${id}:pinned`)!;
       expect(pin.closest("[data-agent-group]")).toBeNull();
+      expect(pin.querySelector(".session-glyph__emoji")?.textContent).toBe("⭐");
       expect(pin.querySelector<HTMLAnchorElement>("a")?.pathname).toBe(`/chat/${id}/pinned`);
+      const avatar = dom.query(
+        `[data-agent-group="${id}"] .sidebar-agent-roster__header .identity-avatar--agent`,
+      );
+      expect(avatar!.querySelector(face)).not.toBeNull();
     }
+    expect(sessionKeys(sidebar)).toEqual(pinned);
+    expect(dom.query("[data-agent-collapse]")).toBeNull();
     await mode(sidebar, "chip");
     // Other agents' pins resolve through descriptors; the loaded row is listed once, first.
     const chipPins = pinnedKeys(sidebar);
     expect(chipPins).toContain("agent:main:pinned");
     expect(sessionKeys(sidebar)).toEqual([...chipPins, "agent:main:recent"]);
+    expectChipPin(sidebar);
     expect(sidebar.sidebarEntries).toEqual(entries);
+
     await mode(sidebar, "roster");
+    expect(context.agentSelection.state.selectedId).toBe("main");
     pinnedRow(sidebar, "agent:working:pinned")?.querySelector<HTMLAnchorElement>("a")?.click();
     await settleRoster(sidebar);
     expect(context.agentSelection.state.selectedId).toBe("working");
@@ -85,5 +113,38 @@ describe("AppSidebar agent roster pins", () => {
       expect.objectContaining({ pathname: "/chat/working/pinned" }),
     );
     expect(sidebar.sidebarEntries).toEqual(entries);
+  });
+
+  it("toggles personal shortcuts from a session row while keeping the agent-only roster", async () => {
+    const key = "agent:main:task";
+    const { sidebar, context, sessions, result } = await mountRoster(roster, [
+      thread("main", "task", 2),
+    ]);
+    const dom = domProbe(sidebar);
+    sidebar.sidebarEntries = ["route:usage", "route:plugins"];
+    const onUpdate = vi.fn((next: string[]) => {
+      sidebar.sidebarEntries = next;
+    });
+    sidebar.onUpdateSidebarEntries = onUpdate;
+    await settleRoster(sidebar);
+    for (const pinned of [true, false]) {
+      const pin = dom.query<HTMLButtonElement>(`[data-session-key="${key}"] .session-action--pin`)!;
+      expect(pin).toMatchObject({ disabled: false });
+      pin.click();
+      await settleRoster(sidebar);
+      expect(sessions.patch).not.toHaveBeenCalled();
+      expect(result.sessions[0]?.pinned).not.toBe(true);
+      expect(sidebar.sidebarEntries.includes(`session:${key}`)).toBe(pinned);
+      expect(pinnedRow(sidebar, key) !== null).toBe(pinned);
+      expect(dom.query(`.sidebar-rail [data-sidebar-entry="session:${key}"]`)).toBeNull();
+      const rows = dom.all(`[data-session-key="${key}"]`);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.classList.contains("session-row-host--pinned")).toBe(pinned);
+      expect(context.agentSelection.state.selectedId).toBe("main");
+    }
+    expect(onUpdate).toHaveBeenLastCalledWith(["route:usage", "route:plugins"]);
+    expect(sidebar.sidebarEntries).toEqual(["route:usage", "route:plugins"]);
+    await mode(sidebar, "roster");
+    expect(sessionKeys(sidebar)).toEqual([]);
   });
 });

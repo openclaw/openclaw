@@ -53,8 +53,12 @@ async function mountQuestion(question: Partial<Question>) {
 
 it.each([
   { selector: ".chat-question-panel", modifier: "ctrlKey" },
+  { selector: ".chat-question-panel", modifier: "metaKey" },
+  { selector: '[role="radio"][aria-checked="true"]', modifier: "ctrlKey" },
   { selector: '[role="radio"][aria-checked="true"]', modifier: "metaKey" },
   { selector: '[role="checkbox"][aria-checked="true"]', modifier: "ctrlKey" },
+  { selector: '[role="checkbox"][aria-checked="true"]', modifier: "metaKey" },
+  { selector: "textarea", modifier: "ctrlKey" },
   { selector: "textarea", modifier: "metaKey" },
 ])("submits from $selector with $modifier+Enter", async ({ selector, modifier }) => {
   const { container, press, onSubmit } = await mountQuestion({
@@ -72,6 +76,7 @@ it.each([
 
 it.each([
   { key: "2", value: "  detailed-id  " },
+  { key: "5", value: "format-5" },
   { key: "9", value: "format-9" },
   { key: "ArrowRight", value: "  detailed-id  " },
 ])("submits the canonical option value selected with $key", async ({ key, value }) => {
