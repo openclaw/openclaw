@@ -64,31 +64,24 @@ function expectStorageFailure(operation: "request" | "resolve") {
   expect(logError).toHaveBeenCalledTimes(1);
 }
 
-it("sanitizes durable registration failures while retaining server diagnostics", async () => {
-  fs.mkdirSync(databasePath);
-  expect(
-    await registerPendingApprovalRecord({
-      manager,
-      record,
-      timeoutMs: 60_000,
-      respond,
-      context: { logGateway: context.logGateway } as unknown as GatewayRequestContext,
-    }),
-  ).toBeUndefined();
-  expectStorageFailure("request");
-});
-
-it.each(["no-route", "resolve"] as const)(
-  "sanitizes %s storage failure and denies the waiter",
+it.each(["register", "no-route", "resolve"] as const)(
+  "sanitizes %s storage failure",
   async (operation) => {
+    const options = { manager, record, respond, context };
+    if (operation === "register") {
+      fs.mkdirSync(databasePath);
+      expect(
+        await registerPendingApprovalRecord({ ...options, timeoutMs: 60_000 }),
+      ).toBeUndefined();
+      expectStorageFailure("request");
+      return;
+    }
     const decisionPromise = (await manager.register(record, 60_000)).decision;
     const afterDecision = vi.fn();
     await makeStoreUnavailable();
     if (operation === "no-route") {
       await handlePendingApprovalRequest({
-        manager,
-        record,
-        respond,
+        ...options,
         afterDecision,
         context: { ...context, hasExecApprovalClients: () => false },
         requestEventName: "exec.approval.requested",
@@ -101,16 +94,15 @@ it.each(["no-route", "resolve"] as const)(
       expect(afterDecision).not.toHaveBeenCalled();
     } else {
       await handleApprovalResolve({
+        ...options,
         approvalKind: "exec",
-        manager,
         inputId: record.id,
         decision: "deny",
-        respond,
         context: { ...context, broadcastToConnIds: vi.fn() },
         client: null,
       });
     }
-    expectStorageFailure(operation === "no-route" ? "request" : "resolve");
+    expectStorageFailure(operation === "resolve" ? "resolve" : "request");
     await expect(decisionPromise).resolves.toBe("deny");
   },
 );

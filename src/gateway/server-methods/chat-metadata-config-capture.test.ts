@@ -59,14 +59,10 @@ test.each([1, 32])(
     copyPreparedModelRuntimeAuthBindings(template, owner);
     harness.setOwner(owner);
     harness.setAuthStore(
-      authStore(
-        Object.fromEntries(
-          ["before", "after"].map((profile) => [
-            `${provider}:${profile}`,
-            apiKey(provider, "synthetic"),
-          ]),
-        ),
-      ),
+      authStore({
+        [`${provider}:before`]: apiKey(provider, "synthetic"),
+        [`${provider}:after`]: apiKey(provider, "synthetic"),
+      }),
     );
     const sessionEntry = (profile: string) => ({
       authProfileOverride: `${provider}:${profile}`,
@@ -99,14 +95,13 @@ test.each([1, 32])(
       expect(project).not.toHaveBeenCalled();
       expect(retained).toEqual(after);
       const readyParams = {
-        agentId: "main",
         readPolicy: "ready" as const,
         sessionEntry: sessionEntry("after"),
       };
       await harness.read();
-      expect(await harness.runtime.readStartup(readyParams)).toBeDefined();
+      expect(await harness.startup(readyParams)).toBeDefined();
       current = false;
-      await expect(harness.runtime.readStartup(readyParams)).resolves.toBeUndefined();
+      await expect(harness.startup(readyParams)).resolves.toBeUndefined();
     } finally {
       await harness.runtime.stop();
       project.mockRestore();
