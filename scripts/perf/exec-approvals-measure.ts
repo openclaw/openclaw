@@ -21,6 +21,7 @@ import { performance, PerformanceObserver, type PerformanceEntry } from "node:pe
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { ExecApprovalsFile } from "../../src/infra/exec-approvals-core.js";
+import type { ExecAllowlistEntry } from "../../src/infra/exec-approvals.types.js";
 import type { ExecutableResolution } from "../../src/infra/exec-command-resolution.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -55,7 +56,7 @@ const { readExecApprovalsSnapshotAsync, prepareExecApprovalsCurrentRead } =
   await import("../../src/infra/exec-approvals-store.js");
 const { matchAllowlist } = await import("../../src/infra/exec-command-resolution.js");
 
-const entries = [
+const entries: ExecAllowlistEntry[] = [
   ...Array.from({ length: 61 }, (_, index) => ({ pattern: `/synthetic/tools/other-${index}/**` })),
   { pattern: "r?" },
   { pattern: "/synthetic/tools/allowed/**" },
