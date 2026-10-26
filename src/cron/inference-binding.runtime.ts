@@ -12,6 +12,7 @@ import {
 } from "../agents/cli-execution-auth.js";
 import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selection-decision.js";
 import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
+import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../agents/model-selection-cli.js";
 import { isConfiguredKeyAuthSource } from "../agents/provider-model-auth-source-plan.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
@@ -34,14 +35,12 @@ export async function captureCronInferenceBinding(params: {
   model?: string;
   isGmailHook?: boolean;
   sessionEntry?: SessionEntry;
+  executionSessionEntry?: Pick<SessionEntry, "modelOverride" | "providerOverride">;
   /**
-   * The model and runtime fields the cron session will hold: the target row of a
+   * The entry the cron session takes its runtime override from: the target row of a
    * `session:` job, or what a `current` job carries from its creating conversation.
    */
-  executionSessionEntry?: Pick<
-    SessionEntry,
-    "modelOverride" | "providerOverride" | "modelOverrideSource" | "agentRuntimeOverride"
-  >;
+  runtimeSessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
   authorizeProfile?: (profileId: string, inherited: boolean) => Promise<(() => void) | undefined>;
   retainAuthorization?: (authority: AuthProfileAuthorization) => void;
 }): Promise<CronInferenceBinding | undefined> {
@@ -66,9 +65,18 @@ export async function captureCronInferenceBinding(params: {
   if (!model.ok) {
     throw new Error(model.error);
   }
-  // Resolve the runtime the way the run will: the override its cron session carries, then
-  // config policy. The binding records it, and runs execute on it.
-  const execution = resolveCronCandidateExecution(
+  // The account follows the config's runtime policy, so a job binds the account it always has.
+  const cliExecutionProvider = resolveCliRuntimeExecutionProvider({
+    cfg,
+    agentId,
+    provider: model.provider,
+    modelId: model.model,
+    authProfileId: model.configuredProfileId,
+  });
+  // The runtime is resolved the way the run resolves it: the override its cron session
+  // carries, then config policy. The binding records it, and runs execute on it.
+  const runtimeEntry = params.runtimeSessionEntry;
+  const { runtime } = resolveCronCandidateExecution(
     {
       cfg,
       agentId,
@@ -76,15 +84,14 @@ export async function captureCronInferenceBinding(params: {
       model: model.model,
       sessionRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
         provider: model.provider,
-        entry: params.executionSessionEntry,
+        entry: runtimeEntry,
         cfg,
       }),
-      sessionEntry: params.executionSessionEntry,
+      sessionEntry: runtimeEntry,
       authProfileId: model.configuredProfileId,
     },
     { isCliProvider, resolveEffectiveAgentRuntime },
   );
-  const cliExecutionProvider = execution.cliExecution ? execution.executionProvider : undefined;
   // Backends that never forward a stored profile own their login; nothing here can bind it.
   if (
     cliExecutionProvider &&
@@ -232,7 +239,7 @@ export async function captureCronInferenceBinding(params: {
       profileId: selection.profileId,
       authorizationId: authority.authorizationId,
       authRequirement,
-      runtime: execution.runtime,
+      runtime,
       source:
         model.configuredProfileId ||
         creatorSession?.authProfileOverrideSource === "user" ||

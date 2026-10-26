@@ -1986,8 +1986,7 @@
       }
     },
     "inferenceRuntimes": {
-      "legacy": "claude-cli",
-      "configOnly": "openclaw"
+      "legacy": "claude-cli"
     },
     "expected": {
       "status": "ready",
@@ -2005,7 +2004,7 @@
         "memory": "equal",
         "workspace": "equal",
         "sandbox": "equal",
-        "inference": "loss"
+        "inference": "equal"
       }
     }
   },
@@ -2043,8 +2042,7 @@
       }
     },
     "inferenceRuntimes": {
-      "legacy": "openclaw",
-      "configOnly": "openclaw"
+      "legacy": "openclaw"
     },
     "expected": {
       "status": "ready",
@@ -2100,8 +2098,7 @@
       }
     },
     "inferenceRuntimes": {
-      "legacy": "claude-cli",
-      "configOnly": "openclaw"
+      "legacy": "claude-cli"
     },
     "expected": {
       "status": "ready",

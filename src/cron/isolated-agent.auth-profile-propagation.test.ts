@@ -625,12 +625,13 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     });
     return cfg;
   };
+  // Same inputs as cron.add for a `current` job: the creator's auth, its carried runtime.
   const captureFromCreator = (cfg: OpenClawConfig, creatorEntry: SessionEntry) =>
     captureCronInferenceBinding({
       cfg,
       agentId: "main",
       sessionEntry: creatorEntry,
-      executionSessionEntry: resolveCarriedCronModelSelection(creatorEntry),
+      runtimeSessionEntry: resolveCarriedCronModelSelection(creatorEntry),
     });
   const runCopyingCreator = (cfg: OpenClawConfig, job: CronStoredJob) => {
     // The run's cron session carries the creator's model and runtime, as session.ts copies them.
@@ -642,27 +643,51 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     return runWithConfig(cfg, job);
   };
 
-  it("captures the CLI login a claude-cli creator's job runs on and runs it there", async () => {
+  it("binds the account a claude-cli creator's job always paid with and records claude-cli", async () => {
     const cfg = await embeddedAnthropicConfig({
       type: "api_key",
       provider: "anthropic",
       key: "synthetic-anthropic-key",
     });
     const binding = await captureFromCreator(cfg, claudeCliCreator());
-    // The CLI login owns auth; the stored key is not recorded for a runtime that won't use it.
-    expect(binding).toBeUndefined();
-    h.resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
+    // The account is the one capture bound before runtimes were recorded; only the runtime is new.
+    expect(binding).toMatchObject({
+      provider: "anthropic",
+      profileId: claudeProfile,
+      authRequirement: "api-key",
+      runtime: "claude-cli",
+    });
     h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
 
-    const result = await runCopyingCreator(cfg, makeAuthJob({ sessionTarget: "current" }));
+    const result = await runCopyingCreator(cfg, makeAuthJob({ inferenceBinding: binding }));
 
+    // claude-cli runs with the recorded key, as the job did before.
     expect(result.status, result.error).toBe("ok");
-    expect(h.runCliAgentMock).toHaveBeenCalledOnce();
     expect(h.runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
       provider: "claude-cli",
-      nativeAuthOnly: true,
+      authProfileId: claudeProfile,
     });
-    expect(h.runCliAgentMock.mock.lastCall?.[0].authProfileId).toBeUndefined();
+    expect(h.runCliAgentMock.mock.lastCall?.[0].nativeAuthOnly).toBeUndefined();
+    expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves a binding recorded without a runtime exactly as before", async () => {
+    const cfg = await embeddedAnthropicConfig({
+      type: "api_key",
+      provider: "anthropic",
+      key: "synthetic-anthropic-key",
+    });
+    const { runtime: _runtime, ...legacy } = (await capture(cfg))!;
+    h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
+
+    // The cron session's copied claude-cli override still selects the runtime.
+    const result = await runCopyingCreator(cfg, makeAuthJob({ inferenceBinding: legacy }));
+
+    expect(result.status, result.error).toBe("ok");
+    expect(h.runCliAgentMock.mock.lastCall?.[0]).toMatchObject({
+      provider: "claude-cli",
+      authProfileId: claudeProfile,
+    });
     expect(h.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 

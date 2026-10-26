@@ -225,15 +225,12 @@ function labelField(
 }
 
 /**
- * The runtimes a bound job's run resolves, read from the rows and config the run reads:
- * `legacy` is the runtime the existing run picks from its copied cron session entry, and
- * `configOnly` the one config policy alone picks, which bindings captured before their
- * runtime was recorded were captured for.
+ * The runtime the existing run picks for a bound job from its copied cron session entry,
+ * read from the rows and config the run reads.
  */
-export type ScheduledInferenceRuntimeFacts = Readonly<{ legacy: string; configOnly: string }>;
+export type ScheduledInferenceRuntimeFacts = Readonly<{ legacy: string }>;
 
-// A recorded runtime replaces the legacy pick; an unrecorded one whose run leaves the
-// runtime it was captured for is refused or forwards the account to another runtime.
+// A recorded runtime replaces the legacy pick; a binding without one keeps the legacy pick.
 function labelInference(
   result: Extract<ScheduledExecutionContextResult, { status: "ready" }>,
   runtimes: ScheduledInferenceRuntimeFacts,
@@ -250,11 +247,7 @@ function labelInference(
       context: recorded,
     };
   }
-  return {
-    label: runtimes.legacy === runtimes.configOnly ? "equal" : "loss",
-    legacy: runtimes.legacy,
-    context: runtimes.configOnly,
-  };
+  return { label: "equal", legacy: runtimes.legacy, context: runtimes.legacy };
 }
 
 export type ScheduledDivergence = Readonly<{

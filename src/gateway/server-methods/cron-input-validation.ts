@@ -340,7 +340,7 @@ export async function captureCronCreatorSession(
     !hasRuntimeAuthority && job.payload.kind === "agentTurn" && executionSessionKey
       ? await loadGatewaySessionEntryReadOnlyInWorker({ cfg, key: executionSessionKey, agentId })
       : undefined;
-  // A `current` run copies its model and runtime from the creating conversation each time.
+  // A `current` run copies its runtime from the creating conversation each time.
   const currentSourceKey = job.sessionTarget === "current" ? job.sessionKey?.trim() : undefined;
   const currentSource =
     !hasRuntimeAuthority && job.payload.kind === "agentTurn" && currentSourceKey
@@ -362,7 +362,8 @@ export async function captureCronCreatorSession(
                   parseAgentSessionKey(executionSessionKey)?.rest ?? executionSessionKey,
                 )) === "gmail",
             sessionEntry: callerScope ? creatorSession : undefined,
-            executionSessionEntry:
+            executionSessionEntry: executionSession?.entry,
+            runtimeSessionEntry:
               executionSession?.entry ??
               (currentSource?.entry
                 ? resolveCarriedCronModelSelection(currentSource.entry)

@@ -144,8 +144,8 @@ function boundModelId(
 }
 
 /**
- * Runtimes a bound job's run resolves: the legacy pick from the entry its cron session copies
- * (a `current` job's creating conversation, a `session:` job's row), and config policy alone.
+ * The runtime a bound job's existing run picks from the entry its cron session copies
+ * (a `current` job's creating conversation, a `session:` job's row).
  */
 export function replayInferenceRuntimes(
   job: CronStoredJob,
@@ -168,23 +168,18 @@ export function replayInferenceRuntimes(
   const provider = binding.provider;
   const model = boundModelId(provider, job, entry, cfg);
   const deps = { isCliProvider, resolveEffectiveAgentRuntime };
-  const resolve = (sessionEntry: Partial<SessionEntry> | undefined) =>
-    resolveCronCandidateExecution(
-      {
-        cfg,
-        agentId,
-        provider,
-        model,
-        sessionRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
-          provider,
-          entry: sessionEntry,
-          cfg,
-        }),
-        sessionEntry,
-      },
-      deps,
-    ).runtime;
-  return { legacy: resolve(entry), configOnly: resolve(undefined) };
+  const legacy = resolveCronCandidateExecution(
+    {
+      cfg,
+      agentId,
+      provider,
+      model,
+      sessionRuntimeOverride: resolveSessionRuntimeOverrideForProvider({ provider, entry, cfg }),
+      sessionEntry: entry,
+    },
+    deps,
+  ).runtime;
+  return { legacy };
 }
 
 // Keeps the discriminators the builder reads from a stored operator source. A
