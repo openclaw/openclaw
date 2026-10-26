@@ -46,22 +46,34 @@ beforeEach(() => {
   params.env = { ...params.env, HOME: stateDir };
   params.context = {
     readPluginStateEntriesInKeyRange: () => [],
-    openPluginStateKeyedStore() {
+    openPluginStateKeyedStore: vi.fn(() => {
       throw new Error("absent or retired state must not open a store");
-    },
+    }),
   };
 });
 
-const accountRoot = (token = "0123456789abcdef") => accountStorageRoot(stateDir, "ops", token);
-const unchanged = { changes: [], warnings: [] };
+function accountRoot(token = "0123456789abcdef") {
+  return accountStorageRoot(stateDir, "ops", token);
+}
 
 it("refuses retired JSON state without changing it or inspecting token-root archives", async () => {
+  const filenames = [
+    "thread-bindings.json",
+    "startup-verification.json",
+    "recovery-key.json",
+    "legacy-crypto-migration.json",
+    "crypto-idb-snapshot.json",
+    "storage-meta.json",
+    "inbound-dedupe.json",
+  ];
   const matrixRoot = path.join(stateDir, "matrix");
-  const sources = [matrixRoot, path.join(matrixRoot, "accounts", "default"), accountRoot()].map(
-    (root) => path.join(root, "recovery-key.json"),
+  const sources = [matrixRoot, path.join(matrixRoot, "accounts", "default"), accountRoot()].flatMap(
+    (root) => filenames.map((filename) => path.join(root, filename)),
   );
-  const archive = path.join(accountRoot("sync-cache-backup"), "recovery-key.json");
-  for (const file of [...sources, archive]) {
+  const archives = filenames.map((filename) =>
+    path.join(accountRoot("sync-cache-backup"), filename),
+  );
+  for (const file of [...sources, ...archives]) {
     writeSource(file, '{"retained":true}\n');
   }
   const migration = await migrationById("matrix-account-sqlite-schema");
@@ -71,9 +83,12 @@ it("refuses retired JSON state without changing it or inspecting token-root arch
     for (const file of sources) {
       await expect(result).rejects.toThrow(file);
     }
-    await expect(result).rejects.not.toThrow(archive);
+    for (const archive of archives) {
+      await expect(result).rejects.not.toThrow(archive);
+    }
   }
-  for (const file of [...sources, archive]) {
+  expect(params.context.openPluginStateKeyedStore).not.toHaveBeenCalled();
+  for (const file of [...sources, ...archives]) {
     expect(fs.readFileSync(file, "utf8")).toBe('{"retained":true}\n');
   }
 });
@@ -83,14 +98,22 @@ it("completes absent legacy-state checks without loading client runtimes", async
     "matrix-account-sqlite-schema",
     "matrix-crypto-unsafe-state",
     "matrix-sync-cache-json-to-plugin-state",
-    "matrix-replay-guard-to-ingress",
   ]) {
     const migration = await migrationById(id);
-    expect(await migration.detectLegacyState(params)).toBeNull();
-    await expect(migration.migrateLegacyState(params)).resolves.toEqual(unchanged);
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
   }
   const inboundDedupe = await migrationById("matrix-inbound-dedupe-to-claimable-dedupe");
   await expect(inboundDedupe.detectLegacyState(params)).resolves.toBeNull();
+  const replayMarkers = await migrationById("matrix-replay-guard-to-ingress");
+  expect(replayMarkers.detectLegacyState(params)).toBeNull();
+  await expect(replayMarkers.migrateLegacyState(params)).resolves.toEqual({
+    changes: [],
+    warnings: [],
+  });
   const credentials = await migrationById("matrix-credentials-json-to-plugin-state");
   await expect(credentials.detectLegacyState(params)).resolves.toBeNull();
   const credentialsDir = path.join(stateDir, "credentials", "matrix");
@@ -99,6 +122,7 @@ it("completes absent legacy-state checks without loading client runtimes", async
   fs.writeFileSync(path.join(credentialsDir, "unrelated.json"), "{}");
   fs.mkdirSync(path.join(credentialsDir, "credentials-ops.json"));
   await expect(credentials.detectLegacyState(params)).resolves.toBeNull();
+  expect(params.context.openPluginStateKeyedStore).not.toHaveBeenCalled();
 });
 
 it.each([true, false])(
@@ -131,23 +155,24 @@ it.each([true, false])(
     if (guardPresent) {
       fs.writeFileSync(marker, `${generation}\n`);
     }
-    const readState = async () => ({
-      snapshot: await snapshotStore.entries(),
-      sync: await syncStore.entries(),
-      marker: fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : null,
-    });
-    const before = await readState();
-    expect(before.marker).toBe(guardPresent ? `${generation}\n` : null);
+    const snapshotBefore = await snapshotStore.entries();
+    const syncBefore = await syncStore.entries();
+    expect(() => getMatrixRuntime()).toThrow("Matrix runtime not initialized");
     const migration = await migrationById("matrix-crypto-unsafe-state");
     params.context = { openPluginStateKeyedStore };
     try {
       const detected = await migration.detectLegacyState(params);
+      const migrated = await migration.migrateLegacyState(params);
       expect(detected).toEqual(guardPresent ? null : { preview: [expect.stringContaining(root)] });
-      expect(await migration.migrateLegacyState(params)).toEqual({
+      expect(migrated).toEqual({
         changes: [],
         warnings: guardPresent ? [] : [expect.stringContaining(root)],
       });
-      expect(await readState()).toEqual(before);
+      expect(await snapshotStore.entries()).toEqual(snapshotBefore);
+      expect(await syncStore.entries()).toEqual(syncBefore);
+      expect(fs.existsSync(marker) ? fs.readFileSync(marker, "utf8") : null).toBe(
+        guardPresent ? `${generation}\n` : null,
+      );
       expect(() => getMatrixRuntime()).toThrow("Matrix runtime not initialized");
     } finally {
       await closeOpenClawStateDatabaseAsync();

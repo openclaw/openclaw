@@ -99,8 +99,11 @@ process.send(["ready", version(), fromInstall("fixture-runtime-dependency").valu
       const closed = once(reader, "close");
       const messages = on(reader, "message", { close: ["close"] });
       const expectMessage = async (kind: string, suffix: string) =>
-        expect((await messages.next()).value).toEqual([
-          [kind, 8, `dependency-${suffix}`, `mirror-${suffix}`],
+        expect((await messages.next()).value?.[0]).toEqual([
+          kind,
+          8,
+          `dependency-${suffix}`,
+          `mirror-${suffix}`,
         ]);
       try {
         await expectMessage("ready", "ready");
