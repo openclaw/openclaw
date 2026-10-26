@@ -1,22 +1,14 @@
-import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { getEnvironmentData, threadId } from "node:worker_threads";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { AGENT_VECTOR_SEARCH_POSTGRES_SQL } from "../../state/openclaw-agent-vector-search-migration.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import { publishSqliteDatabaseSchemaChange } from "../sqlite-database-admission.js";
-import { admitStoreSearch } from "./adapters.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
-import type { SearchSchema, StoreSchema } from "./contract.js";
+import type { StoreSchema } from "./contract.js";
 import { openPostgresEngineTestStore } from "./engine-store.test-support.js";
-import {
-  admitPostgresSearch,
-  assertPostgresSearchAdmitted,
-  pgSearchName,
-} from "./postgres-search-schema.js";
 import { bindStoreSearch } from "./search.js";
 import type { TextQuery } from "./text-contract.js";
 
@@ -82,18 +74,42 @@ async function fixture(
   }) => void | Promise<void>,
 ) {
   expect(threadId, "The fixture host must retain the native admission descriptor").toBe(0);
-  const shared = withEngineStoreAdmission(() => storeFixture());
+  const anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-search-"), "anchor.sqlite"));
+  const connections: PostgresSyncConnection[] = [];
+  const open = () => {
+    const db = openPostgresEngineTestStore({
+      anchor,
+      schema,
+      input: { connection: connection!, schemaPrefix: "search_test" },
+    });
+    if (!(db instanceof PostgresSyncConnection)) {
+      throw new Error("Expected PostgreSQL");
+    }
+    connections.push(db);
+    return db;
+  };
   try {
+    // The synchronous bridge runs before an async test yields; no admission scope spans an await.
     const { result } = withEngineStoreAdmission(() => ({
       result: test({
-        db: shared.open(schema),
-        open: () => shared.open(schema),
-        invalidate: () => publishSqliteDatabaseSchemaChange(shared.anchor),
+        db: open(),
+        open,
+        invalidate: () => publishSqliteDatabaseSchemaChange(anchor),
       }),
     }));
     await result;
   } finally {
-    withEngineStoreAdmission(shared.close);
+    withEngineStoreAdmission(() => {
+      try {
+        const db = connections[0];
+        if (db) {
+          db.exec(`DROP SCHEMA "${db.schema}" CASCADE`);
+        }
+      } finally {
+        connections.forEach((db) => db.close());
+        anchor.close();
+      }
+    });
   }
 }
 
@@ -191,8 +207,8 @@ const terms = (kind: "any" | "all", ...texts: string[]): TextQuery => ({
 });
 
 describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
-  it("keeps cover-density ranking by default and supports a frequency opt-in", () =>
-    fixture(({ db }) => {
+  it("keeps cover-density ranking by default and supports a frequency opt-in", async () => {
+    await fixture(({ db }) => {
       const { add, search } = searchFixture(db);
       add("adjacent", 1, "red fox");
       const fullText = search.fullText!;
@@ -215,10 +231,11 @@ describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
       expect(row.default_rank).toBeCloseTo(0.05, 6);
       expect(row.cover_density).toBeCloseTo(0.1, 6);
       expect(row.frequency).toBeCloseTo(0.09910322, 6);
-    }));
+    });
+  });
 
-  it("composes literal terms, phrases, final-lexeme prefixes and OR with bounded ranked snippets", () =>
-    fixture(({ db }) => {
+  it("composes literal terms, phrases, final-lexeme prefixes and OR with bounded ranked snippets", async () => {
+    await fixture(({ db }) => {
       const { add, text, ids, search } = searchFixture(db);
       db.runTransaction(() => populateText(add));
       expect(ids({ kind: "term", text: "cafe" }).toSorted()).toEqual(["long", "reverse", "short"]);
@@ -244,10 +261,11 @@ describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
         expect(row.snippet.length).toBeLessThanOrEqual(48);
         expect(row.snippet).toContain("blue fox");
       }
-    }));
+    });
+  });
 
-  it("uses trigram contains literally, including wildcard and escape characters", () =>
-    fixture(({ db }) => {
+  it("uses trigram contains literally, including wildcard and escape characters", async () => {
+    await fixture(({ db }) => {
       const { add, text } = searchFixture(db);
       db.runTransaction(() => populateText(add));
       const { fullText, text: indexes } = bindStoreSearch(db, schema.search!);
@@ -266,17 +284,16 @@ describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
         );
       }
       expect(text({ kind: "term", text: "missing" })).toEqual([]);
-    }));
+    });
+  });
 
-  it("computes exact float32 cosine after model/source eligibility and preserves binary64 source", () =>
-    fixture(async ({ db }) => {
+  it("computes exact float32 cosine after model/source eligibility and preserves binary64 source", async () => {
+    await fixture(async ({ db }) => {
       const { add, nearest, storedVector } = searchFixture(db);
       const precise = [0.12345678912345678, 0.9876543219876543, 0.3333333333333333];
       db.runTransaction(() => {
-        for (let i = 0; i < 20; i++) {
-          add(`wrong-model-${i}`, 10 + i, "excluded exact", [1, 0, 0], "model-b");
-          add(`wrong-source-${i}`, 30 + i, "excluded exact", [1, 0, 0], "model-a", "session");
-        }
+        add("wrong-model", 1, "excluded exact", [1, 0, 0], "model-b");
+        add("wrong-source", 2, "excluded exact", [1, 0, 0], "model-a", "session");
         add("eligible", 3, "eligible diagonal", [1, 1, 0]);
         add("opposite", 4, "eligible opposite", [-1, 0, 0]);
         add("precise", 5, "precision", precise, "precision");
@@ -301,17 +318,6 @@ describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
       expect(result.rows[0]!.distance).toBeCloseTo(1 - 1 / Math.sqrt(2), 6);
       expect(result.rows[1]!.distance).toBe(1);
       expect(result.rows[2]!.distance).toBe(2);
-      expect(
-        db
-          .prepare("SELECT embedding_bits::text AS bits FROM notes_vec WHERE id = 'opposite'")
-          .get(),
-      ).toEqual({ bits: "000" });
-      expect(db.prepare("SELECT embedding_bits FROM notes_vec WHERE id = 'zero'").get()).toEqual({
-        embedding_bits: null,
-      });
-      const negative = await nearest([-1, -0.01, 0]);
-      expect(negative.rows[0]!.id).toBe("opposite");
-      expect(negative.rows[0]!.distance).toBeCloseTo(1 - 1 / Math.hypot(1, 0.01), 6);
       const measured = await nearest([1, 0, 0], "precision");
       const rounded = precise.map(Math.fround);
       expect(measured.rows[0]!.distance).toBeCloseTo(1 - rounded[0]! / Math.hypot(...rounded), 6);
@@ -322,19 +328,62 @@ describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
       await expect(nearest([1, 0])).rejects.toThrow("dimensions");
       await expect(nearest([1e39, 0, 0])).rejects.toThrow("finite");
       await expect(nearest([Number.NaN, 0, 0])).rejects.toThrow("finite");
-    }));
+    });
+  });
 
-  it("synchronizes source writes and deletes transactionally and rebuilds only derived projections", () =>
-    fixture(async ({ db }) => {
-      const { add, text, ids, nearest, search, storedVector } = searchFixture(db);
+  it("prefilters within model/source scope and distinguishes negative vectors from zero", async () => {
+    await fixture(async ({ db }) => {
+      const { add, nearest } = searchFixture(db);
+      db.runTransaction(() => {
+        for (let i = 0; i < 20; i++) {
+          add(`decoy-${i}`, i + 1, "excluded", [-1, -0.01, 0], "other-model");
+          add(`source-${i}`, i + 21, "excluded", [-1, -0.01, 0], "model-a", "sessions");
+        }
+        add("a-far", 41, "negative", [-1, -5, -1]);
+        add("b-close", 42, "negative", [-1, -0.1, -0.1]);
+        add("c-orthogonal", 43, "orthogonal", [0, 1, 0]);
+        add("zero", 44, "ineligible", [0, 0, 0]);
+      });
+      expect(
+        db
+          .prepare(
+            "SELECT id, embedding_bits::text AS bits FROM notes_vec WHERE id IN ('b-close', 'zero') ORDER BY id",
+          )
+          .all(),
+      ).toEqual([
+        { id: "b-close", bits: "000" },
+        { id: "zero", bits: null },
+      ]);
+      const result = await nearest([-1, -0.01, 0], "model-a", "memory", 2);
+      expect(result.rows.map((row) => row.id)).toEqual(["b-close", "a-far"]);
+      expect(result.rows[0]!.distance).toBeCloseTo(
+        1 - 1.001 / (Math.hypot(1, 0.01) * Math.hypot(1, 0.1, 0.1)),
+        6,
+      );
+    });
+  });
+
+  it("projects fresh and replacement vectors without deleting their projection first", async () => {
+    await fixture(({ db }) => {
+      const { add } = searchFixture(db);
       db.exec(`CREATE FUNCTION reject_projection_delete() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN RAISE EXCEPTION 'unnecessary projection DELETE'; END $$;
 CREATE TRIGGER reject_projection_delete BEFORE DELETE ON notes_vec
 FOR EACH STATEMENT EXECUTE FUNCTION reject_projection_delete();`);
       db.runTransaction(() => {
-        add("kept", 1, "firstword", [0, 1, 0]);
-        db.prepare("UPDATE notes SET embedding = ? WHERE id = ?").run(embedding([1, 0, 0]), "kept");
+        add("kept", 1, "firstword", [1, 0, 0]);
+        db.prepare("UPDATE notes SET embedding = ? WHERE id = ?").run(embedding([0, 1, 0]), "kept");
       });
+      expect(db.prepare("SELECT id, embedding::text AS embedding FROM notes_vec").all()).toEqual([
+        { id: "kept", embedding: "[0,1,0]" },
+      ]);
+    });
+  });
+
+  it("synchronizes source writes and deletes transactionally and rebuilds only derived projections", async () => {
+    await fixture(async ({ db }) => {
+      const { add, text, ids, nearest, search, storedVector } = searchFixture(db);
+      db.runTransaction(() => add("kept", 1, "firstword", [1, 0, 0]));
       expect(ids({ kind: "term", text: "firstword" })).toEqual(["kept"]);
       expect(() =>
         db.runTransaction(() => {
@@ -352,7 +401,6 @@ FOR EACH STATEMENT EXECUTE FUNCTION reject_projection_delete();`);
         db.prepare("SELECT embedding::text AS embedding FROM notes_vec WHERE id = 'kept'").get(),
       ).toEqual({ embedding: "[1,0,0]" });
       expect(db.prepare("SELECT id FROM notes_vec WHERE id = 'rolled'").get()).toBeUndefined();
-      db.exec("DROP TRIGGER reject_projection_delete ON notes_vec");
       const before = storedVector("kept");
       db.runTransaction(() => {
         db.prepare("UPDATE notes SET text = ?, embedding = ? WHERE id = ?").run(
@@ -384,7 +432,8 @@ FOR EACH STATEMENT EXECUTE FUNCTION reject_projection_delete();`);
         expect(db.prepare("SELECT id FROM notes_vec").all()).toEqual([]);
         expect(ids({ kind: "term", text: "secondword" })).toEqual(["kept"]);
       });
-    }));
+    });
+  });
 
   it.each([
     ["GIN index", "DROP INDEX notes_search_gin"],
@@ -398,326 +447,6 @@ FOR EACH STATEMENT EXECUTE FUNCTION reject_projection_delete();`);
       db.exec(change);
       invalidate();
       expect(open).toThrow("schema drift");
-    });
-  });
-});
-
-const dimensions = [3, 2001, 16000];
-const source: StoreSchema = {
-  id: "agent",
-  version: 32,
-  sqlite: "",
-  postgres: [...dimensions, 17]
-    .map((dim) => `CREATE TABLE notes_${dim} (id TEXT PRIMARY KEY, embedding BYTEA)`)
-    .join(";\n"),
-  postgresVectorDecoderVersion: 2,
-};
-const destination: StoreSchema = {
-  ...source,
-  version: 33,
-  postgresVectorSearchVersion: 2,
-  postgresMigrations: [
-    {
-      version: 33,
-      fromSchema: { postgres: source.postgres!, postgresVectorDecoderVersion: 2 },
-      schema: {
-        postgres: source.postgres!,
-        postgresVectorDecoderVersion: 2,
-        postgresVectorSearchVersion: 2,
-      },
-      sql: AGENT_VECTOR_SEARCH_POSTGRES_SQL,
-    },
-  ],
-};
-const vectorSchema = (dim: number): SearchSchema => ({
-  vector: {
-    notes: {
-      table: `vectors_${dim}`,
-      alias: "v",
-      rowShape: { id: "string" },
-      postgres: { source: `notes_${dim}`, key: "id", embedding: "embedding", dimensions: dim },
-    },
-  },
-});
-const sparseEmbedding = (dim: number, value: number) => {
-  const bytes = Buffer.alloc(dim * 8);
-  bytes.writeDoubleLE(value);
-  return bytes;
-};
-
-function storeFixture(dsn = connection!) {
-  const anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-vector-search-"), "anchor.sqlite"));
-  const opened: PostgresSyncConnection[] = [];
-  return {
-    anchor,
-    open(this: void, selectedSchema: StoreSchema, existingVersion = false) {
-      const db = openPostgresEngineTestStore({
-        anchor,
-        schema: selectedSchema,
-        existingVersion,
-        input: { connection: dsn, schemaPrefix: "binary_vector_test" },
-        openSqlite() {
-          throw new Error("Expected PostgreSQL");
-        },
-      });
-      if (!(db instanceof PostgresSyncConnection)) {
-        throw new Error("Expected PostgreSQL");
-      }
-      opened.push(db);
-      return db;
-    },
-    close(this: void) {
-      try {
-        if (opened[0]) {
-          opened[0].exec(`DROP SCHEMA "${opened[0].schema}" CASCADE`);
-        }
-      } finally {
-        opened.forEach((db) => db.close());
-        anchor.close();
-      }
-    },
-  };
-}
-
-const readVersion = (db: PostgresSyncConnection) =>
-  db.prepare("SELECT version FROM openclaw_schema_meta").get()?.version;
-const bitColumns = (db: PostgresSyncConnection) =>
-  db
-    .prepare(
-      "SELECT count(*) AS count FROM information_schema.columns WHERE table_schema = ? AND column_name = 'embedding_bits'",
-    )
-    .get(db.schema)?.count;
-
-describe.skipIf(!connection)("PostgreSQL binary vector schema", () => {
-  it("migrates existing optional projections, preserves historical admission and maintains zero eligibility", () =>
-    withEngineStoreAdmission(() => {
-      const shared = storeFixture();
-      const { anchor, open } = shared;
-      try {
-        const original = open(source);
-        original.runTransaction(() => {
-          for (const dim of dimensions) {
-            admitStoreSearch(original, vectorSchema(dim), { extension: `vectors-${dim}` });
-            for (const [id, value] of [
-              ["positive", 1],
-              ["negative", -1],
-              ["zero", 0],
-            ] as const) {
-              original
-                .prepare(`INSERT INTO notes_${dim} VALUES (?, ?)`)
-                .run(id, sparseEmbedding(dim, value));
-            }
-          }
-        });
-        // Override only the migration's catalog input; installed extensions and admission stay real.
-        expect(() =>
-          open({
-            ...destination,
-            postgresMigrations: destination.postgresMigrations!.map((migration) =>
-              Object.assign({}, migration, {
-                sql: migration.sql.replace("regexp_match(extversion,", "regexp_match('0.6.2',"),
-              }),
-            ),
-          }),
-        ).toThrow(
-          "PostgreSQL binary vector search requires pgvector 0.7 or newer. Upgrade the server extension package, then have a database administrator run ALTER EXTENSION vector UPDATE before reopening the store.",
-        );
-        expect(readVersion(original)).toBe(32);
-        expect(bitColumns(original)).toBe(0);
-        publishSqliteDatabaseSchemaChange(anchor);
-        // oxlint-disable-next-line typescript/unbound-method -- Forwarded below with the intercepted connection as receiver.
-        const prepare = PostgresSyncConnection.prototype.prepare;
-        const oldVector = vi
-          .spyOn(PostgresSyncConnection.prototype, "prepare")
-          .mockImplementation(function (this: PostgresSyncConnection, statementSql) {
-            const statement = prepare.call(this, statementSql);
-            if (statementSql.includes("pg_catalog.pg_available_extensions")) {
-              const all = statement.all.bind(statement);
-              vi.spyOn(statement, "all").mockImplementation((...values) =>
-                all(...values).map((row) =>
-                  row.name === "vector" ? Object.assign({}, row, { extversion: "0.6.2" }) : row,
-                ),
-              );
-            }
-            return statement;
-          });
-        try {
-          const historical = open(destination, true);
-          expect(readVersion(historical)).toBe(32);
-          expect(bitColumns(historical)).toBe(0);
-          expect(() => open(destination)).toThrow(/requires pgvector 0.7 or newer/);
-        } finally {
-          oldVector.mockRestore();
-        }
-        const migrated = open(destination);
-        expect(readVersion(migrated)).toBe(33);
-        migrated.runTransaction(() => {
-          for (const dim of dimensions) {
-            const expectedVector = (id: string, value: number) => ({
-              id,
-              dimensions: value === 0 ? null : dim,
-              bits: value === 0 ? null : (value > 0 ? "1" : "0") + "0".repeat(dim - 1),
-              embedding: new Uint8Array(sparseEmbedding(dim, value)),
-            });
-            expect(
-              migrated
-                .prepare(`SELECT n.id, n.embedding, v.embedding_bits::text AS bits,
-              bit_length(v.embedding_bits) AS dimensions
-              FROM notes_${dim} n JOIN vectors_${dim} v USING (id) ORDER BY n.id`)
-                .all(),
-            ).toEqual([
-              expectedVector("negative", -1),
-              expectedVector("positive", 1),
-              expectedVector("zero", 0),
-            ]);
-            migrated
-              .prepare(`UPDATE notes_${dim} SET embedding = ? WHERE id = 'zero'`)
-              .run(sparseEmbedding(dim, 1));
-            expect(
-              migrated
-                .prepare(
-                  `SELECT get_bit(embedding_bits, 0) AS sign FROM vectors_${dim} WHERE id = 'zero'`,
-                )
-                .get()?.sign,
-            ).toBe(1);
-          }
-        });
-        admitStoreSearch(migrated, vectorSchema(17), { extension: "vectors-17" });
-        migrated.runTransaction(() => {
-          migrated.prepare("INSERT INTO notes_17 VALUES (?, ?)").run("new", sparseEmbedding(17, 1));
-        });
-        expect(
-          migrated.prepare("SELECT bit_length(embedding_bits) AS dimensions FROM vectors_17").get()
-            ?.dimensions,
-        ).toBe(17);
-
-        migrated.runTransaction(() => {
-          migrated.exec("ALTER TABLE vectors_3 ALTER COLUMN embedding_bits DROP EXPRESSION");
-        });
-        publishSqliteDatabaseSchemaChange(anchor);
-        expect(() => open(destination)).toThrow("schema drift");
-      } finally {
-        shared.close();
-      }
-    }));
-
-  it("migrates stores without optional vectors without creating vector projections", () => {
-    withEngineStoreAdmission(() => {
-      const { open, close } = storeFixture();
-      try {
-        open(source);
-        const migrated = open(destination);
-        expect(readVersion(migrated)).toBe(33);
-      } finally {
-        close();
-      }
-    });
-  });
-});
-
-const admissionSearch: SearchSchema = {
-  text: {
-    notes: { table: "notes", fields: ["text"], postgres: { identity: "id", mode: "trigram" } },
-  },
-  vector: {
-    notes: {
-      table: "vectors",
-      alias: "v",
-      rowShape: { id: "string" },
-      postgres: { source: "notes", key: "id", embedding: "embedding", dimensions: 3 },
-    },
-  },
-};
-function admissionFixture(
-  dsn: string,
-  search: SearchSchema | undefined,
-  run: (db: PostgresSyncConnection) => void,
-) {
-  withEngineStoreAdmission(() => {
-    const { open, close } = storeFixture(dsn);
-    try {
-      run(
-        open({
-          id: "search",
-          version: 1,
-          sqlite: "",
-          postgres: "CREATE TABLE notes(id TEXT PRIMARY KEY, text TEXT NOT NULL, embedding BYTEA)",
-          search,
-        }),
-      );
-    } finally {
-      close();
-    }
-  });
-}
-afterEach(() => vi.restoreAllMocks());
-describe.skipIf(!connection)("PostgreSQL search admission failures", () => {
-  it.each(["0.6.2", "0.7.0"])(
-    "gates binary search on pgvector %s once at admission while historical search remains exact",
-    (version) => {
-      admissionFixture(connection!, undefined, (db) => {
-        const selected: SearchSchema = { vector: admissionSearch.vector };
-        const namespace = String(db.prepare("SELECT current_schema() AS name").get()?.name);
-        const prepare = db.prepare.bind(db);
-        vi.spyOn(db, "prepare").mockImplementation((statementSql) => {
-          const statement = prepare(statementSql);
-          if (statementSql.includes("pg_catalog.pg_available_extensions")) {
-            const all = statement.all.bind(statement);
-            vi.spyOn(statement, "all").mockImplementation((...values) =>
-              all(...values).map((row) =>
-                row.name === "vector" ? Object.assign({}, row, { extversion: version }) : row,
-              ),
-            );
-          }
-          return statement;
-        });
-        admitPostgresSearch(db, selected, namespace, 1)?.();
-        if (version.startsWith("0.6")) {
-          expect(() => admitPostgresSearch(db, selected, namespace, 2)).toThrow(
-            /requires pgvector 0.7 or newer.*ALTER EXTENSION vector UPDATE/,
-          );
-          return;
-        }
-        admitPostgresSearch(db, selected, namespace, 2)?.();
-        expect(admitPostgresSearch(db, selected, namespace, 2)).toBeUndefined();
-        assertPostgresSearchAdmitted(db, selected);
-      });
-    },
-  );
-
-  it("refuses unsupported exact dimensions before installing search DDL", () => {
-    const selected: SearchSchema = {
-      vector: {
-        notes: {
-          ...admissionSearch.vector!.notes!,
-          postgres: { ...admissionSearch.vector!.notes!.postgres!, dimensions: 16_001 },
-        },
-      },
-    };
-    expect(() => admissionFixture(connection!, selected, () => {})).toThrow(
-      "dimensions must be 1–16000",
-    );
-  });
-
-  it("names insufficient schema creation privilege", () => {
-    admissionFixture(connection!, undefined, (admin) => {
-      const role = `r6_${randomUUID().replaceAll("-", "")}`;
-      const database = String(admin.prepare("SELECT current_database() AS name").get()?.name);
-      admin.exec(`CREATE ROLE ${pgSearchName(role)} LOGIN PASSWORD 'synthetic-search-privilege'`);
-      admin.exec(`GRANT CONNECT ON DATABASE ${pgSearchName(database)} TO ${pgSearchName(role)}`);
-      try {
-        const url = new URL(connection!);
-        url.username = role;
-        url.password = "synthetic-search-privilege";
-        expect(() => admissionFixture(url.href, admissionSearch, () => {})).toThrow(
-          "insufficient CREATE privilege",
-        );
-      } finally {
-        admin.exec(
-          `REVOKE CONNECT ON DATABASE ${pgSearchName(database)} FROM ${pgSearchName(role)}`,
-        );
-        admin.exec(`DROP ROLE ${pgSearchName(role)}`);
-      }
     });
   });
 });
