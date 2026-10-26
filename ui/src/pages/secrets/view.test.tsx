@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
@@ -10,14 +10,6 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { SecretsPageState } from "./state.ts";
 import { SecretsStore } from "./view.tsx";
-
-const mounts: ReturnType<typeof mountSolid>[] = [];
-
-afterEach(() => {
-  for (const view of mounts.splice(0)) {
-    view.unmount();
-  }
-});
 
 function mount(
   entries: SecretStoreEntry[],
@@ -36,7 +28,7 @@ function mount(
   const state = new SecretsPageState(context, vi.fn());
   state.store.entries = entries;
   Object.assign(state, overrides);
-  const view = mountSolid(() => (
+  return mountSolid(() => (
     <SecretsStore
       state={state}
       scope={state.store}
@@ -48,24 +40,11 @@ function mount(
       bulkEntryCount={0}
       bulkInvalidNames={[]}
     />
-  ));
-  mounts.push(view);
-  return view.container;
+  )).container;
 }
 
 describe("secrets store view", () => {
   it("never renders a secret value even when hostile input carries one", () => {
-    const secret = {
-      name: "SERVICE_API_KEY",
-      kind: "secret",
-      value: "must-never-render",
-      scopeKind: "team",
-      scopeId: "",
-      createdAtMs: 1,
-      updatedAtMs: 2,
-      updatedBy: "Operator",
-      allowedHosts: ["api.example.com"],
-    } as unknown as SecretStoreEntry;
     const env: SecretStoreEntry = {
       name: "SERVICE_URL",
       kind: "env",
@@ -75,6 +54,13 @@ describe("secrets store view", () => {
       createdAtMs: 1,
       updatedAtMs: 2,
       updatedBy: "Operator",
+    };
+    const secret = {
+      ...env,
+      name: "SERVICE_API_KEY",
+      kind: "secret" as const,
+      value: "must-never-render",
+      allowedHosts: ["api.example.com"],
     };
     const container = mount([secret, env]);
 
