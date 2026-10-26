@@ -1,5 +1,5 @@
 import "./worker-session-tool-executor.test-support.js";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import * as sendTool from "../../agents/tools/sessions-send-tool.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -15,15 +15,16 @@ const realSendTool = await vi.importActual<typeof sendTool>(
   "../../agents/tools/sessions-send-tool.js",
 );
 
-describe.each([false, true])("worker family ownership (shared store=%s)", (shared) => {
-  const source = {
-    ...SOURCE,
-    agentId: shared ? "worker" : "ops",
-    sessionKey: `agent:${shared ? "worker" : "ops"}:dashboard:child`,
-  };
-  const mocks = workerSessionToolTestMocks();
+it.each([false, true])(
+  "sends to the global parent and sibling (shared store=%s)",
+  async (shared) => {
+    const source = {
+      ...SOURCE,
+      agentId: shared ? "worker" : "ops",
+      sessionKey: `agent:${shared ? "worker" : "ops"}:dashboard:child`,
+    };
+    const mocks = workerSessionToolTestMocks();
 
-  it("sends to the non-default global parent and sibling through the core tool", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const fixture = await createWorkerSessionToolTestFixture(mocks, { sourceSession: source });
       const lookupSpy = vi
@@ -47,32 +48,24 @@ describe.each([false, true])("worker family ownership (shared store=%s)", (share
         setRuntimeConfigSnapshot(cfg);
         const parent = { sessionKey: "global", sessionId: "ops-parent" };
         const sibling = { sessionKey: "agent:ops:dashboard:sibling", sessionId: "ops-sibling" };
-        const { setEntry, send } = fixture;
-        setEntry(source.sessionKey, source.sessionId, parent);
-        for (const target of [source, sibling]) {
-          await replaceSessionEntry(
-            {
-              agentId: target === source ? source.agentId : "ops",
-              sessionKey: target.sessionKey,
-              storePath: cfg.session?.store,
-            },
+        const setSession = (agentId: string, target: typeof parent, child = false) =>
+          replaceSessionEntry(
+            { agentId, sessionKey: target.sessionKey, storePath: cfg.session?.store },
             {
               sessionId: target.sessionId,
               updatedAt: 1,
-              parentSessionKey: "global",
-              parentSessionId: parent.sessionId,
+              ...(child
+                ? { parentSessionKey: parent.sessionKey, parentSessionId: parent.sessionId }
+                : {}),
             },
           );
-        }
-        await replaceSessionEntry(
-          { agentId: "ops", sessionKey: "global", storePath: cfg.session?.store },
-          { sessionId: parent.sessionId, updatedAt: 1 },
-        );
+        const { setEntry, send } = fixture;
+        setEntry(source.sessionKey, source.sessionId, parent);
+        await setSession(source.agentId, source, true);
+        await setSession("ops", sibling, true);
+        await setSession("ops", parent);
         if (!shared) {
-          await replaceSessionEntry(
-            { agentId: "main", sessionKey: "global" },
-            { sessionId: "unrelated-main-parent", updatedAt: 1 },
-          );
+          await setSession("main", { sessionKey: "global", sessionId: "unrelated-main-parent" });
         }
         const delivered: Array<{ agentId: string; sessionKey: string }> = [];
         mocks.gatewayRequest.mockImplementation(async (request) => {
@@ -110,5 +103,5 @@ describe.each([false, true])("worker family ownership (shared store=%s)", (share
         await fixture.dispose();
       }
     });
-  });
-});
+  },
+);
