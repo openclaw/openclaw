@@ -866,7 +866,7 @@ describe("initSessionState thread forking", () => {
       },
     });
 
-    const afterTransition = vi.fn(async () => {});
+    const afterTransition = vi.fn(async (_transition: unknown) => {});
     const replyOperation = { key: sourceSessionKey } as unknown as NonNullable<
       Parameters<typeof initSessionState>[0]["replyOperation"]
     >;
@@ -925,6 +925,7 @@ describe("initSessionState thread forking", () => {
       expectedSessionId: "preseed-thread-session",
       storePath,
       kind: "visible",
+      resetTriggered: false,
     });
     expect(admission.status).toBe("owned");
     if (admission.status !== "owned") {
