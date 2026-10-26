@@ -5550,6 +5550,23 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     assertControlUiE2eOwnership((prefix) => tempDirs.make(prefix), parser);
   });
 
+  it("restores shared build content while retaining private real-Gateway preparation", () => {
+    const job = readCiWorkflow().jobs["checks-ui-e2e-real-gateway"];
+    const setup = requiredWorkflowStep(job.steps, "Setup Node environment");
+    const build = requiredWorkflowStep(
+      job.steps,
+      "Build runtime and Control UI artifacts for real-Gateway tests",
+    );
+    expect(setup.with?.["build-all-cache-scope"]).toBe("full");
+    expect(job.needs).toEqual(["preflight"]);
+    expect(build.run).toBe("pnpm build");
+    expect(build.env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
+    expect(build.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
+    expect(job.steps.some((step: WorkflowStep) => step.name === "Save build-all cache")).toBe(
+      false,
+    );
+  });
+
   it.each([
     { frozen: false, prebuilt: true, childExit: 0, releaseTier: false },
     { frozen: false, prebuilt: true, childExit: 0, releaseTier: true },

@@ -50,7 +50,7 @@ inputs:
   build-all-cache-scope:
     description: >
       Namespace for restoring build-all's content-addressed step cache.
-      Leave empty to disable; use only for declaration builds with public inputs.
+      Leave empty to disable; each build step validates its own complete input identity.
     required: false
     default: ""
 outputs:
