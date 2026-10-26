@@ -88,9 +88,23 @@ minutes of silence it closes the connection and reconnects.
 
 IRC sends Markdown as plain text, preserving code contents and link destinations.
 Long replies are rendered before splitting into IRC messages, so code fences and
-inline formatting remain consistent across chunk boundaries. `textChunkLimit`
-and `streaming.chunkMode` control text splitting; the socket also enforces
-IRC's line-size limit.
+inline formatting remain consistent across chunk boundaries.
+
+Formatting settings under `channels.irc`:
+
+- `textChunkLimit` and `streaming.chunkMode` control text splitting. The default
+  `"length"` mode splits at the text limit; `"newline"` prefers blank-line paragraph
+  boundaries and falls back to length splitting. The socket also enforces IRC's
+  line-size limit.
+- `markdown.tables` selects `"code"` (default), `"bullets"`, `"off"`, or `"block"`.
+  IRC has no native table support, so `"block"` falls back to `"code"`. See
+  [table handling](/concepts/markdown-formatting#table-handling).
+- `responsePrefix` adds a prefix to reply text. Set `""` to disable an inherited
+  prefix; see [reply prefixes](/concepts/messages#prefixes-threading-and-replies)
+  for `"auto"` and template values.
+
+Named accounts can override these settings under
+`channels.irc.accounts.<accountId>`.
 
 If nonempty text becomes empty during formatting or IRC sanitization, the send
 fails instead of reporting delivery. Reply references do not count as message content.
