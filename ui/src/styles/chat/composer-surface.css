@@ -1415,8 +1415,6 @@
     --chat-composer-context-stroke: 1.5px;
   }
 
-  /* Mobile action controls own a real 32px target; Plus uses its explicit 36px
-     role token. Adjacent controls never compete for one tap. */
   .agent-chat__input--mobile-toolbar
     :is(
       .agent-chat__input-btn--attach,
@@ -1486,7 +1484,9 @@
     padding-top: 0;
   }
 
-  .agent-chat__composer-combobox > :is(textarea, input, .agent-chat__composer-placeholder) {
+  .agent-chat__input
+    .agent-chat__composer-combobox
+    > :is(textarea, input, .agent-chat__composer-placeholder) {
     min-height: calc(var(--chat-composer-editor-line) + 4px);
     max-height: calc(var(--chat-composer-editor-line) + 4px);
     padding-block: 2px;

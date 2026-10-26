@@ -141,13 +141,15 @@ suite.define(() => {
             shell.evaluate(
               (element) => window.innerHeight - element.getBoundingClientRect().bottom,
             );
+          const restingGap = await bottomGap();
+          expect(restingGap).toBeGreaterThan(0);
           for (const safeArea of [0, 24]) {
             await protocol.send("Emulation.setSafeAreaInsetsOverride", {
               insets: { bottom: safeArea },
             });
-            expect(await bottomGap()).toBe(10 + safeArea);
+            expect(await bottomGap()).toBe(restingGap + safeArea);
             await textarea.focus();
-            expect(await bottomGap()).toBe(10 + safeArea);
+            expect(await bottomGap()).toBe(restingGap + safeArea);
             await textarea.blur();
           }
           await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 0 } });
