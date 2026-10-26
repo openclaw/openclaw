@@ -34,6 +34,28 @@ export function defineProfilePreferenceTests({
       avatarUrl: githubAvatarUrl,
     },
   };
+  const identity = (page: Page) => page.locator("#settings-profile-identity");
+  const identityRow = (page: Page, title: string) =>
+    identity(page)
+      .locator(".settings-row")
+      .filter({
+        has: page.locator(".settings-row__title", { hasText: title }),
+      });
+  const coauthorSwitch = (page: Page) =>
+    identity(page).getByRole("switch", { name: "Git co-author credit" });
+  const preferenceResponses = (entries: Record<string, boolean> = {}) => ({
+    "users.prefs.get": { status: "ok", entries },
+    "users.prefs.set": { status: "ok" },
+  });
+  async function expectSavedPreference(
+    gateway: MockGatewayControls,
+    key: string,
+    value: boolean,
+    after = 0,
+  ) {
+    const saved = await gateway.waitForRequest("users.prefs.set", { after });
+    expect(saved.params).toEqual({ entries: { [key]: value } });
+  }
 
   it.each([
     {
@@ -75,30 +97,18 @@ export function defineProfilePreferenceTests({
           });
           const gateway = await openProfilePage(page, {
             "users.self": { profile: testProfile },
-            "users.prefs.get": {
-              status: "ok",
-              entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false },
-            },
-            "users.prefs.set": { status: "ok" },
+            ...preferenceResponses({ [GIT_COAUTHOR_PREFERENCE_KEY]: false }),
           });
 
-          const githubRow = page
-            .locator("#settings-profile-identity .settings-row")
-            .filter({ has: page.locator(".settings-row__title", { hasText: "GitHub account" }) });
-          const coauthorRow = page.locator("#settings-profile-identity .settings-row").filter({
-            has: page.locator(".settings-row__title", { hasText: "Git co-author credit" }),
-          });
+          const githubRow = identityRow(page, "GitHub account");
+          const coauthorRow = identityRow(page, "Git co-author credit");
           await expect(githubRow).toContainText("Unavailable");
           await expect(githubRow).toContainText("No single verified GitHub sign-in account");
           await expect(githubRow.locator(".settings-account")).toHaveCount(0);
-          await expect(
-            coauthorRow.getByRole("switch", { name: "Git co-author credit" }),
-          ).toBeEnabled();
+          await expect(coauthorSwitch(page)).toBeEnabled();
           await expect(page.getByRole("textbox", { name: "GitHub username" })).toHaveCount(0);
           await expect(
-            page
-              .locator("#settings-profile-identity")
-              .getByRole("button", { name: /Link GitHub|Change|Disconnect/u }),
+            identity(page).getByRole("button", { name: /Link GitHub|Change|Disconnect/u }),
           ).toHaveCount(0);
           await screenshot(page, "08-github-identity-unlinked.png");
 
@@ -130,15 +140,12 @@ export function defineProfilePreferenceTests({
           await expect(coauthorRow).toContainText("verified enterprise email address");
           await expect(coauthorRow).toContainText("visible in commit history");
           await expect(coauthorRow).toContainText("future commits only");
-          const toggle = coauthorRow.getByRole("switch", { name: "Git co-author credit" });
+          const toggle = coauthorSwitch(page);
           await expect(toggle).toBeEnabled();
           await expect(toggle).not.toBeChecked();
 
           await toggle.click();
-          const prefSet = await gateway.waitForRequest("users.prefs.set");
-          expect(prefSet.params).toEqual({
-            entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true },
-          });
+          await expectSavedPreference(gateway, GIT_COAUTHOR_PREFERENCE_KEY, true);
           await expect(toggle).toBeChecked();
           await screenshot(page, "10-git-coauthor-enabled.png");
         },
@@ -156,18 +163,15 @@ export function defineProfilePreferenceTests({
             githubIdentity: null,
           },
         },
-        "users.prefs.get": { status: "ok", entries: {} },
-        "users.prefs.set": { status: "ok" },
+        ...preferenceResponses(),
       });
-      const identity = page.locator("#settings-profile-identity");
-      const toggle = identity.getByRole("switch", { name: "Git co-author credit" });
+      const toggle = coauthorSwitch(page);
       // Capture before the changed assertion so the same scenario records the original defect.
       await screenshot(page, "14-multi-host-consent-initial.png");
       await expect(toggle).toBeEnabled();
       await expect(toggle).toBeChecked();
       await toggle.click();
-      const saved = await gateway.waitForRequest("users.prefs.set");
-      expect(saved.params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } });
+      await expectSavedPreference(gateway, GIT_COAUTHOR_PREFERENCE_KEY, false);
       await expect(toggle).not.toBeChecked();
     });
   });
@@ -179,10 +183,7 @@ export function defineProfilePreferenceTests({
         "users.prefs.get": { status: "ok", entries: {} },
       });
 
-      const coauthorRow = page.locator("#settings-profile-identity .settings-row").filter({
-        has: page.locator(".settings-row__title", { hasText: "Git co-author credit" }),
-      });
-      const toggle = coauthorRow.getByRole("switch", { name: "Git co-author credit" });
+      const toggle = coauthorSwitch(page);
       await expect(toggle).toBeEnabled();
       await expect(toggle).toBeChecked();
       await screenshot(page, "13-git-coauthor-default-on.png");
@@ -191,26 +192,20 @@ export function defineProfilePreferenceTests({
 
   it("persists personal PR attribution independently from Git co-author credit", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const gateway = await openProfilePage(page, {
-        "users.prefs.get": { status: "ok", entries: {} },
-        "users.prefs.set": { status: "ok" },
-      });
-      const identity = page.locator("#settings-profile-identity");
-      const toggle = identity.getByRole("switch", {
+      const gateway = await openProfilePage(page, preferenceResponses());
+      const toggle = identity(page).getByRole("switch", {
         name: "Add OpenClaw attribution to pull requests",
       });
-      const coauthor = identity.getByRole("switch", { name: "Git co-author credit" });
+      const coauthor = coauthorSwitch(page);
       await expect(toggle).toBeEnabled();
       await expect(toggle).not.toBeChecked();
       await expect(coauthor).toBeChecked();
-      await expect(identity.getByRole("link", { name: "🦞 Made with OpenClaw" })).toHaveAttribute(
-        "href",
-        "https://openclaw.ai",
-      );
+      await expect(
+        identity(page).getByRole("link", { name: "🦞 Made with OpenClaw" }),
+      ).toHaveAttribute("href", "https://openclaw.ai");
       await screenshot(page, "15-pr-attribution-default-off.png");
       await toggle.click();
-      const saved = await gateway.waitForRequest("users.prefs.set");
-      expect(saved.params).toEqual({ entries: { "github.prAttribution.enabled": true } });
+      await expectSavedPreference(gateway, "github.prAttribution.enabled", true);
       await expect(toggle).toBeChecked();
       await expect(coauthor).toBeChecked();
       await screenshot(page, "16-pr-attribution-enabled.png");
@@ -224,8 +219,7 @@ export function defineProfilePreferenceTests({
       await expect(toggle).toBeEnabled();
       await expect(toggle).toBeChecked();
       await toggle.click();
-      const disabled = await gateway.waitForRequest("users.prefs.set", { after: 1 });
-      expect(disabled.params).toEqual({ entries: { "github.prAttribution.enabled": false } });
+      await expectSavedPreference(gateway, "github.prAttribution.enabled", false, 1);
       await expect(toggle).not.toBeChecked();
       await expect(coauthor).toBeChecked();
     });
