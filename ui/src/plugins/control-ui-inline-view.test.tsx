@@ -1,5 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { ControlUiViewContext } from "../../../src/plugin-sdk/control-ui.js";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { PRESENTATION_CHANGED_EVENT } from "../lib/presentation.ts";
 import { createInitializationContext } from "../pages/chat/chat-application-context.test-support.ts";
 import { threadFixture } from "../pages/chat/components/chat-transcript-fixture.test-support.tsx";
@@ -10,21 +9,14 @@ import {
 } from "../pages/chat/components/chat-transcript.test-support.ts";
 import { render } from "../pages/chat/test-helpers/chat-transcript-native.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import { createViewRuntime, replacement } from "./control-ui-view.test-support.ts";
+import { createViewRuntime, recordReplacement } from "./control-ui-view.test-support.ts";
 
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
 it("retires inline views when retained rows hide and remounts equal props on return", async () => {
-  const contexts: ControlUiViewContext<unknown>[] = [];
-  const dispose = vi.fn();
-  const runtime = createViewRuntime(
-    replacement("workspace", (container, context) => {
-      contexts.push(context);
-      container.textContent = "Incident detail";
-      return { dispose };
-    }),
-  );
+  const { view, contexts, dispose } = recordReplacement("workspace", "Incident detail");
+  const runtime = createViewRuntime(view);
   const registration = runtime.context.plugins.selectedReplacement("workspace")!;
   Object.assign(runtime.context.plugins, {
     selectedReplacement: () => undefined,
