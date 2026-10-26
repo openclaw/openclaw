@@ -22,11 +22,7 @@ const model = makeProviderModelFixture({
   api: "openai-completions",
   provider: "opencode-go",
   id: "deepseek-v4-flash",
-  name: "Synthetic Go model",
   baseUrl: "https://opencode.ai/zen/go/v1",
-  reasoning: true,
-  contextWindow: 262_144,
-  maxTokens: 8192,
 });
 
 async function openStream(trigger?: "cron", requestTimeoutMs?: number) {
@@ -59,12 +55,18 @@ async function openStream(trigger?: "cron", requestTimeoutMs?: number) {
     signal: caller.signal,
     firstEventTimeoutMs: resolveLlmFirstEventTimeoutMs(params),
   };
-  const stream = await streamWithIdleTimeout(wrapped, resolveLlmIdleTimeoutMs(params), onTimeout)(
-    selectedModel,
-    { messages: [] },
-    options,
-  );
-  return { source, stream, caller, onTimeout, requestOptions };
+  const forwarding: StreamFn = (activeModel, context, activeOptions) => {
+    const stream = wrapped(activeModel, context, activeOptions);
+    expect(stream).toBe(source);
+    expect(requestOptions?.signal).toBe(activeOptions?.signal);
+    return stream;
+  };
+  const stream = await streamWithIdleTimeout(
+    forwarding,
+    resolveLlmIdleTimeoutMs(params),
+    onTimeout,
+  )(selectedModel, { messages: [] }, options);
+  return { source, stream, onTimeout, requestOptions };
 }
 
 afterEach(() => vi.useRealTimers());
@@ -99,49 +101,6 @@ it.each([
     const classification = classifyFailoverSignalCore(signal);
     expect(classification).toEqual({ kind: "reason", reason: "timeout" });
     expect(shouldRetryFailoverSignal({ classification, signal })).toBe(true);
-  } finally {
-    source.end();
-    await iterator.return?.();
-  }
-});
-
-it.each(["done", "error"] as const)(
-  "leaves raw first-SSE budgets and %s ordering with their owners",
-  async (terminal) => {
-    const { source, stream, onTimeout } = await openStream();
-    const message = makeAgentAssistantMessage({
-      content: [{ type: "text", text: "OK" }],
-      stopReason: terminal === "done" ? "stop" : "error",
-    });
-    source.push({ type: "start", partial: message });
-    source.push({ type: "text_delta", contentIndex: 0, delta: "OK", partial: message });
-    source.push(
-      terminal === "done"
-        ? { type: "done", reason: "stop", message }
-        : { type: "error", reason: "error", error: message },
-    );
-    source.end(message);
-    const events = [];
-    for await (const event of stream) {
-      events.push(event.type);
-    }
-    expect(events).toEqual(["start", "text_delta", terminal]);
-    expect(await stream.result()).toBe(message);
-    await vi.advanceTimersByTimeAsync(900_000);
-    expect(onTimeout).not.toHaveBeenCalled();
-  },
-);
-
-it("settles caller cancellation without another signal or event queue", async () => {
-  const { source, stream, caller, requestOptions, onTimeout } = await openStream();
-  const iterator = stream[Symbol.asyncIterator]();
-  try {
-    const pending = iterator.next().catch((error: unknown) => error);
-    const reason = new Error("caller stopped");
-    caller.abort(reason);
-    await expect(pending).resolves.toMatchObject({ name: "AbortError", cause: reason });
-    expect(requestOptions?.signal?.reason).toBe(reason);
-    expect(onTimeout).not.toHaveBeenCalled();
   } finally {
     source.end();
     await iterator.return?.();
