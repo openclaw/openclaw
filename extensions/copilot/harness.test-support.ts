@@ -3,7 +3,6 @@ import type {
   AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
-  AgentHarnessV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -94,32 +93,20 @@ export function createCopilotAgentHarness(
           pluginId: "copilot",
         });
         onAcquired({ release: host.close, releaseBeforeResultWhenIdle: true });
-        const retainSourceAuthority = host.capabilities.retainSourceAuthority;
+        const { kind, version, assertActive, retainSourceAuthority } = host.capabilities;
         if (!retainSourceAuthority) {
           throw new Error("Compaction fixture requires the production source capability");
         }
-        const prepared = {
+        return await compact({
           ...params,
-          hostCapabilities: {
-            kind: host.capabilities.kind,
-            version: host.capabilities.version,
-            assertActive: host.capabilities.assertActive,
-            retainSourceAuthority,
-          },
-        };
-        return await compact(prepared);
+          hostCapabilities: { kind, version, assertActive, retainSourceAuthority },
+        });
       });
     },
   };
 }
 
-type SettledTurnFinalizationAttemptParams = Parameters<
-  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
->[0]["attempt"];
-
-export function asFinalizationAttempt(
-  params: AgentHarnessAttemptParams,
-): SettledTurnFinalizationAttemptParams {
+export function asFinalizationAttempt(params: AgentHarnessAttemptParams) {
   const { hostCapabilities: _hostCapabilities, ...attempt } = params;
   return attempt;
 }
