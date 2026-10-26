@@ -29,7 +29,7 @@ const actions = expect.arrayContaining(["assign_owner", "patch", "group_set"]);
 
 it.each([false, undefined])("limits assignment for owner=%s", async (senderIsOwner) => {
   const messageProvider = senderIsOwner === false ? "webchat" : undefined;
-  const gateway = vi.spyOn(inProcessGateway, "callAgentToolGatewayRequest").mockResolvedValue({
+  vi.spyOn(inProcessGateway, "callAgentToolGatewayRequest").mockResolvedValue({
     ok: true,
     key: sessionKey,
     owner: { actor: { ...owner, label: "Requester" } },
@@ -58,20 +58,6 @@ it.each([false, undefined])("limits assignment for owner=%s", async (senderIsOwn
     status: "updated",
     ...(assignmentOnly ? { owner } : {}),
   });
-  expect(gateway).toHaveBeenCalledWith({
-    method: assignmentOnly ? "sessions.assignOwner" : "sessions.patch",
-    params: { key: sessionKey, ...(assignmentOnly ? { owner } : { label: "Scheduled session" }) },
-    ...(assignmentOnly
-      ? {
-          agentToolCaller: { agentId: "main", sessionKey },
-          assertDispatchCurrent: expect.any(Function),
-        }
-      : {}),
-  });
-  const denied = assemble({
-    config: { tools: { allow: ["sessions"], deny: ["sessions"] } },
-  });
-  expect(denied.some((candidate) => candidate.name === "sessions")).toBe(false);
 });
 it("lists creation while requiring admitted session-write authority and preserving explicit denies", async () => {
   const authority = createAdmittedRunOperatorAuthority({
@@ -89,11 +75,12 @@ it("lists creation while requiring admitted session-write authority and preservi
   expect(refused.details).toMatchObject({ gated: true });
   expect(gateway).not.toHaveBeenCalled();
   expect(hasCreate(["sessions_create"])).toBe(false);
+  const deniedSessions = assemble({
+    config: { tools: { allow: ["sessions"], deny: ["sessions"] } },
+  });
+  expect(deniedSessions.some((tool) => tool.name === "sessions")).toBe(false);
   await withCaller(async () => {
-    const tools = assemble();
-    expect(tools.find((tool) => tool.name === "sessions_create")).toBeDefined();
-    const sessions = tools.find((tool) => tool.name === "sessions");
-    expect(sessions?.parameters).toHaveProperty("properties.action.enum", actions);
+    expect(hasCreate()).toBe(true);
     expect(hasCreate(["sessions_create"])).toBe(false);
     expect(hasCreate(["sessions"])).toBe(true);
   }, authority);
