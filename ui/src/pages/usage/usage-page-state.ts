@@ -739,6 +739,10 @@ export function createUsagePage(context: ApplicationContext) {
         detail: { ...state.detail, ...presentation.detail },
       };
     },
+    reportScope() {
+      projection.read();
+      return { connection: connectionEpoch, agentId: usageAgentId };
+    },
     setRouteData,
     result: () => projection.read().result,
   };

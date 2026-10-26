@@ -5,8 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
+import { dailyEntry } from "./usage-chart.test-support.ts";
 import {
   cacheSnapshot,
+  changeUsageControl,
+  loadUsagePage,
   cleanupUsagePageTest,
   contextWithClient,
   createPage,
@@ -14,6 +17,7 @@ import {
   preloadUsage,
   refreshButton,
 } from "./usage-page.test-support.ts";
+import { usageSession } from "./view.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
 
@@ -76,6 +80,7 @@ describe("Usage query failure ownership", () => {
         const page = await createPage(client, true, context);
         await preloadUsage(page);
         expect(page.textContent).toContain("Old query row");
+        const originalTrend = page.querySelector(".usage-trend-section");
         if (change === "creator") {
           page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
           await vi.advanceTimersByTimeAsync(0);
@@ -158,6 +163,9 @@ describe("Usage query failure ownership", () => {
         await vi.advanceTimersByTimeAsync(0);
         await page.updateComplete;
         expect(page.textContent).toContain("New query row");
+        if (change === "agent") {
+          expect(page.querySelector(".usage-trend-section")).not.toBe(originalTrend);
+        }
         expect(page.textContent).not.toContain("Old query row");
         expect(refreshButton(page).disabled).toBe(false);
         if (change === "creator") {
@@ -288,4 +296,98 @@ describe("Usage query failure ownership", () => {
       }
     },
   );
+});
+
+it("parks a changed model report, rejects a late reply, and retires it on reconnect", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-07T12:00:00Z"));
+  focusDocument();
+  const base = cacheSnapshot("fresh").result;
+  const report = (label: string, tokens: number) => {
+    const session = usageSession("agent:main:retained", "main", "qa", { totalTokens: tokens });
+    return {
+      ...base,
+      totals: { ...base.totals, totalTokens: tokens },
+      sessions: [
+        {
+          ...session,
+          label,
+          usage: {
+            ...session.usage!,
+            dailyBreakdown: [{ ...dailyEntry("2026-08-07", tokens), tokens, cost: 0 }],
+          },
+        },
+      ],
+      aggregates: {
+        ...base.aggregates,
+        costDaily: [dailyEntry("2026-08-07", tokens)],
+      },
+    };
+  };
+  const initial = report("Old query row", 10);
+  let response = Promise.resolve(initial);
+  const request = vi.fn(async (method: string) =>
+    method === "sessions.usage" ? response : { providers: [] },
+  );
+  const { page, context } = await loadUsagePage(request);
+  changeUsageControl(
+    page.querySelector<HTMLInputElement>('input[aria-label="Start date"]')!,
+    "2026-05-01",
+  );
+  await vi.advanceTimersByTimeAsync(400);
+  await page.updateComplete;
+  const svg = page.querySelector(".usage-heatmap__svg")!;
+  expect(svg).not.toBeNull();
+  const cells = [...svg.querySelectorAll(".usage-heatmap__cell")];
+
+  const old = deferred<typeof initial>();
+  response = old.promise;
+  refreshButton(page).click();
+  await page.updateComplete;
+  expect(page.querySelector(".usage-heatmap__svg")).toBe(svg);
+  expect(svg.isConnected).toBe(true);
+
+  const next = deferred<typeof initial>();
+  response = next.promise;
+  const input = page.querySelector<HTMLInputElement>(".usage-query-input")!;
+  input.value = "model:qa-model";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await page.updateComplete;
+  expect(page.querySelector(".usage-query-input")).toBe(input);
+  expect(input.value).toBe("model:qa-model");
+  expect(input.disabled).toBe(false);
+  expect(page.querySelector(".usage-loading-card")).not.toBeNull();
+  expect(page.querySelector(".usage-heatmap__svg")).toBeNull();
+  expect(svg.isConnected).toBe(false);
+  expect(page.textContent).not.toContain("Old query row");
+  expect(
+    [...page.querySelectorAll(".usage-metric-badge strong")].map((node) => node.textContent),
+  ).toEqual(["—", "—", "—"]);
+
+  old.resolve(report("Late old query row", 999));
+  await vi.advanceTimersByTimeAsync(0);
+  await page.updateComplete;
+  expect(page.querySelector(".usage-heatmap__svg")).toBeNull();
+  expect(page.textContent).not.toContain("Late old query row");
+
+  const replacement = report("New query row", 100);
+  next.resolve(replacement);
+  await vi.advanceTimersByTimeAsync(0);
+  await page.updateComplete;
+  expect(page.querySelector(".usage-heatmap__svg")).toBe(svg);
+  const updated = [...svg.querySelectorAll(".usage-heatmap__cell")];
+  expect(updated).toHaveLength(cells.length);
+  updated.forEach((cell, index) => expect(cell).toBe(cells[index]));
+  expect(updated.at(-1)?.getAttribute("data-tooltip")).toContain("100 tokens");
+  expect(page.textContent).toContain("New query row");
+  expect(page.textContent).not.toContain("Old query row");
+
+  response = Promise.resolve(replacement);
+  context.setGatewaySnapshot({ phase: "stopped" });
+  context.setGatewaySnapshot({ phase: "connected" });
+  await vi.advanceTimersByTimeAsync(0);
+  await page.updateComplete;
+  expect(page.querySelector(".usage-heatmap__svg")).not.toBe(svg);
+  expect(page.textContent).toContain("New query row");
 });

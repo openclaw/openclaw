@@ -238,14 +238,7 @@ export async function createPage(
     disposeView = mountSolid(
       () => {
         model = createUsagePage(context);
-        return content?.({
-          get state() {
-            return model.read();
-          },
-          get result() {
-            return model.result();
-          },
-        });
+        return content?.({ page: model });
       },
       {
         container,
