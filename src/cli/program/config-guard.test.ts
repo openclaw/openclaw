@@ -162,6 +162,7 @@ describe("ensureConfigReady", () => {
     const loadRenderer = vi.fn(() => {
       throw new Error("Valid startup must not load error-location rendering");
     });
+    // mock-isolation: Importing the real renderer would defeat this load-boundary assertion.
     vi.doMock("../../config/issue-location.js", loadRenderer);
     try {
       const config = { gateway: { mode: "local" as const } };

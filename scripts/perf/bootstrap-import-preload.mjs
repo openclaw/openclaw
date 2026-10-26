@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { Server } from "node:http";
 import { Session } from "node:inspector";
+import { Server as NetServer } from "node:net";
 import { loadavg } from "node:os";
 import { isMainThread } from "node:worker_threads";
 
@@ -25,9 +26,9 @@ if (isMainThread && process.argv[2] === "gateway") {
     }
   });
   inspector.post("Debugger.enable");
-  const listen = Server.prototype.listen;
   Server.prototype.listen = function (...args) {
-    Server.prototype.listen = listen;
+    // HTTP Server inherits listen from net.Server; remove this one-shot override first.
+    delete Server.prototype.listen;
     const atListen = {
       elapsedMs: performance.now(),
       cpu: process.threadCpuUsage(),
@@ -42,6 +43,6 @@ if (isMainThread && process.argv[2] === "gateway") {
         `${JSON.stringify({ ...atListen, address: this.address() }, null, 2)}\n`,
       );
     });
-    return Reflect.apply(listen, this, args);
+    return NetServer.prototype.listen.apply(this, args);
   };
 }
