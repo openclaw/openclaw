@@ -70,12 +70,14 @@ export function useMenuMachine(
     (options.surface === "listbox"
       ? overlay.surface.contains(target)
       : target.closest('[role="menu"]') === overlay.surface);
-  const items = () =>
-    [...itemNodes]
-      .filter((item) => item.isConnected && ownsTarget(item))
-      .toSorted((left, right) =>
-        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-      );
+  const items = (ordered = true) => {
+    const connected = [...itemNodes].filter((item) => item.isConnected && ownsTarget(item));
+    return ordered
+      ? connected.toSorted((left, right) =>
+          left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+        )
+      : connected;
+  };
   const parentRuntime = createMemo(() => parent?.runtime());
   let hover: PointerEvent | undefined;
   let runtime: MenuRuntime | undefined;
@@ -90,6 +92,8 @@ export function useMenuMachine(
     revision();
     return runtime;
   };
+  // Highlights refresh presentation without resynchronizing unchanged widget inputs.
+  const inputRuntime = createMemo(current);
   // Rows share one rendered snapshot; imperative navigation still reads the live machine.
   const presentation = createMemo(
     () => {
@@ -182,7 +186,8 @@ export function useMenuMachine(
   });
   // Zag is an imperative widget; retain one live input snapshot once admitted.
   createEffect(
-    () => [current(), direction(), options.items?.(), options.value?.(), parentRuntime()] as const,
+    () =>
+      [inputRuntime(), direction(), options.items?.(), options.value?.(), parentRuntime()] as const,
     ([loaded, dir, catalog, selected, loadedParent]) => {
       if (loaded) {
         loaded.updateInputs(dir, catalog, selected);

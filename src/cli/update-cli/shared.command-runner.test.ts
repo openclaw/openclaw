@@ -10,6 +10,7 @@ import {
 } from "../../process/exec-result.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import {
   ensureGitCheckout,
   parseUpdateTimeoutMs,
@@ -93,17 +94,14 @@ it("refreshes standalone completion without a loose launcher", async () => {
   const runtime = path.join(base, "runtime");
   const executable = path.join(base, "openclaw");
   await fs.mkdir(runtime);
-  await fs.writeFile(
-    path.join(base, "manifest.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      mode: "jit",
-      executable: { path: "openclaw" },
-      runtime: { path: "runtime" },
-      openclaw: { version: "2026.10.15" },
-      bun: { version: "1.3.0" },
-    }),
-  );
+  await writeFixtureJson(path.join(base, "manifest.json"), {
+    schemaVersion: 1,
+    mode: "jit",
+    executable: { path: "openclaw" },
+    runtime: { path: "runtime" },
+    openclaw: { version: "2026.10.15" },
+    bun: { version: "1.3.0" },
+  });
 
   await expect(tryWriteCompletionCache(runtime, true, 500, executable)).resolves.toBe("completed");
   expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
@@ -190,11 +188,10 @@ it.runIf(process.platform !== "win32")(
     const packageRoot = path.join(base, "global", "v11", "install", "node_modules", "openclaw");
     await fs.mkdir(path.dirname(packageRoot), { recursive: true });
     await fs.mkdir(storeRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(storeRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf8",
-    );
+    await writeFixtureJson(path.join(storeRoot, "package.json"), {
+      name: "openclaw",
+      version: "1.0.0",
+    });
     await fs.symlink(storeRoot, packageRoot, "dir");
 
     const previousArgv = [...process.argv];

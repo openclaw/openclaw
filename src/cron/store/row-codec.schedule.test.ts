@@ -1,5 +1,6 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { makeCronJob } from "../delivery.test-helpers.js";
+import * as normalization from "../normalize.js";
 import { makeCronStreamSandboxTarget } from "../stream-sandbox.test-support.js";
 import type { CronSchedule } from "../types.js";
 import { projectCronJobThroughStorageCodec as project, rowToCronJob } from "./row-codec.js";
@@ -7,6 +8,22 @@ import { projectCronJobThroughStorageCodec as project, rowToCronJob } from "./ro
 const stream = { kind: "stream", command: ["watch-source"] } as const;
 const operator = { profileId: "profile-ada", scopes: ["operator.write"], assignedRole: null };
 const target = makeCronStreamSandboxTarget();
+
+it("normalizes the isolated clone without copying its envelope again", () => {
+  const job = makeCronJob({});
+  const clone = vi.spyOn(globalThis, "structuredClone");
+  const normalize = vi.spyOn(normalization, "normalizeCronJobInput");
+  try {
+    const projected = project(job);
+    expect(normalize.mock.calls[0]?.[0]).toBe(clone.mock.results[0]?.value);
+    expect(normalize.mock.calls[0]?.[0]).not.toBe(job);
+    expect(projected.schedule).toEqual(job.schedule);
+    expect(projected.schedule).not.toBe(job.schedule);
+  } finally {
+    normalize.mockRestore();
+    clone.mockRestore();
+  }
+});
 function decode(job: Record<string, unknown> & { id: string }) {
   return rowToCronJob(
     { job_id: job.id, state_json: "{}", updated_at: 1, runtime_updated_at_ms: 1 },

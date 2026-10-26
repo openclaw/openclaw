@@ -1,9 +1,10 @@
 // Owner microbenchmark, not a whole-Gateway load test. Run separate CPU and allocation passes:
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-pr-currency-measure.ts
 //   --output .local/currency.json [--allocations] [--base-owner-suffix base]
-// --base-owner-suffix compares control-ui-session-pr-read.<suffix>.ts with the current owner.
+// --base-owner-suffix compares control-ui-session-pr-{read,source}.<suffix>.ts with current owners.
 // Both arms share one prepared fixture; five pairs alternate AB/BA without rebuilding state.
 // Fixture setup is excluded: 10k persisted rows, 40 configured agents, 64 retained readers.
+// Each arm acquires one physical source, then checks it at every reader's final assertion.
 // Preserve every arm, report host load, and interpret allocation-mode timing separately.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -46,7 +47,17 @@ const sources = [
   { name: "candidate", suffix: "" },
 ].map(({ name, suffix }) => {
   const url = new URL(`../../src/gateway/control-ui-session-pr-read${suffix}.ts`, import.meta.url);
-  return { name, url, sha256: createHash("sha256").update(readFileSync(url)).digest("hex") };
+  const sourceUrl = new URL(
+    `../../src/gateway/control-ui-session-pr-source${suffix}.ts`,
+    import.meta.url,
+  );
+  return {
+    name,
+    url,
+    sha256: createHash("sha256").update(readFileSync(url)).digest("hex"),
+    sourceUrl,
+    sourceSha256: createHash("sha256").update(readFileSync(sourceUrl)).digest("hex"),
+  };
 });
 const scratch = path.resolve(".local");
 mkdirSync(scratch, { recursive: true });
@@ -104,7 +115,12 @@ const owners = await Promise.all(
     }: typeof import("../../src/gateway/control-ui-session-pr-read.js") = await import(
       source.url.href
     );
-    return { ...source, createControlUiSessionPrRead };
+    const {
+      withControlUiSessionPrSource,
+    }: typeof import("../../src/gateway/control-ui-session-pr-source.js") = await import(
+      source.sourceUrl.href
+    );
+    return { ...source, createControlUiSessionPrRead, withControlUiSessionPrSource };
   }),
 );
 const profile = ensureProfileForEmail("currency-reader@example.test");
@@ -190,14 +206,18 @@ try {
       assert(target?.assertCurrent);
       assert.equal(target.taskReceipts?.sessions.length, childrenPerRoot + 1);
     }
-    const run = async (count: number) => {
-      for (let index = 0; index < count; index++) {
-        const slot = index % readerCount;
-        const target = await reads[slot]!();
-        assert.equal(target, targets[slot]);
-        target!.assertCurrent!();
-      }
-    };
+    const source = targets[0]!.readSource;
+    assert(targets.every((target) => target?.readSource.path === source.path));
+    const run = (count: number) =>
+      owner.withControlUiSessionPrSource(source, async (assertSourceCurrent) => {
+        for (let index = 0; index < count; index++) {
+          const slot = index % readerCount;
+          const target = await reads[slot]!();
+          assert.equal(target, targets[slot]);
+          assertSourceCurrent();
+          target!.assertCurrent!();
+        }
+      });
     await run(warmup);
     arms.push({ owner, run });
   }
@@ -270,12 +290,23 @@ try {
       source.sha256,
       "Owner source changed during measurement",
     );
+    assert.equal(
+      createHash("sha256").update(readFileSync(source.sourceUrl)).digest("hex"),
+      source.sourceSha256,
+      "Physical source owner changed during measurement",
+    );
   }
   const result = {
     scope:
-      "real in-process PR reader and final currency assertion; no transport or whole-Gateway claim",
+      "real in-process PR reader, physical source and final currency assertions; no transport or whole-Gateway claim",
     node: process.version,
-    owners: sources.map(({ name, url, sha256 }) => ({ name, path: url.pathname, sha256 })),
+    owners: sources.map(({ name, url, sha256, sourceUrl, sourceSha256 }) => ({
+      name,
+      path: url.pathname,
+      sha256,
+      sourcePath: sourceUrl.pathname,
+      sourceSha256,
+    })),
     workload: {
       sessionCount,
       configuredAgents: agentIds.length,

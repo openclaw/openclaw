@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, test, vi }
 import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { getAgentEventExecutionContext } from "./agent-event-execution-context.js";
 import {
   type AgentAssistantSourceReceipt,
   type AgentEventPayload,
@@ -814,6 +815,16 @@ describe("agent event routing after cancellation", () => {
         sessionKey: "agent:first:one",
         sessionId: "before",
       });
+      const routing = getAgentEventExecutionContext()
+        .getStore()!
+        .routingByRun!.get("shared")!.routing;
+      for (let index = 0; index < 3; index++) {
+        sendEvent("shared", "assistant", { delta: "streamed" });
+        expect(
+          getAgentEventExecutionContext().getStore()!.routingByRun!.get("shared")!.routing,
+        ).toBe(routing);
+      }
+      events.length = 0;
       await withGeneration(generation, async () => {
         registerRun("shared", { sessionId: "after-compaction" });
         await Promise.resolve();

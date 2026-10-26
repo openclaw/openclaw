@@ -469,6 +469,11 @@ if (
   throw new Error("Expected boot-route chat, new, sessions or settings");
 }
 const navigationRoutes: CriticalPathRoute[] = [];
+// Cold New has no Chat owner to complete registration, so omit the unused WeakMap shim.
+const captureOwnerRegistration = !firstLoad || bootRoute !== "new";
+const ownerProbes =
+  captureOwnerRegistration && !cpuProfile && !allocations && !values["session-event-churn"];
+const sidebarCounters = captureOwnerRegistration && !cpuProfile;
 for (const route of values["critical-path-route"]) {
   const matched = criticalPathRoutes.find((candidate) => candidate === route);
   if (!matched || navigationRoutes.includes(matched)) {
@@ -791,6 +796,7 @@ try {
     : undefined;
   const prepared = await prepareControlUiMockGatewayScenario({
     ...fixture.scenario,
+    subscriptionInitialHistory: true,
     ...(settingsCoreSchema
       ? {
           methodResponses: {
@@ -1235,7 +1241,7 @@ try {
     ? `\n(${installRotatingBoardTickets.toString()})(${JSON.stringify(fixture.board)}, window.openclawControlUiE2eGateway);`
     : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !allocations && !values["session-event-churn"], sidebarCounters: !cpuProfile })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top || location.protocol === "about:") return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${boardTickets}\n${createColdLoadProbeInitScript({ latencyMs, downloadKbps: values["critical-path"] ? downloadKbps : undefined, methodLatencyMs, sidebarQueryLatencyMs, omitHelloSelfPresence: values["omit-hello-self-presence"], connectNotBeforeMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes, sidebarCounters })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
   if (values["critical-path"]) {
     await page.addInitScript({
@@ -2238,7 +2244,11 @@ try {
     let streaming;
     if (streamingReply) {
       const composer = page.locator(".agent-chat__composer-combobox textarea").last();
+      const initialDraft = await composer.inputValue();
       await composer.focus();
+      await composer.evaluate((input: HTMLTextAreaElement) =>
+        input.setSelectionRange(input.value.length, input.value.length),
+      );
       await cdp.send("Performance.enable", { timeDomain: performanceTimeDomain });
       let previousCpu = (await cdp.send("Performance.getMetrics")).metrics;
       let previousDelivered = 0;
@@ -2275,9 +2285,11 @@ try {
         runId: fixture.scenario.inFlightRun!.runId,
       });
       const streamingInput = new AbortController();
+      let typedCharacters = 0;
       const nativeInput = (async () => {
         while (!streamingInput.signal.aborted) {
           await page.keyboard.press("x");
+          typedCharacters++;
           await new Promise((resolve) => {
             setTimeout(resolve, 500);
           });
@@ -2375,6 +2387,7 @@ try {
         ...(await page.evaluate(() => Reflect.get(window, "__streamingReply").finish())),
         cpu,
         allocations: streamingAllocations,
+        typing: { characters: typedCharacters, draft: await composer.inputValue() },
       };
       if (allocationProfile) {
         await writeFile(
@@ -2400,6 +2413,14 @@ try {
         ),
       );
       await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.streaming.png`) });
+      if (
+        !typedCharacters ||
+        streaming.typing.draft !== initialDraft + "x".repeat(typedCharacters)
+      ) {
+        throw new Error(
+          `Streaming lost composer input: sent ${typedCharacters} characters, retained ${streaming.typing.draft.length}`,
+        );
+      }
       if (
         streaming.tailPosition.scrollHeight <= streaming.tailPosition.initialScrollHeight ||
         Math.abs(streaming.tailPosition.distanceFromBottom) > 2
@@ -2667,12 +2688,12 @@ try {
       if (sidebarView !== "sessions") {
         await page.locator('[data-navigation-view="sessions"]').click();
       }
-      // The next owner cycle is a direct chat visible in the fixture's Involving me window.
-      const target = fixture.scenario.sessions![fixture.counts.owners]!;
+      // The first non-main chat is in the initial Involving me page.
+      const target = fixture.scenario.sessions![1]!;
       const link = page.locator(
         `.sidebar-recent-session[data-session-key="${target.key}"] a.sidebar-recent-session__link`,
       );
-      await link.waitFor({ state: "visible" });
+      await link.scrollIntoViewIfNeeded();
       const rpcOffset = await page.evaluate(
         () => Reflect.get(window, "__coldLoad").read().rpcs.length,
       );
@@ -3016,6 +3037,8 @@ try {
         chromiumArgs,
         isolatedSandboxOrigin,
         cpuProfile,
+        ownerProbes,
+        sidebarCounters,
         metricTimeDomain: performanceTimeDomain,
         cpuProfileCompare: values["cpu-profile-compare"],
         sidebarRowTransfer,

@@ -5,7 +5,11 @@ import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { renderConfigInto, renderConfigView } from "./config-view.test-support.tsx";
+import {
+  renderConfigInto,
+  renderConfigView,
+  requiredConfigElement as required,
+} from "./config-view.test-support.tsx";
 import type { ConfigProps } from "./view.tsx";
 import "../../styles.css";
 
@@ -49,19 +53,6 @@ describe("config form and navigation", () => {
   function selectConfigTab(container: HTMLElement, name: string) {
     const tab = required(container, `#config-sections-tab-${name}`, HTMLElement);
     tab.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
-  }
-
-  function required<T extends Element>(
-    container: HTMLElement,
-    selector: string,
-    constructor: new () => T,
-  ): T {
-    const element = container.querySelector(selector);
-    expect(element).toBeInstanceOf(constructor);
-    if (!(element instanceof constructor)) {
-      throw new Error(`Expected element matching "${selector}"`);
-    }
-    return element;
   }
 
   function disclosure(container: HTMLElement) {

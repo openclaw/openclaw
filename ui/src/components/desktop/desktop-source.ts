@@ -3,7 +3,31 @@ import type {
   EnvironmentSummary,
   EnvironmentsListResult,
 } from "@openclaw/gateway-protocol";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
+
+export function resolveChatPaneDesktopTarget(
+  session: GatewaySessionRow | undefined,
+): string | null {
+  if (!session) {
+    return null;
+  }
+  const placement = session.placement;
+  if (placement && placement.state !== "local") {
+    // Wait for the active owner; starting or reclaimed sessions do not own a desktop yet.
+    if (placement.state !== "active") {
+      return null;
+    }
+    if (placement.runner?.kind === "device") {
+      const nodeId = normalizeOptionalString(placement.runner.deviceId);
+      return placement.runner.status === "available" && nodeId ? `node:${nodeId}` : null;
+    }
+    return normalizeOptionalString(placement.environmentId) ?? null;
+  }
+  const execNode = normalizeOptionalString(session.execNode);
+  return execNode ? `node:${execNode}` : "gateway";
+}
 
 async function requestDesktopEnvironments(
   client: Pick<GatewayBrowserClient, "request">,

@@ -256,6 +256,8 @@ export type ControlUiMockGatewayScenario = {
   /** Simulate a legacy Gateway that predates the advertised method catalog. */
   omitFeatureMethods?: boolean;
   historyMessages?: unknown[];
+  /** Disable only for scenarios exercising the separate chat.startup fallback. */
+  subscriptionInitialHistory?: boolean;
   sessionReactions?: Record<string, Record<string, MessageReactionSummary[]>>;
   /** Canonical per-session transcripts, shared by history and startup reads. */
   sessionTranscripts?: Record<
@@ -810,6 +812,7 @@ function normalizeScenario(
     featureMethods: scenario.featureMethods ?? [...defaultControlUiFeatureMethods],
     omitFeatureMethods: scenario.omitFeatureMethods ?? false,
     historyMessages: scenario.historyMessages ?? [],
+    subscriptionInitialHistory: scenario.subscriptionInitialHistory ?? true,
     sessionReactions: scenario.sessionReactions ?? {},
     sessionTranscripts: scenario.sessionTranscripts ?? {},
     maxPayload: scenario.maxPayload ?? DEFAULT_MOCK_MAX_PAYLOAD_BYTES,
@@ -1271,33 +1274,6 @@ function installControlUiMockGateway(
       // Committed fixture source remains available in the current page.
     }
     return source;
-  }
-
-  /** Transcript fields a scenario configured on chat.history, replayed onto the
-   * chat.startup payload so both bootstrap paths serve the same conversation. */
-  function configuredHistoryTranscript(): Record<string, unknown> {
-    const configured = scenario.methodResponses["chat.history"];
-    if (
-      !isRecord(configured) ||
-      responseFixtures.cases(configured) ||
-      responseFixtures.sequence(configured)
-    ) {
-      return {};
-    }
-    const transcript: Record<string, unknown> = {};
-    for (const field of [
-      "messages",
-      "activity",
-      "sessionId",
-      "sessionInfo",
-      "inFlightRun",
-      "thinkingLevel",
-    ]) {
-      if (hasOwn(configured, field)) {
-        transcript[field] = configured[field];
-      }
-    }
-    return transcript;
   }
 
   function recordSessionsPatchMany(params: unknown, response: unknown): unknown {
@@ -1900,8 +1876,7 @@ function installControlUiMockGateway(
           ...(method === "chat.startup"
             ? {
                 metadata: { models: scenario.models },
-                // Static transcript overrides intentionally replay on startup too.
-                ...configuredHistoryTranscript(),
+                ...responseFixtures.historyTranscript(),
               }
             : {}),
         };
@@ -2113,11 +2088,13 @@ function installControlUiMockGateway(
       case "sessions.subscribe":
         return { subscribed: true };
       case "sessions.messages.subscribe":
-        return {
-          key: subscriptionRouting.canonicalKey(
-            isRecord(params) && typeof params.key === "string" ? params.key : "",
+        return subscriptionRouting.subscribeResponse(params, (historyParams) =>
+          commitFixtureResponse(
+            "chat.startup",
+            historyParams,
+            buildResponse("chat.startup", historyParams),
           ),
-        };
+        );
       case "sessions.messages.unsubscribe":
         return { ok: true };
       case "terminal.open": {

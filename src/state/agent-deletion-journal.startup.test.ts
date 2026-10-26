@@ -175,7 +175,7 @@ it("rejects stale journal absence when deletion arrives during native read clean
       .mockImplementation(() => {
         const source = captureSource();
         return {
-          ...source,
+          own: (close) => source.own(close),
           createTransport(command) {
             const owned = source.createTransport(command);
             if (selected || command.type !== "agentDeletionJournal.status") {
@@ -183,7 +183,7 @@ it("rejects stale journal absence when deletion arrives during native read clean
             }
             selected = true;
             return {
-              ...owned,
+              startValidateFresh: (...args) => owned.startValidateFresh(...args),
               async startRead(...args) {
                 const outcome = await owned.startRead(...args);
                 expect(outcome).toMatchObject({

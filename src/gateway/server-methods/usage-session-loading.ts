@@ -237,8 +237,7 @@ export function withUsageRequestBudget(
       caller.beginClose(parent.reason);
       data.beginClose(parent.reason);
     };
-    const timer = setTimeout(() => data.beginClose(exhausted), 15_000);
-    timer.unref?.();
+    const timer = setTimeout(() => data.beginClose(exhausted), 15_000).unref();
     parent.addEventListener("abort", cancel, { once: true });
     if (parent.aborted) {
       cancel();

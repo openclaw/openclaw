@@ -1602,7 +1602,7 @@ async function prepareCliRunContextWithinReadFence(
       : undefined;
     systemPrompt = skipsTurnPreparation
       ? systemPrompt
-      : finalizeCliSystemPrompt(systemPrompt, modelDisplay, backendResolved.textTransforms?.input);
+      : finalizeCliSystemPrompt(systemPrompt, { modelDisplay, backendResolved, params });
     if (sessionPromptContext?.resumeContext) {
       promptForHooks = composeCliPromptContext(promptForHooks ?? preparedPrompt, {
         prependContext: sessionPromptContext.resumeContext,

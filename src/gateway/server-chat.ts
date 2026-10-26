@@ -665,8 +665,7 @@ export function createAgentEventHandler({
       }
       pendingTerminalLifecycleErrors.delete(evt.runId);
       finalizeLifecycleEvent(pending.event, pending.opts);
-    }, lifecycleErrorRetryGraceMs);
-    timer.unref?.();
+    }, lifecycleErrorRetryGraceMs).unref();
     pendingTerminalLifecycleErrors.set(evt.runId, { timer, event: evt, opts });
   };
 

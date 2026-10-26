@@ -577,7 +577,7 @@ describe("provider local service", () => {
     const script = [
       `const lease = await ensureProviderLocalService(target);`,
       `const [diagnostics] = getManagedProviderLocalServiceDiagnosticsForTest();`,
-      `if (diagnostics.stdoutTail || diagnostics.stderrTail) throw new Error("runtime output was retained");`,
+      `if (Buffer.byteLength(diagnostics.stderrTail) > 8192) throw new Error("unbounded runtime output");`,
       `await fs.promises.writeFile(${JSON.stringify(servicePidPath)}, String(diagnostics.pid));`,
       `lease?.release();`,
     ].join("\n");

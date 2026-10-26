@@ -17,6 +17,20 @@ describe("matchesExecAllowlistPattern", () => {
     expect(matchesExecAllowlistPattern("/tmp/a?b", "/tmp/acb")).toBe(true);
   });
 
+  it.each([
+    ["/usr/bin/../sh", false],
+    ["/usr/bin/sub/../../sh", false],
+    ["/usr/bin/sub/../tool", true],
+    ["/usr/bin/./tool", true],
+    ["/usr/bin/tool..", true],
+    ["/usr/bin/.tool", true],
+    ["/usr/bin/.../tool", true],
+    ["/usr//bin/.\n", false],
+    ["/usr//bin/..\n", false],
+  ] as const)("preserves wildcard path boundaries for %s", (target, expected) => {
+    expect(matchesExecAllowlistPattern("/usr/bin/**", target)).toBe(expected);
+  });
+
   it("expands home-prefix patterns", () => {
     const openClawHome = path.join(path.resolve("/srv/openclaw-home"), "bin", "tool");
     const fallbackHome = path.join(path.resolve("/home/other"), "bin", "tool");

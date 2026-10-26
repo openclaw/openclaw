@@ -258,6 +258,7 @@ suite.define(() => {
       const now = Date.now();
       const method = "sessions.goal.update";
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         sessionKey: "agent:main:main",
         heldMethods: [method, "chat.startup"],
         historyMessages: [

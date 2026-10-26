@@ -10,6 +10,7 @@ import type {
 } from "../../../../packages/ai/src/provider-types.js";
 import type { Context, ImageContent, TextContent } from "../../../llm/types.js";
 import {
+  applyRunHydrationSuppression,
   isImageMediaFact,
   isVideoMediaFact,
   normalizeMediaFacts,
@@ -265,8 +266,11 @@ export async function detectAndLoadPromptImages(
   // initial message. Resolve without persisting before choosing image ownership.
   // Sandbox staging is newer than that snapshot and is the only copy the bridge can read.
   const message = await params.userTurnTranscriptRecorder?.resolveMessage();
+  const recordedMedia = message ? readPersistedMediaFacts(message) : undefined;
   const media = applySandboxStagedImagePaths(
-    normalizeMediaFacts((message ? readPersistedMediaFacts(message) : undefined) ?? params.media),
+    normalizeMediaFacts(
+      recordedMedia ? applyRunHydrationSuppression(recordedMedia, params.media) : params.media,
+    ),
     params.sandbox ? params.media : undefined,
   );
   const mediaImageLayout =

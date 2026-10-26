@@ -1,7 +1,7 @@
 import { WebClient } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveSlackThreadHistory } from "./thread.js";
+import { resolveSlackChannelHistory, resolveSlackThreadHistory } from "./thread.js";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
@@ -22,6 +22,39 @@ const botText = (text: string) =>
   expect.objectContaining({ text, botId: "BMONITOR", userId: undefined, files: undefined });
 const mrkdwn = (text: string) => ({ type: "mrkdwn", text });
 const section = (text: string) => ({ type: "section", text: mrkdwn(text) });
+
+it("returns bounded channel history chronologically without copying the reversed window", async () => {
+  const client = new WebClient();
+  const messages = [
+    { text: "current", ts: "5.000" },
+    { text: "latest", ts: "4.000" },
+    { text: "excluded", ts: "3.000" },
+    { text: "earlier", ts: "2.000" },
+    { text: "oldest", ts: "1.000" },
+  ];
+  const history = vi
+    .spyOn(client.conversations, "history")
+    .mockResolvedValue({ ok: true, messages });
+  const copies = vi.spyOn(Array.prototype, "toReversed");
+  try {
+    const result = await resolveSlackChannelHistory({
+      channelId: "C1",
+      client,
+      currentMessageTs: "5.000",
+      excludedMessageIds: new Set(["3.000"]),
+      limit: 2,
+    });
+    expect(result.map(({ text, ts }) => ({ text, ts }))).toEqual([
+      { text: "earlier", ts: "2.000" },
+      { text: "latest", ts: "4.000" },
+    ]);
+    expect(messages.map(({ ts }) => ts)).toEqual(["5.000", "4.000", "3.000", "2.000", "1.000"]);
+    expect(copies).not.toHaveBeenCalled();
+  } finally {
+    copies.mockRestore();
+    history.mockRestore();
+  }
+});
 
 function replyPage(start: number, count: number, nextCursor = "") {
   return {

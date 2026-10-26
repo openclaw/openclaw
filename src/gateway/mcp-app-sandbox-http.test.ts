@@ -1,9 +1,11 @@
 import type { IncomingMessage } from "node:http";
+import { runInNewContext, Script } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
 import { SANDBOX_HOST_PATH } from "../agents/sandbox-host.js";
+import { createKeyboardShortcutMatcher } from "../shared/keyboard-shortcuts.js";
 import { createSandboxHostHttpServer } from "./mcp-app-sandbox-http.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
@@ -99,6 +101,125 @@ describe("MCP App sandbox HTTP origin", () => {
       await response.text();
       expect(buildMcpAppSandboxPath({ connectDomains: ["invalid"] })).toBe(paths[0]);
     });
+  });
+
+  it("binds the browser-reported parent when the iframe request carries no referrer", async () => {
+    await withSandboxHost(async (origin) => {
+      const shell = await (await fetch(new URL(buildMcpAppSandboxPath(), origin))).text();
+      const bootstrap = expectDefined(
+        [...shell.matchAll(/<script>([\s\S]*?)<\/script>/gu)].at(-1)?.[1],
+        "sandbox bootstrap script",
+      );
+      // WebKit navigates an already attached iframe without the referrer the host requested.
+      const boot = (parentOrigin: string) => {
+        const posted: unknown[][] = [];
+        const location = { href: `${origin}/mcp-app-sandbox`, ancestorOrigins: [parentOrigin] };
+        const window = {
+          location,
+          top: {
+            get document(): never {
+              throw new Error("cross-origin");
+            },
+          },
+          parent: { postMessage: (...args: unknown[]) => posted.push(args) },
+          addEventListener: () => {},
+        };
+        runInNewContext(bootstrap, {
+          URL,
+          window: Object.assign(window, { self: window }),
+          location,
+          document: {
+            referrer: "",
+            body: { appendChild: () => {} },
+            createElement: () => ({ setAttribute: () => {} }),
+          },
+        });
+        return posted;
+      };
+
+      expect(boot("https://control.example")).toEqual([
+        [
+          expect.objectContaining({ method: "ui/notifications/sandbox-proxy-ready" }),
+          "https://control.example",
+        ],
+      ]);
+      expect(() => boot("null")).toThrow("invalid MCP App sandbox parent");
+    });
+  });
+
+  it("serves executable widget bridges when host function source is unavailable", async () => {
+    const originalSource = Object.getOwnPropertyDescriptor(
+      createKeyboardShortcutMatcher,
+      "toString",
+    );
+    Object.defineProperty(createKeyboardShortcutMatcher, "toString", {
+      configurable: true,
+      value: () => "function createKeyboardShortcutMatcher() { [native code] }",
+    });
+    try {
+      await withSandboxHost(async (origin) => {
+        const shell = await (await fetch(new URL(buildMcpAppSandboxPath(), origin))).text();
+        const bootstrap = expectDefined(
+          [...shell.matchAll(/<script>([\s\S]*?)<\/script>/gu)].at(-1)?.[1],
+          "sandbox bootstrap script",
+        );
+        const frames: { srcdoc: string }[] = [];
+        const parent = { postMessage: () => {} };
+        const location = {
+          href: `${origin}/mcp-app-sandbox`,
+          ancestorOrigins: ["https://control.example"],
+        };
+        let receive: (event: unknown) => void = () => {};
+        const window = {
+          parent,
+          location,
+          top: {
+            get document(): never {
+              throw new Error("cross-origin");
+            },
+          },
+          addEventListener: (_name: string, listener: typeof receive) => (receive = listener),
+        };
+        runInNewContext(bootstrap, {
+          URL,
+          window: Object.assign(window, { self: window }),
+          location,
+          document: {
+            body: { appendChild: () => {} },
+            createElement: () => {
+              const frame = {
+                srcdoc: "",
+                setAttribute: () => {},
+                addEventListener: () => {},
+                replaceWith: () => {},
+              };
+              frames.push(frame);
+              return frame;
+            },
+          },
+        });
+        receive({
+          source: parent,
+          origin: "https://control.example",
+          data: {
+            method: "ui/notifications/sandbox-resource-ready",
+            params: { html: "<!doctype html><p>Synthetic widget</p>" },
+          },
+        });
+        const widget = expectDefined(frames.at(-1), "rendered widget frame").srcdoc;
+        const scripts = [...widget.matchAll(/<script>([\s\S]*?)<\/script>/gu)];
+        expect(scripts.length).toBeGreaterThan(0);
+        for (const [, source] of scripts) {
+          expect(() => new Script(source!)).not.toThrow();
+        }
+      });
+    } finally {
+      if (originalSource) {
+        Object.defineProperty(createKeyboardShortcutMatcher, "toString", originalSource);
+      } else {
+        Reflect.deleteProperty(createKeyboardShortcutMatcher, "toString");
+      }
+    }
   });
 
   it("rejects other paths, methods, and malformed policy", () => {

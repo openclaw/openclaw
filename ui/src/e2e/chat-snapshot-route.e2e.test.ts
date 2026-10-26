@@ -14,6 +14,7 @@ const row = createControlUiSessionRow(sessionKey, "Snapshot conversation", 1);
 
 async function openCachedRoute(page: Page) {
   const gateway = await installMockGateway(page, {
+    subscriptionInitialHistory: false,
     sessionKey,
     authMethod: "trusted-proxy",
     authMode: "trusted-proxy",

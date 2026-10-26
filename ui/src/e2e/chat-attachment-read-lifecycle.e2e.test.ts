@@ -364,7 +364,7 @@ suite.define(() => {
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
         const composer = pane.locator(".agent-chat__composer-combobox textarea");
         await pane.getByText("Ready for the held Enter check.", { exact: true }).waitFor();
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         const initialText = "Finish the initial synthetic turn.";
         await composer.fill(initialText);
         await composer.press("Enter");

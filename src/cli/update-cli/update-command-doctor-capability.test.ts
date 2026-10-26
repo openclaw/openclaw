@@ -10,6 +10,7 @@ import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import * as commandExec from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
@@ -53,14 +54,11 @@ it.each([
       vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
       vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
       await state.writeConfig({ plugins: { enabled: false } });
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({
-          name: "openclaw",
-          type: "module",
-          version: targetVersion,
-        }),
-      );
+      await writeFixtureJson(path.join(root, "package.json"), {
+        name: "openclaw",
+        type: "module",
+        version: targetVersion,
+      });
       await fs.writeFile(
         path.join(root, "dist", "index.js"),
         `import fs from "node:fs";

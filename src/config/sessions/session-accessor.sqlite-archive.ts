@@ -105,7 +105,11 @@ type TranscriptArchiveWorkerOperation<Result> = {
   assertCurrent?: () => void;
   signal?: AbortSignal;
 } & (
-  | { expectedMessageType: "done" | "published" | "sized"; workerData: object }
+  | {
+      expectedMessageType: "done" | "published" | "sized";
+      workerData: object;
+      nativeLocations?: readonly string[];
+    }
   | {
       expectedMessageType: "reclaimed";
       workerData: SessionColdWorkerData;
@@ -121,7 +125,7 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
 ): Promise<Result[]> {
   let worker: Worker;
   try {
-    worker = createSqliteTranscriptArchiveWorker(params.workerData);
+    worker = createSqliteTranscriptArchiveWorker(params.workerData, params.nativeLocations);
   } catch (error) {
     return Promise.reject(toStringifiedError(error));
   }

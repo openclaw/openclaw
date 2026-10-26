@@ -225,7 +225,6 @@ export function createPublicationActionInvoker(
               details: await callGateway("sessions.github.action", { sessionKey: source, ...args }),
             }
           : createGitHubPublishTool({
-              actionsAvailable: actor !== "guest",
               sandbox: invocation.sandbox,
             }).execute("publication-action", args),
       ),

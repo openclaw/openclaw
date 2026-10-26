@@ -71,6 +71,7 @@ suite.define(() => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         const model = { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" };
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: false,
           agentModel: "openai/gpt-5.6-luna",
           models: [{ ...model, available: false, unavailableReason: "missing-auth" }],
           historyMessages: [
@@ -299,6 +300,7 @@ suite.define(() => {
         thinkingLevel: null,
       });
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         defaultAgentId: "work",
         sessionKey: "agent:work:main",
         methodResponses: {
@@ -410,7 +412,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await gateway.waitForRequest("models.list");
 
       const composer = page.locator(".agent-chat__input");
@@ -445,6 +447,7 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const routedModel = catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 Luna");
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         agentModel: "openai/gpt-5.6-luna",
         models: [routedModel],
         methodResponses: {

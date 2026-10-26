@@ -73,6 +73,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "swarmOutputSchema",
   "subagentRole",
   "subagentControlScope",
+  "blindPrompt",
   "inheritedToolPolicyVersion",
   "inheritedToolPolicySource",
   "inheritedToolDeny",

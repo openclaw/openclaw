@@ -1891,6 +1891,7 @@ src/state/openclaw-agent-board-schema.ts
 src/state/openclaw-agent-canonical-validation-migration.ts
 src/state/openclaw-agent-canonical-validation-receipt.ts
 src/state/openclaw-agent-canonical-validation-schema.ts
+src/state/openclaw-agent-cold-archive-chunks-schema.ts
 src/state/openclaw-agent-context-engine-turn-outbox-schema.ts
 src/state/openclaw-agent-db-additive-columns.ts
 src/state/openclaw-agent-db-admission.ts
@@ -2598,6 +2599,7 @@ src/sessions/user-turn-transcript.message.ts
 src/shared/assistant-display-content.ts
 src/shared/chat-content.ts
 src/shared/chat-envelope.ts
+src/shared/keyboard-shortcuts.generated.ts
 src/shared/keyboard-shortcuts.ts
 src/shared/markdown-code.ts
 src/shared/provider-login-command.ts

@@ -189,6 +189,22 @@ describe.skipIf(!connection)("PostgreSQL memory path index migration", () => {
         } finally {
           observation.unsubscribe(observe);
         }
+        publishSqliteDatabaseSchemaChange(anchor);
+        const current = open(agentEngineSchema);
+        expect(
+          current.prepare("SELECT version FROM openclaw_schema_meta WHERE store = 'agent'").get(),
+        ).toEqual({ version: agentEngineSchema.version });
+        expect(current.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+          schema_version: agentEngineSchema.version,
+        });
+        expect(memoryRows(current)).toEqual(beforeRows);
+        const retainedIndexNames = new Set(afterIndexes.map((index) => index.name));
+        expect(indexes(current).filter((index) => retainedIndexNames.has(index.name))).toEqual(
+          afterIndexes,
+        );
+        expect(
+          current.prepare("SELECT * FROM session_transcript_cold_archive_chunks").all(),
+        ).toEqual([]);
       } finally {
         const last = opened.at(-1);
         try {

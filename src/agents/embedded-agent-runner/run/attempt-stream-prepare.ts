@@ -145,8 +145,15 @@ function prepareStream(
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
   let activeQueueAdmissions = 0;
-  const isSteeringAdmissionOpen = () =>
-    admission.accepting && !input.getRunState().aborted && !input.runAbortController.signal.aborted;
+  const isSteeringAdmissionOpen = () => {
+    const state = input.getRunState();
+    return (
+      admission.accepting &&
+      !state.aborted &&
+      !state.yieldDetected &&
+      !input.runAbortController.signal.aborted
+    );
+  };
   const shouldRunBeforeAgentFinalize =
     attempt.operation !== "settled-tool-finalization" &&
     hookRunner?.hasHooks("before_agent_finalize");

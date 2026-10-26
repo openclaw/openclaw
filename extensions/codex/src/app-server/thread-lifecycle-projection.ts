@@ -4,7 +4,10 @@ import {
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
-import { fingerprintCodexThreadConfig } from "./thread-fingerprints.js";
+import {
+  areCodexDynamicToolFingerprintsCompatible,
+  fingerprintCodexThreadConfig,
+} from "./thread-fingerprints.js";
 import {
   buildCodexThreadRequestConfig,
   prepareCodexThreadFinalConfigPatch,
@@ -12,13 +15,58 @@ import {
 } from "./thread-lifecycle-preflight.js";
 import type { CodexStartOrResumeThreadParams } from "./thread-lifecycle-types.js";
 
-/** Projection identity omits persistent instructions: qualify using warm reuse's full policy. */
-export async function canRetainCodexProjectionBackgroundWork(
+type CodexProjectionBackgroundRetentionReason =
+  | "retained"
+  | "client-mismatch"
+  | "engine-policy-mismatch"
+  | "tool-mismatch"
+  | "not-background-only"
+  | "plugin-policy-mismatch"
+  | "immutable-config-mismatch";
+
+/** Return the first disqualifier; later checks are unevaluated, not matching. */
+export async function qualifyCodexProjectionBackgroundWork(
   params: CodexStartOrResumeThreadParams,
   binding: CodexAppServerThreadBinding,
-  context: CodexThreadRequestContext,
-  pluginThreadConfig: CodexPluginThreadConfig | undefined,
-): Promise<boolean> {
+  preflight: Pick<
+    CodexThreadRequestContext,
+    "contextEngineBinding" | "dynamicToolsFingerprint" | "legacyDynamicToolsFingerprint"
+  >,
+  prepareRequestContext: () => Promise<CodexThreadRequestContext>,
+  buildLoadedPluginThreadConfig: (
+    binding: CodexAppServerThreadBinding,
+  ) => Promise<CodexPluginThreadConfig | undefined>,
+): Promise<CodexProjectionBackgroundRetentionReason> {
+  if (binding.clientId !== params.client.getInstanceId()) {
+    return "client-mismatch";
+  }
+  const next = preflight.contextEngineBinding;
+  if (
+    !next ||
+    binding.contextEngine?.engineId !== next.engineId ||
+    binding.contextEngine?.policyFingerprint !== next.policyFingerprint
+  ) {
+    return "engine-policy-mismatch";
+  }
+  if (
+    binding.dynamicToolsFingerprint &&
+    !areCodexDynamicToolFingerprintsCompatible({
+      previous: binding.dynamicToolsFingerprint,
+      next: preflight.dynamicToolsFingerprint,
+      nextLegacy: preflight.legacyDynamicToolsFingerprint,
+    })
+  ) {
+    return "tool-mismatch";
+  }
+  if (!isCodexAppServerLiveThreadBackgroundOnly(params.client, binding.threadId)) {
+    return "not-background-only";
+  }
+  const pluginThreadConfig = await buildLoadedPluginThreadConfig(binding);
+  if (pluginThreadConfig && pluginThreadConfig.fingerprint !== binding.pluginAppsFingerprint) {
+    return "plugin-policy-mismatch";
+  }
+  const context = await prepareRequestContext();
+  // Projection identity omits persistent instructions: use warm reuse's full policy.
   const finalConfig = await prepareCodexThreadFinalConfigPatch(
     params,
     context.nativeModelInputTools,
@@ -38,6 +86,10 @@ export async function canRetainCodexProjectionBackgroundWork(
     authProfileId,
     buildCodexThreadRequestConfig(params, context, pluginConfig, finalConfig.configPatch),
   );
+  // Ownership can change while configuration is prepared; do not mislabel that as policy drift.
+  if (!isCodexAppServerLiveThreadBackgroundOnly(params.client, binding.threadId)) {
+    return "not-background-only";
+  }
   return isCodexAppServerLiveThreadBackgroundOnly(
     params.client,
     binding.threadId,
@@ -46,6 +98,9 @@ export async function canRetainCodexProjectionBackgroundWork(
       authProfileId,
       context.dynamicToolsFingerprint,
       binding,
+      params,
     ),
-  );
+  )
+    ? "retained"
+    : "immutable-config-mismatch";
 }

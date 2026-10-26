@@ -5,9 +5,9 @@ import { ChatEventSchema } from "../../packages/gateway-protocol/src/schema/logs
 import { buildEmbeddedRunPayloads } from "../agents/embedded-agent-runner/run/payloads.js";
 import { handleAgentEnd } from "../agents/embedded-agent-subscribe.handlers.lifecycle.js";
 import { createContext } from "../agents/embedded-agent-subscribe.handlers.lifecycle.test-helpers.js";
-import { createAgentHarnessAttemptLifecycle } from "../agents/harness/attempt-events.js";
 import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
 import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-lifecycle-terminal.js";
+import { createAgentHarnessAttemptLifecycle } from "../plugin-sdk/agent-harness-attempt-runtime.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
 

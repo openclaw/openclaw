@@ -108,7 +108,7 @@ suite.define(() => {
         // The same Home conversation cannot own both the page and its dock.
         await page.goto(`${suite.server.baseUrl}new`);
         await openProgressHomeDock(page);
-        await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
         await card.waitFor();
         await waitForHomeScrollIdle(thread);
         await home
@@ -228,7 +228,7 @@ suite.define(() => {
       // The same Home conversation cannot own both the page and its dock.
       await page.goto(`${suite.server.baseUrl}new`);
       await openProgressHomeDock(page);
-      await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
       await card.waitFor();
       expect(await card.getAttribute("open")).toBeNull();
       await card.locator("summary").click();
@@ -341,7 +341,7 @@ suite.define(() => {
       // The same Home conversation cannot own both the page and its dock.
       await page.goto(`${suite.server.baseUrl}new`);
       await openProgressHomeDock(page);
-      await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
       await card.waitFor();
       await waitForHomeScrollIdle(thread);
       await gateway.deferNext("chat.history");

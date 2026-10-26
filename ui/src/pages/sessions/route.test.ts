@@ -79,45 +79,25 @@ it.each([
 );
 
 it.each([
-  {
-    name: "numeric form text",
-    activeMinutes: " 15 ",
-    limit: "25",
-    statusFilter: "active",
-    search: undefined,
-    expected: { activeMinutes: 15, limit: 25, search: "needle" },
+  [" 15 ", "25", "active", undefined, [15, 25, "needle"]],
+  ["15 minutes", "0", "active", undefined, [undefined, 50, "needle"]],
+  ["15", "25", "archived", "", [undefined, 25, undefined]],
+] as const)(
+  "normalizes minutes=%s limit=%s status=%s search=%s",
+  (activeMinutes, limit, statusFilter, search, expected) => {
+    const query = buildSessionsListQuery(
+      "writer",
+      {
+        activeMinutes,
+        limit,
+        statusFilter,
+        includeGlobal: true,
+        includeUnknown: false,
+        searchQuery: " needle ",
+      },
+      null,
+      search,
+    );
+    expect([query.activeMinutes, query.limit, query.search]).toEqual(expected);
   },
-  {
-    name: "invalid numbers",
-    activeMinutes: "15 minutes",
-    limit: "0",
-    statusFilter: "active",
-    search: undefined,
-    expected: { activeMinutes: undefined, limit: 50, search: "needle" },
-  },
-  {
-    name: "archived rows with an explicitly cleared search",
-    activeMinutes: "15",
-    limit: "25",
-    statusFilter: "archived",
-    search: "",
-    expected: { activeMinutes: undefined, limit: 25, search: undefined },
-  },
-] as const)("normalizes $name at the list-query boundary", (testCase) => {
-  const query = buildSessionsListQuery(
-    "writer",
-    {
-      activeMinutes: testCase.activeMinutes,
-      limit: testCase.limit,
-      statusFilter: testCase.statusFilter,
-      includeGlobal: true,
-      includeUnknown: false,
-      searchQuery: " needle ",
-    },
-    null,
-    testCase.search,
-  );
-  expect({ activeMinutes: query.activeMinutes, limit: query.limit, search: query.search }).toEqual(
-    testCase.expected,
-  );
-});
+);

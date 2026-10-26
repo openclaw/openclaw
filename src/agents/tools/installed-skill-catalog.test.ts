@@ -32,6 +32,31 @@ async function matchingNames(catalog: InstalledSkill[], query: string) {
 }
 
 describe("installed skill catalog", () => {
+  it("searches bounded inline bodies without encoding them again", async () => {
+    const catalog = [
+      skill("plain", "Guide", "Spectroscopy"),
+      skill("unicode", "Guide", "価格 😀 spectroscopy"),
+      skill("long", "Guide", `Spectroscopy ${" ".repeat(20_000)}`),
+    ];
+    const encode = vi.spyOn(Buffer, "from");
+    expect(await matchingNames(catalog, "spectroscopy")).toEqual(["long", "plain", "unicode"]);
+    expect(encode.mock.calls.filter(([value]) => typeof value === "string")).toHaveLength(0);
+  });
+
+  it.each([
+    ["価格 ".repeat(5_000), true, `${"価格 ".repeat(2_340)}価�`],
+    [`${" ".repeat(16_383)}😀`, true, `${" ".repeat(16_383)}�`],
+    ["Spectroscopy \ud800", false, "Spectroscopy �"],
+  ] as const)(
+    "preserves byte-bounded inline search text (%#)",
+    async (content, truncated, expected) => {
+      const index = vi.spyOn(ranking, "tokenizeDocument");
+      const result = await searchBodies([skill("bounded", "Guide", content)], "bounded");
+      expect(index).toHaveBeenCalledWith(expected);
+      expect(result.coverage?.truncatedBodies ?? 0).toBe(Number(truncated));
+    },
+  );
+
   it("keeps an emoji whole at the description cap", async () => {
     const prefix = "a".repeat(511);
     const found = await searchInstalledSkills([skill("guide", `${prefix}😀tail`)], "guide");

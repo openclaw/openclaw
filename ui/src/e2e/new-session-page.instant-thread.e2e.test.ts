@@ -5,6 +5,7 @@ import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-scr
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { getInitialHistoryRequests } from "./chat-initial-history.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
   captureUiProof,
@@ -103,6 +104,7 @@ suite.define(() => {
               .waitFor();
           }
           expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+          expect(await getInitialHistoryRequests(gateway)).toHaveLength(0);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
           expect(
@@ -147,19 +149,20 @@ suite.define(() => {
           });
           await waitForCommittedChatRoute(page);
           expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(confirmedKey));
-          await gateway.waitForRequest("chat.startup", { match: { sessionKey: confirmedKey } });
           await gateway.waitForRequest("mcp.app.discover", { match: { sessionKey: confirmedKey } });
           await expect.poll(() => page.locator("openclaw-chat-pane").count()).toBe(1);
-          expect(await gateway.getRequests("chat.startup")).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                params: expect.objectContaining({ sessionKey: confirmedKey }),
-              }),
-            ]),
-          );
+          await expect
+            .poll(() => getInitialHistoryRequests(gateway))
+            .toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  params: expect.objectContaining({ key: confirmedKey }),
+                }),
+              ]),
+            );
           expect(
-            (await gateway.getRequests("chat.startup")).every(
-              (request) => createParams(request).sessionKey === confirmedKey,
+            (await getInitialHistoryRequests(gateway)).every(
+              (request) => createParams(request).key === confirmedKey,
             ),
           ).toBe(true);
           expect(await page.evaluate(() => history.length)).toBe(historyLength + 1);

@@ -223,7 +223,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const attachTrigger = page.getByRole("button", { name: "Add attachment" });
       await expect
         .poll(() => attachTrigger.getAttribute("class"))
@@ -653,7 +653,7 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         if (!operatorScopes.includes("operator.write")) {
           const composer = page.locator(".agent-chat__input");
           const input = composer.locator("textarea");

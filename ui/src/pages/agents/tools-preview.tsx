@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { normalizeToolPolicyName } from "../../../../src/agents/tool-policy-shared.js";
 import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../api/types.ts";
 import {
@@ -207,8 +207,10 @@ export function ToolPreview(props: {
     unverifiedReason()
       ? null
       : (props.preview.facts?.diagnostics.get(normalizeToolPolicyName(props.tool.id)) ?? null);
-  const availability = () =>
-    resolveToolAvailability(diagnostic(), activeEntry(), unverifiedReason(), status());
+  const availability = createMemo(
+    () => resolveToolAvailability(diagnostic(), activeEntry(), unverifiedReason(), status()),
+    { lazy: true },
+  );
   const label = () => {
     const reason = unverifiedReason();
     if (reason) {

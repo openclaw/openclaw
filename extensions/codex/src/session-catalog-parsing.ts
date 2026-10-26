@@ -93,12 +93,11 @@ export function truncateCodexCatalogPreview(
   value: string,
   sanitize: typeof sanitizeTerminalText,
 ): string {
-  const preview = boundedCatalogString(
-    sanitize(value.replace(/\s+/g, " ")),
+  const preview = truncateUtf16Safe(
+    sanitize(value.replace(/\s+/g, " ")).trim(),
     MAX_SESSION_PREVIEW_LENGTH,
-    "truncate",
   );
-  return Buffer.from(preview ?? "", "utf8").toString("utf8");
+  return Buffer.from(preview, "utf8").toString("utf8");
 }
 
 function normalizeInteractiveThreadSource(source: unknown) {
