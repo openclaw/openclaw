@@ -69,6 +69,7 @@ import {
 import { withSelectedTranscriptReader } from "./session-manager-reader.test-support.js";
 import { readCommittedSessionManagerReload } from "./session-manager-reload.js";
 import { SessionManager } from "./session-manager.js";
+import { toolResult } from "./session-message-fixtures.test-support.js";
 
 const memoryOwners: Array<{ agentId: string; path: string }> = [];
 afterEach(() => {
@@ -451,8 +452,7 @@ it.each(["durable", "admitted", "incognito"] as const)(
       } else {
         await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       }
-      const seed = await SessionManager.openAsync(scope);
-      const userId = await seed.appendMessageAsync(userMessage("question", 1));
+      const { source: seed, entryId: userId } = await seedUser(scope, "question");
       const answer = privateAnswer("synthetic-private-native-payload");
       answer.stopReason = "toolUse";
       answer.content.push({
@@ -472,12 +472,7 @@ it.each(["durable", "admitted", "incognito"] as const)(
       });
       const replyId = await seed.appendMessageAsync(answer);
       await seed.appendMessageAsync({
-        role: "toolResult",
-        toolCallId: "call",
-        toolName: "read",
-        isError: false,
-        content: [{ type: "text", text: "result" }],
-        timestamp: 2,
+        ...toolResult("result", "call", 2),
         details: { private: "synthetic-private-tool-details" },
       });
       const manager = await SessionManager.openAsync(scope, undefined, contextLimits);
@@ -546,30 +541,30 @@ it.each(["durable", "admitted", "incognito"] as const)(
       expect(residentCall.arguments.path).toBe("original.txt");
 
       const trap = vi.fn(() => {
-        throw new Error("Initial context invoked a resident proxy trap");
+        throw new Error("Initial context invoked a resident property trap");
       });
       const cycle: Record<string, unknown> = { text: "cycle" };
       cycle.inner = cycle;
-      const residentNested = {
-        accessor: "original",
-        changed: "unpersisted manager edit",
-        proxied: new Proxy(
-          { text: "proxy" },
-          {
-            get: trap,
-            getOwnPropertyDescriptor: trap,
-            ownKeys: trap,
-            getPrototypeOf: trap,
-          },
-        ),
-        cyclic: cycle,
-      };
-      Object.defineProperty(residentNested, "accessor", {
-        get() {
-          throw new Error("Initial context invoked a resident SDK getter");
+      const residentNested = Object.defineProperty(
+        {
+          changed: "unpersisted manager edit",
+          proxied: new Proxy(
+            { text: "proxy" },
+            {
+              get: trap,
+              getOwnPropertyDescriptor: trap,
+              ownKeys: trap,
+              getPrototypeOf: trap,
+            },
+          ),
+          cyclic: cycle,
         },
-        enumerable: true,
-      });
+        "accessor",
+        {
+          get: trap,
+          enumerable: true,
+        },
+      );
       reply.message.content = [
         { type: "text", text: "unpersisted manager edit" },
         {
@@ -591,127 +586,119 @@ it.each(["durable", "admitted", "incognito"] as const)(
 );
 
 it.each([
-  "unchanged",
-  "default-selector",
-  "mutable-message",
-  "native-append",
-  "worker-append",
-  "unrelated-worker-append",
-  "worker-reset",
-  "worker-compaction",
-  "local-reset",
-  "local-branch",
-  "fork",
-  "retarget",
-  "truncated",
-] as const)("reuses complete hydration without losing durable model bytes after %s", (change) =>
-  withOpenClawTestState({ label: "hydrated-model-context" }, async (state) => {
-    const target = sessionScope(
-      change === "default-selector"
-        ? resolveDefaultSessionStorePath("main")
-        : state.statePath("transcript.sqlite"),
-      "hydrated-model-context",
-    );
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const source = await SessionManager.openAsync(target);
-    const questionId = await source.appendMessageAsync(userMessage("question", 1));
-    const replyId = await source.appendMessageAsync(privateAnswer("private-durable-context"));
-    await withSelectedTranscriptReader(target, async () => {
-      const manager = await openCohort(target, change === "truncated" ? 1 : 20);
-      let readTarget = target;
-      let expectedMessages: unknown[] = [...questionAndAnswer];
-      if (change === "mutable-message") {
-        const reply = manager.getEntry(replyId!);
-        assert(
-          reply?.type === "message" && reply.message.role === "assistant",
-          "Missing mutable assistant entry",
-        );
-        reply.message.content = [{ type: "text", text: "unpersisted replacement" }];
-      } else if (change === "native-append") {
-        source.appendMessage(userMessage("native successor", 2));
-        expectedMessages.push({ role: "user", content: "native successor" });
-      } else if (change === "worker-append") {
-        await source.appendMessageAsync(userMessage("worker successor", 2));
-        expectedMessages.push({ role: "user", content: "worker successor" });
-      } else if (change === "unrelated-worker-append") {
-        await runWithoutOwnedSessionTranscriptWrites(async () => {
-          const other = {
-            ...target,
-            sessionId: "unrelated-session",
-            sessionKey: "agent:main:unrelated-session",
-          };
-          await upsertSessionEntryCore(other, { sessionId: other.sessionId, updatedAt: 2 });
-          const writer = await SessionManager.openAsync(other);
-          await writer.appendMessageAsync(userMessage("unrelated question", 2));
-        });
-      } else if (change === "worker-reset") {
-        await source.appendResetBoundaryAsync("new");
-        expectedMessages = [];
-      } else if (change === "worker-compaction") {
-        await source.appendCompactionAsync("Earlier question summarized", replyId!, 100);
-        expectedMessages = [
-          { role: "compactionSummary", summary: "Earlier question summarized" },
-          { role: "assistant", content: [{ text: "answer" }] },
-        ];
-      } else if (change === "local-reset") {
-        manager.resetLeaf();
-        expectedMessages = [];
-      } else if (change === "local-branch") {
-        manager.branch(questionId!);
-        expectedMessages = [{ role: "user", content: "question" }];
-      } else if (change === "fork") {
-        const forkId = await runWithoutOwnedSessionTranscriptWrites(() =>
-          manager.createBranchedSession(questionId!),
-        );
-        expect(forkId).toBe(manager.getSessionId());
-        expect(forkId).not.toBe(target.sessionId);
-        readTarget = { ...target, sessionId: forkId! };
-        expectedMessages = [{ role: "user", content: "question" }];
-      } else if (change === "retarget") {
-        readTarget = {
-          ...target,
-          sessionId: "replacement-context",
-          sessionKey: "agent:main:replacement-context",
-        };
-        await runWithoutOwnedSessionTranscriptWrites(async () => {
-          await upsertSessionEntryCore(readTarget, {
-            sessionId: readTarget.sessionId,
-            updatedAt: 2,
+  ["unchanged", 0],
+  ["default-selector", 0],
+  ["mutable-message", 0],
+  ["native-append", 1],
+  ["worker-append", 1],
+  ["unrelated-worker-append", 0],
+  ["worker-reset", 1],
+  ["worker-compaction", 1],
+  ["local-reset", 0],
+  ["local-branch", 0],
+  ["fork", 1],
+  ["retarget", 1],
+  ["truncated", 1],
+] as const)(
+  "reuses complete hydration without losing durable model bytes after %s",
+  (change, expectedReads) =>
+    withOpenClawTestState({ label: "hydrated-model-context" }, async (state) => {
+      const target = sessionScope(
+        change === "default-selector"
+          ? resolveDefaultSessionStorePath("main")
+          : state.statePath("transcript.sqlite"),
+        "hydrated-model-context",
+      );
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const source = await SessionManager.openAsync(target);
+      const questionId = await source.appendMessageAsync(userMessage("question", 1));
+      const replyId = await source.appendMessageAsync(privateAnswer("private-durable-context"));
+      await withSelectedTranscriptReader(target, async () => {
+        const manager = await openCohort(target, change === "truncated" ? 1 : 20);
+        let readTarget = target;
+        let expectedMessages: unknown[] = [...questionAndAnswer];
+        if (change === "mutable-message") {
+          const reply = manager.getEntry(replyId!);
+          assert(
+            reply?.type === "message" && reply.message.role === "assistant",
+            "Missing mutable assistant entry",
+          );
+          reply.message.content = [{ type: "text", text: "unpersisted replacement" }];
+        } else if (change === "native-append") {
+          source.appendMessage(userMessage("native successor", 2));
+          expectedMessages.push({ role: "user", content: "native successor" });
+        } else if (change === "worker-append") {
+          await source.appendMessageAsync(userMessage("worker successor", 2));
+          expectedMessages.push({ role: "user", content: "worker successor" });
+        } else if (change === "unrelated-worker-append") {
+          await runWithoutOwnedSessionTranscriptWrites(async () => {
+            const other = {
+              ...target,
+              sessionId: "unrelated-session",
+              sessionKey: "agent:main:unrelated-session",
+            };
+            await upsertSessionEntryCore(other, { sessionId: other.sessionId, updatedAt: 2 });
+            const writer = await SessionManager.openAsync(other);
+            await writer.appendMessageAsync(userMessage("unrelated question", 2));
           });
-          const replacement = await SessionManager.openAsync(readTarget);
-          await replacement.appendMessageAsync(userMessage("replacement question", 2));
-          await manager.setSessionTargetAsync(readTarget);
+        } else if (change === "worker-reset") {
+          await source.appendResetBoundaryAsync("new");
+          expectedMessages = [];
+        } else if (change === "worker-compaction") {
+          await source.appendCompactionAsync("Earlier question summarized", replyId!, 100);
+          expectedMessages = [
+            { role: "compactionSummary", summary: "Earlier question summarized" },
+            { role: "assistant", content: [{ text: "answer" }] },
+          ];
+        } else if (change === "local-reset") {
+          manager.resetLeaf();
+          expectedMessages = [];
+        } else if (change === "local-branch") {
+          manager.branch(questionId!);
+          expectedMessages = [{ role: "user", content: "question" }];
+        } else if (change === "fork") {
+          const forkId = await runWithoutOwnedSessionTranscriptWrites(() =>
+            manager.createBranchedSession(questionId!),
+          );
+          expect(forkId).toBe(manager.getSessionId());
+          expect(forkId).not.toBe(target.sessionId);
+          readTarget = { ...target, sessionId: forkId! };
+          expectedMessages = [{ role: "user", content: "question" }];
+        } else if (change === "retarget") {
+          readTarget = {
+            ...target,
+            sessionId: "replacement-context",
+            sessionKey: "agent:main:replacement-context",
+          };
+          await runWithoutOwnedSessionTranscriptWrites(async () => {
+            await upsertSessionEntryCore(readTarget, {
+              sessionId: readTarget.sessionId,
+              updatedAt: 2,
+            });
+            const replacement = await SessionManager.openAsync(readTarget);
+            await replacement.appendMessageAsync(userMessage("replacement question", 2));
+            await manager.setSessionTargetAsync(readTarget);
+          });
+          expectedMessages = [{ role: "user", content: "replacement question" }];
+        } else if (change === "truncated") {
+          expectedMessages = [{ role: "assistant", content: [{ text: "answer" }] }];
+        }
+        const readModel = vi.spyOn(contextWorker, "readSessionTranscriptModelContextInWorker");
+        await withRestoredMocks([readModel], async () => {
+          const consume = () => manager[sessionManagerReadInitialContext]();
+          const context =
+            change === "retarget" || change === "fork"
+              ? await withSelectedTranscriptReader(readTarget, consume)
+              : await consume();
+          expect(JSON.stringify(context)).not.toMatch(/private-durable-context|unpersisted/);
+          expect(context.messages).toMatchObject(expectedMessages);
+          expect(readModel).toHaveBeenCalledTimes(expectedReads);
         });
-        expectedMessages = [{ role: "user", content: "replacement question" }];
-      } else if (change === "truncated") {
-        expectedMessages = [{ role: "assistant", content: [{ text: "answer" }] }];
-      }
-      const readModel = vi.spyOn(contextWorker, "readSessionTranscriptModelContextInWorker");
-      await withRestoredMocks([readModel], async () => {
-        const consume = () => manager[sessionManagerReadInitialContext]();
-        const context =
-          change === "retarget" || change === "fork"
-            ? await withSelectedTranscriptReader(readTarget, consume)
-            : await consume();
-        expect(JSON.stringify(context)).not.toMatch(/private-durable-context|unpersisted/);
-        expect(context.messages).toMatchObject(expectedMessages);
-        const expectedReads = [
-          "unchanged",
-          "default-selector",
-          "mutable-message",
-          "unrelated-worker-append",
-          "local-reset",
-          "local-branch",
-        ].includes(change)
-          ? 0
-          : 1;
-        expect(readModel).toHaveBeenCalledTimes(expectedReads);
+        if (change === "local-reset" || change === "local-branch") {
+          expect(await readMessages(target)).toMatchObject(questionAndAnswer);
+        }
       });
-      if (change === "local-reset" || change === "local-branch") {
-        expect(await readMessages(target)).toMatchObject(questionAndAnswer);
-      }
-    });
-  }),
+    }),
 );
 
 it("rejects prepared context from a revoked writer inside a replacement run", () =>
