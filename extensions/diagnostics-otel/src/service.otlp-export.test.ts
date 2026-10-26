@@ -313,7 +313,7 @@ test.each(["completed", "error"] as const)(
   30_000,
 );
 
-test("exports cache-write TTL facts without duplicate generic usage", async () => {
+test("exports cache-write TTL facts on generic and OpenClaw usage keys", async () => {
   await startOtelService({ traces: true });
   for (const usage of [
     { cacheWrite: 1_000_000, cacheWrite1h: 400_000, cacheWrite5m: 600_000 },
@@ -332,13 +332,31 @@ test("exports cache-write TTL facts without duplicate generic usage", async () =
   const attrs = sdk.exporter.getFinishedSpans().map((span) => span.attributes);
   const generic = "gen_ai.usage.cache_creation.input_tokens";
   const local = "openclaw.model_call.usage.cache_creation_input_tokens";
-  expect(attrs.map((a) => [a[generic], a[local], a[`${local}_1h`], a[`${local}_5m`]])).toEqual([
-    [1_000_000, 1_000_000, 400_000, 600_000],
-    [0, 0, 0, 0],
-    [1_000_000, 1_000_000, undefined, undefined],
+  expect(
+    attrs.map((a) => [
+      a[generic],
+      a["gen_ai.usage.input_cache_creation_1h"],
+      a["gen_ai.usage.input_cache_creation_5m"],
+      a[local],
+      a[`${local}_1h`],
+      a[`${local}_5m`],
+    ]),
+  ).toEqual([
+    [1_000_000, 400_000, 600_000, 1_000_000, 400_000, 600_000],
+    [0, 0, 0, 0, 0, 0],
+    [1_000_000, undefined, undefined, 1_000_000, undefined, undefined],
   ]);
-  // Generic consumers price every bucket, so TTL subsets must stay OpenClaw-only.
-  const ttlKeys = [generic, local, `${local}_1h`, `${local}_5m`].toSorted();
+  // Both vocabularies carry the provider-reported buckets verbatim; the TTL
+  // pair decomposes the blended total, so pricing consumers must not sum it
+  // additively on top of the total's own row.
+  const ttlKeys = [
+    generic,
+    "gen_ai.usage.input_cache_creation_1h",
+    "gen_ai.usage.input_cache_creation_5m",
+    local,
+    `${local}_1h`,
+    `${local}_5m`,
+  ].toSorted();
   expect(
     attrs.map((a) =>
       Object.keys(a)
