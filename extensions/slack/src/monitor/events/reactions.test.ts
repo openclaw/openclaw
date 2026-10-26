@@ -153,7 +153,7 @@ describe("Slack common events", () => {
     { dmPolicy: "allowlist", allowFrom: ["U2"] },
   ])("blocks unauthorized DM pins: $dmPolicy", async (overrides) => {
     await createReactionHarness(overrides, false, "pin_added").handler({
-      event: scopedEvents[2].event,
+      event: commonEvents[2][1],
       body: { event_id: "Ev-pin-default" },
     });
     expect(reactionQueueMock).not.toHaveBeenCalled();
