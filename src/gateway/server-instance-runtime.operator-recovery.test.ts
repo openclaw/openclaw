@@ -90,6 +90,36 @@ const recoveryRequest = (target: OperatorRecoveryTarget) => ({
   expectedExistingSessionId: target.sessionId,
   idempotencyKey: target.recoveryRunId,
 });
+const appendMessage = (
+  target: OperatorRecoveryTarget,
+  message: Parameters<typeof appendTranscriptMessage>[1]["message"],
+) => appendTranscriptMessage(target, { message });
+const appendAborted = (target: OperatorRecoveryTarget) =>
+  appendMessage(target, { role: "assistant", content: [], stopReason: "aborted" });
+const recover = (
+  target: OperatorRecoveryTarget,
+  stateDir: string,
+  runtime: ReturnType<typeof createRuntime>,
+  cfg: OpenClawConfig = {},
+  options: Pick<Parameters<typeof recoverStore>[0], "onSkipped"> = {},
+) =>
+  recoverStore({
+    cfg,
+    storePath: target.storePath,
+    stateDir,
+    handledSessionKeys: new Set(),
+    expectedTarget: target,
+    gatewayRuntime: runtime.recovery,
+    ...options,
+  });
+function expectRecovery(outcome: Awaited<ReturnType<typeof recoverStore>>, authorized: boolean) {
+  expect(outcome).toEqual({
+    started: authorized ? 1 : 0,
+    settled: authorized ? 0 : 1,
+    failed: 0,
+    skipped: 0,
+  });
+}
 function registerRecovery(
   target: OperatorRecoveryTarget,
   runId = target.recoveryRunId,
@@ -213,19 +243,15 @@ describe("typed restart recovery operator admission", () => {
         for (let attempt = 0; attempt < 2; attempt += 1) {
           const context = chatContext();
           context.getRuntimeConfig = () => ({});
-          await appendTranscriptMessage(target, {
-            message: {
-              role: "user",
-              content: "A reviewer has additional findings for the original task.",
-              provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-            },
+          await appendMessage(target, {
+            role: "user",
+            content: "A reviewer has additional findings for the original task.",
+            provenance: { kind: "inter_session", sourceTool: "sessions_send" },
           });
-          await appendTranscriptMessage(target, {
-            message: {
-              role: "assistant",
-              stopReason: "toolUse",
-              content: [{ type: "toolCall", id: "inspect-" + attempt, name: "read" }],
-            },
+          await appendMessage(target, {
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "inspect-" + attempt, name: "read" }],
           });
           await markRecovery(target, context, stateDir, runId);
           rotateAgentEventLifecycleGeneration();
@@ -245,22 +271,17 @@ describe("typed restart recovery operator admission", () => {
           try {
             const denied = revoked && attempt === 1;
             const skipped: string[] = [];
-            const outcome = await recoverStore({
-              onSkipped: (reason) => skipped.push(reason),
-              cfg: {},
-              storePath: target.storePath,
+            const outcome = await recover(
+              target,
               stateDir,
-              handledSessionKeys: new Set(),
-              expectedTarget: target,
-              gatewayRuntime: runtime.recovery,
-            });
+              runtime,
+              {},
+              {
+                onSkipped: (reason) => skipped.push(reason),
+              },
+            );
             expect(skipped).toEqual([]);
-            expect(outcome).toEqual({
-              started: denied ? 0 : 1,
-              settled: denied ? 1 : 0,
-              failed: 0,
-              skipped: 0,
-            });
+            expectRecovery(outcome, !denied);
             expect(startTurn).toHaveBeenCalledTimes(denied ? 1 : attempt + 1);
             const retained = loadSessionEntry(target);
             expect(retained?.restartRecoveryOperatorSource).toEqual(source);
@@ -303,20 +324,16 @@ describe("typed restart recovery operator admission", () => {
           "retained channel requester",
         ),
       });
-      await appendTranscriptMessage(target, {
-        message: {
-          role: "user",
-          content: "Use the completed child's findings to finish my original request.",
-          provenance: {
-            kind: "inter_session",
-            sourceTool: "subagent_settle",
-            sourceSessionKey: "agent:main:subagent:completed-child",
-          },
+      await appendMessage(target, {
+        role: "user",
+        content: "Use the completed child's findings to finish my original request.",
+        provenance: {
+          kind: "inter_session",
+          sourceTool: "subagent_settle",
+          sourceSessionKey: "agent:main:subagent:completed-child",
         },
       });
-      await appendTranscriptMessage(target, {
-        message: { role: "assistant", content: [], stopReason: "aborted" },
-      });
+      await appendAborted(target);
       const marked = await markRecovery(target, context, stateDir, target.recoveryRunId);
       expect(marked).toEqual({ marked: 1, skipped: 0 });
       rotateAgentEventLifecycleGeneration();
@@ -324,15 +341,7 @@ describe("typed restart recovery operator admission", () => {
       using runtime = createRuntime(() => context);
       const finish = holdRecoveryTurn(target);
       try {
-        const outcome = await recoverStore({
-          cfg: {},
-          storePath: target.storePath,
-          stateDir,
-          handledSessionKeys: new Set(),
-          expectedTarget: target,
-          gatewayRuntime: runtime.recovery,
-        });
-        expect(outcome).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
+        expectRecovery(await recover(target, stateDir, runtime), true);
         expect(startTurn).toHaveBeenCalledOnce();
         const principal = expectDefined(
           startTurn.mock.calls[0]?.[0].principal,
@@ -444,32 +453,26 @@ describe("typed restart recovery operator admission", () => {
                 }),
         });
         if (parentState === "internal self-origin") {
-          await appendTranscriptMessage(target, {
-            message: {
-              role: "user",
-              content: "An earlier human request does not own the interrupted turn.",
-              idempotencyKey: "earlier-human-turn:user",
-              provenance: { kind: "external_user" },
-            },
+          await appendMessage(target, {
+            role: "user",
+            content: "An earlier human request does not own the interrupted turn.",
+            idempotencyKey: "earlier-human-turn:user",
+            provenance: { kind: "external_user" },
           });
         }
-        await appendTranscriptMessage(target, {
-          message: {
-            role: "user",
-            content: "Continue the requested child work.",
-            idempotencyKey: `${target.sourceRunId}:user`,
-            provenance:
-              parentState === "direct TUI"
-                ? undefined
-                : { kind: directHuman ? "external_user" : "inter_session" },
-            ...(selfOrigin
-              ? { __openclaw: { transport: { clients: [{ id: "openclaw-tui", mode: "ui" }] } } }
-              : {}),
-          },
+        await appendMessage(target, {
+          role: "user",
+          content: "Continue the requested child work.",
+          idempotencyKey: `${target.sourceRunId}:user`,
+          provenance:
+            parentState === "direct TUI"
+              ? undefined
+              : { kind: directHuman ? "external_user" : "inter_session" },
+          ...(selfOrigin
+            ? { __openclaw: { transport: { clients: [{ id: "openclaw-tui", mode: "ui" }] } } }
+            : {}),
         });
-        await appendTranscriptMessage(target, {
-          message: { role: "assistant", content: [], stopReason: "aborted" },
-        });
+        await appendAborted(target);
         expect(await markRecovery(target, context, stateDir, target.sourceRunId)).toEqual({
           marked: 1,
           skipped: 0,
@@ -479,20 +482,7 @@ describe("typed restart recovery operator admission", () => {
         const finish = holdRecoveryTurn(target);
         try {
           const authorized = parentState === "allowed" || directHuman;
-          const outcome = await recoverStore({
-            cfg,
-            storePath: target.storePath,
-            stateDir,
-            handledSessionKeys: new Set(),
-            expectedTarget: target,
-            gatewayRuntime: runtime.recovery,
-          });
-          expect(outcome).toEqual({
-            started: authorized ? 1 : 0,
-            settled: authorized ? 0 : 1,
-            failed: 0,
-            skipped: 0,
-          });
+          expectRecovery(await recover(target, stateDir, runtime, cfg), authorized);
           expect(startTurn).toHaveBeenCalledTimes(authorized ? 1 : 0);
           if (parentState === "allowed") {
             const recovered = expectDefined(startTurn.mock.calls[0]?.[0], "recovered turn");
@@ -548,33 +538,16 @@ describe("typed restart recovery operator admission", () => {
             requesterOrigin,
           }),
         });
-        await appendTranscriptMessage(target, {
-          message: { role: "user", content: "Finish the interrupted request." },
-        });
-        await appendTranscriptMessage(target, {
-          message: { role: "assistant", content: [], stopReason: "aborted" },
-        });
+        await appendMessage(target, { role: "user", content: "Finish the interrupted request." });
+        await appendAborted(target);
         await markRecovery(target, context, stateDir, target.sourceRunId);
         rotateAgentEventLifecycleGeneration();
         using runtime = createRuntime(() => context);
         const finish = holdRecoveryTurn(target);
-        const recover = () =>
-          recoverStore({
-            cfg: {},
-            storePath: target.storePath,
-            stateDir,
-            handledSessionKeys: new Set(),
-            expectedTarget: target,
-            gatewayRuntime: runtime.recovery,
-          });
+        const recoverAgain = () => recover(target, stateDir, runtime);
         try {
           const authorized = source === "matching";
-          expect(await recover()).toEqual({
-            started: authorized ? 1 : 0,
-            settled: authorized ? 0 : 1,
-            failed: 0,
-            skipped: 0,
-          });
+          expectRecovery(await recoverAgain(), authorized);
           expect(startTurn).toHaveBeenCalledTimes(authorized ? 1 : 0);
           if (!authorized) {
             const retained = loadSessionEntry(target);
@@ -586,7 +559,7 @@ describe("typed restart recovery operator admission", () => {
             expect(JSON.stringify(transcript)).toContain(
               "Send a new authenticated message to continue.",
             );
-            await recover();
+            await recoverAgain();
             expect(startTurn).not.toHaveBeenCalled();
             expect(await loadTranscriptEvents(target)).toEqual(transcript);
           }
