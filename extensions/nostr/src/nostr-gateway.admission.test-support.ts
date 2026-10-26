@@ -28,6 +28,11 @@ export function registerNostrGatewayAdmissionTests() {
   const other = new Uint8Array(32).fill(3);
   const recipient = getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES);
   const key = getPublicKey(approved);
+  const whenLogged = (part: string, resolve: () => void) => (message: string) => {
+    if (message.includes(part)) {
+      resolve();
+    }
+  };
   async function start(config: ResolvedNostrAccount["config"], stateDir?: string) {
     const h = await fixture.create(stateDir);
     const { relay, runtime, errors } = h;
@@ -44,16 +49,8 @@ export function registerNostrGatewayAdmissionTests() {
     context.channelRuntime = runtime.channel;
     context.log = {
       warn: vi.fn(),
-      debug: (message) => {
-        if (message.includes("blocked Nostr sender")) {
-          blocked.resolve();
-        }
-      },
-      info: (message) => {
-        if (message.includes("Nostr provider started")) {
-          started.resolve();
-        }
-      },
+      debug: whenLogged("blocked Nostr sender", blocked.resolve),
+      info: whenLogged("Nostr provider started", started.resolve),
       error: (message) => errors.push(message),
     };
     const task = startNostrGatewayAccount(context);
@@ -72,11 +69,15 @@ export function registerNostrGatewayAdmissionTests() {
     expect(getActiveNostrBuses().has("default")).toBe(false);
   }
 
-  it("delivers through Gateway after a 200-event signed outsider burst with normalized literal keys", async () => {
-    const h = await start({
-      dmPolicy: "allowlist",
-      allowFrom: [key.toUpperCase(), " nostr:" + npubEncode(key) + " ", key],
-    });
+  it("keeps normalized allowlists across an outsider burst and an abort/join restart", async () => {
+    const stateDir = fixture.directory();
+    const h = await start(
+      {
+        dmPolicy: "allowlist",
+        allowFrom: [key.toUpperCase(), " nostr:" + npubEncode(key) + " ", key],
+      },
+      stateDir,
+    );
     const denied = Array.from({ length: 200 }, (_, i) => dm(other, "denied-" + i));
     const allowed = dm(approved, "approved through Gateway");
     const forged = { ...dm(other, "forged"), pubkey: key };
@@ -88,15 +89,6 @@ export function registerNostrGatewayAdmissionTests() {
       expect.objectContaining({ rawBody: "approved through Gateway", senderId: key }),
     );
     expect(h.relay.subscriptions).toEqual([[{ kinds: [4], "#p": [recipient], since: 0 }]]);
-  });
-
-  it("recreates Gateway admission after abort/join and an allowlist key change", async () => {
-    const stateDir = fixture.directory();
-    const first = await start({ dmPolicy: "allowlist", allowFrom: [key] }, stateDir);
-    const oldAllowed = dm(approved, "old allowed");
-    first.relay.sendIncoming([oldAllowed]);
-    await withTimeout(first.delivered.promise, 5000);
-    await finish(first, [oldAllowed.id]);
     const next = await start({ dmPolicy: "allowlist", allowFrom: [getPublicKey(other)] }, stateDir);
     const newAllowed = dm(other, "new allowed");
     next.relay.sendIncoming([dm(approved, "old denied after restart"), newAllowed]);

@@ -21,9 +21,7 @@ vi.mock("nostr-tools", () => ({
       return { close: mockState.closeSubscription };
     }
 
-    close(relays: string[]) {
-      mockState.close(relays);
-    }
+    close = mockState.close;
   },
 }));
 
