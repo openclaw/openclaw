@@ -33,14 +33,6 @@ function pauseDispatch() {
   return { started, dispatch };
 }
 
-function eventOptions() {
-  const options = enqueueSessionEventMock.mock.calls[0]?.[1];
-  if (!options) {
-    throw new Error("Expected session event options");
-  }
-  return options;
-}
-
 describe("Slack interaction lifecycle", () => {
   it.each(["accepted", "refused", "duplicate"] as const)(
     "keeps the captured destination through plugin dispatch and confirms only when %s",
@@ -71,11 +63,12 @@ describe("Slack interaction lifecycle", () => {
       resolveSessionKey.mockResolvedValue({ agentId: "other", sessionKey: "session:replacement" });
       dispatch.resolve({ matched: false, handled: false, duplicate: false });
       await enqueued.promise;
-      expect(eventOptions()).toMatchObject({
+      const options = enqueueSessionEventMock.mock.calls[0]?.[1];
+      expect(options).toMatchObject({
         agentId: "ops",
         sessionKey: "agent:ops:slack:channel:C1",
       });
-      expect(eventOptions().expectedTarget).toBe(expectedTarget);
+      expect(options?.expectedTarget).toBe(expectedTarget);
       expect(app.client.chat.update).not.toHaveBeenCalled();
       accepted.resolve(
         admission === "accepted" ? { ok: true } : { ok: false, error: "session replaced" },
