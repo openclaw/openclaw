@@ -331,12 +331,12 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
                     onSliderCommit(event);
                   }
                 }}
-                onKeyDown={(event: KeyboardEvent) => {
+                onKeyDown={(event) => {
                   dragging = false;
                   if (props.thinkingDisabled) {
                     return;
                   }
-                  const input = event.currentTarget as HTMLInputElement;
+                  const input = event.currentTarget;
                   const current = Math.round(Number(input.value));
                   const last = view().sliderStops.length - 1;
                   const next =
