@@ -41,23 +41,20 @@ export function createTrustedInternalChatSendFixture(chatSend: (...args: unknown
   };
 }
 
-export function createBrowserProvider(createBrowserSession: BrowserSessionFactory) {
-  return {
-    id: "openai",
-    label: "OpenAI Realtime",
-    isConfigured: () => true,
-    createBrowserSession,
-    createBridge: vi.fn(),
-  };
-}
+export const createBrowserProvider = (createBrowserSession: BrowserSessionFactory) => ({
+  id: "openai",
+  label: "OpenAI Realtime",
+  isConfigured: () => true,
+  createBrowserSession,
+  createBridge: vi.fn(),
+});
 
 function browserCredentials(clientSecret: string) {
   return { provider: "openai", transport: "webrtc" as const, clientSecret };
 }
 
-export function createBrowserSessionMock() {
-  return vi.fn(async (_input: unknown) => browserCredentials("secret"));
-}
+export const createBrowserSessionMock = () =>
+  vi.fn(async (_input: unknown) => browserCredentials("secret"));
 
 export type BrowserRequest = Parameters<BrowserSessionFactory>[0];
 export const browserSession = {
@@ -101,7 +98,6 @@ export function createDelegatedBrowserProviderFixture(
   };
 }
 
-/** Wait for the requested event while surfacing any earlier handler failure. */
 export function observeTalkVoiceChangeRequest(broadcast: ReturnType<typeof vi.fn>) {
   const requested = createDeferred();
   broadcast.mockImplementation((event) => {
