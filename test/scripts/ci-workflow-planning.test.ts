@@ -11026,7 +11026,10 @@ describe("ci workflow guards", () => {
       uses: uiE2eSetup.uses,
       with: expectedSharedUiE2eSetup,
     });
-    expect(realGatewaySetup.with).toEqual(expectedSharedUiE2eSetup);
+    expect(realGatewaySetup.with).toEqual({
+      ...expectedSharedUiE2eSetup,
+      "build-all-cache-scope": "full",
+    });
 
     // Failed-job retries can retain an earlier eight-shard plan while live routing
     // selects hosted runners. Both widths retain the cache and contributor boundaries.
