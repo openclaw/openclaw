@@ -20,9 +20,14 @@ type DispatchCase = {
   retryPreparation?: "omit" | "mutate" | "change-cwd";
   cancelTrajectory?: boolean;
   preparedAuth?: "explicit-header" | "no-auth";
+  transcriptTargetInvalidation?: "closed" | "replaced" | "target";
 };
 
 export const dispatchCases: DispatchCase[] = [
+  ...(["closed", "replaced", "target"] as const).map((transcriptTargetInvalidation) => ({
+    agentId: "main",
+    transcriptTargetInvalidation,
+  })),
   { agentId: "main", cyberAccessProgram: "standard" },
   { agentId: "main", cyberAccessProgram: "daybreak_blue" },
   ...(["explicit-header", "no-auth"] as const).map((preparedAuth) => ({

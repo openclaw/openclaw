@@ -282,6 +282,8 @@ const repositoryScriptEntries = [
   "scripts/perf/prompt-cache-history-measure.ts!",
   // scripts/perf/README.md invokes this synthetic authority allocation probe by path.
   "scripts/perf/operator-authority-measure.ts!",
+  // The transcript driver selects this diagnostic preload through --gateway-preload.
+  "scripts/perf/plugin-access-authority-census.mjs!",
   // #179149 invokes this synthetic event-dispatch allocation probe by path.
   "scripts/perf/agent-event-dispatch-measure.ts!",
   // scripts/perf/README.md invokes this WebSocket diagnostic accounting benchmark.

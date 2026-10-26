@@ -40,6 +40,7 @@ import { requireGit } from "../../worktrees/git.js";
 import { insertRegistryWorktree } from "../../worktrees/registry.js";
 import { initializeManagedWorktreeTestRepository } from "../../worktrees/service.test-support.js";
 import type { ManagedWorktreeRecord } from "../../worktrees/types.js";
+import * as attemptBackend from "./backend.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import { dispatchCases } from "./run-attempt-dispatch.cases.test-support.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
@@ -165,7 +166,7 @@ it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
 );
 
 it.each(dispatchCases)(
-  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, explicit cwd $explicitCwd, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory, prepared auth $preparedAuth, access $cyberAccessProgram",
+  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, explicit cwd $explicitCwd, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory, prepared auth $preparedAuth, access $cyberAccessProgram, transcript target $transcriptTargetInvalidation",
   async ({
     cyberAccessProgram,
     agentId = "work",
@@ -186,6 +187,7 @@ it.each(dispatchCases)(
     retryPreparation,
     cancelTrajectory,
     preparedAuth,
+    transcriptTargetInvalidation,
   }) => {
     const gitCoauthorPrompt =
       "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
@@ -313,8 +315,11 @@ it.each(dispatchCases)(
           { sessionId: `${agentId}-global`, updatedAt: 1 },
         );
       }
+      let onValidateSource: (() => void) | undefined;
+      const assertSourceCurrent = vi.fn(() => onValidateSource?.());
       const admission = prepareAgentRunAdmission({
         cfg: config,
+        assertSourceCurrent: transcriptTargetInvalidation ? assertSourceCurrent : undefined,
         facts: {
           runId,
           agentId,
@@ -330,9 +335,33 @@ it.each(dispatchCases)(
           >["prepareContinuationRetryCount"]
         | undefined;
       const sourceTurn = createSourceTurnDispatchAssertions();
+      let assertPreparedTarget: (() => void) | undefined;
+      let activeControls: ReturnType<typeof laneController.createAttemptControls> | undefined;
+      const targetChecked = new Error("prepared transcript target checked");
       const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (params) => {
         expect(params.cyberAccessProgram).toBe(cyberAccessProgram);
         sourceTurn.expectBinding(params);
+        if (transcriptTargetInvalidation) {
+          expect(assertPreparedTarget).toBeTypeOf("function");
+          assertSourceCurrent.mockClear();
+          assertPreparedTarget!();
+          expect(assertSourceCurrent).toHaveBeenCalledOnce();
+          onValidateSource = () => {
+            onValidateSource = undefined;
+            if (transcriptTargetInvalidation === "closed") {
+              activeControls!.close();
+            } else if (transcriptTargetInvalidation === "replaced") {
+              laneController.createAttemptControls({ admittedRunContext });
+            } else {
+              input.sessionPromptState.sessionTarget = {
+                ...input.sessionPromptState.sessionTarget!,
+                sessionId: "rebound-target",
+              };
+            }
+          };
+          expect(assertPreparedTarget).toThrow("Session target preparation outlived its attempt");
+          throw targetChecked;
+        }
         retainedRetryPreparer = params.hostCapabilities?.prepareContinuationRetryCount;
         expect(params).not.toHaveProperty("prepareContinuationRetryCount");
         if (!remoteSkills && retryPreparation !== "omit") {
@@ -451,6 +480,13 @@ it.each(dispatchCases)(
         },
         setParams: () => {},
       });
+      if (transcriptTargetInvalidation) {
+        const createControls = laneController.createAttemptControls;
+        vi.spyOn(laneController, "createAttemptControls").mockImplementation((options) => {
+          activeControls = createControls(options);
+          return activeControls;
+        });
+      }
       const authProfileStore = { version: 1, profiles: {} };
       const sourceApiKey =
         preparedAuth === "explicit-header" ? CUSTOM_LOCAL_AUTH_MARKER : "source-api-key";
@@ -529,7 +565,7 @@ it.each(dispatchCases)(
             agentId,
             sessionId: `${agentId}-global`,
             sessionKey: "global",
-            ...(cancelTrajectory ? { storePath } : {}),
+            ...(cancelTrajectory || transcriptTargetInvalidation ? { storePath } : {}),
           },
           activePrompt: { persisted: false, internal: false },
           onUserMessagePersisted: vi.fn(),
@@ -631,6 +667,15 @@ it.each(dispatchCases)(
           await writeRetrySettings(path.join(workspaceDir, ".openclaw"), 7);
         }
       }
+      const runBackend = attemptBackend.runEmbeddedAttemptWithBackend;
+      const backendObserver = transcriptTargetInvalidation
+        ? vi
+            .spyOn(attemptBackend, "runEmbeddedAttemptWithBackend")
+            .mockImplementation((...args) => {
+              assertPreparedTarget = args[0].preparedSessionTarget?.assertCurrent;
+              return runBackend(...args);
+            })
+        : undefined;
       const pending = prepareAndDispatchEmbeddedRunAttempt(input);
       void pending.catch(() => {});
       const expectNoDispatch = () => {
@@ -639,6 +684,11 @@ it.each(dispatchCases)(
         }
       };
       try {
+        if (transcriptTargetInvalidation) {
+          await expect(pending).rejects.toBe(targetChecked);
+          expect(runAttempt).toHaveBeenCalledOnce();
+          return;
+        }
         if (retryPreparation === "change-cwd") {
           await expect(pending).rejects.toThrow(
             "Native execution cwd changed after continuation retry preparation",
@@ -835,6 +885,7 @@ it.each(dispatchCases)(
       } finally {
         baseline.resolve();
         await pending.catch(() => undefined);
+        backendObserver?.mockRestore();
         preparation?.mockRestore();
         remoteImageRead?.mockRestore();
         restorePlacement();
