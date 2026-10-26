@@ -20,6 +20,10 @@ import {
   checkPluginCacheEntry,
   pluginCacheExistsSync,
   pluginCacheRealpathSync,
+  pluginCacheStatSync,
+  pluginCacheLstatSync,
+  readPluginCacheDirectory,
+  refreshPluginCacheStat,
   readPluginCacheFile,
   readPluginCacheJsonFile,
 } from "./plugin-cache-files.js";
@@ -677,4 +681,69 @@ it("retires a cache released by a borrower captured before package replacement",
     finish.resolve();
     await retirement.catch(() => {});
   }
+});
+
+it("retains compact file facts across every metadata acquisition path", () => {
+  const { root, file } = fixture(
+    {
+      "stat.json": "{}",
+      "checked.json": "{}",
+      "bounded.json": "{}",
+      "regular.json": "{}",
+      "folder/.keep": "",
+    },
+    { "alias.json": "stat.json" },
+  );
+  const cache = createPluginCache();
+  withPluginCache(cache, () => {
+    pluginCacheStatSync(file("stat.json"));
+    pluginCacheLstatSync(file("alias.json"));
+    checkEntry(root, "checked.json");
+    readFile(root, "bounded.json");
+    readPluginCacheJsonFile(file("regular.json"));
+    const entries = readPluginCacheDirectory(root);
+    expect(
+      entries.map((entry) => [
+        entry.name,
+        entry.isFile(),
+        entry.isDirectory(),
+        entry.isSymbolicLink(),
+      ]),
+    ).toEqual(
+      fs
+        .readdirSync(root, { withFileTypes: true })
+        .map((entry) => [entry.name, entry.isFile(), entry.isDirectory(), entry.isSymbolicLink()]),
+    );
+    expect(entries.filter((entry) => entry instanceof fs.Dirent)).toHaveLength(0);
+    for (const record of cache.roots.values()) {
+      for (const [name, facts] of record.paths) {
+        for (const kind of ["stat", "lstat"] as const) {
+          const captured = facts[kind];
+          if (!captured) {
+            continue;
+          }
+          const actual =
+            kind === "stat"
+              ? fs.statSync(path.join(record.rootDir, name))
+              : fs.lstatSync(path.join(record.rootDir, name));
+          for (const key of ["mode", "uid", "nlink", "dev", "ino", "size", "mtimeMs"] as const) {
+            expect(captured[key]).toBe(actual[key]);
+          }
+          expect([captured.isFile(), captured.isDirectory(), captured.isSymbolicLink()]).toEqual([
+            actual.isFile(),
+            actual.isDirectory(),
+            actual.isSymbolicLink(),
+          ]);
+          expect(captured).not.toBeInstanceOf(fs.Stats);
+        }
+      }
+    }
+    fs.appendFileSync(file("stat.json"), "more");
+    expect(pluginCacheStatSync(file("stat.json"))?.size).toBe(2);
+    expect(refreshPluginCacheStat(file("stat.json"))?.size).toBe(6);
+    fs.writeFileSync(file("new.json"), "{}");
+    expect(readPluginCacheDirectory(root)).toBe(entries);
+    invalidatePluginCacheMetadata(cache);
+    expect(readPluginCacheDirectory(root).some((entry) => entry.name === "new.json")).toBe(true);
+  });
 });

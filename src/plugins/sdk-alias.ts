@@ -1,5 +1,4 @@
 // Resolves plugin SDK aliases for public package imports.
-import type fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +23,7 @@ import {
   readPluginCacheDirectory,
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
+import type { PluginDirectoryEntry } from "./plugin-cache-files.types.js";
 import {
   getPluginSdkAliasFacts,
   getPluginSdkHostFacts,
@@ -600,7 +600,7 @@ function resolveBundledPluginPackagePublicSurfaceAliasMap(
     return cached;
   }
   const extensionsRoot = path.join(packageRoot, "extensions");
-  let extensionDirs: fs.Dirent[];
+  let extensionDirs: PluginDirectoryEntry[];
   try {
     extensionDirs = readPluginCacheDirectory(extensionsRoot);
   } catch {
