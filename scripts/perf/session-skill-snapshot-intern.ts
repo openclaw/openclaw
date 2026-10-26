@@ -50,10 +50,15 @@ if (inspector) {
 }
 let gcMs = 0;
 let gcCount = 0;
+let gcMaxMs = 0;
 const observer = new PerformanceObserver((list) => {
   for (const entry of list.getEntries()) {
+    if (entry.startTime < started || entry.startTime >= finished) {
+      continue;
+    }
     gcMs += entry.duration;
     gcCount++;
+    gcMaxMs = Math.max(gcMaxMs, entry.duration);
   }
 });
 observer.observe({ entryTypes: ["gc"] });
@@ -68,7 +73,8 @@ for (let index = 0; index < 10_000; index++) {
   }
   entries[index % resident] = freezeTrustedJsonSnapshot(entry);
 }
-const elapsedMs = performance.now() - started;
+const finished = performance.now();
+const elapsedMs = finished - started;
 const cpu = process.cpuUsage(cpuBefore);
 await new Promise<void>((resolve) => setImmediate(resolve));
 await new Promise<void>((resolve) => setImmediate(resolve));
@@ -94,6 +100,7 @@ console.log(
     sampledAllocationBytes: profile?.samples.reduce((bytes, sample) => bytes + sample.size, 0),
     gcMs,
     gcCount,
+    gcMaxMs,
     retainedBytes,
     distinctSnapshots: unique.size,
     contentHashes: hashes.size,
