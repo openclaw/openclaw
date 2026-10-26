@@ -8,6 +8,24 @@ import { createVoiceCallBaseConfig } from "../test-fixtures.js";
 import type { CallRecord } from "../types.js";
 import { RealtimeCallHandler, type ResolveRealtimeCallRegistration } from "./realtime-handler.js";
 import { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
+export const updateCallMetadata: CallManager["updateCallMetadata"] = async (call, update) => {
+  call.metadata = update(call.metadata);
+};
+export const createRealtimeConfig = () => ({
+  ...createVoiceCallBaseConfig().realtime,
+  enabled: true,
+  instructions: "Be helpful.",
+});
+export const makeRealtimeProvider = (
+  createBridge: RealtimeVoiceProviderPlugin["createBridge"],
+  overrides: Partial<RealtimeVoiceProviderPlugin> = {},
+): RealtimeVoiceProviderPlugin => ({
+  id: "openai",
+  label: "OpenAI",
+  isConfigured: () => true,
+  createBridge,
+  ...overrides,
+});
 
 export function makeCall(providerCallId: string, overrides: Partial<CallRecord> = {}): CallRecord {
   return {
@@ -39,7 +57,6 @@ export function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): Realti
     ...overrides,
   };
 }
-
 export function managedHandler(
   config: ConstructorParameters<typeof RealtimeCallHandler>[0],
   manager: CallManager,
@@ -56,7 +73,6 @@ export function managedHandler(
   });
   return handler;
 }
-
 export function makeHandler(params: {
   call: CallRecord;
   createBridge: RealtimeVoiceProviderPlugin["createBridge"];
@@ -65,16 +81,10 @@ export function makeHandler(params: {
   nativeConsult?: boolean;
 }) {
   const config = {
-    ...createVoiceCallBaseConfig().realtime,
-    enabled: true,
-    instructions: "Be helpful.",
+    ...createRealtimeConfig(),
     ...(params.idleHangupMs ? { idleHangupMs: params.idleHangupMs } : {}),
   };
-  const provider: RealtimeVoiceProviderPlugin = {
-    id: "openai",
-    label: "OpenAI",
-    isConfigured: () => true,
-    createBridge: params.createBridge,
+  const provider = makeRealtimeProvider(params.createBridge, {
     capabilities: {
       transports: ["gateway-relay"],
       inputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
@@ -82,14 +92,12 @@ export function makeHandler(params: {
       supportsBargeIn: true,
       ...(params.nativeConsult ? { handlesAgentConsult: true, supportsToolCalls: false } : {}),
     },
-  };
+  });
   const processEvent = vi.fn(async () => ({ kind: "processed" }));
   const endCall = params.endCall ?? vi.fn(async () => ({ success: true }));
   const manager = {
     processEvent,
-    updateCallMetadata: vi.fn(async (call: CallRecord, update) => {
-      call.metadata = update(call.metadata);
-    }),
+    updateCallMetadata: vi.fn(updateCallMetadata),
     endCall,
     getCallForStream: vi.fn(async () => params.call),
     getCallByProviderCallId: vi.fn(() => params.call),
