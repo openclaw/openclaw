@@ -182,6 +182,10 @@ function persistFirstPlugin(
   );
 }
 
+function packageMetadata(filePath: string, relativePath = path.basename(filePath)) {
+  return { path: relativePath, hash: fileHash(filePath), fileSignature: fileSignature(filePath) };
+}
+
 function expectPersisted(result: ReturnType<typeof loadPluginRegistrySnapshotWithMetadata>) {
   expect(result.source).toBe("persisted");
   expect(result.diagnostics).toStrictEqual([]);
@@ -309,8 +313,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
 
       expect(result.source).toBe("derived");
       expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
-      const memoryPlugin = requirePluginRecord(result.snapshot.plugins, "memory-demo");
-      expect(memoryPlugin.origin).toBe("global");
+      expect(requirePluginRecord(result.snapshot.plugins, "memory-demo").origin).toBe("global");
     },
   );
 
@@ -438,11 +441,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
     const index = loadInstalledPluginIndex({ config, env });
     await persistFirstPlugin(index, stateDir, {
-      packageJson: {
-        path: "..meta/package.json",
-        hash: fileHash(packageJsonPath),
-        fileSignature: fileSignature(packageJsonPath),
-      },
+      packageJson: packageMetadata(packageJsonPath, "..meta/package.json"),
     });
 
     const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
@@ -475,17 +474,12 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       fs.symlinkSync(outsidePackageJsonPath, packageJsonPath);
       const index = loadInstalledPluginIndex({ config, env });
       await persistFirstPlugin(index, stateDir, {
-        packageJson: {
-          path: "package.json",
-          hash: fileHash(packageJsonPath),
-          fileSignature: fileSignature(packageJsonPath),
-        },
+        packageJson: packageMetadata(packageJsonPath),
       });
 
       const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
 
-      expect(result.source).toBe("derived");
-      expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+      expectStale(result);
     },
   );
 
@@ -507,8 +501,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
 
         const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
 
-        expect([artifact, result.source]).toEqual([artifact, "derived"]);
-        expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+        expectStale(result);
       }
     },
   );
