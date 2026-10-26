@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
   clearWorkingProgress,
@@ -9,6 +10,23 @@ import {
 } from "./chat-progress.ts";
 
 const SESSION = "agent:main:main";
+const progress = (...args: Tail<Parameters<typeof resolveWorkingProgress>>) =>
+  resolveWorkingProgress(SESSION, ...args);
+type Tail<T extends unknown[]> = T extends [unknown, ...infer Rest] ? Rest : never;
+const send = (
+  sendRunId: string,
+  createdAt: number,
+  sendState: ChatQueueItem["sendState"],
+  sendError?: string,
+) => ({
+  id: sendRunId,
+  text: "Retained send",
+  createdAt,
+  sendRunId,
+  sendState,
+  sendAttempts: 1,
+  ...(sendError ? { sendError } : {}),
+});
 
 describe("resolveWorkingProgress", () => {
   beforeEach(() => resetWorkingProgress());
@@ -21,21 +39,10 @@ describe("resolveWorkingProgress", () => {
     "does not let an older %s send identify an unknown active turn",
     (sendState) => {
       expect(
-        resolveWorkingProgress(
-          SESSION,
+        progress(
           null,
           2_000,
-          [
-            {
-              id: "old-send",
-              text: "Review this send",
-              createdAt: 1_000,
-              sendRunId: "old-run",
-              sendAttempts: 1,
-              sendState,
-              sendError: "Review required",
-            },
-          ],
+          [{ ...send("old-run", 1_000, sendState), sendError: "Review required" }],
           [],
           [],
         ),
@@ -44,15 +51,10 @@ describe("resolveWorkingProgress", () => {
   );
 
   it("uses only the matching reconnect send when restoring an active turn", () => {
-    const queue = ["other-run", "active-run"].map((sendRunId, index) => ({
-      id: sendRunId,
-      text: "Reconnect send",
-      createdAt: (index + 1) * 1_000,
-      sendRunId,
-      sendState: "waiting-reconnect" as const,
-      sendAttempts: 1,
-    }));
-    expect(resolveWorkingProgress(SESSION, "active-run", 3_000, queue, [], [])).toMatchObject({
+    const queue = ["other-run", "active-run"].map((id, i) =>
+      send(id, (i + 1) * 1_000, "waiting-reconnect"),
+    );
+    expect(progress("active-run", 3_000, queue, [], [])).toMatchObject({
       runId: "active-run",
       startedAt: 2_000,
     });
@@ -61,16 +63,10 @@ describe("resolveWorkingProgress", () => {
   it.each(["failed", "held", "waiting-idle"] as const)(
     "retains matching durable timing from a %s send after the run is identified",
     (sendState) => {
-      const queue = ["old-run", "active-run"].map((sendRunId, index) => ({
-        id: sendRunId,
-        text: "Retained attempted send",
-        createdAt: (index + 1) * 1_000,
-        sendRunId,
-        sendState,
-        sendAttempts: 1,
-        sendError: "Review required",
-      }));
-      expect(resolveWorkingProgress(SESSION, "active-run", 3_000, queue, [], [])).toMatchObject({
+      const queue = ["old-run", "active-run"].map((id, i) =>
+        send(id, (i + 1) * 1_000, sendState, "Review required"),
+      );
+      expect(progress("active-run", 3_000, queue, [], [])).toMatchObject({
         runId: "active-run",
         startedAt: 2_000,
       });
@@ -78,26 +74,17 @@ describe("resolveWorkingProgress", () => {
   );
 
   it("keeps a submitted turn's identity and timing across a delayed foreign preamble", () => {
-    const queue = [
-      {
-        id: "new-send",
-        text: "New turn",
-        createdAt: 60_000,
-        sendRunId: "new-run",
-        sendState: "sending" as const,
-        sendAttempts: 1,
-      },
-    ];
-    const submitted = resolveWorkingProgress(SESSION, null, null, queue, [], []);
+    const queue = [send("new-run", 60_000, "sending")];
+    const submitted = progress(null, null, queue, [], []);
     const segments = [{ runId: "old-run", ts: 1_000 }];
-    expect(resolveWorkingProgress(SESSION, null, null, queue, segments, [])).toEqual(submitted);
-    expect(resolveWorkingProgress(SESSION, "new-run", 61_000, [], segments, [])).toEqual(submitted);
+    expect(progress(null, null, queue, segments, [])).toEqual(submitted);
+    expect(progress("new-run", 61_000, [], segments, [])).toEqual(submitted);
     expect(submitted).toMatchObject({ runId: "new-run", startedAt: 60_000 });
   });
 
   it("preserves anonymous progress when the same turn gains an identity", () => {
-    const anonymous = resolveWorkingProgress(SESSION, null, null, [], [{ ts: 1_000 }], []);
-    expect(resolveWorkingProgress(SESSION, "active-run", 2_000, [], [{ ts: 1_000 }], [])).toEqual({
+    const anonymous = progress(null, null, [], [{ ts: 1_000 }], []);
+    expect(progress("active-run", 2_000, [], [{ ts: 1_000 }], [])).toEqual({
       ...anonymous,
       runId: "active-run",
     });
@@ -107,8 +94,7 @@ describe("resolveWorkingProgress", () => {
     "ignores stream and tool timing without matching ownership (%s)",
     (runId) => {
       expect(
-        resolveWorkingProgress(
-          SESSION,
+        progress(
           "active-run",
           3_000,
           [],
@@ -127,20 +113,10 @@ describe("resolveWorkingProgress", () => {
 
   it("prefers observed stream identity over a future queued send", () => {
     expect(
-      resolveWorkingProgress(
-        SESSION,
+      progress(
         null,
         1_000,
-        [
-          {
-            id: "future-send",
-            text: "Run next",
-            createdAt: 500,
-            sendRunId: "future-run",
-            sendState: "waiting-reconnect",
-            sendAttempts: 1,
-          },
-        ],
+        [send("future-run", 500, "waiting-reconnect")],
         [{ ts: 1_000, runId: "active-run" }],
         [],
       ),
@@ -153,8 +129,7 @@ describe("resolveWorkingProgress", () => {
     clearWorkingProgress(SESSION);
     vi.setSystemTime(61_000);
     expect(
-      resolveWorkingProgress(
-        SESSION,
+      progress(
         null,
         null,
         [],
@@ -177,6 +152,11 @@ describe("resolveTurnRecap", () => {
   const resolve = (params: Omit<Parameters<typeof resolveTurnRecap>[1], "sessionKey"> = {}) =>
     resolveTurnRecap(host, { sessionKey: SESSION, ...params });
   const watch = () => resolve({ indicator: { runId } });
+  const recap = (outputTokens: number | null, runtimeMs = 14_000) => ({
+    runId,
+    runtimeMs,
+    outputTokens,
+  });
 
   beforeEach(() => {
     host = { turnRecapWatch: null };
@@ -187,35 +167,14 @@ describe("resolveTurnRecap", () => {
     expect(
       resolve({ row: { ...doneRow, lastRunId: "previous-run" }, usageByRun: usage(690) }),
     ).toBeNull();
-    expect(resolve({ row: doneRow, usageByRun: usage(690) })).toEqual({
-      runId,
-      runtimeMs: 14_000,
-      outputTokens: 690,
-    });
+    expect(resolve({ row: doneRow, usageByRun: usage(690) })).toEqual(recap(690));
   });
 
   it("reconciles usage arriving after the first completed recap", () => {
     watch();
-    expect(resolve({ row: doneRow, usageByRun: usage(690) })).toEqual({
-      runId,
-      runtimeMs: 14_000,
-      outputTokens: 690,
-    });
-    expect(resolve({ row: doneRow, usageByRun: usage(695) })).toEqual({
-      runId,
-      runtimeMs: 14_000,
-      outputTokens: 695,
-    });
-    expect(resolve({ row: doneRow, usageByRun: usage(680) })).toEqual({
-      runId,
-      runtimeMs: 14_000,
-      outputTokens: 680,
-    });
-    expect(resolve({ row: doneRow, usageByRun: usage(null) })).toEqual({
-      runId,
-      runtimeMs: 14_000,
-      outputTokens: null,
-    });
+    for (const count of [690, 695, 680, null]) {
+      expect(resolve({ row: doneRow, usageByRun: usage(count) })).toEqual(recap(count));
+    }
   });
 
   it("retains a matching terminal that arrives before the indicator disappears", () => {
@@ -225,13 +184,13 @@ describe("resolveTurnRecap", () => {
 
   it("keeps a resolved recap against unwatched terminal rows and usage", () => {
     watch();
-    const recap = resolve({ row: doneRow, usageByRun: usage(695) });
+    const settledRecap = resolve({ row: doneRow, usageByRun: usage(695) });
     expect(
       resolve({
         row: { ...doneRow, lastRunId: "foreign-run", runtimeMs: 1_000 },
         usageByRun: usage(900, "foreign-run"),
       }),
-    ).toEqual(recap);
+    ).toEqual(settledRecap);
   });
 
   it("waits for runtime data without borrowing another run's count", () => {
@@ -239,11 +198,7 @@ describe("resolveTurnRecap", () => {
     expect(
       resolve({ row: { lastRunId: runId, status: "done" }, usageByRun: usage(900, "foreign-run") }),
     ).toBeNull();
-    expect(resolve({ row: doneRow, usageByRun: usage(900, "foreign-run") })).toEqual({
-      runId,
-      runtimeMs: 14_000,
-      outputTokens: null,
-    });
+    expect(resolve({ row: doneRow, usageByRun: usage(900, "foreign-run") })).toEqual(recap(null));
   });
 
   it("reports equal counts on consecutive runs and preserves a known zero", () => {
@@ -267,20 +222,16 @@ describe("resolveTurnRecap", () => {
       ]);
       resolve({ indicator: resumed });
       // 97s from the request to the end, though the last run alone took 14s.
-      expect(resolve({ row: { ...doneRow, endedAt: 98_000 }, usageByRun })).toEqual({
-        runId,
-        runtimeMs: 97_000,
-        outputTokens: 4_356,
-      });
+      expect(resolve({ row: { ...doneRow, endedAt: 98_000 }, usageByRun })).toEqual(
+        recap(4_356, 97_000),
+      );
     });
 
     it("never reports a partial token total, or less time than its last run", () => {
       resolve({ indicator: resumed });
-      expect(resolve({ row: { ...doneRow, endedAt: 9_000 }, usageByRun: usage(256) })).toEqual({
-        runId,
-        runtimeMs: 14_000,
-        outputTokens: null,
-      });
+      expect(resolve({ row: { ...doneRow, endedAt: 9_000 }, usageByRun: usage(256) })).toEqual(
+        recap(null),
+      );
     });
   });
 
@@ -302,11 +253,9 @@ describe("resolveTurnRecap", () => {
       ["handoff-run", { outputTokens: 4_100, seq: 1 }],
       [runId, { outputTokens: 256, seq: 2 }],
     ]);
-    expect(resolve({ row: { ...doneRow, endedAt: 78_000 }, usageByRun })).toEqual({
-      runId,
-      runtimeMs: 77_000,
-      outputTokens: 4_356,
-    });
+    expect(resolve({ row: { ...doneRow, endedAt: 78_000 }, usageByRun })).toEqual(
+      recap(4_356, 77_000),
+    );
   });
 
   it("never invents a watch from history or an unidentified queued indicator", () => {

@@ -135,11 +135,27 @@ async function setup(
         { id, sendRunId, sessionKey, text: id, createdAt: 1, ...extra },
       ),
     ).toBe(true);
+  const expectDismiss = (inputIds: string[]) =>
+    expect(historyState.request).toHaveBeenCalledWith("chat.pendingInputs.dismiss", {
+      sessionKey,
+      agentId: "main",
+      sessionId,
+      inputIds,
+    });
+  const refreshed = () =>
+    vi.waitFor(() =>
+      expect(historyState.request).toHaveBeenCalledWith(
+        "chat.history",
+        expect.objectContaining({ sessionKey }),
+      ),
+    );
   return {
     historyState,
     rerender,
     named,
     admitCopy,
+    expectDismiss,
+    refreshed,
     outboxIds: () => listStoredChatOutboxes(historyState).flatMap((o) => o.queue.map((i) => i.id)),
     text: () => container.textContent ?? "",
     hasRow: (id: string) =>
@@ -221,19 +237,9 @@ describe("retired pending input dismissal", () => {
     view.rerender();
     expect(view.hasRow("interrupted-input")).toBe(false);
     expect(view.hasRow("cancelled-input")).toBe(true);
-    expect(view.historyState.request).toHaveBeenCalledWith("chat.pendingInputs.dismiss", {
-      sessionKey,
-      agentId: "main",
-      sessionId,
-      inputIds: ["interrupted-input"],
-    });
+    view.expectDismiss(["interrupted-input"]);
     reply.resolve(dismissed(["interrupted-input"]));
-    await vi.waitFor(() =>
-      expect(view.historyState.request).toHaveBeenCalledWith(
-        "chat.history",
-        expect.objectContaining({ sessionKey }),
-      ),
-    );
+    await view.refreshed();
     applyChatPendingInputs(view.historyState, page);
     view.rerender();
     expect(view.hasRow("interrupted-input")).toBe(false);
@@ -247,12 +253,7 @@ describe("retired pending input dismissal", () => {
     expect(view.hasRow("interrupted-input")).toBe(false);
     expect(view.hasRow("cancelled-input")).toBe(false);
     expect(view.named(dismissAllLabel)).toBeNull();
-    expect(view.historyState.request).toHaveBeenCalledWith("chat.pendingInputs.dismiss", {
-      sessionKey,
-      agentId: "main",
-      sessionId,
-      inputIds: ["interrupted-input", "cancelled-input"],
-    });
+    view.expectDismiss(["interrupted-input", "cancelled-input"]);
   });
 
   it("restores only the rows of the request that failed", async () => {
@@ -278,12 +279,7 @@ describe("retired pending input dismissal", () => {
     expect(view.hasRow("interrupted-input")).toBe(true);
     expect(view.hasRow("cancelled-input")).toBe(false);
     replies.get("cancelled-input")!.resolve(dismissed(["cancelled-input"]));
-    await vi.waitFor(() =>
-      expect(view.historyState.request).toHaveBeenCalledWith(
-        "chat.history",
-        expect.objectContaining({ sessionKey }),
-      ),
-    );
+    await view.refreshed();
     view.rerender();
     expect(view.hasRow("cancelled-input")).toBe(false);
     expect(view.dismissButtons()).toHaveLength(1);
@@ -292,12 +288,7 @@ describe("retired pending input dismissal", () => {
   it("treats an input the Gateway no longer retains as done", async () => {
     const view = await setup(() => dismissed([], ["cancelled-input"]));
     view.rowButton(cancelledLabel).click();
-    await vi.waitFor(() =>
-      expect(view.historyState.request).toHaveBeenCalledWith(
-        "chat.history",
-        expect.objectContaining({ sessionKey }),
-      ),
-    );
+    await view.refreshed();
     view.rerender();
     expect(view.hasRow("cancelled-input")).toBe(false);
     expect(view.text()).not.toContain("Error");

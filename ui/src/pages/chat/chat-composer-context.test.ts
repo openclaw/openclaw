@@ -23,6 +23,11 @@ function renderComposer(overrides: ComposerOverrides = {}) {
   return container;
 }
 
+const part = (root: ParentNode, name: string) => root.querySelector(`.context-usage__${name}`);
+const contextRingFor = (root: ParentNode) => root.querySelector(".context-ring");
+const statsTitle = (root: ParentNode) => part(root, "stats [title]")?.getAttribute("title");
+const defaultSessions = () => ({ sessions: [], defaults: { contextTokens: 200_000 } });
+
 function sessionRow(overrides: Partial<GatewaySessionRow>): GatewaySessionRow {
   return { key: "main", kind: "direct", updatedAt: null, ...overrides };
 }
@@ -45,6 +50,19 @@ function planUsage(providers: ModelAuthStatusProvider[], basePath?: string) {
     modelAuthStatusResult: { ts: Date.now(), providers },
   };
 }
+
+const weekly = (
+  provider: string,
+  displayName: string,
+  usedPercent: number,
+  profile?: Pick<ModelAuthStatusProfile, "profileId" | "type">,
+) =>
+  planProvider(
+    provider,
+    displayName,
+    { providerId: provider, windows: [{ label: "Week", usedPercent }] },
+    profile,
+  );
 
 afterEach(async () => {
   await resetComposerFixture();
@@ -79,9 +97,7 @@ describe("renderChatComposer context usage", () => {
       expect(costReads).toBe(0);
       toggle();
       expect(view.container.textContent).toContain("$0.03");
-      expect(
-        view.container.querySelector(".context-usage__stats [title]")?.getAttribute("title"),
-      ).toBe("Output $0.01");
+      expect(statsTitle(view.container)).toBe("Output $0.01");
       expect(costReads).toBe(1);
       toggle();
       setMessages([message(0.02)]);
@@ -89,9 +105,7 @@ describe("renderChatComposer context usage", () => {
       expect(costReads).toBe(1);
       toggle();
       expect(view.container.textContent).toContain("$0.03");
-      expect(
-        view.container.querySelector(".context-usage__stats [title]")?.getAttribute("title"),
-      ).toBe("Output $0.02");
+      expect(statsTitle(view.container)).toBe("Output $0.02");
       expect(costReads).toBe(2);
     } finally {
       view.unmount();
@@ -108,25 +122,20 @@ describe("renderChatComposer context usage", () => {
         contextBudgetStatus: contextBudgetStatusFixture(),
       }),
     });
-    expect(container.querySelector(".context-ring")?.textContent?.trim()).toBe("");
-    expect(container.querySelector(".context-ring")?.getAttribute("title")).toBe(
-      "Open context usage details",
-    );
-    expect(container.querySelector(".context-usage__context-value")?.textContent).toContain("180k");
-    expect(container.querySelector(".context-usage__title")?.textContent).toBe("Prompt budget");
-    expect(
-      container.querySelector(".context-ring")?.classList.contains("context-ring--warning"),
-    ).toBe(true);
+    expect(contextRingFor(container)?.textContent?.trim()).toBe("");
+    expect(contextRingFor(container)?.getAttribute("title")).toBe("Open context usage details");
+    expect(part(container, "context-value")?.textContent).toContain("180k");
+    expect(part(container, "title")?.textContent).toBe("Prompt budget");
+    expect(contextRingFor(container)?.classList.contains("context-ring--warning")).toBe(true);
   });
 
   it("does not reuse a global row owned by another agent", () => {
-    const session: GatewaySessionRow = {
+    const session = sessionRow({
       key: "global",
       kind: "global",
-      updatedAt: null,
       totalTokens: 46_000,
       contextTokens: 200_000,
-    };
+    });
     const container = renderComposer({
       sessionKey: "global",
       currentAgentId: "work",
@@ -134,7 +143,7 @@ describe("renderChatComposer context usage", () => {
       sessions: { sessions: [session], defaults: { contextTokens: 200_000 } } as never,
     });
 
-    expect(container.querySelector(".context-ring")?.getAttribute("aria-label") ?? null).toBe(null);
+    expect(contextRingFor(container)?.getAttribute("aria-label") ?? null).toBe(null);
   });
 
   it("renders plan usage before session metrics arrive", () => {
@@ -155,10 +164,8 @@ describe("renderChatComposer context usage", () => {
       ),
     });
 
-    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Usage Remaining",
-    );
-    expect(container.querySelector(".context-usage__bar")).toBeNull();
+    expect(contextRingFor(container)?.getAttribute("aria-label")).toBe("Usage Remaining");
+    expect(part(container, "bar")).toBeNull();
     expect(
       [...container.querySelectorAll(".context-usage__limit-value")].map((row) => row.textContent),
     ).toEqual(["34%", "78%"]);
@@ -191,22 +198,15 @@ describe("renderChatComposer context usage", () => {
             contextTokens: 200_000,
           },
         },
-        providerUsage: withPlanUsage
-          ? planUsage([
-              planProvider("openai", "OpenAI", {
-                providerId: "openai",
-                windows: [{ label: "Week", usedPercent: 72 }],
-              }),
-            ])
-          : undefined,
+        providerUsage: withPlanUsage ? planUsage([weekly("openai", "OpenAI", 72)]) : undefined,
       });
 
-      expect(container.querySelector(".context-usage__context-value")).toBeNull();
-      expect(container.querySelector(".context-usage__bar")).toBeNull();
-      const ring = container.querySelector(".context-ring");
+      expect(part(container, "context-value")).toBeNull();
+      expect(part(container, "bar")).toBeNull();
+      const ring = contextRingFor(container);
       if (withPlanUsage) {
         expect(ring?.getAttribute("aria-label")).toBe("Usage Remaining");
-        expect(container.querySelector(".context-usage__limit")?.textContent).toContain("72%");
+        expect(part(container, "limit")?.textContent).toContain("72%");
       } else {
         expect(ring).toBeNull();
       }
@@ -247,7 +247,7 @@ describe("renderChatComposer context usage", () => {
     });
 
     expect(container.querySelectorAll(".context-usage__tray")).toHaveLength(1);
-    expect(container.querySelector(".context-usage__plan-badge")?.textContent).toBe("Max (20x)");
+    expect(part(container, "plan-badge")?.textContent).toBe("Max (20x)");
     const limits = [...container.querySelectorAll(".context-usage__limit")];
     expect(
       limits.map((row) => row.querySelector(".context-usage__limit-label")?.textContent),
@@ -266,7 +266,7 @@ describe("renderChatComposer context usage", () => {
         ),
     ).toBe(true);
     expect(limits[3]?.querySelector(".context-usage__limit-reset")).toBeNull();
-    expect(container.querySelector(".context-usage__stats")).not.toBeNull();
+    expect(part(container, "stats")).not.toBeNull();
     expect(container.textContent).not.toContain("Est. cost");
   });
 
@@ -298,19 +298,8 @@ describe("renderChatComposer context usage", () => {
         defaults: { contextTokens: 200_000 },
       },
       providerUsage: planUsage([
-        planProvider(
-          "anthropic",
-          "Claude",
-          {
-            providerId: "anthropic",
-            windows: [{ label: "Week", usedPercent: 25 }],
-          },
-          { profileId: "anthropic:oauth", type: "oauth" },
-        ),
-        planProvider("openai", "OpenAI", {
-          providerId: "openai",
-          windows: [{ label: "Week", usedPercent: 72 }],
-        }),
+        weekly("anthropic", "Claude", 25, { profileId: "anthropic:oauth", type: "oauth" }),
+        weekly("openai", "OpenAI", 72),
       ]),
     };
     const providerNames = (container: HTMLElement) =>
@@ -321,9 +310,7 @@ describe("renderChatComposer context usage", () => {
     const container = renderComposer(composerProps as never);
 
     expect(providerNames(container)).toEqual([]);
-    expect(container.querySelector(".context-usage__stats [title]")?.getAttribute("title")).toBe(
-      "Input $0.01 · Output $0.02",
-    );
+    expect(statsTitle(container)).toBe("Input $0.01 · Output $0.02");
     expect(container.textContent).not.toContain("Model:");
 
     session.modelProvider = undefined;
@@ -340,10 +327,7 @@ describe("renderChatComposer context usage", () => {
         estimatedCostUsd: 0.03,
         modelProvider: "openai",
       }),
-      sessions: {
-        sessions: [],
-        defaults: { contextTokens: 200_000 },
-      } as never,
+      sessions: defaultSessions() as never,
       providerUsage: planUsage([
         planProvider(
           "github-copilot",
@@ -357,8 +341,8 @@ describe("renderChatComposer context usage", () => {
       ]),
     });
 
-    const popoverText = container.querySelector(".context-usage__popover")?.textContent ?? "";
-    expect(container.querySelector(".context-usage__tray")).toBeNull();
+    const popoverText = part(container, "popover")?.textContent ?? "";
+    expect(part(container, "tray")).toBeNull();
     expect(popoverText).not.toContain("Copilot");
     expect(popoverText).toContain("Context window");
     expect(popoverText).toContain("Latest run");
@@ -392,47 +376,33 @@ describe("renderChatComposer context usage", () => {
         contextTokens: 200_000,
         estimatedCostUsd: 0,
       }),
-      sessions: {
-        sessions: [],
-        defaults: { contextTokens: 200_000 },
-      } as never,
+      sessions: defaultSessions() as never,
     });
 
-    expect(container.querySelector(".context-usage__stats [title]")).toBeNull();
-    expect(container.querySelector(".context-usage__stats")?.textContent).toContain("$0.00");
+    expect(part(container, "stats [title]")).toBeNull();
+    expect(part(container, "stats")?.textContent).toContain("$0.00");
   });
 
   it("warns on fresh high usage but keeps stale usage approximate", () => {
-    let container = renderComposer({
-      selectedSession: sessionRow({ totalTokens: 190_000, contextTokens: 200_000 }),
-      sessions: {
-        sessions: [],
-        defaults: { contextTokens: 200_000 },
-      } as never,
-    });
-    const contextRing = container.querySelector(".context-ring");
-    expect(contextRing?.getAttribute("aria-label")).toBe(
-      "Session context usage: 190k of 200k (95%)",
-    );
-    expect(contextRing?.classList).toContain("context-ring--warning");
-    expect(container.textContent).not.toContain("Compact");
-
-    container = renderComposer({
-      selectedSession: sessionRow({
-        totalTokens: 190_000,
-        totalTokensFresh: false,
-        contextTokens: 200_000,
-      }),
-      sessions: {
-        sessions: [],
-        defaults: { contextTokens: 200_000 },
-      } as never,
-    });
-    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
-      "Session context usage: ~190k of 200k (~95%)",
-    );
-    expect(container.querySelector(".context-ring")?.classList).not.toContain(
-      "context-ring--warning",
-    );
+    for (const totalTokensFresh of [undefined, false]) {
+      const container = renderComposer({
+        selectedSession: sessionRow({
+          totalTokens: 190_000,
+          contextTokens: 200_000,
+          ...(totalTokensFresh === false ? { totalTokensFresh } : {}),
+        }),
+        sessions: defaultSessions() as never,
+      });
+      const ring = contextRingFor(container);
+      expect(ring?.getAttribute("aria-label")).toBe(
+        totalTokensFresh === false
+          ? "Session context usage: ~190k of 200k (~95%)"
+          : "Session context usage: 190k of 200k (95%)",
+      );
+      expect(ring?.classList.contains("context-ring--warning")).toBe(totalTokensFresh !== false);
+      if (totalTokensFresh !== false) {
+        expect(container.textContent).not.toContain("Compact");
+      }
+    }
   });
 });

@@ -45,6 +45,24 @@ const paused: GatewaySessionRow = {
     canContinue: true,
   },
 };
+const continuedRow = (at: number): GatewaySessionRow => ({
+  ...paused,
+  providerReview: undefined,
+  updatedAt: at,
+  snapshotAt: at,
+});
+function publisher(emit: ReturnType<typeof createGatewayHarness>["emitEvent"]) {
+  return (
+    session: Omit<Partial<GatewaySessionRow>, "providerReview"> & {
+      providerReview?: GatewaySessionRow["providerReview"] | null;
+    },
+  ) =>
+    emit({
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: paused.key, agentId: "main", session },
+    });
+}
 
 async function createReviewHost(
   request: ReturnType<typeof makeRequestMock>,
@@ -65,15 +83,7 @@ async function createReviewHost(
     chatMessage,
   });
   const publish = (row: GatewaySessionRow, clearReview = false) =>
-    emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: {
-        sessionKey: row.key,
-        agentId: "main",
-        session: clearReview ? { ...row, providerReview: null } : row,
-      },
-    });
+    publisher(emitEvent)(clearReview ? { ...row, providerReview: null } : row);
   return { host, publish };
 }
 
@@ -150,20 +160,12 @@ it("holds composer and queued inputs across the provider pause and only retries 
   await retryQueuedChatMessage(host, "first");
   expect(host.chatMessage).toBe("Keep this draft");
   expect(requestCalls(request, "chat.send")).toHaveLength(0);
-  expect(listStoredChatOutboxes(host)[0]?.queue).toEqual([
-    expect.objectContaining({
-      id: "first",
-      text: "Retained first input",
-      sendState: "held",
-    }),
-    expect.objectContaining({
-      id: "second",
-      text: "Retained second input",
-      sendState: "held",
-    }),
+  expect(listStoredChatOutboxes(host)[0]?.queue).toMatchObject([
+    { id: "first", text: "Retained first input", sendState: "held" },
+    { id: "second", text: "Retained second input", sendState: "held" },
   ]);
 
-  row = { ...paused, providerReview: undefined, updatedAt: 11, snapshotAt: 11 };
+  row = continuedRow(11);
   publish(row, true);
   expect(chatProviderReviewRow(host)?.providerReview).toBeUndefined();
   await flushChatQueueForEvent(host);
@@ -192,36 +194,21 @@ it("keeps provider review receipts through partial events and rejects a stale re
   const sessions = createTestSessionCapability(gateway);
   await sessions.refresh({ agentId: "main", force: true });
   const readBeforeClear = sessions.captureReconcile();
-  emitEvent({
-    type: "event",
-    event: "sessions.changed",
-    payload: {
-      sessionKey: paused.key,
-      agentId: "main",
-      session: {
-        key: paused.key,
-        sessionId: paused.sessionId,
-        updatedAt: 11,
-        snapshotAt: 11,
-        label: "Renamed",
-      },
-    },
+  const publish = publisher(emitEvent);
+  publish({
+    key: paused.key,
+    sessionId: paused.sessionId,
+    updatedAt: 11,
+    snapshotAt: 11,
+    label: "Renamed",
   });
   expect(sessions.state.result?.sessions[0]?.providerReview).toEqual(paused.providerReview);
-  emitEvent({
-    type: "event",
-    event: "sessions.changed",
-    payload: {
-      sessionKey: paused.key,
-      agentId: "main",
-      session: {
-        key: paused.key,
-        sessionId: paused.sessionId,
-        updatedAt: 12,
-        snapshotAt: 12,
-        providerReview: null,
-      },
-    },
+  publish({
+    key: paused.key,
+    sessionId: paused.sessionId,
+    updatedAt: 12,
+    snapshotAt: 12,
+    providerReview: null,
   });
   readBeforeClear(paused);
   expect(sessions.state.result?.sessions[0]?.providerReview).toBeUndefined();
@@ -271,12 +258,7 @@ it("keeps a paused queue input held when its earlier settings wait finishes afte
 it.each(["lost-ack", "accepted-unconsumed"] as const)(
   "transfers %s input to server custody across pause clearing and reload",
   async (outcome) => {
-    let row: GatewaySessionRow = {
-      ...paused,
-      providerReview: undefined,
-      updatedAt: 9,
-      snapshotAt: 9,
-    };
+    let row = continuedRow(9);
     let attemptedRunId: string | undefined;
     let attempts = 0;
     let consumed = false;
@@ -353,7 +335,7 @@ it.each(["lost-ack", "accepted-unconsumed"] as const)(
       });
     }
 
-    row = { ...paused, providerReview: undefined, updatedAt: 11, snapshotAt: 11 };
+    row = continuedRow(11);
     publish(row, true);
     await loadChatHistory(host, { deferBranches: true });
     await flushChatQueueForEvent(host);
@@ -397,7 +379,7 @@ it.each(["consumed", "pending", "disconnected"] as const)(
   async (outcome) => {
     const started = createDeferred();
     const acknowledgment = createDeferred<unknown>();
-    const initial = { ...paused, providerReview: undefined, updatedAt: 9, snapshotAt: 9 };
+    const initial = continuedRow(9);
     const request = makeRequestMock({
       "sessions.list": () => sessionsResult([initial], 9),
       "chat.send": () => {
@@ -423,7 +405,7 @@ it.each(["consumed", "pending", "disconnected"] as const)(
       sendState: "held",
       sendError: expect.any(String),
     });
-    const continued = { ...paused, providerReview: undefined, updatedAt: 11, snapshotAt: 11 };
+    const continued = continuedRow(11);
     host.sessionsResult = sessionsResult([continued], 11);
     publish(continued, true);
     expect(chatProviderReviewRow(host)?.providerReview).toBeUndefined();
@@ -442,13 +424,13 @@ it.each(["consumed", "pending", "disconnected"] as const)(
     if (outcome !== "disconnected") {
       expect(listStoredChatOutboxes(host)).toEqual([]);
     } else {
-      expect(listStoredChatOutboxes(host)[0]?.queue).toEqual([
-        expect.objectContaining({
+      expect(listStoredChatOutboxes(host)[0]?.queue).toMatchObject([
+        {
           text: inFlight?.text,
           sendRunId: inFlight?.sendRunId,
           sendAttempts: 1,
           sendState: "held",
-        }),
+        },
       ]);
     }
   },
