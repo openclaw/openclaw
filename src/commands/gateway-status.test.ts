@@ -15,8 +15,6 @@ const mocks = vi.hoisted(() => {
   const sshStop = vi.fn(async () => {});
   const successfulProbe = (url: string): GatewayProbeResult => {
     const local = url.includes("127.0.0.1");
-    const host = local ? "local" : "remote";
-    const ip = local ? "127.0.0.1" : "100.64.0.2";
     return {
       ok: true,
       url,
@@ -28,19 +26,10 @@ const mocks = vi.hoisted(() => {
         scopes: [local ? "operator.read" : "operator.admin"],
         capability: local ? "read_only" : "admin_capable",
       },
-      server: { version: "2026.4.24", connId: host },
+      server: { version: "2026.4.24" },
       health: { ok: true },
       status: {},
-      presence: [
-        {
-          mode: "gateway",
-          reason: "self",
-          host,
-          ip,
-          text: `Gateway: ${host} (${ip}) · app test · mode gateway · reason self`,
-          ts: Date.now(),
-        },
-      ],
+      presence: null,
       configSnapshot: {
         path: local ? "/tmp/cfg.json" : "/tmp/remote.json",
         exists: true,

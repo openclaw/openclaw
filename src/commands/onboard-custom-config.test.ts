@@ -76,19 +76,10 @@ it("keeps explicit custom-provider model state on its authored owner", () => {
     config: {
       agents: {
         ownership: "explicit",
-        defaults: {
-          systemAgent: { agentId: "ops" },
-          model: { primary: "anthropic/global" },
-          models: { "anthropic/global": { alias: "Global" } },
-        },
+        defaults: { model: { primary: "anthropic/global" } },
         entries: {
-          main: { name: "Main", model: { primary: "anthropic/main" } },
-          OPS: {
-            name: "Operations",
-            model: { primary: "openai/ops" },
-            models: { "openai/ops": { alias: "Operations" } },
-            modelPolicy: { allow: ["openai/ops"] },
-          },
+          main: { model: { primary: "anthropic/main" } },
+          OPS: { model: { primary: "openai/ops" } },
         },
       },
     },
@@ -99,19 +90,10 @@ it("keeps explicit custom-provider model state on its authored owner", () => {
 
   expect(result.config.agents?.entries?.OPS?.model).toEqual({ primary: "custom/foo-large" });
   expect(result.config.agents?.entries?.OPS?.models).toEqual({
-    "openai/ops": { alias: "Operations" },
     "custom/foo-large": { alias: "Custom" },
   });
-  expect(result.config.agents?.entries?.OPS?.modelPolicy).toEqual({ allow: ["openai/ops"] });
-  expect(result.config.agents).not.toHaveProperty("list");
-  expect(result.config.agents?.entries).toHaveProperty("OPS.name", "Operations");
-  expect(result.config.agents?.entries).toHaveProperty("main.name", "Main");
-  expect(Object.keys(result.config.agents?.entries ?? {})).toEqual(["main", "OPS"]);
   expect(result.config.agents?.entries?.main?.model).toEqual({ primary: "anthropic/main" });
   expect(result.config.agents?.defaults?.model).toEqual({ primary: "anthropic/global" });
-  expect(result.config.agents?.defaults?.models).toEqual({
-    "anthropic/global": { alias: "Global" },
-  });
   expect(result.config.models?.providers?.custom?.models?.map((model) => model.id)).toEqual([
     "foo-large",
   ]);

@@ -4,12 +4,9 @@ import { mockPluginProviders, useDoctorLegacyConfigFixture } from "./doctor/shar
 import { describe, expect, it } from "vitest";
 import { listAgentEntries } from "../agents/agent-roster.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  createPluginMetadataSnapshot,
-  makeRegistry,
-} from "../config/plugin-auto-enable.test-helpers.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { validateConfigObject } from "../config/validation.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { maybeRepairCodexRoutes } from "./doctor/shared/codex-route-warnings.js";
@@ -34,10 +31,6 @@ function normalizeProviders(providers: unknown) {
   return normalizeCompatibilityConfigValues(withProviders(providers));
 }
 
-function normalizeSkills(entries: unknown) {
-  return normalizeCompatibilityConfigValues({ skills: { entries } });
-}
-
 function normalizeDefaults(defaults: unknown, config: Record<string, unknown> = {}) {
   return normalizeCompatibilityConfigValues({ ...config, agents: { defaults } });
 }
@@ -46,6 +39,15 @@ function normalizeMistralModels(models: ModelDefinitionConfig[]) {
   return normalizeProviders({
     mistral: { baseUrl: "https://api.mistral.ai/v1", api: "openai-completions", models },
   });
+}
+
+function codexProvider(models: unknown[]) {
+  return { baseUrl: "https://chatgpt.com/backend-api", api: "openai-chatgpt-responses", models };
+}
+
+function normalizeNanoBanana(entry: unknown) {
+  return normalizeCompatibilityConfigValues({ skills: { entries: { "nano-banana-pro": entry } } })
+    .config;
 }
 
 function migrateCodexConfig(config: Record<string, unknown>) {
@@ -78,10 +80,10 @@ describe("normalizeCompatibilityConfigValues", () => {
     };
     const migrated = normalizeCompatibilityConfigValues(normalized, { sourceRaw: raw });
 
-    expect(migrated.config.mcp?.servers).toStrictEqual({ docs: { command: "docs" } });
-    expect(migrated.config.nodeHost?.mcp?.servers).toStrictEqual({ local: { command: "local" } });
-    expect(Object.hasOwn(migrated.config.mcp?.servers ?? {}, "__proto__")).toBe(false);
-    expect(Object.hasOwn(migrated.config.nodeHost?.mcp?.servers ?? {}, "__proto__")).toBe(false);
+    expect(migrated.config).toStrictEqual({
+      mcp: { servers: { docs: { command: "docs" } } },
+      nodeHost: { mcp: { servers: { local: { command: "local" } } } },
+    });
     expect(migrated.changes).toStrictEqual([
       'Dropped MCP server "__proto__" from mcp.servers because the name is reserved; re-add it under a different name.',
       'Dropped MCP server "__proto__" from nodeHost.mcp.servers because the name is reserved; re-add it under a different name.',
@@ -150,24 +152,30 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
-  it("migrates nano-banana skill config to native image generation config", () => {
-    const res = normalizeSkills({
-      "nano-banana-pro": {
-        enabled: true,
-        apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
-      },
-    });
-
-    expect(res.config.agents?.defaults?.mediaModels?.image).toEqual({
-      primary: "google/gemini-3-pro-image-preview",
-    });
-    expect(res.config.models?.providers?.google).toEqual({
+  it.each([
+    {
+      entry: { apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" } },
       apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      models: [],
-    });
-    expect(res.config.skills?.entries).toBeUndefined();
-  });
+    },
+    {
+      entry: { apiKey: "ignored-skill-api-key", env: { GEMINI_API_KEY: "env-gemini-key" } },
+      apiKey: "env-gemini-key",
+    },
+  ])(
+    "migrates nano-banana image config with env-over-skill credential precedence: %j",
+    ({ entry, apiKey }) => {
+      const config = normalizeNanoBanana(entry);
+      expect(config.agents?.defaults?.mediaModels?.image).toEqual({
+        primary: "google/gemini-3-pro-image-preview",
+      });
+      expect(config.models?.providers?.google).toEqual({
+        apiKey,
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        models: [],
+      });
+      expect(config.skills?.entries).toBeUndefined();
+    },
+  );
 
   it("migrates legacy OpenAI provider api values to OpenAI completions", () => {
     const res = normalizeProviders({
@@ -220,60 +228,47 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(result.config.agents?.entries?.main?.model).toBeUndefined();
   });
 
-  it("preserves plugin-owned CLI providers and agent-local models.json providers", () => {
-    fixture.seedProviderCatalog("worker");
-    mockPluginProviders(["anthropic", "my-cli"]);
-    const result = repairModelRefs(
-      withAgents({
+  it.each([
+    {
+      name: "plugin-owned CLI and agent-local models.json providers",
+      catalogAgent: "worker",
+      providers: ["anthropic", "my-cli"],
+      config: withAgents({
         defaults: { model: "my-cli/model" },
         entries: {
           worker: { model: "agent-local/model" },
           core: { model: "anthropic/claude-sonnet-4-6" },
         },
       }),
-    );
-
+    },
+    {
+      name: "configured installable providers",
+      catalogAgent: undefined,
+      providers: [],
+      config: {
+        plugins: { allow: ["mistral"], entries: { mistral: { enabled: true } } },
+        agents: { defaults: { model: { primary: "mistral/mistral-large-latest" } } },
+      },
+    },
+  ])("preserves model refs backed by $name", ({ catalogAgent, providers, config }) => {
+    if (catalogAgent) {
+      fixture.seedProviderCatalog(catalogAgent);
+    }
+    mockPluginProviders(providers);
+    const result = repairModelRefs(structuredClone(config));
     expect(result.changes).toEqual([]);
-    expect(result.config.agents?.defaults?.model).toBe("my-cli/model");
-    expect(result.config.agents?.entries?.worker?.model).toBe("agent-local/model");
-    expect(result.config.agents?.entries?.core?.model).toBe("anthropic/claude-sonnet-4-6");
+    expect(result.config.agents).toEqual(config.agents);
   });
 
   it("uses a retained metadata snapshot for plugin-owned providers", () => {
     const config = { agents: { defaults: { model: "my-cli/model" } } };
-    const baseSnapshot = createPluginMetadataSnapshot({
-      config,
-      manifestRegistry: makeRegistry([
-        { id: "my-cli-plugin", channels: [], providers: ["my-cli"] },
-      ]),
+    const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "my-cli-plugin", providers: ["my-cli"] }],
     });
-    const pluginMetadataSnapshot = {
-      ...baseSnapshot,
-      owners: {
-        ...baseSnapshot.owners,
-        providers: new Map([["my-cli", ["my-cli-plugin"]]]),
-      },
-    };
-
-    const result = repairModelRefs(config, {
-      pluginMetadataSnapshot,
-    });
+    const result = repairModelRefs(config, { pluginMetadataSnapshot });
 
     expect(result.changes).toEqual([]);
     expect(result.config.agents?.defaults?.model).toBe("my-cli/model");
-  });
-
-  it("preserves model refs backed by a configured installable provider", () => {
-    mockPluginProviders();
-    const result = repairModelRefs({
-      plugins: { allow: ["mistral"], entries: { mistral: { enabled: true } } },
-      agents: { defaults: { model: { primary: "mistral/mistral-large-latest" } } },
-    });
-
-    expect(result.changes).toEqual([]);
-    expect(result.config.agents?.defaults?.model).toEqual({
-      primary: "mistral/mistral-large-latest",
-    });
   });
 
   it("evaluates and repairs every canonical keyed agent", () => {
@@ -291,24 +286,14 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("uses only explicit providers when models.mode is replace", () => {
+    const custom = { baseUrl: "http://localhost:1234", models: [{ id: "kept", name: "Kept" }] };
     const result = repairModelRefs({
-      models: {
-        mode: "replace",
-        providers: {
-          custom: {
-            baseUrl: "http://localhost:1234",
-            models: [{ id: "kept", name: "Kept" }],
-          },
-        },
-      },
-      agents: {
+      models: { mode: "replace", providers: { custom } },
+      ...withAgents({
         defaults: {
-          model: {
-            primary: "deleted/main",
-            fallbacks: ["plugin-provider/model", "custom/kept"],
-          },
+          model: { primary: "deleted/main", fallbacks: ["plugin-provider/model", "custom/kept"] },
         },
-      },
+      }),
     });
 
     expect(result.config.agents?.defaults?.model).toEqual({ primary: "custom/kept" });
@@ -333,11 +318,7 @@ describe("normalizeCompatibilityConfigValues", () => {
             },
           ],
         },
-        codex: {
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://chatgpt.com/backend-api",
-          models: [{ id: "gpt-5.6-sol" }, { id: "gpt-5.4-mini" }],
-        },
+        codex: codexProvider([{ id: "gpt-5.6-sol" }, { id: "gpt-5.4-mini" }]),
       }),
       agents: { defaults: structuredClone(defaults) },
     };
@@ -367,11 +348,7 @@ describe("normalizeCompatibilityConfigValues", () => {
   it("migrates a 2026.6 wizard-shaped Codex config into gateway-loadable canonical state", () => {
     const raw = {
       ...withProviders({
-        codex: {
-          baseUrl: "https://chatgpt.com/backend-api",
-          api: "openai-chatgpt-responses",
-          models: [makeModel("gpt-5.6-sol")],
-        },
+        codex: codexProvider([makeModel("gpt-5.6-sol")]),
       }),
       agents: {
         defaults: {
@@ -508,21 +485,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
     expect(res.config.models?.providers?.openai?.agentRuntime).toEqual(codexRuntime);
     expect(res.config.models?.providers?.openai?.models?.[0]?.agentRuntime).toEqual(codexRuntime);
-  });
-
-  it("prefers legacy nano-banana env.GEMINI_API_KEY over skill apiKey during migration", () => {
-    const res = normalizeSkills({
-      "nano-banana-pro": {
-        apiKey: "ignored-skill-api-key",
-        env: { GEMINI_API_KEY: "env-gemini-key" },
-      },
-    });
-
-    expect(res.config.models?.providers?.google).toEqual({
-      apiKey: "env-gemini-key",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      models: [],
-    });
   });
 
   it("preserves explicit native config while removing legacy nano-banana skill config", () => {
