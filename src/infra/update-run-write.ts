@@ -9,6 +9,7 @@ import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { completeUpdateFailureSummary } from "./update-failure-result.js";
 import { claimUpdateResultInTransaction } from "./update-result-claim.js";
 import type { UpdateResultPayload } from "./update-result-payload.js";
+import { isNeverActivatedFailedUpdate } from "./update-run-activation.js";
 import { encodeRun, isRetainedStep, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import type { UpdateRunPhasePatch } from "./update-run-mutation.types.js";
 import { decodeRun, readUpdateRunRecord } from "./update-run-read.kernel.js";
@@ -98,11 +99,12 @@ export function applyUpdateRunStep(
   record: UpdateRunRecord,
   { reason, ...step }: UpdateRunStep & { reason?: string },
 ): void {
-  // Post-success retirement is advisory; it may add diagnostics, never change the terminal outcome.
+  // Post-completion retirement is advisory; it may add diagnostics, never change the terminal outcome.
   if (
     record.finishedAtMs !== null &&
     (record.status === "succeeded" ||
-      (record.status === "skipped" && record.reason === "already-current")) &&
+      (record.status === "skipped" && record.reason === "already-current") ||
+      isNeverActivatedFailedUpdate(record)) &&
     step.status === "completed" &&
     [
       "recovery-artifact-cleanup",

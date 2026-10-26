@@ -98,6 +98,8 @@ update failure report.
 
 After durable success, updates automatically retire eligible superseded recovery
 copies through the state owner, retaining the current update's rollback generation.
+A failed update that stopped before repair or activation does the same and also
+retires its own original-state capture, since nothing it captured changed.
 Cleanup warnings never fail or roll back the successful update. Manual
 `openclaw update cleanup` remains available for inspection and retry; see
 [recovery retirement](/cli/update/repair-and-recovery#update-cleanup).

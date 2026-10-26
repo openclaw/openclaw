@@ -362,6 +362,27 @@ it("reports one failed set as unresolved and multiple failed sets as ambiguous",
     "ambiguous",
   ]);
 });
+it("reports a set from a failure that never activated as stale and directs it to cleanup", async () => {
+  const c = await capture();
+  const failed = await run(c);
+  const validated = [
+    { step: "requested", status: "completed" },
+    { step: "original-state-capture", status: "completed" },
+    { step: "staging", status: "completed" },
+    { step: "validating", status: "failed" },
+  ] as const;
+  mocks.readRun.mockResolvedValue({ ...failed, steps: [...validated] });
+  const [set] = (await inspect()).recoverySets;
+  expect(set).toMatchObject({ status: "stale", nextAction: "openclaw update cleanup" });
+  expect(set.message).toContain("failed before changing the installation or state");
+  expect(set.message).not.toMatch(/manual inspection/i);
+  // An activation receipt keeps the same failed set as its manual recovery source.
+  mocks.readRun.mockResolvedValue({
+    ...failed,
+    steps: [...validated, { step: "activating", status: "failed" }],
+  });
+  expect((await inspect()).recoverySets[0].status).toBe("unresolved");
+});
 it("validates forward resolution against retained generations without writing", async () => {
   const c = await capture();
   const row = await run(c);
