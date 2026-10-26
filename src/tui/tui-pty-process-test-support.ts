@@ -1,6 +1,5 @@
 import path from "node:path";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { tuiPtyRuntimeEntrypoints } from "./tui-pty-runtime-test-support.js";
 
 function buildTuiCliScript(args: string[], tuiCliModuleUrl: string) {
   return [
@@ -16,10 +15,11 @@ function buildTuiCliScript(args: string[], tuiCliModuleUrl: string) {
   ].join("\n");
 }
 
-export function buildTuiProcessArgs(args: string[]) {
+export async function buildTuiProcessArgs(args: string[]) {
   if (process.env.OPENCLAW_TUI_PTY_USE_BUILT_CLI === "1") {
     return [path.join(process.cwd(), "openclaw.mjs"), ...args];
   }
+  const { tuiPtyRuntimeEntrypoints } = await import("./tui-pty-runtime-test-support.js");
   const tuiUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.cli);
   return [
     ...resolveRuntimeWorkerArgv(tuiUrl).slice(0, -1),

@@ -204,7 +204,16 @@ suite.define(() => {
         }
         await composer.fill(draft);
         await pauseVirtualClock(page);
-        await page.clock.runFor(60_001);
+        if (method === "chat.startup") {
+          // Preserve the first timeout and automatic retry before the shared deadline.
+          await page.clock.fastForward(30_001);
+          await page.clock.runFor(501);
+          await gateway.waitForRequest(method, { after: 1 });
+          await page.clock.fastForward(30_001);
+        } else {
+          await page.clock.fastForward(60_001);
+        }
+        await page.clock.runFor(100);
 
         expect(await gateway.getSocketCount()).toBe(1);
         expect(await composer.inputValue()).toBe(draft);

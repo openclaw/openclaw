@@ -86,6 +86,7 @@ function inspectTlsCertificateErrorInternal(
   }
   seen.add(error);
 
+  // SAFETY: The object guard allows optional field reads; each field remains unknown until checked.
   const candidate = error as {
     cause?: unknown;
     code?: unknown;

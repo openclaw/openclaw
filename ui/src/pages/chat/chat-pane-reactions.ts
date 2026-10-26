@@ -9,7 +9,7 @@ import { canReactToSession } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { ChatPaneSharingActions } from "./chat-pane-sharing-actions.ts";

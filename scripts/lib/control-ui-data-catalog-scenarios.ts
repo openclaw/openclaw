@@ -25,7 +25,7 @@ function suffix(index: number) {
   return String(index).padStart(4, "0");
 }
 
-export function createDataCatalogFixture(revision = 1): InteractionFixtureOverrides {
+function createDataCatalogFixture(revision = 1): InteractionFixtureOverrides {
   const plugins: PluginCatalogItem[] = Array.from({ length: inventorySize }, (_, index) => ({
     id: `data-plugin-${suffix(index)}`,
     catalogId: `data-catalog-${suffix(index)}`,

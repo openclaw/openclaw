@@ -17,6 +17,7 @@ function resolutionWarning(configPath: string) {
   expect(readCurrentConfigForResolution({ configPath }).config).toEqual({});
   return warn.mock.calls.map(([line]) => String(line)).join("\n");
 }
+const compaction = { mode: "safeguard" };
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -35,11 +36,9 @@ it("records why an unparseable config was ignored by best-effort reads", async (
     using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     expect(await readSourceConfigBestEffort()).toEqual({});
-    expect(
-      warn.mock.calls.some(([line]) =>
-        String(line).includes("best-effort read ignored unparseable config"),
-      ),
-    ).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("best-effort read ignored unparseable config"),
+    );
   });
 });
 
@@ -63,21 +62,18 @@ it("preserves Windows case-insensitive env lookup in isolated reads", async () =
 
 it("does not restore suspicious direct edits from .bak during ordinary reads", async () => {
   await withTempHomeConfig(
-    {
-      meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
-      update: { channel: "beta" },
-      gateway: { mode: "local" },
-    },
+    { meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" }, gateway: { mode: "local" } },
     async ({ home, configPath }) => {
       await fs.copyFile(configPath, `${configPath}.bak`);
-      const directEditRaw = `${JSON.stringify({ update: { channel: "beta" } }, null, 2)}\n`;
+      const directEdit = { update: { channel: "beta" } };
+      const directEditRaw = JSON.stringify(directEdit);
       await fs.writeFile(configPath, directEditRaw, "utf-8");
 
       const snapshot = await readConfigFileSnapshot();
 
-      expect(snapshot.sourceConfigBeforeMigrations).toEqual({ update: { channel: "beta" } });
+      expect(snapshot.sourceConfigBeforeMigrations).toEqual(directEdit);
       expect(snapshot.sourceConfig).toEqual({
-        update: { channel: "beta" },
+        ...directEdit,
         agents: { entries: { main: {} } },
       });
       expect(await fs.readFile(configPath, "utf-8")).toBe(directEditRaw);
@@ -96,8 +92,8 @@ it("materializes fresh-install defaults when the config file is missing", async 
     const loaded = loadConfig({ pin: false, skipPluginValidation: true });
 
     expect(snapshot.exists).toBe(false);
-    expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
-    expect(loaded.agents?.defaults?.compaction?.mode).toBe("safeguard");
+    expect(snapshot.config.agents?.defaults?.compaction).toMatchObject(compaction);
+    expect(loaded.agents?.defaults?.compaction).toMatchObject(compaction);
     expect(loaded.logging?.level).toBe("warn");
   });
 });
@@ -111,16 +107,13 @@ it("keeps authored source separate from materialized best-effort defaults", asyn
     expect(sourceBestEffort.agents?.defaults?.contextPruning?.mode).toBeUndefined();
     expect(sourceBestEffort.agents?.defaults?.compaction?.mode).toBeUndefined();
 
-    expect(snapshot.config.agents?.defaults).toMatchObject({
-      contextPruning: { mode: "cache-ttl" },
-      compaction: { mode: "safeguard" },
-    });
-
-    expect(bestEffort.agents?.defaults).toMatchObject({
+    const defaults = {
       contextPruning: { mode: "cache-ttl", ttl: "1h" },
-      compaction: { mode: "safeguard" },
+      compaction,
       models: { "anthropic/claude-opus-4-6": { params: { cacheRetention: "short" } } },
-    });
+    };
+    expect(snapshot.config.agents?.defaults).toMatchObject(defaults);
+    expect(bestEffort.agents?.defaults).toMatchObject(defaults);
   });
 });
 
@@ -129,26 +122,21 @@ it("returns invalid config diagnostics with the best-effort fallback", async () 
     expect((await readBestEffortConfigSnapshot({ observe: false })).configDiagnostics).toEqual({
       path: configPath,
       issues: [
-        {
-          path: "gateway.port",
-          message: "Invalid input: expected number, received string",
-        },
+        { path: "gateway.port", message: "Invalid input: expected number, received string" },
       ],
     });
   });
 });
 const unavailable = "Config unavailable; using environment and default agent directory settings.";
-const malformedRedaction = (entry: number | null) => ({
-  name: `malformed redaction ${entry}`,
-  config: {
-    logging: { redactPatterns: [entry] },
-    skills: { workshop: { approvalPolicy: "pending", maxPending: 3 } },
-  },
-  messages: ["Config warnings:", unavailable, "logging.redactPatterns"],
-});
 it.each([
-  malformedRedaction(1),
-  malformedRedaction(null),
+  {
+    name: "malformed redaction",
+    config: {
+      logging: { redactPatterns: [1, null] },
+      skills: { workshop: { approvalPolicy: "pending", maxPending: 3 } },
+    },
+    messages: ["Config warnings:", unavailable, "logging.redactPatterns"],
+  },
   {
     name: "invalid port",
     config: { gateway: { port: "abc" } },

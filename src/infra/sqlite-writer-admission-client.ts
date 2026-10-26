@@ -1,7 +1,7 @@
 import { MessagePort, type Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAgentDatabaseExecutionAuthority } from "../state/openclaw-agent-execution-authority.js";
-import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
+import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
 import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
 import {
   readSqliteWorkerMonotonicNs,

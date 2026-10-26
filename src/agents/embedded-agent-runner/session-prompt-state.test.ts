@@ -2,6 +2,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import * as normalization from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { canonicalizeSessionEntry } from "../sessions/session-manager-persistence-entry.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
@@ -417,6 +418,42 @@ describe("session tool surface", () => {
     fixture.prepare(prompt, entries).commit();
     await fixture.persist(entries);
   }
+
+  it("reuses admitted tool payloads when checkpointing a changed prompt", async () => {
+    const entries: SessionEntry[] = [];
+    surface([tool("read"), tool("exec")]);
+    const write = (customType: string, data: unknown) => {
+      const entry = {
+        ...entryMetadata,
+        type: "custom" as const,
+        id: `checkpoint-${entries.length}`,
+        customType,
+        data,
+      };
+      const expected = JSON.stringify(entry);
+      const canonical = canonicalizeSessionEntry(entry);
+      expect(JSON.stringify(canonical)).toBe(expected);
+      entries.push(canonical);
+    };
+    fixture.prepare("Base.", entries).commit();
+    await persistSessionSystemPrompt(fixture.state, write);
+    const pinned = fixture.state.toolSurface!.tools;
+    fixture.prepare("Base.\n## Skills\nRefreshed.", entries).commit();
+    const ownKeys = vi.spyOn(Reflect, "ownKeys");
+    const descriptors = vi.spyOn(Object, "getOwnPropertyDescriptor");
+    try {
+      await persistSessionSystemPrompt(fixture.state, write);
+      expect(ownKeys.mock.calls.filter(([value]) => value === pinned)).toHaveLength(0);
+      expect(descriptors.mock.calls.filter(([value]) => value === pinned)).toHaveLength(0);
+    } finally {
+      ownKeys.mockRestore();
+      descriptors.mockRestore();
+    }
+    expect(entries).toHaveLength(2);
+    expect(entries[1]).toMatchObject({
+      data: { tools: pinned, renderedPrefix: "Base.\n## Skills\nRefreshed." },
+    });
+  });
 
   it("keeps every pinned definition on a turn that builds fewer tools and refuses the missing ones", async () => {
     const entries: SessionEntry[] = [];

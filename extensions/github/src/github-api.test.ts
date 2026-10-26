@@ -3,7 +3,7 @@ import { fetchGitHubApi, readGitHubGraphQLResponse, resolveGitHubApiUrls } from 
 
 const log = vi.hoisted(() => ({ info: vi.fn(), debug: vi.fn() }));
 // mock-isolation: Capture severity without opening process-global log sinks.
-vi.mock("openclaw/plugin-sdk/logging-core", () => ({ createSubsystemLogger: () => log }));
+vi.mock("openclaw/plugin-sdk/diagnostic-runtime", () => ({ createSubsystemLogger: () => log }));
 
 const publicRepo = "https://api.github.com/repos/acme/repo";
 const query = { query: "query { viewer { login } }", variables: {} };

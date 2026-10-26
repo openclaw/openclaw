@@ -1292,6 +1292,7 @@ src/infra/state-migrations.receipts.ts
 src/infra/tcp-port.ts
 src/infra/temp-artifact-cleanup.ts
 src/infra/test-runtime-env.ts
+src/infra/tls-certificate-errors.ts
 src/infra/tmp-openclaw-dir.ts
 src/infra/update-channels.ts
 src/infra/update-database-generations.ts
@@ -1719,6 +1720,7 @@ src/process/exec-runner.ts
 src/process/exec-spawn.ts
 src/process/exec-termination.ts
 src/process/exec.ts
+src/process/gateway-work-admission-state.ts
 src/process/gateway-work-admission.ts
 src/process/kill-tree.ts
 src/process/linux-oom-score.ts
@@ -1748,6 +1750,7 @@ src/process/supervisor/darwin-process-command.ts
 src/process/supervisor/service-child-group-ownership.ts
 src/process/windows-command-line.ts
 src/process/windows-command.ts
+src/projects/project-checkout.ts
 src/proxy-capture/child-transport.ts
 src/proxy-capture/cli-contract.ts
 src/proxy-capture/env.ts
@@ -2375,7 +2378,6 @@ packages/ai/src/utils/sanitize-unicode.ts
 packages/ai/src/utils/stream-first-event-timeout.ts
 packages/ai/src/utils/streaming-byte-guard.ts
 packages/ai/src/utils/system-prompt-cache-boundary.ts
-packages/ai/src/utils/tls-certificate-errors.ts
 packages/ai/src/utils/usage.ts
 packages/gateway-protocol/src/chat-work-context.ts
 packages/gateway-protocol/src/schema/agent-database-admission.ts
@@ -2676,6 +2678,8 @@ src/gateway/worker-environments/workspace-conflicts.ts
 src/infra/sibling-temp-file.ts
 src/interactive/payload.ts
 src/media/media-reference.ts
+src/media/inbound-media-path.ts
+src/media/store-path.ts
 src/media/store.shared.ts
 src/media/store.ts
 src/sessions/session-run-error-presentation.ts

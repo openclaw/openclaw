@@ -28,12 +28,13 @@ import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.
 import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createInitializationContext } from "./chat-application-context.test-support.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { renderControls } from "./chat-pane-session-controls.test-support.ts";
-import { createInitializationContext, createRenderTestChatPane } from "./chat-pane.test-support.ts";
+import { createRenderTestChatPane } from "./chat-pane.test-support.ts";
 import { steerQueuedChatMessage } from "./chat-send-actions.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";

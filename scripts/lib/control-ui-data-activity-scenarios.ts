@@ -9,7 +9,7 @@ import type {
 const population = 1_000;
 const pageSize = 100;
 
-export function createDataActivityFixture(): InteractionFixtureOverrides {
+function createDataActivityFixture(): InteractionFixtureOverrides {
   const now = Date.now();
   return {
     sessions: Array.from({ length: population }, (_, index) => ({

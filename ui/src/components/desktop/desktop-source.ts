@@ -4,7 +4,8 @@ import type {
   EnvironmentsListResult,
 } from "@openclaw/gateway-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 
 export function resolveChatPaneDesktopTarget(

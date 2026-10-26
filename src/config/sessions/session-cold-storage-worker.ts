@@ -20,6 +20,14 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { readSessionGoalOperationInDatabase } from "./goals-operations.js";
 import { publishEncodedSessionTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
+import type {
+  SessionColdArchive,
+  SessionColdBatchInput,
+  SessionColdBatchPrepared,
+  SessionColdExternalization,
+  SessionColdPlan,
+  SessionColdPrepared,
+} from "./session-accessor.sqlite-archive-types.js";
 import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
@@ -44,24 +52,14 @@ import {
 import {
   readSessionAdmissionProtectionKeys,
   selectSessionColdBatch,
-  type SessionColdBatchInput,
 } from "./session-cold-storage-selection.js";
 import {
   readSessionColdLockedValidation,
   type prepareSessionColdSourceGuard,
   type SessionColdSourceMatches,
 } from "./session-cold-storage-source-guard.worker.js";
-import {
-  readSessionColdTranscript,
-  type SessionColdArchive,
-} from "./session-cold-storage-state.js";
-import type {
-  SessionColdExternalization,
-  SessionColdMutationResult,
-  SessionColdOversized,
-  SessionColdPlan,
-  SessionColdPrepared,
-} from "./session-cold-storage.types.js";
+import { readSessionColdTranscript } from "./session-cold-storage-state.js";
+import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
 import {
@@ -79,19 +77,6 @@ import {
 import { resolveSessionWorkStartError } from "./session-work-start.js";
 import { prepareTranscriptPayload, TRANSCRIPT_INSERT_BATCH_SIZE } from "./transcript-payload.js";
 
-export type SessionColdPreparationWorkerData = {
-  type: "sqlite-transcript-archive-v2";
-  operation: "cold-prepare";
-  input: SessionColdBatchInput;
-};
-export type SessionColdBatchPrepared = {
-  freePages: number;
-  protectionKeys: string[];
-  prepared: SessionColdPrepared[];
-  externalizations: SessionColdExternalization[];
-  oversizedTranscripts: SessionColdOversized[];
-  envelopeBytes: number;
-};
 export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databaseOptions"] } & (
   | { kind: "cold-maintain" }
   | {

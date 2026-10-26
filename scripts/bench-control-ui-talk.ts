@@ -46,6 +46,7 @@ const { values } = parseArgs({
     states: { type: "string", default: "listening,speaking,transcribing,idle,hidden" },
     "external-transcripts": { type: "boolean", default: false },
     "expect-hidden-parked": { type: "boolean", default: false },
+    "focused-stop": { type: "boolean", default: false },
     aa: { type: "boolean", default: false },
     sample: { type: "boolean", default: false },
     trace: { type: "boolean", default: false },
@@ -90,6 +91,16 @@ if (
 }
 if (values["expect-hidden-parked"] && !states.includes("hidden-transcribing")) {
   throw new Error("--expect-hidden-parked requires hidden-transcribing");
+}
+if (
+  values["focused-stop"] &&
+  (values["external-transcripts"] ||
+    values.frames ||
+    states.some((state) => state !== "listening" && state !== "idle"))
+) {
+  throw new Error(
+    "--focused-stop requires listening/idle states without --external-transcripts or --frames",
+  );
 }
 const artifactDir = createControlUiE2eArtifactDir("talk", values.output);
 const viewports = [
@@ -317,6 +328,7 @@ try {
     externalTranscripts: values["external-transcripts"],
     transcriptPeriodMs,
     expectHiddenParked: values["expect-hidden-parked"],
+    focusedStop: values["focused-stop"],
     assetHashContract:
       "Hashes of server files (or Node-fetched assets) matched to observed browser resource URLs; not browser-response byte attestation.",
     mode: values.trace || values.counters || values.frames ? "diagnostic" : "thread-cpu-comparison",
@@ -328,7 +340,7 @@ try {
     },
     compareCss,
     contract:
-      "Production renderer; native oscillator microphone and native audio-element playback; synthetic WebRTC/provider events. No real-provider, network, hardware microphone, end-to-end audio latency, or battery-life claim. Playback latency measures the local native play() promise, not network round-trip. Transcript latency is provider-event dispatch to DOM observation, not INP. Idle means a connected Talk session without audio/transcript work; hidden means a connected listening session in an actually hidden document. Hidden-transcribing delivers provider chunks from Node at 20Hz and verifies complete catchup and retained row identity after reveal. External transcript CPU windows omit per-chunk DOM observation unless --counters is enabled; endpoint scans run after metrics. Speaking means input/playback with 0.8Hz amplitude modulation, silenced at the audio element. Frame probe adds its own RAF loop, so run separately. All timers/animations retain native clocks.",
+      "Production renderer; native oscillator microphone and native audio-element playback; synthetic WebRTC/provider events. No real-provider, network, hardware microphone, end-to-end audio latency, or battery-life claim. Playback latency measures the local native play() promise, not network round-trip. Transcript latency is provider-event dispatch to DOM observation, not INP. Idle means a connected Talk session without audio/transcript work; hidden means a connected listening session in an actually hidden document. Hidden-transcribing delivers provider chunks from Node at 20Hz and verifies complete catchup and retained row identity after reveal. External transcript CPU windows omit per-chunk DOM observation unless --counters is enabled; endpoint scans run after metrics. Speaking means input/playback with 0.8Hz amplitude modulation, silenced at the audio element. Frame probe adds its own RAF loop, so run separately. Focused-stop uses native Tab traversal and requires the Stop trigger, its own tooltip, and document focus to remain active throughout the interval. All timers/animations retain native clocks.",
     acceptance:
       "At least 10 interleaved pairs; aim for 40% active CPU reduction and near-zero idle/hidden renderer work. A clean >=5% CPU win may land; per-cell timing median regression <=5% with no p95 increase (or 20-pair confirmation). A/A identifies shared-host wall-time noise; never claim network/provider latency from this fixture.",
   };
@@ -544,6 +556,35 @@ try {
                   } else {
                     await page.waitForFunction(() => !document.hidden, undefined, { polling: 50 });
                   }
+                  if (values["focused-stop"]) {
+                    const stop = page.getByRole("button", {
+                      name: "Stop voice input",
+                      exact: true,
+                    });
+                    await page.mouse.move(1, 1);
+                    if (await stop.evaluate((element) => element === document.activeElement)) {
+                      // Re-enter through native keyboard navigation to establish focus modality.
+                      await page.keyboard.press("Tab");
+                      await page.keyboard.press("Shift+Tab");
+                    } else {
+                      let focused = false;
+                      for (let step = 0; step < 120; step++) {
+                        await page.keyboard.press("Tab");
+                        if (await stop.evaluate((element) => element === document.activeElement)) {
+                          focused = true;
+                          break;
+                        }
+                      }
+                      if (!focused) {
+                        throw new Error("Stop was not reachable within 120 native Tab steps");
+                      }
+                    }
+                    await page
+                      .locator("openclaw-tooltip")
+                      .filter({ has: stop })
+                      .locator('.tooltip-surface[data-phase="open"]')
+                      .waitFor({ state: "visible" });
+                  }
                   if (values["first-pair-screenshots"] && pair === 0 && !hidden) {
                     await page.screenshot({ path: `${prefix}.png` });
                   }
@@ -561,12 +602,18 @@ try {
                     await page.evaluate(() => performance.mark("openclaw-talk-sample"));
                   }
                   await page.evaluate(
-                    ({ frames, observeTranscripts, observeTooltips }) =>
-                      window.openclawTalkBench.start(frames, observeTranscripts, observeTooltips),
+                    ({ frames, observeTranscripts, observeTooltips, focusedStop }) =>
+                      window.openclawTalkBench.start(
+                        frames,
+                        observeTranscripts,
+                        observeTooltips,
+                        focusedStop,
+                      ),
                     {
                       frames: values.frames,
                       observeTranscripts: !externalTranscripts || values.counters,
-                      observeTooltips: externalTranscripts,
+                      observeTooltips: externalTranscripts || values["focused-stop"],
+                      focusedStop: values["focused-stop"],
                     },
                   );
                   const beforeProcesses = await processes(browserCdp);
@@ -624,6 +671,7 @@ try {
                       tooltipOpenAtStart,
                       tooltipOpenAtEnd,
                       tooltipChanges,
+                      focusedStop,
                       transcriptLatenciesMs,
                       frameTimes,
                     } = snapshot;
@@ -640,6 +688,7 @@ try {
                       tooltipOpenAtStart,
                       tooltipOpenAtEnd,
                       tooltipChanges,
+                      focusedStop,
                       transcriptObservedChunks: transcriptChunks - transcriptPendingChunks,
                       transcriptLatenciesMs,
                       frameTimes,
@@ -760,6 +809,21 @@ try {
                   });
                   if (errors.length) {
                     throw new Error(`Page errors: ${errors.join("; ")}`);
+                  }
+                  if (
+                    values["focused-stop"] &&
+                    (!proof.focusedStop?.documentFocusedAtStart ||
+                      !proof.focusedStop.documentFocusedAtEnd ||
+                      !proof.focusedStop.triggerFocusedAtStart ||
+                      !proof.focusedStop.triggerFocusedAtEnd ||
+                      !proof.focusedStop.tooltipOpenAtStart ||
+                      !proof.focusedStop.tooltipOpenAtEnd ||
+                      proof.focusedStop.invalidated ||
+                      proof.tooltipChanges)
+                  ) {
+                    throw new Error(
+                      "Focused Stop observation lost document, trigger, or tooltip focus",
+                    );
                   }
                   if (externalTranscripts) {
                     if (

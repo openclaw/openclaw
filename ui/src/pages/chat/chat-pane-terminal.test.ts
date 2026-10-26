@@ -6,14 +6,14 @@ import { decodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { gatewayHelloForMethods as desktopHello } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture as gateway } from "./chat-application-context.test-support.ts";
 import {
   activePlacementSession,
   createPaneHeaderWorkspaceFixture,
-  createGatewayBrowserClientFixture as gateway,
-  createSessionCapabilityFixture,
   createTestChatPane,
   getPaneTestRuntime,
 } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import {
   openNativeMenu,
   renderPaneHeaderInto,

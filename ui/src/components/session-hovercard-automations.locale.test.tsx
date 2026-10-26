@@ -4,9 +4,9 @@ import { expect, it, onTestFinished } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import { registerGitHubEnglish } from "../i18n/locales/en-github.ts";
-import { createCronJob, cronJobsListResponse } from "../lib/cron/cron.test-support.ts";
 import { registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
+import { createCronJob, cronJobsListResponse } from "../test-helpers/cron.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,

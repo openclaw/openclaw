@@ -12,15 +12,20 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.js";
+import type { ModelCatalogResult, SessionsListResult } from "../api/types.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 let owner: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
+const call = <T = unknown>(method: string, params: Record<string, unknown>) =>
+  client.request<T>(method, params);
 let dir: string;
 let programs: string[] | undefined = ["standard", "daybreak_blue", "daybreak_red"];
 let reasoningEfforts = ["medium"];
@@ -42,6 +47,14 @@ const reply = (response: ServerResponse, index: number) =>
 const suite = createControlUiE2eSuite({
   name: "Daybreak through a real built Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(owner, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     dir = createControlUiE2eArtifactDir("daybreak-real-gateway");
     const provider = await reserveTestPortListener({
@@ -227,10 +240,6 @@ suite.define(() => {
       expect(result.code, result.stderr).toBe(0);
       return result.stdout;
     };
-    const call = async (method: string, params: Record<string, unknown>) =>
-      JSON.parse(
-        await runCli(["gateway", "call", method, "--json", "--params", JSON.stringify(params)]),
-      );
     const key = "agent:main:platform-discovery";
     await call("sessions.create", { key, agentId: "main", label: "Platform discovery" });
     await call("sessions.patch", { key, model: "openai/gpt-6.1-sol@openai:platform-fixture" });
@@ -246,7 +255,7 @@ suite.define(() => {
           ["standard", "daybreak_red"],
         ]) {
           programs = advertised;
-          const result = await call("models.list", {
+          const result = await call<ModelCatalogResult>("models.list", {
             agentId: "main",
             sessionKey: key,
             view: "configured",
@@ -297,10 +306,6 @@ suite.define(() => {
       expect(result.code, result.stderr).toBe(0);
       return result.stdout;
     };
-    const call = async (method: string, params: Record<string, unknown>) =>
-      JSON.parse(
-        await runCli(["gateway", "call", method, "--json", "--params", JSON.stringify(params)]),
-      );
     for (const mobile of [false, true]) {
       const name = mobile ? "mobile" : "desktop";
       const key = "agent:main:daybreak-" + name;
@@ -340,8 +345,11 @@ suite.define(() => {
             await writeFile(path.join(dir, name + "-" + stage + ".png"), frame.png);
           };
           const row = async () => {
-            const result = await call("sessions.list", { agentId: "main", limit: 100 });
-            return result.sessions.find((entry: { key: string }) => entry.key === key);
+            const result = await call<SessionsListResult>("sessions.list", {
+              agentId: "main",
+              limit: 100,
+            });
+            return result.sessions.find((entry) => entry.key === key)!;
           };
           const choose = async (value: string) => {
             await open();

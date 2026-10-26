@@ -14,7 +14,14 @@ import { registerHooks, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { GCProfiler, getHeapStatistics, setFlagsFromString, writeHeapSnapshot } from "node:v8";
+import {
+  GCProfiler,
+  getHeapCodeStatistics,
+  getHeapSpaceStatistics,
+  getHeapStatistics,
+  setFlagsFromString,
+  writeHeapSnapshot,
+} from "node:v8";
 import workerThreads, { isMainThread, threadId } from "node:worker_threads";
 
 const output = process.env.OPENCLAW_BENCH_RETAINED_WORKER_DIR;
@@ -118,7 +125,7 @@ const script = path.basename(process.argv[1] ?? "");
 if (
   output &&
   !isMainThread &&
-  /^(sqlite-store|prepared-model-catalog|session-accessor\.sqlite-archive|openclaw-state-read)\.worker(?:\.baseline)?\.[cm]?[jt]s$/.test(
+  /^(sqlite-store|prepared-model-catalog|session-accessor\.sqlite-archive|openclaw-state-read|openclaw-state-lease-heartbeat|gateway-state-owner-heartbeat|worker-native-lifecycle|control-ui-file|identity-avatar-file|provider-prompt-state|client-credential)\.worker(?:\.baseline)?\.[cm]?[jt]s$/.test(
     script,
   )
 ) {
@@ -140,6 +147,8 @@ if (
   const memory = () => ({
     ...process.memoryUsage(),
     heapSizeLimitBytes: getHeapStatistics().heap_size_limit,
+    heapSpaces: getHeapSpaceStatistics(),
+    code: getHeapCodeStatistics(),
   });
   const publish = (suffix: string, value: object) => {
     const file = `${prefix}.${suffix}.json`;

@@ -1,22 +1,13 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementPendingRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import {
-  navigateToControlUiSession,
-  startProductionControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
-import {
-  controlUiE2eBuiltModuleRequest,
-  failControlUiModuleForDocuments,
-} from "./control-ui-built-module.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { navigateToControlUiSession } from "../test-helpers/control-ui-e2e.ts";
+import { failControlUiModuleForDocuments } from "./control-ui-built-module.test-support.ts";
+import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   controlUiSessionUrl,
   createdSessionListResult,
@@ -30,35 +21,14 @@ import {
 const button = (scope: Page | Locator, name: string) =>
   scope.getByRole("button", { name, exact: true });
 const discardStarts = "Discard unsaved starts and reload";
-const buildId = "startup-recovery-proof";
-let buildRoot: string;
-const suite = createControlUiE2eSuite({
-  name: "Control UI startup recovery production E2E",
-  startServer: async () => {
-    const outDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-startup-recovery-"));
-    buildRoot = outDir;
-    try {
-      const server = await startProductionControlUiE2eServer(outDir, buildId, undefined, {
-        includeBootGroups: false,
-      });
-      return {
-        ...server,
-        close: async () => {
-          try {
-            await server.close();
-          } finally {
-            await rm(outDir, { recursive: true, force: true });
-          }
-        },
-      };
-    } catch (error) {
-      await rm(outDir, { recursive: true, force: true });
-      throw error;
-    }
-  },
-});
 
-async function recoverStartup(page: Page, escape: "saved" | "chat" | "toast") {
+async function recoverStartup(
+  page: Page,
+  escape: "saved" | "chat" | "toast",
+  suite: ReturnType<typeof createControlUiE2eSuite>,
+  moduleRequest: (sourcePath: string) => RegExp,
+  buildId: string,
+) {
   const incognito = escape !== "saved";
   const sessionKey = "agent:main:startup-load-recovery";
   const sessionId = `session:${sessionKey}`;
@@ -138,7 +108,7 @@ async function recoverStartup(page: Page, escape: "saved" | "chat" | "toast") {
   });
   const failure = await failControlUiModuleForDocuments(
     page,
-    controlUiE2eBuiltModuleRequest("ui/src/app/session-placement-startup.runtime.ts", buildRoot),
+    moduleRequest("ui/src/app/session-placement-startup.runtime.ts"),
   );
   await page.reload();
   await expect.poll(failure.documentCount).toBe(1);
@@ -244,10 +214,7 @@ async function recoverStartup(page: Page, escape: "saved" | "chat" | "toast") {
       }
       await page.locator(".new-session-page__message").fill(separateDraft);
     }
-    const configRuntime = controlUiE2eBuiltModuleRequest(
-      "ui/src/pages/config/config-page-state.ts",
-      buildRoot,
-    );
+    const configRuntime = moduleRequest("ui/src/pages/config/config-page-state.ts");
     await page.route(configRuntime, (route) => route.abort("failed"));
     await navigateInApp(page, "appearance");
     const reload = button(page.locator(".lazy-view-error"), "Reload");
@@ -331,13 +298,19 @@ async function recoverStartup(page: Page, escape: "saved" | "chat" | "toast") {
   }
 }
 
-suite.define(() => {
-  it.each(["saved", "chat", "toast"] as const)(
-    "recovers a saved startup through %s recovery",
-    (escape) =>
-      suite.withPage(
-        { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
-        ({ page }) => recoverStartup(page, escape),
-      ),
-  );
-});
+export function defineStartupRecoveryModuleBoundaryTests(
+  suite: ReturnType<typeof createControlUiE2eSuite>,
+  moduleRequest: (sourcePath: string) => RegExp,
+  buildId: string,
+) {
+  describe("Control UI startup recovery production E2E", () => {
+    it.each(["saved", "chat", "toast"] as const)(
+      "recovers a saved startup through %s recovery",
+      (escape) =>
+        suite.withPage(
+          { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+          ({ page }) => recoverStartup(page, escape, suite, moduleRequest, buildId),
+        ),
+    );
+  });
+}

@@ -28,7 +28,7 @@ import {
   filterVisibleSessionRows,
   resolveSessionNavigation,
   sessionMatchesVisibleSessionScope,
-} from "../lib/sessions/index.ts";
+} from "../lib/sessions/navigation.ts";
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,

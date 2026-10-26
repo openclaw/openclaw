@@ -31,9 +31,9 @@ export async function expectComposerSurface(composer: Locator, accessible = fals
   });
 }
 
-export async function readArtwork(shell: Locator) {
+export async function readArtwork(shell: Locator, artworkDetail?: "fingerprint" | "color-spread") {
   await shell.evaluate(finishElementAnimations);
-  return shell.evaluate(async (element) => {
+  return shell.evaluate(async (element, detail) => {
     const style = getComputedStyle(element);
     const probe = document.createElement("div");
     probe.style.backgroundImage = "var(--app-background-image)";
@@ -70,15 +70,22 @@ export async function readArtwork(shell: Locator) {
       throw new Error("Cannot inspect decoded app artwork");
     }
     pixels.drawImage(image, 0, 0);
-    const fingerprint = canvas.toDataURL();
     const data = pixels.getImageData(0, 0, canvas.width, canvas.height).data;
+    // Compare decoded artwork without PNG encoding or transporting full images.
+    const fingerprint =
+      detail === "fingerprint"
+        ? `${canvas.width}x${canvas.height}:${Array.from(
+            new Uint8Array(await crypto.subtle.digest("SHA-256", data)),
+            (byte) => byte.toString(16).padStart(2, "0"),
+          ).join("")}`
+        : null;
     let paintedPixels = 0;
     let maxColorSpread = 0;
     for (let offset = 0; offset < data.length; offset += 4) {
       const alpha = data[offset + 3]!;
       paintedPixels += alpha > 0 ? 1 : 0;
       // Ignore unpremultiplication noise in almost-transparent antialiasing.
-      if (alpha >= 8) {
+      if (detail === "color-spread" && alpha >= 8) {
         const channels = [data[offset]!, data[offset + 1]!, data[offset + 2]!];
         maxColorSpread = Math.max(maxColorSpread, Math.max(...channels) - Math.min(...channels));
       }
@@ -92,11 +99,15 @@ export async function readArtwork(shell: Locator) {
     };
     let ancestorCount = 0;
     const opaqueAncestors: string[] = [];
-    const composer = element.querySelector<HTMLElement>(".agent-chat__input");
-    const description = element.querySelector<HTMLElement>(".settings-section__desc");
+    // SPA navigation retains hidden chat panes and their unsent drafts.
+    const visible = (surface: HTMLElement) => surface.checkVisibility({ visibilityProperty: true });
+    const composer = [...element.querySelectorAll<HTMLElement>(".agent-chat__input")].find(visible);
+    const description = [...element.querySelectorAll<HTMLElement>(".settings-section__desc")].find(
+      visible,
+    );
     const transcript = [
       ...element.querySelectorAll<HTMLElement>(".chat-group.assistant .chat-text"),
-    ].at(-1);
+    ].findLast(visible);
     const anchor = composer?.parentElement ?? description;
     if (!anchor) {
       throw new Error("Expected a real composer or Appearance description on the app canvas");
@@ -165,13 +176,13 @@ export async function readArtwork(shell: Locator) {
       );
     }
 
-    const luminance = (red: number, green: number, blue: number) => {
-      const linear = (channel: number) => {
-        const value = channel / 255;
-        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-      };
-      return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue);
+    const linear = (channel: number) => {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
     };
+    const linearBytes = Float64Array.from({ length: 256 }, (_, channel) => linear(channel));
+    const luminance = (red: number, green: number, blue: number) =>
+      0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue);
     const minContrast = (rect: DOMRect, foreground: number[], artwork = true) => {
       const x = Math.max(0, Math.ceil(rect.x - bounds.x));
       const y = Math.max(0, Math.ceil(rect.y - bounds.y));
@@ -182,6 +193,8 @@ export async function readArtwork(shell: Locator) {
       }
       const rgba = pixels.getImageData(x, y, width, height).data;
       const alpha = foreground[3]! / 255;
+      const opaqueLuminance =
+        alpha === 1 ? luminance(foreground[0]!, foreground[1]!, foreground[2]!) : null;
       let minimum = Infinity;
       for (let offset = 0; offset < rgba.length; offset += 4) {
         const red = rgba[offset]!;
@@ -190,12 +203,15 @@ export async function readArtwork(shell: Locator) {
         if (artwork && (red !== baseColor[0] || green !== baseColor[1] || blue !== baseColor[2])) {
           visiblePaintedPixels += 1;
         }
-        const bg = luminance(red, green, blue);
-        const fg = luminance(
-          foreground[0]! * alpha + red * (1 - alpha),
-          foreground[1]! * alpha + green * (1 - alpha),
-          foreground[2]! * alpha + blue * (1 - alpha),
-        );
+        const bg =
+          0.2126 * linearBytes[red]! + 0.7152 * linearBytes[green]! + 0.0722 * linearBytes[blue]!;
+        const fg =
+          opaqueLuminance ??
+          luminance(
+            foreground[0]! * alpha + red * (1 - alpha),
+            foreground[1]! * alpha + green * (1 - alpha),
+            foreground[2]! * alpha + blue * (1 - alpha),
+          );
         minimum = Math.min(minimum, (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05));
       }
       return minimum;
@@ -251,7 +267,7 @@ export async function readArtwork(shell: Locator) {
         ...opaqueAncestors.map((name) => `opaque ancestor: ${name}`),
       ],
     };
-  });
+  }, artworkDetail);
 }
 
 export function expectAppArtwork(artwork: Awaited<ReturnType<typeof readArtwork>>, label: string) {

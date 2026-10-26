@@ -4,7 +4,7 @@ import type {
   SessionGitHubPublicationResult,
   SessionGitHubStatusResult,
 } from "../../../packages/gateway-protocol/src/schema/session-github-publication.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import type { GitHubPublicationOptions } from "../lib/sessions/github-publication-owner.ts";
 import {
   controlUiSessionUrl,

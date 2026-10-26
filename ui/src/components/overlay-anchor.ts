@@ -84,6 +84,11 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
   let source: HTMLSpanElement | undefined;
   let presented = false;
   let frame: number | undefined;
+  let positionedCrossRoot: boolean | undefined;
+  let proxyLeft = Number.NaN;
+  let proxyTop = Number.NaN;
+  let proxyWidth = Number.NaN;
+  let proxyHeight = Number.NaN;
   const sourceName = `--oc-overlay-spatial-${++nextAnchor}`;
   const current = () => bindings.findLast((binding) => binding.anchor);
   const crossRoot = (binding: Binding) => binding.anchor?.getRootNode() !== surface.getRootNode();
@@ -92,16 +97,21 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
       return;
     }
     const rect = anchor.getBoundingClientRect();
-    for (const [property, value] of Object.entries({
-      left: rect.left,
-      top: rect.top,
-      width: rect.width,
-      height: rect.height,
-    })) {
-      const next = `${value}px`;
-      if (source.style.getPropertyValue(property) !== next) {
-        source.style.setProperty(property, next);
-      }
+    if (rect.left !== proxyLeft) {
+      source.style.setProperty("left", `${rect.left}px`);
+      proxyLeft = rect.left;
+    }
+    if (rect.top !== proxyTop) {
+      source.style.setProperty("top", `${rect.top}px`);
+      proxyTop = rect.top;
+    }
+    if (rect.width !== proxyWidth) {
+      source.style.setProperty("width", `${rect.width}px`);
+      proxyWidth = rect.width;
+    }
+    if (rect.height !== proxyHeight) {
+      source.style.setProperty("height", `${rect.height}px`);
+      proxyHeight = rect.height;
     }
   };
   const apply = () => {
@@ -109,14 +119,15 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
     if (!binding?.anchor) {
       return;
     }
-    const positionAnchor = crossRoot(binding) ? sourceName : binding.name;
+    positionedCrossRoot = crossRoot(binding);
+    const positionAnchor = positionedCrossRoot ? sourceName : binding.name;
     if (surface.style.getPropertyValue("position-anchor") !== positionAnchor) {
       surface.style.setProperty("position-anchor", positionAnchor);
     }
     if (surface.dataset.placement !== binding.placement) {
       surface.dataset.placement = binding.placement;
     }
-    if (crossRoot(binding)) {
+    if (positionedCrossRoot) {
       measure(binding.anchor);
     }
   };
@@ -141,7 +152,16 @@ function createSurfaceAnchor(surface: HTMLElement, sameRoot: boolean): SurfaceAn
       if (!surface.isConnected || !presented) {
         return;
       }
-      apply();
+      const activeBinding = current();
+      if (!activeBinding?.anchor) {
+        return;
+      }
+      // A live cross-root binding can move into the surface root between frames.
+      if (crossRoot(activeBinding) !== positionedCrossRoot) {
+        apply();
+      } else if (positionedCrossRoot) {
+        measure(activeBinding.anchor);
+      }
       schedule();
     });
   };

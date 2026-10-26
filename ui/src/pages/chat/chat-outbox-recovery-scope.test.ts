@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { makeChatHost, requestCalls, requireRecord } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";

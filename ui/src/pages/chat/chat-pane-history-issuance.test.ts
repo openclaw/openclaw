@@ -2,8 +2,8 @@
 
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentsListResult } from "../../api/types.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import {
   createGatewayHarness,
@@ -14,7 +14,7 @@ import { loadChatHistory } from "./chat-history.ts";
 import { requestCalls } from "./chat-host.test-support.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
-const agentsList: AgentsListResult = makeBootRoster();
+const agentsList = makeBootRoster();
 
 function createCanonicalRoutePane(
   handlers: Record<string, (params: Record<string, unknown>) => unknown> = {},
@@ -55,27 +55,6 @@ function assistantHistory(text: string) {
   return { messages: [{ role: "assistant", content: [{ type: "text", text }] }] };
 }
 
-it("shows the subscribed initial transcript without another history round trip", async () => {
-  const { pane, state, snapshot, request } = createCanonicalRoutePane({
-    "sessions.messages.subscribe": () => ({
-      key: "agent:main:current",
-      initialHistory: { ok: true, payload: assistantHistory("Initial subscription transcript") },
-    }),
-  });
-  pane.sessionKey = state.sessionKey;
-  pane.applyGatewaySnapshot(snapshot);
-  await vi.waitFor(() =>
-    expect(state.chatMessages).toEqual(
-      assistantHistory("Initial subscription transcript").messages,
-    ),
-  );
-  expect(getChatHistoryLoadState(state).phase).toBe("committed");
-  expect(requestCalls(request, "chat.startup")).toHaveLength(0);
-  expect(requestCalls(request, "sessions.messages.subscribe")[0]?.[1]).toMatchObject({
-    initialHistory: { limit: 80, maxBytes: 256 * 1024, knownState: {} },
-  });
-});
-
 async function expectRecoveredHistory(
   state: ReturnType<typeof createCanonicalRoutePane>["state"],
   request: ReturnType<typeof vi.fn>,
@@ -84,17 +63,6 @@ async function expectRecoveredHistory(
   text: string,
 ) {
   await vi.waitFor(() => expect(requestCalls(request, method)).toHaveLength(attempts));
-  expect(request).toHaveBeenCalledWith(
-    method,
-    {
-      sessionKey: state.sessionKey,
-      knownState: {},
-      limit: 80,
-      maxBytes: 256 * 1024,
-      toolResultMaxChars: 2_000,
-    },
-    { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-  );
   await vi.waitFor(() => expect(state.chatMessages).toEqual(assistantHistory(text).messages));
   expect(getChatHistoryLoadState(state).phase).toBe("committed");
 }

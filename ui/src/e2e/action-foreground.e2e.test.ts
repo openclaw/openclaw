@@ -3,11 +3,11 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import { configResponse } from "./appearance-prefs.test-support.ts";
-import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Filled action foregrounds" });
@@ -87,7 +87,13 @@ async function paint(button: Locator, foreground: string, background?: string) {
   return { colors, contrast: contrast(composite(colors.svg!, fill), fill), width: raw.width };
 }
 
-async function inspectStates(page: Page, button: Locator, foreground: string, fills?: string[]) {
+async function inspectStates(
+  page: Page,
+  button: Locator,
+  label: string,
+  foreground: string,
+  fills?: string[],
+) {
   const samples = [];
   for (const [index, state] of ["rest", "hover", "pressed"].entries()) {
     if (state === "rest") {
@@ -100,14 +106,20 @@ async function inspectStates(page: Page, button: Locator, foreground: string, fi
     }
     try {
       const sample = await paint(button, foreground, fills?.[index]);
-      expect.soft(sample.colors.button, `${state}: button ink`).toEqual(sample.colors.expectedInk);
-      expect.soft(sample.colors.svg, `${state}: SVG follows button`).toEqual(sample.colors.button);
+      expect
+        .soft(sample.colors.button, `${label} ${state}: button ink`)
+        .toEqual(sample.colors.expectedInk);
+      expect
+        .soft(sample.colors.svg, `${label} ${state}: SVG follows button`)
+        .toEqual(sample.colors.button);
       if (fills) {
         expect
-          .soft(sample.colors.fill, `${state}: selected fill`)
+          .soft(sample.colors.fill, `${label} ${state}: selected fill`)
           .toEqual(sample.colors.expectedFill);
       }
-      expect.soft(sample.contrast, `${state}: rendered icon contrast`).toBeGreaterThanOrEqual(3);
+      expect
+        .soft(sample.contrast, `${label} ${state}: rendered icon contrast`)
+        .toBeGreaterThanOrEqual(3);
       samples.push({ state, ...sample });
     } finally {
       if (state === "pressed") {
@@ -117,7 +129,10 @@ async function inspectStates(page: Page, button: Locator, foreground: string, fi
       }
     }
   }
-  expect(samples.map((sample) => sample.width)).toEqual(Array(3).fill(samples[0]!.width));
+  expect(
+    samples.map((sample) => sample.width),
+    `${label}: stable action width`,
+  ).toEqual(Array(3).fill(samples[0]!.width));
   return samples;
 }
 
@@ -136,101 +151,154 @@ async function screenshot(page: Page, name: string, targets: Locator[]) {
 }
 
 suite.define(() => {
-  it.each(themes)("keeps $theme $mode action color pairs (accent $accent)", async (appearance) => {
-    const { theme, mode, accent } = appearance;
-    const id = `${theme}-${mode}-${accent ?? "theme"}`;
+  it("keeps action color pairs across every theme, mode, and accent", async () => {
     await suite.withPage(
-      { viewport: { width: 1440, height: 900 }, colorScheme: mode },
+      { viewport: { width: 1440, height: 900 }, colorScheme: "dark" },
       async ({ page }) => {
-        await seedChatSettings(page, suite.server.baseUrl, { theme, themeMode: mode, accent });
         const gateway = await installMockGateway(page, {
           agentModel: "example/demo-model",
           models: [{ id: "demo-model", name: "Demo model", provider: "example" }],
           historyMessages: [
             { role: "assistant", content: "The draft is ready for review.", timestamp: 1 },
           ],
-          methodResponses: { "config.get": configResponse({ theme, themeMode: mode, accent }, id) },
+          methodResponses: {
+            "config.get": configResponse({ theme: "claw", themeMode: "dark" }, "claw-dark"),
+          },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("sessions.messages.subscribe", {
           match: { key: "agent:main:main" },
         });
-        const resolved = theme === "claw" ? mode : `${theme}${mode === "light" ? "-light" : ""}`;
-        await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(resolved);
-        if (theme !== "claw") {
+        for (const [index, { theme, mode, accent }] of themes.entries()) {
+          const id = `${theme}-${mode}-${accent ?? "theme"}`;
+          await page.emulateMedia({ colorScheme: mode });
+          await page.setViewportSize({ width: 1440, height: 900 });
+          if (index > 0) {
+            // Exercise the live preference owner while reusing the mounted application.
+            await gateway.setMethodResponse(
+              "config.get",
+              configResponse({ theme, themeMode: mode, accent }, id),
+            );
+            await gateway.emitGatewayEvent("config.changed", {});
+            await evaluateControlUiContext(page, (app) => app.navigate("chat"));
+            await waitForControlUiRoute(page, { routeId: "chat" });
+          }
+          const resolved = theme === "claw" ? mode : `${theme}${mode === "light" ? "-light" : ""}`;
           await expect
             .poll(() =>
-              page
-                .locator(`#openclaw-theme-palette-${theme}`)
-                .evaluate((link) => Boolean((link as HTMLLinkElement).sheet)),
+              page.evaluate(() => ({
+                theme: document.documentElement.dataset.theme,
+                mode: document.documentElement.dataset.themeMode,
+                accent: document.documentElement.style.getPropertyValue("--accent"),
+              })),
             )
-            .toBe(true);
-        }
-        const palette = await page.evaluate(() => ({
-          theme: document.documentElement.dataset.theme,
-          links: [
-            ...document.querySelectorAll<HTMLLinkElement>('link[id^="openclaw-theme-palette-"]'),
-          ].map((link) => ({ href: link.href, loaded: Boolean(link.sheet) })),
-          accent: getComputedStyle(document.documentElement).getPropertyValue("--accent"),
-          primary: getComputedStyle(document.documentElement).getPropertyValue("--primary"),
-        }));
-        const rail = page.locator(".sidebar-rail__create .sidebar-new-session");
-        const railSamples = await inspectStates(page, rail, "var(--accent-foreground)", [
-          "var(--sidebar-rail-action-bg)",
-          "var(--sidebar-rail-action-hover-bg)",
-          "var(--sidebar-rail-action-active-bg)",
-        ]);
-        const textarea = page.locator(".agent-chat__composer-combobox textarea");
-        await textarea.fill("Review this draft.");
-        const send = page.getByRole("button", { name: "Send message", exact: true });
-        const desktop = await inspectStates(page, send, "var(--chat-send-foreground)");
-        await screenshot(page, `${id}-desktop-send`, [page.locator(".agent-chat__input"), rail]);
-        await page.setViewportSize({ width: 390, height: 844 });
-        const mobile = await inspectStates(page, send, "var(--chat-send-foreground)");
-        await screenshot(page, `${id}-mobile-send`, [page.locator(".agent-chat__input")]);
-        if (theme === "crt" && mode === "dark") {
-          // An explicit theme token must reach the SVG, not only its button.
-          await page.evaluate(() =>
-            document.documentElement.style.setProperty("--chat-send-foreground", "#000000"),
+            .toEqual({ theme: resolved, mode, accent: accent ?? "" });
+          if (theme !== "claw") {
+            await expect
+              .poll(() =>
+                page
+                  .locator(`#openclaw-theme-palette-${theme}`)
+                  .evaluate((link) => Boolean((link as HTMLLinkElement).sheet)),
+              )
+              .toBe(true);
+          }
+          const palette = await page.evaluate(() => ({
+            theme: document.documentElement.dataset.theme,
+            links: [
+              ...document.querySelectorAll<HTMLLinkElement>('link[id^="openclaw-theme-palette-"]'),
+            ].map((link) => ({ href: link.href, loaded: Boolean(link.sheet) })),
+            accent: getComputedStyle(document.documentElement).getPropertyValue("--accent"),
+            primary: getComputedStyle(document.documentElement).getPropertyValue("--primary"),
+          }));
+          const rail = page.locator(".sidebar-rail__create .sidebar-new-session");
+          const railSamples = await inspectStates(
+            page,
+            rail,
+            `${id} rail`,
+            "var(--accent-foreground)",
+            [
+              "var(--sidebar-rail-action-bg)",
+              "var(--sidebar-rail-action-hover-bg)",
+              "var(--sidebar-rail-action-active-bg)",
+            ],
           );
-          await inspectStates(page, send, "#000000");
-          await page.evaluate(() =>
-            document.documentElement.style.removeProperty("--chat-send-foreground"),
+          const chatInput = page.locator(".chat-pane-cache__pane--active .agent-chat__input");
+          const textarea = chatInput.locator(".agent-chat__composer-combobox textarea");
+          await textarea.fill("Review this draft.");
+          const send = page.getByRole("button", { name: "Send message", exact: true });
+          const desktop = await inspectStates(
+            page,
+            send,
+            `${id} send`,
+            "var(--chat-send-foreground)",
           );
-        }
-        await send.click();
-        const sent = await gateway.waitForRequest("chat.send");
-        expect(sent.params).toMatchObject({ message: "Review this draft." });
-        const stop = page.getByRole("button", { name: "Stop generating", exact: true });
-        await stop.waitFor({ state: "visible" });
-        const stopMobile = await inspectStates(page, stop, "var(--danger)");
-        await screenshot(page, `${id}-mobile-stop`, [page.locator(".agent-chat__input")]);
-        await page.setViewportSize({ width: 1440, height: 900 });
-        const stopDesktop = await inspectStates(page, stop, "var(--danger)");
-        await stop.click();
-        await gateway.waitForRequest("chat.abort");
-        await stop.waitFor({ state: "detached" });
-        await page.goto(`${suite.server.baseUrl}new`);
-        await page.setViewportSize({ width: 390, height: 844 });
-        await textarea.fill("A new conversation draft.");
-        const start = page.locator(".new-session-page__start-submit");
-        const newSession = await inspectStates(page, start, "var(--chat-send-foreground)");
-        await screenshot(page, `${id}-mobile-new`, [page.locator(".agent-chat__input")]);
-        if (theme === "crt" && mode === "dark") {
-          await page.evaluate(() =>
-            document.documentElement.style.setProperty("--chat-send-foreground", "#000000"),
+          await screenshot(page, `${id}-desktop-send`, [chatInput, rail]);
+          await page.setViewportSize({ width: 390, height: 844 });
+          const mobile = await inspectStates(
+            page,
+            send,
+            `${id} send`,
+            "var(--chat-send-foreground)",
           );
-          await inspectStates(page, start, "#000000");
-        }
-        if (capture) {
-          await writeFile(
-            path.join(suite.artifactDir, `${id}-colors.json`),
-            JSON.stringify(
-              { palette, railSamples, desktop, mobile, stopMobile, stopDesktop, newSession },
-              null,
-              2,
-            ),
+          await screenshot(page, `${id}-mobile-send`, [chatInput]);
+          if (theme === "crt" && mode === "dark") {
+            // An explicit theme token must reach the SVG, not only its button.
+            await page.evaluate(() =>
+              document.documentElement.style.setProperty("--chat-send-foreground", "#000000"),
+            );
+            await inspectStates(page, send, `${id} explicit send ink`, "#000000");
+            await page.evaluate(() =>
+              document.documentElement.style.removeProperty("--chat-send-foreground"),
+            );
+          }
+          const sendCount = (await gateway.getRequests("chat.send")).length;
+          await send.click();
+          const sent = await gateway.waitForRequest("chat.send", { after: sendCount });
+          expect(sent.params, `${id}: submitted draft`).toMatchObject({
+            message: "Review this draft.",
+          });
+          const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+          await stop.waitFor({ state: "visible" });
+          const stopMobile = await inspectStates(page, stop, `${id} stop`, "var(--danger)");
+          await screenshot(page, `${id}-mobile-stop`, [chatInput]);
+          await page.setViewportSize({ width: 1440, height: 900 });
+          const stopDesktop = await inspectStates(page, stop, `${id} stop`, "var(--danger)");
+          const abortCount = (await gateway.getRequests("chat.abort")).length;
+          await stop.click();
+          await gateway.waitForRequest("chat.abort", { after: abortCount });
+          await stop.waitFor({ state: "detached" });
+          await evaluateControlUiContext(page, (app) => app.navigate("new-session"));
+          await waitForControlUiRoute(page, { routeId: "new-session" });
+          await page.setViewportSize({ width: 390, height: 844 });
+          const newInput = page.locator(".new-session-page .agent-chat__input");
+          await newInput.locator(".new-session-page__message").fill("A new conversation draft.");
+          const start = page.locator(".new-session-page__start-submit");
+          const newSession = await inspectStates(
+            page,
+            start,
+            `${id} new session`,
+            "var(--chat-send-foreground)",
           );
+          await screenshot(page, `${id}-mobile-new`, [newInput]);
+          if (theme === "crt" && mode === "dark") {
+            await page.evaluate(() =>
+              document.documentElement.style.setProperty("--chat-send-foreground", "#000000"),
+            );
+            await inspectStates(page, start, `${id} explicit new session ink`, "#000000");
+            await page.evaluate(() =>
+              document.documentElement.style.removeProperty("--chat-send-foreground"),
+            );
+          }
+          if (capture) {
+            await writeFile(
+              path.join(suite.artifactDir, `${id}-colors.json`),
+              JSON.stringify(
+                { palette, railSamples, desktop, mobile, stopMobile, stopDesktop, newSession },
+                null,
+                2,
+              ),
+            );
+          }
         }
       },
     );

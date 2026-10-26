@@ -6,6 +6,8 @@ import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fi
 import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 const suite = createControlUiE2eSuite({ name: "Snapshot route admission" });
 const id = "b1c2cd3c-1234-4321-9876-123456789abc";
 const sessionKey = `agent:main:chat:${id}`;
@@ -209,7 +211,9 @@ suite.define(() => {
           await page.getByText(transcript, { exact: true }).waitFor();
           await gateway.waitForRequest("sessions.resolve");
           await gateway.waitForRequest("chat.startup");
-          await page.screenshot({ path: path.join(suite.artifactDir, `cached-${outcome}.png`) });
+          if (captureUiProof) {
+            await page.screenshot({ path: path.join(suite.artifactDir, `cached-${outcome}.png`) });
+          }
           const movedKey =
             outcome === "mismatch"
               ? "agent:main:chat:98765432-1234-4321-9876-123456789abc"

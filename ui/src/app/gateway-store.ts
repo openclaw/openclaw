@@ -21,7 +21,7 @@ import { retireStoredGoalOperations } from "../lib/chat/goal-operation-storage.t
 import { readConnectionAuthReason } from "../lib/connection-hints.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
-import { resolveSessionKey } from "../lib/sessions/index.ts";
+import { resolveSessionKey } from "../lib/sessions/navigation.ts";
 import { readSessionDefaults } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";

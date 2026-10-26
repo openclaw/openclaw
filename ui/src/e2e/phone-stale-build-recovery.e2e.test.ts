@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator } from "playwright";
-import { expect, it } from "vitest";
+import { expect, inject, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   controlUiBundledGatewayUrl,
@@ -34,7 +34,8 @@ const proofBuildId = proofIdentity.expectedRevisionSha
   : "phone-proof-local-artifact";
 const suite = createControlUiE2eSuite({
   name: "Control UI phone stale-build recovery E2E",
-  startServer: () => startPhoneProofServer(proofBuildId),
+  startServer: () =>
+    startPhoneProofServer(proofBuildId, inject("controlUiE2ePrebuiltAssets")?.root),
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,

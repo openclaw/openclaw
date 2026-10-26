@@ -6,7 +6,8 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { prepareAgentRunReplyText } from "../agents/agent-run-terminal-reply.js";
 import { normalizeContextUsage } from "../agents/usage.js";
-import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
+import { buildInboundMediaUriFromPath } from "../media/inbound-media-path.js";
+import { parseInboundMediaUri } from "../media/inbound-media-uri.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
   isSilentAssistantTranscriptMessage,
@@ -669,10 +670,9 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (isProjectedForwardedMessage(entry)) {
     return false;
   }
-  if (resolveAssistantMessagePhase(message) === "commentary") {
-    return !hasAssistantMixedToolVisibleText(message);
-  }
-  return isSilentAssistantTranscriptMessage(message);
+  return resolveAssistantMessagePhase(message) === "commentary"
+    ? !hasAssistantMixedToolVisibleText(message)
+    : isSilentAssistantTranscriptMessage(message);
 }
 
 export function sanitizeChatHistoryMessages(

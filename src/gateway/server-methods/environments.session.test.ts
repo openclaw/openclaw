@@ -5,7 +5,10 @@ import {
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
+import {
+  createPersonalToolParticipant as participant,
+  withPersonalToolTurn,
+} from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import { ensureSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -14,14 +17,6 @@ import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-cli
 import * as support from "../worker-environments/service.test-support.js";
 import { environmentsSessionHandlers } from "./environments.session.js";
 
-function participant(profileId: string, name: string) {
-  return {
-    profileId,
-    name,
-    senderId: `${profileId}-sender`,
-    gatewayUiCommandTarget: { connId: `${profileId}-tab`, profileId },
-  };
-}
 const owner = participant("alice", "Alice");
 const steerer = participant("bob", "Bob");
 const identity = {

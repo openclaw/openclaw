@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { compareSessionRowsByUpdatedAt } from "../lib/sessions/index.ts";
+import { compareSessionRowsByUpdatedAt } from "../lib/sessions/navigation.ts";
 import { runningRow } from "../test-helpers/app-sidebar-session-narration.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import {
