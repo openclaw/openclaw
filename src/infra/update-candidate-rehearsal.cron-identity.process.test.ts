@@ -57,7 +57,7 @@ async function runFirstPrivateAdmission(env: NodeJS.ProcessEnv) {
 }
 
 async function prepareFixture(
-  kind: "explicit-state" | "custom-config",
+  kind: "default-state" | "explicit-state" | "custom-config",
   storeKeys: (paths: { expected: string; sibling: string }) => readonly string[],
 ) {
   const root = tempDirs.make("rehearsal-cron-identity-");
@@ -67,19 +67,21 @@ async function prepareFixture(
   const stateDir = path.join(root, "source-state");
   const customConfigPath = path.join(root, "custom", "openclaw.json");
   const expected =
-    kind === "explicit-state"
+    kind === "default-state" || kind === "explicit-state"
       ? path.join(stateDir, "cron", "jobs.json")
       : path.join(path.dirname(customConfigPath), "cron", "jobs.json");
   const sibling =
-    kind === "explicit-state"
+    kind === "default-state" || kind === "explicit-state"
       ? path.join(root, "retained-sibling", "cron", "jobs.json")
       : path.join(stateDir, "cron", "jobs.json");
   const source = await prepareSource(root, storeKeys({ expected, sibling }));
   const sourceBytes = await fs.readFile(source.databasePath);
   const sourceEnv =
-    kind === "explicit-state"
-      ? { OPENCLAW_STATE_DIR: source.stateDir, OPENCLAW_CONFIG_PATH: "/ignored/openclaw.json" }
-      : { OPENCLAW_CONFIG_PATH: customConfigPath };
+    kind === "default-state"
+      ? {}
+      : kind === "explicit-state"
+        ? { OPENCLAW_STATE_DIR: source.stateDir, OPENCLAW_CONFIG_PATH: "/ignored/openclaw.json" }
+        : { OPENCLAW_CONFIG_PATH: customConfigPath };
   const rehearsal = await prepareUpdateCandidateRehearsal({
     config: {},
     candidateRoot,
@@ -96,15 +98,16 @@ async function cleanupFixture(fixture: Awaited<ReturnType<typeof prepareFixture>
   expect(await fs.readFile(fixture.source.databasePath)).toEqual(fixture.sourceBytes);
 }
 
-it.each(["explicit-state", "custom-config"] as const)(
+it.each(["default-state", "explicit-state", "custom-config"] as const)(
   "carries the original %s cron identity through the first private admission",
   async (kind) => {
     const fixture = await prepareFixture(kind, ({ expected, sibling }) => [expected, sibling]);
     try {
-      await expect(runFirstPrivateAdmission(fixture.rehearsal.env)).resolves.toEqual({
-        initializationCronDefaultStoreKey: fixture.expected,
-        boundStoreKey: fixture.expected,
-      });
+      const result = await runFirstPrivateAdmission(fixture.rehearsal.env);
+      expect(result.initializationCronDefaultStoreKey).toBe(
+        path.join(fixture.rehearsal.stateDir, "cron", "jobs.json"),
+      );
+      expect(result.boundStoreKey).toBe(fixture.expected);
     } finally {
       await cleanupFixture(fixture);
     }
@@ -114,9 +117,11 @@ it.each(["explicit-state", "custom-config"] as const)(
 it("does not bind an unmatched original identity to a retained sibling", async () => {
   const fixture = await prepareFixture("custom-config", ({ sibling }) => [sibling]);
   try {
-    await expect(runFirstPrivateAdmission(fixture.rehearsal.env)).resolves.toEqual({
-      initializationCronDefaultStoreKey: fixture.expected,
-    });
+    const result = await runFirstPrivateAdmission(fixture.rehearsal.env);
+    expect(result.initializationCronDefaultStoreKey).toBe(
+      path.join(fixture.rehearsal.stateDir, "cron", "jobs.json"),
+    );
+    expect(result.boundStoreKey).toBeUndefined();
   } finally {
     await cleanupFixture(fixture);
   }

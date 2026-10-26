@@ -6,7 +6,6 @@ import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareUpdateCandidateRehearsal } from "../infra/update-candidate-rehearsal.js";
 import { materializeUpdateCandidateStateWorker } from "../infra/update-candidate-state.test-support.js";
-import { UPDATE_REHEARSAL_CRON_IDENTITY_ENV } from "../infra/update-rehearsal-paths.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -94,17 +93,14 @@ it("admits real producer plugin host, dependency and basename links without trav
         "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM",
         "OPENCLAW_NO_AUTO_UPDATE",
         "NODE_DISABLE_COMPILE_CACHE",
-        UPDATE_REHEARSAL_CRON_IDENTITY_ENV,
       ]) {
         const original = params.env[key];
         params.env[key] = "changed";
         try {
           expect(() => admitted.assertCurrent()).toThrow(/isolated environment changed/);
-          const expectedFreshError =
-            key === UPDATE_REHEARSAL_CRON_IDENTITY_ENV
-              ? /Update rehearsal cron identity is invalid/
-              : /isolated environment changed|not a prepared disposable copy/;
-          await expect(inspectPreparedDoctorRehearsal(params)).rejects.toThrow(expectedFreshError);
+          await expect(inspectPreparedDoctorRehearsal(params)).rejects.toThrow(
+            /isolated environment changed|not a prepared disposable copy/,
+          );
         } finally {
           params.env[key] = original;
         }
