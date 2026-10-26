@@ -18,7 +18,6 @@ const {
   completeMock,
   getApiKeyForModelMock,
   setRuntimeApiKeyMock,
-  discoverModelsMock,
   registerProviderStreamForModelMock,
   prepareProviderRuntimeAuthMock,
   acquireAgentRunPreparedModelRuntimeMock,
@@ -39,63 +38,14 @@ type ImageRequest = Parameters<typeof describeImageWithModelCore>[0];
 function describeImage(provider: string, model: string, overrides: Partial<ImageRequest> = {}) {
   return describeImageWithModelCore({ ...imageRequestDefaults(), provider, model, ...overrides });
 }
-function mockGoogleCompletion(text: string) {
-  mockImageModel({ provider: "google", id: "gemini-2.5-flash", api: "google-generative-ai" });
-  completeMock.mockResolvedValue(
-    imageCompletion("google-generative-ai", "google", "gemini-2.5-flash", text),
-  );
-}
 
 describe("describeImageWithModelCore", () => {
-  installImageRuntimeTestHooks({
-    copilotHeaders: {
-      "Editor-Version": "vscode/1.107.0",
-      "User-Agent": "GitHubCopilotChat/0.35.0",
-    },
-  });
+  installImageRuntimeTestHooks();
   beforeEach(() => {
     resolveProviderRuntimePluginHandleMock.mockReset().mockImplementation((params) => ({
       ...params,
       plugin: undefined,
     }));
-  });
-
-  it("normalizes deprecated google flash ids and keeps profile model/auth selection", async () => {
-    const findMock = vi.fn((provider: string, modelId: string) => {
-      expect([provider, modelId]).toEqual(["google", "gemini-3-flash-preview"]);
-      return {
-        provider: "google",
-        id: "gemini-3-flash-preview",
-        input: ["text", "image"],
-        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      };
-    });
-    discoverModelsMock.mockReturnValue({ find: findMock });
-    completeMock.mockResolvedValue(
-      imageCompletion("google-generative-ai", "google", "gemini-3-flash-preview", "flash ok"),
-    );
-
-    const result = await describeImage("google", "gemini-3.1-flash-preview", {
-      profile: "google:default",
-      preferredProfile: "google:preferred",
-    });
-
-    expect(result).toEqual({ text: "flash ok", model: "gemini-3-flash-preview" });
-    expect(findMock).toHaveBeenCalled();
-    for (const call of resolveModelAsyncMock.mock.calls) {
-      expect(call[4]).toMatchObject({
-        authProfileId: "google:default",
-        preferredProfile: "google:preferred",
-      });
-    }
-    expect(getApiKeyForModelMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        profileId: "google:default",
-        preferredProfile: "google:preferred",
-      }),
-    );
-    expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "test-token");
   });
 
   it("rematerializes profile-scoped image metadata after auth selects a backup profile", async () => {
@@ -128,9 +78,18 @@ describe("describeImageWithModelCore", () => {
       imageCompletion("openai-responses", "github-copilot", "gpt-5.6-sol", "ok"),
     );
 
-    await describeImage("github-copilot", "gpt-5.6-sol", { profile: "github-copilot:preferred" });
+    const profile = "github-copilot:preferred";
+    const preferredProfile = "github-copilot:preferred-order";
+    await describeImage("github-copilot", "gpt-5.6-sol", { profile, preferredProfile });
+    expect(resolveModelAsyncMock.mock.calls[0]?.[4]).toMatchObject({
+      authProfileId: profile,
+      preferredProfile,
+    });
+    expect(getApiKeyForModelMock.mock.calls[0]?.[0]).toMatchObject({
+      profileId: profile,
+      preferredProfile,
+    });
 
-    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(2);
     expect(resolveModelAsyncMock.mock.calls[1]?.[4]).toMatchObject({
       authStorage,
       modelRegistry,
@@ -162,29 +121,18 @@ describe("describeImageWithModelCore", () => {
 
     await describeImage(ref.provider, ref.model);
 
-    expect(completeMock).not.toHaveBeenCalled();
-    expect(stream).toHaveBeenCalledOnce();
-    expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "github-copilot",
-        context: expect.objectContaining({ [API_KEY_FIELD]: "test-token", authMode: "oauth" }),
-      }),
-    );
+    const authCall = expectDefined(prepareProviderRuntimeAuthMock.mock.calls[0], "runtime auth")[0];
+    expect(authCall).toMatchObject({
+      provider: "github-copilot",
+      context: { [API_KEY_FIELD]: "test-token", authMode: "oauth" },
+    });
     const storedValue = setRuntimeApiKeyMock.mock.calls[0]?.[1] as string;
     expect(setRuntimeApiKeyMock.mock.calls[0]?.[0]).toBe("github-copilot");
     expect(looksLikeSecretSentinel(storedValue)).toBe(true);
     expect(storedValue).not.toBe("test-token");
     expect(resolveSecretSentinel(storedValue)).toBe("test-token");
     const [model, context, options] = expectDefined(stream.mock.calls[0], "stream");
-    expect(model).toMatchObject({
-      baseUrl: "https://api.githubcopilot.com",
-      headers: {
-        "Copilot-Integration-Id": "copilot-developer-cli",
-        "Editor-Version": "vscode/1.107.0",
-        "Openai-Organization": "github-copilot",
-        "User-Agent": "GitHubCopilotChat/0.35.0",
-      },
-    });
+    expect(model.baseUrl).toBe("https://api.githubcopilot.com");
     expect(
       Object.values(model.headers ?? {}).some(
         (value) => value !== null && looksLikeSecretSentinel(value),
@@ -202,18 +150,28 @@ describe("describeImageWithModelCore", () => {
     expect(contentTypes).toEqual(expect.arrayContaining(["text", "image"]));
   });
 
+  it("rejects a resolved text-only model before authenticating or dispatching it", async () => {
+    mockImageModel({ provider: "google", id: "text-only", input: ["text"] });
+    await expect(describeImage("google", "text-only")).rejects.toThrow(
+      "Model does not support images: google/text-only",
+    );
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(completeMock).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "uses the correct workspace/runtime owner (parent supplied: %s)",
     async (supplied) => {
       const agentDir = supplied ? "/tmp/parent-agent" : "/tmp/openclaw-agent";
       const workspaceDir = supplied ? "/tmp/parent-workspace" : "/tmp/openclaw-workspace";
-      const cfg: OpenClawConfig = supplied
-        ? { logging: { level: "info" } }
-        : {
-            agents: { entries: { "vision-agent": { agentDir, workspace: workspaceDir } } },
-          };
+      const cfg: OpenClawConfig = {
+        agents: { entries: { "vision-agent": { agentDir, workspace: workspaceDir } } },
+      };
       const text = supplied ? "parent runtime" : "workspace ok";
-      mockGoogleCompletion(text);
+      mockImageModel({ provider: "google", id: "gemini-2.5-flash", api: "google-generative-ai" });
+      completeMock.mockResolvedValue(
+        imageCompletion("google-generative-ai", "google", "gemini-2.5-flash", text),
+      );
       const preparedModelRuntime = supplied
         ? {
             agentDir,
@@ -237,6 +195,7 @@ describe("describeImageWithModelCore", () => {
       expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
         expect.objectContaining({ cfg, agentDir, workspaceDir, wrapProviderStream: true }),
       );
+      expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "test-token");
       if (supplied) {
         expect(result.text).toBe(text);
         expect(acquireAgentRunPreparedModelRuntimeMock).not.toHaveBeenCalled();

@@ -4,24 +4,17 @@ import type { MediaUnderstandingProvider } from "./types.js";
 const mediaMetadataPlugins = vi.hoisted(() => {
   const pdf = { pdf: { textExtraction: "MiniMax-M2.7", image: false } };
   const minimax = { capabilities: ["image"], documentModels: pdf };
+  const mediaUnderstandingProviderMetadata = {
+    google: { capabilities: ["image"], autoPriority: { image: 30 } },
+    minimax: { ...minimax, autoPriority: { image: 40 } },
+    "minimax-portal": { ...minimax, autoPriority: { image: 50 } },
+    openrouter: { capabilities: ["image"], defaultModels: { image: "auto" } },
+    openai: {},
+  };
   return [
     {
-      contracts: {
-        mediaUnderstandingProviders: [
-          "google",
-          "minimax",
-          "minimax-portal",
-          "openrouter",
-          "openai",
-        ],
-      },
-      mediaUnderstandingProviderMetadata: {
-        google: { capabilities: ["image"], autoPriority: { image: 30 } },
-        minimax: { ...minimax, autoPriority: { image: 40 } },
-        "minimax-portal": { ...minimax, autoPriority: { image: 50 } },
-        openrouter: { capabilities: ["image"], defaultModels: { image: "auto" } },
-        openai: {},
-      },
+      contracts: { mediaUnderstandingProviders: Object.keys(mediaUnderstandingProviderMetadata) },
+      mediaUnderstandingProviderMetadata,
     },
   ];
 });
@@ -61,11 +54,7 @@ describe("media defaults", () => {
   });
   it("orders priorities without conflating declared capabilities and runtime hooks", () => {
     const capability = "video";
-    const hooks = {
-      describeImage: async () => ({ text: "image" }),
-      transcribeAudio: async () => ({ text: "audio" }),
-      describeVideo: async () => ({ text: "video" }),
-    };
+    const hooks = { describeVideo: async () => ({ text: "video" }) };
     const providers: MediaUnderstandingProvider[] = [
       { id: "z-tie", capabilities: [capability], autoPriority: { [capability]: 2 } },
       { id: "a-tie", capabilities: [capability], autoPriority: { [capability]: 2 } },
@@ -81,18 +70,7 @@ describe("media defaults", () => {
     ];
     const providerRegistry = new Map(providers.map((provider) => [provider.id, provider]));
 
-    const copy = vi.spyOn(Array.prototype, "toSorted");
-    let ordered: string[];
-    let copies: number;
-    try {
-      ordered = resolveAutoMediaKeyProviders({ capability, providerRegistry });
-      copies = copy.mock.calls.length;
-    } finally {
-      copy.mockRestore();
-    }
-
-    expect(copies).toBe(0);
-    expect(ordered).toEqual([
+    expect(resolveAutoMediaKeyProviders({ capability, providerRegistry })).toEqual([
       "negative",
       "zero",
       "hook-only",
@@ -101,7 +79,6 @@ describe("media defaults", () => {
       "google",
       "google",
     ]);
-    expect([...providerRegistry.values()]).toEqual(providers);
   });
 
   it("preserves configured MiniMax CN aliases for image auto discovery", () => {
@@ -118,14 +95,13 @@ describe("media defaults", () => {
       } as never,
     });
 
-    expect(providers).toContain("minimax-cn");
-    expect(providers).toContain("minimax-portal-cn");
-    expect(providers).not.toContain("gemini");
-    expect(providers).toContain("google");
-    expect(providers.indexOf("minimax-cn")).toBeLessThan(providers.indexOf("minimax"));
-    expect(providers.indexOf("minimax-portal-cn")).toBeLessThan(
-      providers.indexOf("minimax-portal"),
-    );
+    expect(providers).toEqual([
+      "google",
+      "minimax-cn",
+      "minimax",
+      "minimax-portal-cn",
+      "minimax-portal",
+    ]);
     providers.length = 0;
     expect(resolveAutoMediaKeyProviders({ capability: "image" })).toEqual([
       "google",

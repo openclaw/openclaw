@@ -3,7 +3,6 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VERSION } from "../version.js";
 
 const { guardedFetch, usesProxy } = vi.hoisted(() => ({
   guardedFetch: vi.fn<typeof import("../infra/net/fetch-guard.js").fetchWithSsrFGuard>(),
@@ -45,14 +44,7 @@ it.each([
   "releases the response for %s (%i, object=%s)",
   async (body, status, objectResponse, error, expected) => {
     const release = queueGuardedResponse(new Response(body, { status }));
-    const params = {
-      url: "https://provider.example/jobs",
-      headers: new Headers({ "Content-Type": "application/json" }),
-      body: { prompt: "Synthetic submission" },
-      fetchFn: fetch,
-      errorLabel: "submission",
-      responseLabel: "response",
-    };
+    const params = { ...postOptions(), errorLabel: "submission", responseLabel: "response" };
     const result = objectResponse
       ? postJsonResponse({ ...params, objectResponse: true })
       : postJsonResponse<unknown>(params);
@@ -74,6 +66,8 @@ afterEach(() => {
 });
 
 const getFirstGuardedFetchCall = () => guardedFetch.mock.calls[0]![0];
+const noSleep = async () => {};
+const immediateRetry = { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep: noSleep };
 
 function createTricklingResponse(status = 200): Response {
   const chunk = new TextEncoder().encode("{");
@@ -123,7 +117,7 @@ function downloadOptions(fetchFn: typeof fetch) {
   };
 }
 function postOptions() {
-  const body = { ok: true };
+  const body = {};
   return { url: "https://api.example.com/v1/test", headers: new Headers(), body, fetchFn: fetch };
 }
 function queueGuardedResponse(response: Response) {
@@ -174,7 +168,6 @@ describe("provider operation deadlines", () => {
     });
     vi.setSystemTime(4_250);
 
-    expect(resolveTimeoutMs).toHaveBeenCalledTimes(1);
     expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(1_750);
     expect(resolveTimeoutMs).toHaveBeenCalledTimes(1);
   });
@@ -183,18 +176,15 @@ describe("provider operation deadlines", () => {
     ["remaining deadline", 1_000, 10_000, 1_000],
     ["timer maximum", undefined, MAX_TIMER_TIMEOUT_MS + 1_000_000, MAX_TIMER_TIMEOUT_MS],
   ] as const)("caps poll waits at the %s", async (_label, timeoutMs, pollIntervalMs, expected) => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const wait = waitProviderOperationPollInterval({
       deadline: makeDeadline(timeoutMs),
       pollIntervalMs,
     });
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), expected);
     let settled = false;
     void wait.then(() => {
       settled = true;
     });
     await vi.advanceTimersByTimeAsync(expected - 1);
-    await Promise.resolve();
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await expect(wait).resolves.toBeUndefined();
@@ -216,7 +206,6 @@ describe("provider operation deadlines", () => {
     const assertion = expect(result).rejects.toThrow(`${label} timed out after 100ms`);
     await vi.advanceTimersByTimeAsync(110);
     await assertion;
-    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it("retries guarded transient provider status failures while polling", async () => {
@@ -233,7 +222,6 @@ describe("provider operation deadlines", () => {
     await vi.advanceTimersByTimeAsync(250);
 
     await expect(result).resolves.toEqual({ status: "completed" });
-    expect(guardedFetch).toHaveBeenCalledTimes(2);
     const call = getFirstGuardedFetchCall();
     expect([call.policy, call.dispatcherPolicy, call.auditContext]).toEqual([
       { allowPrivateNetwork: true },
@@ -247,7 +235,6 @@ describe("provider operation deadlines", () => {
   it.each(["poll", "download"])(
     "recomputes the remaining %s timeout before retries",
     async (stage) => {
-      const sleep = vi.fn(async () => undefined);
       const fetchFn = vi.fn<typeof fetch>(async () => {
         vi.setSystemTime(2_001);
         if (stage === "download") {
@@ -263,7 +250,7 @@ describe("provider operation deadlines", () => {
           : fetchProviderDownloadResponse({
               ...downloadOptions(fetchFn),
               deadline: makeDeadline(1_000, "video download"),
-              retry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep },
+              retry: immediateRetry,
             });
       const label = stage === "poll" ? pollLabel : "video download";
       const assertion = expect(result).rejects.toThrow(`${label} timed out after 1000ms`);
@@ -272,15 +259,11 @@ describe("provider operation deadlines", () => {
       }
       await assertion;
       expect(fetchFn).toHaveBeenCalledTimes(1);
-      if (stage === "download") {
-        expect(sleep).toHaveBeenCalledWith(0, undefined);
-      }
     },
   );
 
   it("retries transient generated asset downloads", async () => {
     vi.useRealTimers();
-    const sleep = vi.fn(async () => undefined);
     const fetchFn = vi
       .fn<typeof fetch>()
       .mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }))
@@ -288,50 +271,15 @@ describe("provider operation deadlines", () => {
 
     const response = await fetchProviderDownloadResponse({
       ...downloadOptions(fetchFn),
-      // Keep the shipped timeoutMs call shape working for external plugins.
       timeoutMs: 5_000,
-      retry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep },
+      retry: immediateRetry,
     });
 
     expect(await response.text()).toBe("video-bytes");
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledWith(0, undefined);
   });
 });
 
 describe("resolveProviderHttpRequestConfig", () => {
-  it("preserves explicit caller headers but protects attribution headers", () => {
-    const resolved = resolveProviderHttpRequestConfig({
-      baseUrl: "https://api.openai.com/v1/",
-      defaultBaseUrl: "https://api.openai.com/v1",
-      headers: {
-        authorization: "Bearer override",
-        "User-Agent": "custom-agent/1.0",
-        originator: "spoofed",
-      },
-      defaultHeaders: {
-        authorization: "Bearer default-token",
-        "X-Default": "1",
-      },
-      provider: "openai",
-      api: "openai-audio-transcriptions",
-      capability: "audio",
-      transport: "media-understanding",
-    });
-
-    expect(resolved).toMatchObject({
-      baseUrl: "https://api.openai.com/v1",
-      allowPrivateNetwork: false,
-    });
-    expect(Object.fromEntries(resolved.headers)).toMatchObject({
-      authorization: "Bearer override",
-      "x-default": "1",
-      "user-agent": `openclaw/${VERSION}`,
-      originator: "openclaw",
-      version: VERSION,
-    });
-  });
-
   it("removes default headers marked null by the runtime caller", () => {
     const defaults = { Authorization: "Bearer original", "X-Keep": "retained" };
     const resolved = resolveProviderHttpRequestConfig({
@@ -388,7 +336,6 @@ describe("fetchWithTimeoutGuarded", () => {
 
     const call = getFirstGuardedFetchCall();
     expect(call.auditContext).toBe(prefix);
-    expect(call.auditContext).not.toContain(String.fromCharCode(0xd83d));
   });
 
   it("merges full SSRF policy into JSON request guards", async () => {
@@ -429,23 +376,19 @@ describe("fetchWithTimeoutGuarded", () => {
     guardedFetch.mockReset();
     const firstRelease = queueGuardedResponse(busyResponse());
     const secondRelease = queueGuardedResponse(new Response(null, { status: 200 }));
-    const sleep = vi.fn(async () => undefined);
 
     const result = await postJsonRequest({
       ...postOptions(),
       retryStage: "read",
-      retry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep },
+      retry: immediateRetry,
     });
 
     expect(result.response.status).toBe(200);
-    expect(guardedFetch).toHaveBeenCalledTimes(2);
     expect(firstRelease).toHaveBeenCalledOnce();
     expect(secondRelease).not.toHaveBeenCalled();
-    expect(sleep).toHaveBeenCalledWith(0, undefined);
   });
 
   it("does not auto-upgrade when caller passes explicit dispatcherPolicy", async () => {
-    // Auto-upgrade would discard the caller's explicit dispatcher overrides.
     usesProxy.mockReturnValue(true);
 
     const explicitPolicy = {

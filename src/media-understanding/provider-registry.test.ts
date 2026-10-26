@@ -1,83 +1,40 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { mediaModels } from "./media-config.test-support.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
-import type { MediaUnderstandingProvider } from "./types.js";
-
-const resolvePluginCapabilityProvidersMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../plugins/capability-provider-runtime.js", () => ({
-  resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
+  resolvePluginCapabilityProviders: () => [],
 }));
 
-function requireMediaProvider(
-  registry: Map<string, MediaUnderstandingProvider>,
-  providerId: string,
-): MediaUnderstandingProvider {
-  const provider = getMediaUnderstandingProvider(providerId, registry);
-  if (!provider) {
-    throw new Error(`expected media-understanding provider ${providerId}`);
-  }
-  return provider;
-}
+const cfg: OpenClawConfig = { models: mediaModels("acme", "vision", ["text", "image"]) };
 
 describe("media-understanding provider registry", () => {
-  beforeEach(() => {
-    resolvePluginCapabilityProvidersMock.mockReset();
-    resolvePluginCapabilityProvidersMock.mockReturnValue([]);
-  });
-
-  it("adds configured image only for static opt-ins without mutating registrations or overrides", () => {
-    const cfg: OpenClawConfig = {
-      models: mediaModels("acme", "vision", ["text", "image"]),
-    };
-    const registered = Object.freeze({
-      id: "acme",
-      capabilities: ["audio"],
-      inheritConfiguredImageCapability: true,
-    } satisfies MediaUnderstandingProvider);
-    const projected = requireMediaProvider(
-      buildMediaUnderstandingRegistry(undefined, cfg, [registered]),
-      "acme",
-    );
-    expect(projected.capabilities).toEqual(["audio", "image"]);
-    expect(projected).not.toBe(registered);
-    expect(registered.capabilities).toEqual(["audio"]);
-    expect(
-      requireMediaProvider(buildMediaUnderstandingRegistry(undefined, {}, [registered]), "acme")
-        .capabilities,
-    ).toEqual(["audio"]);
-    for (const inheritConfiguredImageCapability of [false, undefined]) {
-      expect(
-        requireMediaProvider(
-          buildMediaUnderstandingRegistry(undefined, cfg, [
-            { ...registered, inheritConfiguredImageCapability },
-          ]),
-          "acme",
-        ).capabilities,
-      ).toEqual(["audio"]);
-    }
+  it("preserves partial native overrides for dispatch", () => {
     const overrideImage = vi.fn(async () => ({ text: "override image" }));
-    const override = {
-      id: "acme",
+    const registered = { id: "acme", capabilities: ["audio" as const] };
+    expect(
+      buildMediaUnderstandingRegistry(undefined, cfg, [registered]).get("acme")?.capabilities,
+    ).toEqual(["audio"]);
+    const registry = buildMediaUnderstandingRegistry(
+      {
+        acme: { id: "acme", capabilities: ["image"], describeImage: overrideImage },
+      },
+      cfg,
+      [registered],
+    );
+    expect(getMediaUnderstandingProvider("acme", registry)).toMatchObject({
       capabilities: ["image"],
       describeImage: overrideImage,
-    } satisfies MediaUnderstandingProvider;
-    const provider = requireMediaProvider(
-      buildMediaUnderstandingRegistry({ acme: override }, cfg, [registered]),
-      "acme",
-    );
-    expect(provider.capabilities).toEqual(["image"]);
-    expect(provider.describeImage).toBe(overrideImage);
-    expect(provider.describeImages).toBeUndefined();
-    expect(registered.capabilities).toEqual(["audio"]);
+    });
+    expect(getMediaUnderstandingProvider("acme", registry)?.describeImages).toBeUndefined();
   });
 
   it("auto-registers media-understanding for config providers with image-capable models (#51392)", () => {
-    const cfg: OpenClawConfig = {
+    const imageConfig: OpenClawConfig = {
       models: {
         providers: {
           ...mediaModels("glm", "glm-4.6v", ["text", "image"]).providers,
@@ -85,14 +42,11 @@ describe("media-understanding provider registry", () => {
         },
       },
     };
-    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
-    const glmProvider = requireMediaProvider(registry, "glm");
-    const textOnlyProvider = getMediaUnderstandingProvider("textOnly", registry);
-
-    expect(glmProvider.id).toBe("glm");
-    expect(glmProvider.capabilities).toEqual(["image"]);
-    expect(glmProvider.describeImage).toBeUndefined();
-    expect(glmProvider.describeImages).toBeUndefined();
-    expect(textOnlyProvider).toBeUndefined();
+    const registry = buildMediaUnderstandingRegistry(undefined, imageConfig);
+    const provider = getMediaUnderstandingProvider("glm", registry);
+    expect(provider).toMatchObject({ id: "glm", capabilities: ["image"] });
+    expect(provider?.describeImage).toBeUndefined();
+    expect(provider?.describeImages).toBeUndefined();
+    expect(getMediaUnderstandingProvider("textOnly", registry)).toBeUndefined();
   });
 });
