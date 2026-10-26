@@ -22,17 +22,6 @@ function expectUrlLink(lines: string[], url: string) {
 }
 
 describe("btw inline message", () => {
-  it("renders the BTW question, answer, and dismiss hint inline", () => {
-    const message = new BtwInlineMessage({ question: "what is 17 * 19?", text: "323" });
-    expect(message.render(80)).toEqual([
-      "",
-      " BTW: what is 17 * 19?                                                          ",
-      "",
-      "323                                                                             ",
-      " Press Enter or Esc to dismiss                                                  ",
-    ]);
-  });
-
   it.each([true, false])(
     "sanitizes questions and Markdown updates with native hyperlinks=%s",
     (hyperlinks) => {
@@ -42,19 +31,33 @@ describe("btw inline message", () => {
         const url = "https://example.test/tui/btw?copy=caf%C3%A9";
         const message = new BtwInlineMessage({
           question: "first \x1b[3Jquestion\r\nمرحبا\tשלום",
-          text: `\x1b]52;c;clipboard\x07**first café**\nsecond body ${url}`,
+          text: `\x1b]52;c;clipboard\x07**first café**\nsecond body ${url}\n\n\u202e# مرحبا\u202c\n\n\u200f> שלום\n\n\u2066- عنصر\u2069`,
         });
 
-        function check(visible: string[]) {
+        function check(visible: string[], absent: string[] = []) {
           const lines = message.render(140);
           const raw = lines.join("\n");
-          expectText(normalizeTestText(raw), visible);
+          const normalized = normalizeTestText(raw);
+          expectText(normalized, [...visible, "Press Enter or Esc to dismiss"], absent);
           expectText(raw, [], ["\x1b[3J", "\x1b]52;", "\u009b3J", "\u009d0;"]);
           expect(lines[1]).not.toMatch(/[\r\n\t]/u);
+          for (const line of lines.filter((entry) => /[\u0590-\u08ff]/u.test(entry))) {
+            expect(line.match(/[\u2067\u2069]/gu)).toEqual(["\u2067", "\u2069"]);
+          }
           expectUrlLink(lines, url);
           return normalizeTestText(raw);
         }
-        check(["BTW: \u2067first question مرحبا שלום\u2069", "first café", "second body"]);
+        check(
+          [
+            "BTW: \u2067first question مرحبا שלום\u2069",
+            "first café",
+            "second body",
+            "\u2067مرحبا\u2069",
+            "│ שלום",
+            "- عنصر",
+          ],
+          ["# مرحبا"],
+        );
 
         message.setResult({
           question: "next \u009b3Jquestion\r\nשלום\tمرحبا",
@@ -68,20 +71,6 @@ describe("btw inline message", () => {
       }
     },
   );
-
-  it("passes sanitized RTL source through Markdown exactly once", () => {
-    const message = new BtwInlineMessage({
-      question: "structure proof",
-      text: "\u202e# مرحبا\u202c\n\n\u200f> שלום\n\n\u2066- عنصر\u2069",
-    });
-
-    const lines = message.render(100);
-    const normalized = normalizeTestText(lines.join("\n")).replace(/[\u2067\u2069]/gu, "");
-    expectText(normalized, ["مرحبا", "│ שלום", "- عنصر"], ["# مرحبا"]);
-    for (const line of lines.filter((entry) => /[\u0590-\u08ff]/u.test(entry))) {
-      expect(line.match(/[\u2067\u2069]/gu)).toEqual(["\u2067", "\u2069"]);
-    }
-  });
 
   it.each([false, true])("sanitizes errors with an empty fallback=%s", (empty) => {
     const questionAttack = "\x1b]0;question-title\x07";

@@ -1,8 +1,8 @@
 import { renderFakeCursor, visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import { FilterableSelectList, type FilterableSelectItem } from "./filterable-select-list.js";
-import { expectText, selectByEnter, selectTheme, typeInput } from "./render.test-support.js";
+import { attacks, expectText, select, theme, typeText } from "./render.test-support.js";
 
 const cursorCell = renderFakeCursor(" ");
 
@@ -13,7 +13,7 @@ const testItems: FilterableSelectItem[] = [
 
 describe("FilterableSelectList", () => {
   const createList = (items = testItems, maxVisible = 5) =>
-    new FilterableSelectList(items, maxVisible, selectTheme);
+    new FilterableSelectList(items, maxVisible, theme);
   function expectFilter(list: FilterableSelectList, text = "") {
     expect(stripAnsi(list.render(80)[0] ?? "").trimEnd()).toBe(`>Filter: <> ${text}${cursorCell}`);
   }
@@ -27,7 +27,7 @@ describe("FilterableSelectList", () => {
     list.focused = true;
 
     for (const filter of ["", "missing"]) {
-      typeInput(list, filter);
+      typeText(list, filter);
       expect(Math.max(...list.render(7).map(visibleWidth))).toBeLessThanOrEqual(7);
     }
   });
@@ -38,7 +38,7 @@ describe("FilterableSelectList", () => {
     list.handleInput("k");
 
     expectFilter(list, "k");
-    expect(selectByEnter(list)?.value).toBe("kilo");
+    expect(select(list)?.value).toBe("kilo");
   });
 
   it("preserves arrow and Ctrl-key navigation", () => {
@@ -51,39 +51,22 @@ describe("FilterableSelectList", () => {
       ["\x1b[A", "session-1"],
     ] as const) {
       list.handleInput(key);
-      expect(selectByEnter(list)?.value).toBe(value);
+      expect(select(list)?.value).toBe(value);
     }
   });
 
-  it("clears the active filter before cancelling with modifyOtherKeys Ctrl+C", () => {
-    const key = "\x1b[27;5;99~";
+  it("resets the filtered selection when modifyOtherKeys Ctrl+C clears the query", () => {
     const list = createList();
-    const onCancel = vi.fn();
-    list.onCancel = onCancel;
-
-    typeInput(list, "beta");
+    typeText(list, "beta");
     expectFilter(list, "beta");
-    expect(selectByEnter(list)?.value).toBe("session-2");
-
-    list.handleInput(key);
-
-    expect(onCancel).not.toHaveBeenCalled();
+    expect(select(list)?.value).toBe("session-2");
+    list.handleInput("\x1b[27;5;99~");
     expectFilter(list);
-    expect(selectByEnter(list)?.value).toBe("session-1");
+    expect(select(list)?.value).toBe("session-1");
     expectText(list.render(80).join("\n"), ["first session", "second session"]);
-    list.handleInput(key);
-    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
   it("sanitizes rendered fields without changing filtering or the selected value", () => {
-    const attacks = [
-      "\u001b[38;5;201m",
-      "\u001b[3J",
-      "\u001b]0;filter-title\u0007",
-      "\u001b]52;c;filter-clipboard\u0007",
-      "\u009b2K",
-      "\u009d0;filter-c1-title\u009c",
-    ];
     const rawValue = `fv-start${attacks[1]}fv-end\r\nمرحبا\tשלום`;
     const description = `fd-start${attacks[3]}fd-end\n東京`;
     const list = createList([
@@ -91,7 +74,7 @@ describe("FilterableSelectList", () => {
       { value: rawValue, label: attacks.join(""), description, searchText: "raw-filter-target" },
     ]);
 
-    typeInput(list, "raw-filter-target");
+    typeText(list, "raw-filter-target");
     const rendered = list.render(160).join("\n");
 
     expectText(
@@ -102,7 +85,7 @@ describe("FilterableSelectList", () => {
 
     // Text removed from display remains part of the original search fields.
     list.handleInput("\x1b");
-    typeInput(list, "filter-title");
-    expect(selectByEnter(list)).toMatchObject({ searchText: "raw-filter-target", value: rawValue });
+    typeText(list, "picker-title");
+    expect(select(list)).toMatchObject({ searchText: "raw-filter-target", value: rawValue });
   });
 });

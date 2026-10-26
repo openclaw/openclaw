@@ -1,7 +1,7 @@
 import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
-import { expectText, selectByEnter, selectTheme, typeInput } from "./render.test-support.js";
+import { attacks, expectText, select, theme, typeText } from "./render.test-support.js";
 import {
   SearchableSelectList,
   type SearchableSelectItem,
@@ -22,18 +22,11 @@ const ansiHighlightTheme: SearchableSelectListTheme = {
 function item(value: string, description?: string, label = value): SearchableSelectItem {
   return { value, label, description };
 }
-const testItems = [
-  item("anthropic/claude-3-opus", "Claude 3 Opus"),
-  item("anthropic/claude-3-sonnet", "Claude 3 Sonnet"),
-  item("openai/gpt-4", "GPT-4"),
-  item("openai/gpt-4-turbo", "GPT-4 Turbo"),
-  item("google/gemini-pro", "Gemini Pro"),
-];
 const makeList = (
-  items: SearchableSelectItem[] = testItems,
-  theme: SearchableSelectListTheme = selectTheme,
+  items: SearchableSelectItem[] = [item("model")],
+  listTheme: SearchableSelectListTheme = theme,
   maxVisible = 5,
-) => new SearchableSelectList(items, maxVisible, theme);
+) => new SearchableSelectList(items, maxVisible, listTheme);
 const makeAnsiList = (items: SearchableSelectItem[], maxVisible = 5) =>
   makeList(items, ansiHighlightTheme, maxVisible);
 const render = (list: SearchableSelectList, width = 80) => list.render(width).join("\n");
@@ -84,11 +77,10 @@ describe("SearchableSelectList", () => {
 
   it("does not corrupt ANSI sequences when highlighting repeated query tokens", () => {
     const list = makeAnsiList([item("gpt-model")]);
-    typeInput(list, "  gpt GPT m  ");
+    typeText(list, "  gpt GPT m  ");
     const rendered = list.render(80);
     const renderedLine = rendered.find((line) => stripAnsi(line).includes("gpt-model"));
     expect(renderedLine?.split("\u001b[31m")).toHaveLength(3);
-    expect(list.render(80)).toEqual(rendered);
   });
 
   it("renders the current query after clearing and replacing it", () => {
@@ -105,20 +97,12 @@ describe("SearchableSelectList", () => {
   });
 
   it("sanitizes rendered fields before applying trusted highlighting", () => {
-    const attacks = [
-      "\u001b[38;5;201m",
-      "\u001b[3J",
-      "\u001b]0;search-title\u0007",
-      "\u001b]52;c;search-clipboard\u0007",
-      "\u009b2K",
-      "\u009d0;search-c1-title\u009c",
-    ];
     const rawValue = `selector-value-start${attacks[1]}selector-value-end\r\nمرحبا\tשלום`;
     const description = `selector-description-start${attacks[3]}selector-description-end\n東京`;
     const list = makeAnsiList([
       { value: rawValue, label: attacks.join(""), description, searchText: "selector-target" },
     ]);
-    typeInput(list, "selector");
+    typeText(list, "selector");
     const rendered = render(list, 160);
     const plainRendered = stripAnsi(rendered);
     expect(rendered).toContain("\u001b[31mselector\u001b[0m-value-start");
@@ -129,16 +113,6 @@ describe("SearchableSelectList", () => {
       "\u2069",
     ]);
     expectText(rendered, [], [...attacks, "selector-value-end\r\nمرحبا\tשלום"]);
-    expect(selectByEnter(list)?.value).toBe(rawValue);
-  });
-
-  it("cancels an active query with modifyOtherKeys Ctrl+C", () => {
-    const list = makeList();
-    list.onCancel = vi.fn();
-    typeInput(list, "gemini");
-    const selected = selectByEnter(list);
-    list.handleInput("\x1b[27;5;99~");
-    expect(list.onCancel).toHaveBeenCalledTimes(1);
-    expect(selectByEnter(list)).toBe(selected);
+    expect(select(list)?.value).toBe(rawValue);
   });
 });

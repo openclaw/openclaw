@@ -1,7 +1,16 @@
 import type { SelectItem } from "@earendil-works/pi-tui";
 import { expect, vi } from "vitest";
 
-export const selectTheme = {
+export const attacks = [
+  "\u001b[38;5;201m",
+  "\u001b[3J",
+  "\u001b]0;picker-title\u0007",
+  "\u001b]52;c;picker-clipboard\u0007",
+  "\u009b2K",
+  "\u009d0;picker-c1-title\u009c",
+];
+
+export const theme = {
   selectedPrefix: (t: string) => `[${t}]`,
   selectedText: (t: string) => `**${t}**`,
   description: (t: string) => `(${t})`,
@@ -13,13 +22,13 @@ export const selectTheme = {
   matchHighlight: (t: string) => `*${t}*`,
 };
 
-export function typeInput(list: { handleInput: (key: string) => void }, text: string) {
+export function typeText(list: { handleInput: (key: string) => void }, text: string) {
   for (const ch of text) {
     list.handleInput(ch);
   }
 }
 
-export function selectByEnter(list: {
+export function select(list: {
   handleInput: (key: string) => void;
   onSelect?: (item: SelectItem) => void;
 }) {
