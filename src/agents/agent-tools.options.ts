@@ -70,7 +70,11 @@ export type OpenClawCodingToolsOptions = {
   emitBeforeToolCallDiagnostics?: boolean;
   /** Attempt-local authority to start or redirect delegated work. */
   delegationCapability?: DelegationCapability;
-  /** Host-resolved lifetime of this turn's tool policy; "conversation" adds no per-turn narrowing. */
+  /**
+   * Host-resolved lifetime of this turn's tool policy, as `pluginHarnessToolPolicyScope` reports it.
+   * "conversation" means the turn adds no narrowing the session would not re-derive on its next
+   * turn. Omitted or "turn" keeps every background follow-up capped at this turn's tool list.
+   */
   toolPolicyScope?: "conversation" | "turn";
   /** Model API for the current provider (used for provider-native tool arbitration). */
   modelApi?: string;
