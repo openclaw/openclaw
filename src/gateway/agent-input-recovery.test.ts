@@ -21,10 +21,7 @@ it("retains every deferred group member when recovery fails before handoff", asy
   await gate.track(
     Promise.resolve({
       initial: Promise.resolve(),
-      pending: new Map([
-        ["main", pending.promise],
-        ["child", pending.promise],
-      ]),
+      pending: new Map(["main", "child"].map((id) => [id, pending.promise])),
       settled: pending.promise,
     }),
   );
@@ -41,15 +38,8 @@ it("retains an initial recovery failure for later input waiters", async () => {
   const gate = new GatewayInputRecovery();
   const error = new Error("recovery discovery failed");
   const failed = Promise.reject(error);
-  await expect(
-    gate.track(
-      Promise.resolve({
-        initial: failed,
-        pending: new Map(),
-        settled: failed,
-      }),
-    ),
-  ).rejects.toBe(error);
+  const progress = { initial: failed, pending: new Map<string, Promise<void>>(), settled: failed };
+  await expect(gate.track(Promise.resolve(progress))).rejects.toBe(error);
   await expect(gate.waitForAgentInputRecovery("main")).rejects.toBe(error);
   expect(gate.isPending("main")).toBe(true);
 });

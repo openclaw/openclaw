@@ -44,35 +44,33 @@ it("joins cron writes and receipt finalization before close", async ({ signal })
       saveCronStore(storePath, { version: 1, jobs: [{ ...job, enabled: false }] }),
     );
     await gate(saveCommitted.promise, saving, "Cron save did not commit");
-    finishing = kernel.connectionWork.track(async () => {
-      await stateWorker.runOpenClawStateWorkerOperation(
-        captureOpenClawStateWorkerContext(),
-        (scope) =>
-          scope.execute({
-            type: "cron.finalizeRuns",
-            input: {
-              storeKey: handle.storeKey,
-              snapshot: {
-                nowMs: 3,
-                defaultAgentId: "main",
-                outcomes: [
-                  {
-                    jobId: job.id,
-                    job,
-                    runReceipt: handle,
-                    status: "ok",
-                    errorReason: undefined,
-                    completionStatus: "succeeded",
-                    deliveryState: { ...notRequested, failureNotification: notRequested },
-                    startedAt: 1,
-                    endedAt: 3,
-                  },
-                ],
-              },
+    finishing = kernel.connectionWork.track(() =>
+      stateWorker.runOpenClawStateWorkerOperation(captureOpenClawStateWorkerContext(), (scope) =>
+        scope.execute({
+          type: "cron.finalizeRuns",
+          input: {
+            storeKey: handle.storeKey,
+            snapshot: {
+              nowMs: 3,
+              defaultAgentId: "main",
+              outcomes: [
+                {
+                  jobId: job.id,
+                  job,
+                  runReceipt: handle,
+                  status: "ok",
+                  errorReason: undefined,
+                  completionStatus: "succeeded",
+                  deliveryState: { ...notRequested, failureNotification: notRequested },
+                  startedAt: 1,
+                  endedAt: 3,
+                },
+              ],
             },
-          }),
-      );
-    });
+          },
+        }),
+      ),
+    );
     await gate(finishCommitted.promise, finishing, "Cron finalization did not commit");
     kernel.connectionWork.signal.addEventListener("abort", () => receivedWorkCancelled.resolve(), {
       once: true,
