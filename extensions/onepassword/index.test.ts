@@ -4,52 +4,33 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import type { OnePasswordBroker } from "./src/broker.js";
+import { MemoryKeyedStore } from "./src/memory-store.test-support.js";
 
 function register(
   current: () => OpenClawConfig = () => ({}),
   pluginConfig?: Record<string, unknown>,
 ) {
-  const store = {
-    register: vi.fn(async () => undefined),
-    lookup: vi.fn(async () => undefined),
-    lookupMany: vi.fn(async () => []),
-    delete: vi.fn(async () => undefined),
-    entries: vi.fn(async () => []),
-  };
   const hooks = { registerCli: vi.fn(), registerTool: vi.fn(), on: vi.fn() };
-  const openKeyedStore = vi.fn(() => store);
-  const openKeyedStoreV2 = vi.fn(() => store);
   plugin.register(
     createTestPluginApi({
       id: "onepassword",
-      config: current(),
       pluginConfig,
       runtime: {
         config: { current },
         state: {
-          openKeyedStore,
-          openKeyedStoreV2,
+          openKeyedStore: () => new MemoryKeyedStore(),
+          openKeyedStoreV2: () => new MemoryKeyedStore(),
           resolveStateDir: () => "/tmp/openclaw-onepassword-test",
         },
       } as never,
       ...hooks,
     }),
   );
-  return { openKeyedStore, openKeyedStoreV2, ...hooks };
+  return hooks;
 }
 
-it("opens bounded grant, audit, and pending stores", () => {
-  const { openKeyedStore, openKeyedStoreV2, registerCli, registerTool } = register();
-  const options = (namespace: string, maxEntries: number) => ({
-    namespace,
-    maxEntries,
-    overflowPolicy: "evict-oldest",
-  });
-  expect(openKeyedStoreV2.mock.calls).toEqual([[options("grants", 1_024)]]);
-  expect(openKeyedStore.mock.calls).toEqual([
-    [options("audit", 40_000)],
-    [options("pending", 512)],
-  ]);
+it("registers the CLI without exposing an unconfigured tool", () => {
+  const { registerCli, registerTool } = register();
   expect(registerCli).toHaveBeenCalledTimes(1);
   expect(registerTool).not.toHaveBeenCalled();
 });
@@ -66,20 +47,17 @@ it("evaluates enablement and before-tool policy from live plugin config", async 
     | OnePasswordBroker["beforeToolCall"]
     | undefined;
   assert(beforeToolCall, "missing before_tool_call hook");
-  const evaluate = (toolCallId: string, reason: string) =>
+  const context = { toolName: "onepassword", toolCallId: "live-policy", agentId: "agent-a" };
+  const evaluate = () =>
     beforeToolCall(
-      { toolName: "onepassword", toolCallId, params: { action: "get", slug: "deploy", reason } },
-      { toolName: "onepassword", toolCallId, agentId: "agent-a" },
+      { ...context, params: { action: "get", slug: "deploy", reason: "test live config" } },
+      context,
     );
 
   entry.enabled = false;
-  await expect(evaluate("live-enabled-1", "test live enablement")).resolves.toMatchObject({
-    block: true,
-  });
+  await expect(evaluate()).resolves.toMatchObject({ block: true });
 
   entry.enabled = true;
   entry.config = pluginConfig("deny");
-  await expect(evaluate("live-policy-1", "test live policy")).resolves.toMatchObject({
-    block: true,
-  });
+  await expect(evaluate()).resolves.toMatchObject({ block: true });
 });

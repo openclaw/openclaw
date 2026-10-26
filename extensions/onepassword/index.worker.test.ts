@@ -12,13 +12,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import type { AuditRow, OnePasswordBroker, PendingAuthorization } from "./src/broker.js";
 
-const { getItem } = vi.hoisted(() => ({
-  getItem: vi.fn(async () => ({
+const getItem = vi.hoisted(() =>
+  vi.fn(async () => ({
     value: "synthetic-secret",
     itemTitle: "Fixture",
     fieldLabel: "credential",
   })),
-}));
+);
 vi.mock("./src/op-client.js", () => ({
   OpClient: class {
     getItem = getItem;
@@ -45,12 +45,11 @@ it("hands approvals to competing tool executions without main-thread SQL", async
       approval: { item: "Approval fixture", field: "credential", policy: "approve" },
     },
   };
-  const config = { plugins: { entries: { onepassword: { config: pluginConfig } } } };
   const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
   const on = vi.fn<OpenClawPluginApi["on"]>();
-  const api = createTestPluginApi({ id: "onepassword", config, pluginConfig, registerTool, on });
+  const api = createTestPluginApi({ id: "onepassword", pluginConfig, registerTool, on });
   api.runtime.config = {
-    current: () => config,
+    current: () => ({ plugins: { entries: { onepassword: { config: pluginConfig } } } }),
     mutateConfigFile: vi.fn(),
     replaceConfigFile: vi.fn(),
   };
@@ -121,11 +120,8 @@ it("hands approvals to competing tool executions without main-thread SQL", async
       .openKeyedStore<T>({ namespace, maxEntries, overflowPolicy: "evict-oldest" })
       .entries();
   expect(await entries<PendingAuthorization>("pending", 512)).toEqual([]);
-  const audit = await entries<AuditRow>("audit", 40_000);
-  expect(audit.map(({ value }) => value.outcome)).toEqual(
+  expect((await entries<AuditRow>("audit", 40_000)).map(({ value }) => value.outcome)).toEqual(
     expect.arrayContaining(["auto", "approved", "grant"]),
   );
-  for (const call of sql) {
-    expect(call).not.toHaveBeenCalled();
-  }
+  expect(sql.flatMap((spy) => spy.mock.calls)).toEqual([]);
 });
