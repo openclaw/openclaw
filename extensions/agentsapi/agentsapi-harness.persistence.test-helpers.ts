@@ -43,16 +43,15 @@ export function createBindingStore<T = StoredBinding>(env: NodeJS.ProcessEnv) {
 
 export async function externalSessionFixture(state: { stateDir: string; env: NodeJS.ProcessEnv }) {
   const params = await createAttempt(state.stateDir);
-  const config = { environment: "self_hosted" };
   const runtime = createBindingRuntime(state.env, () => ({
-    plugins: { entries: { agentsapi: { config } } },
+    plugins: { entries: { agentsapi: { config: { environment: "self_hosted" } } } },
   }));
-  const openStore = <T = AgentsApiBinding>() => createBindingStore<T>(state.env);
   const events: string[] = [];
+  const hostedSession = createHostedSession("idle");
   const nativeSession: Awaited<ReturnType<AgentsApiClient["session"]>> = {
-    ...createHostedSession("idle"),
+    ...hostedSession,
     id: "native-executor-session",
-    agent: { ...createHostedSession().agent, id: "fixture-agent" },
+    agent: { ...hostedSession.agent, id: "fixture-agent" },
     environment: {
       id: "executor-environment",
       type: "self_hosted",
@@ -60,20 +59,18 @@ export async function externalSessionFixture(state: { stateDir: string; env: Nod
       workspace_directory: "/executor/project",
       remote_url: "wss://executor.example.test/session",
     },
-    required_actions: [],
   };
   const client = mockClient(nativeSession.id);
   client.session.mockResolvedValue(nativeSession);
-  const cancel = vi.spyOn(AgentsApiClient.prototype, "cancel").mockImplementation(async () => {
-    events.push("cancel");
-  });
   return {
     params,
     runtime,
-    openStore,
+    openStore: <T = AgentsApiBinding>() => createBindingStore<T>(state.env),
     nativeSession,
     ...client,
-    cancel,
+    cancel: vi.spyOn(AgentsApiClient.prototype, "cancel").mockImplementation(async () => {
+      events.push("cancel");
+    }),
     events,
     createHarness: () => requireAgentsApiHarness(runtime),
   };
@@ -113,10 +110,7 @@ function requireAgentsApiHarness(runtime: PluginRuntime) {
 function createBindingRuntime(env: NodeJS.ProcessEnv, current: () => OpenClawConfig) {
   setRuntimeConfigSnapshot(current());
   const runtime = createPluginRuntimeMock({ config: { current } });
-  runtime.state.openKeyedStoreV2 = <T>(
-    options: Parameters<typeof runtime.state.openKeyedStoreV2>[0],
-    authority?: Parameters<typeof runtime.state.openKeyedStoreV2>[1],
-  ) => {
+  runtime.state.openKeyedStoreV2 = <T>(options, authority) => {
     const store = createPluginStateKeyedStoreForTests<T>("agentsapi", { ...options, env });
     return authority ? store.withCurrent(authority) : store;
   };
@@ -139,9 +133,8 @@ export async function createAttempt(stateDir: string) {
     ...target,
     entry: { sessionId: target.sessionId, updatedAt: Date.now() },
   });
-  const params = createAttemptParams();
   return {
-    ...params,
+    ...createAttemptParams({ hostCapabilities: { createToolSurfaceAsync: async () => [] } }),
     ...target,
     sessionTarget: target,
     sessionFile: path.join(stateDir, "session.jsonl"),
@@ -151,8 +144,6 @@ export async function createAttempt(stateDir: string) {
     runId: "persisted-run",
     prompt: "Continue the retained conversation.",
     timeoutMs: 5_000,
-    resolvedApiKey: "fixture-not-a-real-api-key",
-    hostCapabilities: { ...params.hostCapabilities, createToolSurfaceAsync: async () => [] },
   } satisfies AgentHarnessAttemptParamsV2;
 }
 

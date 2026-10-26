@@ -54,7 +54,7 @@ export async function createWorkspaceAttachmentFixture(directory: string) {
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(directory, "state"));
   await fs.mkdir(gatewayRoot);
   await fs.mkdir(remoteRoot);
-  const bridge: AgentWorkspaceAccess["bridge"] = {
+  const bridge = {
     readFile: ({ filePath }) => fs.readFile(path.join(remoteRoot, filePath)),
     writeFile: async () => {
       throw new Error("Attachment staging must use exclusive creation");
@@ -89,16 +89,12 @@ export async function createWorkspaceAttachmentFixture(directory: string) {
         throw error;
       }
     },
-  };
+  } satisfies AgentWorkspaceAccess["bridge"];
   const release = registerAgentWorkspaceAccess(gatewayRoot, {
     bridge,
     prepareTurnAttachments: createWorkspaceAttachmentPreparer({
       remoteRoot,
-      createBridge: () => ({
-        readFile: bridge.readFile,
-        stat: bridge.stat,
-        createFileExclusive: bridge.createFileExclusive!,
-      }),
+      createBridge: () => bridge,
     }),
   });
   onTestFinished(release);
