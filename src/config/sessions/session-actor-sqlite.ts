@@ -39,6 +39,10 @@ import type {
 } from "./session-actor-contract.js";
 import type { SessionActorExecutor, SessionActorExecutorGuards } from "./session-actor-executor.js";
 import { SessionActorReadInvalidatedError } from "./session-actor-read-error.js";
+import {
+  restoreSessionActorCommittedOutcome,
+  type SessionActorCommittedWireOutcome,
+} from "./session-actor-receipt.js";
 import type { createSessionActorReplica } from "./session-actor-replica.js";
 import { publishCommittedSessionTranscriptReceipts } from "./session-transcript-authority.js";
 
@@ -342,7 +346,10 @@ export function createSqliteSessionActorExecutor(
                 receipt.phase === name
               ) {
                 // SAFETY: The paired worker constructs the typed result; native admission validates its settlement envelope.
-                committed = evidence as Extract<Outcome, { kind: "committed" }>;
+                committed = restoreSessionActorCommittedOutcome(
+                  evidence as SessionActorCommittedWireOutcome<SessionActorPhaseResults[Phase]>,
+                  entryReference,
+                );
                 if (!reply.ok) {
                   preserveFailure(reply.error, "response");
                 } else if (reply.value.kind === "committed" && reply.value.failure) {

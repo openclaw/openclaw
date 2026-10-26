@@ -672,6 +672,8 @@ it("admits tool appends once per transaction boundary without transferring repli
       expect(serialize(facts.snapshot).byteLength).toBeLessThan(1024);
     }
     const committed = actor.snapshot(authority)!;
+    expect(committed.entry).toEqual(initial.entry);
+    expect(committed.entry).not.toBe(initial.entry);
     expect(committed.transcript.version.rawSeq).toBeGreaterThan(
       initial.transcript.version.rawSeq ?? -1,
     );
