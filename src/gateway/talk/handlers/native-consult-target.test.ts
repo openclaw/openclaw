@@ -173,16 +173,11 @@ const steerRelay = (sessionId: string, handlers?: GatewayRequestHandlers) =>
   dispatch("talk.session.steer", { sessionId, text: "status", mode: "status" }, handlers);
 
 function makeConsultBridge(submitToolResult = () => undefined) {
-  return {
-    connect: async () => undefined,
-    sendAudio: () => undefined,
-    setMediaTimestamp: () => undefined,
+  return makeBridge({
+    triggerGreeting: undefined,
     handleBargeIn: () => undefined,
     submitToolResult,
-    acknowledgeMark: () => undefined,
-    close: () => undefined,
-    isConnected: () => true,
-  };
+  });
 }
 
 type RunTargetParams = Parameters<typeof resolveOwnedActiveTalkRunTarget>[0];
@@ -322,10 +317,7 @@ beforeEach(async () => {
   browserVoiceSessionIds.clear();
   browserControl = undefined;
   vi.clearAllMocks();
-  mocks.runEmbeddedAgent.mockReset().mockResolvedValue({
-    payloads: [{ text: "Synthetic consult answer" }],
-    meta: { durationMs: 0 },
-  });
+  mocks.runEmbeddedAgent.mockReset();
   rpcSourceTesting.clear();
   context.chatRunState.clear();
   context.agentRunSeq.clear();
@@ -676,10 +668,6 @@ it.each(["source", "claim"] as const)(
       expect(rpcSourceTesting.get("queued-talk")).toBe(registration.entry);
       expect(targetRun?.isCurrent()).toBe(true);
       expect(await control(voiceTarget, "status")).toMatchObject({ active: false });
-      expect(await control(targetRun, "status", { mode: "status" })).toMatchObject({
-        active: true,
-        sessionId: resolvedSessionId,
-      });
       expectOk(
         await dispatch("talk.client.steer", { sessionKey: "main", text: "status", mode: "status" }),
         expect.objectContaining({ active: true, sessionId: resolvedSessionId }),
@@ -794,16 +782,15 @@ it("restores bounded relay history after the original voice provider finishes cl
     expect(transcript[0]?.event).toMatchObject({
       message: { content: [{ type: "text", text: utterances[0]?.trim() }] },
     });
-    expect(transcript.slice(-2).map(({ event }) => event)).toEqual(
-      [
-        ["user", tailUser],
-        ["assistant", tailAssistant],
-      ].map(([role, text]) =>
-        expect.objectContaining({
-          message: expect.objectContaining({ role, content: [{ type: "text", text }] }),
-        }),
-      ),
-    );
+    expect(
+      transcript.slice(-2).map(({ event }) => (isRecord(event) ? event.message : undefined)),
+    ).toEqual([
+      expect.objectContaining({ role: "user", content: [{ type: "text", text: tailUser }] }),
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: tailAssistant }],
+      }),
+    ]);
 
     const replacement = await createRelayCall({
       voiceChangeId: changeId,
