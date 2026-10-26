@@ -32,10 +32,12 @@ const MSTEAMS_GROUP_CONVERSATION_ID = /^19:.+@thread\.(?:tacv2|skype|v2)$/i;
 
 // A configured allowlist whose entries cannot be turned into stable IDs must stay configured and
 // match nothing. Projecting it to an empty list or map would read as "no allowlist" and admit
-// everyone, so these placeholders keep the restriction in force. None can equal a real sender,
-// team, or channel ID: the access group is never defined and the thread IDs use a reserved suffix.
-export const MSTEAMS_UNMATCHABLE_ALLOW_ENTRY = "accessGroup:openclaw-msteams-unresolved-allowlist";
+// everyone, so this placeholder keeps the restriction in force. It must not be an access-group
+// reference (operators can define any group name) or any other value an operator can turn into a
+// grant. A thread-shaped ID with a reserved suffix cannot equal a real sender ID, display name, or
+// conversation ID: Teams conversation IDs end in tacv2, v2, or skype.
 const MSTEAMS_UNMATCHABLE_THREAD_ID = "19:openclaw-unresolved-allowlist@thread.unresolved";
+export const MSTEAMS_UNMATCHABLE_ALLOW_ENTRY = MSTEAMS_UNMATCHABLE_THREAD_ID;
 
 /** Keeps a configured but fully unresolvable sender allowlist configured and matching nothing. */
 export function keepConfiguredMSTeamsAllowlistActive(

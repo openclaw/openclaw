@@ -402,6 +402,18 @@ describe("configured allowlists that cannot be resolved stay configured", () => 
     ]);
   });
 
+  it("never mutates the stored configuration or leaks the placeholder into it", () => {
+    const teams = { Engineering: team({ Roadmap: {} }) };
+    const groupAllowFrom = ["Bob Builder"];
+    const before = structuredClone({ teams, groupAllowFrom });
+    projectStableMSTeamsTeamsConfig(teams);
+    keepConfiguredMSTeamsAllowlistActive(
+      groupAllowFrom,
+      projectStableMSTeamsGroupAllowlist(groupAllowFrom),
+    );
+    expect({ teams, groupAllowFrom }).toEqual(before);
+  });
+
   it("leaves resolvable, empty, and unset sender allowlists unchanged", () => {
     expect(keepConfiguredMSTeamsAllowlistActive([userId, "Bob"], [userId])).toEqual([userId]);
     expect(keepConfiguredMSTeamsAllowlistActive([], [])).toEqual([]);

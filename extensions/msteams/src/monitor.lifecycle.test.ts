@@ -527,6 +527,11 @@ describe("monitorMSTeamsProvider lifecycle", () => {
 
     await startMonitor(cfg);
 
+    // The operator's stored configuration keeps its original entries; only the in-memory
+    // projection handed to the handler carries the placeholder.
+    expect(cfg.channels?.msteams?.groupAllowFrom).toEqual(["Bob Builder"]);
+    expect(cfg.channels?.msteams?.teams).toEqual({ Engineering: {} });
+
     const registered = registeredDeps().cfg.channels?.msteams;
     expect(registered?.groupAllowFrom).toEqual([MSTEAMS_UNMATCHABLE_ALLOW_ENTRY]);
     expect(Object.keys(registered?.teams ?? {})).toHaveLength(1);
