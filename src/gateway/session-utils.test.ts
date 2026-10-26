@@ -63,7 +63,7 @@ const { getSessionProviderArtifactMocks, resetSessionProviderArtifacts } =
   await import("./session-utils-provider.test-support.js");
 const providerArtifactMocks = getSessionProviderArtifactMocks();
 
-function makeSession(sessionId: string, fields: Partial<SessionEntry> = {}): SessionEntry {
+function makeSession(sessionId: string, fields: Partial<InternalSessionEntry> = {}) {
   return { sessionId, updatedAt: 1, ...fields };
 }
 

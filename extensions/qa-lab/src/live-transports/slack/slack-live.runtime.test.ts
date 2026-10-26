@@ -659,7 +659,12 @@ describe("Slack native data QA scenarios", () => {
       const history = vi.fn(async (query: unknown) => {
         const expected = reads.shift();
         assert(expected, "unexpected Slack history retry");
-        expect(query).toMatchObject({ channel: context.channelId, latest: expected.ts });
+        expect(query).toEqual({
+          channel: context.channelId,
+          inclusive: true,
+          latest: expected.ts,
+          limit: 1,
+        });
         return {
           messages: [
             {

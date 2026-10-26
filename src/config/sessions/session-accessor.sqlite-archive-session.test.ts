@@ -239,7 +239,7 @@ describe("SQLite transcript archive sessions", () => {
       let following: Promise<void> | undefined;
       try {
         await awaitGateBeforeSettlement(
-          Atomics.waitAsync(gate, 0, 0).value,
+          Promise.resolve(Atomics.waitAsync(gate, 0, 0).value),
           active,
           "Archive completed before entering the flush gate",
         );

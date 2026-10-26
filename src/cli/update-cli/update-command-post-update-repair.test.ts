@@ -964,6 +964,7 @@ describe("post-activation failure settlement without inference", () => {
       const report = getUpdateRun(run.runId, { env: run.env });
       expect(report?.verification.serviceRunning).toBe(untouched ? undefined : recovered);
       expect(report?.verification.readyz).toBe(untouched ? undefined : recovered);
+      const rendered = renderUpdateRunReport(report!).lines.join("\n");
       if (migration) {
         expect(report?.status).toBe("failed");
         if (receipt === "migration-verified") {
@@ -982,14 +983,21 @@ describe("post-activation failure settlement without inference", () => {
         );
         expect(refusal).toMatchObject({ status: "failed", exitCode: 1 });
       }
-      if (receipt === "settled") {
-        expect(report?.origin.nextAction).toMatch(
-          /installed Gateway is healthy.*running on the retained state.*openclaw --profile work gateway stop.*openclaw --profile work update repair/,
-        );
+      if (migration && !recovered) {
+        expect(rendered).toContain("openclaw --profile work doctor --fix");
+        expect(rendered).toContain("openclaw --profile work gateway start");
+      }
+      if (recovered) {
+        expect(rendered).toContain("openclaw --profile work update repair");
+        expect(report?.origin.nextAction).toContain("installed Gateway is healthy");
+        expect(report?.origin.nextAction).toContain("running on the retained state");
+        expect(report?.origin.nextAction).toContain("openclaw --profile work gateway stop");
         expect(report?.origin.nextAction).not.toContain("migrated state");
       }
       if (receipt === "unsettled") {
         expect(mocks.rollback).not.toHaveBeenCalled();
+        expect(report?.origin.nextAction).toContain("41001, 41002");
+        expect(report?.origin.nextAction).toContain("Keep the Gateway stopped");
         expect(
           report?.steps.findLast((step) => step.step === "doctor process settlement"),
         ).toMatchObject({

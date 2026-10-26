@@ -105,7 +105,7 @@ function kernelFixture() {
 }
 
 const withKernel = (run: (fixture: ReturnType<typeof kernelFixture>) => void | Promise<void>) =>
-  withOpenClawTestState({ scenario: "minimal" }, () => run(kernelFixture()));
+  withOpenClawTestState({ scenario: "minimal" }, async () => await run(kernelFixture()));
 
 const header = (id: string) => ({
   type: "session",
@@ -133,7 +133,7 @@ const assistant = (content: string, idempotencyKey?: string) => ({
   ...(idempotencyKey ? { idempotencyKey } : {}),
 });
 const messageEnvelope = (id: string, parentId: string, second: number) => ({
-  type: "message",
+  type: "message" as const,
   id,
   parentId,
   timestamp: `2026-01-01T00:00:0${second}.000Z`,
@@ -380,7 +380,7 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
         }
       }
     });
-    const append: SessionActorAppend = {
+    const append: Extract<SessionActorAppend, { kind: "metadata" }> = {
       kind: "metadata",
       input: {
         scope,

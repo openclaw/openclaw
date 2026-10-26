@@ -48,21 +48,11 @@ vi.mock("node:fs", async (importOriginal) => ({
   existsSync,
 }));
 
-vi.mock("./exec-file.js", () => {
+// mock-isolation: Native manager commands must use fixture responses, never the host service manager.
+vi.mock("./exec-file.js", async () => {
+  const { createSystemdExecFixture } = await import("./systemd-exec.test-support.js");
   return {
-    execFileUtf8: async (
-      command: string,
-      args: string[],
-      options: Parameters<ExecFileMock>[2] = {},
-    ): Promise<ExecResult> => {
-      if (args.includes("Version")) {
-        expect(command).toBe("busctl");
-        if (!versionFixture.useScenarioResponse) {
-          return { code: 0, termination: "exit", stdout: 's "252.39"', stderr: "" };
-        }
-      }
-      return expectDefined(await execFileMock(command, args, options), "expected native response");
-    },
+    execFileUtf8: createSystemdExecFixture(execFileMock, versionFixture),
   };
 });
 
@@ -204,7 +194,7 @@ function userResult(output: ExecResult, ...command: string[]): ExecFileMock {
   return nativeResult(["--user", ...command], output);
 }
 
-function nativeResult(command: string[], output = nativeExit()): ExecFileMock {
+function nativeResult(command: string[], output: ExecResult = nativeExit()): ExecFileMock {
   return async (_cmd, args) => {
     expect(args).toEqual(command);
     return output;

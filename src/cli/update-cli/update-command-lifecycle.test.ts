@@ -94,10 +94,12 @@ vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
   }),
 }));
 
+// mock-isolation: This lifecycle fixture has no persisted plugin index to read or mutate.
 vi.mock("../../plugins/installed-plugin-index-store.js", () => ({
   readPersistedInstalledPluginIndex: vi.fn(async () => null),
 }));
 
+// mock-isolation: Lease custody is modeled by leaseActive, not the host's plugin lock.
 vi.mock("../../plugins/plugin-lifecycle-lease.js", () => ({
   withPluginLifecycleLease: async (_params: unknown, run: () => Promise<unknown>) => {
     mocks.leaseActive = true;
@@ -121,6 +123,7 @@ vi.mock("./shared.js", async (importOriginal) => ({
   tryWriteCompletionCache: vi.fn(async () => "completed"),
 }));
 
+// mock-isolation: The lifecycle fixture supplies config and must not snapshot host state.
 vi.mock("./update-command-config-snapshot.js", () => ({
   createUpdateConfigSnapshot: vi.fn(async () => undefined),
 }));
@@ -146,6 +149,7 @@ vi.mock("./update-command-config.js", async (importOriginal) => ({
   }),
 }));
 
+// mock-isolation: Exercise finalizer ordering without launching a real Doctor subprocess.
 vi.mock("./update-command-fresh-doctor.js", () => ({
   completePostCorePluginUpdate: vi.fn(async () => ({
     pluginUpdate: successfulPluginUpdate,

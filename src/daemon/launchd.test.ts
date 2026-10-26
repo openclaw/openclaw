@@ -40,6 +40,7 @@ import * as launchdRuntime from "./launchd-runtime.js";
 import { launchdTestState as state } from "./launchd-state.test-support.js";
 import {
   isLaunchAgentEnabled,
+  readLaunchAgentProgramArguments,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
@@ -400,6 +401,13 @@ describe("launchd install", () => {
     expect(state.fileModes.get(ENV_FILE)).toBe(0o600);
     expect(state.fileModes.get(WRAPPER)).toBe(0o700);
     expect(state.dirModes.get("/Users/test/.openclaw/service-env")).toBe(0o700);
+
+    const command = await readLaunchAgentProgramArguments(ENV);
+    expect(command).toMatchObject({
+      programArguments: defaultProgramArguments,
+      environment: { TMPDIR: tmpDir, OPENAI_API_KEY: apiKey, NODE_OPTIONS: "" },
+      environmentValueSources: { TMPDIR: "file", OPENAI_API_KEY: "file" },
+    });
   });
 
   it("warns before overwriting a customized generated LaunchAgent env wrapper during restart rewrite", async () => {
