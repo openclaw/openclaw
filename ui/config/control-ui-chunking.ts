@@ -104,8 +104,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/claws/creator-flow.ts":
     case "ui/src/pages/claws/draft-navigation.ts":
     case "ui/src/i18n/locales/en-agents-home.ts":
-      // Claws and its sidebar action share draft state without loading Chat.
-      return "claws-creator-runtime";
+      // Chat and the roster co-load both; Claws accepts the extra virtualizer bytes.
+      return "virtual-core-runtime";
     case "src/shared/dedupe-by-key.ts":
       // Config search shares this helper without loading optional session UI.
       return "control-ui-boot-shared";
