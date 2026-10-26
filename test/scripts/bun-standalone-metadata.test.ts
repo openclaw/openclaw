@@ -64,6 +64,7 @@ function ownerSource(relative: string, functionName?: string, typed = false): st
         statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
       if (
         ((declaration?.type === "FunctionDeclaration" ||
+          declaration?.type === "ClassDeclaration" ||
           declaration?.type === "TSTypeAliasDeclaration") &&
           (!functionName || declaration.id?.name === functionName)) ||
         (functionName &&
@@ -1058,7 +1059,10 @@ describe("standalone image metadata", () => {
           ? "loadLegacySessionSurface"
           : "resolveBundledEntryModulePath";
     if (owner === "runtime") {
-      vm.runInContext(ownerSource(ownerFile, "prepareRuntimePluginConfig"), context);
+      vm.runInContext(
+        ownerSource("src/plugins/loader-shared.ts", "prepareRuntimePluginConfig"),
+        context,
+      );
     }
     const source = ownerSource(ownerFile, ownerName).replaceAll(
       "import.meta.url",
