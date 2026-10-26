@@ -6,7 +6,6 @@ import { getExpandedToolCards, getExpandedUserMessages } from "../chat-thread.ts
 import type { ChatWidgetLayout } from "../session-message-cache.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import { measureTranscriptRow } from "./chat-transcript-geometry.ts";
-import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   publishTranscriptScroll,
   readTranscriptViewport,
@@ -37,7 +36,7 @@ export function unscaledBorderBox(element: HTMLElement, style = getComputedStyle
 /** The native scroll range changes only at these viewport and content writes. */
 export class TranscriptLayoutOwner {
   ready = false;
-  rows: readonly TranscriptRow[] = [];
+  rows: readonly { key: string; revision?: string }[] = [];
   rowLayout?: ChatWidgetLayout;
   private rowPresentation = "";
   rowWidth = 0;
@@ -74,7 +73,7 @@ export class TranscriptLayoutOwner {
 
   private rowLayoutKey(index: number, width = this.rowWidth): string | undefined {
     const row = this.rows[index];
-    return width > 0 && row?.kind === "item" && row.revision
+    return width > 0 && row?.revision
       ? `row:v1:${width}:${this.rowPresentation}:${row.revision}:${JSON.stringify(row.key)}`
       : undefined;
   }

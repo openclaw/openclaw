@@ -82,7 +82,7 @@ it("reserves only the matching width and appearance, including text scale, width
     applicationContext: { ...context, theme },
   });
   const layout = new TranscriptLayoutOwner(() => {});
-  layout.rows = [{ kind: "item", key: "notice", item: null, revision: "notice-v1" }];
+  layout.rows = [{ key: "notice", revision: "notice-v1" }];
   layout.rowWidth = 768;
   const reserve = (version = 0) => {
     layout.configureRows(props, "gutter", version);
@@ -101,9 +101,9 @@ it("reserves only the matching width and appearance, including text scale, width
   props.applicationContext = { ...context, theme };
   expect(reserve(1)).toBe(0);
   expect(reserve()).toBe(300);
-  layout.rows = [{ kind: "item", key: "notice", item: null, revision: "notice-v2" }];
+  layout.rows = [{ key: "notice", revision: "notice-v2" }];
   expect(reserve()).toBe(0);
-  layout.rows = [{ kind: "item", key: "notice", item: null, revision: "notice-v1" }];
+  layout.rows = [{ key: "notice", revision: "notice-v1" }];
   layout.rowWidth = 400;
   expect(reserve()).toBe(0);
   layout.rowWidth = 0;
@@ -145,7 +145,7 @@ it("batches measured footprints after reveal and idle without publishing boot me
     0,
   );
   layout.rowWidth = 768;
-  layout.rows = [{ kind: "item", key: "row", item: null, revision: "one" }];
+  layout.rows = [{ key: "row", revision: "one" }];
   layout.connect(container);
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
     count: 1,
