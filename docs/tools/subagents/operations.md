@@ -169,7 +169,9 @@ of unrelated interrupted child work.
 
 If the lifecycle listener misses that terminal event, the registry sweep uses
 the same recovery claim or receipt to find the registered wake's execution and
-its own terminal timestamps and reply. It does not credit a later parent
+its own terminal timestamps and reply. The current Gateway's terminal job snapshot
+takes precedence. After a restart, a matching last terminal run ID in the session
+and that execution's persisted final reply can settle the run. It does not credit a later parent
 follow-up to the wake. Without matching execution evidence, ordinary wait and
 recovery owners remain in charge; an ownerless run eventually reports failure
 at the existing stale-run cutoff (two hours, or its longer explicit timeout plus
