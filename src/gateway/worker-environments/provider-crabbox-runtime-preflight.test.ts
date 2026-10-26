@@ -23,6 +23,51 @@ const CLASSLESS_PROFILE = {
   setup: "true",
 };
 const PROFILE = { ...CLASSLESS_PROFILE, class: "standard" };
+const state = support.testState;
+type Transition = Parameters<typeof state.store.transition>[0];
+function transition(
+  environmentId: string,
+  from: Transition["from"],
+  to: Transition["to"],
+  patch?: Transition["patch"],
+) {
+  return state.store.transition({ environmentId, from, to, patch });
+}
+
+async function seedProvisioning(
+  environmentId: string,
+  profileSnapshot: Parameters<typeof state.store.createIntent>[0]["profileSnapshot"],
+  provisionOperationId = `provision:${"0".repeat(64)}`,
+) {
+  const intent = await state.store.createIntent({
+    environmentId,
+    providerId: "crabbox",
+    profileId: "development",
+    profileSnapshot,
+    provisionOperationId,
+  });
+  return transition(environmentId, intent.state, "provisioning");
+}
+const absentResource = {
+  backend: "ascii-box",
+  code: 1,
+  stderr: "ascii-box bx_0123456789ab not found (404)",
+  attached: true,
+};
+function cleanupCase(
+  name: string,
+  overrides: Partial<typeof absentResource> & { outcome?: string } = {},
+) {
+  return {
+    name,
+    backend: "digitalocean",
+    code: 4,
+    stderr: "DigitalOcean fixed lease is terminal",
+    attached: false,
+    outcome: "destroyed",
+    ...overrides,
+  };
+}
 
 describe("Crabbox runtime preflight cleanup", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -58,7 +103,7 @@ describe("Crabbox runtime preflight cleanup", () => {
   }
   beforeEach(() => {
     scheduler = createTestPluginServiceScheduler();
-    vi.stubEnv("OPENCLAW_STATE_DIR", support.testState.root);
+    vi.stubEnv("OPENCLAW_STATE_DIR", state.root);
   });
   afterEach(async () => {
     scheduler.beginClose();
@@ -66,8 +111,8 @@ describe("Crabbox runtime preflight cleanup", () => {
       for (const service of pluginServices.splice(0)) {
         await service.stop?.({
           scheduler,
-          config: support.testState.config,
-          stateDir: support.testState.root,
+          config: state.config,
+          stateDir: state.root,
           logger: { info() {}, warn() {}, error() {}, debug() {} },
         });
       }
@@ -101,43 +146,29 @@ describe("Crabbox runtime preflight cleanup", () => {
     });
     const provider = await registerProvider();
     // Seed the real persisted provider snapshot without allocating any cloud resource.
-    const intent = await support.testState.store.createIntent({
+    await seedProvisioning(
       environmentId,
-      providerId: "crabbox",
-      profileId: "development",
-      profileSnapshot: {
+      {
         settings: { ...PROFILE, provider: "aws", warmImage: false },
       },
-      provisionOperationId: "fast-reclaim-operation",
+      "fast-reclaim-operation",
+    );
+    await transition(environmentId, "provisioning", "bootstrapping", {
+      leaseId,
+      sshEndpoint: support.SSH_ENDPOINT,
     });
-    await support.testState.store.transition({
-      environmentId: intent.environmentId,
-      from: "requested",
-      to: "provisioning",
-    });
-    await support.testState.store.transition({
-      environmentId,
-      from: "provisioning",
-      to: "bootstrapping",
-      patch: { leaseId, sshEndpoint: support.SSH_ENDPOINT },
-    });
-    await support.testState.store.transition({
-      environmentId: intent.environmentId,
-      from: "bootstrapping",
-      to: "ready",
-      patch: support.readyPatch(intent.environmentId),
-    });
+    await transition(environmentId, "bootstrapping", "ready", support.readyPatch(environmentId));
     const service = support.createService(provider);
-    const reclaim = service.reclaim(intent.environmentId);
+    const reclaim = service.reclaim(environmentId);
     try {
       await withinTest(acceptedStop.promise, signal);
       await expect(withinTest(reclaim, signal)).resolves.toMatchObject({ state: "destroying" });
-      expect(support.testState.store.get(intent.environmentId)).toMatchObject({
+      expect(state.store.get(environmentId)).toMatchObject({
         state: "destroying",
         leaseId,
       });
       finishRelease.resolve();
-      await expect(service.destroy(intent.environmentId)).resolves.toMatchObject({
+      await expect(service.destroy(environmentId)).resolves.toMatchObject({
         state: "destroyed",
       });
       expect(calls.map((argv) => argv.slice(1))).toEqual([
@@ -180,7 +211,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       ).rejects.toMatchObject({
         code: "provider_failure",
       });
-      const failed = expectDefined(support.testState.store.list()[0], "failed fresh intent");
+      const failed = expectDefined(state.store.list()[0], "failed fresh intent");
       expect(failed).toMatchObject({ state: "failed", leaseId: null, destroyRequestedAtMs: null });
       await expect(service.destroy(failed.environmentId)).resolves.toMatchObject({
         state: "failed",
@@ -191,7 +222,7 @@ describe("Crabbox runtime preflight cleanup", () => {
         prepareNodeEnrollment: vi.fn(),
       });
       await restarted.reconcileOnce();
-      expect(support.testState.store.get(failed.environmentId)).toEqual(failed);
+      expect(state.store.get(failed.environmentId)).toEqual(failed);
       expect(runCommand.mock.calls.map(([argv]) => argv.slice(1))).toEqual([
         ["--version"],
         ["providers", "--json"],
@@ -247,7 +278,7 @@ describe("Crabbox runtime preflight cleanup", () => {
             : diagnostic.replaceAll("\n", " "),
         ),
       });
-      const record = expectDefined(support.testState.store.list()[0], "warmup failure record");
+      const record = expectDefined(state.store.list()[0], "warmup failure record");
       expect(record).toMatchObject({
         state: refused ? "failed" : "provisioning",
         leaseId: null,
@@ -275,100 +306,52 @@ describe("Crabbox runtime preflight cleanup", () => {
   );
 
   it.each([
-    {
-      name: "terminal fixed lease",
-      backend: "digitalocean",
-      code: 4,
-      stderr: "DigitalOcean fixed lease is terminal",
-      attached: false,
-      outcome: "destroyed",
-    },
-    {
-      name: "absent attached resource",
-      backend: "ascii-box",
-      code: 1,
-      stderr: "ascii-box bx_0123456789ab not found (404)",
-      attached: true,
-      outcome: "destroyed",
-    },
-    {
-      name: "absent resource with unconfirmed stop",
-      backend: "ascii-box",
-      code: 1,
-      stderr: "ascii-box bx_0123456789ab not found (404)",
-      attached: true,
+    cleanupCase("terminal fixed lease"),
+    cleanupCase("absent attached resource", { ...absentResource, outcome: "destroyed" }),
+    cleanupCase("absent resource with unconfirmed stop", {
+      ...absentResource,
       outcome: "retry-stop",
-    },
-    {
-      name: "unresolved creation attempt",
-      backend: "digitalocean",
-      code: 4,
+    }),
+    cleanupCase("unresolved creation attempt", {
       stderr:
         "lease_id_conflict: lease cbx_0123456789ab has an unresolved or unattested creation attempt",
-      attached: false,
       outcome: "retry-inspect",
-    },
-    {
-      name: "terminal text with an unexpected exit code",
-      backend: "digitalocean",
+    }),
+    cleanupCase("terminal text with an unexpected exit code", {
       code: 1,
-      stderr: "DigitalOcean fixed lease is terminal",
+      outcome: "retry-inspect",
+    }),
+    cleanupCase("not-found text mixed with an auth failure", {
+      ...absentResource,
+      stderr: `${absentResource.stderr}\nauthentication failed`,
       attached: false,
       outcome: "retry-inspect",
-    },
-    {
-      name: "not-found text mixed with an auth failure",
-      backend: "ascii-box",
-      code: 1,
-      stderr: "ascii-box bx_0123456789ab not found (404)\nauthentication failed",
-      attached: false,
-      outcome: "retry-inspect",
-    },
+    }),
   ])("reconciles requested teardown after $name", async (scenario) => {
     const environmentId = "worker-inspect-cleanup";
     const leaseId = "cbx_0123456789ab";
-    const intent = await support.testState.store.createIntent({
-      environmentId,
-      providerId: "crabbox",
-      profileId: "development",
-      profileSnapshot: {
-        executionMode: "worker-turn",
-        settings: { ...PROFILE, provider: scenario.backend, warmImage: false },
-      },
-      provisionOperationId: `provision:${"0".repeat(64)}`,
+    await seedProvisioning(environmentId, {
+      executionMode: "worker-turn",
+      settings: { ...PROFILE, provider: scenario.backend, warmImage: false },
     });
-    await support.testState.store.transition({
-      environmentId,
-      from: intent.state,
-      to: "provisioning",
-    });
-    let record = await support.testState.store.transition({
-      environmentId,
-      from: "provisioning",
-      to: "ready",
-      patch: {
-        leaseId,
-        nodeDeviceId: "node:cleanup-fixture",
-        sharedHost: false,
-        ...support.readyPatch(environmentId),
-      },
+    let record = await transition(environmentId, "provisioning", "ready", {
+      leaseId,
+      nodeDeviceId: "node:cleanup-fixture",
+      sharedHost: false,
+      ...support.readyPatch(environmentId),
     });
     if (scenario.attached) {
-      record = await support.testState.store.transition({
+      record = await transition(
         environmentId,
-        from: "ready",
-        to: "attached",
-        patch: support.attachedPatch(environmentId, "session-cleanup-fixture"),
-      });
+        "ready",
+        "attached",
+        support.attachedPatch(environmentId, "session-cleanup-fixture"),
+      );
     }
-    await support.testState.store.requestDestroy({ environmentId, state: record.state });
+    await state.store.requestDestroy({ environmentId, state: record.state });
     if (!scenario.attached) {
-      await support.testState.store.transition({ environmentId, from: "ready", to: "draining" });
-      record = await support.testState.store.transition({
-        environmentId,
-        from: "draining",
-        to: "destroying",
-      });
+      await transition(environmentId, "ready", "draining");
+      record = await transition(environmentId, "draining", "destroying");
     }
     let stopFails = scenario.outcome === "retry-stop";
     const calls: string[][] = [];
@@ -402,7 +385,7 @@ describe("Crabbox runtime preflight cleanup", () => {
     await service.reconcileOnce();
 
     if (scenario.outcome === "retry-inspect") {
-      expect(support.testState.store.get(environmentId)).toMatchObject({
+      expect(state.store.get(environmentId)).toMatchObject({
         state: "destroying",
         leaseId,
         lastError: expect.stringContaining("Crabbox inspect failed"),
@@ -413,7 +396,7 @@ describe("Crabbox runtime preflight cleanup", () => {
     }
     expect(calls).toEqual([inspectCommand, stopCommand]);
     if (stopFails) {
-      expect(support.testState.store.get(environmentId)).toMatchObject({
+      expect(state.store.get(environmentId)).toMatchObject({
         state: "attached",
         leaseId,
         ownerEpoch: record.ownerEpoch,
@@ -424,7 +407,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       await service.reconcileOnce();
       expect(calls).toEqual([inspectCommand, stopCommand, inspectCommand, stopCommand]);
     }
-    expect(support.testState.store.get(environmentId)).toMatchObject({
+    expect(state.store.get(environmentId)).toMatchObject({
       state: "destroyed",
       leaseId,
       attachedSessionIds: [],
@@ -438,18 +421,7 @@ describe("Crabbox runtime preflight cleanup", () => {
   it.each(["restart reconciliation", "direct destroy"])(
     "retains unresolved legacy allocation responsibility after %s and cleanup restart",
     async (entrance) => {
-      const intent = await support.testState.store.createIntent({
-        environmentId: "worker-legacy-provision",
-        providerId: "crabbox",
-        profileId: "development",
-        profileSnapshot: { settings: PROFILE },
-        provisionOperationId: `provision:${"0".repeat(64)}`,
-      });
-      const original = await support.testState.store.transition({
-        environmentId: intent.environmentId,
-        from: intent.state,
-        to: "provisioning",
-      });
+      const original = await seedProvisioning("worker-legacy-provision", { settings: PROFILE });
       const runCommand = vi
         .spyOn(processRuntime, "runCommandWithTimeout")
         .mockImplementation(async () => {
@@ -464,7 +436,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       if (entrance === "restart reconciliation") {
         await service.reconcileOnce();
         expect(provision).toHaveBeenCalledOnce();
-        expect.soft(support.testState.store.get(original.environmentId)).toMatchObject({
+        expect.soft(state.store.get(original.environmentId)).toMatchObject({
           ...original,
           lastError: expect.stringContaining("cannot be replayed safely"),
         });
@@ -478,7 +450,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       );
       expect(pending).toMatchObject({
         ...original,
-        destroyRequestedAtMs: support.testState.nowMs,
+        destroyRequestedAtMs: state.nowMs,
         teardownTerminalState: "destroyed",
         lastError: expect.stringContaining("cannot be replayed safely"),
       });
@@ -505,8 +477,8 @@ describe("Crabbox runtime preflight cleanup", () => {
       expect(restartedProvision).not.toHaveBeenCalled();
       expect(runCommand).not.toHaveBeenCalled();
       expect(prepareNodeEnrollment).not.toHaveBeenCalled();
-      expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
-      expect(support.testState.store.getCredential(original.environmentId)).toBeUndefined();
+      expect(state.bootstrapWorker).not.toHaveBeenCalled();
+      expect(state.store.getCredential(original.environmentId)).toBeUndefined();
     },
   );
 
@@ -614,7 +586,7 @@ describe("Crabbox runtime preflight cleanup", () => {
         executionMode: "worker-turn",
       }),
     ).rejects.toMatchObject({ code: "provider_failure" });
-    const original = expectDefined(support.testState.store.list()[0], "unreported allocation");
+    const original = expectDefined(state.store.list()[0], "unreported allocation");
     expect(original).toMatchObject({ state: "provisioning", leaseId: null });
     expect(live).toBe(true);
 
@@ -624,7 +596,7 @@ describe("Crabbox runtime preflight cleanup", () => {
     const resolveAllocation = vi.spyOn(replayProvider, "resolveAllocation");
     service = support.createService(replayProvider, { prepareNodeEnrollment });
     await service.reconcileOnce();
-    expect(support.testState.store.get(original.environmentId)).toMatchObject({
+    expect(state.store.get(original.environmentId)).toMatchObject({
       state: "provisioning",
       leaseId: null,
       provisionOperationId: original.provisionOperationId,
@@ -632,7 +604,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       lastError: expect.any(String),
     });
     const beforeCleanup = calls.length;
-    support.testState.config.cloudWorkers!.profiles = {};
+    state.config.cloudWorkers!.profiles = {};
     await expect(service.destroy(original.environmentId)).rejects.toMatchObject({
       code: "provider_failure",
     });
@@ -640,7 +612,7 @@ describe("Crabbox runtime preflight cleanup", () => {
       profile,
       original.provisionOperationId,
     );
-    expect(support.testState.store.get(original.environmentId)).toMatchObject({
+    expect(state.store.get(original.environmentId)).toMatchObject({
       state: "destroying",
       leaseId,
       destroyRequestedAtMs: expect.any(Number),
@@ -650,7 +622,7 @@ describe("Crabbox runtime preflight cleanup", () => {
     await support.reopenWorkerEnvironmentStore();
     service = support.createService(await makeProvider(), { prepareNodeEnrollment });
     await service.reconcileOnce();
-    expect(support.testState.store.get(original.environmentId)).toMatchObject({
+    expect(state.store.get(original.environmentId)).toMatchObject({
       state: "destroyed",
       leaseId,
     });
@@ -664,7 +636,7 @@ describe("Crabbox runtime preflight cleanup", () => {
     expect(stops).toBe(2);
     expect(live).toBe(false);
     expect(prepareNodeEnrollment).not.toHaveBeenCalled();
-    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+    expect(state.bootstrapWorker).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -715,7 +687,7 @@ describe("Crabbox runtime preflight cleanup", () => {
         code: "invalid_profile",
         message: expect.stringContaining(message),
       });
-      const records = support.testState.store.list();
+      const records = state.store.list();
       expect(records).toHaveLength(intentRecorded ? 1 : 0);
       if (intentRecorded) {
         expect(records[0]).toMatchObject({ state: "failed", leaseId: null });
