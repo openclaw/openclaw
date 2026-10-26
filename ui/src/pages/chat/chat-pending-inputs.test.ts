@@ -99,12 +99,7 @@ async function retainDeliveredUserTurn(
   host: Parameters<typeof retireDeliveredQueuedUserTurn>[0],
   item: ChatQueueItem,
 ): Promise<Parameters<typeof retireDeliveredQueuedUserTurn>[2]> {
-  const admission = captureChatOutboxAdmission(
-    host,
-    item.sessionKey ?? host.sessionKey,
-    item.agentId,
-  );
-  expect(admitQueuedMessageForSession(host, admission, item)).toBe(true);
+  admitSource(host, item);
   const outbox = expectDefined(
     listStoredChatOutboxes(host).find((entry) =>
       entry.queue.some((queued) => queued.id === item.id),
@@ -113,6 +108,15 @@ async function retainDeliveredUserTurn(
   );
   expect(await retireDeliveredQueuedUserTurn(host, item.sendRunId, outbox)).toBe("retired");
   return outbox;
+}
+
+function admitSource(host: Parameters<typeof retainDeliveredUserTurn>[0], item: ChatQueueItem) {
+  const admission = captureChatOutboxAdmission(
+    host,
+    item.sessionKey ?? host.sessionKey,
+    item.agentId,
+  );
+  expect(admitQueuedMessageForSession(host, admission, item)).toBe(true);
 }
 
 beforeEach(() => {
@@ -669,13 +673,7 @@ describe("server-owned pending input display", () => {
           Buffer.from(imageBase64, "base64"),
         );
       }
-      expect(
-        admitQueuedMessageForSession(
-          host,
-          captureChatOutboxAdmission(host, sessionKey, queued.agentId),
-          queued,
-        ),
-      ).toBe(true);
+      admitSource(host, queued);
       expect(
         loadChatComposerState(host, sessionKey).snapshot?.queue[0]?.attachments?.[0]?.dataUrl,
       ).toBeUndefined();
