@@ -35,8 +35,12 @@ describe("Telegram send recovery conformance over HTTP", () => {
   let photos: string[];
   let voicePath: string;
   const requestOptions = () => ({ cfg, api: bot.api });
+  const send = (text: string, options: Parameters<typeof sendMessageTelegram>[2] = {}) =>
+    sendMessageTelegram("123", text, { ...requestOptions(), ...options });
   const mediaOptions = () => ({ ...requestOptions(), mediaLocalRoots: [fixture.mediaDir] });
   const photoOptions = () => ({ ...mediaOptions(), mediaUrl: photoPath });
+  const firstUpload = (field: string) => resolveTelegramTestUpload(requests[0]!.fields, field);
+  const albumIds = Array.from({ length: 10 }, (_, index) => String(1001 + index));
   const fieldValues = (key: string, start = 0) =>
     requests.slice(start).map(({ fields }) => fields[key]);
   const expectMethods = (...methods: string[]) =>
@@ -218,7 +222,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
               thread: { scope: "forum", id: 77 },
               silent: true,
             })
-          : await sendMessageTelegram("123", "Album", {
+          : await send("Album", {
               ...mediaOptions(),
               mediaUrls: photos,
               replyToMessageId: 7,
@@ -238,10 +242,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
       expect(String(requests[0]!.fields.reply_to_message_id)).toBe("7");
       expect(requests[1]!.fields.reply_to_message_id).toBeUndefined();
       expect(requests[1]!.fields.reply_parameters).toBeUndefined();
-      expect(result.receipt?.platformMessageIds).toEqual([
-        ...Array.from({ length: 10 }, (_, index) => String(1001 + index)),
-        "2",
-      ]);
+      expect(result.receipt?.platformMessageIds).toEqual([...albumIds, "2"]);
     },
   );
 
@@ -250,9 +251,8 @@ describe("Telegram send recovery conformance over HTTP", () => {
     async (failure) => {
       const abort = new AbortController();
       let authorized = true;
-      const ids = Array.from({ length: 10 }, (_, index) => String(1001 + index));
       await expectPartial(
-        sendMessageTelegram("123", "Album", {
+        send("Album", {
           ...mediaOptions(),
           mediaUrls: photos,
           messageThreadId: 77,
@@ -266,7 +266,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
             if (failure === "observer") {
               throw new Error("observer failed");
             }
-            if (messageId === ids.at(-1)) {
+            if (messageId === albumIds.at(-1)) {
               if (failure === "abort") {
                 abort.abort();
               } else if (failure === "revoked") {
@@ -275,8 +275,8 @@ describe("Telegram send recovery conformance over HTTP", () => {
             }
           },
         }),
-        ids,
-        { platformMessageIds: ids, threadId: "77" },
+        albumIds,
+        { platformMessageIds: albumIds, threadId: "77" },
       );
       expectMethods("sendMediaGroup");
     },
@@ -537,7 +537,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
         emptyMessage,
         ...(rejected ? ["Bad Request: keyboard retrofit failed"] : []),
       );
-      const sending = sendMessageTelegram("123", "\u200b".repeat(1025), {
+      const sending = send("\u200b".repeat(1025), {
         ...photoOptions(),
         textMode: "html",
         buttons,
@@ -563,7 +563,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
     async (forceDocument) => {
       const document = path.join(fixture.mediaDir, "report.pdf");
       await fs.writeFile(document, "%PDF-1.4\nreport");
-      await sendMessageTelegram("123", "Attachments", {
+      await send("Attachments", {
         ...mediaOptions(),
         mediaUrls: [photos[0]!, photos[1]!, document, photos[2]!, photos[3]!],
         forceDocument,
@@ -596,16 +596,16 @@ describe("Telegram send recovery conformance over HTTP", () => {
       vi.spyOn(mediaRuntime, "getImageMetadata").mockResolvedValue(
         shape === "unknown" ? null : { width: 4000, height: 100 },
       );
-      await sendMessageTelegram("123", "Caption", photoOptions());
+      await send("Caption", photoOptions());
       expectMethods("sendDocument");
-      expect(
-        Buffer.from(await resolveTelegramTestUpload(requests[0]!.fields, "document").arrayBuffer()),
-      ).toEqual(await fs.readFile(photoPath));
+      expect(Buffer.from(await firstUpload("document").arrayBuffer())).toEqual(
+        await fs.readFile(photoPath),
+      );
     },
   );
 
   it("consumes an implicit first reply on media before its oversized caption follow-up", async () => {
-    await sendMessageTelegram("123", "A".repeat(1100), {
+    await send("A".repeat(1100), {
       ...photoOptions(),
       replyToMessageId: 7,
       replyToIdSource: "implicit",
@@ -659,7 +659,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
 
   it("enforces the configured upload limit before reaching Telegram", async () => {
     await expect(
-      sendMessageTelegram("123", "", {
+      send("", {
         ...photoOptions(),
         cfg: configWith({ mediaMaxMb: 1 / (1024 * 1024) }),
       }),
@@ -669,15 +669,12 @@ describe("Telegram send recovery conformance over HTTP", () => {
 
   it("sends WAV media requested as voice using sendAudio", async () => {
     mockAudio("audio/wav", "note.wav");
-    await sendMessageTelegram("123", "Caption", {
-      ...requestOptions(),
+    await send("Caption", {
       mediaUrl: "https://example.com/audio",
       asVoice: true,
     });
     expectMethods("sendAudio");
-    expect(await resolveTelegramTestUpload(requests[0]!.fields, "audio").text()).toBe(
-      "audio-bytes",
-    );
+    expect(await firstUpload("audio").text()).toBe("audio-bytes");
   });
 
   it.each([
@@ -692,7 +689,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
       mockAudio(contentType);
       const mediaUrl = "https://example.com/clip";
       if (entry === "durable") {
-        await sendMessageTelegram("123", "", { cfg, api: bot.api, mediaUrl, asVoice });
+        await send("", { mediaUrl, asVoice });
       } else {
         await deliver([{ mediaUrl, audioAsVoice: asVoice }]);
       }
@@ -710,9 +707,7 @@ describe("Telegram send recovery conformance over HTTP", () => {
       } else {
         probe.mockResolvedValue(result);
       }
-      await sendMessageTelegram("123", "", {
-        cfg,
-        api: bot.api,
+      await send("", {
         mediaUrl: voicePath,
         mediaLocalRoots: [fixture.mediaDir],
         asVoice: true,
@@ -723,17 +718,14 @@ describe("Telegram send recovery conformance over HTTP", () => {
   );
 
   it("does not claim delivery when all text is rejected as empty", async () => {
-    const description = "text must be non-empty";
-    rejections.push(`Bad Request: ${description}`, `Bad Request: ${description}`);
-    await expect(sendMessageTelegram("123", "\u200b", { cfg, api: bot.api })).rejects.toThrow(
-      description,
-    );
+    rejections.push(emptyMessage, emptyMessage);
+    await expect(send("\u200b")).rejects.toThrow("text must be non-empty");
     expectMethods("sendMessage", "sendMessage");
   });
 
   it("keeps authored link destinations through an HTML rejection", async () => {
     rejections.push("Bad Request: can't parse entities");
-    await sendMessageTelegram("123", "Read [docs](https://example.com/guide)", requestOptions());
+    await send("Read [docs](https://example.com/guide)");
     expect(fieldValues("text")).toEqual([
       'Read <a href="https://example.com/guide">docs</a>',
       "Read docs (https://example.com/guide)",

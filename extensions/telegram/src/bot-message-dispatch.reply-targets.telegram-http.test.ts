@@ -71,9 +71,49 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     acceptedCalls,
     createContext,
     emitToolStart,
-    dispatchProgressTurn,
+    dispatchProgressTurn: dispatch,
     waitForBotApiCall,
   } = http;
+  function dispatchProgressTurn(
+    events: Parameters<typeof dispatch>[0],
+    scenario: Partial<NonNullable<Parameters<typeof dispatch>[1]>>,
+  ) {
+    return dispatch(events, { mode: "off", toolProgress: false, ...scenario });
+  }
+  function forumContext(threadId: number) {
+    const context = createContext();
+    const chat = {
+      id: -1001,
+      type: "supergroup",
+      title: "Forum",
+      is_forum: true,
+    } satisfies Message["chat"];
+    Object.assign(context, {
+      chatId: chat.id,
+      isGroup: true,
+      isForum: true,
+      replyThreadId: threadId,
+      threadSpec: { scope: "forum", id: threadId },
+    });
+    context.msg = { ...context.msg, chat, message_thread_id: threadId, is_topic_message: true };
+    context.route.sessionKey = `agent:default:telegram:group:-1001:topic:${threadId}`;
+    Object.assign(context.ctxPayload, {
+      SessionKey: context.route.sessionKey,
+      ChatType: "group",
+      From: `telegram:-1001:topic:${threadId}`,
+      To: `telegram:-1001:topic:${threadId}`,
+      OriginatingChannel: "telegram",
+      OriginatingTo: `telegram:-1001:topic:${threadId}`,
+    });
+    return context;
+  }
+  function sentFields(text: string) {
+    const sends = acceptedCalls.filter(
+      (call) => call.method === "sendMessage" && call.fields.text === text,
+    );
+    expect(sends).toHaveLength(1);
+    return sends[0]!.fields;
+  }
   const hasReaction = (call: (typeof calls)[number], emoji: string) =>
     call.method === "setMessageReaction" && JSON.stringify(call.fields.reaction).includes(emoji);
   beforeEach(() => {
@@ -108,17 +148,11 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         });
         const text = `Answer with ${ancestor} ancestry.`;
         await dispatchProgressTurn(async () => undefined, {
-          mode: "off",
-          toolProgress: false,
           context,
           replyToMode,
           finalReply: { text },
         });
-        const sends = acceptedCalls.filter(
-          (call) => call.method === "sendMessage" && call.fields.text === text,
-        );
-        expect(sends).toHaveLength(1);
-        const fields = sends[0]!.fields;
+        const fields = sentFields(text);
         expect(fields.message_thread_id).toBe(77);
         if (replyToMode === "off") {
           expect(fields).not.toHaveProperty("reply_parameters");
@@ -153,8 +187,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
             ? "[[reply_to:9002]] "
             : "";
       await dispatchProgressTurn(async () => undefined, {
-        mode: "off",
-        toolProgress: false,
         context,
         replyToMode,
         finalReply: {
@@ -162,11 +194,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           ...(selection === "quote" ? { replyToId: String(context.msg.message_id) } : {}),
         },
       });
-      const sends = acceptedCalls.filter(
-        (call) => call.method === "sendMessage" && call.fields.text === text,
-      );
-      expect(sends).toHaveLength(1);
-      const fields = sends[0]!.fields;
+      const fields = sentFields(text);
       const reply = fields.reply_parameters;
       expect(telegramReplyId(fields)).toBe(
         selection === "current" ? context.msg.message_id : selection === "explicit" ? 9002 : 9001,
@@ -185,30 +213,7 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
   ] as const)(
     "preserves the $target final reply target after a $replyToMode progress card",
     async ({ replyToMode, target }) => {
-      const context = createContext();
-      const chat = {
-        id: -1001,
-        type: "supergroup",
-        title: "Forum",
-        is_forum: true,
-      } satisfies Message["chat"];
-      Object.assign(context, {
-        chatId: chat.id,
-        isGroup: true,
-        isForum: true,
-        replyThreadId: 15,
-        threadSpec: { scope: "forum", id: 15 },
-      });
-      context.msg = { ...context.msg, chat, message_thread_id: 15, is_topic_message: true };
-      context.route.sessionKey = "agent:default:telegram:group:-1001:topic:15";
-      Object.assign(context.ctxPayload, {
-        SessionKey: context.route.sessionKey,
-        ChatType: "group",
-        From: "telegram:-1001:topic:15",
-        To: "telegram:-1001:topic:15",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:-1001:topic:15",
-      });
+      const context = forumContext(15);
       const finalText = "The requested result is ready.";
       const finalTarget = target === "inbound" ? context.msg.message_id : 9001;
       const draftStreams: TelegramDraftStream[] = [];
@@ -236,7 +241,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         },
         {
           mode: "progress",
-          toolProgress: false,
           context,
           replyToMode,
           telegramCfg: {
@@ -304,7 +308,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
         },
         {
           mode: "partial",
-          toolProgress: false,
           context,
           replyToMode: "first",
           finalReply: {
@@ -360,7 +363,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       },
       {
         mode: "partial",
-        toolProgress: false,
         context,
         replyToMode: "batched",
         textLimit: 80,
@@ -397,7 +399,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       },
       {
         mode: "partial",
-        toolProgress: false,
         replyToMode: "all",
         accountId: "sut",
         finalReply: { text, replyToCurrent: true },
@@ -489,37 +490,14 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
   });
   it("retains provider time and General-topic provenance in accepted transcript projections", async () => {
     await withOpenClawTestState({ prefix: "telegram-general-projection-" }, async (state) => {
-      const context = createContext();
+      const context = forumContext(1);
       const sessionKey = "agent:default:telegram:group:-1001:topic:1";
       const storePath = path.join(state.stateDir, "sessions.json");
       const scope = { agentId: "default", sessionKey, sessionId: "general-projection", storePath };
       const entry = { sessionId: scope.sessionId, updatedAt: Date.now() };
       await patchSessionEntry({ ...scope, fallbackEntry: entry, update: () => entry });
-      const chat = {
-        id: -1001,
-        type: "supergroup",
-        title: "Forum",
-        is_forum: true,
-      } satisfies Message["chat"];
-      Object.assign(context, {
-        chatId: -1001,
-        isGroup: true,
-        isForum: true,
-        replyThreadId: 1,
-        threadSpec: { scope: "forum", id: 1 },
-      });
-      context.msg = { ...context.msg, chat, message_thread_id: 1, is_topic_message: true };
       Object.assign(context.primaryCtx, {
         me: { id: 123456, is_bot: true, first_name: "Fixture Bot", username: "fixture_bot" },
-      });
-      context.route.sessionKey = sessionKey;
-      Object.assign(context.ctxPayload, {
-        SessionKey: sessionKey,
-        ChatType: "group",
-        From: "telegram:-1001:topic:1",
-        To: "telegram:-1001:topic:1",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:-1001:topic:1",
       });
       let sourceId: string | undefined;
       await dispatchProgressTurn(
@@ -540,8 +518,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           );
         },
         {
-          mode: "off",
-          toolProgress: false,
           context,
           finalReply: { text: "The General-topic answer." },
           cfg: {
@@ -614,8 +590,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           );
         },
         {
-          mode: "off",
-          toolProgress: false,
           context,
           replyToMode: "all",
           cfg: { session: { store: scope.storePath } },
@@ -820,8 +794,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
       }),
     });
     await dispatchProgressTurn(async () => undefined, {
-      mode: "off",
-      toolProgress: false,
       context,
       cfg,
       replyToMode: "all",
@@ -862,8 +834,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
   });
   it("suppresses late nonterminal diagnostics without hiding a terminal failure", async () => {
     await dispatchProgressTurn(async () => undefined, {
-      mode: "off",
-      toolProgress: false,
       producer: async ({ dispatcher }) => {
         dispatcher.sendToolResult({ text: "Diagnostic before final", isError: true });
         dispatcher.sendFinalReply({ text: "Accepted answer" });
@@ -913,8 +883,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
           },
           {
             context,
-            mode: "off",
-            toolProgress: false,
             replyToMode,
             finalReply: { text: `Final answer ${turnIndex}.` },
           },

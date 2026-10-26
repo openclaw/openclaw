@@ -22,6 +22,8 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
   } = http;
   const sends = () => http.acceptedFor("sendMessage");
   const sentTexts = () => sends().map((call) => call.fields.text);
+  const deletedIds = () =>
+    http.acceptedFor("deleteMessage").map((call) => Number(call.fields.message_id));
 
   type Scenario = NonNullable<Parameters<typeof dispatchProgressTurn>[1]>;
   type Events = Parameters<typeof dispatchProgressTurn>[0];
@@ -41,6 +43,10 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
   }
   function produce(producer: NonNullable<Scenario["producer"]>, scenario: Partial<Scenario> = {}) {
     return runTurn(async () => undefined, { ...scenario, producer });
+  }
+  async function showPreview(options: Options, text: string, method = "sendMessage") {
+    await options?.onPartialReply?.({ text });
+    await http.waitForMethod(method);
   }
   async function accepts(options: Options, text: string, channelData: ReplyPayload["channelData"]) {
     expect(await options?.onToolResult?.({ text, channelData })).toBe(true);
@@ -90,22 +96,22 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
       const first = "This answer starts here and has enough text to preview. ";
       const chunk = "The next sentence belongs to the same answer. ";
       const finalText = "The authoritative final replaces the streamed draft.";
-      await runTurn(async () => undefined, {
-        mode,
-        cfg: { messages: { responsePrefix: prefix.trimEnd() } },
-        producer: async ({ dispatcher }) => {
-          dispatcher.sendBlockReply({ text: first, textMode: "delta" });
-          await dispatcher.waitForIdle();
-          dispatcher.sendBlockReply({ text: chunk, textMode: "delta" });
-          await dispatcher.waitForIdle();
-          dispatcher.sendBlockReply({ text: first, textMode: "delta" });
-          await dispatcher.waitForIdle();
+      await produce(
+        async ({ dispatcher }) => {
+          for (const text of [first, chunk, first]) {
+            dispatcher.sendBlockReply({ text, textMode: "delta" });
+            await dispatcher.waitForIdle();
+          }
           expect(http.texts()).toEqual([(prefix + first + chunk + first).trimEnd()]);
           dispatcher.sendFinalReply({ text: finalText });
           dispatcher.sendFinalReply({ text: "Separate status." });
           return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
         },
-      });
+        {
+          mode,
+          cfg: { messages: { responsePrefix: prefix.trimEnd() } },
+        },
+      );
       expect(http.texts()).toEqual([prefix + finalText, prefix + "Separate status."]);
     },
   );
@@ -137,10 +143,8 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     };
     await runTurn(
       async (options) => {
-        await options?.onPartialReply?.({ text: initial });
-        await http.waitForMethod("sendMessage");
-        await options?.onPartialReply?.({ text: updated });
-        await http.waitForMethod("editMessageText");
+        await showPreview(options, initial);
+        await showPreview(options, updated, "editMessageText");
       },
       { finalReply: { text: finalText } },
     );
@@ -256,8 +260,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     let preview: Array<[number, string]> = [];
     await runTurn(
       async (options) => {
-        await options?.onPartialReply?.({ text: finalText });
-        await http.waitForMethod("sendMessage");
+        await showPreview(options, finalText);
         preview = [...visibleMessages];
       },
       {
@@ -284,9 +287,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
       if (call.fields.reply_to_message_id !== undefined) {
         expect(call.fields.reply_to_message_id).toBe(context.msg.message_id);
       } else {
-        expect(call.fields.reply_parameters).toMatchObject({
-          message_id: context.msg.message_id,
-        });
+        expect(call.fields.reply_parameters).toMatchObject({ message_id: context.msg.message_id });
       }
     }
     expect(preview).toHaveLength(1);
@@ -380,10 +381,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
       await runTurn(
         async (options) => {
           if (branch === "immediate") {
-            await options?.onPartialReply?.({
-              text: "The presentation is ready for review and selection.",
-            });
-            await http.waitForMethod("sendMessage");
+            await showPreview(options, "The presentation is ready for review and selection.");
             await options?.onBlockReply?.(controls);
             await waitForBotApiCall(
               (call) => call.method === "editMessageText" && call.fields.reply_markup !== undefined,
@@ -417,7 +415,6 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
         },
       );
       const answer = [...visibleMessages].find(([id]) => visibleMarkup.has(id));
-      expect(answer).toBeDefined();
       expect(answer?.[1]).toContain("Copy manually");
       const markup = JSON.stringify(visibleMarkup.get(answer![0]));
       assertContains(
@@ -501,11 +498,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
     expect(sentTexts()).toEqual([firstText, answer]);
     if (skip) {
       expect(visibleMessages.has(previewId!)).toBe(false);
-      expect(
-        acceptedCalls
-          .filter((call) => call.method === "deleteMessage")
-          .map((call) => Number(call.fields.message_id)),
-      ).toEqual([previewId]);
+      expect(deletedIds()).toEqual([previewId]);
     } else {
       expect(visibleMessages.get(previewId!)).toBe(firstText);
     }
@@ -580,9 +573,8 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
         finalReply: { text: "The command failed." },
       },
     );
-    const writes = JSON.stringify(calls.map((call) => call.fields.text));
     assertExcludes(
-      writes,
+      JSON.stringify(calls.map((call) => call.fields.text)),
       "Formatted summary",
       "fixture-private-output",
       "command echo",
