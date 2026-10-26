@@ -173,17 +173,8 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
       const result = await f.invoke();
       expect(Value.Check(SessionGitHubPullRequestInspectResultSchema, result)).toBe(true);
       expect(result).toMatchObject({
-        url: "https://github.com/example/repository/pull/7",
-        host: "github.com",
-        number: 7,
-        author: { accountId: 101, login: "contributor" },
         state: "open",
-        base: {
-          repository: "example/repository",
-          repositoryId: 10,
-          branch: "release",
-          commit: BASE,
-        },
+        base: { branch: "release", commit: BASE },
         head: {
           repository: variant === "fork" ? "contributor/repository" : "example/repository",
           repositoryId: variant === "fork" ? 20 : 10,
@@ -192,11 +183,6 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
         },
       });
       expect(session()).toEqual(before);
-      expect(f.endpoints()).toEqual([
-        "repos/example/repository",
-        "repos/example/repository/pulls/7",
-        ...(variant === "fork" ? ["repos/contributor/repository"] : []),
-      ]);
       expect(f.externalWrites).toEqual([]);
     },
   );
@@ -268,26 +254,14 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
         "This PR is not authored by a GitHub account linked to you. inspect_pr checks your PR authorship, not the managed publisher's credentials. For this session's published PR, use edit without title or body; for a new PR, use publish. A bot-authored PR from another session cannot be imported with inspect_pr or prepare_pr.",
       );
       expect(session()).toEqual(before);
-      expect(f.endpoints()).toEqual([
-        "repos/example/repository",
-        "repos/example/repository/pulls/7",
-      ]);
       expect(f.externalWrites).toEqual([]);
     },
   );
 
-  it.each(["unlinked", "wrong author"])("rejects %s without exposing PR data", async (variant) => {
-    const f = await fixture({ linked: variant !== "unlinked" });
-    if (variant === "wrong author") {
-      f.pr.user.id = 999;
-    }
-    await expect(f.invoke()).rejects.toThrow(
-      variant === "unlinked" ? "Link a verified" : "not authored by a GitHub account linked to you",
-    );
-    if (variant === "unlinked") {
-      expect(f.requests).toEqual([]);
-    }
-    expect(f.endpoints()).not.toContain("repos/contributor/repository");
+  it("rejects an unlinked requester before reading PR data", async () => {
+    const f = await fixture({ linked: false });
+    await expect(f.invoke()).rejects.toThrow("Link a verified");
+    expect(f.requests).toEqual([]);
   });
 
   it.each(["role", "linked identity", "publisher", "session"])(

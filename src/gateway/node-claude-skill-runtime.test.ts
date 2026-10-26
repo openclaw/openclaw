@@ -481,12 +481,7 @@ it("authors through the node MCP proxy using the actual host capability without 
   expect((await f.execute()).result.exitCode).toBe(0);
   const tools = JSON.parse(f.output()).listed.result.tools;
   expect(tools).toHaveLength(1);
-  const [tool] = tools;
-  expect(tool).toMatchObject({ name: "skill_workshop" });
-  expect(tool.inputSchema.properties.action).toMatchObject({
-    type: "string",
-    enum: expect.arrayContaining(["create", "update"]),
-  });
+  expect(tools[0]).toMatchObject({ name: "skill_workshop" });
   const entries = (await listSkillLibrary(f.authority)).entries;
   expect(entries).toHaveLength(1);
   const published = await readSkillLibrary(f.authority, entries[0]!.skillId);

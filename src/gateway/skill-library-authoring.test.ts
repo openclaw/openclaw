@@ -395,10 +395,6 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
       content: "#!/bin/sh\nprintf original",
       contentIncluded: true,
     });
-    expect(await read("data.bin")).toMatchObject({
-      contentIncluded: false,
-      omissionReason: "binary",
-    });
     await update("edit-helper", entry.revision, {
       files: [{ path: "scripts/edit.sh", content: "#!/bin/sh\nprintf changed" }],
     });

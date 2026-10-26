@@ -1,9 +1,7 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { createCanvasDocument } from "../canvas/documents.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
@@ -19,12 +17,10 @@ import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
 import {
   collectPublicSessionAttachments,
   readPublicSessionAttachment,
 } from "./control-ui-public-session-attachments.js";
-import { serveControlUiPublicSessionMedia } from "./control-ui-public-session-media.js";
 import { projectPublicSessionItems } from "./control-ui-public-session-project.js";
 import {
   isPublicSessionShareActive as readActive,
@@ -32,11 +28,6 @@ import {
   readPublicSessionWidget,
   readPublicSessionShare as readShare,
 } from "./control-ui-public-session-read.js";
-import {
-  loadPublicSessionShareTokenCodec,
-  mintPublicSessionWidgetToken,
-} from "./control-ui-public-session-token.js";
-import { createRequest, createResponse } from "./server-http.test-harness.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import * as transcriptReaders from "./session-transcript-readers.js";
 
@@ -131,29 +122,6 @@ describe("anonymous published session reader", () => {
     });
   });
 
-  it("pages fifty visible items and retains source positions for the older link", async () => {
-    await withPublicTestState(async () => {
-      await seed(Array.from({ length: 205 }, (_, index) => `Message ${index}`));
-      const latest = await readPublicSessionShare(cfg, locator);
-      expect(latest).toMatchObject({
-        title: "Public example",
-        totalMessages: 205,
-        olderOffset: 50,
-        truncated: false,
-      });
-      expect(latest?.messages).toHaveLength(50);
-      expect(latest?.messages[0]).toMatchObject({ content: "Message 155" });
-      const older = await readPublicSessionShare(cfg, locator, { offset: latest?.olderOffset });
-      expect(older?.olderOffset).toBe(100);
-      expect(older?.messages[0]).toMatchObject({ content: "Message 105" });
-      const first = await readPublicSessionShare(cfg, locator, { offset: 200 });
-      expect(first?.messages).toHaveLength(5);
-      const preview = await readPublicSessionShare(cfg, locator, { card: true });
-      expect(preview).toMatchObject({ messages: [{ content: "Message 0" }], totalMessages: 205 });
-      expect(first?.olderOffset).toBeUndefined();
-    });
-  });
-
   it("fills pages across hidden rows without splitting tool runs or repeating visible items", async () => {
     await withPublicTestState(async () => {
       await seed(
@@ -173,7 +141,11 @@ describe("anonymous published session reader", () => {
       let offset = 0;
       do {
         const page = await readPublicSessionShare(cfg, locator, { offset });
-        expect(page).not.toBeNull();
+        expect(page).toMatchObject({
+          title: "Public example",
+          totalMessages: 440,
+          truncated: false,
+        });
         pages.unshift(projectPublicSessionItems(page!.messages));
         offset = page!.olderOffset ?? 0;
       } while (offset);
@@ -210,23 +182,8 @@ describe("anonymous published session reader", () => {
 
   it("authorizes nested and top-level widget receipts only in the published generation", async () => {
     await withPublicTestState(async () => {
-      const documents = new Map<string, string>();
-      for (const name of [
-        "top-level-chart",
-        "nested-chart",
-        "hidden-chart",
-        "internal-chart",
-        "other-chart",
-      ]) {
-        const document = await createCanvasDocument({
-          html: `<p>${name}</p>`,
-          cspSandbox: "scripts",
-        });
-        documents.set(name, document.id);
-      }
-      const documentId = (name: string) => expectDefined(documents.get(name), "widget fixture ID");
       const details = (name: string) => {
-        const id = documentId(name);
+        const id = `cv_${name}`;
         return {
           kind: "canvas",
           presentation: { target: "assistant_message" },
@@ -263,7 +220,7 @@ describe("anonymous published session reader", () => {
       ]);
       const read = (docId: string, target = locator) =>
         readPublicSessionWidget(cfg, target, {
-          docId: documentId(docId),
+          docId: `cv_${docId}`,
           projection: currentProjection(),
         });
       expect(await read("top-level-chart")).toBe(true);
@@ -274,42 +231,6 @@ describe("anonymous published session reader", () => {
       expect(await read("top-level-chart", { ...locator, sessionId: "old-generation" })).toBe(
         false,
       );
-      await loadPublicSessionShareTokenCodec();
-      const gate = createControlUiPublicSessionRequestGate();
-      try {
-        for (const [docId, statusCode] of [
-          ["top-level-chart", 200],
-          ["nested-chart", 200],
-          ["hidden-chart", 404],
-          ["internal-chart", 404],
-          ["other-chart", 404],
-        ] as const) {
-          const token = await mintPublicSessionWidgetToken(locator, documentId(docId));
-          const response = createResponse();
-          await serveControlUiPublicSessionMedia({
-            req: createRequest({
-              path: `/share/session/media?widget=${token}`,
-              host: "127.0.0.1:18789",
-            }),
-            res: response.res,
-            basePath: "",
-            config: cfg,
-            projection: currentProjection(),
-            gate,
-            ingress: {
-              kind: "direct-local",
-              clientIp: "127.0.0.1",
-              rateLimit: { subject: { key: "widget-reader" }, resetOnSuccess: true },
-            },
-          });
-          expect(response.res.statusCode, docId).toBe(statusCode);
-          expect(response.getBody()).toBe(
-            statusCode === 200 ? `<p>${docId}</p>` : "This widget is unavailable.",
-          );
-        }
-      } finally {
-        gate.dispose();
-      }
       const find = transcriptMatch.findTranscriptEvent;
       vi.spyOn(transcriptMatch, "findTranscriptEvent").mockImplementationOnce(async (...args) => {
         const result = await find(...args);

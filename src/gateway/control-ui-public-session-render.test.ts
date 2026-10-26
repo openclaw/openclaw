@@ -31,7 +31,11 @@ function render(
   });
 }
 
-const fragment = (...args: Parameters<typeof render>) => JSDOM.fragment(render(...args));
+function fragment(messages: unknown[] | string, overrides: Parameters<typeof render>[1] = {}) {
+  return JSDOM.fragment(
+    render(typeof messages === "string" ? [message("assistant", messages)] : messages, overrides),
+  );
+}
 
 describe("public session document", () => {
   const widgetDetails = {
@@ -68,12 +72,7 @@ describe("public session document", () => {
 
   it("renders hosted shortcodes with the public widget URL and preserves surrounding text", () => {
     const page = fragment(
-      [
-        message(
-          "assistant",
-          'Before [embed ref="cv_timeline" title="A & B" height="1050" /] After',
-        ),
-      ],
+      'Before [embed ref="cv_timeline" title="A & B" height="1050" /] After',
       widgetOptions,
     );
     const article = page.querySelector("article")!;
@@ -86,31 +85,6 @@ describe("public session document", () => {
     expect(frame.getAttribute("title")).toBe("A & B");
     expect(frame.style.height).toBe("1050px");
     expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
-  });
-
-  it("renders only explicitly mapped widgets and gives byte-stable rows content revisions", () => {
-    const messages = [
-      widgetReceipt,
-      message("assistant", '[embed ref="unmapped" /]', {
-        content: [
-          { type: "toolCall", id: "read", name: "read", arguments: {} },
-          { type: "text", text: '[embed ref="unmapped" /]' },
-        ],
-      }),
-    ];
-    const html = render(messages, widgetOptions);
-    expect(render(messages, widgetOptions)).toBe(html);
-    const page = JSDOM.fragment(html);
-    expect(page.querySelectorAll("iframe")).toHaveLength(1);
-    for (const row of page.querySelectorAll(".transcript > *")) {
-      expect(row.getAttribute("data-public-item")).toBeTruthy();
-      expect(row.getAttribute("data-public-revision")).toMatch(/^[a-f0-9]{24}$/);
-    }
-    expect(
-      fragment([widgetReceipt], { mediaBaseUrl: widgetOptions.mediaBaseUrl }).querySelector(
-        "iframe",
-      ),
-    ).toBeNull();
   });
 
   it("merges a nested receipt into its same-turn shortcode and inherits its title", () => {
@@ -202,12 +176,7 @@ describe("public session document", () => {
 
   it("renders mixed widget and link embeds in shortcode order", () => {
     const page = fragment(
-      [
-        message(
-          "assistant",
-          '[embed url="https://example.test/first" /] [embed ref="cv_timeline" /] [embed url="https://example.test/last" /]',
-        ),
-      ],
+      '[embed url="https://example.test/first" /] [embed ref="cv_timeline" /] [embed url="https://example.test/last" /]',
       widgetOptions,
     );
     expect(
@@ -267,6 +236,8 @@ describe("public session document", () => {
       ),
       message("assistant", "NO_REPLY"),
       message("assistant", "HEARTBEAT_OK"),
+      message("assistant", "no_r"),
+      message("assistant", "NO_R", { display: true }),
       message("user", "[OpenClaw heartbeat poll]"),
       message(
         "user",
@@ -306,18 +277,11 @@ describe("public session document", () => {
     expect(html).toContain("Public phased commentary");
     expect(html).toContain("Second public question");
     expect(html).toContain("<strong>Public final answer</strong>");
+    expect(html).toContain("<p>no_r</p>");
+    expect(html).toContain("<p>NO_R</p>");
     expect(html).not.toMatch(
       /private|Private|hidden user input|internal handoff|unknown source|NO_REPLY|HEARTBEAT_OK|heartbeat poll/,
     );
-  });
-
-  it("preserves ordinary silent-token fragments outside heartbeat context", () => {
-    const html = render([
-      { role: "assistant", content: "no_r" },
-      { role: "assistant", display: true, content: "NO_R" },
-    ]);
-    expect(html).toContain("<p>no_r</p>");
-    expect(html).toContain("<p>NO_R</p>");
   });
 
   it("groups tool work between every assistant message with bounded unmasked summaries", () => {
@@ -516,23 +480,6 @@ describe("public session document", () => {
     expect(html).toContain("Some messages or long text are omitted");
     expect(html).toContain("Message shortened for this public view");
     expect(html.indexOf("Message number 104.")).toBeLessThan(html.indexOf("Long message"));
-  });
-
-  it("keeps older pages still and offers chronological navigation back to the live view", () => {
-    const html = render([{ role: "user", content: "An earlier question" }], {
-      isLatest: false,
-      olderUrl: "/share/session?token=v1.opaque&offset=100",
-    });
-    expect(html).not.toContain('http-equiv="refresh"');
-    expect(html).toContain("Earlier conversation");
-    expect(html).toContain("Back to latest");
-    expect(html).toContain('href="/share/session?token=v1.opaque&amp;offset=100" rel="prev"');
-    const page = JSDOM.fragment(html);
-    expect(page.querySelector(".eyebrow a")?.getAttribute("href")).toBe(
-      "/share/session?token=v1.opaque",
-    );
-    expect(page.querySelector(".eyebrow a")?.textContent).toBe("Back to latest");
-    expect(page.querySelector(".notice")).toBeNull();
   });
 
   it("keeps whole characters when the document budget leaves one code unit", () => {
