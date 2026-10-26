@@ -112,19 +112,15 @@ export function createGateway(
   scopes?: string[],
   responses: Record<string, () => unknown> = {},
 ): TestGateway {
+  const defaults: Record<string, () => unknown> = {
+    "channels.pairing.list": emptyPairingSnapshot,
+    "channels.status": channelSnapshot,
+    "plugins.list": () => ({ plugins: [], diagnostics: [], mutationAllowed: true }),
+  };
   const client = {
-    request: vi.fn(async (method: string) => {
-      if (responses[method]) {
-        return responses[method]();
-      }
-      return method === "channels.pairing.list"
-        ? emptyPairingSnapshot()
-        : method === "channels.status"
-          ? channelSnapshot()
-          : method === "plugins.list"
-            ? { plugins: [], diagnostics: [], mutationAllowed: true }
-            : {};
-    }),
+    request: vi.fn(async (method: string) =>
+      (responses[method] ?? defaults[method] ?? (() => ({})))(),
+    ),
   } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
