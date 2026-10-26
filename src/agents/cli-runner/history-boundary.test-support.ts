@@ -17,6 +17,7 @@ import { buildCliSessionHistoryPrompt, loadCliSessionPromptContext } from "./ses
 import type { PreparedCliRunContext } from "./types.js";
 
 type SessionStoreTempDirs = ReturnType<typeof useSessionStoreTempDirs>;
+type RunParams = PreparedCliRunContext["params"];
 
 export async function createHistoryBoundaryFixture(
   sessionDirs: SessionStoreTempDirs,
@@ -44,20 +45,17 @@ export async function createHistoryBoundaryFixture(
   let runNumber = 0;
   const withRun = async <T>(
     runId: string,
-    action: (params: PreparedCliRunContext["params"]) => Promise<T>,
-    overrides: Partial<PreparedCliRunContext["params"]> = {},
+    action: (params: RunParams) => Promise<T>,
+    overrides: Partial<RunParams> = {},
   ) => {
     const admission = prepareSystemAgentRunAdmission({}, runId, "main", "history-test");
     try {
       return await action({
+        ...target,
         admittedRunContext: await admission.admit("embedded"),
         runId,
-        agentId: target.agentId,
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
         sessionFile: target.sessionKey,
         sessionTarget: target,
-        storePath: target.storePath,
         provider: "test-cli",
         model: "test-model",
         prompt: "current ask",
@@ -71,8 +69,8 @@ export async function createHistoryBoundaryFixture(
   };
   const run = async <T>(
     epoch: string | undefined,
-    action: (allowed: boolean, params: PreparedCliRunContext["params"]) => Promise<T>,
-    overrides: Partial<PreparedCliRunContext["params"]> = {},
+    action: (allowed: boolean, params: RunParams) => Promise<T>,
+    overrides: Partial<RunParams> = {},
     credential?: AuthProfileCredential,
     preparedBackend?: Parameters<typeof prepareCliHistoryBoundary>[1]["preparedBackend"],
   ) => {
@@ -100,15 +98,14 @@ export async function createHistoryBoundaryFixture(
   return { target, manager, run, seed, withRun };
 }
 
-export async function history(allowed: boolean, params: PreparedCliRunContext["params"]) {
+export async function history(allowed: boolean, params: RunParams) {
+  const { reseedMessages } = await loadCliSessionPromptContext({
+    ...params,
+    allowRawTranscriptReseed: true,
+    rawTranscriptReseedReason: allowed ? "missing-transcript" : "auth-unknown",
+  });
   return buildCliSessionHistoryPrompt({
-    messages: (
-      await loadCliSessionPromptContext({
-        ...params,
-        allowRawTranscriptReseed: true,
-        rawTranscriptReseedReason: allowed ? "missing-transcript" : "auth-unknown",
-      })
-    ).reseedMessages,
+    messages: reseedMessages,
     prompt: "current ask",
     maxHistoryChars: 8192,
   });

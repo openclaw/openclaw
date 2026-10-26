@@ -34,9 +34,8 @@ export const enqueueSessionEventMock = vi.fn<typeof sessionEventHandoff.enqueueS
 );
 
 beforeEach(({ onTestFinished }) => {
-  const getProcessSupervisorSpy = vi
-    .spyOn(processSupervisor, "getProcessSupervisor")
-    .mockImplementation(() => {
+  const spies = [
+    vi.spyOn(processSupervisor, "getProcessSupervisor").mockImplementation(() => {
       const activeRuns = new Map<string, Awaited<ReturnType<ProcessSupervisor["spawn"]>>>();
       return {
         acquireScopeCleanup: vi.fn(() => {
@@ -88,23 +87,20 @@ beforeEach(({ onTestFinished }) => {
         }),
         cancelScope: vi.fn(),
       };
-    });
-  const captureSessionEventTargetForHostSpy = vi
-    .spyOn(sessionEventHandoff, "captureSessionEventTargetForHost")
-    .mockImplementation(async (agentId, sessionKey) => ({
-      agentId,
-      sessionKey,
-      sessionId: sessionKey,
-      generation: "test",
-    }));
-  const enqueueSessionEventForHostSpy = vi
-    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
-    .mockImplementation((text, options) => enqueueSessionEventMock(text, options));
-  onTestFinished(() => {
-    getProcessSupervisorSpy.mockRestore();
-    captureSessionEventTargetForHostSpy.mockRestore();
-    enqueueSessionEventForHostSpy.mockRestore();
-  });
+    }),
+    vi
+      .spyOn(sessionEventHandoff, "captureSessionEventTargetForHost")
+      .mockImplementation(async (agentId, sessionKey) => ({
+        agentId,
+        sessionKey,
+        sessionId: sessionKey,
+        generation: "test",
+      })),
+    vi
+      .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
+      .mockImplementation(enqueueSessionEventMock),
+  ];
+  onTestFinished(() => spies.forEach((spy) => spy.mockRestore()));
 });
 
 type MockRunExit = Omit<RunExit, "oomScoreWrapperSelected">;
