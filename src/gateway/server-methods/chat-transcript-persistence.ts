@@ -56,10 +56,6 @@ export type ResolvedAssistantTranscriptScope = SessionTranscriptWriteScope & {
   sessionKey: string;
 };
 
-type SourceReplyTranscriptMirrorMetadata = NonNullable<
-  ReturnType<typeof getReplyPayloadMetadata>
->["sourceReplyTranscriptMirror"];
-
 export type SourceReplyContentState = {
   broadcastContent: AssistantDisplayContentBlock[];
   persistedContent: AssistantDisplayContentBlock[];
@@ -69,7 +65,7 @@ export type SourceReplyContentState = {
 
 export type SourceReplyTranscriptMirror = {
   idempotencyKey: string;
-  metadata: SourceReplyTranscriptMirrorMetadata;
+  metadata: NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"];
 };
 
 export type SourceReplyTranscriptRewrite = SourceReplyTranscriptMirror & {

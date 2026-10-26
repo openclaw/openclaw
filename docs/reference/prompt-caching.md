@@ -47,6 +47,13 @@ Code Mode catalog, including `screen`, without borrowing execution authority.
 The next operator declaration updates that session fact; current-turn execution
 gates and the live requesting-browser check still enforce calls.
 
+GitHub tool listing follows the session's Gateway publication capability and
+workspace support, not the current turn's operator or GitHub identity. Operator,
+channel, scheduled, heartbeat, and senderless wake turns retain the same
+`github_publish` definition and catalog while those facts are unchanged. The
+Gateway checks current identity, target access, and full operator write authority
+for privileged PR actions when called. Listing an action does not grant it.
+
 The `message` description and schema use the session's channel, bound account,
 and configured bindings, not the current turn's source. CLI, restart recovery, and subagent
 announcement turns in the same conversation keep identical definitions,
@@ -236,7 +243,7 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 - Cache hits surface via `usage.prompt_tokens_details.cached_tokens` (Chat Completions) or `input_tokens_details.cached_tokens` (Responses API), mapped to `cacheRead`.
 - Responses API payloads can also expose `input_tokens_details.cache_write_tokens`, mapped to `cacheWrite` and priced at the model's cache-write rate; Responses payloads that omit the field keep `cacheWrite` at `0`. Chat Completions payloads that include `prompt_tokens_details.cache_write_tokens` also populate `cacheWrite`; availability depends on the model and route.
 - Captured consecutive Responses request bodies retained byte-identical history prefixes, so history rewriting did not explain the observed shortfall. Provider breakpoint placement can affect reported `cacheRead`: OpenAI documents message-end breakpoints for GPT-5.6 and later on the Platform API, while the ChatGPT-backed Responses route was observed to report hits in 1,024-token steps. See [OpenAI live expectations](#openai-live-expectations) below.
-- On Responses routes the whole system prompt, including the volatile suffix below the cache boundary, is sent as `instructions`. A suffix change (date rollover, timezone, elevated level, watched sessions, model identity, Project Memory facts) re-caches from the changed point on the next request; the stable prefix and tools are not split into a separate cached block the way Anthropic checkpoints are. Cache observations report this as a `systemPromptSuffix` change.
+- On native OpenAI Responses routes the system prompt is pinned for the session and sent unchanged as `instructions`. Later changes to its sections (skills, workspace memory, temporal context, config-driven sections) arrive as instruction messages after the current user turn, so the cached `instructions` prefix and earlier history stay byte-identical. Changing the route or selected personal profile, resetting, or compacting starts a new series and re-caches from the start; see [Context](/concepts/context#how-openclaw-builds-the-system-prompt). Routes without a pinned series still send the whole rendered prompt as `instructions`, where a suffix change re-caches from the changed point and cache observations report it as a `systemPromptSuffix` change.
 
 ### OpenAI 12-hour cache lifetime
 

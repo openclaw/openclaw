@@ -53,6 +53,7 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
   let notice = "";
   let generation = 0;
   let available = false;
+  let renderedConnection = "";
   let disposed = false;
   let dialog: ControlUiComponentHandle<ControlUiDialogProps> | undefined;
   const page = element("section", undefined, "mcp-connected-apps");
@@ -134,7 +135,18 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
     busy = true;
     error = "";
     notice = "";
-    render();
+    if (snapshot) {
+      // The existing rows stay valid while the authoritative reply is pending.
+      page.querySelector(".mcp-connected-apps__error")?.remove();
+      page.querySelector(".mcp-connected-apps__feedback")!.textContent = "Loading connected apps…";
+      for (const control of page.querySelectorAll<HTMLButtonElement | HTMLInputElement>(
+        "button, input",
+      )) {
+        control.disabled = true;
+      }
+    } else {
+      render();
+    }
     try {
       await action(id);
     } catch (cause) {
@@ -424,9 +436,15 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
   }
 
   function sync() {
+    const connection = host.connection;
+    const connectionKey = `${connection.connected}:${connection.canRead}:${connection.canWrite}`;
+    // Session and agent publications do not change this page or its focused controls.
+    let needsRender = connectionKey !== renderedConnection;
+    renderedConnection = connectionKey;
     const nextRequest = context.props.request ?? "";
     const next = canUse() && context.presented && !context.signal.aborted;
     if (next !== available || nextRequest !== requestId) {
+      needsRender = true;
       available = next;
       requestId = nextRequest;
       generation += 1;
@@ -442,7 +460,9 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
         return;
       }
     }
-    render();
+    if (needsRender) {
+      render();
+    }
   }
   const unsubscribe = host.subscribe(sync);
   sync();

@@ -12,6 +12,10 @@ import type {
   GatewayWsPresenceMode,
   GatewayWsSessionEventAttribution,
 } from "../../infra/diagnostic-rpc-types.js";
+import {
+  hasGatewayWsMetricsListeners,
+  publishGatewayWsMetrics,
+} from "../../infra/gateway-ws-metrics.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { GATEWAY_EVENTS } from "../events.js";
@@ -99,19 +103,30 @@ const FRAME_BYTE_LABELS = FRAME_BYTE_BOUNDS.map((bound) =>
 function flushEventCounters() {
   for (const counter of pendingCounters) {
     const { traffic } = counter;
-    if (traffic.count > 0) {
-      const frameBytes: NonNullable<EventTraffic["frameBytes"]> = {};
-      let cumulative = traffic.count;
-      // Start with the largest index so V8 never grows a mostly empty elements array.
-      for (let i = FRAME_BYTE_LABELS.length - 1; i >= 0; i--) {
-        frameBytes[FRAME_BYTE_LABELS[i]!] = cumulative;
-        cumulative -= counter.buckets[i]!;
+    publishGatewayWsMetrics(
+      traffic.event,
+      traffic.count,
+      traffic.bytes,
+      traffic.wireBytes,
+      counter.buckets,
+      FRAME_BYTE_LABELS,
+      traffic.sessionEvent,
+      traffic.presenceMode,
+    );
+    if (hasInternalDiagnosticEventInterest("gateway.ws.event", true)) {
+      if (traffic.count > 0) {
+        const frameBytes: NonNullable<EventTraffic["frameBytes"]> = {};
+        let cumulative = traffic.count;
+        // Start with the largest index so V8 never grows a mostly empty elements array.
+        for (let i = FRAME_BYTE_LABELS.length - 1; i >= 0; i--) {
+          frameBytes[FRAME_BYTE_LABELS[i]!] = cumulative;
+          cumulative -= counter.buckets[i]!;
+        }
+        // Explicit subscribers retain detached snapshots; exporters borrow the counters above.
+        traffic.frameBytes = Object.freeze(frameBytes);
       }
-      // Reuse the owned snapshot; cloning sparse numeric keys expands V8's elements storage.
-      traffic.frameBytes = Object.freeze(frameBytes);
+      emitTrustedDiagnosticEvent(traffic);
     }
-    // Enrichment copies the top level synchronously; queued nested histograms stay detached.
-    emitTrustedDiagnosticEvent(traffic);
     traffic.count = traffic.bytes = 0;
     traffic.wireBytes = traffic.frameBytes = undefined;
     counter.buckets.fill(0);
@@ -129,7 +144,8 @@ export function recordGatewayWsEvent(
 ): boolean {
   if (
     !areDiagnosticsEnabledForProcess() ||
-    !hasInternalDiagnosticEventInterest("gateway.ws.event", true)
+    (!hasGatewayWsMetricsListeners() &&
+      !hasInternalDiagnosticEventInterest("gateway.ws.event", true))
   ) {
     return false;
   }

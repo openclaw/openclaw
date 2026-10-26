@@ -281,9 +281,9 @@ it("retains failed Remove feedback after automatic unchanged dashboard reconcili
   });
   const view = await waitForView(element);
   await settleCells(view);
+  await openBoardMenu(view);
   const remove = view.querySelector<HTMLElement>(".board-widget__menu-danger")!;
   expect(remove).not.toBeNull();
-  await openBoardMenu(view);
   remove.click();
   await recoveryRequested.promise;
   await settleCells(view);
@@ -310,7 +310,7 @@ it("retains failed Remove feedback after automatic unchanged dashboard reconcili
   expect(errors()).toEqual(beforeRefresh);
 
   await openBoardMenu(view);
-  remove.click();
+  view.querySelector<HTMLElement>(".board-widget__menu-danger")!.click();
   await waitForSolid(() => expect(view.snapshot?.revision).toBe(2));
   await settleCells(view);
   expect(writes).toBe(2);

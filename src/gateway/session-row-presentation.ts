@@ -243,7 +243,7 @@ export function prepareSessionRowPublication(
     return {
       getAudienceKey() {
         return JSON.stringify([
-          recipient.sharing.getCacheKey(),
+          recipient.sharing.getCacheKey(projection.sharingRevision),
           recipient.presentFastMode("ultrafast"),
           recipient.publicationState?.factsRevision,
         ]);

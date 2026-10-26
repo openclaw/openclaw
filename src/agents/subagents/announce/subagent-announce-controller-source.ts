@@ -238,6 +238,8 @@ export async function reserveRestoredSubagentControllerSources(
     if (
       !isSubagentObligationRetired(entry) &&
       entry.expectsCompletionMessage === true &&
+      // Interrupted terminal delivery is reserved by recovery after reconciliation.
+      entry.terminalOwner !== "interrupted-recovery" &&
       !hasRequesterCompletionCohort(entry) &&
       (entry.delivery?.status === "pending" || entry.delivery?.status === "in_progress") &&
       (entry.delivery.nextAttemptAt ?? 0) <= Date.now()

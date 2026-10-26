@@ -176,6 +176,10 @@ NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-contr
 
 Twenty runs alternate ten base/head pairs. Supply a second copy of the base
 bundle for an A/A control. `--boot-route new` measures the New Session composer.
+Cold New Session omits owner registration and sidebar counters because it has no
+Chat owner to finish registration. The effective `ownerProbes` and
+`sidebarCounters` flags are recorded in `summary.json`; other routes and warm
+reloads retain their existing instrumentation.
 Browser storage and HTTP caches are cleared between samples; Gateway asset
 caches stay warm for each immutable bundle. Each bundle's index is read before
 sampling to initialize the shared file reader outside the first timed reload.
@@ -580,8 +584,9 @@ clocks. The result records created/active observers, observed targets, callbacks
 intervals, media queries, and global listeners before and after each action.
 Run timing comparisons separately without instrumentation, with
 `--thread-cpu-time --pairs 20 --compare-bundle-dir <other-build>` and an A/A
-control on a loaded host. Hidden idle requires `--headed`: the runner minimizes
-its own Chromium window and verifies native document visibility. Hidden samples
+control on a loaded host. Hidden idle runs headless: the runner launches full
+Chrome for Testing with `--headless=new`, minimizes its own window, and verifies
+native document visibility; no window appears on screen. Hidden samples
 use a fresh runner-owned profile and Playwright's `noDefaults` connection so its
 normal focus emulation cannot override native visibility. The profile and process
 are removed after each sample. A browser that

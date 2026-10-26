@@ -54,6 +54,8 @@ Debian 12 meet that ABI floor. RHEL 9 and Rocky Linux 9 ship glibc 2.34, so
 they cannot run the published AppImage. Extraction does not bypass this
 requirement.
 
+The AppImage keeps its bundled libraries for the companion and WebKit helpers. Host CLI tools and SSH ProxyCommand programs use the host libraries; non-AppImage launches preserve the user's library path.
+
 See [Desktop compatibility](https://docs.openclaw.ai/platforms/linux#desktop-compatibility)
 for package updates, desktop limitations, and native-app distinctions.
 

@@ -9,14 +9,22 @@ sidebarTitle: "Config"
 
 Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path, print the schema, validate, or print the active file path. Run `openclaw config` with no subcommand to open the same guided wizard as `openclaw configure`.
 
-`config set`, `config patch`, and `config unset` require the local Gateway to be
-stopped. These commands hold exclusive state ownership while publishing the file
-and its database metadata. Stop the Gateway through its service owner, wait for
-it to exit, then rerun the command. A running-owner refusal is an offline-only
-restriction, not an authentication failure. For online changes, use
-`openclaw gateway call config.patch` with a `raw` patch and the `hash` returned by
-`openclaw gateway call config.get` as `baseHash`; see
-[Config RPC](/gateway/configuration/config-rpc).
+When a local Gateway owns the state directory, `config set`, `config patch`, and
+`config unset` route the write through that Gateway instead of writing the file
+themselves. The CLI prepares the same change and validation as an offline write,
+then sends it as one `config.patch` guarded by the `hash` from `config.get`, so the
+Gateway stays the only writer and applies the change under its reload policy.
+Output and exit codes match the offline command. If the config changed in between,
+the Gateway rejects the write; rerun the command. A failure after the request was
+sent is reported as an uncertain outcome and is never retried locally; check the
+path with `openclaw config get` before retrying.
+
+Two kinds of change still need the Gateway stopped: `database.*` settings, which
+select the state database the Gateway holds open, and changes a merge patch
+cannot express (for example an authored `null`). Stop the Gateway through its
+service owner, wait for it to exit, then rerun the command. `--dry-run` never
+contacts the Gateway. See [Config RPC](/gateway/configuration/config-rpc) for the
+underlying methods.
 
 <Note>
 When `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`) still work; config writers refuse.
@@ -620,6 +628,7 @@ After every successful `config set` / `config patch` / `config unset`, the CLI p
 | `Restart the gateway to apply.`                     | The changed path needs a full restart, or passive reload is disabled. |
 | `Change will apply without restarting the gateway.` | Hot reload picks it up automatically.                                 |
 | `No gateway restart needed.`                        | Nothing runtime-relevant changed.                                     |
+| `The Gateway is restarting to apply it.`            | A running Gateway accepted the write and scheduled its own restart.   |
 
 Plugin entry changes use the same reload planner as other settings. In the default
 `hybrid` mode, ordinary `plugins.entries.<id>` edits replace the affected plugin

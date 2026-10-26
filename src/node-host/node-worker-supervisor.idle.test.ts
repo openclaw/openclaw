@@ -490,8 +490,8 @@ describe("node worker idle retention", () => {
         expect(owner.adapter.kill).toHaveBeenCalledTimes(2);
         expect(mocks.prepare).toHaveBeenCalledTimes(1);
       } else {
-        // Move wall time to the boundary without firing the deadline callback.
-        vi.setSystemTime(10_000);
+        // Reach the admission boundary without firing unrelated retention timers.
+        vi.spyOn(performance, "now").mockReturnValue(10_000);
       }
       cleanup.resolve();
       if (timing === "before") {
@@ -541,6 +541,7 @@ describe("node worker idle retention", () => {
         });
         await owner.killed.promise;
         if (boundary === "deadline") {
+          vi.setSystemTime(-60_000);
           await vi.advanceTimersByTimeAsync(9_999);
           expect(outcomes).toEqual([]);
           await vi.advanceTimersByTimeAsync(1);

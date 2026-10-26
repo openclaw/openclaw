@@ -24,7 +24,7 @@ import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { mapColdLoadCpuProfile, summarizeCpuProfile } from "./lib/control-ui-cold-load-trace.ts";
 import {
-  createInteractionFixture,
+  createScenarioFixture,
   interactionScenarios,
   settleSidebarBackgroundWork,
   type InteractionEvidence,
@@ -58,8 +58,10 @@ const { values } = parseArgs({
   options: {
     "bundle-dir": { type: "string", default: "dist/control-ui" },
     "compare-bundle-dir": { type: "string" },
+    "control-bundle-dir": { type: "string" },
     "workboard-source-root": { type: "string" },
     "compare-workboard-source-root": { type: "string" },
+    "control-workboard-source-root": { type: "string" },
     output: { type: "string", default: ".artifacts/control-ui-interactions" },
     steps: { type: "string" },
     viewport: { type: "string", default: "both" },
@@ -78,7 +80,8 @@ const { values } = parseArgs({
     "asset-latency-ms": { type: "string", default: "0" },
     "projection-fixtures": { type: "boolean", default: false },
     "projection-counts": { type: "boolean", default: false },
-    headed: { type: "boolean", default: false },
+    "data-pages": { type: "boolean", default: false },
+    "retained-heap": { type: "boolean", default: false },
   },
 });
 const trace = values.trace || values["selector-stats"];
@@ -107,12 +110,20 @@ if (!Number.isFinite(cpuThrottle) || cpuThrottle < 1) {
 if (!Number.isInteger(pairs) || pairs < 1) {
   throw new Error("pairs must be a positive integer");
 }
+if (values["control-bundle-dir"] && !values["compare-bundle-dir"]) {
+  throw new Error(
+    "control-bundle-dir requires compare-bundle-dir for baseline/candidate/control order",
+  );
+}
 if (!["desktop", "mobile", "both"].includes(values.viewport)) {
   throw new Error("viewport must be desktop, mobile or both");
 }
 const selectedIds = values.steps?.split(",");
 const scenarios = interactionScenarios.filter((step) => {
   if (Boolean(step.projectionFamily) !== values["projection-fixtures"]) {
+    return false;
+  }
+  if (!selectedIds && Boolean(step.dataPage) !== values["data-pages"]) {
     return false;
   }
   return selectedIds
@@ -123,9 +134,11 @@ if (!scenarios.length || selectedIds?.some((id) => !scenarios.some((step) => ste
   throw new Error("Unknown or empty interaction steps");
 }
 const artifactDir = createControlUiE2eArtifactDir("warm", values.output);
-const bundles = [values["bundle-dir"], values["compare-bundle-dir"]].filter(
-  (directory): directory is string => Boolean(directory),
-);
+const bundles = [
+  values["bundle-dir"],
+  values["compare-bundle-dir"],
+  values["control-bundle-dir"],
+].filter((directory): directory is string => Boolean(directory));
 const viewports = [
   { name: "desktop", width: 1440, height: 1000 },
   { name: "mobile", width: 390, height: 844 },
@@ -339,6 +352,7 @@ type Result = {
     error?: string;
   };
   durationBreakdownMs?: Record<string, number>;
+  retainedHeap?: { beforeBytes: number; afterBytes?: number; deltaBytes?: number };
   longTasks?: { count: number; totalMs: number; maxMs: number };
   requests?: Record<string, number>;
   scenarioEvidence?: InteractionEvidence;
@@ -410,7 +424,6 @@ if (values["process-wakeups"]) {
 const browserExecutable = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const browser = await chromium.launch({
   executablePath: browserExecutable,
-  headless: !values.headed,
 });
 
 async function launchNativeVisibilityContext() {
@@ -424,6 +437,8 @@ async function launchNativeVisibilityContext() {
       "--no-default-browser-check",
       "--password-store=basic",
       "--use-mock-keychain",
+      // Full Chrome headless still hides a natively minimized window; the headless shell does not.
+      "--headless=new",
       "about:blank",
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
@@ -529,9 +544,11 @@ try {
       throw new Error(`Missing build identity: ${directory}`);
     }
     const build: { buildId: string; version: string } = JSON.parse(raw);
-    const sourceRoot = [values["workboard-source-root"], values["compare-workboard-source-root"]][
-      bundleIndex
-    ];
+    const sourceRoot = [
+      values["workboard-source-root"],
+      values["compare-workboard-source-root"],
+      values["control-workboard-source-root"],
+    ][bundleIndex];
     const needsWorkboard = scenarios.some((scenario) => scenario.fixture?.workboardResources);
     if (needsWorkboard && !sourceRoot) {
       throw new Error(`Missing explicit Workboard source root for bundle ${bundleIndex}`);
@@ -584,7 +601,16 @@ try {
           : "untraced CDP metrics",
         metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
         cpuThrottle,
-        pairOrder: values.counterbalance ? "AB/BA alternating by pair" : "AB",
+        retainedHeap: values["retained-heap"]
+          ? "Separate GC-controlled proof: collect before tracing and after action metrics/tracing; not a timing comparison."
+          : false,
+        pairOrder: values["control-bundle-dir"]
+          ? values.counterbalance
+            ? "ABC/CBA alternating by pair"
+            : "ABC"
+          : values.counterbalance
+            ? "AB/BA alternating by pair"
+            : "AB",
         assetLatency: {
           milliseconds: assetLatencyMs,
           scope:
@@ -617,7 +643,6 @@ try {
             }
           : false,
         preferences: { lobsterPetVisits: false },
-        headed: values.headed,
         invalidationTracking:
           trace && (values["invalidation-tracking"] || values["selector-stats"]),
         selectorStats: values["selector-stats"],
@@ -652,25 +677,27 @@ try {
             }
           : undefined,
         acceptance:
-          "For fixed steps: >=10 serial AB pairs per viewport, all median/p95/min/max cells reviewed; any >20% regression stops landing. No boot growth beyond 64 B.",
+          "For fixed steps: >=10 serial AB pairs per viewport, all median/p95/min/max cells reviewed; any >20% regression stops landing. Compare startup with its same-host merge base; growth beyond build variance needs an accepted measured win.",
         exclusions: [
           "No live Gateway/provider",
           "No sidebar text input exists; measure command palette search separately",
-          "No fake clocks or Lit probes; optional simulated asset delay is recorded above",
+          "No fake clocks or Lit probes; optional asset delay is recorded above and other simulated transport delays are named by their scenario",
         ],
         scenarios: scenarios.map(
-          ({ id, route, expected, fixture, diagnostic, observationBrowser }) => ({
+          ({ id, route, expected, fixture, dataPage, diagnostic, observationBrowser }) => ({
             id,
             route,
             expected,
             fixture,
+            dataPage,
             diagnostic,
             observationBrowser,
           }),
         ),
         viewports,
         bundles: servers.map(
-          ({ directory, build, indexSha256, workboardSource, projectionBuild }) => ({
+          ({ directory, build, indexSha256, workboardSource, projectionBuild }, index) => ({
+            role: index === 0 ? "baseline" : index === 1 ? "candidate" : "control",
             directory,
             ...build,
             indexSha256,
@@ -695,16 +722,13 @@ try {
         for (const [bundle, slot] of slots) {
           const artifactPrefix = `${viewport.name}-${theme}-${scenario.id}-${pair + 1}-${bundle}`;
           const nativeVisibility =
-            scenario.visibility === "hidden" && values.headed
-              ? await launchNativeVisibilityContext()
-              : undefined;
+            scenario.visibility === "hidden" ? await launchNativeVisibilityContext() : undefined;
           const observationBrowser =
             scenario.observationBrowser && !nativeVisibility
               ? await launchControlUiObservationBrowser({
                   viewport: { width: viewport.width, height: viewport.height },
                   artifactDir,
                   artifactPrefix,
-                  headless: !values.headed,
                   colorScheme: theme,
                   isMobile: viewport.name === "mobile",
                   hasTouch: viewport.name === "mobile",
@@ -811,12 +835,7 @@ try {
                   slot.build.version,
                   workboardSource.root,
                 )
-              : createInteractionFixture(
-                  slot.build.buildId,
-                  slot.build.version,
-                  scenario.fixture,
-                  sandbox,
-                );
+              : createScenarioFixture(slot.build.buildId, slot.build.version, scenario, sandbox);
             const sessions = createTeamScaleSidebarListOwner({
               rows: fixture.sessions,
               viewerProfileId: "interaction-viewer",
@@ -847,6 +866,7 @@ try {
                     }
                     return sessions.list(params).result;
                   },
+                  ...scenario.createRequestHandlers?.(),
                 },
               },
             );
@@ -896,6 +916,14 @@ try {
             await cdp.send("Performance.enable", {
               timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
             });
+            if (values["retained-heap"]) {
+              await cdp.send("HeapProfiler.collectGarbage");
+              const initial = await metrics(cdp);
+              if (initial.JSHeapUsedSize === undefined) {
+                throw new Error("Missing JSHeapUsedSize after initial garbage collection");
+              }
+              result.retainedHeap = { beforeBytes: initial.JSHeapUsedSize };
+            }
             if (values["selector-stats"]) {
               cdp.on(
                 "CSS.styleSheetAdded",
@@ -943,8 +971,7 @@ try {
                 windowId,
                 bounds: { windowState: "minimized" },
               });
-              // Headless Chromium accepts minimization without hiding the page.
-              // A frozen renderer would make this idle measurement meaningless.
+              // Never simulate hidden: an unhidden or frozen renderer would make this idle measurement meaningless.
               const hidden = await page
                 .waitForFunction(() => document.visibilityState === "hidden", undefined, {
                   timeout: 1_000,
@@ -956,7 +983,7 @@ try {
                 );
               if (!hidden) {
                 throw new ScenarioSkipped(
-                  "Native window minimization did not hide the page; use --headed on a windowed host for hidden-idle proof.",
+                  "Native window minimization did not hide the page; this Chromium build cannot produce hidden-idle proof.",
                 );
               }
             }
@@ -1331,6 +1358,18 @@ try {
                   }
                 });
               }
+              const retainedHeap = result.retainedHeap;
+              if (values["retained-heap"] && cdp && retainedHeap && result.status === "passed") {
+                await capture(async () => {
+                  await cdp!.send("HeapProfiler.collectGarbage");
+                  const final = await metrics(cdp!);
+                  if (final.JSHeapUsedSize === undefined) {
+                    throw new Error("Missing JSHeapUsedSize after final garbage collection");
+                  }
+                  retainedHeap.afterBytes = final.JSHeapUsedSize;
+                  retainedHeap.deltaBytes = final.JSHeapUsedSize - retainedHeap.beforeBytes;
+                });
+              }
               if (!values["first-pair-screenshots"] || pair === 0 || result.status === "failed") {
                 await capture(() =>
                   page.screenshot({ path: path.join(artifactDir, `${artifactPrefix}.png`) }),
@@ -1480,37 +1519,42 @@ const summary = viewports
     ),
   )
   .toSorted((a, b) => (b.metrics.scriptMs?.median ?? 0) - (a.metrics.scriptMs?.median ?? 0));
-const comparisons = summary
-  .filter((row) => row.bundle === 0)
-  .flatMap((baseline) => {
-    const candidate = summary.find(
-      (row) => row.bundle === 1 && row.viewport === baseline.viewport && row.step === baseline.step,
-    );
-    if (!candidate) {
-      return [];
-    }
-    return Object.entries(baseline.metrics).flatMap(([metric, before]) => {
-      const after = candidate.metrics[metric];
-      if (!before || !after) {
+const compareBundle = (bundle: number) =>
+  summary
+    .filter((row) => row.bundle === 0)
+    .flatMap((baseline) => {
+      const candidate = summary.find(
+        (row) =>
+          row.bundle === bundle && row.viewport === baseline.viewport && row.step === baseline.step,
+      );
+      if (!candidate) {
         return [];
       }
-      return (["median", "p95", "min", "max"] as const).map((statistic) => ({
-        viewport: baseline.viewport,
-        step: baseline.step,
-        metric,
-        statistic,
-        before: before[statistic],
-        after: after[statistic],
-        percent: before[statistic] ? (after[statistic] / before[statistic] - 1) * 100 : null,
-        regression: after[statistic] > before[statistic] * 1.2,
-      }));
+      return Object.entries(baseline.metrics).flatMap(([metric, before]) => {
+        const after = candidate.metrics[metric];
+        if (!before || !after) {
+          return [];
+        }
+        return (["median", "p95", "min", "max"] as const).map((statistic) => ({
+          viewport: baseline.viewport,
+          step: baseline.step,
+          metric,
+          statistic,
+          before: before[statistic],
+          after: after[statistic],
+          percent: before[statistic] ? (after[statistic] / before[statistic] - 1) * 100 : null,
+          regression: after[statistic] > before[statistic] * 1.2,
+        }));
+      });
     });
-  });
+const comparisons = compareBundle(1);
+const controlComparisons = values["control-bundle-dir"] ? compareBundle(2) : undefined;
 await writeFile(
   path.join(artifactDir, "summary.json"),
   JSON.stringify(
     {
       comparisons,
+      controlComparisons,
       planned: viewports.length * scenarios.length * pairs * servers.length,
       executed: results.length,
       failed: results.filter((row) => row.status === "failed").length,

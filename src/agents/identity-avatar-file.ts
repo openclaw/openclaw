@@ -116,6 +116,21 @@ export type PreparedLocalAgentAvatarFile = Omit<OpenedLocalAgentAvatarFile, "fd"
   body?: Buffer;
 };
 
+const inlineFiles = new WeakMap<PreparedLocalAgentAvatarFile, string>();
+
+/** An unchanged, revalidated file retains its prepared object and inline representation. */
+export function localAgentAvatarDataUrl(file: PreparedLocalAgentAvatarFile): string | undefined {
+  if (!file.body) {
+    return undefined;
+  }
+  let dataUrl = inlineFiles.get(file);
+  if (!dataUrl) {
+    dataUrl = `data:${resolveAvatarMime(file.path)};base64,${file.body.toString("base64")}`;
+    inlineFiles.set(file, dataUrl);
+  }
+  return dataUrl;
+}
+
 export type LocalAgentAvatarResult =
   | { ok: true; file: PreparedLocalAgentAvatarFile }
   | { ok: false; reason: LocalAgentAvatarFailureReason };
@@ -221,7 +236,5 @@ export async function resolveAgentAvatarUrlFromSource(
     source: normalized,
     readBody: true,
   });
-  return prepared.ok && prepared.file.body
-    ? `data:${resolveAvatarMime(prepared.file.path)};base64,${prepared.file.body.toString("base64")}`
-    : undefined;
+  return prepared.ok ? localAgentAvatarDataUrl(prepared.file) : undefined;
 }

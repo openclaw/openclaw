@@ -156,3 +156,30 @@ it("carries original tool results into Anthropic and OpenAI-compatible payloads"
     expect(JSON.stringify(payload)).toContain(JSON.stringify(source).slice(1, -1));
   }
 });
+
+it.each(
+  ["EAI_AGAIN", "CERT_REVOKED"].flatMap((code) =>
+    [false, true].map((registered) => ({ code, registered })),
+  ),
+)("redacts nested fetch $code only when registered ($registered)", ({ code, registered }) => {
+  if (registered) {
+    registerSecretValueForRedaction(code);
+  }
+  const cause = new TypeError("fetch failed", {
+    cause: Object.assign(new Error("fixture transport failure"), {
+      code,
+      authorization: "Bearer fixture-sensitive-authorization",
+    }),
+  });
+  const projected = projectProviderError(new Error("Connection error.", { cause }));
+  expect(projected).toEqual(
+    registered
+      ? expect.not.objectContaining({ errorCode: code })
+      : {
+          stopReason: "error",
+          errorMessage: "Connection error.",
+          errorCode: code,
+        },
+  );
+  expect(JSON.stringify(projected)).not.toContain("fixture-sensitive-authorization");
+});

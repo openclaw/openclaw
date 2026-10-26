@@ -18,12 +18,6 @@ import type { EmbeddedAgentQueueHandle } from "../run-state.js";
 import { detachActiveEmbeddedRun, attachActiveEmbeddedRun } from "../runs.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";
 
-type DeferredTrajectoryRecorder = {
-  recordEvent: (type: string, data?: Record<string, unknown>) => void;
-  flush: () => Promise<void>;
-  describeFlushState: () => string | undefined;
-};
-
 export type DeferredEmbeddedRunLifecycleOwner = {
   beginRetryWait: (
     deadlineAtMs: number,
@@ -44,7 +38,11 @@ export function createEmbeddedAttemptDeferredLifecycleOwner(params: {
   diagnosticOwner: DiagnosticEmbeddedRunOwner;
   isCurrent: () => boolean;
   onRetryWaitCompleted: () => void;
-  trajectoryRecorder: DeferredTrajectoryRecorder | null;
+  trajectoryRecorder: {
+    recordEvent: (type: string, data?: Record<string, unknown>) => void;
+    flush: () => Promise<void>;
+    describeFlushState: () => string | undefined;
+  } | null;
   clearActiveRun: () => void;
 }): EmbeddedAttemptDeferredLifecycleOwner {
   let pending: typeof params | undefined = params;

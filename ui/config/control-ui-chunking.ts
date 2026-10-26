@@ -135,6 +135,15 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/styles/panel-loading-skeleton.css":
       // Keep the inline string with its renderer so recursive Chat grouping cannot capture it.
       return "deferred-ui-support";
+    case "ui/src/components/mcp-app-catalog.tsx":
+    case "ui/src/lib/mcp-app-catalog.ts":
+    case "ui/src/i18n/locales/en-mcp-app.ts":
+    case "ui/src/components/mcp-app-launch.ts":
+    case "ui/src/components/mcp-app-view-lazy.ts":
+    case "ui/src/lib/sessions/session-create-params.ts":
+    case "packages/gateway-protocol/src/question-media.ts":
+      // Shared catalogs and session parameters must not pull Chat into other routes.
+      return "deferred-ui-support";
     case "ui/src/lib/page-request.ts":
     case "ui/src/lib/model-catalog-reader.ts":
     case "ui/src/components/lobster-pet-contract.ts":
@@ -441,10 +450,12 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 styles.add("ui/src/components/solid/text-overflow.css");
                 // Document styles also serve Agents without loading Chat's visible renderers.
                 styles.add("ui/src/styles/sidebar-markdown.css");
+                styles.add("ui/src/styles/mcp-app-extensions.css");
               }
               if (route === "chat") {
                 styles.delete("ui/src/components/solid/text-overflow.css");
                 styles.delete("ui/src/styles/sidebar-markdown.css");
+                styles.delete("ui/src/styles/mcp-app-extensions.css");
                 // These optional views share the route's preloaded stylesheet.
                 styles.add("ui/src/pages/chat/components/chat-pane-mobile-header.css");
                 styles.add("ui/src/pages/chat/components/chat-pane-mobile-composition.css");

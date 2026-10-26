@@ -292,15 +292,13 @@ export function retireDeliveredQueuedUserTurn(
   });
 }
 
-type ChatDeliveryFailureHost = Parameters<typeof visibleSessionMatches>[0] & {
-  lastError?: string | null;
-  chatError?: string | null;
-  sessionsResult?: SessionsListResult | null;
-};
-
 /** Surface a terminal delivery failure in the owning pane or a named toast. */
 export function surfaceChatDeliveryFailure(
-  host: ChatDeliveryFailureHost,
+  host: Parameters<typeof visibleSessionMatches>[0] & {
+    lastError?: string | null;
+    chatError?: string | null;
+    sessionsResult?: SessionsListResult | null;
+  },
   sessionKey: string,
   agentId: string | undefined,
   error: string,

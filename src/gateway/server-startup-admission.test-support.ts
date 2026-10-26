@@ -4,6 +4,7 @@ import type { PluginHookHandlerMap } from "../plugins/hook-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
 import { tryBeginGatewaySuspendAdmission } from "../process/gateway-work-admission.js";
+import { createDeferredWorkTracker } from "../shared/async-work-scope.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import {
   installGatewayHookModuleLoad,
@@ -103,10 +104,7 @@ export function registerGatewayStartupAdmissionTests(params: {
         hookLoad.release();
       }
       await installGatewayHookModuleLoad(hookLoad.run, params.startupModuleRestorers);
-      const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
-        const operation = Promise.resolve().then(() => run(connectionWork.signal));
-        return connectionWork.track(() => operation);
-      };
+      const trackStartupWork = createDeferredWorkTracker(connectionWork);
       const runtime = await trackStartupWork(() =>
         params.start(
           params.createParams({

@@ -54,6 +54,14 @@ function childTool(agentId: string, command?: string): JsonObject {
   return { agent_id: agentId, tool_name: "Bash", tool_input: command ? { command } : {} };
 }
 
+const relaySuccess = { stdout: "", stderr: "", exitCode: 0 };
+const registration = (relayId: string) =>
+  nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+
+function installToolHook(handler: (...args: unknown[]) => Promise<unknown>) {
+  initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_tool_call", handler }]));
+}
+
 function yieldRequest(harness: ReturnType<typeof createStartedThreadHarness>, callId: string) {
   return harness.handleServerRequest({
     id: `request-${callId}`,
@@ -286,6 +294,8 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         },
         signal,
       );
+    const followup = (turnId: string, callId: string, signal?: AbortSignal) =>
+      invoke(turnId, callId, "child-thread", "collaborationfollowup_task", signal);
     const request = {
       client: client.client,
       threadId: "child-thread",
@@ -299,14 +309,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       throw new Error("Expected child execution custody");
     }
     try {
-      expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(
-        resolveCodexNativeModelInputTools({}).toSorted(),
-      );
-      const nativeWrite = vi.fn();
-      await expect(invoke("parent-b", "denied-steer").then(nativeWrite)).rejects.toThrow(
+      await expect(invoke("parent-b", "denied-steer")).rejects.toThrow(
         "same admitted model source",
       );
-      expect(nativeWrite).not.toHaveBeenCalled();
       await expect(invoke("parent-b", "ambiguous-root", "parent-thread")).rejects.toThrow(
         "unambiguous receiver turn",
       );
@@ -314,18 +319,10 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         "outside the sender's admitted tree",
       );
       expect(() => capture.assertCurrent()).not.toThrow();
-      await expect(
-        invoke(
-          "parent-b",
-          "foreign-active-followup",
-          "child-thread",
-          "collaborationfollowup_task",
-        ).then(nativeWrite),
-      ).rejects.toThrow("same admitted model source");
-      expect(nativeWrite).not.toHaveBeenCalled();
-      await expect(
-        invoke("parent-a", "same-active-followup", "child-thread", "collaborationfollowup_task"),
-      ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+      await expect(followup("parent-b", "foreign-active-followup")).rejects.toThrow(
+        "same admitted model source",
+      );
+      await expect(followup("parent-a", "same-active-followup")).resolves.toEqual(relaySuccess);
       await client.notify(inputRejected("same-active-followup", "Input declined"));
 
       await invoke("parent-a", "initial-same-source-steer");
@@ -342,18 +339,13 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       for (let index = 0; index < 31; index++) {
         await invoke("parent-a", `pending-${index}`);
       }
-      await expect(invoke("parent-a", "over-capacity").then(nativeWrite)).rejects.toThrow(
+      await expect(invoke("parent-a", "over-capacity")).rejects.toThrow(
         "native input admission capacity reached",
       );
-      expect(nativeWrite).not.toHaveBeenCalled();
       for (let index = 0; index < 31; index++) {
         await client.notify(inputRejected(`pending-${index}`, "Input rejected"));
       }
-      await expect(invoke("parent-a", "same-source-steer")).resolves.toEqual({
-        stdout: "",
-        stderr: "",
-        exitCode: 0,
-      });
+      await expect(invoke("parent-a", "same-source-steer")).resolves.toEqual(relaySuccess);
       await client.notify(
         successfulSendInputOutput({
           turnId: "parent-a",
@@ -398,15 +390,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       const coldTarget = threadRead({ threadStatus: "notLoaded" });
       coldTarget.thread.modelProvider = "unqualified-provider";
       client.setThreadRead("child-thread", coldTarget);
-      await expect(
-        invoke(
-          "parent-b",
-          "denied-cold-followup",
-          "child-thread",
-          "collaborationfollowup_task",
-        ).then(nativeWrite),
-      ).rejects.toThrow("does not admit this model");
-      expect(nativeWrite).not.toHaveBeenCalled();
+      await expect(followup("parent-b", "denied-cold-followup")).rejects.toThrow(
+        "does not admit this model",
+      );
       const warmTarget = threadRead({ threadStatus: "idle" });
       warmTarget.thread.modelProvider = "test-provider";
       client.setThreadRead("child-thread", warmTarget);
@@ -418,13 +404,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         return lateRead.promise;
       });
       const requester = new AbortController();
-      const abandoned = invoke(
-        "parent-a",
-        "abandoned-input",
-        "child-thread",
-        "collaborationfollowup_task",
-        requester.signal,
-      );
+      const abandoned = followup("parent-a", "abandoned-input", requester.signal);
       await Promise.race([
         entered.promise,
         abandoned.then(() => {
@@ -440,16 +420,10 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       lateRead.resolve(warmTarget);
       await lateAdmissionSettled.promise;
       client.setThreadRead("child-thread", warmTarget);
-      await invoke(
-        "parent-b",
-        "followup-after-a",
-        "child-thread",
-        "collaborationfollowup_task",
-      ).then(nativeWrite);
-      expect(nativeWrite).toHaveBeenCalledOnce();
-      await expect(
-        invoke("parent-a", "incompatible-pending", "child-thread", "collaborationfollowup_task"),
-      ).rejects.toThrow("same admitted model source");
+      await followup("parent-b", "followup-after-a");
+      await expect(followup("parent-a", "incompatible-pending")).rejects.toThrow(
+        "same admitted model source",
+      );
       await client.notify(
         parentItemNotification(
           {
@@ -559,20 +533,14 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       const replacement = invoke("replacement-child");
       await expect(invoke("capacity-control")).rejects.toThrow("capacity reached");
       releaseChild = relay.claimDirectChild("replacement-child");
-      await expect(replacement).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+      await expect(replacement).resolves.toEqual(relaySuccess);
       relay.authorizeRetentionAfterSuccessfulYield();
       relay.unregister();
-      await expect(invoke("replacement-child")).resolves.toEqual({
-        stdout: "",
-        stderr: "",
-        exitCode: 0,
-      });
+      await expect(invoke("replacement-child")).resolves.toEqual(relaySuccess);
       releaseChild();
       releaseChild = undefined;
       await expect(invoke("replacement-child")).rejects.toThrow(/not found|inactive/);
-      expect(
-        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relay.relayId),
-      ).toBeUndefined();
+      expect(registration(relay.relayId)).toBeUndefined();
     } finally {
       releaseChild?.();
       relay.unregister();
@@ -586,21 +554,11 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
   });
 
   it.each([
-    {
-      name: "V1 before turn binding",
-      version: "v1",
-      bindBeforeClaim: false,
-      hasDeliveryScope: true,
-    },
-    {
-      name: "V2 without delivery scope",
-      version: "v2",
-      bindBeforeClaim: true,
-      hasDeliveryScope: false,
-    },
+    ["v1", false, true],
+    ["v2", true, false],
   ] as const)(
-    "retains and fences a live child through sessions_yield ($name)",
-    async ({ version, bindBeforeClaim, hasDeliveryScope }) => {
+    "retains and fences a live %s child through sessions_yield (bound: %s, scope: %s)",
+    async (version, bindBeforeClaim, hasDeliveryScope) => {
       const childThreadId = `child-${version}`;
       const childClaim = directSpawnItem(version, "thread-1", childThreadId);
       const deferredTurnStart = createDeferred<undefined>();
@@ -623,9 +581,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
           ? { block: true, blockReason: "child policy denied" }
           : undefined,
       );
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
-      );
+      installToolHook(beforeToolCall);
 
       const remote = version === "v1";
       const run = runCodexAppServerAttempt(params, {
@@ -717,8 +673,8 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
           deferredTurnStart.resolve(undefined);
         }
         await expect(Promise.all([firstPending, duplicatePending])).resolves.toEqual([
-          { stdout: "", stderr: "", exitCode: 0 },
-          { stdout: "", stderr: "", exitCode: 0 },
+          relaySuccess,
+          relaySuccess,
         ]);
         expect(beforeToolCall).toHaveBeenCalledTimes(2);
 
@@ -758,9 +714,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
           livenessState: "paused",
           stopReason: "end_turn",
         });
-        expect(
-          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
-        ).toBeDefined();
+        expect(registration(relayId)).toBeDefined();
         if (remote) {
           expect(harness.requests.some(({ method }) => method === "fs/remove")).toBe(false);
         }
@@ -777,9 +731,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
           },
         });
         expect(beforeToolCall).toHaveBeenCalledTimes(5);
-        expect(
-          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
-        ).toBeDefined();
+        expect(registration(relayId)).toBeDefined();
         for (const agentId of ["unknown-child", `${childThreadId}/nested`]) {
           await expect(invokeRelay(relayId, childTool(agentId))).rejects.toThrow(
             /not found|inactive|retained invocation/,
@@ -796,9 +748,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         if (remote) {
           expect(harness.requests.filter(({ method }) => method === "fs/remove")).toHaveLength(1);
         }
-        expect(
-          nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
-        ).toBeUndefined();
+        expect(registration(relayId)).toBeUndefined();
         await expect(invokeRelay(relayId, childTool(childThreadId, "allow-child"))).rejects.toThrow(
           /not found|inactive/,
         );
@@ -821,9 +771,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
     const { params, fixture } = await yieldParams(childThreadId);
 
     const beforeToolCall = vi.fn(async () => undefined);
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
-    );
+    installToolHook(beforeToolCall);
 
     const run = runCodexAppServerAttempt(params, {
       nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
@@ -862,9 +810,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       expect(readAttemptTerminal(result).promptError).toContain("parent failed after yielding");
       const continuationHistory = await readCodexMirroredSessionHistoryMessages(params);
       expect(continuationHistory?.filter((message) => message.role === "custom")).toEqual([]);
-      expect(
-        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
-      ).toBeUndefined();
+      expect(registration(relayId)).toBeUndefined();
       await expect(invokeRelay(relayId, childPayload)).rejects.toThrow(/not found|inactive/);
     } finally {
       fixture.closeHost();

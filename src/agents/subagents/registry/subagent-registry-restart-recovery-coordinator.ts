@@ -85,13 +85,16 @@ export function createInterruptedRecoveryCoordinator(params: {
       current !== undefined &&
       isSameSubagentRunOwner(current, entry) &&
       recoveryFacts(current).every((fact, index) => fact === expected[index]) &&
-      isSameSubagentRunOwner(
-        getLatestSubagentRunForChild(
-          params.getRunsForChildSession(entry.childSessionKey, entry.childAgentId),
+      // A saved terminal result still owes delivery after its child session is reused.
+      // Only unfinished execution needs the latest generation's session ownership.
+      ((entry.execution.status === "terminal" && entry.terminalOwner === "interrupted-recovery") ||
+        isSameSubagentRunOwner(
+          getLatestSubagentRunForChild(
+            params.getRunsForChildSession(entry.childSessionKey, entry.childAgentId),
+            entry,
+          ),
           entry,
-        ),
-        entry,
-      )
+        ))
     );
   };
 

@@ -29,11 +29,6 @@ type WebchatAudioEmbeddingOptions = {
   onLocalAudioAccessDenied?: (err: LocalMediaAccessError) => void;
 };
 
-type LocalAudioContentBlock = {
-  path: string;
-  block: Record<string, unknown>;
-};
-
 /** Map `mediaUrl` strings to an absolute filesystem path for local embedding (plain paths or `file:` URLs). */
 function resolveLocalMediaPathForEmbedding(raw: string): string | null {
   const trimmed = raw.trim();
@@ -59,7 +54,10 @@ async function readLocalAudioContentBlockForEmbedding(
   payload: ReplyPayload,
   raw: string,
   options: WebchatAudioEmbeddingOptions | undefined,
-): Promise<LocalAudioContentBlock | null> {
+): Promise<{
+  path: string;
+  block: Record<string, unknown>;
+} | null> {
   if (payload.trustedLocalMedia !== true) {
     // WebChat may embed local audio only after an upstream path normalizer grants trust.
     return null;

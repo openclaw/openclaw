@@ -240,16 +240,12 @@ const OMISSION_OVERFLOW = "[More image/non-text data omitted from summary input]
 // metadata is only meaningful on user turns, so this deliberately accepts the
 // minimal shared shape rather than forcing token accounting through an unsafe
 // Message cast.
-type PersistedSenderCarrier = {
-  role: string;
-};
-
 /**
  * Return exactly the persisted-sender text which is projected into a user
  * conversation label. Keep this shared with token accounting: adding a label
  * to the prompt without charging it can make bounded compaction overflow.
  */
-export function formatPersistedSenderSuffix(message: PersistedSenderCarrier): string {
+export function formatPersistedSenderSuffix(message: { role: string }): string {
   if (message.role !== "user") {
     return "";
   }
@@ -285,12 +281,12 @@ const ENTRY_SEPARATOR = "\n\n";
 const MAX_CALL_LABEL_ARGUMENT_CHARS = 120;
 const MAX_CALL_LABEL_CHARS = 300;
 
-function formatCallLabel(name: string, args: Record<string, unknown>): string {
-  const label = `${name}(${Object.entries(args)
-    .map(([key, value]) => {
-      const text = stringifyCompactionValue(value);
-      return `${key}=${text.length > MAX_CALL_LABEL_ARGUMENT_CHARS ? `${truncateUtf16Safe(text, MAX_CALL_LABEL_ARGUMENT_CHARS)}...` : text}`;
-    })
+function formatCallLabel(name: string, args: ReadonlyArray<readonly [string, string]>): string {
+  const label = `${name}(${args
+    .map(
+      ([key, text]) =>
+        `${key}=${text.length > MAX_CALL_LABEL_ARGUMENT_CHARS ? `${truncateUtf16Safe(text, MAX_CALL_LABEL_ARGUMENT_CHARS)}...` : text}`,
+    )
     .join(", ")})`;
   return label.length > MAX_CALL_LABEL_CHARS
     ? `${truncateUtf16Safe(label, MAX_CALL_LABEL_CHARS)}...)`
@@ -350,11 +346,12 @@ function serializeConversationEntries(messages: Message[]) {
         if (block.type === "text") {
           textParts.push(block.text);
         } else if (block.type === "toolCall") {
-          const argsStr = Object.entries(block.arguments)
-            .map(([k, v]) => `${k}=${stringifyCompactionValue(v)}`)
-            .join(", ");
+          const args = Object.entries(block.arguments).map(
+            ([key, value]) => [key, stringifyCompactionValue(value)] as const,
+          );
+          const argsStr = args.map(([key, text]) => `${key}=${text}`).join(", ");
           toolCalls.push(`${block.name}(${argsStr})`);
-          callLabels.add(block.id, formatCallLabel(block.name, block.arguments));
+          callLabels.add(block.id, formatCallLabel(block.name, args));
         }
       }
 

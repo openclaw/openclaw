@@ -56,21 +56,6 @@ import {
 } from "./node-bootstrap-prebuilt.js";
 import { resolveNodeBootstrapRuntimeChunks } from "./node-bootstrap-runtime-chunks.js";
 
-const BOOTSTRAP_LAUNCHER_FILES = [
-  "openclaw.mjs",
-  "node-version.mjs",
-  "node-sqlite.mjs",
-  "node-runtime-update.mjs",
-  "node-runtime-recovery.mjs",
-  "cli-parent-lifetime.mjs",
-  "node-runtime-env.mjs",
-  "cli-invocation.mjs",
-  "cli-root-options.mjs",
-  "gateway-run-argv.mjs",
-  "gateway-shutdown-budget.mjs",
-  "node-host-launcher.mjs",
-  "node-compile-cache.mjs",
-];
 const READ_CONCURRENCY = 16;
 const IGNORED_PLUGIN_DIRECTORIES = new Set(["node_modules", "src", "test", "tests"]);
 // Shared runtime chunks that the plugin npm build publishes under this hidden dist
@@ -355,13 +340,18 @@ export async function prepareNodeBootstrapArtifact(
       !relative.startsWith("dist/control-ui/") &&
       !externalPluginPrefixes.some((prefix) => relative.startsWith(prefix)),
   );
-  const scripts = (sourcePackage.files ?? []).filter(
+  // The package owns runtime helpers as well as lifecycle scripts; a second
+  // launcher inventory drifts and makes every retry rebuild an invalid archive.
+  const runtimeFiles = (sourcePackage.files ?? []).filter(
     (relative) =>
-      relative.startsWith("scripts/") && !relative.includes("*") && !relative.endsWith("/"),
+      (relative.startsWith("scripts/") || /\.[cm]?[jt]s$/u.test(relative)) &&
+      !relative.startsWith("!") &&
+      !relative.includes("*") &&
+      !relative.endsWith("/"),
   );
   const { files, sourceFacts } = await resolveNodeBootstrapRuntimeChunks(
     packageRoot,
-    [...BOOTSTRAP_LAUNCHER_FILES, ...publicFiles, ...scripts].filter(
+    [...runtimeFiles, ...publicFiles].filter(
       (relative) => relative !== LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
     ),
     packageJson.files ?? [],
@@ -591,6 +581,7 @@ export async function prepareNodeBootstrapArtifact(
             ...(inspected?.imports ??
               collectPackageDistImports({
                 files: [importerPath],
+                includeTypeScript: entry.scope === mainScope && runtimeFiles.includes(relative),
                 packageJsons: entry.scope.packageJsons,
                 readText: () => contents.toString("utf8"),
               })),

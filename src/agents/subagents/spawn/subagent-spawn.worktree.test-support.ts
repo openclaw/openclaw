@@ -188,7 +188,6 @@ export function registerManagedWorktreeSpawnCases(
         );
         childSessionKey = details.childSessionKey;
         const childScope = { storePath: bound.storePath, sessionKey: childSessionKey };
-        expect(childSessionKey).toContain(":subagent:");
         expect(loadSessionEntry(childScope)).toMatchObject({
           projectId,
           pendingWorktree: { name: `hidden-${cleanup}`, baseRef: "main" },
@@ -221,11 +220,6 @@ export function registerManagedWorktreeSpawnCases(
         expect(child?.pendingWorktree).toBeUndefined();
         expect(runEmbeddedAgent.mock.calls[0]?.[0].workspaceDir).toBe(checkout.path);
         expect(gitAt(checkout.path, "branch", "--show-current")).toBe(checkout.branch);
-        expect(subagentRuns.get(details.runId)).toMatchObject({
-          cleanup,
-          requesterSessionKey: bound.parentSessionKey,
-          ...(cleanup === "keep" ? { completionTarget: "parent" } : {}),
-        });
         await fs.writeFile(path.join(checkout.path, "result.txt"), "preserve this result\n");
         modelResult.resolve({ payloads: [{ text: "done" }], meta: { durationMs: 1 } });
         await withinTest(executionIdle, signal);

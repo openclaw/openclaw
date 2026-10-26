@@ -21,17 +21,15 @@ type IndicatorEntry = {
   branchKnown: boolean;
 };
 
-type SessionPullRequestIndicatorsOptions = {
+/** Passive row projections; the shared store owns snapshots and checkout subscriptions. */
+export function createSessionPullRequestIndicators(options: {
   getConnected: () => boolean;
   getPresented: () => boolean;
   getRows: () => readonly SidebarRecentSession[];
   getSelectedAgentId: () => string;
   getGateway: () => ApplicationGateway | undefined;
   getSessions: () => SessionCapability | undefined;
-};
-
-/** Passive row projections; the shared store owns snapshots and checkout subscriptions. */
-export function createSessionPullRequestIndicators(options: SessionPullRequestIndicatorsOptions) {
+}) {
   // Any admitted reader projects the shared store; the store itself issues passive sidebar reads only
   // for broad readers, so a session-only reader sees snapshots its own conversation read delivered.
   const readable = () => {

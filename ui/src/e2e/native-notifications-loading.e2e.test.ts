@@ -180,7 +180,10 @@ suite.define(() => {
         expect(await send.count()).toBe(0);
         await page.locator('a[href="/settings/notifications"]').first().click();
         await expect.poll(() => send.isEnabled()).toBe(true);
-        await page.getByText("Test notification queued", { exact: true }).waitFor();
+        await page
+          .locator(".settings-status")
+          .getByText("Test notification queued", { exact: true })
+          .waitFor();
         expect(errors).toEqual([]);
       },
     );
