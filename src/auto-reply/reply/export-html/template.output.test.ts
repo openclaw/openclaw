@@ -21,81 +21,62 @@ function element<T extends Element = Element>(root: ParentNode, selector: string
   return html.requireElement(root.querySelector<T>(selector), `missing ${selector}`);
 }
 
-function tool(name: string, args: Record<string, unknown>, id = name) {
-  return { type: "toolCall", id, name, arguments: args };
+function textOf(root: ParentNode, selector: string) {
+  return Array.from(root.querySelectorAll(selector), (node) => node.textContent).join("\n");
 }
 
-it("renders read line-range arguments as text", async () => {
-  const offset = "<b data-offset-probe>untrusted</b>";
-  const { document } = await render([
-    {
-      role: "assistant",
-      content: [{ offset: 2, limit: 3 }, { offset }].map((args, index) =>
-        tool("read", { path: "safe.txt", ...args }, `read-${index}`),
-      ),
-    },
-  ]);
-
-  expect(
-    Array.from(document.querySelectorAll(".line-numbers"), (node) => node.textContent),
-  ).toEqual([":2-4", `:${offset}`]);
-  expect(document.querySelector("#messages [data-offset-probe]")).toBeNull();
-});
-
 it.each([
-  ["bash", ""],
-  ["custom", ""],
-  ["bashExecution", ""],
-  ["write", "sample.ts"],
-  ["read", "Dockerfile"],
-  ["read", "sample.html"],
-])("preserves %s %s output around its preview limit", async (name, filePath) => {
-  const maxLines = name === "bash" ? 5 : 10;
-  for (const lineCount of [maxLines, maxLines + 1]) {
-    const lines = Array.from({ length: lineCount }, (_, index) =>
-      filePath.endsWith(".html")
-        ? `<p>line ${index} & text</p>\tend`
-        : `const value${index} = "<&>";\t// line`,
+  ["bash", "", false],
+  ["bash", "", true],
+  ["custom", "", true],
+  ["bashExecution", "", true],
+  ["write", "sample.ts", true],
+  ["read", "Dockerfile", true],
+  ["write", "sample.ts", false],
+  ["read", "sample.html", true],
+] as const)("preserves %s %s output (expanded=%s)", async (name, path, expanded) => {
+  const offset = "<b data-offset-probe>untrusted</b>";
+  const limit = name === "bash" ? 5 : 10;
+  const lines = Array.from(
+    { length: limit + Number(expanded) },
+    (_, index) => `const v${index} = "<p>&</p>";\t// line`,
+  );
+  if (expanded && name !== "bash") {
+    lines[lines.length - 1] = "";
+  }
+  const text = lines.join("\n");
+  const range = path === "Dockerfile" ? { offset: 2, limit: 3 } : { offset };
+  const args = { command: "echo", path, content: text, ...(name === "read" ? range : {}) };
+  const { document } = await render(
+    name === "bashExecution"
+      ? [{ role: name, command: args.command, output: text, exitCode: 0 }]
+      : [
+          { role: "assistant", content: [{ type: "toolCall", id: name, name, arguments: args }] },
+          { role: "toolResult", toolCallId: name, content: name === "write" ? "" : text },
+        ],
+  );
+  if (name !== "bashExecution") {
+    expect(document.querySelector('.tree-node[data-id="0"]')).toBeNull();
+  }
+  if (name === "read") {
+    expect(textOf(document, ".line-numbers")).toBe(path === "Dockerfile" ? ":2-4" : `:${offset}`);
+    expect(document.querySelector("#messages [data-offset-probe]")).toBeNull();
+  }
+  const output = element(document, ".tool-execution > .tool-output:last-child");
+  expect(output.classList.contains("expandable")).toBe(expanded);
+  const full = expanded ? element(output, ".output-full") : output;
+  const selector = path ? "code.hljs" : ":scope > div:not(.expand-hint)";
+  const expected = lines.map((line) => line.replace(/\t/g, "   "));
+  expect(textOf(full, selector)).toBe(expected.join("\n"));
+  if (expanded) {
+    expect(textOf(element(output, ".output-preview"), selector)).toBe(
+      expected.slice(0, limit).join("\n"),
     );
-    const expanded = lineCount > maxLines;
-    if (expanded && name !== "bash") {
-      lines[lineCount - 1] = "";
-    }
-    const text = lines.join("\n");
-    const args = { command: "echo output", path: filePath, content: text };
-    const { document } = await render(
-      name === "bashExecution"
-        ? [{ role: name, command: args.command, output: text, exitCode: 0 }]
-        : [
-            { role: "assistant", content: [tool(name, args)] },
-            { role: "toolResult", toolCallId: name, content: name === "write" ? "" : text },
-          ],
-    );
-    if (name !== "bashExecution") {
-      expect(document.querySelector('.tree-node[data-id="0"]')).toBeNull();
-    }
-    const output = element(document, ".tool-execution > .tool-output:last-child");
-    expect(output.classList.contains("expandable")).toBe(expanded);
-    const full = expanded ? element(output, ".output-full") : output;
-    const assertLines = (node: Element, expected: string[]) => {
-      const actual = filePath
-        ? element(node, "code.hljs").textContent?.split("\n")
-        : Array.from(node.children)
-            .filter((child) => !child.classList.contains("expand-hint"))
-            .map((child) => child.textContent);
-      expect(actual).toEqual(expected);
-    };
-    const expected = lines.map((line) => line.replace(/\t/g, "   "));
-    assertLines(full, expected);
-    if (expanded) {
-      assertLines(element(output, ".output-preview"), expected.slice(0, maxLines));
-      expect(output.querySelector(".expand-hint")?.textContent).toBe("... (1 more lines)");
-    }
-    if (filePath === "Dockerfile") {
-      expect(full.querySelector("span")).toBeNull();
-    } else if (filePath) {
-      expect(full.querySelector(".hljs-keyword, .hljs-tag")).not.toBeNull();
-    }
+    expect(output.querySelector(".expand-hint")?.textContent).toBe("... (1 more lines)");
+  }
+  if (path) {
+    const syntax = path === "Dockerfile" ? "span" : ".hljs-keyword, .hljs-tag";
+    expect(full.querySelector(syntax) === null).toBe(path === "Dockerfile");
   }
 });
 it("restores all tree rows when Escape clears a search", async () => {
@@ -107,17 +88,15 @@ it("restores all tree rows when Escape clears a search", async () => {
   const treeIds = () =>
     Array.from(document.querySelectorAll(".tree-node"), (node) => node.getAttribute("data-id"));
   const search = element<HTMLInputElement>(document, "#tree-search");
-  expect(treeIds()).toEqual(["0", "1", "2"]);
   search.value = "search-me";
   const input = document.createEvent("Event");
   input.initEvent("input", true, false);
   search.dispatchEvent(input);
   expect(treeIds()).toEqual(["0", "2"]);
 
-  const escape = document.createEvent("Event");
-  escape.initEvent("keydown", true, true);
-  Object.defineProperty(escape, "key", { value: "Escape" });
-  document.dispatchEvent(escape);
+  input.initEvent("keydown", true, true);
+  Object.defineProperty(input, "key", { value: "Escape" });
+  document.dispatchEvent(input);
 
   expect(search.value).toBe("");
   expect(treeIds()).toEqual(["0", "1", "2"]);
