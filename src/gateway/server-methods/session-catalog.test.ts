@@ -118,22 +118,20 @@ describe("session catalog Gateway methods", () => {
         ),
       );
       const config = {};
-      const expected = {
-        catalogs: [
-          { id: "alpha", label: "ALPHA", capabilities: noActions, hosts: [] },
-          {
-            id: "zeta",
-            label: "ZETA",
-            capabilities: {
-              ...noActions,
-              openTerminal: true,
-              startTerminal: true,
-              createSession: { model: "openai/gpt-5.6-sol", startTerminal: true },
-            },
-            hosts: [],
+      const catalogs = [
+        { id: "alpha", label: "ALPHA", capabilities: noActions, hosts: [] },
+        {
+          id: "zeta",
+          label: "ZETA",
+          hosts: [],
+          capabilities: {
+            ...noActions,
+            openTerminal: true,
+            startTerminal: true,
+            createSession: { model: "openai/gpt-5.6-sol", startTerminal: true },
           },
-        ],
-      };
+        },
+      ];
 
       const readProjection = vi.fn(() => {
         throw new Error("metadata must not acquire the session projection");
@@ -144,36 +142,34 @@ describe("session catalog Gateway methods", () => {
         readProjection,
       );
       const metadata = vi.fn();
-      const readMetadata = () =>
-        sessionCatalogHandlers["sessions.catalog.list"]!({
+      const readMetadata = async () => {
+        metadata.mockClear();
+        await sessionCatalogHandlers["sessions.catalog.list"]!({
           params: { metadataOnly: true, progressId: "metadata-progress" },
           context,
           respond: metadata,
           client: { connId: "metadata-client", connect: gatewayConnect([]) },
         } as never);
+        expectCatalogs(metadata, catalogs);
+        expect(readProjection).not.toHaveBeenCalled();
+        expect(broadcastToConnIds).not.toHaveBeenCalled();
+      };
       await readMetadata();
       expect(list).not.toHaveBeenCalled();
       expect(createListOperation).not.toHaveBeenCalled();
-      expect(readProjection).not.toHaveBeenCalled();
-      expect(broadcastToConnIds).not.toHaveBeenCalled();
-      expect(metadata).toHaveBeenCalledWith(true, expected);
 
       const full = await listCatalogs({}, config);
       expect(list).toHaveBeenCalledOnce();
       expect(createListOperation).toHaveBeenCalledOnce();
       expectCatalogs(full, [
         {
-          ...expected.catalogs[0],
+          ...catalogs[0],
           error: { code: "catalog_error", message: failure ?? "session catalog provider failed" },
         },
-        expected.catalogs[1],
+        catalogs[1],
       ]);
 
-      metadata.mockClear();
       await readMetadata();
-      expect(metadata).toHaveBeenCalledWith(true, expected);
-      expect(readProjection).not.toHaveBeenCalled();
-      expect(broadcastToConnIds).not.toHaveBeenCalled();
       expect(list).toHaveBeenCalledOnce();
       expect(createListOperation).toHaveBeenCalledOnce();
     },
@@ -406,8 +402,9 @@ describe("session catalog Gateway methods", () => {
 
   it("installs a provider-requested binding on the adopted Control UI session", async () => {
     const afterConversationBound = vi.fn(async () => undefined);
+    const sessionKey = "agent:main:adopted";
     const continueSession = vi.fn(async () => ({
-      sessionKey: "agent:main:adopted",
+      sessionKey,
       conversationBinding: {
         summary: "Continue remotely",
         data: { kind: "remote-runtime", version: 1 },
@@ -442,14 +439,14 @@ describe("session catalog Gateway methods", () => {
       pluginId: "remote",
       pluginName: "Remote Runtime",
       pluginRoot: "/plugins/remote",
-      sessionKey: "agent:main:adopted",
+      sessionKey,
       binding: {
         summary: "Continue remotely",
         data: { kind: "remote-runtime", version: 1 },
       },
       afterBind: afterConversationBound,
     });
-    expect(respond).toHaveBeenCalledWith(true, { sessionKey: "agent:main:adopted" });
+    expect(respond).toHaveBeenCalledWith(true, { sessionKey });
   });
 });
 

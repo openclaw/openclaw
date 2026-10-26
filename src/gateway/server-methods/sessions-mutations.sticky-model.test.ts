@@ -199,25 +199,21 @@ async function personalSession(
 }
 
 function createSession(
+  key: string,
   options: Omit<
     Parameters<typeof createGatewaySession>[0],
-    "cfg" | "commandSource" | "operatorRoleActor"
-  >,
+    "cfg" | "key" | "commandSource" | "operatorRoleActor"
+  > = {},
 ) {
   return createGatewaySession({
     cfg,
+    key,
+    ...runtimeSelection,
+    loadGatewayModelCatalogSnapshot: async () => catalogSnapshot(),
     commandSource: "test",
     operatorRoleActor: { kind: "system" },
     ...options,
   });
-}
-
-function runtimeOptions(key: string) {
-  return {
-    key,
-    ...runtimeSelection,
-    loadGatewayModelCatalogSnapshot: async () => catalogSnapshot(),
-  };
 }
 
 function queueRuntimeSelection(sessionKey: string) {
@@ -599,8 +595,7 @@ describe("explicit session model runtimes", () => {
 
   it("creates an unlocked session with an explicit runtime and rejects unprivileged adoption changes", async () => {
     const sessionKey = "agent:main:created-runtime";
-    const options = runtimeOptions(sessionKey);
-    const result = await createSession(options);
+    const result = await createSession(sessionKey);
     expect(result).toMatchObject({
       ok: true,
       entry: { agentRuntimeOverride: "codex", modelOverride: "gpt-5.6-sol" },
@@ -608,7 +603,7 @@ describe("explicit session model runtimes", () => {
     expect(result).not.toHaveProperty("entry.modelSelectionLocked");
     expect(result).not.toHaveProperty("entry.liveModelSwitchPending");
     const adopt = (allowExistingModelSelection: boolean) =>
-      createSession({ ...options, agentRuntime: "openclaw", allowExistingModelSelection });
+      createSession(sessionKey, { agentRuntime: "openclaw", allowExistingModelSelection });
     expect(await adopt(false)).toMatchObject({
       ok: false,
       error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
@@ -636,7 +631,7 @@ describe("explicit session model runtimes", () => {
       kind: "unavailable",
       message: "Refresh the model catalog.",
     });
-    expect(await createSession(runtimeOptions(sessionKey))).toMatchObject({
+    expect(await createSession(sessionKey)).toMatchObject({
       ok: false,
       error: { message: "Refresh the model catalog." },
     });
