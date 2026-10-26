@@ -32,43 +32,26 @@ const wrap = (source: ReturnType<typeof createStubTool>) =>
 describe("tool-activity-heartbeat", () => {
   afterEach(() => clearToolActivityRun(RUN));
 
-  it("supports multiple listeners", () => {
+  it("notifies only the current run's listeners and clears its activity", () => {
     const a = vi.fn();
     const b = vi.fn();
-
+    const other = vi.fn();
     const unsubA = onToolActivity(RUN, a);
     onToolActivity(RUN, b);
+    const unsubOther = onToolActivity("other-run", other);
     notifyToolActivity(RUN);
-
-    expect(a).toHaveBeenCalledTimes(1);
-    expect(b).toHaveBeenCalledTimes(1);
-
-    unsubA();
-  });
-
-  it("scopes listeners per run - does not cross-fire", () => {
-    const runAListener = vi.fn();
-    const runBListener = vi.fn();
-
-    onToolActivity("run-a", runAListener);
-    onToolActivity("run-b", runBListener);
-    notifyToolActivity("run-a");
-
-    expect(runAListener).toHaveBeenCalledTimes(1);
-    expect(runBListener).not.toHaveBeenCalled();
-  });
-
-  it("clearToolActivityRun removes listeners and last-activity timestamp", () => {
-    const listener = vi.fn();
-    onToolActivity(RUN, listener);
-    notifyToolActivity(RUN);
+    expect(a).toHaveBeenCalledOnce();
+    expect(b).toHaveBeenCalledOnce();
+    expect(other).not.toHaveBeenCalled();
     expect(getLastToolActivityMs(RUN)).toBeGreaterThan(0);
-
     clearToolActivityRun(RUN);
     expect(getLastToolActivityMs(RUN)).toBe(0);
-
     notifyToolActivity(RUN);
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(a).toHaveBeenCalledOnce();
+    expect(b).toHaveBeenCalledOnce();
+    unsubA();
+    unsubOther();
+    clearToolActivityRun("other-run");
   });
 
   it.each(["unsubscribe", "clear"])(
@@ -91,43 +74,22 @@ describe("tool-activity-heartbeat", () => {
       expect(oldListener).not.toHaveBeenCalled();
     },
   );
-  it("preserves channel tool metadata on heartbeat-wrapped tools", () => {
-    const source = createStubTool("test-tool");
+  it("preserves execution and presentation metadata on heartbeat-wrapped tools", () => {
+    const sourceTool = createStubTool("test-tool");
+    const source = markCodeModeControlTool(wrapToolWithBeforeToolCallHook(sourceTool));
+    const formatter = () => ({ text: "web_fetch: 3 pages" });
     setChannelAgentToolMeta(source as never, { channelId: "telegram" });
+    setPluginToolMeta(source, { pluginId: "test-plugin", optional: false });
+    setToolTerminalPresentation(source, formatter);
     const wrapped = wrap(source);
     expect(getChannelAgentToolMeta(wrapped as never)).toEqual({ channelId: "telegram" });
-  });
-
-  it("preserves plugin tool metadata on heartbeat-wrapped tools", () => {
-    const source = { name: "test-tool", execute: vi.fn() as never };
-    setPluginToolMeta(source as never, { pluginId: "test-plugin", optional: false });
-
-    const wrapped = wrapEmbeddedAttemptToolWithActivity(source as never, RUN) as typeof source;
-
-    const meta = getPluginToolMeta(wrapped as never);
-    expect(meta?.pluginId).toBe("test-plugin");
-  });
-
-  it("preserves before-tool-call marker on heartbeat-wrapped tools", () => {
-    const sourceTool = createStubTool("test-tool");
-    const source = wrapToolWithBeforeToolCallHook(sourceTool);
-    const wrapped = wrap(source);
+    expect(getPluginToolMeta(wrapped)?.pluginId).toBe("test-plugin");
     expect(isToolWrappedWithBeforeToolCallHook(wrapped)).toBe(true);
     expect(getBeforeToolCallSourceTool(wrapped)).toBe(sourceTool);
-  });
-
-  it("preserves terminal presentation metadata on heartbeat-wrapped tools", () => {
-    const source = createStubTool("test-tool");
-    const formatter = () => ({ text: "web_fetch: 3 pages" });
-    setToolTerminalPresentation(source, formatter);
-    const copiedFormatter = getToolTerminalPresentation(wrap(source));
+    const copiedFormatter = getToolTerminalPresentation(wrapped);
     expect(copiedFormatter).toBe(formatter);
     expect(copiedFormatter?.(undefined, { content: [] } as never)?.text).toBe("web_fetch: 3 pages");
-  });
-
-  it("preserves code-mode control identity on heartbeat-wrapped tools", () => {
-    const source = markCodeModeControlTool(createStubTool("exec"));
-    expect(isCodeModeControlTool(wrap(source))).toBe(true);
+    expect(isCodeModeControlTool(wrapped)).toBe(true);
   });
 
   it("applies heartbeat ownership to private preparation and execution", async () => {

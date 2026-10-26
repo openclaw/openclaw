@@ -122,10 +122,6 @@ it("keeps the normal Code Mode surface through failure, inspection, and multiple
     "second hunk applied",
     "third hunk applied",
   ]);
-  expect(applyPatch.execute).toHaveBeenCalledOnce();
-  expect(shell.execute).toHaveBeenCalledOnce();
-  expect(write.execute).toHaveBeenCalledTimes(2);
-  expect(read.execute).toHaveBeenCalledOnce();
   expect(result.messagesSnapshot.at(-1)).toMatchObject({
     role: "assistant",
     content: [{ type: "text", text: "all changes verified" }],

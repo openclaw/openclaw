@@ -28,8 +28,6 @@ vi.mock("../../harness/selection.js", () => ({
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
   appendAssistantMirrorMessageByIdentity: mocks.append,
 }));
-// This suite stubs persistence; resolve its synthetic paths without opening a
-// host database. The runner boundary suite uses the real resolver and SQLite.
 // mock-isolation: synthetic session targets must not open the host session database.
 vi.mock("../../run-session-target.js", () => ({
   resolveAgentRunSessionTarget: vi.fn(
@@ -131,15 +129,13 @@ describe("settled-turn finalization after an earlier tool failure", () => {
         skipPreparedUserTurnMessage: true,
         suppressNextUserMessagePersistence: true,
       });
-      // #178300: the unrecovered earlier failure must reach the summary's instruction.
+      // #178300: retain the earlier failure in the summary instruction.
       expect(preparedAttempt.prompt).toContain(TOOL_FAILURE_INSTRUCTION);
       expect(settledAttempt).toBe(attempt);
       expect(result.finalizationOutcome).toBe(outcome);
       expect(mocks.append).not.toHaveBeenCalled();
       if (outcome === "answered") {
-        expect(result.prepared.payloadsWithToolMedia).toEqual([
-          expect.objectContaining({ text: finalText }),
-        ]);
+        expect(result.prepared.payloadsWithToolMedia).toMatchObject([{ text: finalText }]);
         expect(result.attempt.messagesSnapshot.slice(0, -1)).toEqual(attempt.messagesSnapshot);
       } else {
         expect(result.attempt).toBe(attempt);

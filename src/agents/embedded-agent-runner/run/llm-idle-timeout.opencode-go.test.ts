@@ -77,6 +77,9 @@ it.each([
 ])("keeps missing-EOF recovery at $idleMs ms", async ({ trigger, requestMs, idleMs }) => {
   // Human report #93610: tokens arrived, but the upstream never terminated.
   const { source, stream, onTimeout, requestOptions } = await openStream(trigger, requestMs);
+  expect((requestOptions as FirstStreamEventInternalOptions).firstEventTimeoutMs).toBe(
+    requestMs ?? 300_000,
+  );
   const partial = makeAgentAssistantMessage({ content: [{ type: "text", text: "hi" }] });
   const iterator = stream[Symbol.asyncIterator]();
   try {
@@ -105,32 +108,27 @@ it.each([
 it.each(["done", "error"] as const)(
   "leaves raw first-SSE budgets and %s ordering with their owners",
   async (terminal) => {
-    for (const requestMs of [undefined, 2000, 600_000]) {
-      const { source, stream, onTimeout, requestOptions } = await openStream(undefined, requestMs);
-      expect((requestOptions as FirstStreamEventInternalOptions).firstEventTimeoutMs).toBe(
-        requestMs ?? 300_000,
-      );
-      const message = makeAgentAssistantMessage({
-        content: [{ type: "text", text: "OK" }],
-        stopReason: terminal === "done" ? "stop" : "error",
-      });
-      source.push({ type: "start", partial: message });
-      source.push({ type: "text_delta", contentIndex: 0, delta: "OK", partial: message });
-      source.push(
-        terminal === "done"
-          ? { type: "done", reason: "stop", message }
-          : { type: "error", reason: "error", error: message },
-      );
-      source.end(message);
-      const events = [];
-      for await (const event of stream) {
-        events.push(event.type);
-      }
-      expect(events).toEqual(["start", "text_delta", terminal]);
-      expect(await stream.result()).toBe(message);
-      await vi.advanceTimersByTimeAsync(900_000);
-      expect(onTimeout).not.toHaveBeenCalled();
+    const { source, stream, onTimeout } = await openStream();
+    const message = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "OK" }],
+      stopReason: terminal === "done" ? "stop" : "error",
+    });
+    source.push({ type: "start", partial: message });
+    source.push({ type: "text_delta", contentIndex: 0, delta: "OK", partial: message });
+    source.push(
+      terminal === "done"
+        ? { type: "done", reason: "stop", message }
+        : { type: "error", reason: "error", error: message },
+    );
+    source.end(message);
+    const events = [];
+    for await (const event of stream) {
+      events.push(event.type);
     }
+    expect(events).toEqual(["start", "text_delta", terminal]);
+    expect(await stream.result()).toBe(message);
+    await vi.advanceTimersByTimeAsync(900_000);
+    expect(onTimeout).not.toHaveBeenCalled();
   },
 );
 

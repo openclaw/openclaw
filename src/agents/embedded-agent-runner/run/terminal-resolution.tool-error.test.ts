@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createReplyDispatcher } from "../../../auto-reply/reply/reply-dispatcher.js";
 import { classifyAgentExecResult } from "../../../commands/agent-exec-result.js";
-import { buildEmbeddedRunnerAssistant } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { toolAssistant } from "./settled-turn-fixtures.test-support.js";
 import { prepareAttempt } from "./terminal-preparation.test-support.js";
 import {
   resolveEmbeddedRunTerminal,
@@ -33,14 +33,14 @@ describe("terminal tool failures", () => {
     "delivers the terminal denied-exec outcome (output=$output, denialFirst=$denialFirst)",
     async ({ output, denialFirst = true }) => {
       const commentary = output === "commentary" ? "I will check the command and file." : undefined;
-      const toolCalls = buildEmbeddedRunnerAssistant({
-        stopReason: "toolUse",
-        content: [
-          ...(commentary ? [{ type: "text" as const, text: commentary }] : []),
-          { type: "toolCall", id: "denied", name: "bash", arguments: {} },
-          { type: "toolCall", id: "sibling", name: "read", arguments: {} },
-        ],
-      });
+      const toolCalls = toolAssistant(["denied", "bash"], ["sibling", "read"]);
+      if (commentary) {
+        toolCalls.content.unshift({ type: "text", text: commentary });
+      }
+      const results = [
+        makeTextToolResult("denied", "bash", "Execution denied.", true, 0),
+        makeTextToolResult("sibling", "read", "File contents.", false, 0),
+      ];
       const answered = output === "visible" || output === "silent";
       const answerText =
         output === "silent"
@@ -76,15 +76,7 @@ describe("terminal tool failures", () => {
           messagesSnapshot: [
             { role: "user", content: "Run the command and read the file.", timestamp: 0 },
             toolCalls,
-            ...(denialFirst
-              ? [
-                  makeTextToolResult("denied", "bash", "Execution denied.", true, 0),
-                  makeTextToolResult("sibling", "read", "File contents.", false, 0),
-                ]
-              : [
-                  makeTextToolResult("sibling", "read", "File contents.", false, 0),
-                  makeTextToolResult("denied", "bash", "Execution denied.", true, 0),
-                ]),
+            ...(denialFirst ? results : results.toReversed()),
             ...(assistant && (answered || commentary) ? [assistant] : []),
           ],
           replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
