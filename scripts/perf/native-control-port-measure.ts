@@ -26,7 +26,9 @@ assert(mode === "timing" || mode === "allocation");
 const direct = process.argv[3] === "direct";
 const iterations = 5_000;
 const ports = direct ? new MessageChannel() : undefined;
-const buffers = direct ? Array.from({ length: iterations }, () => new Uint8Array(4096)) : [];
+const buffers: Uint8Array[] = direct
+  ? Array.from({ length: iterations }, () => new Uint8Array(4096))
+  : [];
 const worker = createRetainedNativeWorker(
   `const {parentPort}=require("node:worker_threads");
   parentPort.on("message", value => {
@@ -49,6 +51,9 @@ let fail: ((error: Error) => void) | undefined;
 worker.on("error", (error) => fail?.(error));
 worker.on("message", (message) => {
   if (direct) {
+    assert(message !== null && typeof message === "object");
+    assert("id" in message && "actor" in message && "input" in message);
+    assert(message.input instanceof Uint8Array);
     assert.equal(message.id, received);
     assert.equal(message.actor, received % 8);
     assert.equal(message.input.byteLength, 4096);
@@ -71,7 +76,9 @@ async function batch() {
   for (let index = from; index < target; index++) {
     if (direct) {
       const input = buffers[index % iterations]!;
-      worker.postMessage({ type: "execute", id: index, actor: index % 8, input }, [input.buffer]);
+      const buffer = input.buffer;
+      assert(buffer instanceof ArrayBuffer);
+      worker.postMessage({ type: "execute", id: index, actor: index % 8, input }, [buffer]);
     } else {
       worker.postMessage(index, []);
     }
