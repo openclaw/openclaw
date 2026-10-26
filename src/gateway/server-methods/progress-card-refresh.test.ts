@@ -1,8 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { ProgressCard } from "../../../packages/gateway-protocol/src/index.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
-import { withRestoredMocks } from "../../test-utils/vitest-spies.js";
 import { progressCardStore } from "../progress-card-store.js";
 import type { handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import { progressCardHandlers } from "./progress-card.js";
@@ -10,6 +9,7 @@ import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 const { send } = vi.hoisted(() => ({ send: vi.fn<typeof handleTrustedInternalChatSend>() }));
 vi.mock("./chat-send-handler.js", () => ({ handleTrustedInternalChatSend: send }));
+afterEach(() => vi.restoreAllMocks());
 const card: ProgressCard = {
   sessionKey: "agent:work:status",
   revision: 7,
@@ -17,8 +17,8 @@ const card: ProgressCard = {
   markdown: "Old status",
 };
 function fixture() {
-  const get = vi.fn(async () => card as ProgressCard | null);
-  const put = vi.fn();
+  const get = vi.spyOn(progressCardStore, "get").mockResolvedValue(card);
+  const put = vi.spyOn(progressCardStore, "put").mockImplementation(vi.fn());
   const respond = vi.fn<RespondFn>();
   const assertCurrent = vi.fn();
   const invocation = {
@@ -42,13 +42,7 @@ function fixture() {
     put,
     respond,
     invocation,
-    invoke: async () => {
-      const getSpy = vi.spyOn(progressCardStore, "get").mockImplementation(get);
-      const putSpy = vi.spyOn(progressCardStore, "put").mockImplementation(put);
-      return await withRestoredMocks([getSpy, putSpy], () =>
-        progressCardHandlers["progressCard.refresh"]!(invocation),
-      );
-    },
+    invoke: () => progressCardHandlers["progressCard.refresh"]!(invocation),
   };
 }
 it("refresh dispatches a hidden steer with caller authority and session-bound retry identity", async () => {

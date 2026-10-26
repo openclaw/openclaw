@@ -34,28 +34,24 @@ function createHookRegistry() {
       invocation: { enabled: true },
     },
   });
+  const methodRegistry = createGatewayMethodRegistry(
+    createCoreGatewayMethodDescriptors(hooksStatusHandlers),
+    registry,
+  );
   return {
     workspaceDir,
-    config: { agents: { defaults: { workspace: workspaceDir } } },
-    methodRegistry: createGatewayMethodRegistry(
-      createCoreGatewayMethodDescriptors(hooksStatusHandlers),
-      registry,
-    ),
+    dispatch: (
+      requestParams = {},
+      config: OpenClawConfig = { agents: { defaults: { workspace: workspaceDir } } },
+      scopes = ["operator.read"],
+    ) =>
+      sendAuthorizationRequest("hooks.status", requestParams, {
+        scopes,
+        connId: "hooks-status-client",
+        context: { getRuntimeConfig: () => config },
+        methodRegistry,
+      }),
   };
-}
-
-function dispatchHooksStatus(params: {
-  methodRegistry: ReturnType<typeof createGatewayMethodRegistry>;
-  config: OpenClawConfig;
-  scopes?: string[];
-  requestParams?: Record<string, unknown>;
-}) {
-  return sendAuthorizationRequest("hooks.status", params.requestParams ?? {}, {
-    scopes: params.scopes ?? ["operator.read"],
-    connId: "hooks-status-client",
-    context: { getRuntimeConfig: () => params.config },
-    methodRegistry: params.methodRegistry,
-  });
 }
 
 it("returns typed selection-required for an ownerless explicit fleet", async () => {
@@ -69,14 +65,10 @@ it("returns typed selection-required for an ownerless explicit fleet", async () 
     },
   };
 
-  const missing = await dispatchHooksStatus({ ...fixture, config });
+  const missing = await fixture.dispatch({}, config);
   expectRpcError(missing, { code: "INVALID_REQUEST", message: expect.stringContaining("agent") });
 
-  const selected = await dispatchHooksStatus({
-    ...fixture,
-    config,
-    requestParams: { agentId: "research" },
-  });
+  const selected = await fixture.dispatch({ agentId: "research" }, config);
   expectRpcResult(selected, expect.objectContaining({ workspaceDir }));
 });
 
@@ -84,7 +76,7 @@ it("returns registered plugin hooks from the request-attached live registry", as
   const fixture = createHookRegistry();
   setActivePluginRegistry(createEmptyPluginRegistry());
 
-  const respond = await dispatchHooksStatus(fixture);
+  const respond = await fixture.dispatch();
 
   expectRpcResult(
     respond,
@@ -104,7 +96,7 @@ it("returns registered plugin hooks from the request-attached live registry", as
 it("requires operator.read and rejects unexpected params", async () => {
   const fixture = createHookRegistry();
 
-  const denied = await dispatchHooksStatus({ ...fixture, scopes: [] });
+  const denied = await fixture.dispatch({}, undefined, []);
   expect(denied).toHaveBeenCalledWith(false, undefined, {
     code: "FORBIDDEN",
     message: "missing scope: operator.read",
@@ -115,9 +107,6 @@ it("requires operator.read and rejects unexpected params", async () => {
     },
   });
 
-  const invalid = await dispatchHooksStatus({
-    ...fixture,
-    requestParams: { reload: true },
-  });
+  const invalid = await fixture.dispatch({ reload: true });
   expectRpcError(invalid, { code: "INVALID_REQUEST" });
 });
