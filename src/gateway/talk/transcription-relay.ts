@@ -295,12 +295,11 @@ export function createTalkTranscriptionRelaySession(
       if (active) {
         closeTranscriptionSession(active, "completed");
       }
-    }, TRANSCRIPTION_SESSION_TTL_MS),
+    }, TRANSCRIPTION_SESSION_TTL_MS).unref(),
     receivedAudio: false,
     draining: false,
   };
   relayRef.current = relay;
-  relay.cleanupTimer.unref?.();
   transcriptionSessions.set(transcriptionSessionId, relay);
   registerTalkConnectionCleanup(params.connId, "transcription-relay", () =>
     closeTalkTranscriptionRelaySessionsForConnection(params.connId),
@@ -433,8 +432,7 @@ export function stopTalkTranscriptionRelaySession(params: {
     if (transcriptionSessions.get(session.id) === session) {
       closeTranscriptionSession(session, "completed");
     }
-  }, TRANSCRIPTION_PROVIDER_FINAL_DRAIN_MS);
-  session.cleanupTimer.unref?.();
+  }, TRANSCRIPTION_PROVIDER_FINAL_DRAIN_MS).unref();
   try {
     // Providers can flush several finals across asynchronous frames; keep this
     // exact owner registered throughout its bounded provider shutdown window.

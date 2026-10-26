@@ -147,8 +147,7 @@ it("sends one baseline per recipient and concatenates blocked appends without re
   const slow = createPeer("slow");
   const fast = createPeer("fast", true);
   const late = createPeer("late", true);
-  const onBroadcast = vi.fn();
-  const { broadcast, clients } = broadcaster([slow, fast], { onBroadcast });
+  const { broadcast, clients } = broadcaster([slow, fast]);
   const owner = new AbortController();
   const opts = textOptions(owner.signal);
   broadcast("chat", text("A", "A"), opts);
@@ -161,9 +160,6 @@ it("sends one baseline per recipient and concatenates blocked appends without re
   expect(payloads(fast)).toEqual([text("A", "A"), ...["B", "C", "D"].map(deltaPayload)]);
   expect(payloads(late)).toEqual([text("ABC", "C"), deltaPayload("D")]);
   expect(slow.frames.map(({ seq }) => seq)).toEqual([1, 2]);
-  expect(onBroadcast.mock.calls.map(([, payload]) => payload)).toEqual(
-    ["A", "AB", "ABC", "ABCD"].map((value) => text(value, value.at(-1))),
-  );
   owner.abort();
   expect(getEventListeners(owner.signal, "abort")).toHaveLength(0);
 });

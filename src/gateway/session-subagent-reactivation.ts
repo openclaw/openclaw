@@ -20,20 +20,28 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { SessionRecoverySourceChangedError } from "./session-recovery-source.js";
 
-/** Retain the registry owner that authorizes an interrupted child's operator recovery. */
-export async function prepareRestartInterruptedSubagentRecovery(params: {
+/** Retain the registry owner for explicit recovery, including terminal restart failures. */
+export async function prepareSubagentRestartRecovery(params: {
   sessionKey: string;
   agentId: string;
   entry: InternalSessionEntry;
   assertCurrent?: () => void;
 }): Promise<{ runId: string; assertCurrent: () => void } | undefined> {
-  if (params.entry.status !== "interrupted" || params.entry.abortedLastRun !== true) {
+  const terminalFailure = params.entry.status === "failed" && params.entry.abortedLastRun !== true;
+  if (
+    !terminalFailure &&
+    (params.entry.status !== "interrupted" || params.entry.abortedLastRun !== true)
+  ) {
     return undefined;
   }
   const observed = await getLatestSubagentRunByChildSessionKey(params.sessionKey, params.agentId);
   if (
     !observed ||
-    !isRestartInterruptedSubagent(observed) ||
+    !isRestartInterruptedSubagent(
+      observed,
+      terminalFailure ? { allowTerminalFailure: true } : undefined,
+    ) ||
+    (terminalFailure && observed.execution.interruptionReason !== undefined) ||
     resolveSubagentChildAuthority(observed, params.entry).status !== "verified" ||
     params.entry.lastRunId !== observed.runId
   ) {
@@ -58,7 +66,11 @@ export async function prepareRestartInterruptedSubagentRecovery(params: {
         !current ||
         !isSameSubagentRun(interrupted, observed) ||
         !isSameSubagentRunOwner(current, interrupted) ||
-        !isRestartInterruptedSubagent(current)
+        !isRestartInterruptedSubagent(
+          current,
+          terminalFailure ? { allowTerminalFailure: true } : undefined,
+        ) ||
+        (terminalFailure && current.execution.interruptionReason !== undefined)
       ) {
         throw new SessionRecoverySourceChangedError();
       }

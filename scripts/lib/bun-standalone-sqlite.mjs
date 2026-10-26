@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { isSqliteWalResetSafeVersion } from "../../node-sqlite.mjs";
+import { isSqliteWalResetSafeVersion } from "../../node-sqlite-capabilities.mjs";
 
 const LIBRARY_PATH = "lib/libsqlite3.dylib";
 

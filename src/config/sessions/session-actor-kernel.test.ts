@@ -46,6 +46,7 @@ import { mutatePendingInput, readPendingInput } from "./session-pending-input-op
 import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { applySessionTurn } from "./session-turn.worker.js";
+import { timedMessageEvent, messageEvent } from "./transcript-message.test-support.js";
 
 // mock-isolation: Session storage proof does not schedule unrelated background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -95,13 +96,11 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
           timestamp: "2026-01-01T00:00:00.000Z",
           cwd: "/synthetic",
         },
-        {
-          type: "message",
-          id: "user",
-          parentId: null,
-          timestamp: "2026-01-01T00:00:01.000Z",
-          message: { role: "user", content: "hello", idempotencyKey: "first-user" },
-        },
+        timedMessageEvent("user", null, "2026-01-01T00:00:01.000Z", {
+          role: "user",
+          content: "hello",
+          idempotencyKey: "first-user",
+        }),
       ]);
     }, options);
     const expected = readPendingInput(database, {
@@ -262,12 +261,11 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
     const retained = structuredClone(projectionState);
     const detached = projectSessionActorHotState(projectionState);
     const original = structuredClone(detached);
-    detached.entry!.label = "caller edit";
-    detached.entry!.cliSessionIds!.synthetic = "caller edit";
-    Object.assign(detached.target.database, { birthtime: "caller edit" });
-    Object.assign(detached.version, { sequence: -1 });
-    detached.participants[0]!.identity.id = "caller edit";
-    detached.members[0]!.identityId = "caller edit";
+    // Internal projections retain replace-only metadata; publication owns detachment.
+    expect(detached.target).toBe(projectionState.hot.target);
+    expect(detached.version).toBe(projectionState.hot.version);
+    expect(detached.participants).toBe(projectionState.hot.participants);
+    expect(detached.members).toBe(projectionState.hot.members);
     detached.pendingInputs[0]!.input_id = "caller edit";
     detached.transcript.version.rawSeq = -1;
     detached.transcript.watermark.maxSeq = -1;
@@ -368,13 +366,10 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
           timestamp: "2026-01-01T00:00:00.000Z",
           cwd: "/synthetic",
         },
-        {
-          type: "message",
-          id: "retained-user",
-          parentId: null,
-          timestamp: "2026-01-01T00:00:01.000Z",
-          message: { role: "user", content: "retained" },
-        },
+        timedMessageEvent("retained-user", null, "2026-01-01T00:00:01.000Z", {
+          role: "user",
+          content: "retained",
+        }),
       ]);
       db.db
         .prepare(`UPDATE transcript_events
@@ -719,18 +714,8 @@ it("preserves historical replay and branch ancestry outside the actor's retained
         [
           { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" },
           { type: "message", id: "first", parentId: null, message: originalMessage },
-          {
-            type: "message",
-            id: "answer",
-            parentId: "first",
-            message: { role: "assistant", content: "answer" },
-          },
-          {
-            type: "message",
-            id: "second",
-            parentId: "answer",
-            message: { role: "user", content: "second" },
-          },
+          messageEvent("answer", "first", { role: "assistant", content: "answer" }),
+          messageEvent("second", "answer", { role: "user", content: "second" }),
           ...Array.from({ length: 520 }, (_, index) => ({
             type: "custom",
             id: `side-${index}`,
@@ -830,19 +815,9 @@ it("keeps partial actor appends after a reset when a leaf targets older history"
         scope,
         [
           { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" },
-          {
-            type: "message",
-            id: "before-reset",
-            parentId: null,
-            message: { role: "user", content: "old question" },
-          },
+          messageEvent("before-reset", null, { role: "user", content: "old question" }),
           { type: "reset", id: "reset", parentId: "before-reset" },
-          {
-            type: "message",
-            id: "after-reset",
-            parentId: "reset",
-            message: { role: "user", content: "current question" },
-          },
+          messageEvent("after-reset", "reset", { role: "user", content: "current question" }),
           ...Array.from({ length: 520 }, (_, index) => ({
             type: "custom",
             id: `side-${index}`,
@@ -887,12 +862,13 @@ it("bounds committed actor growth across the window limit without retaining roll
     write(() =>
       appendTranscriptEventsInTransaction(database, scope, [
         { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" },
-        ...Array.from({ length: 511 }, (_, index) => ({
-          type: "message",
-          id: `message-${index}`,
-          parentId: index === 0 ? null : `message-${index - 1}`,
-          message: index === 0 ? originalMessage : { role: "assistant", content: "synthetic" },
-        })),
+        ...Array.from({ length: 511 }, (_, index) =>
+          messageEvent(
+            `message-${index}`,
+            index === 0 ? null : `message-${index - 1}`,
+            index === 0 ? originalMessage : { role: "assistant", content: "synthetic" },
+          ),
+        ),
       ]),
     );
     const resident = f.hydrate();

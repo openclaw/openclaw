@@ -5,20 +5,12 @@ import {
   requireFirstPostJsonRecordRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createClosedChunkStream } from "../test-support/streaming-error-response.js";
 import { buildFalMusicGenerationProvider } from "./music-generation-provider.js";
 
 const { postJsonRequestMock, resolveApiKeyForProviderMock } = getProviderHttpMocks();
 
 installProviderHttpMockCleanup();
-
-function streamedAudio(bytes: string) {
-  return new ReadableStream({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(bytes));
-      controller.close();
-    },
-  });
-}
 
 function mockAudio(payload: unknown, body: BodyInit = "wav-bytes", contentType = "audio/wav") {
   postJsonRequestMock.mockResolvedValue({
@@ -97,7 +89,7 @@ it("rejects generated music downloads that exceed the configured media cap", asy
     {
       audio: { url: "https://v3b.fal.media/files/b/out.mp3", content_type: "audio/mpeg" },
     },
-    streamedAudio("too-large"),
+    createClosedChunkStream([new TextEncoder().encode("too-large")]),
     "audio/mpeg",
   );
 

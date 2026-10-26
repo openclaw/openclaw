@@ -134,12 +134,10 @@ describe("pw-tools-core.snapshot navigate guard", () => {
   });
 
   it("handles capture timeouts that win before ordinary navigation settles", async () => {
-    let rejectCapture!: (err: Error) => void;
+    const { promise: capture, reject: rejectCapture } = Promise.withResolvers<never>();
     const downloadCapture = {
       armed: true,
-      promise: new Promise<never>((_, reject) => {
-        rejectCapture = reject;
-      }),
+      promise: capture,
       cancel: vi.fn(),
     };
     setPwToolsCoreDownloadCapture(downloadCapture);

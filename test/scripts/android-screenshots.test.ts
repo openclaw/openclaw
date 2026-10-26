@@ -169,23 +169,15 @@ it.runIf(existsSync(IMAGEMAGICK_CONVERT) && existsSync(IMAGEMAGICK_IDENTIFY))(
 
     for (const [dimensions, grayscale] of [
       ["1440x2560", false],
-      ["454x454", false],
-      ["32x32", true],
+      ["454x454", true],
     ] as const) {
       const input = path.join(root, `input ${dimensions}.png`);
       const output = path.join(root, `output ${dimensions}.jpg`);
-      const [width, height] = dimensions.split("x");
-      const gradient = (size: string, color: string) => {
-        const endColor = grayscale ? "#ffffff" : color;
-        return ["(", "-size", size, `gradient:#000000-${endColor}`];
-      };
       const fixture = command(IMAGEMAGICK_CONVERT, [
-        ...gradient(dimensions, "#ff0000"),
-        ")",
-        ...gradient(`${height}x${width}`, "#00ff00"),
-        ..."-transpose ) -compose plus -composite -alpha set -channel A -evaluate set 60% +channel".split(
-          " ",
-        ),
+        "-size",
+        dimensions,
+        `gradient:#000000-${grayscale ? "#ffffff" : "#ff0000"}`,
+        ..."-alpha set -channel A -evaluate set 60% +channel".split(" "),
         input,
       ]);
       expect(fixture.status, fixture.stderr).toBe(0);

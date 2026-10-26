@@ -111,7 +111,12 @@ export function createSidebarPinnedSessions(
     return source;
   }
 
-  function seed(snapshot: SidebarSnapshotModel["pinnedSessions"]): void {
+  function seed(
+    snapshot: readonly Pick<
+      GatewaySessionRow,
+      "key" | "agentId" | "label" | "icon" | "color" | "pinned" | "archived" | "boardFace"
+    >[],
+  ): void {
     synchronize();
     if (!scope) {
       return;
@@ -199,14 +204,18 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
       return [];
     }
     const loaded = host.findSidebarSessionByKey(entry.key);
-    const snapshot = loaded
+    const catalog = loaded
       ? undefined
-      : (host.navigationCatalog.dashboards?.result?.sessions.find((row) => row.key === entry.key) ??
-        host.pinnedSessions.get(entry.key));
-    const row =
-      loaded ??
-      (snapshot ? host.getSessionNavigationState().toSidebarSession(snapshot) : undefined);
-    return row ? [row] : [];
+      : host.navigationCatalog.dashboards?.result?.sessions.find((row) => row.key === entry.key);
+    const live =
+      loaded ?? (catalog ? host.getSessionNavigationState().toSidebarSession(catalog) : undefined);
+    if (live) {
+      // A query replacement must not collapse a visible pin while its descriptor loads.
+      host.pinnedSessions.seed([live]);
+      return [live];
+    }
+    const snapshot = host.pinnedSessions.get(entry.key);
+    return snapshot ? [host.getSessionNavigationState().toSidebarSession(snapshot)] : [];
   });
   return buildReconciledSidebarZone({
     sidebarEntries: host.sidebarEntries,

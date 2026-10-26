@@ -32,11 +32,6 @@
       "import": "./dist/openai-compatible-video.mjs",
       "default": "./dist/openai-compatible-video.mjs"
     },
-    "./output-extract": {
-      "types": "./dist/output-extract.d.mts",
-      "import": "./dist/output-extract.mjs",
-      "default": "./dist/output-extract.mjs"
-    },
     "./provider-id": {
       "types": "./dist/provider-id.d.mts",
       "import": "./dist/provider-id.mjs",

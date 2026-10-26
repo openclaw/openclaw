@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import type { SessionsCreateResult } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { createCanvasDocument } from "../../../src/canvas/documents.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { appendTranscriptMessage } from "../../../src/config/sessions/session-accessor.js";
@@ -12,12 +13,22 @@ import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 let instance: OpenClawTestInstance | undefined;
+let client: Awaited<ReturnType<typeof connectChatGateway>> | undefined;
 const suite = createControlUiE2eSuite({
   name: "Control UI widget sandbox with a real Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(gatewayOwner(), signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     const owner = await createOpenClawTestInstance({
       name: "control-ui-widget-sandbox",
@@ -57,8 +68,12 @@ const browserOptions = {
   permissions: ["local-network-access"],
 };
 
-const rpc = (method: string, params: Record<string, unknown>) =>
-  cliJson(["gateway", "call", method, "--params", JSON.stringify(params), "--json"]);
+function rpc<T = Record<string, unknown>>(method: string, params: Record<string, unknown>) {
+  if (!client) {
+    throw new Error("Gateway fixture client is not connected");
+  }
+  return client.request<T>(method, params);
+}
 
 async function sessionUrl(key: string, face: "chat" | "dashboard") {
   const handoff = await cliJson(["dashboard", "--json"]);
@@ -79,7 +94,11 @@ function canvasDocument(title: string, body: string) {
 }
 
 async function createSession(key: string, label: string) {
-  const session = await rpc("sessions.create", { key, agentId: "main", label });
+  const session = await rpc<SessionsCreateResult>("sessions.create", {
+    key,
+    agentId: "main",
+    label,
+  });
   expect(session.ok).toBe(true);
   expect(typeof session.sessionId).toBe("string");
   return String(session.sessionId);
@@ -113,7 +132,10 @@ suite.define(() => {
       },
     ];
     await appendAssistant(sessionKey, sessionId, content);
-    const history = await rpc("chat.history", { sessionKey, agentId: "main" });
+    const history = await rpc<{ messages: unknown[] }>("chat.history", {
+      sessionKey,
+      agentId: "main",
+    });
     expect(history.messages).toEqual(
       expect.arrayContaining([expect.objectContaining({ content })]),
     );

@@ -8,7 +8,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import type { Model } from "../llm/types.js";
+import type { Model, ModelRequestHeaders } from "../llm/types.js";
 import {
   listKnownProviderAuthEnvVarNamesRuntime as listKnownProviderEnvApiKeyNames,
   listOpenClawPluginManifestMetadataRuntime as listOpenClawPluginManifestMetadata,
@@ -164,30 +164,27 @@ export function resolveExplicitProviderNoAuth(params: {
 export function applyLocalNoAuthHeaders(
   api: string,
   apiKey: string | undefined,
-  headers: Record<string, string> | undefined,
-): Record<string, string> | undefined {
+  headers: ModelRequestHeaders | undefined,
+): ModelRequestHeaders | undefined {
   if (apiKey !== CUSTOM_LOCAL_AUTH_MARKER || api !== "openai-completions") {
     return headers;
   }
   // Null every spelling: SDK callers may merge these headers over the original model headers.
-  const next: Record<string, string | null> = {
-    ...Object.fromEntries(
-      Object.entries(headers ?? {}).map(([name, value]) => [
-        name,
-        name.toLowerCase() === "authorization" ? null : value,
-      ]),
-    ),
-    Authorization: null,
-  };
-  // SAFETY: OpenAI accepts null to delete headers; the shared Model header type omits that SDK value.
-  return next as Record<string, string>;
+  const next: ModelRequestHeaders = Object.fromEntries(
+    Object.entries(headers ?? {}).map(([name, value]) => [
+      name,
+      name.toLowerCase() === "authorization" ? null : value,
+    ]),
+  );
+  next.Authorization = null;
+  return next;
 }
 
 /** Clears auth for OpenAI-compatible servers that explicitly use no auth. */
 export function applyLocalNoAuthHeaderOverride<T extends Model>(
   model: T,
   auth: Pick<ResolvedProviderAuth, "apiKey"> | null | undefined,
-): T {
+): Omit<T, "headers"> & Pick<Model, "headers"> {
   const headers = applyLocalNoAuthHeaders(model.api, auth?.apiKey, model.headers);
   return headers === model.headers ? model : { ...model, headers };
 }

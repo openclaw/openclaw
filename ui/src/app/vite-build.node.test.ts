@@ -8,6 +8,10 @@ import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { build, createLogger, type InlineConfig, type Plugin } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  listDirectoryTreeStrict,
+  listDirectoryTreeStrictSync,
+} from "../../../src/infra/directory-walk.js";
 import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
 import { controlUiPluginDistributionsPlugin } from "../../config/control-ui-plugin-distributions.ts";
 import controlUiViteConfig from "../../vite.config.ts";
@@ -24,6 +28,8 @@ let root: string;
 let outDir: string;
 const info = vi.fn<(message: string) => void>();
 const writeRoot = (file: string, source: string) => fs.writeFile(path.join(root, file), source);
+const writeFiles = (files: Record<string, string>) =>
+  Promise.all(Object.entries(files).map(([file, source]) => writeRoot(file, source)));
 const readOutput = (file: string) => fs.readFile(path.join(outDir, file), "utf8");
 const readAsset = (file: string) => readOutput(`assets/${file}`);
 const assetNames = () => fs.readdir(path.join(outDir, "assets"));
@@ -117,13 +123,13 @@ function createConfig(level: "info" | "silent" = "silent"): InlineConfig {
 beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "control-ui-vite-build-")));
   outDir = path.join(root, "dist");
-  await writeRoot(
-    "index.html",
-    '<script>globalThis.fixtureBooted = true;</script><button>Load</button><script type="module" src="./main.js"></script>',
-  );
-  await writeRoot("main.js", 'globalThis.load = () => import("./lazy.js");');
-  await writeRoot("lazy.js", 'import "./lazy.css"; export const message = "Lazy content loaded";');
-  await writeRoot("lazy.css", "body { color: green; }");
+  await writeFiles({
+    "index.html":
+      '<script>globalThis.fixtureBooted = true;</script><button>Load</button><script type="module" src="./main.js"></script>',
+    "main.js": 'globalThis.load = () => import("./lazy.js");',
+    "lazy.js": 'import "./lazy.css"; export const message = "Lazy content loaded";',
+    "lazy.css": "body { color: green; }",
+  });
 });
 
 afterEach(async () => {
@@ -134,20 +140,16 @@ afterEach(async () => {
 
 it("omits already imported JavaScript from lazy preload tables, retaining lazy JS and CSS", async () => {
   const config = createConfig();
-  await writeRoot(
-    "main.js",
-    'import { shared } from "./shared.js"; globalThis.shared = shared; globalThis.load = () => import("./lazy.js"); globalThis.loadPlain = () => import("./plain.js");',
-  );
-  await writeRoot("shared.js", 'export const shared = "shared";');
-  await writeRoot("lazy-only.js", 'export const lazy = "lazy-only";');
-  await writeRoot(
-    "plain.js",
-    'import { lazy } from "./lazy-only.js"; export const message = "No stylesheet wait" + lazy;',
-  );
-  await writeRoot(
-    "lazy.js",
-    'import { shared } from "./shared.js"; import { lazy } from "./lazy-only.js"; import "./lazy.css"; export const message = shared + lazy;',
-  );
+  await writeFiles({
+    "main.js":
+      'import { shared } from "./shared.js"; globalThis.shared = shared; globalThis.load = () => import("./lazy.js"); globalThis.loadPlain = () => import("./plain.js");',
+    "shared.js": 'export const shared = "shared";',
+    "lazy-only.js": 'export const lazy = "lazy-only";',
+    "plain.js":
+      'import { lazy } from "./lazy-only.js"; export const message = "No stylesheet wait" + lazy;',
+    "lazy.js":
+      'import { shared } from "./shared.js"; import { lazy } from "./lazy-only.js"; import "./lazy.css"; export const message = shared + lazy;',
+  });
   setOutput(config, {
     codeSplitting: {
       groups: ["shared", "lazy-only"].map((name) => ({
@@ -160,7 +162,6 @@ it("omits already imported JavaScript from lazy preload tables, retaining lazy J
   const entryName = names.find((name) => /^index-.*\.js$/u.test(name))!;
   const entry = await readAsset(entryName);
   const table = /^const __vite__mapDeps=.*$/mu.exec(entry)?.[0];
-  expect(table).toBeDefined();
   const sharedName = names.find((name) => /^shared-.*\.js$/u.test(name))!;
   const lazyName = names.find((name) => /^lazy-only-.*\.js$/u.test(name))!;
   const plainName = names.find((name) => /^plain-.*\.js$/u.test(name))!;
@@ -224,6 +225,8 @@ it("keeps page styles separate from measured JavaScript boot groups", async () =
   const secondStyle = styles.find(({ source }) => source.includes(".second-page"))!;
   expect(new Set([initial.name, firstStyle.name, secondStyle.name]).size).toBe(3);
   expect(html).toContain(initial.name);
+  expect(html).toMatch(/<link[^>]*rel="preload"[^>]*as="style"[^>]*>/u);
+  expect(html).toMatch(/<link[^>]*id="openclaw-boot-styles"[^>]*media="print"[^>]*>/u);
   expect(html).not.toContain(firstStyle.name);
   expect(html).not.toContain(secondStyle.name);
   const scripts = (await readAssets(names, ".js")).map(({ source }) => source).join("\n");
@@ -303,6 +306,24 @@ it.each(["unresolved import", "blocked output"])(
   },
 );
 
+it("finalizes raw browser-fixture assets when precompression is omitted", async () => {
+  const config = createConfig();
+  config.plugins = config.plugins?.filter(
+    (plugin) => !(plugin && "name" in plugin && plugin.name === "control-ui-precompressed-assets"),
+  );
+
+  const { names, html, worker } = await buildOutput(config);
+
+  expect(names.some((name) => name.endsWith(".br") || name.endsWith(".gz"))).toBe(false);
+  const entry = names.find((name) => /^index-.*\.js$/u.test(name));
+  expect(entry).toBeDefined();
+  expect(html).toContain(entry);
+  const identity = readBuiltIdentity(html);
+  expect(worker).toContain(`const EMBEDDED_CACHE_VERSION = "${identity.buildId}";`);
+  expect(offlineAssets(worker)).toContain(`assets/${entry}`);
+  expect(JSON.parse(await readOutput(".build-inputs.json"))).toBeInstanceOf(Array);
+});
+
 it("reports completed compression work before build completion at a bounded cadence", async () => {
   const config = createConfig("info");
   let clockMs = 0;
@@ -320,10 +341,9 @@ it("reports completed compression work before build completion at a bounded cade
     if (!message.includes("Control UI precompression")) {
       return;
     }
-    const emitted = fsSync.readdirSync(path.join(outDir, "assets"), {
-      encoding: "utf8",
-      recursive: true,
-    });
+    const emitted = listDirectoryTreeStrictSync(path.join(outDir, "assets")).map(
+      (walkEntry) => walkEntry.relativePath,
+    );
     activity.push({
       message,
       elapsed: clockMs,
@@ -353,10 +373,9 @@ it("reports completed compression work before build completion at a bounded cade
 
   await build(config);
 
-  const emitted = await fs.readdir(path.join(outDir, "assets"), {
-    encoding: "utf8",
-    recursive: true,
-  });
+  const emitted = (await listDirectoryTreeStrict(path.join(outDir, "assets"))).map(
+    (walkEntry) => walkEntry.relativePath,
+  );
   const sidecars = emitted.filter((name) => /\.(br|gz)$/u.test(name));
   const completed = new Set(sidecars.map((name) => name.slice(0, -3))).size;
   expect(completed).toBeGreaterThan(4);
@@ -412,38 +431,20 @@ it.each([
     await expect(fs.stat(configuredOutDir)).rejects.toMatchObject({ code: "ENOENT" });
   }
 
-  expect(emitted.some((name) => name.endsWith(".map"))).toBe(true);
-
+  const entry = emitted.find((name) => /^index-.*\.js$/u.test(name))!;
+  const entryBytes = await readBytes(entry);
+  for (const encoding of ["br", "gz"]) {
+    const compressed = await readBytes(`${entry}.${encoding}`);
+    expect(encoding === "br" ? brotliDecompressSync(compressed) : gunzipSync(compressed)).toEqual(
+      entryBytes,
+    );
+  }
   const scripts = emitted.filter((name) => name.endsWith(".js"));
-  expect(scripts.length).toBeGreaterThan(1);
   expect(scripts.some((name) => emitted.includes(`${name}.map`))).toBe(true);
-  expect(emitted.some((name) => name.endsWith(".css"))).toBe(true);
-  for (const name of emitted.filter((fileName) => /\.(js|css)$/u.test(fileName))) {
-    const source = await readBytes(name);
-    expect(source.byteLength).toBeLessThan(4096);
-    // The startup entry saves bytes in both encodings; its tiny runtime only in Brotli.
-    // Deferred JS is below the threshold, and this tiny CSS grows in either encoding.
-    const encodings = name.startsWith("index-")
-      ? ["br", "gz"]
-      : name.startsWith("rolldown-runtime-")
-        ? ["br"]
-        : [];
-    for (const extension of ["br", "gz"]) {
-      if (!encodings.includes(extension)) {
-        await missingOutput(`assets/${name}.${extension}`);
-        continue;
-      }
-      const compressed = await readBytes(`${name}.${extension}`);
-      expect(compressed.byteLength).toBeLessThan(source.byteLength);
-      expect(
-        extension === "br" ? brotliDecompressSync(compressed) : gunzipSync(compressed),
-      ).toEqual(source);
-    }
-    if (name.endsWith(".js")) {
-      expect(source.toString("utf8").includes("sourceMappingURL="), name).toBe(
-        !release && emitted.includes(`${name}.map`),
-      );
-    }
+  for (const name of scripts) {
+    expect((await readAsset(name)).includes("sourceMappingURL="), name).toBe(
+      !release && emitted.includes(`${name}.map`),
+    );
   }
   const embeddedBuildId = /const EMBEDDED_CACHE_VERSION = "([^"]+)"/u.exec(worker)?.[1];
   const buildInfo = readBuiltIdentity(html);

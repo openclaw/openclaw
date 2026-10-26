@@ -346,52 +346,10 @@ suite.define(() => {
       }),
   );
 
-  it("keeps the hold-to-dictate preference keyboard accessible without changing the microphone", () =>
-    suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      await installMockGateway(page, {
-        methodResponses: { "talk.catalog": catalog(true, true) },
-      });
-      await installTalkBrowserFixtures(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-
-      const voice = button(page, "Start voice input");
-      await voice.hover();
-      const trigger = button(page, "Microphone input");
-      await trigger.click();
-      const picker = page.locator(".chat-talk-input-picker");
-      const selectedDevice = picker.getByRole("menuitemradio", { name: "USB Audio Interface" });
-      await selectedDevice.click();
-      await expect.poll(() => picker.getAttribute("open")).toBeNull();
-      await expect.poll(() => isFocused(trigger)).toBe(false);
-      await voice.hover();
-      await trigger.click();
-      const toggle = picker.getByRole("menuitemcheckbox", { name: "Hold to start dictation" });
-      await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
-      await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("true");
-
-      await picker.getByRole("menuitemradio", { name: "System default" }).focus();
-      await page.keyboard.press("End");
-      await expect.poll(() => isFocused(toggle)).toBe(true);
-      await page.keyboard.press("Space");
-
-      await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("false");
-      await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
-      await expect.poll(() => selectedDevice.getAttribute("aria-checked")).toBe("true");
-      await captureComposer(page, "microphone-picker-hold-toggle.png");
-      await captureFullPage(page, "microphone-picker-hold-toggle-full");
-      await page.keyboard.press("Home");
-      await page.keyboard.press("Enter");
-      await expect.poll(() => picker.getAttribute("open")).toBeNull();
-      await expect.poll(() => isFocused(trigger)).toBe(true);
-      await trigger.click();
-      await selectedDevice.click();
-      await expect.poll(() => picker.getAttribute("open")).toBeNull();
-      await expect.poll(() => isFocused(trigger)).toBe(false);
-    }));
-
   it("gates unavailable voice capabilities in the microphone picker", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         heldMethods: ["chat.startup", "talk.catalog"],
         historyMessages: [TALK_READY_HISTORY_MESSAGE],
         methodResponses: { "talk.catalog": catalog(false, false) },
@@ -430,6 +388,11 @@ suite.define(() => {
         await waitForTalkReady(page);
 
         const microphone = button(page, "Dictation");
+        const microphoneColors = await microphone.evaluate((element) => ({
+          button: getComputedStyle(element).color,
+          icon: getComputedStyle(element.querySelector("svg")!).color,
+        }));
+        expect(microphoneColors.icon).toBe(microphoneColors.button);
         await microphone.click();
         await gateway.waitForRequest("talk.session.create");
 

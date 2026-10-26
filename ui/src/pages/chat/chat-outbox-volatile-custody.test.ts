@@ -35,20 +35,21 @@ function custodyHost(
   options: Parameters<typeof makeChatHost>[0],
   subscribed = true,
   replacement = false,
+  initialAccount = "owner-a",
+  discarded?: () => void,
 ) {
-  const {
-    requestHandlers = {
+  const host = makeChatHost({
+    requestHandlers: {
       "chat.send": () => {
         throw new Error("gateway closed (1006)");
       },
     },
-    ...overrides
-  } = options ?? {};
-  const host = makeChatHost({ ...overrides, requestHandlers });
-  let account = "owner-a";
+    ...options,
+  });
+  let account = initialAccount;
   vi.spyOn(host.client!, "recoveryScope", "get").mockImplementation(() => account);
   const owner = chatOutboxOwner(host);
-  const stop = subscribed ? owner.subscribe(host) : () => {};
+  const stop = subscribed ? owner.subscribe(host, discarded) : () => {};
   onTestFinished(stop);
   const select = (
     next: string,
@@ -68,12 +69,18 @@ function custodyHost(
   return { host, owner, select, stop };
 }
 
-it.each([
-  { subscribed: false, replacement: false },
-  { subscribed: true, replacement: true },
-])(
-  "retains a genuinely volatile send across account return ($subscribed/$replacement)",
-  async ({ subscribed, replacement }) => {
+function expectRestored(
+  host: ReturnType<typeof makeChatHost>,
+  original: (typeof host.chatQueue)[number],
+  sendState: typeof original.sendState,
+) {
+  const { id, text, sendRunId } = original;
+  expect(host.chatQueue).toMatchObject([{ id, text, sendRunId, sendState }]);
+}
+
+it.each([false, true])(
+  "replays a bound volatile send only after its account returns (subscribed/replacement: %s)",
+  async (replacement) => {
     failStorageWrites(new DOMException("quota exceeded", "QuotaExceededError"));
     let attempts = 0;
     const {
@@ -83,6 +90,7 @@ it.each([
     } = custodyHost(
       {
         chatMessage: "Only unsaved copy",
+        currentSessionId: "volatile-original-session",
         requestHandlers: {
           "chat.send": (params: unknown) => {
             const payload = requireRecord(params, "memory send");
@@ -94,7 +102,7 @@ it.each([
           },
         },
       },
-      subscribed,
+      replacement,
       replacement,
     );
     const select = (next: string) => changeAccount(next, true);
@@ -103,7 +111,7 @@ it.each([
     const original = host.chatQueue[0]!;
     expect(host).toMatchObject({
       chatMessage: "",
-      chatQueue: [{ text: "Only unsaved copy", sendState: "unconfirmed", sendAttempts: 1 }],
+      chatQueue: [{ text: "Only unsaved copy", sendState: "waiting-reconnect", sendAttempts: 1 }],
     });
     expect(originalOwner.hasVolatile(host, original.id)).toBe(true);
     select("owner-b");
@@ -112,17 +120,8 @@ it.each([
     await retryQueuedChatMessage(host, original.id);
     expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
     select("owner-a");
-    expect(host.chatQueue).toMatchObject([
-      {
-        id: original.id,
-        text: original.text,
-        sendRunId: original.sendRunId,
-        sendState: "unconfirmed",
-      },
-    ]);
+    expectRestored(host, original, "waiting-reconnect");
     await resumeStoredChatOutboxes(host);
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
-    await retryQueuedChatMessage(host, original.id);
     expect(requestCalls(host.request, "chat.send")).toHaveLength(2);
     expect(requestCalls(host.request, "chat.send")[1]?.[1]).toMatchObject({
       idempotencyKey: original.sendRunId,
@@ -169,21 +168,17 @@ it.each(["retry", "discard"])(
       finishNavigation: vi.fn(),
     });
     expect(clearDraft).toHaveBeenCalledWith(false);
-    const host = makeChatHost({
-      client,
-      sessionKey,
-      settings: { gatewayUrl: context.gateway.connection.gatewayUrl },
-    });
     const originalAccount = client.recoveryScope;
-    const select = (value: string) => {
-      Object.defineProperty(client, "recoveryScope", { configurable: true, value });
-      host.connectionEpoch += 1;
-      chatOutboxOwner(host).syncHost(host);
-    };
-    const owner = chatOutboxOwner(host);
     const discarded = vi.fn();
-    const stop = owner.subscribe(host, discarded);
-    onTestFinished(stop);
+    const fixture = custodyHost(
+      { client, sessionKey, settings: { gatewayUrl: context.gateway.connection.gatewayUrl } },
+      true,
+      false,
+      originalAccount,
+      discarded,
+    );
+    const { host, owner, stop } = fixture;
+    const select = (value: string) => fixture.select(value, true);
     expect(admitInitialTurnHandoff(host, sessionKey)).toBe(true);
     expect(listStoredChatOutboxes(host)).toEqual([]);
     const original = host.chatQueue[0]!;
@@ -248,15 +243,8 @@ it("parks an in-flight memory turn without resurrecting its retired sending oper
     select("owner-b", true);
     expect(host.chatQueue).toEqual([]);
     select("owner-a", true);
-    expect(host.chatQueue).toMatchObject([
-      {
-        id: original.id,
-        text: original.text,
-        sendRunId: original.sendRunId,
-        sendAttempts: 1,
-        sendState: "held",
-      },
-    ]);
+    expectRestored(host, original, "held");
+    expect(host.chatQueue[0]?.sendAttempts).toBe(1);
     await resumeStoredChatOutboxes(host);
     expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
   } finally {
@@ -314,7 +302,11 @@ it("moves peer panes together while retaining each volatile input under its orig
   const { host: left, select } = custodyHost({
     chatMessage: "Left private input",
   });
-  const right = makeChatHost({ client: left.client, chatMessage: "Right private input" });
+  const right = makeChatHost({
+    client: left.client,
+    sessionKey: "agent:main:right",
+    chatMessage: "Right private input",
+  });
   onTestFinished(chatOutboxOwner(right).subscribe(right));
   await handleSendChat(left);
   await handleSendChat(right);

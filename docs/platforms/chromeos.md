@@ -12,7 +12,7 @@ inside that container exactly like any other Linux install, so the [Linux
 guide](/platforms/linux) applies in full. This page covers the ChromeOS
 specific setup and the gotchas that differ from a plain Linux host.
 
-Node is the primary, default, and recommended runtime. Bun 1.4.3+ builds with
+Node is the primary, default, and recommended runtime. Bun 1.4.4+ builds with
 WAL-reset-safe `node:sqlite` can run the CLI and Gateway as an explicit opt-in,
 and Bun can also run package scripts. The installation path below uses Node.
 

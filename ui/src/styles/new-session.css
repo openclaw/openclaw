@@ -631,7 +631,6 @@ span.new-session-page__select {
 .session-group-defaults__mode-dropdown > .session-group-defaults__mode-menu {
   width: min(100cqw, calc(100vw - 48px));
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-md);
@@ -1377,7 +1376,7 @@ span.new-session-page__select {
   .agent-chat__input--mobile-toolbar .new-session-page__start-submit > svg {
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
-    color: var(--primary-foreground);
+    color: inherit;
   }
 
   .new-session-page .agent-chat__welcome-clawd {

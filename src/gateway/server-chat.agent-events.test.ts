@@ -74,6 +74,7 @@ vi.mock("./session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: async () => await loadSessionEntryAsync("session-1"),
 }));
 
+import { waitForFast } from "../../test/helpers/vitest-wait.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { makeClient, registerNodeSession } from "./node-registry.test-helpers.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
@@ -95,13 +96,6 @@ import { broadcastChatFinal } from "./server-methods/chat-broadcast.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import * as sessionEventRows from "./session-event-prepared-row.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
 
 describe("agent event handler", () => {
   let lineageProjection: ReturnType<typeof createSessionRowProjectionFixture> | undefined;
@@ -161,6 +155,28 @@ describe("agent event handler", () => {
       "run owner claim",
     );
   }
+
+  it("resolves each synchronous streamed event once while keeping routing current", () => {
+    let sessionKey = "agent:main:first";
+    const resolveSessionKeyForRun = vi.fn(() => sessionKey);
+    const h = createHarness({ resolveSessionKeyForRun });
+    onTestFinished(async () => {
+      await h.handler.dispose();
+      h.chatRunState.clear();
+    });
+    const expected = [];
+    for (let seq = 1; seq <= 12; seq++) {
+      if (seq === 7) {
+        sessionKey = "agent:main:second";
+      }
+      const stream = seq % 2 ? "assistant" : "thinking";
+      const data = { text: `fragment ${seq}` };
+      expect(h.emit("streamed-run", stream, data, { seq })).toBeUndefined();
+      expected.push({ runId: "streamed-run", sessionKey, stream, seq, data });
+    }
+    expect(h.agent().map(([, payload]) => payload)).toMatchObject(expected);
+    expect(resolveSessionKeyForRun).toHaveBeenCalledTimes(12);
+  });
 
   it("projects successful widgets into live assistant snapshots without final text", async () => {
     const h = createHarness();

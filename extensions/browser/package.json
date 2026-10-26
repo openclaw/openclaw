@@ -1,11 +1,12 @@
 {
   "name": "@openclaw/browser-plugin",
-  "version": "2026.10.6",
+  "version": "2026.10.7",
   "private": true,
   "description": "OpenClaw browser tool plugin",
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/client": "2.3.1",
+    "acorn": "8.19.0",
     "chrome-devtools-mcp": "1.11.0",
     "express": "5.3.0",
     "playwright-core": "1.64.1",
@@ -20,11 +21,21 @@
     "undici": "8.12.2"
   },
   "openclaw": {
+    "build": {
+      "workerEntries": [
+        "./native-host-entry.ts",
+        "./relay-daemon-entry.ts",
+        "./setup-entry.ts"
+      ]
+    },
     "extensions": [
       "./index.ts"
     ],
     "assetScripts": {
       "copy": "node scripts/copy-chrome-extension.mjs"
     }
-  }
+  },
+  "bundleDependencies": [
+    "playwright-core"
+  ]
 }

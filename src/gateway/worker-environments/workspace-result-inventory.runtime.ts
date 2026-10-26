@@ -98,6 +98,7 @@ export async function loadStagedWorkerWorkspace(
     (!gitHistory ||
       gitHistory.baseCommit !== base.baseCommit ||
       (gitHistory.descendsFromBase &&
+        !gitHistory.unavailableReason &&
         !rawCommit.stdout
           .subarray(0, commitHeaderEnd)
           .toString("utf8")

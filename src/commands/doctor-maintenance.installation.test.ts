@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
@@ -153,7 +154,7 @@ useDoctorMaintenanceRuntimeDirectory(() => {
   );
   return runtimeDirectory;
 });
-const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const ttyMock = createCliTtyMock([process.stdin]);
 beforeEach(() => {
   handoffBinding.assertPath(resolveManagedUpdateLeaseDatabasePath());
   vi.clearAllMocks();
@@ -175,11 +176,7 @@ beforeEach(() => {
   }
 });
 afterEach(() => {
-  if (originalStdinIsTTY) {
-    Object.defineProperty(process.stdin, "isTTY", originalStdinIsTTY);
-  } else {
-    Reflect.deleteProperty(process.stdin, "isTTY");
-  }
+  ttyMock.restore();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -216,16 +213,10 @@ async function runInstallationCase(params: {
     >("../daemon/service-audit.js");
     mocks.audit.mockImplementation(auditGatewayServiceConfig);
     mocks.confirm.mockResolvedValue(params.consent.approved);
-    Object.defineProperty(process.stdin, "isTTY", {
-      value: params.consent.interactive,
-      configurable: true,
-    });
+    ttyMock.set(params.consent.interactive);
   }
   if (params.tokenRecovery) {
-    Object.defineProperty(process.stdin, "isTTY", {
-      value: params.tokenRecovery !== "no-consent",
-      configurable: true,
-    });
+    ttyMock.set(params.tokenRecovery !== "no-consent");
     mocks.confirm.mockResolvedValue(true);
   }
   const home = await fs.realpath(tempDirs.make("openclaw-doctor-installation-"));
@@ -308,7 +299,7 @@ async function runInstallationCase(params: {
           path.join(root, "dist/index.js"),
         ]);
       if (params.definitionRepair && params.definitionRepair !== "not-needed") {
-        Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+        ttyMock.set(true);
         mocks.confirm.mockResolvedValue(true);
         mocks.audit.mockImplementation(async () => ({
           ok: !command.environment?.NODE_EXTRA_CA_CERTS,

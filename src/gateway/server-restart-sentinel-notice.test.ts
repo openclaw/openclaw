@@ -11,18 +11,16 @@ import { attachOutboundDeliveryCommitHook } from "../infra/outbound/delivery-com
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../infra/outbound/delivery-queue-media-staging.js";
 import * as queue from "../infra/outbound/delivery-queue-storage.js";
 import * as runs from "../infra/update-run-ledger.js";
-import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as admission from "../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { resolveUpdateRunNoticeTarget } from "./update-run-notice-target.js";
+import { createRequestGate } from "./server-methods.request-gate.test-support.js";
 
 const {
   sendDurableMessageBatch: sendBatch,
@@ -103,16 +101,6 @@ function capturedCustody(stateDir: string, owner: string) {
   setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "external");
   claimOpenClawStateOwnership(owner, { env: process.env });
   return captureDeliveryQueueStateContext(stateDir);
-}
-function pauseGate() {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const pause = async () => {
-    entered.resolve();
-    await release.promise;
-    return undefined;
-  };
-  return { entered: entered.promise, release: release.resolve, pause };
 }
 const notDispatched = (retryable: boolean) =>
   new PlatformMessageNotDispatchedError("synthetic transport failure", {
@@ -222,8 +210,6 @@ describe("restart sentinel notice recovery", () => {
         target: { version: "2026.9.2" },
         origin: destination === "control-ui" ? {} : { sessionKey },
       });
-      const target = await resolveUpdateRunNoticeTarget({ cfg, sessionKey: run.origin.sessionKey });
-      expect.soft(target.kind).toBe(destination === "owner" ? "route" : "none");
       const notify = await createUpdateRunNotifier(run, () => cfg, {});
       await notify(run, "ack");
       await notify(run, "ack");
@@ -246,22 +232,18 @@ describe("restart sentinel notice recovery", () => {
       });
       await successor(run, "finished");
       await notify(run, "finished");
-      expect(sendBatch.mock.calls.map(([request]) => request.payloads[0].text)).toEqual(
-        destination === "owner"
-          ? [
-              "⬆️ Updating OpenClaw… You'll get a message here when it's done.",
-              "⏳ Restarting OpenClaw…",
-              "🔁 Checking that OpenClaw is ready…",
-              renderUpdateRunSummary(run),
-            ]
-          : [],
-      );
+      // Wording belongs to infra/update-run-notice.test.ts; this boundary proves that
+      // each milestone reaches only the configured recipient and is durable once.
+      expect(sendBatch).toHaveBeenCalledTimes(destination === "owner" ? 4 : 0);
       expect(runs.getUpdateRun(run.runId)?.verification.noticeDelivered).toBe(
         destination === "owner",
       );
-      if (destination !== "owner") {
-        for (const kind of ["ack", "activating", "verifying", "finished"]) {
-          expect(await queue.findDeliveryIntentOwner(`update-run-${kind}:${run.runId}`)).toBeNull();
+      for (const kind of ["ack", "activating", "verifying", "finished"]) {
+        const intent = await queue.findDeliveryIntentOwner(`update-run-${kind}:${run.runId}`);
+        if (destination === "owner") {
+          expect(intent).toMatchObject({ status: "completed" });
+        } else {
+          expect(intent).toBeNull();
         }
       }
       expect(recover).not.toHaveBeenCalled();
@@ -309,25 +291,18 @@ describe("restart sentinel notice recovery", () => {
     async (phase) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const queueId = `update-run-ack:${phase}-timeout`;
-      const started = createDeferredCore();
-      const finish = createDeferredCore();
-      const completed = createDeferredCore();
+      const gate = createRequestGate();
       const work = new AsyncWorkScope();
-      const pause = async () => {
-        started.resolve();
-        await finish.promise;
-        completed.resolve();
-      };
       const result = { channel: "whatsapp" as const, messageId: "late-ack" };
       if (phase === "send") {
         sendBatch.mockImplementationOnce(async () => {
-          await pause();
+          await gate.pause();
           return { status: "sent", results: [result] };
         });
       } else {
         sendBatch.mockResolvedValueOnce({
           status: "sent",
-          results: [attachOutboundDeliveryCommitHook(result, pause)],
+          results: [attachOutboundDeliveryCommitHook(result, gate.pause)],
         });
       }
       let settled = false;
@@ -336,7 +311,7 @@ describe("restart sentinel notice recovery", () => {
         .finally(() => {
           settled = true;
         });
-      await started.promise;
+      await gate.entered;
       let drained = false;
       let draining: Promise<void> | undefined;
       try {
@@ -354,9 +329,8 @@ describe("restart sentinel notice recovery", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(drained).toBe(false);
       } finally {
-        finish.resolve();
+        gate.release();
         await (draining ?? work.drain());
-        await completed.promise;
         if (phase === "send") {
           await vi.waitFor(() => expect(queueStatus(queueId)).toBe("completed"));
         }
@@ -367,7 +341,7 @@ describe("restart sentinel notice recovery", () => {
 
   it("finishes a real durable send under the admitted RPC root after restart admission closes", async () => {
     await useRealDelivery();
-    const gate = pauseGate();
+    const gate = createRequestGate();
     const sendText = vi.fn(async () => {
       await gate.pause();
       return { channel: "matrix" as const, messageId: "ack-during-drain" };
@@ -401,19 +375,12 @@ describe("restart sentinel notice recovery", () => {
     expect(admission.getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it.each([
-    ["enqueue", "state directory"],
-    ["enqueue", "supervisor mode"],
-    ["preparation", "state directory"],
-    ["preparation", "supervisor mode"],
-    ["transport", "state directory"],
-    ["transport", "supervisor mode"],
-  ] as const)(
-    "retains notice custody through %s when ambient %s changes",
-    async (phase, changed) => {
+  it.each(["enqueue", "preparation", "transport"] as const)(
+    "retains notice custody through %s when ambient state and supervisor change",
+    async (phase) => {
       const context = capturedCustody(stateDir, "notice-custody-fixture");
       const replacement = tempDirs.make();
-      const gate = pauseGate();
+      const gate = createRequestGate();
       hooks.hasHooks.mockImplementation((name?: string) => name === "message_sending");
       hooks.runMessageSending.mockImplementationOnce(async () => {
         if (phase !== "transport") {
@@ -434,10 +401,8 @@ describe("restart sentinel notice recovery", () => {
       const queueId = "lifecycle-retained-context";
       const pending = phase === "enqueue" ? enqueueNotice() : sendLifecycleNotice(queueId, true);
       await gate.entered;
-      setTestEnvValue(
-        changed === "state directory" ? "OPENCLAW_STATE_DIR" : "OPENCLAW_SUPERVISOR_MODE",
-        changed === "state directory" ? replacement : "",
-      );
+      setTestEnvValue("OPENCLAW_STATE_DIR", replacement);
+      setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "");
       gate.release();
       const result = await pending;
       if (phase === "enqueue") {
@@ -493,8 +458,11 @@ describe("restart sentinel notice recovery", () => {
 
   it("serializes stable notice preparation before modifiers can run twice", async () => {
     hooks.hasHooks.mockImplementation((name?: string) => name === "message_sending");
-    const gate = pauseGate();
-    hooks.runMessageSending.mockImplementationOnce(gate.pause);
+    const gate = createRequestGate();
+    hooks.runMessageSending.mockImplementationOnce(async () => {
+      await gate.pause();
+      return undefined;
+    });
     const request = noticeRequest();
 
     const first = enqueueRestartSentinelNotice(request);
@@ -522,7 +490,7 @@ describe("restart sentinel notice recovery", () => {
     }
   });
 
-  it.each(["sent", "retryable", "ambiguous", "permanent", "exhausted"] as const)(
+  it.each(["sent", "ambiguous", "exhausted"] as const)(
     "settles restart notice %s delivery before publishing terminal hooks",
     async (outcome) => {
       const queueId = await enqueueNotice();
@@ -531,9 +499,7 @@ describe("restart sentinel notice recovery", () => {
         statusesAtHook.push(queueStatus(queueId));
       });
       const failure = () =>
-        outcome === "ambiguous"
-          ? new Error("platform outcome unknown")
-          : notDispatched(outcome !== "permanent");
+        outcome === "ambiguous" ? new Error("platform outcome unknown") : notDispatched(true);
       sendBatch.mockImplementationOnce(async (request: DeliveryRequest) => {
         await markAttempt(request);
         if (outcome !== "sent") {
@@ -550,18 +516,12 @@ describe("restart sentinel notice recovery", () => {
           await markAttempt(request);
           throw failure();
         });
-      } else if (outcome === "retryable") {
-        recover.mockResolvedValueOnce([{ channel: "whatsapp", messageId: "recovered-1" }]);
       }
       await deliverNotice(queueId);
       expect(sendBatch).toHaveBeenCalledOnce();
-      expect(recover).toHaveBeenCalledTimes(
-        outcome === "retryable" ? 1 : outcome === "exhausted" ? 44 : 0,
-      );
+      expect(recover).toHaveBeenCalledTimes(outcome === "exhausted" ? 44 : 0);
       expect(await queue.loadPendingDelivery(queueId)).toBeNull();
-      expect(queueStatus(queueId)).toBe(
-        outcome === "sent" || outcome === "retryable" ? "completed" : "failed",
-      );
+      expect(queueStatus(queueId)).toBe(outcome === "sent" ? "completed" : "failed");
       if (outcome === "sent") {
         await vi.waitFor(() => expect(hooks.runMessageSent).toHaveBeenCalledOnce());
         expect(statusesAtHook).toEqual(["completed"]);

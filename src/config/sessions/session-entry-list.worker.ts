@@ -36,7 +36,7 @@ export async function readSessionEntryList(
       ? undefined
       : await import("./session-accessor.sqlite-entry-list.read.js");
   const resolveScope = listing
-    ? (await import("./session-accessor.sqlite-scope.js")).resolveSqliteScope
+    ? (await import("./session-accessor.sqlite-read-scope.js")).resolveSqliteScope
     : undefined;
   const mainRecovery = scope.mainSessionRecovery
     ? await import("./restart-recovery-state.js")

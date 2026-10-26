@@ -149,3 +149,122 @@ The plugin package owner bundles patched runtime dependencies so installed
 WhatsApp plugins retain the adapter. Remove this patch and its registration
 when an upstream Baileys version accepts the current decoder and passes the
 same voice-note regression.
+
+`apache-arrow@21.2.0` replaces per-builder JavaScript generation for null
+sentinels with a direct predicate for the common `[null]` case and a snapshot
+`Set` for other sentinels. NaN, signed zero, undefined, bigint, and literal
+strings retain their equality semantics. Both CommonJS and ESM distributions,
+the TypeScript source, declarations, and maps are generated from the same owner.
+This lets LanceDB serialize memory writes when code generation from strings is
+disabled and avoids compiling a predicate for each column on ordinary Node/Bun.
+
+Remove this patch and its registration when an upstream release passes
+`extensions/memory-lancedb/arrow-null-predicates.test.ts` and the existing
+`lancedb-store.delete.test.ts` and `lancedb-store.staleness.test.ts` contracts. The former exercises both module formats in a
+Node process with `--disallow-code-generation-from-strings`; the latter covers
+memory writes, vector search, agent isolation, and reopened tables.
+
+`@shinyoshiaki/binary-data@0.6.1` uses ordinary closures for its finite numeric,
+stream, transaction, and BufferList methods instead of compiling functions at
+module initialization. This keeps the existing codec API and endian, byte-count,
+fragmented-read, and transactional-consumption behavior while allowing the
+OpenAI realtime WebRTC transport to load with JavaScript string compilation
+disabled. No runtime globals or werift call sites are patched.
+
+The patch SHA-256 is
+`231e04c1ca6a2f66dda30dfe23c1178d2df9fbc2161d9eac7689e3a751a85a9b`.
+Remove this patch and its registration when an upstream dependency release
+passes `extensions/openai/realtime-binary-codecs.test.ts` unmodified. The test
+covers all numeric codec wire bytes and fragmented transactional reads, plus a
+real werift DTLS handshake and encrypted application-data exchange over an
+in-memory datagram transport, with string compilation disabled throughout.
+
+`@openclaw/crabline@0.1.30` uses fixed generated protobuf codecs for Feishu frames instead of building codecs from a reflected schema on first use. The protobuf wire format, required fields, decimal uint64 IDs, object conversion, and private schema ownership are unchanged. The runtime imports only `protobufjs/minimal.js`; no dynamic-code-generation setting is required.
+
+The patch includes the canonical `dist/src/servers/feishu-wire.proto` plus `dist/src/servers/generate-feishu-wire.mjs`. Regenerate in the extracted package with `node dist/src/servers/generate-feishu-wire.mjs` (the generator uses pinned protobufjs-cli 2.7.0 and protobufjs 8.8.0 at build time). The original reflection source map is removed with its source-map reference rather than shipping incorrect debugger mappings. Existing public declarations remain unchanged; the new codec is an internal JavaScript module.
+
+Remove this patch and its registration when an upstream release passes `extensions/qa-lab/src/crabline-feishu-wire.test.ts`, including the real installed dependency round trip under Node's string-code-generation ban. The synthetic fixtures cover uint64 values beyond JavaScript's safe-integer range, negative int32, UTF-8 headers, arbitrary payload bytes, optional fields, unknown fields, malformed/truncated frames, and invalid IDs. They make no live Feishu or Gateway request.
+
+The owning plugin manifests bundle these patched runtime dependencies. Selected-plugin distributions carry those bundle declarations and their installed dependency closures into Docker and node artifacts; the default core package does not gain optional media or QA dependencies.
+`playwright-core@1.64.1` has an approved syntax-only normalizer patch. Acorn
+parses serialized callbacks in the same function-body grammar instead of
+constructing a host Function. Execution remains in the target browser; ordinary
+functions, method shorthand, and async methods retain Playwright's normalization.
+The package extension supplies Acorn, and the root and browser plugin packages
+bundle the patched runtime for npm installs. Remove the patch, extension, and
+exact-version guard when upstream passes the browser serialization regression
+with host string compilation disabled.
+
+The same Playwright patch removes graceful-fs's obsolete process-wide `cwd` and
+`chdir` cache. Importing the browser runtime leaves those functions owned by the
+host, and relative filesystem access continues to use the native implementation.
+The remaining graceful-fs behavior and L7's syntax normalizer are unchanged.
+Upstream follow-up: [graceful-fs](https://github.com/isaacs/node-graceful-fs) should
+remove this historical process polyfill, then
+[Playwright](https://github.com/microsoft/playwright) can refresh its bundled copy.
+Remove this hunk when `extensions/browser/src/browser/playwright-import.test.ts`
+passes with the published dependency.
+
+`@homebridge/ciao@1.3.12` adds an explicit `@homebridge/ciao/native.js` entry that
+does not install source-map-support. The historical root entry retains its
+published behavior. Responder diagnostics accept an optional typed logger;
+custom loggers receive separate responders, while default responder pooling is
+unchanged. Bonjour uses this entry and its existing plugin logger instead of
+replacing process-wide console functions. The published JavaScript, declarations,
+and source maps were regenerated from the upstream v1.3.12 TypeScript source.
+
+Upstream follow-up: offer the native-source-map entry and per-responder logger to
+[homebridge/ciao](https://github.com/homebridge/ciao). Remove the patch and its
+registration when an upstream release supports both contracts and passes
+`extensions/bonjour/src/ciao-runtime.test.ts` and `advertiser.test.ts` without the
+patch. Bonjour bundles the patched dependency so installed plugin artifacts retain
+the same entry and logger behavior as source installs.
+
+`proper-lockfile@4.1.2`, used by Crabline's recorder, uses native `node:fs` and
+installs its own exit/signal listeners only while locks are held. Importing it
+no longer loads graceful-fs or signal-exit's process-method wrappers. The
+cleanup owner preserves application signal handlers, signal-exit v3/v4 observers
+and vetoes, separately installed lockfile copies, and the original termination
+signal. Release and compromise remove listeners when the last lock is gone.
+
+Upstream follow-up: submit the native-fs default and owned cleanup to
+`moxystudio/node-proper-lockfile`; keep the existing custom `fs` option. Remove
+this patch and its registration when an upstream version passes
+`extensions/qa-lab/src/proper-lockfile-runtime.test.ts`, including Crabline
+recorder writes, import identity, contention, stale recovery, compromise,
+normal exit, and signal cleanup. Its package file list explicitly retains the
+published changelog during patch regeneration. The existing Crabline package
+patch is unchanged.
+
+`@clawdbot/lobster@2026.9.16` has an approved temporary validation patch. Its two
+fixed LLM payload/envelope checks are generated with Ajv at build time. A scoped
+compiler callback lets the OpenClaw plugin use the shared codegen-free validator
+on AOT hosts while keeping native Ajv validation on Node and JIT Bun. The scope
+belongs to one async tool request; schema caches remain separate for each native
+Ajv owner. No process-global engine setter or format-registry write is added.
+
+Regenerate fixed checks inside a `pnpm patch` edit directory with
+`pnpm lobster:validators:gen --package-dir <directory>`, then run
+`pnpm patch-commit <directory>`. `pnpm lobster:validators:check` checks the installed
+patch without editing `node_modules`. The generator owns the generated file;
+never edit its patch hunk directly.
+The generated header records the Ajv version and canonical Unicode helper hash;
+the existing CI generated-validator gate checks both through `pnpm validators:check`.
+
+Normalize pnpm's trailing header tabs, then refresh the native patch hash:
+
+```sh
+node --input-type=module <<'JS'
+import { readFileSync, writeFileSync } from "node:fs";
+const patch = "patches/@clawdbot__lobster@2026.9.16.patch";
+const source = readFileSync(patch, "utf8");
+writeFileSync(patch, source.replace(/^(?:---|\+\+\+) .+\t$/gm, (line) => line.slice(0, -1)));
+JS
+pnpm install --fix-lockfile
+pnpm lobster:validators:check
+```
+
+Upstream follow-up: port the generated fixed checks and request-scoped compiler
+hook to [openclaw/lobster](https://github.com/openclaw/lobster), then remove this
+patch and its exact-version guard when a published version passes the Lobster
+runner validation suite and the AOT/codegen-ban probe without the patch.

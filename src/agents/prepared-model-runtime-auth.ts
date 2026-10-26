@@ -122,7 +122,12 @@ export type PreparedAccountCatalogAccess = {
     allowDiscovery: boolean;
     refresh?: boolean;
     load: () => Promise<readonly ProviderCatalogOutcome[]>;
-  }) => Promise<{ outcomes: readonly ProviderCatalogOutcome[]; isCurrent: () => boolean }>;
+  }) => Promise<{
+    outcomes: readonly ProviderCatalogOutcome[];
+    /** Distinguishes an authoritative empty publication from a cold private catalog. */
+    hasPublishedCatalog: boolean;
+    isCurrent: () => boolean;
+  }>;
 };
 
 /** Private auth facts owned by an immutable prepared model generation. */

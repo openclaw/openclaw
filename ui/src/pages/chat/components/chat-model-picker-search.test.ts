@@ -2,11 +2,8 @@
 import { createEffect, createRoot, createSignal } from "solid-js";
 import { expect, it } from "vitest";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import {
-  createChatModelSearch,
-  updateModelSearch,
-  type ChatModelSearchCatalog,
-} from "./chat-model-picker-search.ts";
+import { createChatModelSearchView, updateModelSearch } from "./chat-model-picker-search-view.ts";
+import { createChatModelSearch, type ChatModelSearchCatalog } from "./chat-model-picker-search.ts";
 
 it("only invalidates model row metadata when the ranked result changes", () => {
   const catalog: ChatModelSearchCatalog = {
@@ -31,7 +28,7 @@ it("only invalidates model row metadata when the ranked result changes", () => {
     const input = document.createElement("input");
     details.append(input);
     search.detailsRef(details);
-    const view = search.createView(source, () => {});
+    const view = createChatModelSearchView(search, source, () => {});
     let reads = 0;
     for (const row of catalog.rows) {
       createEffect(

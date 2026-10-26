@@ -209,7 +209,7 @@ Options:
 - `--all-commands`: Advertise the full default command surface and forget any saved `--commands` allowlist. Cannot be combined with `--commands`.
 - `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
 - `--no-share-installed-apps`: Disable installed application sharing
-- `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4.3+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
+- `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 - `--runtime-path <path>`: Pin an absolute Node/Bun executable that passes runtime capability checks.
 - `--auth-from-env`: Persist environment Gateway credentials and select them explicitly on service restarts
 - `--force`: Reinstall/overwrite if already installed
@@ -427,6 +427,11 @@ authoritative. Malformed or conflicting sources remain unchanged and require the
 repair described in the diagnostic. Keep `client/credentials.sqlite` private;
 it contains the device keypair and auth tokens. Other retired node state remains
 part of `openclaw doctor --fix`.
+
+Retired `node.json` and interrupted Doctor claims must contain valid UTF-8.
+Doctor reports malformed text as a recoverable warning and preserves its bytes
+for repair. Keep a backup, correct the encoding in a copy, replace the affected
+file, then rerun `openclaw doctor --fix` before starting the node host.
 
 ## Exec approvals
 

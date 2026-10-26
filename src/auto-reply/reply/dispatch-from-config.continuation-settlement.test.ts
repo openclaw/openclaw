@@ -5,6 +5,7 @@ import {
   emptyConfig,
   hookMocks,
   mocks,
+  mockSessionStorePath,
   resetPluginTtsAndThreadMocks,
   sessionStoreMocks,
   setDiscordTestRegistry,
@@ -120,9 +121,7 @@ beforeEach(() => {
   sessionStoreMocks.loadSessionStoreEntry
     .mockReset()
     .mockImplementation(() => sessionStoreMocks.currentEntry);
-  sessionStoreMocks.resolveSessionStorePathCore
-    .mockReset()
-    .mockReturnValue("/tmp/mock-sessions.json");
+  sessionStoreMocks.resolveSessionStorePathCore.mockReset().mockReturnValue(mockSessionStorePath);
   sessionStoreMocks.updateSessionEntry.mockClear();
 });
 
@@ -419,7 +418,7 @@ describe("accepted continuation status delivery", () => {
         expectedSessionId: "session-1",
         expectedWriterRunId: "run-before-replacement",
         sessionKey: "agent:test:session",
-        storePath: "/tmp/mock-sessions.json",
+        storePath: mockSessionStorePath,
       },
     });
     sessionStoreMocks.currentEntry = currentEntry;

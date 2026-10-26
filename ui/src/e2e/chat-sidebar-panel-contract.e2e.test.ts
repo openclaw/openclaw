@@ -34,6 +34,8 @@ import {
   installScriptedRfbServer,
 } from "./desktop-rfb-test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
 const suite = createControlUiE2eSuite({
   name: "chat sidebar cold-open invariant",
   startServerBeforeBrowser: true,
@@ -112,7 +114,16 @@ function coldOpenScenario(populated = false): ControlUiMockGatewayScenario {
     ...(populated
       ? {
           sessions: [
-            { key: "agent:main:main", kind: "direct", label: "Main", updatedAt: 1 },
+            {
+              key: "agent:main:main",
+              sessionId: "main-session",
+              kind: "direct",
+              label: "Main",
+              updatedAt: 1,
+              totalTokens: 2000,
+              totalTokensFresh: true,
+              contextTokens: 100000,
+            },
             {
               key: "agent:main:subagent:panel-content",
               kind: "direct",
@@ -319,6 +330,7 @@ async function readSlotColdOpenOutcome(
     } finally {
       held?.release();
     }
+
     if (label === "Processes") {
       const processes = page.locator("openclaw-chat-processes-panel");
       await processes
@@ -533,7 +545,9 @@ suite.define(() => {
       await clickSidebarTab(page, "Desktop");
       await gateway.waitForRequest(INVENTORY);
       await desktop.getByText("Connecting to desktop…", { exact: true }).waitFor();
-      await page.screenshot({ path: path.join(artifactDir, "unified-loading.png") });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(artifactDir, "unified-loading.png") });
+      }
       await gateway.resolveDeferred(INVENTORY, retainedDesktopEnvironment);
       await canvas.waitFor({ state: "visible" });
       await expect.poll(rfb.events).toEqual(["authenticated:1"]);
@@ -547,7 +561,9 @@ suite.define(() => {
           ),
         )
         .toEqual([24, 180, 160, 255]);
-      await page.screenshot({ path: path.join(artifactDir, "connected.png") });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(artifactDir, "connected.png") });
+      }
       const originalCanvas = await canvas.elementHandle();
       const inventoryCount = (await gateway.getRequests(INVENTORY)).length;
       const observeCount = (await gateway.getRequests(OBSERVE)).length;

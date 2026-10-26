@@ -190,6 +190,18 @@ Omitting the ID retains the legacy single-observer behavior.
 Older clients remain compatible with the updated Gateway; the updated SDK's
 ownership fields require an updated Gateway.
 
+Foreground readers can include `initialHistory` to receive the first `chat.startup`
+snapshot in the same acknowledgment. It accepts `cursor`, `knownState`, `limit`,
+`maxBytes`, `toolResultMaxChars`, and `inputRunIds`; the subscription's normalized
+session and agent select the transcript. The Gateway admits the observer before
+reading history, so subsequent live events cover activity after the snapshot.
+The response adds `initialHistory: { ok: true, payload }` or
+`initialHistory: { ok: false, error }`. A history error leaves the successful
+subscription active: retry the history read or release the returned observer.
+Clients that omit `initialHistory` keep the existing acknowledgment shape. This
+optional request requires a Gateway that supports it; it does not change wire
+protocol v4.
+
 Background narration consumers declare `mode: "narration"`. The Gateway replaces
 their token-level `chat` deltas and raw `agent` assistant events with
 `session.narration` snapshots. Each snapshot contains `sessionKey`, optional

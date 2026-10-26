@@ -32,10 +32,13 @@ export async function inspectGatewayRestart(params: {
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
   requirePluginHealth?: boolean;
   requireChannelHealth?: boolean;
+  /** Diagnostic-only; protocol reachability never establishes process ownership. */
+  allowUnattributedDiagnosticProbe?: boolean;
   probeContext?: GatewayRestartProbeContext;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   timeoutMs?: number;
   /** Bound Gateway requests separately from native service/listener inspection. */
   probeTimeoutMs?: number;
@@ -83,6 +86,7 @@ export async function inspectGatewayRestart(params: {
   const loadReachability = () =>
     read("gateway-health", () =>
       confirmGatewayReachable({
+        assertCurrent: params.assertCurrent,
         port: params.port,
         ...params.probeContext,
         ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
@@ -163,14 +167,28 @@ export async function inspectGatewayRestart(params: {
           listenerOwnedByRuntimePid({ listener, runtimePid }),
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
+  // Scheduled Tasks can report Running while elevated listener command lines are hidden.
+  const canProbeUnattributedListener =
+    params.allowUnattributedDiagnosticProbe === true &&
+    process.platform === "win32" &&
+    running &&
+    params.requirePluginHealth === false &&
+    runtimePid == null &&
+    portUsage.listeners.length > 0 &&
+    portUsage.listeners.every(
+      (listener) => !listener.commandLine && classifyPortListener(listener) === "unknown",
+    );
   let healthy = false;
   if (
     !startupPhase &&
     portUsage.status === "busy" &&
-    (!running || !requiresGatewayProbe || ownsPort)
+    (!running || !requiresGatewayProbe || ownsPort || canProbeUnattributedListener)
   ) {
     const reachable = (reachability ??= await loadReachability());
-    healthy = reachable.reachable;
+    // Auth rejection proves liveness, but only a successful hello supplies a version.
+    healthy =
+      reachable.reachable &&
+      (!canProbeUnattributedListener || Boolean(normalizeOptionalString(reachable.gatewayVersion)));
   }
   // Read after probes: an owner can acquire the coordinator while health is unavailable.
   const unmanagedHealthy = healthy && !running;
@@ -208,6 +226,7 @@ export async function inspectGatewayRestart(params: {
     gatewayBuildId,
     probeError,
     authenticationError,
+    protocolMismatch,
     staleConnection,
     activatedPluginErrors,
     unavailablePlugins,
@@ -226,6 +245,7 @@ export async function inspectGatewayRestart(params: {
     ...(startupPhase ? { startupPhase } : {}),
     ...(probeError ? { probeError } : {}),
     ...(authenticationError ? { authenticationError } : {}),
+    ...(protocolMismatch ? { protocolMismatch } : {}),
     ...(staleConnection ? { staleConnection } : {}),
     ...(activatedPluginErrors?.length ? { activatedPluginErrors } : {}),
     ...(unavailablePlugins?.length ? { unavailablePlugins } : {}),

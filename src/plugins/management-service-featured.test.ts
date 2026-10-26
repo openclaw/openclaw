@@ -43,6 +43,15 @@ function setCatalog(
 const list = () => listManagedPlugins({ config: {}, env: {} });
 const icons = (pluginId: string) =>
   resolveManagedPluginIconSources({ config: {}, env: {}, pluginId });
+const clawhubIcon = (packageName: string) => [
+  { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName },
+];
+const clawhubRecord = (clawhubPackage: string) => ({
+  source: "clawhub",
+  clawhubUrl: "https://clawhub.ai",
+  clawhubChannel: "official",
+  clawhubPackage,
+});
 function expectOnlyPlugin(
   catalog: Awaited<ReturnType<typeof list>>,
   expected: Record<string, unknown>,
@@ -57,15 +66,12 @@ function hostedFeedEntry({
   catalogFeatured,
   order,
   ...fields
-}: {
+}: Pick<OfficialExternalPluginCatalogEntry, "featured" | "featuredAt" | "description"> & {
   packageName: string;
   title: string;
-  featured?: boolean;
-  featuredAt?: number;
   pluginId?: string;
   catalogFeatured?: boolean;
   order?: number;
-  description?: string;
   icon?: string;
 }) {
   return {
@@ -76,17 +82,12 @@ function hostedFeedEntry({
     title,
     ...fields,
     publisher: { id: "openclaw", trust: "official" },
-    ...(pluginId
+    openclaw: pluginId
       ? {
-          openclaw: {
-            plugin: { id: pluginId, label: title },
-            catalog: {
-              ...(catalogFeatured === undefined ? {} : { featured: catalogFeatured }),
-              ...(order === undefined ? {} : { order }),
-            },
-          },
+          plugin: { id: pluginId, label: title },
+          catalog: { featured: catalogFeatured, order },
         }
-      : {}),
+      : undefined,
   };
 }
 
@@ -148,21 +149,24 @@ describe("plugin management Featured authority", () => {
     expect(catalog.plugins.map((plugin) => plugin.featuredAt)).toEqual([200, 100, undefined]);
   });
 
-  it.each([
-    {
-      name: "legacy hosted row without featured",
-      local: undefined,
-      feed: { packageName: "@openclaw/diffs", title: "Diffs" },
-      expected: {
-        id: "diffs",
-        featured: false,
-        install: { source: "official", pluginId: "diffs" },
-      },
-    },
-    {
-      name: "stale embedded curation on an unmatched live package",
-      local: undefined,
-      feed: {
+  it.each<
+    [
+      string,
+      Parameters<typeof metadataSnapshot>[0] | undefined,
+      Parameters<typeof hostedFeedEntry>[0],
+      Record<string, unknown>,
+    ]
+  >([
+    [
+      "legacy hosted row without featured",
+      undefined,
+      { packageName: "@openclaw/diffs", title: "Diffs" },
+      { id: "diffs", featured: false, install: { source: "official", pluginId: "diffs" } },
+    ],
+    [
+      "stale embedded curation on an unmatched live package",
+      undefined,
+      {
         packageName: "@openclaw/new-tool",
         title: "New Tool",
         featured: false,
@@ -170,31 +174,27 @@ describe("plugin management Featured authority", () => {
         catalogFeatured: true,
         order: 80,
       },
-      expected: { id: "new-tool", featured: false, order: 80 },
-    },
-    {
-      name: "live unfeature overriding an installed manifest",
-      local: {
+      { id: "new-tool", featured: false, order: 80 },
+    ],
+    [
+      "live unfeature overriding an installed manifest",
+      {
         id: "diffs",
         name: "Diffs",
         origin: "global",
         installRecord: { source: "npm", spec: "@openclaw/diffs" },
       },
-      feed: { packageName: "@openclaw/diffs", title: "Diffs", featured: false },
-      expected: { id: "diffs", installed: true, featured: false, order: 40 },
-    },
-  ] satisfies Array<{
-    name: string;
-    local: Parameters<typeof metadataSnapshot>[0] | undefined;
-    feed: Parameters<typeof hostedFeedEntry>[0];
-    expected: Record<string, unknown>;
-  }>)("uses hosted curation for $name", async ({ local, feed, expected }) => {
+      { packageName: "@openclaw/diffs", title: "Diffs", featured: false },
+      { id: "diffs", installed: true, featured: false, order: 40 },
+    ],
+  ])("uses hosted curation for %s", async (_name, local, feed, expected) => {
     setCatalog(local, [hostedFeedEntry(feed)]);
     expectOnlyPlugin(await list(), expected);
   });
 
   it("applies hosted curation to the exact published package for bundled FireCrawl", async () => {
-    const hostedIcon = "https://cdn.example.test/firecrawl-company.png";
+    const description = "Crawl, scrape, search, and extract web content with FireCrawl.";
+    const featuredAt = 1_784_280_000_000;
     setCatalog(
       {
         id: "firecrawl",
@@ -208,30 +208,27 @@ describe("plugin management Featured authority", () => {
           packageName: "@openclaw/firecrawl-plugin",
           title: "FireCrawl",
           featured: true,
-          featuredAt: 1_784_280_000_000,
+          featuredAt,
           pluginId: "firecrawl",
-          description: "Crawl, scrape, search, and extract web content with FireCrawl.",
-          icon: hostedIcon,
+          description,
+          icon: "https://cdn.example.test/firecrawl-company.png",
         }),
       ],
     );
 
     const catalog = await list();
-    const resolvedIcon = await icons("firecrawl");
 
     expectOnlyPlugin(catalog, {
       id: "firecrawl",
       name: "FireCrawl",
-      description: "Crawl, scrape, search, and extract web content with FireCrawl.",
+      description,
       packageName: "@openclaw/firecrawl-plugin",
       featured: true,
-      featuredAt: 1_784_280_000_000,
+      featuredAt,
       order: 10,
+      hasIcon: true,
     });
-    expect(catalog.plugins[0]?.hasIcon).toBe(true);
-    expect(resolvedIcon).toEqual([
-      { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName: "@openclaw/firecrawl-plugin" },
-    ]);
+    expect(await icons("firecrawl")).toEqual(clawhubIcon("@openclaw/firecrawl-plugin"));
   });
 
   it("does not identify a package-less private bundled plugin by hosted runtime id", async () => {
@@ -250,17 +247,14 @@ describe("plugin management Featured authority", () => {
       ],
     );
 
-    const catalog = await list();
-    const resolvedIcon = await icons("workboard");
-
-    expectOnlyPlugin(catalog, {
+    expectOnlyPlugin(await list(), {
       id: "workboard",
       name: "Workboard",
       description: "Private local workboard.",
       featured: true,
       order: 10,
     });
-    expect(resolvedIcon).toEqual([]);
+    expect(await icons("workboard")).toEqual([]);
   });
 
   it.each([
@@ -311,41 +305,25 @@ describe("plugin management Featured authority", () => {
       name: "New Tool",
       origin: "global",
       packageName: null,
-      installRecord: {
-        source: "clawhub",
-        clawhubUrl: "https://clawhub.ai",
-        clawhubChannel: "official",
-        clawhubPackage: "@openclaw/new-tool",
-      },
+      installRecord: clawhubRecord("@openclaw/new-tool"),
     });
 
     expectOnlyPlugin(await list(), { id: "new-tool", featured: false, order: 10 });
   });
 
+  const clawhub = { clawhubSpec: "clawhub:@acme/shared" };
+  const npmShared = { npmSpec: "@acme/shared" };
+  const both = { ...clawhub, ...npmShared };
   it.each([
-    ["one dual-source occurrence", "bundled"],
-    ["split source occurrences", "remote"],
-    ["different source", "remote"],
-    ["different ClawHub case", "remote"],
-  ])("preserves overlay identity for %s", async (mode, expectedId) => {
-    const both = { clawhubSpec: "clawhub:@acme/shared", npmSpec: "@acme/shared" };
-    const bundled = compositionEntry("bundled", both, { order: 41 });
-    const hosted = compositionEntry("remote", both);
-    let bundledEntries = [bundled];
-    if (mode === "split source occurrences") {
-      bundledEntries = [
-        compositionEntry("bundled-clawhub", { clawhubSpec: both.clawhubSpec }),
-        compositionEntry("bundled-npm", { npmSpec: both.npmSpec }),
-      ];
-    } else if (mode === "different source") {
-      hosted.openclaw.install = { clawhubSpec: both.clawhubSpec };
-      bundled.openclaw.install = { npmSpec: both.npmSpec };
-    } else if (mode === "different ClawHub case") {
-      hosted.openclaw.install = { clawhubSpec: "clawhub:@acme/Shared" };
-      bundled.openclaw.install = { clawhubSpec: both.clawhubSpec };
-    }
-    mocks.bundledEntries = bundledEntries;
-    setCatalog(undefined, [hosted]);
+    ["one dual-source occurrence", [both], both, "bundled"],
+    ["split source occurrences", [clawhub, npmShared], both, "remote"],
+    ["different source", [npmShared], clawhub, "remote"],
+    ["different ClawHub case", [clawhub], { clawhubSpec: "clawhub:@acme/Shared" }, "remote"],
+  ] as const)("preserves overlay identity for %s", async (_mode, bundled, hosted, expectedId) => {
+    mocks.bundledEntries = bundled.map((install, index) =>
+      compositionEntry(index ? "bundled-npm" : "bundled", install, { order: 41 }),
+    );
+    setCatalog(undefined, [compositionEntry("remote", hosted)]);
 
     expectOnlyPlugin(await list(), {
       id: expectedId,
@@ -357,7 +335,6 @@ describe("plugin management Featured authority", () => {
   it.each(["one", "clone", "npm source only", "dual-source feed", "npm namesake"])(
     "preserves installed identity and package suppression for %s hosted occurrence",
     async (mode) => {
-      const hostedIcon = "https://cdn.example.test/hosted.png";
       mocks.metadata.mockReturnValue(
         metadataSnapshot({
           id: "installed",
@@ -382,7 +359,7 @@ describe("plugin management Featured authority", () => {
             : { clawhubSpec: "clawhub:@acme/shared" },
         ),
         title: "Remote",
-        icon: hostedIcon,
+        icon: "https://cdn.example.test/hosted.png",
         ...(mode === "dual-source feed"
           ? {
               state: "available",
@@ -401,7 +378,6 @@ describe("plugin management Featured authority", () => {
       mocks.officialCatalog.mockResolvedValue(hostedCatalog(entries));
 
       const catalog = await list();
-      const icon = await icons("installed");
       const curated = mode === "one" || mode === "dual-source feed";
 
       expect(catalog.plugins).toEqual([
@@ -422,9 +398,7 @@ describe("plugin management Featured authority", () => {
           hasIcon: true,
         }),
       ]);
-      expect(icon).toEqual([
-        { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName: "@acme/shared" },
-      ]);
+      expect(await icons("installed")).toEqual(clawhubIcon("@acme/shared"));
     },
   );
 
@@ -435,12 +409,7 @@ describe("plugin management Featured authority", () => {
         name,
         packageName,
         origin: "global",
-        installRecord: {
-          source: "clawhub",
-          clawhubUrl: "https://clawhub.ai",
-          clawhubChannel: "official",
-          clawhubPackage: packageName,
-        },
+        installRecord: clawhubRecord(packageName),
       });
     const first = alias("Alias", "First", "@acme/first");
     const second = alias("ALIAS", "Second", "@acme/second");
@@ -473,12 +442,9 @@ describe("plugin management Featured authority", () => {
       ],
     };
     const catalog = await listManagedPlugins({ config: {}, env: {}, officialCatalog });
-    const icon = await icons("ALIAS");
 
     expect(catalog.plugins).toMatchObject([{ hasIcon: true }, { hasIcon: true }]);
-    expect(icon).toEqual([
-      { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName: "@acme/first" },
-    ]);
+    expect(await icons("ALIAS")).toEqual(clawhubIcon("@acme/first"));
   });
 
   const clawhubSpec = "clawhub:@acme/action";

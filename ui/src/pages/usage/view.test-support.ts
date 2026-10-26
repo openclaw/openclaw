@@ -22,6 +22,10 @@ export function usageTotals(
   };
 }
 
+export function usageMessages(): UsageAggregates["messages"] {
+  return { total: 2, user: 1, assistant: 1, toolCalls: 0, toolResults: 0, errors: 0 };
+}
+
 export function usageSession(
   key: string,
   agentId: string,
@@ -47,7 +51,7 @@ export function usageSession(
     updatedAt: Date.now(),
     usage: {
       ...totals,
-      messageCounts: { total: 2, user: 1, assistant: 1, toolCalls: 0, toolResults: 0, errors: 0 },
+      messageCounts: usageMessages(),
       modelUsage: [{ provider, model: `${provider}-model`, count: 1, totals }],
     },
   };

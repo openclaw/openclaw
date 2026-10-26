@@ -134,11 +134,6 @@ function describeExclusion(params: {
   };
 }
 
-type SkillWorkshopToolPolicyAvailability = {
-  available: boolean;
-  exclusion?: ToolPolicyFilterEvent;
-};
-
 const skillWorkshopPolicyProbe = {
   name: SKILL_WORKSHOP_TOOL_NAME,
   label: SKILL_WORKSHOP_TOOL_NAME,
@@ -183,7 +178,7 @@ export function resolveAllowedPluginToolNames(params: {
 export function resolveSkillWorkshopToolPolicyAvailability(params: {
   config: OpenClawConfig;
   conversationCapabilityProfile: ResolvedConversationCapabilityProfile;
-}): SkillWorkshopToolPolicyAvailability {
+}) {
   let exclusion: ToolPolicyFilterEvent | undefined;
   const tools = applyFinalEffectiveToolPolicy({
     bundledTools: [skillWorkshopPolicyProbe],

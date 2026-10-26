@@ -59,20 +59,17 @@ describe("runMigrationApply", () => {
   });
 
   it("refuses a supplied provider before planning or applying under a live Gateway", async () => {
-    const discover = vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
+    using _ = vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
       pid: process.pid,
       port: 18789,
       ownerId: "synthetic-foreign-gateway",
       createdAt: new Date().toISOString(),
     });
     const provider = makeProvider({ id: "fixture", label: "Fixture" });
-    try {
-      await expect(run(provider, { configOverride: {} })).rejects.toThrow("stop the Gateway");
-      expect(provider.plan).not.toHaveBeenCalled();
-      expect(provider.apply).not.toHaveBeenCalled();
-    } finally {
-      discover.mockRestore();
-    }
+
+    await expect(run(provider, { configOverride: {} })).rejects.toThrow("stop the Gateway");
+    expect(provider.plan).not.toHaveBeenCalled();
+    expect(provider.apply).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

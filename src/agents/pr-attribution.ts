@@ -6,7 +6,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { getUserPreferenceValues } from "../state/user-preferences.js";
 
-export const PR_ATTRIBUTION_OPTOUT = "<!-- openclaw:attribution=off -->";
+const PR_ATTRIBUTION_OPTOUT = "<!-- openclaw:attribution=off -->";
 const log = createSubsystemLogger("agents/pr-attribution");
 
 /** Caller supplies the verified requester, never a participant or publisher identity. */

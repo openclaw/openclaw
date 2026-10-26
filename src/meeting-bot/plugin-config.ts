@@ -45,11 +45,6 @@ export type MeetingPluginConfig = MeetingRealtimeEngineConfig & {
   };
 };
 
-type MeetingPluginConfigOptions = {
-  defaultRealtimeInstructions: string;
-  resolveGatewayOperationTimeoutMs(config: MeetingPluginConfig): number;
-};
-
 const DEFAULT_AUDIO_BUFFER_BYTES = 4_096;
 const DEFAULT_AUDIO_FORMAT: MeetingRealtimeAudioFormat = "pcm16-24khz";
 const DEFAULT_MODE_HELP =
@@ -68,7 +63,10 @@ function resolveAudioFormat(value: unknown): MeetingRealtimeAudioFormat {
   return normalized === "g711-ulaw-8khz" ? normalized : DEFAULT_AUDIO_FORMAT;
 }
 
-export function createMeetingPluginConfigSchema(options: MeetingPluginConfigOptions) {
+export function createMeetingPluginConfigSchema(options: {
+  defaultRealtimeInstructions: string;
+  resolveGatewayOperationTimeoutMs(config: MeetingPluginConfig): number;
+}) {
   const defaultAudioRuntime = buildMeetingConfigAudioCommands(
     "auto",
     DEFAULT_AUDIO_FORMAT,

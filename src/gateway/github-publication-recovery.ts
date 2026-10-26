@@ -1,5 +1,7 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import type {
   GitHubPublicationExecutionRow,
   GitHubPublicationRow,
@@ -17,6 +19,61 @@ import {
 import { reconcileGitHubPublicationPullRequest } from "./github-publication-pull-requests.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
+
+export type GitHubPublicationRecoveryBackoff = ReturnType<
+  typeof createGitHubPublicationRecoveryBackoff
+>;
+
+/** Maintenance-only, process-local scheduling; an unconfirmed receipt remains unsettled. */
+export function createGitHubPublicationRecoveryBackoff() {
+  const failures = new Map<string, { delayMs: number; retryAtMs: number; diagnostic: string }>();
+  return {
+    clear: () => failures.clear(),
+    retain(requestIds: string[]) {
+      const pending = new Set(requestIds);
+      for (const requestId of failures.keys()) {
+        if (!pending.has(requestId)) {
+          failures.delete(requestId);
+        }
+      }
+    },
+    async run(requestId: string, operation: () => Promise<SessionGitHubPublicationResult | void>) {
+      const previous = failures.get(requestId);
+      if (previous && performance.now() < previous.retryAtMs) {
+        return;
+      }
+      const defer = (error: unknown) => {
+        const delayMs = Math.min((previous?.delayMs ?? 30_000) * 2, 30 * 60_000);
+        failures.set(requestId, {
+          delayMs,
+          retryAtMs: performance.now() + delayMs,
+          diagnostic: redactToolPayloadText(formatErrorMessage(error)).slice(0, 2_048),
+        });
+      };
+      try {
+        const result = await operation();
+        if (result && (result.status === "requested" || result.status === "publishing")) {
+          defer(result.message);
+        } else {
+          failures.delete(requestId);
+        }
+        return result;
+      } catch (error) {
+        defer(error);
+        throw error;
+      }
+    },
+    describe(result: SessionGitHubPublicationResult): SessionGitHubPublicationResult {
+      const failure = failures.get(result.requestId);
+      return failure && (result.status === "requested" || result.status === "publishing")
+        ? {
+            ...result,
+            message: `Automatic recovery deferred; next attempt in ${Math.max(0, Math.ceil((failure.retryAtMs - performance.now()) / 1_000))} seconds. Recorded effects are retained; do not request another publication. ${failure.diagnostic}`,
+          }
+        : result;
+    },
+  };
+}
 
 export async function recoverGitHubPublicationWorkspace(
   row: GitHubPublicationExecutionRow,

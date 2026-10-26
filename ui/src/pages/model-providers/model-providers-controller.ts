@@ -345,6 +345,7 @@ export function createModelProviders(
   onSettled(() => {
     connected = true;
     gateway.connect();
+    void context.runtimeConfig.ensureLoaded().catch(() => undefined);
     let location = context.router.getState().location;
     const syncAgent = () => {
       discovery.synchronize();

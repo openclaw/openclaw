@@ -14,6 +14,7 @@ import {
 } from "../../scripts/lib/code-mode-matrix-gateway-fixtures.js";
 import { runGatewayMatrixCell } from "../../scripts/lib/code-mode-matrix-gateway.js";
 import * as performanceFixtures from "../../scripts/lib/code-mode-matrix-performance-fixtures.js";
+import { prepareGatewayMatrixProcessOwner } from "../../scripts/lib/code-mode-matrix-process-owner.js";
 import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -440,7 +441,11 @@ it.each([
           task: capture ? "repo-invoice-repair" : "partial-failure",
           repetition: 1,
         },
-        runtime: { args: [runtime], cwd: runtimeRoot },
+        runtime: {
+          args: [runtime],
+          cwd: runtimeRoot,
+          processOwnerBootstrap: await prepareGatewayMatrixProcessOwner(runtimeRoot, root),
+        },
         repoRoot: root,
         outputDir: root,
         keepState: false,

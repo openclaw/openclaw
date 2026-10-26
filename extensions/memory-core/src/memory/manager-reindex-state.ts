@@ -37,10 +37,44 @@ export type MemoryIndexProviderIdentity = {
   providerKey: string;
 };
 
+export function canUpgradeMemoryIndexProviderKey(
+  state: MemoryIndexIdentityState,
+  meta: MemoryIndexMeta,
+  identities: MemoryIndexProviderIdentity[],
+): boolean {
+  const [canonical, ...aliases] = identities;
+  if (
+    !canonical ||
+    meta.provider !== canonical.provider ||
+    meta.model !== canonical.model ||
+    !meta.providerKey ||
+    meta.providerKey === canonical.providerKey ||
+    !aliases.some(
+      (alias) =>
+        alias.provider === meta.provider &&
+        alias.model === meta.model &&
+        alias.providerKey === meta.providerKey,
+    )
+  ) {
+    return false;
+  }
+  return (
+    state.status === "valid" ||
+    (state.status === "mismatched" &&
+      state.owner === "openclaw" &&
+      state.code === "chunking_version" &&
+      state.versionOrder === "older" &&
+      state.chunkingVersionOnly === true &&
+      (meta.embeddingInputFormatVersion ?? 0) ===
+        resolveEmbeddingInputFormatVersion(canonical.model))
+  );
+}
+
 export function resolveMemoryIndexProviderIdentities(params: {
   provider: { id: string; model: string } | null;
   cacheKeyData?: Record<string, unknown>;
   aliases?: Array<{ model: string; cacheKeyData: Record<string, unknown> }>;
+  documentPrefix?: string;
 }): MemoryIndexProviderIdentity[] {
   const provider = params.provider ?? { id: "none", model: "fts-only" };
   const candidates = [
@@ -51,12 +85,19 @@ export function resolveMemoryIndexProviderIdentities(params: {
     ...(params.provider ? (params.aliases ?? []) : []),
   ];
   const embeddingInputFormatVersion = resolveEmbeddingInputFormatVersion(provider.model);
+  // Explicit formatting also disables provider-owned templates, including an empty prefix.
+  const documentPrefix = params.provider ? params.documentPrefix : undefined;
   const seen = new Set<string>();
   const identities: MemoryIndexProviderIdentity[] = [];
   for (const [index, candidate] of candidates.entries()) {
-    const cacheKeyData = embeddingInputFormatVersion
-      ? { provider: candidate.cacheKeyData, embeddingInputFormatVersion }
-      : candidate.cacheKeyData;
+    const cacheKeyData =
+      embeddingInputFormatVersion || documentPrefix !== undefined
+        ? {
+            provider: candidate.cacheKeyData,
+            embeddingInputFormatVersion,
+            ...(documentPrefix !== undefined ? { documentPrefix } : {}),
+          }
+        : candidate.cacheKeyData;
     const providerKey = hashText(JSON.stringify(cacheKeyData));
     const key = `${candidate.model}\u0000${providerKey}`;
     if ((index > 0 && !candidate.model) || seen.has(key)) {

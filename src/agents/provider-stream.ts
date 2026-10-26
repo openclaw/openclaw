@@ -8,6 +8,7 @@ import {
   assertProviderAuthAuthority,
   attachProviderAuthAuthority,
   getProviderAuthAuthority,
+  getProviderRequestAuth,
 } from "../plugins/provider-auth-authority.js";
 import {
   attachModelProviderRuntimePluginHandle,
@@ -70,6 +71,7 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
       provider: runtimeModel.provider,
       modelId: runtimeModel.id,
       model: pluginModel,
+      requestAuth: getProviderRequestAuth(runtimeModel),
     },
   });
   const transportFallback = providerStreamFn

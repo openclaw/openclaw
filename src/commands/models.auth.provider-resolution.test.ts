@@ -24,6 +24,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { tryImportProviderCredential } from "./models/auth-credential-import.js";
 import { resolveRequestedLoginProviderOrThrow, runModelsAuthLoginFlowCore } from "./models/auth.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 function makeProvider(params: { id: string; label?: string; aliases?: string[] }): ProviderPlugin {
   return { ...params, label: params.label ?? params.id, auth: [] };
@@ -305,15 +306,11 @@ it.each([
           }
         };`,
     );
-    const originalModel = {
-      id: "original",
+    const originalModel = createTestModelDefinition("original", {
       name: "Original",
-      reasoning: false,
-      input: ["text" as const],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 4096,
       maxTokens: 1024,
-    };
+    });
     const modelConnection = {
       baseUrl: "https://fixture.invalid",
       api: "openai-completions" as const,

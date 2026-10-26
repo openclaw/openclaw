@@ -1,12 +1,9 @@
 import fs from "node:fs";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
-import { promisify } from "node:util";
 import { getAiTransportHost } from "@openclaw/ai";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { listenProvider } from "../gateway/gateway-provider-fixture.test-support.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
@@ -18,18 +15,17 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import * as modelResolution from "./embedded-agent-runner/model.js";
+import { input } from "./exec-auto-review.test-support.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 import { acquireSimpleCompletionModelForAgent } from "./simple-completion-runtime.js";
-
-// The reviewed command is input data only; this fixture never dispatches it.
-const input = {
-  command: "git status",
-  host: "gateway" as const,
-  reason: "approval-required" as const,
-  analysis: { parsed: true, allowlistMatched: false, inlineEval: false },
-};
+import {
+  completionChunk,
+  completionConfig,
+  completionModelDefinition,
+  startCompletionServer,
+} from "./simple-completion.test-support.js";
 
 it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)(
   "retains the exec reviewer model through %s",
@@ -61,43 +57,33 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
       }
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.end(
-        `data: ${JSON.stringify({ id: "review", object: "chat.completion.chunk", model: "reviewer", choices: [{ index: 0, delta: { content: JSON.stringify({ decision: "ask", risk: "low", rationale: "fixture" }) }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+        completionChunk(
+          JSON.stringify({ decision: "ask", risk: "low", rationale: "fixture" }),
+          "reviewer",
+        ),
       );
     };
-    const server = createServer((_request, response) => {
+    const server = await startCompletionServer((_request, response) => {
       requests.push(response);
       arrived.resolve();
     });
-    const baseUrl = await listenProvider(server);
-    const origin = new URL(baseUrl).origin;
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { workspace: root, model: `${fixture.providerId}/reviewer` } },
-      models: {
-        providers: {
-          [fixture.providerId]: {
-            api: "openai-completions",
-            apiKey: "fixture-only",
-            baseUrl,
-            models: [
-              {
-                id: "reviewer",
-                name: "Reviewer",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 8192,
-                maxTokens: 1024,
-              },
-            ],
-          },
+    const cfg = completionConfig(
+      fixture.providerId,
+      {
+        api: "openai-completions",
+        apiKey: "fixture-only",
+        baseUrl: server.baseUrl,
+        models: [completionModelDefinition({ id: "reviewer", name: "Reviewer" })],
+      },
+      {
+        agents: { defaults: { workspace: root, model: `${fixture.providerId}/reviewer` } },
+        plugins: {
+          load: { paths: [fixture.rootDir] },
+          slots: { memory: "none" },
+          entries: { [fixture.pluginId]: { enabled: true } },
         },
       },
-      plugins: {
-        load: { paths: [fixture.rootDir] },
-        slots: { memory: "none" },
-        entries: { [fixture.pluginId]: { enabled: true } },
-      },
-    };
+    );
     try {
       await withEnvAsync(
         {
@@ -151,7 +137,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
             const realFetch = globalThis.fetch;
             fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
               const response = await realFetch(...args);
-              if (!response.url.startsWith(`${origin}/`)) {
+              if (!response.url.startsWith(`${server.origin}/`)) {
                 return response;
               }
               const reader = response.body?.getReader();
@@ -203,12 +189,11 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
             }
             first = parent.track(() => reviewer(input));
             const started = mode === "late-preparation" ? heldWorkStarted.promise : arrived.promise;
-            await Promise.race([
+            await awaitGateBeforeSettlement(
               started,
-              first.then(() => {
-                throw new Error("Reviewer settled before fixture boundary");
-              }),
-            ]);
+              first,
+              "Reviewer settled before fixture boundary",
+            );
             const builds = create.mock.calls.length;
             expect(builds).toBeGreaterThan(0);
             if (mode === "callback-tail" || mode === "cancel-tail") {
@@ -281,8 +266,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
         },
       );
     } finally {
-      server.closeAllConnections();
-      await promisify(server.close.bind(server))();
+      await server[Symbol.asyncDispose]();
       roots.cleanup();
     }
   },

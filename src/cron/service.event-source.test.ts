@@ -293,9 +293,9 @@ describe("event automation durable admission", () => {
           await entered.promise;
         } else {
           cronStore.noteCronJobsStoreCommit(cronStoreKey(f.storePath));
-          const load = cronStore.loadCronJobsStoreWithConfigJobs;
+          const load = cronStore.loadCronJobsStoreWithConfigJobsByKey;
           const delayed = vi
-            .spyOn(cronStore, "loadCronJobsStoreWithConfigJobs")
+            .spyOn(cronStore, "loadCronJobsStoreWithConfigJobsByKey")
             .mockImplementationOnce(async (...args) => {
               const loaded = await load(...args);
               entered.resolve();

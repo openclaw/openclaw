@@ -280,7 +280,10 @@ export function resolveLoginFailureFeedback(
     });
   }
 
-  if (lower.includes("protocol mismatch")) {
+  if (
+    lastErrorCode === ConnectErrorDetailCodes.PROTOCOL_MISMATCH ||
+    lower.includes("protocol mismatch")
+  ) {
     return buildFeedback(rawError, "login.failure.protocol", {
       kind: "protocol-mismatch",
       docsHref:

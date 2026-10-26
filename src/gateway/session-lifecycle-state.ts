@@ -2,9 +2,6 @@ import { normalizeOptionalString as normalizeLifecycleRunId } from "@openclaw/no
 import { getRuntimeConfig } from "../config/io.js";
 import { applySessionEntryTargetOperation } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
-  deriveSessionLifecycleSnapshot,
-  resolveSessionLifecycleTerminal,
-  derivePersistedSessionLifecyclePatch,
   matchesProviderReviewWriter,
   resolveLifecyclePhase,
   type LifecycleEventLike,
@@ -22,50 +19,13 @@ import {
 } from "../sessions/session-agent-work-admission.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import {
-  recordGatewaySessionRunFailure,
-  resolveSessionRunError,
-} from "../sessions/session-run-error.js";
+import { recordGatewaySessionRunFailure } from "../sessions/session-run-error.js";
 import { runOutsideAsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
+import { resolveLifecycleFailureSummary } from "./session-lifecycle-projection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
-export { isStaleLifecycleEventForSession } from "../config/sessions/session-run-lifecycle-projection.js";
-
 const restartRecoveryLog = createSubsystemLogger("main-session-restart-recovery");
-
-function resolveLifecycleFailureSummary(event: LifecycleEventLike): string | undefined {
-  const { terminal, status } = resolveSessionLifecycleTerminal(event);
-  return terminal && status
-    ? resolveSessionRunError({ ...terminal, errorKind: event.data?.errorKind }, status)
-    : undefined;
-}
-
-export function deriveGatewaySessionLifecycleSnapshot(
-  params: Omit<Parameters<typeof deriveSessionLifecycleSnapshot>[0], "lastRunError">,
-) {
-  return deriveSessionLifecycleSnapshot({
-    ...params,
-    lastRunError: resolveLifecycleFailureSummary(params.event),
-  });
-}
-
-export function deriveGatewaySessionLifecycleProjectionPatch(params: {
-  entry?: Parameters<typeof derivePersistedSessionLifecyclePatch>[0]["entry"];
-  event: LifecycleEventLike;
-}): ReturnType<typeof deriveGatewaySessionLifecycleSnapshot> {
-  const {
-    restartRecoveryRuns: _restartRecoveryRuns,
-    restartRecoveryForceSafeTools: _restartRecoveryForceSafeTools,
-    lifecycleRunId: _lifecycleRunId,
-    ...patch
-  } = derivePersistedSessionLifecyclePatch({
-    ...params,
-    currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
-    lastRunError: resolveLifecycleFailureSummary(params.event),
-  });
-  return patch;
-}
 
 type GatewaySessionLifecycleEventParams = {
   sessionKey: string;

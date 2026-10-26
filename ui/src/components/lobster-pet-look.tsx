@@ -1,4 +1,4 @@
-import { renderSolidSnapshot } from "../lib/dom/solid-snapshot.ts";
+import { renderSolidSnapshot } from "../lib/reactive/detached-root.ts";
 import { LobsterSvg, type LobsterSvgProps } from "./lobster-pet-artwork.tsx";
 import type { LobsterPetLook } from "./lobster-pet-contract.ts";
 

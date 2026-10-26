@@ -136,24 +136,19 @@ it.each([true, false])("prepares web search for a known native model (%s)", asyn
   if (!native || native.auth !== "native") {
     throw new Error("Expected native model ownership");
   }
-  native.modelRef = known ? { provider: "native", model: "bound" } : undefined;
+  const modelRef = { provider: "native", model: "bound" };
+  native.modelRef = known ? modelRef : undefined;
   attempt.config = { tools: { byProvider: { native: { deny: ["web_search"] } } } };
   await execute();
-  expect(runAttempt.mock.calls[0]?.[0].preparedWebSearchPolicy).toEqual(
-    known
-      ? {
-          allowed: false,
-          persistentAllowed: false,
-          modelRef: { provider: "native", model: "bound" },
-          requesterFacts: [],
-        }
-      : { allowed: false, persistentAllowed: false },
-  );
+  expect(runAttempt.mock.calls[0]?.[0].preparedWebSearchPolicy).toEqual({
+    allowed: false,
+    persistentAllowed: false,
+    ...(known ? { modelRef, requesterFacts: [] } : {}),
+  });
 });
 
 const admissionCases: Array<[HarnessOperation, HarnessMode, boolean, boolean]> = [
   ["execution", "fresh", true, false],
-  ["execution", "native", true, false],
   ["execution", "fresh", false, false],
   ["execution", "native", false, false],
   ["execution", "fresh", true, true],

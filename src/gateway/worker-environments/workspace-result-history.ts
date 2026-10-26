@@ -18,7 +18,11 @@ export async function importWorkerWorkspaceHistory(params: {
   assertCurrent?: () => void;
 }): Promise<void> {
   const history = params.gitHistory;
-  if (!history?.descendsFromBase || history.headCommit === history.baseCommit) {
+  if (
+    !history?.descendsFromBase ||
+    history.unavailableReason ||
+    history.headCommit === history.baseCommit
+  ) {
     return;
   }
   if (!params.gitPackPath) {
@@ -63,11 +67,47 @@ export async function adoptStagedWorkerWorkspaceHistory(params: {
     params.root,
     params.stagedResultRef,
   );
-  if (!history || history.headCommit === history.baseCommit) {
+  return adoptWorkerWorkspaceHistory({ ...params, gitHistory: history });
+}
+
+export const workerHistoryNotAdopted = (reason: string) =>
+  `Cloud worker commits were not adopted: ${reason}. File changes were reconciled and kept for review.`;
+
+export async function restoreWorkerWorkspaceHistory(params: {
+  root: string;
+  gitHistory?: WorkerWorkspaceGitHistory;
+  gitPackPath?: string;
+  gitHistoryNote?: string;
+  assertCurrent?: () => void;
+}): Promise<string | undefined> {
+  if (params.gitHistoryNote) {
+    return params.gitHistoryNote;
+  }
+  try {
+    await importWorkerWorkspaceHistory(params);
+    return await adoptWorkerWorkspaceHistory(params);
+  } catch {
+    params.assertCurrent?.();
+    return workerHistoryNotAdopted("retained Git history could not be verified");
+  }
+}
+
+async function adoptWorkerWorkspaceHistory(params: {
+  root: string;
+  gitHistory?: WorkerWorkspaceGitHistory;
+  assertCurrent?: () => void;
+}): Promise<string | undefined> {
+  const history = params.gitHistory;
+  if (!history) {
     return undefined;
   }
-  const fallback = (reason: string) =>
-    `Cloud worker commits were not adopted: ${reason}. File changes were reconciled and kept for review.`;
+  const fallback = workerHistoryNotAdopted;
+  if (history.unavailableReason) {
+    return fallback(history.unavailableReason);
+  }
+  if (history.headCommit === history.baseCommit) {
+    return undefined;
+  }
   if (!history.descendsFromBase) {
     return fallback("worker history does not descend from the dispatch base");
   }

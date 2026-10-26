@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
+  createCapturedPluginRegistration,
   createRuntimeEnv,
   createTestWizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -139,23 +139,15 @@ beforeEach(async () => {
     text: request.model.startsWith("glm") ? "OPENCLAW OCR 4827" : "red square",
     model: request.model,
   }));
-  let provider: ProviderPlugin | undefined;
-  let media: MediaUnderstandingProvider | undefined;
-  plugin.register(
-    createTestPluginApi({
-      id: "llama-cpp",
-      name: "llama.cpp",
-      source: "test",
-      config: {},
-      pluginConfig: {},
-      registerProvider: (value) => {
-        provider = value;
-      },
-      registerMediaUnderstandingProvider: (value) => {
-        media = value;
-      },
-    }),
-  );
+  const captured = createCapturedPluginRegistration({
+    id: "llama-cpp",
+    name: "llama.cpp",
+    source: "test",
+    config: {},
+  });
+  plugin.register(captured.api);
+  const provider = captured.providers.at(-1);
+  const media = captured.mediaUnderstandingProviders.at(-1);
   const method = provider?.auth.find((entry) => entry.id === "local-media");
   const ordinary = provider?.auth.find((entry) => entry.id === "local");
   assert(method && ordinary && media, "Missing production local media registration");

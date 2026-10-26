@@ -217,6 +217,10 @@
             "maxItems": 50,
             "type": "array"
           },
+          "blind": {
+            "description": "Blind trial: child prompt omits its model, session ids and workspace path. Hidden subagent, context=\"isolated\".",
+            "type": "boolean"
+          },
           "cleanup": {
             "description": "Hidden session cleanup; delete snapshots and removes its managed worktree through session cleanup. visible=true always keeps the session.",
             "enum": ["delete", "keep"],

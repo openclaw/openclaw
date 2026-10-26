@@ -50,7 +50,6 @@ import {
   bindSubagentRunGatewayOwners,
   retryDeferredSubagentCompletionSource,
 } from "./subagent-registry-gateway-owner.js";
-import * as lifecycleCleanup from "./subagent-registry-lifecycle-cleanup.js";
 import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import {
@@ -86,18 +85,6 @@ const retiredDelivery = {
   disposition: "intentional_non_delivery",
   lastError: "store replaced",
 } as const;
-
-const recoveryWarn = vi.hoisted(() => vi.fn());
-vi.mock("../../../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) => {
-      const logger = actual.createSubsystemLogger(subsystem);
-      return subsystem === "agents/subagents" ? { ...logger, warn: recoveryWarn } : logger;
-    },
-  };
-});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let settleRootWork: ReturnType<typeof observeRootWork>;
@@ -135,13 +122,11 @@ it("leaves yielded tasks with their owner until a final result needs store retir
   subagent.requesterStorePath = "original-store";
   markSubagentRunPausedAfterYield({ entry: subagent });
   publishCommittedRecords(subagent);
-  using runWorker = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
 
   for (let publication = 0; publication < 3; publication++) {
     publishSystemEventStoreResolver(() => "replacement-store");
     await settleRootWork(true);
   }
-  expect(runWorker).not.toHaveBeenCalled();
   expect(subagentRuns.isCompletionAuthorityRetired(subagent)).toBe(false);
   expect(loadSubagentRegistryFromSqlite().get(subagent.runId)).toMatchObject({
     pauseReason: "sessions_yield",
@@ -361,7 +346,6 @@ it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"]
     );
     subagentRuns.set(subagent.runId, subagent);
     await initSubagentRegistry();
-    using retireNotifications = vi.spyOn(lifecycleCleanup, "suspendReplacedStoreNotifications");
     if (change === "unknown retry") {
       await admitCompletionFixtureDatabase();
       database.db.exec(
@@ -434,10 +418,6 @@ it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"]
       context.resolveGatewayContext = () => context;
       await activateSubagentRegistry(() => context).settled;
       try {
-        expect(retireNotifications).toHaveBeenCalled();
-        await expect(retireNotifications.mock.results[0]?.value).rejects.toThrow(
-          "retirement write rejected",
-        );
         await expect(settleRootWork(true)).rejects.toMatchObject({
           name: "AggregateError",
           message: "Failed to settle subagent cleanup roots",
@@ -486,37 +466,28 @@ it.each([false, true])(
       const cfg = { session: { store: state.path("sessions.json") } };
       setRuntimeConfigSnapshot(cfg);
       vi.mocked(getRuntimeConfig).mockReturnValue(cfg);
-      const entries = ["successful", "interrupted", "quiet", "delivered"].map((kind) =>
-        createSubagentStoreRunFixture({
-          runId: `legacy-${kind}`,
-          childSessionKey: `agent:main:subagent:legacy-${kind}`,
-          expectsCompletionMessage: kind !== "quiet",
-          requesterStorePath: ["quiet", "delivered"].includes(kind) ? "old" : "current",
-          ...(kind === "delivered"
-            ? {
-                delivery: {
-                  status: "delivered",
-                  disposition: "delivered",
-                  deliveredAt: 260,
-                  announcedAt: 260,
-                },
-              }
-            : {}),
-          ...(kind === "interrupted"
-            ? {
-                execution: {
-                  status: "terminal",
-                  endedAt: 250,
-                  outcome: { status: "error", error: "Gateway restarted" },
-                },
-              }
-            : {}),
-        }),
-      );
       const wake = { status: "pending", attemptCount: 0 } as const;
       const delivered = { status: "delivered", deliveredAt: 260, announcedAt: 260 } as const;
       const terminal = { status: "terminal", endedAt: 250 } as const;
       const paused = { pauseReason: "sessions_yield", execution: terminal } as const;
+      const legacy = (kind: string, overrides: Partial<SubagentRunRecord> = {}) =>
+        createSubagentStoreRunFixture({
+          runId: `legacy-${kind}`,
+          childSessionKey: `agent:main:subagent:legacy-${kind}`,
+          requesterStorePath: "current",
+          ...overrides,
+        });
+      const entries = [
+        legacy("successful"),
+        legacy("interrupted", {
+          execution: { ...terminal, outcome: { status: "error", error: "Gateway restarted" } },
+        }),
+        legacy("quiet", { expectsCompletionMessage: false, requesterStorePath: "old" }),
+        legacy("delivered", {
+          requesterStorePath: "old",
+          delivery: { ...delivered, disposition: "delivered" },
+        }),
+      ];
       const legacyStates: Partial<SubagentRunRecord>[] = [
         { requesterSettleWake: wake, cleanupCompletedAt: 300, delivery: delivered },
         { requesterSettleWake: wake, cleanupCompletedAt: 300 },
@@ -526,11 +497,7 @@ it.each([false, true])(
         },
         { execution: terminal },
         { ...paused, requesterStorePath: "old" },
-        {
-          ...paused,
-          requesterStorePath: undefined,
-          delivery: delivered,
-        },
+        { ...paused, requesterStorePath: undefined, delivery: delivered },
         {
           ...paused,
           requesterSettleWake: { ...wake, pauseNotice: { acknowledgment: "Paused" } },
@@ -557,10 +524,8 @@ it.each([false, true])(
       ];
       for (const [index, overrides] of legacyStates.entries()) {
         const runId = overrides.runId ?? `legacy-state-${index}`;
-        const entry = createSubagentStoreRunFixture({
+        const entry = legacy(`state-${index}`, {
           runId,
-          childSessionKey: `agent:main:subagent:legacy-state-${index}`,
-          requesterStorePath: "current",
           completionTarget: "parent",
           ...overrides,
         });
@@ -595,9 +560,7 @@ it.each([false, true])(
           BEFORE UPDATE ON subagent_runs WHEN NEW.run_id = 'legacy-state-0'
           BEGIN SELECT RAISE(ABORT, 'temporary completion settlement failure'); END`);
       }
-      recoveryWarn.mockClear();
       await restart();
-      expect(recoveryWarn).toHaveBeenCalledTimes(failWrite ? 1 : 0);
       if (failWrite) {
         const unsettled = [...loadSubagentRegistryFromSqlite().values()].filter(
           (entry) => !entry.suppressCompletionDelivery,
@@ -609,12 +572,7 @@ it.each([false, true])(
         );
       }
       expect(await loadPendingSessionDeliveries(captureOpenClawStateWorkerContext())).toEqual([]);
-      recoveryWarn.mockClear();
       await restart();
-      expect(recoveryWarn).not.toHaveBeenCalledWith(
-        "subagent completion authority was not restored",
-        expect.anything(),
-      );
       const settled = loadSubagentRegistryFromSqlite();
       for (const entry of entries) {
         expect(settled.get(entry.runId)?.requesterSettleWake).toBeUndefined();

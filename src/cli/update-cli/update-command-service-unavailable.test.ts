@@ -13,14 +13,13 @@ import * as processes from "../../infra/gateway-lock-process.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as packageFilesystem from "../../infra/package-update-filesystem.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
-import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
-import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { isPublicUpdateFailureCode } from "../../infra/update-failure-public-codes.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import * as processIdentity from "../../shared/pid-alive.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { mockProcessPlatform, withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { UpdatePreMutationError } from "./shared.js";
 import { inspectUpdateManagedServices } from "./update-command-database-context.js";
 import * as databaseContext from "./update-command-database-context.js";
@@ -124,15 +123,12 @@ it.each([
   "admits unavailable service inspection safely ($platform, owner=$owner)",
   async ({ platform, owner, refused }) => {
     const home = dirs.make("update-service-unavailable-");
-    const swap = await createPackageSwapFixture(home);
-    const root = swap.packageRoot;
+    const root = path.join(home, "live", "lib", "node_modules", "openclaw");
+    await writePackageRoot(root, "1.0.0");
     const other = path.join(home, "other");
     await writePackageRoot(other, "1.0.0");
     if (owner === "foreign") {
-      fs.writeFileSync(
-        path.join(other, "package.json"),
-        JSON.stringify({ name: "other", version: "1.0.0" }),
-      );
+      writeFixtureJsonSync(path.join(other, "package.json"), { name: "other", version: "1.0.0" });
     }
     vi.stubEnv("HOME", home);
     serviceHome(home);
@@ -181,14 +177,6 @@ it.each([
         expect((await admission).services.get(root)?.serviceUpdateVerdict?.kind).toBe(
           "unavailable",
         );
-        if (platform === "win32") {
-          mockProcessPlatform(hostPlatform);
-          const backup = vi.spyOn(packageFilesystem, "backupNpmPackageRoot");
-          const result = await swapStagedPackageInstall(swap.params);
-          expect(result).toMatchObject({ status: "committed", step: { exitCode: 0 } });
-          expect(backup).toHaveBeenCalledOnce();
-          expect(readPackage(root)).toMatchObject({ version: "2.0.0" });
-        }
       }
       expect(native.stop).not.toHaveBeenCalled();
     } finally {

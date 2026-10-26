@@ -1,7 +1,6 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
-import type { RequesterSettleWakeBatchState } from "../announce/subagent-announce.requester-settle-state.js";
 import type {
   PendingFinalDeliveryPayload,
   SubagentCompletionDeliveryState,
@@ -349,7 +348,7 @@ export const loadPendingFinalDeliveryPayload = (
 
 export function transitionRequesterSettleWakeState(
   entry: SubagentRunRecord,
-  state: RequesterSettleWakeBatchState,
+  state: Omit<RequesterSettleWakeState, "retireAfterSettle">,
 ): void {
   entry.requesterSettleWake = {
     ...state,

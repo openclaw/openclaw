@@ -111,11 +111,15 @@ suite.define(() => {
         ];
         await gateway.setMethodResponse("models.list", { models: recoveredModels });
         if (trigger === "reconnect") {
+          // Device signing can finish after a clock advance; let its mock replies run.
+          await page.clock.resume();
           await gateway.closeLatest(1006, "synthetic transient disconnect");
-        } else if (!initiallyUnavailable) {
-          await gateway.emitGatewayEvent(trigger, { agentId: "main" });
+        } else {
+          if (!initiallyUnavailable) {
+            await gateway.emitGatewayEvent(trigger, { agentId: "main" });
+          }
+          await page.clock.runFor(10_000);
         }
-        await page.clock.runFor(10_000);
         await expect
           .poll(async () => (await gateway.getRequests("system.info")).length)
           .toBe(initialSystemInfoRequestCount + 1);

@@ -1,16 +1,15 @@
 // Requesty live tests prove model discovery, streamed text, and a tool-call round trip.
-import {
-  completeSimple,
-  streamSimple,
-  type AssistantMessage,
-  type Model,
-  type Tool,
-} from "openclaw/plugin-sdk/llm";
+import { completeSimple, streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
-import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import {
+  createLiveValueTool,
+  createLiveToolReplayContext,
+  requireLiveToolCall,
+} from "../test-support/live-value-tool.test-support.js";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
 import {
   getStaticRequestyModelCatalog,
   REQUESTY_BASE_URL,
@@ -54,22 +53,6 @@ function liveModel(id: string): Model<"openai-completions"> {
     contextWindow: 200_000,
     maxTokens: 8192,
   } as Model<"openai-completions">;
-}
-
-function liveEchoTool(): Tool {
-  return {
-    name: "live_echo",
-    description: "Return the supplied value.",
-    parameters: Type.Object({ value: Type.String() }, { additionalProperties: false }),
-  };
-}
-
-function requireToolCall(message: AssistantMessage) {
-  const toolCall = message.content.find((block) => block.type === "toolCall");
-  if (toolCall?.type !== "toolCall") {
-    throw new Error(`Requesty live model did not call a tool: ${message.stopReason}`);
-  }
-  return toolCall;
 }
 
 describeLive("requesty plugin live", () => {
@@ -130,12 +113,11 @@ describeLive("requesty plugin live", () => {
         throw new Error(`Requesty live catalog did not include ${modelId}`);
       }
       const model = { ...liveModel(modelId), ...definition } as Model<"openai-completions">;
-      const tool = liveEchoTool();
-      const userPrompt = {
-        role: "user" as const,
-        content: "Call live_echo with value requesty. Do not answer directly.",
-        timestamp: Date.now() - 3,
-      };
+      const tool = createLiveValueTool("live_echo");
+      const userPrompt = makeUserMessage(
+        "Call live_echo with value requesty. Do not answer directly.",
+        Date.now() - 3,
+      );
       const first = await completeSimple(
         model,
         { messages: [userPrompt], tools: [tool] },
@@ -144,28 +126,13 @@ describeLive("requesty plugin live", () => {
       if (first.stopReason === "error") {
         throw new Error(first.errorMessage || "Requesty first turn returned an error");
       }
-      const toolCall = requireToolCall(first);
+      const toolCall = requireLiveToolCall(first, "Requesty live model did not call a tool: ");
       expect(toolCall.name).toBe("live_echo");
       expect(toolCall.arguments).toEqual({ value: "requesty" });
 
       const second = await completeSimple(
         model,
-        {
-          messages: [
-            userPrompt,
-            first,
-            {
-              role: "toolResult",
-              toolCallId: toolCall.id,
-              toolName: toolCall.name,
-              content: [{ type: "text", text: "ok" }],
-              isError: false,
-              timestamp: Date.now() - 1,
-            },
-            { role: "user", content: "Reply with exactly: ok", timestamp: Date.now() },
-          ],
-          tools: [tool],
-        },
+        createLiveToolReplayContext(userPrompt, first, toolCall, tool),
         { apiKey: REQUESTY_API_KEY, maxTokens: 2048, reasoning: "low" },
       );
       if (second.stopReason === "error") {

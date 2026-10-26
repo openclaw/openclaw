@@ -1,6 +1,11 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile as readFileCallback } from "node:fs";
+import { readdir } from "node:fs/promises";
 import os from "node:os";
+import { promisify } from "node:util";
 import { hasErrnoCode } from "../infra/errno.js";
+
+// Avoid fs/promises' extra promise layers for every tiny procfs read.
+const readFile = promisify(readFileCallback);
 
 /** Host exec budgets physical memory, not V8/Go's virtual address reservations. */
 export function resolveHostExecMemoryLimit(): number | undefined {
@@ -21,13 +26,13 @@ async function readTreeMemory(
   rootPid: number,
   limitBytes: number,
   isStopped: () => boolean,
-): Promise<number> {
+): Promise<{ bytes: number; pids: Set<number> }> {
   const pending = [rootPid];
   const seen = new Set(pending);
   let bytes = 0;
   for (const pid of pending) {
     if (isStopped()) {
-      return bytes;
+      return { bytes, pids: seen };
     }
     try {
       const status = await readFile(`/proc/${pid}/status`, "utf8");
@@ -36,11 +41,11 @@ async function readTreeMemory(
         bytes += Number(match[1]) * 1024;
       }
       if (bytes > limitBytes) {
-        return bytes;
+        return { bytes, pids: seen };
       }
       for (const tid of await readdir(`/proc/${pid}/task`)) {
         if (isStopped()) {
-          return bytes;
+          return { bytes, pids: seen };
         }
         try {
           const children = await readFile(`/proc/${pid}/task/${tid}/children`, "utf8");
@@ -63,10 +68,10 @@ async function readTreeMemory(
       }
     }
   }
-  return bytes;
+  return { bytes, pids: seen };
 }
 
-/** One nonoverlapping sample per second, retained by the execution-tree owner. */
+/** Nonoverlapping samples: every second near the bound or after discovering descendants. */
 export function watchChildMemory(params: {
   pid?: number;
   limitBytes?: number;
@@ -79,10 +84,19 @@ export function watchChildMemory(params: {
   }
   let stopped = false;
   let warned = false;
+  let previousPids = new Set([pid]);
   let timer: NodeJS.Timeout | undefined;
   const sample = async () => {
+    let intervalMs = 1000;
     try {
-      const bytes = await readTreeMemory(pid, limitBytes, () => stopped);
+      const { bytes, pids } = await readTreeMemory(pid, limitBytes, () => stopped);
+      intervalMs = bytes < limitBytes / 2 ? 5000 : 1000;
+      for (const childPid of pids) {
+        if (!previousPids.has(childPid)) {
+          intervalMs = 1000;
+        }
+      }
+      previousPids = pids;
       if (!stopped && bytes > limitBytes) {
         stopped = true;
         params.onLimit(bytes);
@@ -97,7 +111,7 @@ export function watchChildMemory(params: {
       }
     } finally {
       if (!stopped) {
-        timer = setTimeout(() => void sample(), 1000);
+        timer = setTimeout(() => void sample(), intervalMs);
         timer.unref();
       }
     }

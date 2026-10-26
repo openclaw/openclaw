@@ -3,6 +3,7 @@ import { recordSessionRowSelectionReset } from "../infra/gateway-work-metrics.js
 import { isIncognitoSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { notifyListeners } from "../shared/listeners.js";
+import type { readResidentSessionRow } from "./session-row-projection-materialize.js";
 import {
   identity,
   selectionRow,
@@ -121,11 +122,28 @@ export function createSessionRowProjectionRevisions(
     selection: () => (selection ??= {}),
     taskPublication: () => (taskPublication ??= {}),
     invalidate,
-    materialized(row: Row, previousBoard: Row["hasBoard"]) {
-      const changed = row.hasBoard !== previousBoard;
-      invalidate(changed);
+    materialized(
+      row: Row,
+      prepared: ReturnType<typeof readResidentSessionRow> &
+        Pick<Row, "materializedSequence" | "profileRevision" | "subagentRevision">,
+    ) {
+      const boardChanged = row.hasBoard !== prepared.hasBoard;
+      const sharingChanged = row.membership !== prepared.membership;
+      const changed =
+        boardChanged ||
+        sharingChanged ||
+        row.materialized !== prepared.materialized ||
+        row.facts !== prepared.facts ||
+        row.fallbackModel !== prepared.fallbackModel;
+      Object.assign(row, prepared);
+      if (!changed) {
+        return;
+      }
+      if (boardChanged || sharingChanged) {
+        invalidate(boardChanged);
+      }
       publishFacts(row);
-      if (changed && !isIncognitoSessionKey(row.key)) {
+      if (boardChanged && !isIncognitoSessionKey(row.key)) {
         publishSelection(row);
       }
     },

@@ -434,30 +434,51 @@ process.stdout.write(JSON.stringify({
     },
   );
 
-  it("preserves node-native Claude auth when no profile credential is forwarded", async () => {
-    const calls = await invokeWithNativeAuth(
-      `
+  it.each([undefined, true] as const)(
+    "uses native-only credential isolation only when requested (%s)",
+    async (nativeAuthOnly) => {
+      const calls = await invokeWithNativeAuth(
+        `
 process.stdout.write(JSON.stringify({
   type: "result",
   apiKey: process.env.ANTHROPIC_API_KEY,
   oauth: process.env.CLAUDE_CODE_OAUTH_TOKEN,
   scrub: process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
+  otherProvider: process.env.Openai_Api_Key,
+  contextWindow: process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW,
 }) + "\\n");`,
-      {
-        ANTHROPIC_API_KEY: "node-native-api-key",
-        CLAUDE_CODE_OAUTH_TOKEN: "node-native-oauth",
-        CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
-      },
-    );
-    expect(calls.find((call) => call.method === "node.invoke.result")).toMatchObject({
-      params: { ok: true },
-    });
-    expect(JSON.parse(progressText(calls))).toMatchObject({
-      apiKey: "node-native-api-key",
-      oauth: "node-native-oauth",
-      scrub: "1",
-    });
-  });
+        {
+          ANTHROPIC_API_KEY: "node-native-api-key",
+          CLAUDE_CODE_OAUTH_TOKEN: "node-native-oauth",
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+          Openai_Api_Key: "synthetic-other-provider",
+        },
+        {
+          ...(nativeAuthOnly ? { nativeAuthOnly } : {}),
+          env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" },
+        },
+      );
+      expect(calls.find((call) => call.method === "node.invoke.result")).toMatchObject({
+        params: { ok: true },
+      });
+      expect(JSON.parse(progressText(calls))).toMatchObject({
+        ...(nativeAuthOnly
+          ? {}
+          : {
+              apiKey: "node-native-api-key",
+              oauth: "node-native-oauth",
+              otherProvider: "synthetic-other-provider",
+            }),
+        scrub: "1",
+        contextWindow: "100000",
+      });
+      if (nativeAuthOnly) {
+        expect(JSON.parse(progressText(calls))).not.toHaveProperty("apiKey");
+        expect(JSON.parse(progressText(calls))).not.toHaveProperty("oauth");
+        expect(JSON.parse(progressText(calls))).not.toHaveProperty("otherProvider");
+      }
+    },
+  );
 
   it("streams stdin-driven stdout and cleans up a node-local system prompt file", async () => {
     const executable = await executableScript(`
@@ -847,10 +868,7 @@ process.stdout.write(Buffer.concat([
     const controller = new AbortController();
     const request = { argv: ["-p"], idleTimeoutMs: 5_000, timeoutMs: 10_000 };
     const calls: Calls = [];
-    let resolveProgress!: () => void;
-    const progressObserved = new Promise<void>((resolve) => {
-      resolveProgress = resolve;
-    });
+    const { promise: progressObserved, resolve: resolveProgress } = createDeferred();
     const run = runCommand(executable, request, {
       client: client(calls, resolveProgress),
       signal: controller.signal,

@@ -39,7 +39,12 @@ const markdownManifest = existsSync(markdownManifestPath)
   ? JSON.parse(readFileSync(markdownManifestPath, "utf8"))
   : undefined;
 const markdownDependencies = markdownManifest
-  ? ["mdast-util-from-markdown", "mdast-util-gfm-table", "micromark-extension-gfm-table"]
+  ? [
+      "mdast-util-from-markdown",
+      "mdast-util-gfm-table",
+      "micromark",
+      "micromark-extension-gfm-table",
+    ]
   : [];
 // Pre-#149585 anchors contain no package manifest and need only these tooling pins.
 const dependencies = [

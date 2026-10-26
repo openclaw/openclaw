@@ -253,64 +253,60 @@ describe("GA Realtime call retirement", () => {
     }
   });
 
-  it("awaits rejected sideband retirement before hangup and reservation release", async () => {
-    const retired = createDeferred<void>();
-    const bridge = retirementBridge();
-    vi.mocked(bridge.close).mockReturnValue(retired.promise);
-    const hangup = vi.fn(() => new Response(null, { status: 204 }));
-    const { realtime } = createBroker({ fetchImpl: retirementFetch(hangup) });
-    try {
-      const reservation = await reserveGaSession(realtime, () => bridge);
-      await offer(realtime, reservation.clientSecret);
-      const closing = realtime.broker.cancelBrowserSession(reservation);
-      const concurrent = realtime.cleanup();
-      expect(realtime.getSessionCounts()).toMatchObject({ active: 0, reservations: 1 });
-      expect(bridge.close).toHaveBeenCalledOnce();
-      expect(hangup).not.toHaveBeenCalled();
-      retired.reject(new Error("sideband disposal failed"));
-      await Promise.all([closing, concurrent]);
-      expect(hangup).toHaveBeenCalledOnce();
-      expect(realtime.getSessionCounts()).toMatchObject({ active: 0, reservations: 0 });
-    } finally {
-      retired.resolve();
-      await realtime.cleanup();
-    }
-  });
-
-  it("coalesces reentrant retirement and settles HTTP 404 once", async () => {
-    vi.useFakeTimers();
-    const bridge = retirementBridge();
-    const hungUp = createDeferred<void>();
-    let hangups = 0;
-    const fetchImpl = retirementFetch(async () => {
-      hangups += 1;
-      await hungUp.promise;
-      return new Response(null, { status: 404 });
-    });
-    const { realtime } = createBroker({ fetchImpl });
-    let reentered: Promise<void> | undefined;
-    try {
-      const reservation = await reserveGaSession(realtime, ({ onTerminal }) => {
-        vi.mocked(bridge.close).mockImplementation(() => {
-          onTerminal();
-          reentered = Promise.resolve(realtime.broker.cancelBrowserSession(reservation));
-        });
-        return bridge;
+  it.each(["rejected sideband", "reentrant HTTP 404"])(
+    "joins cancellation and cleanup during %s retirement",
+    async (phase) => {
+      const bridge = retirementBridge();
+      const retiring = createDeferred<void>();
+      const reentrant = phase === "reentrant HTTP 404";
+      if (reentrant) {
+        vi.useFakeTimers();
+      }
+      const hangup = vi.fn(async () => {
+        if (reentrant) {
+          await retiring.promise;
+        }
+        return new Response(null, { status: reentrant ? 404 : 204 });
       });
-      await offer(realtime, reservation.clientSecret);
-      const first = realtime.broker.cancelBrowserSession(reservation);
-      const concurrent = realtime.cleanup();
-      expect(bridge.close).toHaveBeenCalledOnce();
-      hungUp.resolve();
-      await Promise.all([first, concurrent, reentered]);
-      await vi.advanceTimersByTimeAsync(30 * 60_000);
-      await realtime.cleanup();
-      expect(hangups).toBe(1);
-    } finally {
-      hungUp.resolve();
-      await realtime.cleanup();
-    }
-  });
+      const { realtime } = createBroker({ fetchImpl: retirementFetch(hangup) });
+      let reentered: Promise<void> | undefined;
+      try {
+        const reservation = await reserveGaSession(realtime, ({ onTerminal }) => {
+          vi.mocked(bridge.close).mockImplementation(() => {
+            if (!reentrant) {
+              return retiring.promise;
+            }
+            onTerminal();
+            reentered = Promise.resolve(realtime.broker.cancelBrowserSession(reservation));
+            return undefined;
+          });
+          return bridge;
+        });
+        await offer(realtime, reservation.clientSecret);
+        const first = realtime.broker.cancelBrowserSession(reservation);
+        const concurrent = realtime.cleanup();
+        expect(bridge.close).toHaveBeenCalledOnce();
+        if (reentrant) {
+          retiring.resolve();
+        } else {
+          expect(realtime.getSessionCounts()).toMatchObject({ active: 0, reservations: 1 });
+          expect(hangup).not.toHaveBeenCalled();
+          retiring.reject(new Error("sideband disposal failed"));
+        }
+        await Promise.all([first, concurrent, reentered]);
+        expect(realtime.getSessionCounts()).toMatchObject({ active: 0, reservations: 0 });
+        expect(hangup).toHaveBeenCalledOnce();
+        if (reentrant) {
+          await vi.advanceTimersByTimeAsync(30 * 60_000);
+          await realtime.cleanup();
+          expect(hangup).toHaveBeenCalledOnce();
+        }
+      } finally {
+        retiring.resolve();
+        await realtime.cleanup();
+      }
+    },
+  );
 
   it("retains exhausted old broker calls and per-client native capacity across replacement", async () => {
     const count = 2;

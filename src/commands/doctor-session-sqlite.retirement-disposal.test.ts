@@ -22,7 +22,7 @@ import * as windowsPrivateDirectory from "../infra/windows-private-directory.js"
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { runOutsideOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
-import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
+import { retireRecovery as retire } from "./doctor-session-sqlite.fixtures.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
   expectFiles,
@@ -33,7 +33,6 @@ import {
   importLegacyStore,
   readMigrationManifest as readManifest,
   requireMigrationManifestPath,
-  type TestStore,
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
@@ -43,19 +42,6 @@ vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
 }));
 
 const { createLegacyStore, createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
-
-function retire(
-  store: TestStore,
-  confirm = async () => true,
-  preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
-) {
-  return retireSessionSqliteRecovery({
-    env: store.env,
-    preview,
-    readConfig: async () => ({}),
-    confirm,
-  });
-}
 
 function message(id: string, content: unknown, parentId: string | null = null, role = "user") {
   return { type: "message", id, parentId, message: { role, content } };

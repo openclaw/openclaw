@@ -65,28 +65,6 @@ CREATE TABLE IF NOT EXISTS operator_approval_standing_grant_generations (
   job_definition_generation INTEGER NOT NULL CHECK (job_definition_generation >= 1)
 ) STRICT;
 `,
-  operator_approval_execution_identities: `
-CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
-  approval_id TEXT NOT NULL PRIMARY KEY
-    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
-  source_context_id TEXT NOT NULL CHECK (
-    length(source_context_id) BETWEEN 1 AND 256 AND source_context_id = trim(source_context_id)
-  ),
-  source_execution_id TEXT NOT NULL CHECK (
-    length(source_execution_id) BETWEEN 1 AND 256 AND source_execution_id = trim(source_execution_id)
-  )
-) STRICT;
-`,
-  worker_environment_ssh_fallback_ports: `
-CREATE TABLE IF NOT EXISTS worker_environment_ssh_fallback_ports (
-  environment_id TEXT NOT NULL,
-  position INTEGER NOT NULL CHECK (position >= 0 AND position <= 9),
-  port INTEGER NOT NULL CHECK (port >= 1 AND port <= 65535),
-  PRIMARY KEY (environment_id, position),
-  UNIQUE (environment_id, port),
-  FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
-) STRICT;
-`,
   worker_environment_session_attachments: `
 CREATE TABLE IF NOT EXISTS worker_environment_session_attachments (
   session_id TEXT PRIMARY KEY,

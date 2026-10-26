@@ -98,6 +98,8 @@ function applyObservedChatSessionRow(
 ): void {
   const selectedAgentId = resolveChatAgentId(state);
   if (!row) {
+    // The row owner retired this target even if a list already projected its successor.
+    retireSessionMutations();
     const result = state.sessionsResult;
     if (!result || state.sessionsResultAgentId !== selectedAgentId) {
       return;
@@ -110,7 +112,6 @@ function applyObservedChatSessionRow(
     if (sessions.length === result.sessions.length) {
       return;
     }
-    retireSessionMutations();
     state.sessionsResult = { ...result, sessions, count: sessions.length };
     return;
   }

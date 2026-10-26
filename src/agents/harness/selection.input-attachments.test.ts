@@ -111,7 +111,7 @@ it("refuses remembered consent revoked after admission before native dispatch", 
     { ownerPluginId: "codex" },
   );
   const original = harnessLifecycle.runAgentHarnessLifecycleAttempt;
-  const dispatch = vi
+  using dispatch = vi
     .spyOn(harnessLifecycle, "runAgentHarnessLifecycleAttempt")
     .mockImplementation(async (harness, prepared, execute) => {
       setRuntimeConfigSnapshot({
@@ -120,13 +120,10 @@ it("refuses remembered consent revoked after admission before native dispatch", 
       });
       return original(harness, prepared, execute);
     });
-  try {
-    await expect(runAgentHarnessAttempt(attempt)).rejects.toThrow(/workspace-only|revoked/);
-    expect(dispatch).toHaveBeenCalledOnce();
-    expect(nativeStart).not.toHaveBeenCalled();
-  } finally {
-    dispatch.mockRestore();
-  }
+
+  await expect(runAgentHarnessAttempt(attempt)).rejects.toThrow(/workspace-only|revoked/);
+  expect(dispatch).toHaveBeenCalledOnce();
+  expect(nativeStart).not.toHaveBeenCalled();
 });
 
 function createAttributionRecorder(registered = true) {

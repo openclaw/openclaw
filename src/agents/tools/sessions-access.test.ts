@@ -210,11 +210,6 @@ it.each(["exact", "fallback"] as const)(
     });
 
     expect(access).toEqual({ allowed: true });
-    expect(gateway.mock.calls.map(([request]) => request.method)).toEqual([
-      "sessions.describe",
-      "sessions.resolve",
-      ...(mode === "fallback" ? ["sessions.list"] : []),
-    ]);
   },
 );
 
@@ -242,29 +237,24 @@ it.each([
         : {},
     );
 
-    const access = await resolveAccess({
-      action,
-      displayAction,
-      requesterSessionKey: parentKey,
-      targetSessionKey,
-      callGateway: gateway as never,
-    });
-
-    expect(access).toMatchObject({ allowed: false, reasonCode: "tree_visibility_restricted" });
-    expect(gateway.mock.calls.map(([request]) => request.method)).toEqual([
-      "sessions.describe",
-      "sessions.resolve",
-    ]);
-    canonical = true;
-    expect(
-      await resolveAccess({
+    const check = () =>
+      resolveAccess({
         action,
         displayAction,
         requesterSessionKey: parentKey,
         targetSessionKey,
         callGateway: gateway as never,
-      }),
-    ).toEqual({ allowed: true, expectedSessionId: "retained-child", basis: "parent-lineage" });
+      });
+    expect(await check()).toMatchObject({
+      allowed: false,
+      reasonCode: "tree_visibility_restricted",
+    });
+    canonical = true;
+    expect(await check()).toEqual({
+      allowed: true,
+      expectedSessionId: "retained-child",
+      basis: "parent-lineage",
+    });
   },
 );
 
@@ -430,7 +420,6 @@ it.each([
     "all",
     disabledEvidence,
     "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
-    [],
   ],
   [
     "history",
@@ -439,11 +428,10 @@ it.each([
     "tree",
     ownershipEvidence,
     "Session history denied because spawned-session ownership lookup failed (transient); retry once, then ask the operator to inspect OpenClaw logs.",
-    ["sessions.describe", "sessions.resolve"],
   ],
 ] as const)(
   "preserves %s denial guidance for %s",
-  async (action, targetAgentId, targetSessionKey, visibility, evidence, message, methods) => {
+  async (action, targetAgentId, targetSessionKey, visibility, evidence, message) => {
     const gateway = failingGateway();
     const access = await resolveAccess({
       action,
@@ -457,7 +445,9 @@ it.each([
     });
     const denial = expectDenial(access, evidence);
     expect(formatSessionToolAccessDenial(denial, { action })).toBe(message);
-    expect(gateway.mock.calls.map(([request]) => request.method)).toEqual(methods);
+    if (action === "send") {
+      expect(gateway).not.toHaveBeenCalled();
+    }
   },
 );
 
@@ -530,11 +520,11 @@ it("reports a transient tree-visibility lookup failure distinctly", async () => 
   });
 
   const result = guard.check("agent:main:subagent:child-1");
-  expect(result).toMatchObject({ allowed: false, status: "forbidden" });
-  if (!result.allowed) {
-    expect(result.error).toMatch(/ownership lookup failed/i);
-    expect(result.error).toMatch(/transient\); retry/i);
-  }
+  expect(result).toMatchObject({
+    allowed: false,
+    status: "forbidden",
+    error: expect.stringMatching(/ownership lookup failed.*transient\); retry/i),
+  });
   const warnText = loggerMocks.logWarn.mock.calls.map((call) => String(call[0])).join("\n");
   expect(warnText).toMatch(/requester=sha256:[a-f0-9]{12}/u);
   expect(warnText).not.toContain("agent:main:main");

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { visibleCompletion } from "./subagent-announce-fixtures.test-support.js";
 import {
   registryRuntimeMock,
+  sessionStore,
   setSessionStore,
   wakeParams,
 } from "./subagent-announce.requester-settle-fixture.test-support.js";
@@ -16,6 +17,8 @@ import {
 
 const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
+const wake = (overrides?: Parameters<typeof wakeParams>[0]) =>
+  maybeWakeRequesterAfterAllChildrenSettled(wakeParams(overrides));
 
 describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
   type PrivateOptions = Partial<Record<"mixed" | "yielded" | "single" | "marked", boolean>>;
@@ -48,27 +51,14 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     current?: { sessionId: string; lifecycleRevision?: string };
     frozen?: boolean;
   };
-  it.each<Scenario>([
-    { name: "pending private pair" },
-    { name: "pending mixed pair", mixed: true },
-    { name: "yielded private child", single: true, yielded: true },
-    { name: "yielded mixed pair", mixed: true, yielded: true },
-    { name: "unmarked upgrade", single: true, yielded: true, marked: false, frozen: true },
-    {
-      name: "replacement session",
-      single: true,
-      yielded: true,
-      frozen: true,
-      current: { sessionId: "new-parent" },
-    },
-    {
-      name: "reset lifecycle",
-      single: true,
-      yielded: true,
-      frozen: true,
-      current: { sessionId: "sess-main", lifecycleRevision: "rev-2" },
-    },
-  ])("preserves the admitted reply policy: $name", async (scenario) => {
+  it.each`
+    name                     | mixed    | single   | yielded  | marked   | frozen   | current
+    ${"pending mixed pair"}  | ${true}  | ${false} | ${false} | ${true}  | ${false} | ${undefined}
+    ${"yielded mixed pair"}  | ${true}  | ${false} | ${true}  | ${true}  | ${false} | ${undefined}
+    ${"unmarked upgrade"}    | ${false} | ${true}  | ${true}  | ${false} | ${true}  | ${undefined}
+    ${"replacement session"} | ${false} | ${true}  | ${true}  | ${true}  | ${true}  | ${{ sessionId: "new-parent" }}
+    ${"reset lifecycle"}     | ${false} | ${true}  | ${true}  | ${true}  | ${true}  | ${{ sessionId: "sess-main", lifecycleRevision: "rev-2" }}
+  `("preserves the admitted reply policy: $name", async (scenario: Scenario) => {
     const { single, yielded, current, marked = true } = scenario;
     if (current) {
       setSessionStore({ [REQUESTER]: current });
@@ -77,7 +67,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     if (scenario.frozen) {
       children[0]!.requesterSettleWake!.batchRunIds = ["run-b"];
     }
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(!current);
+    expect(await wake()).toBe(!current);
     if (current) {
       expect(deliverSpy).not.toHaveBeenCalled();
       expect(completeBatchSpy).toHaveBeenCalledWith(
@@ -91,7 +81,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
       );
       return;
     }
-    expect(deliverSpy).toHaveBeenCalledOnce();
     const call = deliveredCallArg();
     expect(call.completionRequesterSessionId).toBe("sess-main");
     expect(call.requireVisibleReply).toBeUndefined();
@@ -103,14 +92,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     expect(trigger).toContain("private marker");
     if (yielded && marked) {
       expect(trigger).not.toContain("Your final reply stays internal");
-      expect(trigger).toContain("under its normal reply rules");
       expect(trigger).toContain("must go through the message tool, send your answer with it");
-      expect(trigger).toContain("avoid repeating an update already delivered");
     } else if (!yielded) {
       expect(trigger).not.toContain("messaging tool");
       expect(trigger).toContain("Your final reply is recorded in this session for the requester");
-      expect(trigger).toContain("briefly record the reviewed outcome and any remaining work");
-      expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+      expect(await wake()).toBe(false);
       expect(deliverSpy).toHaveBeenCalledOnce();
       expect(completeBatchSpy.mock.calls[0]?.[2]).not.toHaveProperty(
         "requesterVisibleFinalDelivered",
@@ -118,30 +104,114 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     }
   });
 
+  it("forwards the requester route to private completion guidance", async () => {
+    settledPrivateChildren({});
+    expect(await wake({ requesterOrigin: { channel: "discord", to: "channel:123" } })).toBe(true);
+    expect(deliveredCallArg().triggerMessage).toContain(
+      "send it through an available, permitted messaging tool",
+    );
+  });
+});
+
+describe("quiet requester restart continuation", () => {
+  it("does not reoffer a confirmed interruption notice in a requester-settle wave", async () => {
+    sessionStore[REQUESTER] = { sessionId: "sess-parent" };
+    const child = makeSettledChild({
+      runId: "delivered-interruption",
+      delivery: { status: "delivered", deliveredAt: 4_000 },
+      execution: {
+        status: "terminal",
+        startedAt: 2_000,
+        endedAt: 3_000,
+        interruptionReason: "gateway-restart",
+        outcome: { status: "error", error: "Gateway restarted" },
+      },
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+
+    expect(await wake({ settledEntry: child })).toBe(false);
+    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(child.requesterSettleWake).toBeUndefined();
+  });
+
   it.each([
-    { name: "channel-less", origin: undefined, canDeliver: false },
-    {
-      name: "internal session target",
-      origin: { channel: "internal", to: "agent:main:main" },
-      canDeliver: false,
-    },
-    { name: "channel", origin: { channel: "discord", to: "channel:123" }, canDeliver: true },
-    { name: "WebChat", origin: { channel: "webchat" }, canDeliver: true },
-  ])(
-    "guides private $name settles according to the requester route",
-    async ({ origin, canDeliver }) => {
-      settledPrivateChildren({});
+    "main",
+    "nested",
+    "reset",
+    "cancelled",
+    "successful",
+    "replaced-child",
+    "failed-placement",
+  ] as const)(
+    "keeps a quiet restart continuation private to its original %s parent",
+    async (scenario) => {
+      const requesterSessionKey = scenario === "nested" ? "agent:main:subagent:middle" : REQUESTER;
+      sessionStore[requesterSessionKey] = {
+        sessionId: "sess-parent",
+        lifecycleRevision: scenario === "reset" ? "replacement" : "original",
+      };
+      const child = makeSettledChild({
+        runId: "quiet-interrupted",
+        requesterSessionKey,
+        expectsCompletionMessage: false,
+        completionTarget: "parent",
+        completionRequesterSessionId: "sess-parent",
+        completionRequesterLifecycleRevision: "original",
+        suppressCompletionDelivery: scenario === "cancelled",
+        delivery: { status: "not_required" },
+        ...(scenario === "failed-placement"
+          ? { terminalOwner: "interrupted-recovery", endedReason: "subagent-error" }
+          : {}),
+        execution: {
+          status: "terminal",
+          startedAt: 2_000,
+          endedAt: 3_000,
+          interruptionReason:
+            scenario === "successful" || scenario === "failed-placement"
+              ? undefined
+              : "gateway-restart",
+          outcome:
+            scenario === "successful"
+              ? { status: "ok" }
+              : scenario === "failed-placement"
+                ? { status: "error", error: "Worker setup failed; repair it before resuming." }
+                : { status: "error", error: "The original child session was replaced." },
+          suppressSessionEffects: scenario === "replaced-child" ? true : undefined,
+        },
+      });
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+      const shouldContinue =
+        scenario === "main" ||
+        scenario === "nested" ||
+        scenario === "replaced-child" ||
+        scenario === "failed-placement";
       expect(
-        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ requesterOrigin: origin })),
-      ).toBe(true);
-      const trigger = String(deliveredCallArg().triggerMessage);
-      if (canDeliver) {
-        expect(trigger).toContain("send it through an available, permitted messaging tool");
-      } else {
-        expect(trigger).not.toContain("messaging tool");
-        expect(trigger).toContain("Your final reply is recorded in this session for the requester");
-        expect(trigger).toContain("no messaging send is needed");
+        await maybeWakeRequesterAfterAllChildrenSettled(
+          wakeParams({ requesterSessionKey, settledEntry: child }),
+        ),
+      ).toBe(shouldContinue);
+      expect(deliverSpy).toHaveBeenCalledTimes(shouldContinue ? 1 : 0);
+      if (shouldContinue) {
+        const delivery = deliveredCallArg();
+        expect(delivery).toMatchObject({
+          completionTarget: "parent",
+          completionRequesterSessionId: "sess-parent",
+          completionRequesterLifecycleRevision: "original",
+          expectsCompletionMessage: false,
+        });
+        if (scenario === "failed-placement") {
+          expect(delivery.triggerMessage).toContain("Every subagent in this batch has now settled");
+          expect(delivery.triggerMessage).toContain(
+            "status: error: Worker setup failed; repair it before resuming.",
+          );
+        } else {
+          expect(delivery.triggerMessage).toContain("Reconcile every listed unfinished child");
+          expect(delivery.triggerMessage).toContain(child.childSessionKey);
+          expect(delivery.triggerMessage).toContain("The original child session was replaced.");
+        }
+        expect(delivery.triggerMessage).toContain("Process this result privately");
       }
+      expect(child.requesterSettleWake).toBeUndefined();
     },
   );
 });

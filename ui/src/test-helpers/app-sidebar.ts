@@ -536,6 +536,7 @@ export function createContext(
     runtimeConfig: {
       state: createInitialConfigState(gateway.snapshot),
       ensureLoaded: async () => undefined,
+      ensureDisplayLoaded: async () => undefined,
       subscribe: () => () => undefined,
     },
     scopeUpgrade: hiddenScopeUpgradeCapability,

@@ -1,3 +1,4 @@
+import { jsonResponse as json } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildComfyConfig, registerComfyProviders } from "./test-helpers.js";
 
@@ -19,10 +20,6 @@ const cfg = buildComfyConfig({
   promptNodeId: "6",
   inputImageNodeId: "7",
 });
-
-function json(body: unknown) {
-  return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
-}
 
 function generate(capability: "image" | "music" | "video") {
   const req = {

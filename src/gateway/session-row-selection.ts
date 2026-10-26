@@ -5,7 +5,7 @@ import { sessionCreatorProfileId } from "../config/sessions/session-entry-proven
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   projectSessionOwner,
-  projectSessionParticipants,
+  resolveSessionProfileId,
   projectSessionProfileInvolvements,
 } from "./session-identity-projection.js";
 import { compareSessionEntryPairs, type SessionEntryPair } from "./session-list-order.js";
@@ -20,7 +20,7 @@ import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 
 const sentinel = (key: string) => key === "global" || key === "unknown";
 type SelectionScope = ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>;
-const EMPTY_KEYS: ReadonlySet<string> = new Set();
+const EMPTY_KEYS: ReadonlySet<string> = Object.freeze(new Set<string>());
 type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair };
 
 export function createSessionRowSelection(
@@ -30,6 +30,7 @@ export function createSessionRowSelection(
   getContext: () => SessionListRowContext,
   indexCreators = false,
 ) {
+  // Singleton rows live only in winners; retain physical competitors only when needed.
   const groups = new Map<string, Map<string, IndexedTarget>>();
   const winners = new Map<string, IndexedTarget>();
   const duplicates = new Set<string>();
@@ -52,7 +53,10 @@ export function createSessionRowSelection(
   };
   const personalInvolvements = new Map<string, Set<string>>();
   const relatedInvolvements = new Map<string, Set<string>>();
-  const rowInvolvements = new Map<string, { personal: Set<string>; related: Set<string> }>();
+  const rowInvolvements = new Map<
+    string,
+    { personal: ReadonlySet<string>; related: ReadonlySet<string> }
+  >();
   const changedInvolvements = new Set<string>();
   const creators = new Map<string, Map<string, IndexedTarget>>();
   const creatorOrders = new Map<string, IndexedTarget[]>();
@@ -126,7 +130,7 @@ export function createSessionRowSelection(
     const identities = context.userProfileIdentityById;
     for (const key of changedInvolvements) {
       const { entry } = winners.get(key)!.row;
-      const related = new Set<string>();
+      let related: Set<string> | undefined;
       const owner = (context.identityProjection?.owner ?? projectSessionOwner)(
         entry,
         identities,
@@ -134,16 +138,12 @@ export function createSessionRowSelection(
         configuredAgentIds,
       )?.actor;
       if (owner?.identity?.type === "profile") {
-        related.add(owner.identity.id);
+        (related ??= new Set()).add(owner.identity.id);
       }
-      const participants = (context.identityProjection?.participants ?? projectSessionParticipants)(
-        entry,
-        identities,
-        cfg,
-      );
-      for (const participant of participants.values()) {
-        if (participant.identity.type === "profile") {
-          related.add(participant.identity.id);
+      // Membership needs canonical IDs, not participant labels, avatars, or display map keys.
+      for (const { identity } of entry.participants ?? []) {
+        if (identity.type === "profile") {
+          (related ??= new Set()).add(resolveSessionProfileId(identity.id, identities));
         }
       }
       const states = (context.identityProjection?.involvement ?? projectSessionProfileInvolvements)(
@@ -152,20 +152,29 @@ export function createSessionRowSelection(
       );
       for (const [profileId, state] of states) {
         if (state.lastMention) {
-          related.add(profileId);
+          (related ??= new Set()).add(profileId);
         }
       }
-      const personal = new Set(related);
+      // Most rows have identical facets; copy only when a personal override changes membership.
+      let personal = related;
       for (const [profileId, state] of states) {
         if (state.hidden) {
-          personal.delete(profileId);
-        } else {
-          personal.add(profileId);
+          if (personal?.has(profileId)) {
+            if (personal === related) {
+              personal = new Set(related);
+            }
+            personal.delete(profileId);
+          }
+        } else if (!personal?.has(profileId)) {
+          if (personal === related) {
+            personal = new Set(related);
+          }
+          (personal ??= new Set()).add(profileId);
         }
       }
       for (const [profiles, index] of [
-        [personal, personalInvolvements],
-        [related, relatedInvolvements],
+        [personal ?? EMPTY_KEYS, personalInvolvements],
+        [related ?? EMPTY_KEYS, relatedInvolvements],
       ] as const) {
         for (const profileId of profiles) {
           const keys = index.get(profileId) ?? new Set<string>();
@@ -173,8 +182,11 @@ export function createSessionRowSelection(
           index.set(profileId, keys);
         }
       }
-      if (personal.size || related.size) {
-        rowInvolvements.set(key, { personal, related });
+      if (personal?.size || related?.size) {
+        rowInvolvements.set(key, {
+          personal: personal?.size ? personal : EMPTY_KEYS,
+          related: related ?? EMPTY_KEYS,
+        });
       }
     }
     changedInvolvements.clear();
@@ -182,7 +194,7 @@ export function createSessionRowSelection(
   const keyFor = (row: Pick<SelectionTarget, "key" | "agentId">) =>
     sentinel(row.key) && activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key;
   const update = (id: string, key: string, row?: SelectionTarget) => {
-    const previous = groups.get(key);
+    let group = groups.get(key);
     const oldWinner = winners.get(key);
     const eligible =
       row &&
@@ -190,27 +202,33 @@ export function createSessionRowSelection(
       (!scope.agentId || row.agentId === scope.agentId) &&
       (!scope.configuredAgentIds ||
         isConfiguredGatewaySessionEntry(cfg, scope.configuredAgentIds, row.key, row.entry));
-    const group = previous ?? new Map<string, IndexedTarget>();
-    if (eligible) {
-      group.set(id, { row, pair: [key, row.entry] });
-      groups.set(key, group);
-    } else {
-      group.delete(id);
-      if (!group.size) {
+    if (!group && oldWinner && rowIdentity(oldWinner.row) !== id) {
+      group = new Map([[rowIdentity(oldWinner.row), oldWinner]]);
+    }
+    let winner: IndexedTarget | undefined = eligible ? { row, pair: [key, row.entry] } : undefined;
+    if (group) {
+      if (winner) {
+        group.set(id, winner);
+      } else {
+        group.delete(id);
+      }
+      winner = undefined;
+      for (const target of group.values()) {
+        if (
+          !winner ||
+          scope.paths.get(target.row.storeTarget.storePath)! <
+            scope.paths.get(winner.row.storeTarget.storePath)!
+        ) {
+          winner = target;
+        }
+      }
+      if (group.size > 1) {
+        groups.set(key, group);
+      } else {
         groups.delete(key);
       }
     }
-    let winner: IndexedTarget | undefined;
-    for (const target of group.values()) {
-      if (
-        !winner ||
-        scope.paths.get(target.row.storeTarget.storePath)! <
-          scope.paths.get(winner.row.storeTarget.storePath)!
-      ) {
-        winner = target;
-      }
-    }
-    if (group.size > 1 && !sentinel(winner!.row.key)) {
+    if (group && group.size > 1 && !sentinel(winner!.row.key)) {
       duplicates.add(key);
     } else {
       duplicates.delete(key);

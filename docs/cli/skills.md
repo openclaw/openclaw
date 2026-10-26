@@ -254,6 +254,10 @@ CLI host.
 openclaw skills library --help
 ```
 
+Human-readable library metadata neutralizes terminal control sequences and displays
+embedded tabs and line breaks as visible escapes. JSON retains the original values.
+`library read` prints the requested skill and supporting-file contents verbatim.
+
 List your library:
 
 ```bash

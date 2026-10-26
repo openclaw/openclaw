@@ -1,10 +1,18 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import {
+  jsonObjectFieldsForScan,
+  jsonScannedValue,
+} from "../../infra/database-engine/json-values.js";
+import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import {
+  readJsonPredicateScalar,
+  scanJsonObjectFields,
+} from "../../state/json-predicate-fields.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   TranscriptEvent,
@@ -24,7 +32,8 @@ import {
   preparedAssistantMessagesPreserveTurn,
   resolveTranscriptAppendParent,
 } from "./transcript-append-parent.js";
-import { transcriptEventNavigationSql } from "./transcript-payload.js";
+import { transcriptEventNavigationSql, transcriptPredicateSql } from "./transcript-payload.js";
+import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 import {
   isSessionTranscriptLeafControl,
   parseSessionTranscriptTreeEntry,
@@ -143,29 +152,15 @@ export function canRebasePreparedAssistantInTransaction(
           "identity.parent_id",
           "active.message_position",
           "rewrite.generation",
-          /* kysely-allow-raw: validate the canonical message role without hydrating content. */
-          sql<string>`json_extract(${transcriptEventNavigationSql(database.db, "event")}, '$.message.role')`.as(
-            "message_role",
-          ),
-          /* kysely-allow-raw: only exact canonical booleans exempt a command from model context. */
-          sql<
-            number | null
-          >`json_type(${transcriptEventNavigationSql(database.db, "event")}, '$.message.excludeFromContext') = 'true'
-            AND json_type(${transcriptEventNavigationSql(database.db, "event")}, '$.message.__openclaw.contextFreeCommand') = 'true'`.as(
-            "context_free_command",
-          ),
-          /* kysely-allow-raw: classify realtime voice records without hydrating content. */
-          sql<
-            string | null
-          >`json_extract(${transcriptEventNavigationSql(database.db, "event")}, '$.message.provenance.kind')`.as(
-            "provenance_kind",
-          ),
-          /* kysely-allow-raw: pair the kind with its channel so a partial marker cannot match. */
-          sql<
-            string | null
-          >`json_extract(${transcriptEventNavigationSql(database.db, "event")}, '$.message.provenance.sourceChannel')`.as(
-            "provenance_source_channel",
-          ),
+          transcriptPredicateSql(database.db, "navigation_valid", "event").as("navigation_valid"),
+          jsonObjectFieldsForScan(database.db, transcriptEventNavigationSql(database.db, "event"), {
+            message: {
+              role: true,
+              excludeFromContext: true,
+              __openclaw: { contextFreeCommand: true },
+              provenance: { kind: true, sourceChannel: true },
+            },
+          }).as("message_json"),
         ])
         .where("identity.session_id", "=", sessionId)
         .where("identity.seq", ">=", newerMessageMetadata[0]!.seq)
@@ -175,7 +170,43 @@ export function canRebasePreparedAssistantInTransaction(
         .limit(PREPARED_ASSISTANT_MAX_NEWER_MESSAGES),
     ),
   );
-  return preparedAssistantMessagesPreserveTurn(newerRoles, admittedUserId, (row) => {
+  const newerFacts = newerRoles.map((row) => {
+    assertTranscriptNavigationValid(row.navigation_valid);
+    const event = scanJsonObjectFields(row.message_json, ["message"]);
+    assertTranscriptNavigationValid(event.valid ? 1 : 0);
+    const message = event.first.get("message");
+    const fields = scanJsonObjectFields(message?.kind === "object" ? message.text : "{}", [
+      "role",
+      "excludeFromContext",
+      "__openclaw",
+      "provenance",
+    ]).first;
+    const internal = fields.get("__openclaw");
+    const command = scanJsonObjectFields(internal?.kind === "object" ? internal.text : "{}", [
+      "contextFreeCommand",
+    ]).first.get("contextFreeCommand");
+    const provenance = fields.get("provenance");
+    const source = scanJsonObjectFields(provenance?.kind === "object" ? provenance.text : "{}", [
+      "kind",
+      "sourceChannel",
+    ]).first;
+    return {
+      event_id: row.event_id,
+      seq: row.seq,
+      parent_id: row.parent_id,
+      message_position: row.message_position,
+      generation: row.generation,
+      message_role: jsonScannedValue(fields.get("role")),
+      context_free_command:
+        readJsonPredicateScalar(fields.get("excludeFromContext")) === true &&
+        readJsonPredicateScalar(command) === true
+          ? 1
+          : 0,
+      provenance_kind: jsonScannedValue(source.get("kind")),
+      provenance_source_channel: jsonScannedValue(source.get("sourceChannel")),
+    };
+  });
+  return preparedAssistantMessagesPreserveTurn(newerFacts, admittedUserId, (row) => {
     const answer = questionAnswers.find((input) => input.entryId === row.event_id);
     return (
       answer !== undefined &&

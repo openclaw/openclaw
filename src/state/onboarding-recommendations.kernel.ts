@@ -6,7 +6,6 @@ import {
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import {
   ONBOARDING_RECOMMENDATIONS_STATE_KEY_PREFIX,
-  OnboardingRecommendationMatchesSchema,
   type OnboardingRecommendationsRecord,
   type PreparedOnboardingRecommendationOffer,
   type AcknowledgeOnboardingRecommendationsParams,
@@ -25,11 +24,8 @@ export function readOnboardingRecommendationsInDatabase(
   configKey: string,
 ): OnboardingRecommendationsRecord | null {
   const row = readConfigMachineStateRowInDatabase(db, configKey);
-  // SAFETY: The mutation kernels below own this persisted record shape; matches are validated next.
-  const record = row ? (JSON.parse(row.value_json) as OnboardingRecommendationsRecord) : null;
-  return record
-    ? { ...record, matches: OnboardingRecommendationMatchesSchema.parse(record.matches) }
-    : null;
+  // SAFETY: Offer and pending-update admission validate matches before the owning kernels persist them.
+  return row ? (JSON.parse(row.value_json) as OnboardingRecommendationsRecord) : null;
 }
 
 function matchesExpectedOnboardingRecommendations(

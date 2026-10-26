@@ -24,7 +24,7 @@ import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
-} from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/navigation.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { nextBooleanToolOverrides } from "../../lib/sessions/tool-overrides.ts";

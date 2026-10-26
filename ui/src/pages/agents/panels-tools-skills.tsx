@@ -39,21 +39,6 @@ import {
 
 registerSettingsEnglish();
 
-function formatToolPolicyLabels(params: {
-  allowed: boolean;
-  baseAllowed: boolean;
-  denied: boolean;
-}) {
-  const [state, summary]: [string, string] = params.denied
-    ? ["agentTools.disabledByOverride", "agentTools.overrideOff"]
-    : params.allowed
-      ? params.baseAllowed
-        ? ["agentTools.enabledByProfile", "agentTools.enabled"]
-        : ["agentTools.enabledByOverride", "agentTools.overrideOn"]
-      : ["agentTools.notIncluded", "agentTools.profileOff"];
-  return { state: t(state), summary: t(summary) };
-}
-
 export function AgentTools(
   params: AgentConfigActions &
     AgentsPageView["tools"] &
@@ -458,7 +443,17 @@ export function AgentTools(
                         const defaultProfiles = () => tool().defaultProfiles ?? [];
                         const sourceLabel = () =>
                           buildToolPresentation(section(), tool(), null).sourceLabel;
-                        const policyLabels = createMemo(() => formatToolPolicyLabels(resolved()));
+                        const policyLabels = createMemo(() => {
+                          const policy = resolved();
+                          const [state, policySummary]: [string, string] = policy.denied
+                            ? ["agentTools.disabledByOverride", "agentTools.overrideOff"]
+                            : policy.allowed
+                              ? policy.baseAllowed
+                                ? ["agentTools.enabledByProfile", "agentTools.enabled"]
+                                : ["agentTools.enabledByOverride", "agentTools.overrideOn"]
+                              : ["agentTools.notIncluded", "agentTools.profileOff"];
+                          return { state: t(state), summary: t(policySummary) };
+                        });
                         function PreviewPart(partProps: {
                           part: "summary" | "badges" | "details" | "policy";
                         }) {

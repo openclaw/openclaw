@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { expect, vi } from "vitest";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
-import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   reloadFailure,
   heldWork,
   probeHttpRoute,
+  pluginInstance,
   rejectWith,
 } from "./server-plugin-reload.fixture-tools.test-support.js";
 import {
@@ -93,7 +93,8 @@ export async function verifyPreparedSidecarRecovery(
       expect(signals[0]?.aborted).toBe(true);
     }
     const result = await fixture.reload().catch((error: unknown) => error);
-    expect(result).toMatchObject({ details: { committed: false } });
+    // Preserve the timed-out manual stop, without wrapping the preparation error in a start failure.
+    expect(result).toMatchObject({ details: { committed: false }, cause: preparationError });
     expect(paused).toBe(false);
     expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
     expect([stop.mock.calls, start.mock.calls]).toEqual([[], []]);
@@ -101,9 +102,6 @@ export async function verifyPreparedSidecarRecovery(
     expect(
       manager.getRuntimeSnapshot({ channelId, inspectAccounts: false }).channels[channelId],
     ).toMatchObject({ running: true, connected: true, lifecycle: "ready" });
-    // Rollback preserves the timed-out manual stop instead of starting a replacement,
-    // so the original preparation error is not wrapped in a channel-start failure.
-    expect(result).toMatchObject({ cause: preparationError });
   } finally {
     finishTask.resolve();
     vi.useRealTimers();
@@ -299,9 +297,7 @@ export async function verifyIndependentPostCommitActivation(
     await probeHttpRoute(route.handler, (_response, end) => {
       expect(end).toHaveBeenCalledWith("generation 2");
     });
-    expect(getPluginInstance(fixture.previousRegistry.plugins[0]!)?.lifecycle.signal.aborted).toBe(
-      true,
-    );
+    expect(pluginInstance(fixture.previousRegistry).lifecycle.signal.aborted).toBe(true);
   } finally {
     for (const id of channelIds) {
       await manager.stopChannel(id);

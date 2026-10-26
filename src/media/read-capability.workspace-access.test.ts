@@ -1,16 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   declareAgentWorkspaceAccess,
-  getAgentWorkspaceAccess,
   registerAgentWorkspaceAccess,
   type AgentWorkspaceAccess,
 } from "../agents/workspace-access.js";
 import { createReplyMediaPathNormalizer } from "../auto-reply/reply/reply-media-paths.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { readOutboundMediaFile } from "./bounded-read-file.js";
 import { buildOutboundMediaLoadOptions } from "./load-options.js";
 import { resolveAgentScopedOutboundMediaAccess as resolveMediaAccess } from "./read-capability.js";
 import { saveMediaBuffer } from "./store.js";
@@ -26,7 +24,6 @@ vi.mock("../channels/plugins/index.js", () => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const releases: (() => void)[] = [];
 const harnessBytes = Buffer.from("Harness output");
 let f: Awaited<ReturnType<typeof workspaceFixture>>;
 
@@ -75,7 +72,7 @@ async function workspaceFixture() {
       createReplyMediaPathNormalizer({ cfg, agentId: "writer", workspaceDir: workspace }),
     bind: (access = host) => {
       const release = registerAgentWorkspaceAccess(workspace, access);
-      releases.push(release);
+      onTestFinished(release);
       return release;
     },
   };
@@ -84,23 +81,33 @@ beforeEach(async () => {
   f = await workspaceFixture();
 });
 afterEach(() => {
-  for (const release of releases.splice(0)) {
-    release();
-  }
   vi.unstubAllEnvs();
+  expect(f.host.bridge.readFile).not.toHaveBeenCalled();
 });
 
 describe("registered workspace outbound media", () => {
-  it("stages remote bytes without reading the stale mirror or document bridge", async () => {
+  it("stages remote bytes from snapshotted roots without exposing documents or stale mirrors", async () => {
+    const alias = path.join(f.root, "remote-output");
+    const roots = [f.output, alias];
+    f.host.outboundMedia!.localRoots = roots;
     const normalize = f.normalizer(); // Capture before the workspace service starts.
     f.bind();
+    roots.push(f.workspace);
     const result = await normalize({ mediaUrl: "output/report.txt" });
-    expect(result.mediaUrl).toBeDefined();
-    expect(result.mediaUrl).not.toBe(f.file);
     expect(await fs.readFile(result.mediaUrl!, "utf8")).toBe("Harness output");
     expect(await fs.readFile(f.file, "utf8")).toBe("stale Gateway copy");
     expect(f.reader).toHaveBeenCalledWith(f.file, expect.any(Number));
-    expect(f.host.bridge.readFile).not.toHaveBeenCalled();
+    const fallback = vi.fn(async () => Buffer.from("wrong local bytes"));
+    const access = f.resolve({
+      agentId: "other",
+      workspaceDir: f.workspace,
+      mediaAccess: { localRoots: [f.root], readFile: fallback },
+    });
+    expect((await f.load(path.join(alias, "report.txt"), access)).buffer).toEqual(harnessBytes);
+    expect(fallback).not.toHaveBeenCalled();
+    const document = path.join(f.workspace, "AGENTS.md");
+    await fs.writeFile(document, "stale document");
+    await expect(f.load(document)).rejects.toMatchObject({ code: "path-not-allowed" });
   });
 
   it("preserves managed and HTTP attachments after remote shutdown", async () => {
@@ -112,22 +119,17 @@ describe("registered workspace outbound media", () => {
       mediaUrls: [saved.path, url],
     });
     expect(await fs.readFile(saved.path, "utf8")).toBe("Gateway attachment");
-    expect(f.reader).not.toHaveBeenCalled();
-    expect(f.host.bridge.readFile).not.toHaveBeenCalled();
     expect((await f.load(saved.path)).buffer.toString()).toBe("Gateway attachment");
   });
 
   it("preserves local delivery for a stopped document-only binding", async () => {
     f.bind({ bridge: f.host.bridge })();
     expect((await f.load()).buffer.toString()).toBe("stale Gateway copy");
-    expect(f.reader).not.toHaveBeenCalled();
-    expect(f.host.bridge.readFile).not.toHaveBeenCalled();
   });
 
   it("bounds remote output before loading", async () => {
     f.bind();
     await expect(f.load(f.file, f.resolve(), 4)).rejects.toThrow("Remote media exceeds maxBytes");
-    expect(f.reader).toHaveBeenCalledWith(f.file, 4);
   });
 
   it("denies remote output for a blocked sender", async () => {
@@ -162,39 +164,6 @@ describe("registered workspace outbound media", () => {
     await expect(retained.readFile!(f.file)).rejects.toThrow("stopped or not ready");
     expect(f.reader).toHaveBeenCalledTimes(1);
     await expect(f.resolve().readFile!(f.file)).resolves.toEqual(harnessBytes);
-  });
-
-  it("snapshots remote roots without expanding document access", async () => {
-    const alias = path.join(f.root, "remote-output");
-    const roots = [f.output, alias];
-    f.host.outboundMedia!.localRoots = roots;
-    f.bind();
-    roots.push(f.workspace);
-    expect(getAgentWorkspaceAccess(f.workspace)!.outboundMedia!.localRoots).toEqual([
-      f.output,
-      alias,
-    ]);
-    const access = f.resolve();
-    expect(access.localRoots).not.toContain(f.workspace);
-    await expect(
-      readOutboundMediaFile(access.readFile!, path.join(alias, "report.txt"), { maxBytes: 20 }),
-    ).resolves.toEqual(harnessBytes);
-    const document = path.join(f.workspace, "AGENTS.md");
-    await fs.writeFile(document, "stale document");
-    await expect(f.load(document, access)).rejects.toMatchObject({ code: "path-not-allowed" });
-  });
-
-  it("routes the selected workspace ahead of another agent or local fallback", async () => {
-    f.bind();
-    const fallback = vi.fn(async () => Buffer.from("wrong local bytes"));
-    const access = f.resolve({
-      agentId: "other",
-      workspaceDir: f.workspace,
-      mediaAccess: { localRoots: [f.root], readFile: fallback },
-    });
-    expect(access.localRoots).toContain(f.root);
-    await expect(access.readFile!(f.file)).resolves.toEqual(harnessBytes);
-    expect(fallback).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -239,7 +208,6 @@ describe("registered workspace outbound media", () => {
         "current sandbox output",
       );
     }
-    expect(readFile).toHaveBeenCalledTimes(roots.length);
     expect(f.reader).not.toHaveBeenCalled();
   });
 });

@@ -89,6 +89,7 @@ import {
 } from "./doctor-session-sqlite-retained.js";
 import { settleDuplicateSessionSqliteArchives } from "./doctor-session-sqlite-retirement.js";
 import {
+  assertDoctorSessionSqliteTargetsNotAliased,
   createMigrationTargetInput,
   filterLegacySessionStoreTargets,
   prepareDoctorSessionSqliteTargets,
@@ -656,16 +657,12 @@ export async function reconcileDoctorSessionSqlitePublication(
 ): Promise<void> {
   const env = options.env ?? process.env;
   const cfg = resolveDoctorSessionSqliteConfig(options);
-  const { targets } = resolveDoctorSessionSqliteTargets({ ...options, cfg, env });
-  assertDoctorSqliteMaintenancePathsNotAliased(
-    `session SQLite ${options.mode}`,
-    resolveDoctorSessionSqliteMaintenancePaths(targets),
-    resolveDoctorSessionSqliteMaintenanceRoots(targets, env),
-  );
+  const resolved = resolveDoctorSessionSqliteTargets({ ...options, cfg, env });
+  assertDoctorSessionSqliteTargetsNotAliased({ ...options, ...resolved, env });
   await reconcileSessionSqliteMigrationPublications({
     env,
     sourcePath,
-    trustedTargets: targets.map(createMigrationTargetInput),
+    trustedTargets: resolved.targets.map(createMigrationTargetInput),
   });
 }
 

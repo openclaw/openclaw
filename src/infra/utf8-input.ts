@@ -1,4 +1,6 @@
-export class Utf8InputError extends Error {}
+export class Utf8InputError extends Error {
+  readonly code = "ERR_INVALID_UTF8";
+}
 
 function strictUtf8Decoder(sourceLabel: string) {
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });

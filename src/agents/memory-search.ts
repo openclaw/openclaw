@@ -17,7 +17,25 @@ import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-own
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
-import { resolveMemorySearchSourcePolicy } from "./memory-search-source-policy.js";
+
+type MemorySearchSource = "memory" | "sessions";
+
+const DEFAULT_SOURCES: MemorySearchSource[] = ["memory"];
+
+function normalizeSources(
+  sources: readonly MemorySearchSource[] | undefined,
+  sessionMemoryEnabled: boolean,
+): MemorySearchSource[] {
+  const input = sources?.length ? sources : DEFAULT_SOURCES;
+  const normalized = [
+    ...new Set(
+      input.filter(
+        (source) => source === "memory" || (source === "sessions" && sessionMemoryEnabled),
+      ),
+    ),
+  ];
+  return normalized.length > 0 ? normalized : [...DEFAULT_SOURCES];
+}
 
 type ProducedMemorySearchConfig = NonNullable<ReturnType<typeof produceMemorySearchConfig>>;
 
@@ -25,16 +43,20 @@ export type ResolvedMemorySearchConfig = Omit<
   ProducedMemorySearchConfig,
   | "cache"
   | "documentInputType"
+  | "inputFormat"
   | "inputType"
   | "local"
   | "outputDimensionality"
   | "queryInputType"
+  | "queryInstruction"
   | "remote"
   | "store"
   | "sync"
 > & {
+  inputFormat?: { query: string; document: string };
   inputType?: string;
   queryInputType?: string;
+  queryInstruction?: string;
   documentInputType?: string;
   outputDimensionality?: number;
   cache: Omit<ProducedMemorySearchConfig["cache"], "maxEntries"> & { maxEntries?: number };
@@ -97,15 +119,21 @@ export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: str
   const configuredSessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
   const configuredSources = overrides?.sources ?? defaults?.sources;
-  const { sessionMemory, ...sourcePolicy } = resolveMemorySearchSourcePolicy({
-    configuredSources,
-    rememberAcrossConversations,
-    configuredSessionMemory,
-  });
+  /** Resolve query and indexed sources from already-selected memory policy facts. */
+  const sessionMemory = rememberAcrossConversations || configuredSessionMemory;
+  const searchSources = normalizeSources(configuredSources, sessionMemory);
+  const sources = normalizeSources(
+    rememberAcrossConversations ? [...searchSources, "sessions"] : configuredSources,
+    sessionMemory,
+  );
+  const sessionSourceExcluded =
+    configuredSources?.includes("sessions") === true && !searchSources.includes("sessions");
   return {
     enabled,
     rememberAcrossConversations,
-    ...sourcePolicy,
+    sources,
+    searchSources,
+    sessionSourceExcluded,
     extraPaths: normalizeConfiguredMemoryExtraPaths([
       ...(defaults?.extraPaths ?? []),
       ...(overrides?.extraPaths ?? []),
@@ -188,8 +216,10 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
     remote,
     fallback,
     model,
+    inputFormat: overrides?.inputFormat ?? defaults?.inputFormat,
     inputType,
     queryInputType,
+    queryInstruction: (overrides?.queryInstruction ?? defaults?.queryInstruction) || undefined,
     documentInputType,
     outputDimensionality,
     local: { modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath },

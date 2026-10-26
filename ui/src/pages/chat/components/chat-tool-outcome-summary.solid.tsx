@@ -8,14 +8,12 @@ import { summarizeToolCardOutcomes } from "./chat-tool-render-model.ts";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
-export type ToolOutcomeSummaryProps = {
+/** Status belongs in the disclosure; diagnostics stay in the expanded tool output. */
+export function ToolOutcomeSummary(props: {
   cards: readonly ToolCard[];
   includeCount?: boolean;
   activity?: Parameters<typeof summarizeToolCardOutcomes>[1];
-};
-
-/** Status belongs in the disclosure; diagnostics stay in the expanded tool output. */
-export function ToolOutcomeSummary(props: ToolOutcomeSummaryProps) {
+}) {
   const outcomes = createMemo(() => summarizeToolCardOutcomes(props.cards, props.activity));
   const outcome = () =>
     outcomes().exitCode === undefined || outcomes().exitCode === 0

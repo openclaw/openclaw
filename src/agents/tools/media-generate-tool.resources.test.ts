@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
@@ -13,18 +14,18 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../../plugins/loader.test-fixtures.js";
+import {
+  cleanupNativeFixture,
+  nativeFixtureEnv,
+} from "../../plugins/native-resource.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import * as taskRuntime from "../media-generation-task-status.js";
-import { prepareConfiguredRuntimeFacts } from "../prepared-model-runtime.configured-catalog.js";
 import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
-import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
 import { discardPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
-import { ModelRegistry } from "../sessions/model-registry.js";
 import { runWithAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { createImageGenerateTool } from "./image-generate-tool.js";
 import {
@@ -32,7 +33,10 @@ import {
   musicGenerationTaskLifecycle,
   videoGenerationTaskLifecycle,
 } from "./media-generate-background.js";
-import { admitTask } from "./media-resource-fixtures.test-support.js";
+import {
+  admitTask,
+  snapshot as createPreparedSnapshot,
+} from "./media-resource-fixtures.test-support.js";
 import { createMusicGenerateTool } from "./music-generate-tool.js";
 import { createVideoGenerateTool } from "./video-generate-tool.js";
 
@@ -227,25 +231,12 @@ ${
     resumeProvider,
     lookupStarted,
     resumeLookup,
-    withEnvironment: (run: () => Promise<void>) =>
-      withEnvAsync(
-        {
-          OPENCLAW_HOME: dir,
-          OPENCLAW_STATE_DIR: dir,
-          OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-        },
-        run,
-      ),
+    withEnvironment: (run: () => Promise<void>) => withEnvAsync(nativeFixtureEnv(dir), run),
     cleanup() {
       resumeLookup.resolve();
       resumeProvider.resolve();
       resumeGeneration.resolve();
-      for (const { database } of connections) {
-        if (database.isOpen) {
-          database.close();
-        }
-      }
-      Reflect.deleteProperty(globalThis, key);
+      cleanupNativeFixture(key, connections);
     },
   };
 }
@@ -268,39 +259,16 @@ async function prepareSnapshot(
     { includeCredentialProviders: false },
     () => registry,
   );
-  const facts = prepared.agentFacts[0]!;
-  const catalog = prepareConfiguredRuntimeFacts({
-    agentFacts: facts,
-    workspaceFacts: prepared.pluginGeneration,
-    templateModelRegistry: ModelRegistry.inMemory(facts.templateAuthStorage),
-    configuredRuntimeModels: facts.configuredRuntimeModels,
-  });
-  const snapshot = createPreparedModelRuntimeSnapshot(
-    undefined,
-    facts,
-    prepared.pluginGeneration,
-    catalog,
-    {
-      initialAuth: { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
-      isCurrent: () => true,
-      withRefreshStatus: (value) => value,
-      readFullModelCatalog: () => catalog.modelCatalog,
-      refreshExpiredModelCatalog: () => {},
-      recheckNativeLogin: () => {},
-      readPublishedModels: () => undefined,
-      loadFullModelCatalog: async () => catalog.modelCatalog,
-      loadNativeModelCatalog: async () => catalog.modelCatalog,
-      loadAuth: async () => {
-        throw new Error("The synthetic media provider does not request model credentials");
-      },
-    },
-  );
-  return { snapshot, release: () => discardPreparedPluginGeneration(prepared.pluginGeneration) };
+  return {
+    snapshot: createPreparedSnapshot(prepared, async () => {
+      throw new Error("The synthetic media provider does not request model credentials");
+    }),
+    release: () => discardPreparedPluginGeneration(prepared.pluginGeneration),
+  };
 }
 
 afterEach(() => {
   vi.restoreAllMocks();
-  resetRecentMediaGenerationDuplicateGuardsForTests();
   resetGeneratedMediaTaskActivityForTests();
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
@@ -361,12 +329,11 @@ describe.each(["image", "music", "video"] as const)(
             image: referencePath,
           });
           try {
-            await Promise.race([
+            await awaitGateBeforeSettlement(
               waiting.promise,
-              outcome.then(() => {
-                throw new Error("Media preflight finished before workspace readiness");
-              }),
-            ]);
+              outcome,
+              "Media preflight finished before workspace readiness",
+            );
             expect(readReference).not.toHaveBeenCalled();
             expect(createTask).not.toHaveBeenCalled();
             const inline = await tool!.execute("inline-reference", {
@@ -469,12 +436,11 @@ describe.each(["image", "music", "video"] as const)(
                 (error: unknown) => ({ value: undefined, error }),
               );
             try {
-              await Promise.race([
+              await awaitGateBeforeSettlement(
                 preflightPaused.promise,
-                outcome.then(() => {
-                  throw new Error(`Media preflight settled before ${pause}`);
-                }),
-              ]);
+                outcome,
+                `Media preflight settled before ${pause}`,
+              );
               await first.release();
               await prepared.release();
               resumePreflight.resolve();
@@ -582,31 +548,28 @@ describe.each(["image", "music", "video"] as const)(
             }
             fixture.resumeProvider.resolve();
             if (phase === "lookup") {
-              await Promise.race([
+              await awaitGateBeforeSettlement(
                 fixture.lookupStarted.promise,
-                completion.then(() => {
-                  throw new Error("Video task settled before model capability lookup");
-                }),
-              ]);
+                completion,
+                "Video task settled before model capability lookup",
+              );
               await first.release();
               await prepared.release();
               expect(connection.database.isOpen).toBe(true);
               expect(connection.generated).toBe(0);
               fixture.resumeLookup.resolve();
             }
-            await Promise.race([
+            await awaitGateBeforeSettlement(
               fixture.generated.promise,
-              completion.then(() => {
-                throw new Error("Media task settled without invoking its prepared provider");
-              }),
-            ]);
+              completion,
+              "Media task settled without invoking its prepared provider",
+            );
             fixture.resumeGeneration.resolve();
-            await Promise.race([
+            await awaitGateBeforeSettlement(
               saveStarted.promise,
-              completion.then(() => {
-                throw new Error("Media task settled before persisting its output");
-              }),
-            ]);
+              completion,
+              "Media task settled before persisting its output",
+            );
             if (kind !== "video" || phase !== "rollback") {
               await first.release();
               await prepared.release();

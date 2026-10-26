@@ -165,6 +165,7 @@ Block chunking is implemented by `EmbeddedBlockChunker`:
   whitespace -> hard break.
 - **Code fences:** never split inside fences; when forced at `maxChars`, close
   and reopen the fence to keep Markdown valid.
+  Inline backtick code does not make following prose part of a fenced block.
 - **Tables:** a Markdown table that fits in `maxChars` is kept in one chunk,
   even if that means breaking before it below `minChars`, so channels that
   render tables see the header and rows together. Larger tables split at row

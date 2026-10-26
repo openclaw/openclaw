@@ -5,6 +5,45 @@ import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
 const loadI18n = useLazyEnglishTest();
 
+it("keeps chat session actions readable without loading the session management catalog", async () => {
+  const { en, manager } = await loadI18n({
+    sessionsView: { goal: "Ziel" },
+  });
+  const sessionsView = en.sessionsView;
+  await manager.setLocale("de");
+  expect(manager.t("sessionsView.searchGroups")).toBe("sessionsView.searchGroups");
+
+  await Promise.all([
+    import("../components/app-sidebar-catalog-menu.tsx"),
+    import("../components/session-menu-access.ts"),
+    import("../lib/chat/complete-history.ts"),
+    import("../lib/sessions/session-archive-reason.ts"),
+    import("../lib/sessions/session-menu-navigation.ts"),
+    import("../pages/chat/chat-pane-native-session-actions.ts"),
+    import("../pages/chat/chat-pane-placement.ts"),
+  ]);
+
+  expect(manager.t("sessionsView.searchGroups")).toBe("sessionsView.searchGroups");
+  expect(manager.t("sessionsView.archiveReasonManual")).toBe("Archived manually");
+  expect(manager.t("sessionsView.pinRootSessionsOnly")).toBe(
+    "Only root sessions can be pinned; pin the parent session instead.",
+  );
+  expect(manager.t("sessionsView.stopCloudWorkerConfirm", { session: "Build" })).toBe(
+    'Stop the cloud worker for "Build"?',
+  );
+  expect(manager.t("sessionsView.stopCloudWorkerConfirmAction")).toBe("Stop worker");
+  expect(manager.t("sessionsView.goal")).toBe("Ziel");
+  expect(en.sessionsView).toBe(sessionsView);
+
+  const { registerSessionOrganizationEnglish } =
+    await import("./locales/en-session-organization.ts");
+  registerSessionOrganizationEnglish();
+  expect(manager.t("sessionsView.searchGroups")).toBe("Search groups");
+  expect(manager.t("sessionsView.goal")).toBe("Ziel");
+  expect(manager.getLocale()).toBe("de");
+  expect(en.sessionsView).toBe(sessionsView);
+});
+
 it("keeps a cold roster metadata failure readable before its view catalog loads", async () => {
   const { en, manager } = await loadI18n();
   const agentsHome = en.agentsHome;

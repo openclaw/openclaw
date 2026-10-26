@@ -17,7 +17,7 @@ export type CompactHooksQueuedCompaction = (
   host?: Partial<Parameters<typeof import("./compact.queued.js").compactEmbeddedAgentSession>[1]>,
 ) => ReturnType<typeof import("./compact.queued.js").compactEmbeddedAgentSession>;
 
-export const emptyPluginMetadataSnapshot = createEmptyPluginMetadataSnapshot();
+const emptyPluginMetadataSnapshot = createEmptyPluginMetadataSnapshot();
 
 export const getCurrentPluginMetadataSnapshotMock: Mock<
   typeof import("../../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
@@ -82,13 +82,13 @@ export async function acquireCompactHooksPreparedModelRuntime(
   };
 }
 
-export function createCompactHooksPreparedModelRuntime(input: {
-  agentId: string;
-  agentDir: string;
-  config: PreparedModelRuntimeInput["config"];
-  workspaceDir: string;
-  metadataSnapshot: PluginMetadataSnapshot;
-}) {
+export function createCompactHooksPreparedModelRuntime(
+  input: Required<
+    Pick<PreparedModelRuntimeInput, "agentId" | "agentDir" | "config" | "workspaceDir">
+  > & {
+    metadataSnapshot: PluginMetadataSnapshot;
+  },
+) {
   return withEmptyRuntimeStores(input);
 }
 

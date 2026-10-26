@@ -26,6 +26,15 @@ type ToolCallOccurrence = {
 
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
 
+type ToolResultIdAliases = {
+  toolCallId?: unknown;
+  toolUseId?: unknown;
+  tool_call_id?: unknown;
+  tool_use_id?: unknown;
+  callId?: unknown;
+  call_id?: unknown;
+};
+
 type ToolResultRecord = {
   result: ToolResultMessage;
   sourceResult: ToolResultMessage;
@@ -105,14 +114,7 @@ export function extractToolCallsFromAssistant(
 }
 
 export function extractToolResultIds(message: ToolResultMessage): string[] {
-  const record = message as {
-    toolCallId?: unknown;
-    toolUseId?: unknown;
-    tool_call_id?: unknown;
-    tool_use_id?: unknown;
-    callId?: unknown;
-    call_id?: unknown;
-  };
+  const record: ToolResultIdAliases = message;
   return normalizeUniqueTrimmedStringList([
     record.toolCallId,
     record.toolUseId,
@@ -124,7 +126,16 @@ export function extractToolResultIds(message: ToolResultMessage): string[] {
 }
 
 export function extractToolResultId(message: ToolResultMessage): string | null {
-  return extractToolResultIds(message)[0] ?? null;
+  const record: ToolResultIdAliases = message;
+  return (
+    normalizeOptionalString(record.toolCallId) ??
+    normalizeOptionalString(record.toolUseId) ??
+    normalizeOptionalString(record.tool_call_id) ??
+    normalizeOptionalString(record.tool_use_id) ??
+    normalizeOptionalString(record.callId) ??
+    normalizeOptionalString(record.call_id) ??
+    null
+  );
 }
 
 export function makeMissingToolResult(params: {

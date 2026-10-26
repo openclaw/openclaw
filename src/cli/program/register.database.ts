@@ -4,16 +4,16 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { formatCliJsonFailure } from "../failure-output.js";
 import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 
 type DatabaseOutputOptions = { json?: boolean };
 
 function writeDatabaseError(error: unknown, json: boolean): void {
-  const message = formatErrorMessage(error);
   if (json) {
-    writeRuntimeJson(defaultRuntime, { error: message });
+    writeRuntimeJson(defaultRuntime, formatCliJsonFailure(error));
   } else {
-    defaultRuntime.error(message);
+    defaultRuntime.error(formatErrorMessage(error));
   }
   defaultRuntime.exit(1);
 }
@@ -137,6 +137,26 @@ export function registerDatabaseCommand(program: Command): void {
       try {
         const { doctorDatabasePort } = await import("../../commands/doctor-database-port.js");
         const result = await doctorDatabasePort(options);
+        const statistics = [
+          ...("plannerStatistics" in result ? result.plannerStatistics : []).map(
+            ({ path: storePath, result: statisticsResult }) => ({
+              label: storePath,
+              result: statisticsResult,
+            }),
+          ),
+          ...("memoryRebuilds" in result ? result.memoryRebuilds : []).flatMap((rebuild) =>
+            rebuild.plannerStatistics
+              ? [{ label: `memory ${rebuild.agentId}`, result: rebuild.plannerStatistics }]
+              : [],
+          ),
+        ];
+        for (const { label, result: statisticsResult } of statistics) {
+          if (statisticsResult.status === "warning") {
+            defaultRuntime.error(
+              `Planner statistics WARNING (${label}): ${statisticsResult.warning}`,
+            );
+          }
+        }
         if ("memoryRebuilds" in result) {
           for (const rebuild of result.memoryRebuilds) {
             if (rebuild.warning) {
@@ -153,6 +173,14 @@ export function registerDatabaseCommand(program: Command): void {
             defaultRuntime,
             `Database port: ${result.phase} (${result.engine}${"to" in result ? ` → ${result.to}` : ""}); ${result.stores.length} database stores.\n${"remainingSqlite" in result ? `${result.remainingSqlite.length} other stores remain on SQLite.\n` : ""}${"backup" in result ? `Original backup: ${result.backup}\n${result.restart}\n` : ""}${"verification" in result ? `${result.verification}\n` : ""}`,
           );
+          for (const { label, result: statisticsResult } of statistics) {
+            if (statisticsResult.status === "analyzed") {
+              writeRuntimeStdout(
+                defaultRuntime,
+                `Planner statistics (${label}): ANALYZE completed for ${statisticsResult.tables} tables.\n`,
+              );
+            }
+          }
           if ("memoryRebuilds" in result) {
             for (const rebuild of result.memoryRebuilds) {
               writeRuntimeStdout(

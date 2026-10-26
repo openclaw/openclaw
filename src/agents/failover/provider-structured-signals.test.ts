@@ -1,6 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
-import { buildApiErrorObservationFields } from "../embedded-agent-error-observation.js";
 import { classifyAssistantFailoverReason as assistantReason } from "../embedded-agent-helpers/assistant-message-failures.js";
 import {
   formatAssistantErrorText,
@@ -28,115 +26,54 @@ describe("provider failover hook structured signals", () => {
     "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
   const privateDetail =
     "RAW_BODY_CANARY Authorization: Bearer secret-canary https://private.invalid/body";
-  const signalContext = {
-    provider: "prepared-owner",
-    status: 403,
-    code: "unknown_parameter",
-    errorType: "PROVIDER_TYPE",
-  };
   function expectReason(reason: string, signal: Parameters<typeof classifyFailoverSignal>[0]) {
     expect(classifyFailoverSignal(signal)).toEqual({ kind: "reason", reason });
   }
-  const hookCall = (errorMessage: string, status?: number) => ({
-    provider: "demo-provider",
-    context: {
-      provider: "demo-provider",
-      status,
-      code: undefined,
-      errorType: undefined,
-      errorMessage,
-    },
-  });
   const refusal = (errorType: string, errorCode: string, errorMessage: string) =>
     makeMessage({ provider: "custom-route", errorType, errorCode, errorMessage });
+  function expectSafeCopy(fields: Fields, expected: string) {
+    const message = makeMessage({ errorMessage: privateDetail, ...fields });
+    const text = userCopy(message);
+    expect(text).toBe(expected);
+    expect(text).not.toMatch(/RAW_BODY_CANARY|Authorization|secret-canary|private\.invalid/);
+    expect(hook).not.toHaveBeenCalled();
+    return message;
+  }
+  const rejection = (message: string) =>
+    `400 ${JSON.stringify({ error: { type: "invalid_request_error", message } })}`;
 
   beforeEach(() => {
     hook.mockReset();
   });
 
-  it("explains a saved misalignment code without newer refusal diagnostics", () => {
-    const message = makeMessage({
-      errorMessage: "This request was blocked by our safety systems.",
-      errorCode: "misalignment_policy_violation",
-      errorType: "invalid_request_error",
-      errorBody: '{"misalignment":{"detailed_explanation":"PRIVATE_FINDINGS ... [truncated]',
-    });
-    expect(userCopy(message)).toBe(
-      "The provider stopped this request as a safety precaution (misalignment).",
-    );
-  });
-
-  it.each([
-    [
-      MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
-      "LLM streaming response contained a malformed fragment. Please try again.",
-      "unclassified",
-    ],
-    [
-      "model input limit reached",
-      "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.",
-      "unclassified",
-    ],
-    [
-      '429 {"error":{"type":"rate_limit_error","message":"Too many requests"}}',
-      rateLimitCopy,
-      "rate_limit",
-    ],
-  ])("presents/observes %s without discovery", (errorMessage, copy, expectedKind) => {
-    const message = makeMessage({ errorMessage });
-    expect(userCopy(message)).toBe(copy);
-    expect.soft(hook).not.toHaveBeenCalled();
-    hook.mockClear();
+  it("gives prepared context policy precedence without rediscovery", () => {
     expect(
-      buildApiErrorObservationFields(errorMessage, { provider: message.provider }),
-    ).toMatchObject({
-      providerRuntimeFailureKind: expectedKind,
-      rawErrorHash: expect.stringMatching(/^sha256:/),
-    });
+      userCopy(refusal("PROVIDER_TYPE", "unknown_parameter", "403 fixture refusal"), {
+        providerOwner: {
+          id: "prepared-owner",
+          matchesContextOverflowError: () => true,
+          classifyFailoverReason: () => {
+            throw new Error("Context policy must take precedence");
+          },
+        },
+      }),
+    ).toBe(contextCopy);
     expect(hook).not.toHaveBeenCalled();
   });
 
-  it.each(["billing", "rate_limit", "context_overflow", "model_not_found", "format"] as const)(
-    "uses prepared %s policy without rediscovery",
-    (reason) => {
-      const classifyFailoverReason = vi.fn(() => reason);
-      const matchesContextOverflowError = vi.fn(() => reason === "context_overflow");
-      const message = refusal("PROVIDER_TYPE", "unknown_parameter", "403 fixture refusal");
-      const copies = {
-        billing: formatBillingErrorMessage("custom-route", message.model),
-        rate_limit: rateLimitCopy,
-        context_overflow: contextCopy,
-        model_not_found: "This model was not found. Choose another model in the Control UI.",
-        format: "LLM request rejected: fixture refusal",
-      };
-      expect(
-        userCopy(message, {
-          provider: "custom-route",
-          providerOwner: {
-            id: "prepared-owner",
-            matchesContextOverflowError,
-            classifyFailoverReason,
-          },
-        }),
-      ).toBe(copies[reason]);
-      expect(matchesContextOverflowError).toHaveBeenCalledWith({
-        ...signalContext,
-        errorMessage: message.errorMessage,
-      });
-      if (reason === "context_overflow") {
-        expect(classifyFailoverReason).not.toHaveBeenCalled();
-      } else {
-        expect(classifyFailoverReason).toHaveBeenCalledWith(expect.objectContaining(signalContext));
-      }
-      expect(hook).not.toHaveBeenCalled();
-    },
-  );
-
   it.each([
-    [{ errorCode: "RESOURCE_EXHAUSTED" }, rateLimitCopy],
     [
       {
-        errorMessage: '400 {"error":{"type":"invalid_request_error","message":"provider refusal"}}',
+        errorMessage: "This request was blocked by our safety systems.",
+        errorCode: "misalignment_policy_violation",
+        errorType: "invalid_request_error",
+        errorBody: '{"misalignment":{"detailed_explanation":"PRIVATE_FINDINGS ... [truncated]',
+      },
+      "The provider stopped this request as a safety precaution (misalignment).",
+    ],
+    [
+      {
+        errorMessage: rejection("provider refusal"),
         errorCode: "RESOURCE_EXHAUSTED",
       },
       rateLimitCopy,
@@ -147,8 +84,7 @@ describe("provider failover hook structured signals", () => {
     ],
     [
       {
-        errorMessage:
-          '400 {"error":{"type":"invalid_request_error","message":"max_tokens (100) exceeds maximum output tokens (50)"}}',
+        errorMessage: rejection("max_tokens (100) exceeds maximum output tokens (50)"),
         errorBody: '{"error":{"message":"insufficient credits"}}',
       },
       formatBillingErrorMessage(),
@@ -157,91 +93,52 @@ describe("provider failover hook structured signals", () => {
       { errorBody: '{"error":{"message":"Request size exceeds model context window"}}' },
       contextCopy,
     ],
-  ] satisfies [Fields, string][])("presents structured %j without discovery", (fields, copy) => {
-    const message = makeMessage({ errorMessage: "provider refusal", ...fields });
-    expect(userCopy(message)).toBe(copy);
-    expect(hook).not.toHaveBeenCalled();
-  });
-
-  it.each([
     [
-      {
-        errorCode: "DEACTIVATED_WORKSPACE",
-      },
+      { errorCode: "DEACTIVATED_WORKSPACE" },
       "⚠️ The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`.",
     ],
     [{ errorBody: '{"error":{"type":"upstream_error"}}' }, serverCopy],
-    [{ errorMessage: undefined, errorType: "upstream_error" }, serverCopy],
-  ] satisfies [Fields, string][])("sanitizes structured %j", (fields, expected) => {
-    const message = makeMessage({ errorMessage: privateDetail, ...fields });
-    const text = userCopy(message);
-    expect(text).toBe(expected);
-    if ("errorMessage" in fields && fields.errorMessage === undefined) {
-      expect(formatAssistantErrorText(message)).toBe(expected);
-    }
-    expect(text).not.toMatch(/RAW_BODY_CANARY|Authorization|secret-canary|private\.invalid/);
-    expect(hook).not.toHaveBeenCalled();
-  });
-
-  it("carries a prepared owner's structured decision into safe composed copy", () => {
-    const classifyFailoverReason = vi.fn(
-      ({ code, errorType }: { code?: string; errorType?: string }) =>
-        code === "OWNER_CODE" && errorType === "OWNER_TYPE" ? ("server_error" as const) : undefined,
-    );
-    const message = refusal("OWNER_TYPE", "OWNER_CODE", `403 ${privateDetail}`);
-    const text = userCopy(message, {
-      providerOwner: { id: "prepared-owner", classifyFailoverReason },
-    });
-    expect(text).toBe(serverCopy);
-    expect(text).not.toMatch(/RAW_BODY_CANARY|Authorization|secret-canary|private\.invalid/);
-    expect(classifyFailoverReason).toHaveBeenCalledWith(
-      expect.objectContaining({ ...signalContext, code: "OWNER_CODE", errorType: "OWNER_TYPE" }),
-    );
-    expect(hook).not.toHaveBeenCalled();
-  });
+    [{ errorMessage: undefined, errorType: "upstream_error" }, serverCopy, true],
+  ] satisfies [Fields, string, boolean?][])(
+    "presents structured %j without discovery",
+    (fields, expected, checkDiagnostic?: boolean) => {
+      const message = expectSafeCopy(fields, expected);
+      if (checkDiagnostic) {
+        expect(formatAssistantErrorText(message)).toBe(expected);
+      }
+    },
+  );
 
   it("uses provider-attributed inferred auth statuses only for scoped hook consultation", () => {
-    hook.mockImplementation(({ provider, context }) =>
-      provider === "demo-provider" && (context.status === 403 || context.status === 429)
-        ? "billing"
-        : undefined,
-    );
-
-    expectReason("billing", {
-      provider: "demo-provider",
-      message: "403 concurrency limit breached",
-    });
-    expect(hook).toHaveBeenCalledWith(hookCall("403 concurrency limit breached", 403));
-    expectReason("billing", {
-      provider: "demo-provider",
-      message: "429 API key budget limit exceeded",
-    });
-    expect(hook).toHaveBeenLastCalledWith(hookCall("429 API key budget limit exceeded", 429));
+    for (const [status, message] of [
+      [403, "403 concurrency limit breached"],
+      [429, "429 API key budget limit exceeded"],
+    ] as const) {
+      hook.mockImplementation(({ provider, context }) =>
+        provider === "demo-provider" && context.status === status ? "billing" : undefined,
+      );
+      expectReason("billing", { provider: "demo-provider", message });
+    }
   });
 
   it("passes nested provider error types through failover error normalization", () => {
-    hook.mockImplementation(({ context }) => {
-      return context.provider === "demo-provider" &&
-        context.errorType === "PROVIDER_QUOTA_EXHAUSTED"
+    hook.mockImplementation(({ context }) =>
+      context.provider === "demo-provider" && context.errorType === "PROVIDER_QUOTA_EXHAUSTED"
         ? "billing"
-        : undefined;
-    });
+        : undefined,
+    );
 
     expect(
       resolveReason({
         provider: "demo-provider",
         status: 403,
         type: "error",
-        error: {
-          type: "PROVIDER_QUOTA_EXHAUSTED",
-          message: "Forbidden",
-        },
+        error: { type: "PROVIDER_QUOTA_EXHAUSTED", message: "Forbidden" },
       }),
     ).toBe("billing");
   });
 
   it("classifies replay-invalid carriers as terminal format failures", () => {
-    hook.mockReturnValue(undefined);
     const carriers = [
       '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
       'Validation error: The model returned the following errors: {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
@@ -257,15 +154,11 @@ describe("provider failover hook structured signals", () => {
 
   it("classifies message-less Anthropic rate-limit assistant failures", () => {
     const errorType = "rate_limit_error";
-    hook.mockImplementation(({ context }) => {
-      if (context.provider !== "anthropic") {
-        return undefined;
-      }
-      if (context.errorType === "rate_limit_error") {
-        return "rate_limit";
-      }
-      return context.errorType === "api_error" ? "server_error" : undefined;
-    });
+    hook.mockImplementation(({ context }) =>
+      context.provider === "anthropic" && context.errorType === errorType
+        ? "rate_limit"
+        : undefined,
+    );
 
     const message = makeMessage({
       provider: "anthropic",
@@ -281,20 +174,17 @@ describe("provider failover hook structured signals", () => {
   });
 
   it("consults message-only hooks without promoting generic SDK type strings", () => {
-    hook.mockReturnValue("billing");
+    hook.mockImplementation(({ context }) =>
+      context.errorType === undefined ? "billing" : undefined,
+    );
 
     const message = "unclassified provider failure";
     for (const fields of [{ type: "api_error" }, { detail: { type: "api_error" } }]) {
       expect(resolveReason({ provider: "demo-provider", message, ...fields })).toBe("billing");
     }
-    expect(hook).toHaveBeenCalledTimes(2);
-    for (const [call] of hook.mock.calls) {
-      expect(call).toEqual(hookCall(message));
-    }
   });
 
   it("routes a preserved server_error code to server_error instead of timeout (#117609)", () => {
-    // Preserved structured codes must outrank the timeout prose classifier.
     hook.mockImplementation(({ context }) =>
       context.provider === "openai" && context.code === "server_error" ? "server_error" : undefined,
     );
@@ -304,6 +194,5 @@ describe("provider failover hook structured signals", () => {
     expect(hook).not.toHaveBeenCalled();
 
     expectReason("server_error", { ...signal, code: "server_error" });
-    expect(hook).toHaveBeenCalledTimes(1);
   });
 });

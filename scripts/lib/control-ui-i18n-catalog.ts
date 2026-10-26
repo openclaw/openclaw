@@ -160,6 +160,7 @@ const sourceFiles = [
   "en-personal-instructions.ts",
   "en-session-machine.ts",
   "en-session-navigation.ts",
+  "en-session-organization-shared.ts",
   "en-session-organization.ts",
   "en-session-people.ts",
   "en-session-placement.ts",
@@ -187,6 +188,9 @@ export function loadControlUiStartupCatalog(): TranslationMap {
 }
 
 export function loadControlUiSourceCatalog(): TranslationMap {
+  // Keep canonical translation order when summary copy moves out of the lazy CI catalog.
+  const { automationNoChecks, ...pullRequests } = registerGitHubEnglish.catalog.chat.pullRequests;
+  const { automationRetry, ...ciPullRequests } = registerChatCiEnglish.catalog.chat.pullRequests;
   const agentChip: TranslationMap = {};
   for (const [key, value] of Object.entries(en.agentChip)) {
     agentChip[key] = value;
@@ -371,7 +375,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         mediaPlayer: registerChatMediaEnglish.catalog.chat.mediaPlayer,
         attachments: registerChatComposerEnglish.catalog.chat.attachments,
         privateDraftReload: registerChatComposerEnglish.catalog.chat.privateDraftReload,
-        pullRequests: registerGitHubEnglish.catalog.chat.pullRequests,
+        pullRequests,
       },
       sessionHovercard: registerGitHubEnglish.catalog.sessionHovercard,
       githubPublication: registerGitHubEnglish.catalog.githubPublication,
@@ -406,7 +410,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerSecretsStoreEnglish.catalog,
     registerBrowserEnglish.catalog,
     registerChatCameraEnglish.catalog,
-    registerChatCiEnglish.catalog,
+    { chat: { pullRequests: { ...ciPullRequests, automationNoChecks, automationRetry } } },
     registerChatCommandResultsEnglish.catalog,
     registerChatComposerEnglish.catalog,
     registerChatGoalsEnglish.catalog,

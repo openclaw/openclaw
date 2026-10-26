@@ -55,7 +55,7 @@ beforeEach(() => {
     stderr: "",
     stdout: JSON.stringify({
       ...JSON.parse(nodeProbeOutput("26.12.1").stdout),
-      bunVersion: path.basename(executable) === "bun" ? "1.4.3" : null,
+      bunVersion: path.basename(executable) === "bun" ? "1.4.4" : null,
     }),
   }));
   vi.mocked(service.isLoaded).mockResolvedValue(true);
@@ -113,7 +113,15 @@ it.each([
     const installed = vi.mocked(service.install).mock.calls[0]?.[0];
     const runtimeArgs = runtime === "bun" ? ["--no-install"] : [];
     const prefix = [cli.executable, ...runtimeArgs, launcherPath, "node", "run"];
-    expect(installed?.programArguments.slice(0, prefix.length)).toEqual(prefix);
+    expect(installed?.programArguments).toEqual([
+      ...prefix,
+      "--host",
+      "gateway.example",
+      "--port",
+      "18789",
+      "--no-tls",
+      "--auth-from-env",
+    ]);
     expect(installed?.runtimePinUpdate).toEqual({
       expected: observed,
       pin: pinned ? { runtime, path: cli.executable } : undefined,

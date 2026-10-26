@@ -1,5 +1,5 @@
 // Google tests cover video generation provider plugin behavior.
-import { ApiError, type Video } from "@google/genai";
+import { ApiError } from "@google/genai";
 import { formatErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
@@ -40,6 +40,11 @@ import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime"
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import * as googleBase64 from "./base64.js";
 import { googleVideoGenerationProvider } from "./video-generation-provider.js";
+import {
+  completedRestVideoResponse,
+  completedVideo,
+  videoDownloadResponse,
+} from "./video-generation.test-support.js";
 
 function mockGoogleApiKeyAuth(apiKey = "google-key") {
   vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
@@ -57,10 +62,6 @@ function generateVideo(overrides: Partial<VideoGenerationRequest> = {}) {
     cfg: {},
     ...overrides,
   });
-}
-
-function completedVideo(video: Video, fields: { name?: string } = {}) {
-  return { done: true, ...fields, response: { generatedVideos: [{ video }] } };
 }
 
 type MockWithCalls = {
@@ -391,18 +392,9 @@ describe("google video generation provider", () => {
 
   it("downloads MLDev direct video uri responses without routing through the Files API", async () => {
     mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(
-      completedVideo({
-        uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
-        mimeType: "video/mp4",
-      }),
-    );
+    generateVideosMock.mockResolvedValue(completedVideo());
     const fetchMock = vi.fn(async () => {
-      return new Response("direct-mp4", {
-        status: 200,
-        statusText: "OK",
-        headers: { "content-type": "video/mp4" },
-      });
+      return videoDownloadResponse("direct-mp4");
     });
     vi.stubGlobal("fetch", fetchMock);
     const result = await generateVideo({
@@ -421,22 +413,10 @@ describe("google video generation provider", () => {
 
   it("rejects direct video uri downloads that exceed the configured media cap", async () => {
     mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(
-      completedVideo({
-        uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
-        mimeType: "video/mp4",
-      }),
-    );
+    generateVideosMock.mockResolvedValue(completedVideo());
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          new Response("too-large", {
-            status: 200,
-            statusText: "OK",
-            headers: { "content-type": "video/mp4" },
-          }),
-      ),
+      vi.fn(async () => videoDownloadResponse("too-large")),
     );
     await expect(
       generateVideo({
@@ -453,18 +433,9 @@ describe("google video generation provider", () => {
     { name: "empty video", contentType: "video/mp4", body: "" },
   ])("rejects a successful $name direct video uri response", async ({ contentType, body }) => {
     mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(
-      completedVideo({
-        uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
-        mimeType: "video/mp4",
-      }),
-    );
+    generateVideosMock.mockResolvedValue(completedVideo());
     const fetchMock = vi.fn(async () => {
-      return new Response(body, {
-        status: 200,
-        statusText: "OK",
-        headers: { "content-type": contentType },
-      });
+      return videoDownloadResponse(body, contentType);
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -477,12 +448,7 @@ describe("google video generation provider", () => {
 
   it("cancels each captured failed video download without waiting for its cloned stream", async () => {
     mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(
-      completedVideo({
-        uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
-        mimeType: "video/mp4",
-      }),
-    );
+    generateVideosMock.mockResolvedValue(completedVideo());
 
     const capturedResponses: Response[] = [];
     const canceledBodies: ReadableStream<Uint8Array>[] = [];
@@ -531,12 +497,7 @@ describe("google video generation provider", () => {
 
   it("preserves the video download error when a failed response has no body", async () => {
     mockGoogleApiKeyAuth();
-    generateVideosMock.mockResolvedValue(
-      completedVideo({
-        uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
-        mimeType: "video/mp4",
-      }),
-    );
+    generateVideosMock.mockResolvedValue(completedVideo());
     const fetchMock = vi.fn(
       async () => new Response(null, { status: 503, statusText: "Service Unavailable" }),
     );
@@ -559,11 +520,7 @@ describe("google video generation provider", () => {
       }),
     );
     const fetchMock = vi.fn(async () => {
-      return new Response("sdk-video", {
-        status: 200,
-        statusText: "OK",
-        headers: { "content-type": "video/mp4" },
-      });
+      return videoDownloadResponse("sdk-video");
     });
     vi.stubGlobal("fetch", fetchMock);
     const result = await generateVideo({
@@ -588,14 +545,7 @@ describe("google video generation provider", () => {
     );
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          new Response("too-large", {
-            status: 200,
-            statusText: "OK",
-            headers: { "content-type": "video/mp4" },
-          }),
-      ),
+      vi.fn(async () => videoDownloadResponse("too-large")),
     );
     await expect(
       generateVideo({
@@ -664,33 +614,8 @@ describe("google video generation provider", () => {
     generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            done: true,
-            name: "operations/rest-123",
-            response: {
-              generateVideoResponse: {
-                generatedSamples: [
-                  {
-                    video: {
-                      uri: "https://generativelanguage.googleapis.com/v1beta/files/rest-video:download?alt=media",
-                      mimeType: "video/mp4",
-                    },
-                  },
-                ],
-              },
-            },
-          }),
-        ),
-      )
-      .mockResolvedValueOnce(
-        new Response("rest-video", {
-          status: 200,
-          statusText: "OK",
-          headers: { "content-type": "video/mp4" },
-        }),
-      );
+      .mockResolvedValueOnce(completedRestVideoResponse())
+      .mockResolvedValueOnce(videoDownloadResponse("rest-video"));
     vi.stubGlobal("fetch", fetchMock);
     const result = await generateVideo({
       model: "google/models/veo-3.1-fast-generate-preview",
@@ -820,33 +745,8 @@ describe("google video generation provider", () => {
         ),
       )
       .mockResolvedValueOnce(new Response("", { status: 503, statusText: "Service Unavailable" }))
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            done: true,
-            name: "operations/rest-123",
-            response: {
-              generateVideoResponse: {
-                generatedSamples: [
-                  {
-                    video: {
-                      uri: "https://generativelanguage.googleapis.com/v1beta/files/rest-video:download?alt=media",
-                      mimeType: "video/mp4",
-                    },
-                  },
-                ],
-              },
-            },
-          }),
-        ),
-      )
-      .mockResolvedValueOnce(
-        new Response("rest-video", {
-          status: 200,
-          statusText: "OK",
-          headers: { "content-type": "video/mp4" },
-        }),
-      );
+      .mockResolvedValueOnce(completedRestVideoResponse())
+      .mockResolvedValueOnce(videoDownloadResponse("rest-video"));
     vi.stubGlobal("fetch", fetchMock);
     const resultPromise = generateVideo({
       durationSeconds: 3,

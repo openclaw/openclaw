@@ -30,11 +30,7 @@ async function createRecording(
     return reply(name, active.root);
   });
   const computer = await execution(active.session);
-  return Object.assign(active, {
-    computer,
-    act: (action: string, params: Record<string, unknown> = {}) =>
-      computer.act(JSON.stringify({ action, ...params })),
-  });
+  return Object.assign(active, { computer, act: computer.send });
 }
 
 it("maps each recording tool while projecting only opaque resource handles", async () => {

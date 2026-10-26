@@ -1,4 +1,5 @@
 import type { GatewaySessionRow } from "../api/types.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -13,6 +14,11 @@ import type {
   SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
 import { showConfirmChoiceDialog, showConfirmDialog } from "./confirm-dialog.ts";
+import {
+  confirmWithBoundAutomations,
+  withBoundAutomationNotice,
+} from "./session-automation-confirm.ts";
+import { isSessionMutationScopeCurrent } from "./session-mutation-scope.ts";
 import {
   patchSessionRows,
   type SessionActionHost,
@@ -69,6 +75,24 @@ export async function confirmSessionArchive(
 ): Promise<{ kind: "single" } | { kind: "tree"; rows: SessionActionRow[] } | null> {
   if (!isCurrent()) {
     return null;
+  }
+  if (session.hasArchiveDescendants && scope.gateway.snapshot.phase !== "connected") {
+    // Complete subtree discovery requires live reads. Offline intent targets
+    // only the selected row, with the same explicit nested-session warning.
+    const options = {
+      title: t("sessionsView.archiveSessionTitle"),
+      message:
+        t("sessionsView.archiveSessionNestedOffline", { session: session.label }) +
+        (hasActiveArchiveWork(session) ? "\n\n" + t("sessionsView.archiveRunningSessions") : ""),
+      confirmLabel: t("sessionsView.archiveThisSession"),
+      signal: scope.signal,
+    };
+    const confirmed = await confirmWithBoundAutomations(
+      archiveAutomationRequest([session], scope),
+      (notice) => showConfirmDialog(notice ? withBoundAutomationNotice(options, notice) : options),
+      Boolean,
+    );
+    return confirmed && isCurrent() ? { kind: "single" } : null;
   }
   if (session.hasArchiveDescendants) {
     const { session: root } = await scope.sessions.describe(
@@ -162,7 +186,7 @@ export async function confirmSessionArchive(
       const directChildCount = rows.filter(
         (row) => ancestorsByKey.get(row.key)?.length === 1,
       ).length;
-      const choice = await showConfirmChoiceDialog({
+      const options = {
         title: t("sessionsView.archiveSessionTitle"),
         message:
           t(
@@ -178,14 +202,34 @@ export async function confirmSessionArchive(
         alternativeLabel: t("sessionsView.archiveThisSession"),
         groupChoicesOnMobile: true,
         signal: scope.signal,
-      });
+      };
+      // The tree choice keeps its own labels; only bound conversations that end up archived pause.
+      const automationTargets = rows.map((row) => ({
+        key: row.key,
+        agentId: resolveUiSessionRowAgentId(row, scope.selectedAgentId),
+        label: resolveSessionDisplayName(row.key, row),
+        hasAutomation: row.hasAutomation,
+      }));
+      const choice = await confirmWithBoundAutomations(
+        archiveAutomationRequest(automationTargets, scope),
+        (notice) =>
+          showConfirmChoiceDialog(
+            notice
+              ? {
+                  ...withBoundAutomationNotice(options, notice),
+                  confirmLabel: options.confirmLabel,
+                }
+              : options,
+          ),
+        (result) => result !== null,
+      );
       if (!isCurrent() || choice === null) {
         return null;
       }
       return choice === "confirm" ? { kind: "tree", rows: guardedRows } : { kind: "single" };
     }
   }
-  return (await confirmRunningSessionsArchive([session], scope.signal)) && isCurrent()
+  return (await confirmRunningSessionsArchive([session], scope)) && isCurrent()
     ? { kind: "single" }
     : null;
 }
@@ -201,23 +245,53 @@ function hasActiveArchiveWork(session: SessionArchiveActivity): boolean {
   );
 }
 
+type SessionArchiveConfirmScope = Pick<
+  SidebarSessionMutationScope,
+  "gateway" | "selectedAgentId" | "signal"
+>;
+
+function archiveAutomationRequest(
+  sessions: readonly Pick<SessionActionRow, "key" | "agentId" | "label" | "hasAutomation">[],
+  scope: SessionArchiveConfirmScope,
+) {
+  return {
+    action: "archive" as const,
+    sessions,
+    gateway: scope.gateway,
+    selectedAgentId: scope.selectedAgentId,
+    signal: scope.signal,
+  };
+}
+
 export async function confirmRunningSessionsArchive(
-  sessions: readonly (SessionArchiveActivity & Pick<SessionActionRow, "label">)[],
-  signal?: AbortSignal,
+  sessions: readonly (SessionArchiveActivity &
+    Pick<SessionActionRow, "key" | "agentId" | "label" | "hasAutomation">)[],
+  scope: SessionArchiveConfirmScope,
 ): Promise<boolean> {
-  if (!sessions.some(hasActiveArchiveWork)) {
-    return true;
-  }
+  const running = sessions.some(hasActiveArchiveWork);
   const single = sessions.length === 1 ? sessions[0] : undefined;
-  return showConfirmDialog({
-    message: single
-      ? t("sessionsView.archiveRunningSessionConfirm", { session: single.label })
-      : t("sessionsView.archiveRunningSessions"),
+  const options = {
+    message: !running
+      ? ""
+      : single
+        ? t("sessionsView.archiveRunningSessionConfirm", { session: single.label })
+        : t("sessionsView.archiveRunningSessions"),
     confirmLabel: single
       ? t("sessionsView.archiveSession")
       : t("sessionsView.archiveSessionCount", { count: String(sessions.length) }),
-    signal,
-  });
+    signal: scope.signal,
+  };
+  // Leaf and batch archives confirm only for active work or bound automations.
+  return confirmWithBoundAutomations(
+    archiveAutomationRequest(sessions, scope),
+    (notice) =>
+      notice
+        ? showConfirmDialog(withBoundAutomationNotice(options, notice))
+        : running
+          ? showConfirmDialog(options)
+          : Promise.resolve(true),
+    Boolean,
+  );
 }
 
 export async function archiveSessionWithUndo(
@@ -253,7 +327,19 @@ export async function archiveSessionWithUndo(
   const undoPins = captureSessionArchivePins(scope, [session.key]);
   let result: SidebarSessionMutationResult;
   try {
-    result = await patchSession(host, session, { archived: true }, scope, { sessionScope: true });
+    result = await patchSession(
+      {
+        sessionData: host.sessionData,
+        selectSession: (key) => host.selectSession(key),
+        sidebarSessionStatusFilter: () => host.sidebarSessionStatusFilter(),
+        pruneSidebarSessionEntry: (key) =>
+          undoPins.prune(key, () => host.pruneSidebarSessionEntry(key)),
+      },
+      session,
+      { archived: true },
+      scope,
+      { sessionScope: true },
+    );
   } finally {
     finishArchive();
   }
@@ -275,7 +361,7 @@ export async function archiveSessionsWithUndo(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
-  if (await confirmRunningSessionsArchive(rows, scope.signal)) {
+  if (await confirmRunningSessionsArchive(rows, scope)) {
     await archiveConfirmedSessionsWithUndo(host, rows, scope);
   }
 }
@@ -289,7 +375,7 @@ export async function archiveConfirmedSessionsWithUndo(
     return;
   }
   // Once confirmed, finish the batch and publish its outcome across page navigation.
-  // The captured connection still retires work and Undo on reconnect.
+  // Online work stays connection-scoped; offline Undo follows its recovery owner.
   const outcomeHost = sessionUndoHost(host, scope);
   const pending = rows.flatMap((row) => {
     const finish = scope.sessions.beginArchive(row.key, row.sessionId);
@@ -306,6 +392,8 @@ export async function archiveConfirmedSessionsWithUndo(
   let failure: { status: "failed"; error: unknown } | undefined;
   const initialHost: SessionActionHost = {
     ...outcomeHost,
+    pruneSidebarSessionEntry: (key) =>
+      undoPins.prune(key, () => outcomeHost.pruneSidebarSessionEntry(key)),
     sessionData: {
       ...outcomeHost.sessionData,
       publishSessionMutationError: (candidate, error) => {
@@ -349,40 +437,42 @@ function archiveUndoAction(
 ): () => void {
   const undoHost = sessionUndoHost(host, scope);
   return () => {
-    void undoPins(() => restoreArchivedSessions(undoHost, archived, scope)).catch(
-      (error: unknown) => {
+    void undoPins
+      .restore(() => restoreArchivedSessions(undoHost, archived, scope))
+      .catch((error: unknown) => {
         undoHost.sessionData.publishSessionMutationError(scope, error);
-      },
-    );
+      });
   };
 }
 
 /** The toast alone retains this receipt; ordinary Unarchive never restores personal pins. */
 export function captureSessionArchivePins(
-  scope: Pick<SidebarSessionMutationScope, "context" | "sessions">,
+  scope: SidebarSessionMutationScope,
   keys: readonly string[],
 ) {
   const { navigation } = scope.context;
-  const connection = scope.sessions.captureConnectionScope();
+  const isCurrent = captureSessionUndoCurrent(scope);
   const pins = keys.filter((key) => navigation.snapshot.sidebarEntries.includes("session:" + key));
-  return async (restore: () => Promise<readonly string[]>): Promise<void> => {
-    if (!connection || !scope.sessions.isConnectionScopeCurrent(connection)) {
+  let pruning: string | undefined;
+  const restore = async (restoreSessions: () => Promise<readonly string[]>): Promise<void> => {
+    if (!isCurrent()) {
       return;
     }
     const changed = new Set<string>();
-    const initial = new Set(navigation.snapshot.sidebarEntries);
+    let previous = new Set(navigation.snapshot.sidebarEntries);
     // A manual pin/unpin during the request is newer intent, even if its final value matches.
     const stop = navigation.subscribe(({ sidebarEntries }) => {
       for (const key of pins) {
         const entry = "session:" + key;
-        if (sidebarEntries.includes(entry) !== initial.has(entry)) {
+        if (key !== pruning && sidebarEntries.includes(entry) !== previous.has(entry)) {
           changed.add(key);
         }
       }
+      previous = new Set(sidebarEntries);
     });
     try {
-      const restored = await restore();
-      if (!scope.sessions.isConnectionScopeCurrent(connection)) {
+      const restored = await restoreSessions();
+      if (!isCurrent()) {
         return;
       }
       const entries = navigation.snapshot.sidebarEntries;
@@ -398,27 +488,52 @@ export function captureSessionArchivePins(
       stop();
     }
   };
+  return {
+    restore,
+    prune(key: string, action: () => void) {
+      // An archive ACK can arrive after Undo was queued; it is not a manual unpin.
+      pruning = key;
+      try {
+        action();
+      } finally {
+        pruning = undefined;
+      }
+    },
+  };
+}
+
+function captureSessionUndoCurrent(scope: SidebarSessionMutationScope): () => boolean {
+  const connection = scope.sessions.captureConnectionScope();
+  if (connection) {
+    return () => scope.sessions.isConnectionScopeCurrent(connection);
+  }
+  // Offline Undo follows the admitted recovery owner across reconnect, not the pane's
+  // retired confirmation epoch. The session owner still authorizes each restore.
+  const owner = gatewayPresentationScope(scope.gateway).key;
+  return () =>
+    scope.allowDeferred === true &&
+    isSessionMutationScopeCurrent(scope.context, scope) &&
+    gatewayPresentationScope(scope.gateway).key === owner;
 }
 
 function sessionUndoHost(
   host: SessionActionHost,
   scope: SidebarSessionMutationScope,
 ): SessionActionHost {
-  // The toast outlives its originating pane. The session owner fences reconnects;
-  // the captured row IDs still fence replacement conversations during restore.
-  const connection = scope.sessions.captureConnectionScope();
+  // The toast outlives its originating pane; captured row IDs still fence
+  // replacement conversations during restore.
+  const isCurrent = captureSessionUndoCurrent(scope);
   return {
     pruneSidebarSessionEntry: (key) => host.pruneSidebarSessionEntry(key),
     selectSession: (key) => host.selectSession(key),
     sidebarSessionStatusFilter: () => host.sidebarSessionStatusFilter(),
     sessionData: {
       refreshSidebarSessions: (agentId) => host.sessionData.refreshSidebarSessions(agentId),
-      isSessionMutationScopeCurrent: () =>
-        connection !== null && scope.sessions.isConnectionScopeCurrent(connection),
+      isSessionMutationScopeCurrent: isCurrent,
       publishSessionMutationError: (candidate, error) => {
         if (host.sessionData.isSessionMutationScopeCurrent(candidate)) {
           host.sessionData.publishSessionMutationError(candidate, error);
-        } else if (connection && scope.sessions.isConnectionScopeCurrent(connection)) {
+        } else if (isCurrent()) {
           showToast({ message: formatUiError(error) });
         }
       },
@@ -433,13 +548,36 @@ async function restoreArchivedSessions(
   scope: SidebarSessionMutationScope,
 ): Promise<readonly string[]> {
   let restoredKeys: string[];
+  const snapshot = scope.gateway.snapshot;
+  const deferred =
+    snapshot.phase !== "connected" ||
+    Boolean(snapshot.deferredIntentCount || snapshot.deferredIntentDraining);
   const rows = archived.map((entry) => entry.session);
+  if (deferred) {
+    const restored = await Promise.all(
+      rows.map(async (session) => {
+        const receipt = Promise.withResolvers<boolean>();
+        const result = await patchSession(host, session, { archived: false }, scope, {
+          deferListRefresh: true,
+          sessionScope: true,
+          onConfirmed: (confirmed) =>
+            receipt.resolve(confirmed.entry.sessionId === session.sessionId),
+          onDeferredSettled: () => receipt.resolve(false),
+        });
+        return result === "completed" && (await receipt.promise) ? session.key : null;
+      }),
+    );
+    return restored.filter((key) => key !== null);
+  }
   if (archived.length === 1) {
     const { session, pinned } = archived[0]!;
     const restored = await patchSession(
       host,
       session,
-      { archived: false, ...(pinned ? { pinned: true } : {}) },
+      {
+        archived: false,
+        ...(pinned ? { pinned: true } : {}),
+      },
       scope,
       { deferListRefresh: true, sessionScope: true },
     );
