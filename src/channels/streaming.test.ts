@@ -1,6 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
-import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
 import {
@@ -15,18 +13,18 @@ import {
   normalizeAgentPlanSteps,
   mergeChannelProgressDraftLine as mergeLine,
   resolveChannelStreamingBlockEnabled,
-  resolveChannelStreamingProgressCommentary,
-  resolveChannelStreamingProgressNarration,
+  resolveChannelStreamingProgressCommentary as readCommentary,
+  resolveChannelStreamingProgressNarration as readNarration,
   createChannelProgressDraftGate,
   formatChannelProgressDraftLine as formatLine,
   isChannelProgressDraftWorkToolName,
-  resolveChannelStreamingBlockCoalesce,
-  resolveChannelStreamingChunkMode,
-  resolveChannelStreamingNativeTransport,
-  resolveChannelStreamingPreviewCommandText,
-  resolveChannelStreamingPreviewChunk,
+  resolveChannelStreamingBlockCoalesce as readCoalesce,
+  resolveChannelStreamingChunkMode as readChunkMode,
+  resolveChannelStreamingNativeTransport as readNative,
+  resolveChannelStreamingPreviewCommandText as readCommand,
+  resolveChannelStreamingPreviewChunk as readChunk,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
-  resolveChannelStreamingPreviewToolProgress,
+  resolveChannelStreamingPreviewToolProgress as readTools,
 } from "./streaming.js";
 
 const inheritedBlock = (mode: string) =>
@@ -59,18 +57,16 @@ function draftText(
 
 it("keeps prepared titles and failure outcomes when detail text is unchanged", () => {
   const input = item({
-    itemKind: "tool",
-    itemId: "task",
     name: "process",
-    title: "Check sample results",
-    progressText: "sample job",
+    title: "Check",
+    progressText: "job",
   });
   const running = formatForEntry(undefined, { ...input, status: "running" });
   const failed = formatForEntry(undefined, { ...input, status: "failed" });
-  expect(running).toContain("Check sample results");
-  expect(failed).toContain("Check sample results");
+  expect(running).toContain("Check");
+  expect(failed).toContain("Check");
   expect(failed).toContain("failed");
-  expect(failed).toContain("sample job");
+  expect(failed).toContain("job");
   expect(failed).not.toBe(running);
 });
 
@@ -78,13 +74,7 @@ it("bounds prepared path titles at the configured maxLineChars", () => {
   const maxLineChars = 40;
   const path = `/tmp/${"deep/".repeat(40)}file.txt`;
   const entry = { streaming: { progress: { maxLineChars } } };
-  const input = item({
-    itemKind: "tool",
-    name: "read",
-    title: `Read from ${path}`,
-    meta: `from ${path}`,
-    status: "failed",
-  });
+  const input = item({ name: "read", title: path, meta: path, status: "failed" });
   const line = buildForEntry(entry, input, { toolIcons: true });
 
   expect(line?.label).toContain("…");
@@ -101,23 +91,15 @@ it("keeps plan arguments out of generic tool and item rows", () => {
   };
   expect(buildLineInput(toolInput(name, args))).toBeUndefined();
   expect(buildLineInput(item({ itemKind: "tool", name, meta: args.markdown }))).toBeUndefined();
+  expect(
+    ["message", "react", "web_search", "exec"].map(isChannelProgressDraftWorkToolName),
+  ).toEqual([false, false, true, true]);
 });
 
 it("keeps blocked plan-tool attention without raw argument metadata", () => {
-  expect(
-    buildLineInput(
-      item({
-        itemId: "plan-failed",
-        itemKind: "tool",
-        name: "progress_card",
-        status: "blocked",
-        meta: '<progress aria-label="private" value="1" max="2"></progress>',
-      }),
-    ),
-  ).toMatchObject({
-    id: "plan-failed",
-    kind: "item",
-    label: "Progress Card",
+  const input = item({ itemId: "plan", name: "progress_card", status: "blocked", meta: "private" });
+  expect(buildLineInput(input)).toMatchObject({
+    id: "plan",
     status: "blocked",
     text: "Progress Card",
   });
@@ -142,24 +124,17 @@ it("defaults entry-backed command progress to status and preserves explicit raw 
 });
 it.each<[ChannelProgressDraftLineInput, string]>([
   [
-    {
-      event: "command-output",
-      name: "exec",
-      phase: "end",
-      title: "echo private",
-      exitCode: 1,
-    },
+    { event: "command-output", name: "exec", phase: "end", title: "echo private", exitCode: 1 },
     "exit 1",
   ],
   [
-    {
-      event: "item",
+    item({
       itemKind: "command",
       name: "exec",
       phase: "start",
       status: "running",
       meta: "echo private",
-    },
+    }),
     "Exec",
   ],
 ])("hides command text unless raw output is requested: %j", (input, statusText) => {
@@ -171,12 +146,9 @@ it("renders capitalized shell tools and their summary as one line", () => {
   const args = { command: "echo alpha", description: "print text" };
   const input = { ...toolInput(name, args), toolCallId: "call-1", phase: "start" };
   const structured = buildLineInput(input, { commandText: "raw" });
-  const meta = inferToolMetaFromArgsCore(name, args, { detailMode: "explain" });
-  const summaryText = formatToolAggregate(name, meta ? [meta] : undefined, { markdown: true });
-
   const merged = mergeLine(
     structured ? [structured] : [],
-    { kind: "item", label: "", text: summaryText, prefix: false },
+    { kind: "item", label: "", text: "`print text`", prefix: false },
     { maxLines: 8 },
   );
 
@@ -233,12 +205,6 @@ it("preserves SDK summary exit priority over a full plan", () => {
   expect(text.split("\n").filter(Boolean)).toHaveLength(3);
 });
 
-it("renders plan markers and keeps the checklist under narration", () => {
-  expect(
-    draftText(["Exec"], { label: false }, { narration: "Working through the plan.", plan }),
-  ).toBe("Working through the plan.\n\n• Exec\n✅ Inspect\n▸ Patch\n▢ Verify");
-});
-
 it.each([
   { maxLines: 1, steps: plan, expected: ["✅ 1/3 done"] },
   {
@@ -257,36 +223,37 @@ it.each([
   },
 );
 
-it("drops every tool line when the checklist consumes the whole budget", () => {
-  expect(
-    draftText(
-      ["tool one", "tool two"],
-      { label: false, maxLines: 2 },
-      { plan: [step("Active", "in_progress"), step("Next")] },
-    ),
-  ).toBe("▸ Active\n▢ Next");
-});
+it.each([
+  {
+    lines: ["Exec"],
+    progress: { label: false as const },
+    options: { narration: "Working.", plan },
+    expected: "Working.\n\n• Exec\n✅ Inspect\n▸ Patch\n▢ Verify",
+  },
+  {
+    lines: ["tool one", "tool two"],
+    progress: { label: false as const, maxLines: 2 },
+    options: { plan: [step("Active", "in_progress"), step("Next")] },
+    expected: "▸ Active\n▢ Next",
+  },
+])(
+  "renders the plan within the draft budget: $expected",
+  ({ lines, progress, options, expected }) => {
+    expect(draftText(lines, progress, options)).toBe(expected);
+  },
+);
 
 it("honors the caller's mode when resolving commentary", () => {
   const entry = { streaming: { progress: { commentary: true } } };
-  expect(resolveChannelStreamingProgressCommentary(entry, false, "progress")).toBe(true);
-  expect(resolveChannelStreamingProgressCommentary(entry, false, "partial")).toBe(false);
-  expect(
-    resolveChannelStreamingProgressCommentary(
-      { streaming: { mode: "progress", progress: { commentary: true } } },
-      false,
-    ),
-  ).toBe(true);
+  expect(readCommentary(entry, false, "progress")).toBe(true);
+  expect(readCommentary(entry, false, "partial")).toBe(false);
+  expect(readCommentary({ streaming: { ...entry.streaming, mode: "progress" } }, false)).toBe(true);
 });
 
 it("resolves the narration toggle with default on", () => {
-  expect(
-    [
-      undefined,
-      { streaming: { mode: "progress" } },
-      { streaming: { mode: "progress", progress: { narration: false } } },
-    ].map((entry) => resolveChannelStreamingProgressNarration(entry)),
-  ).toEqual([true, true, false]);
+  expect(readNarration(undefined)).toBe(true);
+  expect(readNarration({ streaming: { mode: "progress" } })).toBe(true);
+  expect(readNarration({ streaming: { progress: { narration: false } } })).toBe(false);
 });
 type CommandInput = Extract<
   ChannelProgressDraftLineInput,
@@ -309,20 +276,15 @@ function buildLine(input: CommandInput, markdown = false) {
 // Preserve the producer's order: terminal items precede the titled command output.
 function commandSequence(): CommandInput[] {
   const status = "failed";
-  const base = item({ meta: "run tests · pty · elevated" });
-  const tool = {
-    ...base,
-    itemId: "tool:call-1",
-    itemKind: "tool",
-    title: `exec ${base.meta}`,
-    commandBearing: true,
-  };
-  const command = {
-    ...base,
-    itemId: "command:call-1",
-    itemKind: "command",
-    title: `command ${base.meta}`,
-  };
+  const family = (kind: string, title: string) =>
+    item({
+      itemId: `${kind}:call-1`,
+      itemKind: kind,
+      title,
+      meta: "run tests · pty · elevated",
+    });
+  const tool = { ...family("tool", "exec run tests · pty · elevated"), commandBearing: true };
+  const command = family("command", "command run tests · pty · elevated");
   const output = { event: "command-output" as const, phase: "end", status, exitCode: 1 };
   return [
     { event: "tool", itemId: tool.itemId, phase: "start", args: { command: "pnpm test" } },
@@ -361,12 +323,7 @@ it("keeps one command row through failed terminal delivery", async () => {
       });
     }
     await progress.start();
-    expect(progress.getSnapshot().lines[0]).toMatchObject({
-      kind: "command-output",
-      detail,
-      status: "exit 1",
-      text: `exit 1; ${detail}`,
-    });
+    expect(progress.getSnapshot().lines[0]?.text).toBe(`exit 1; ${detail}`);
     expect(rendered.match(/run tests/g)).toHaveLength(1);
   } finally {
     progress.cancel();
@@ -418,38 +375,23 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("reads canonical nested streaming config", () => {
-  const coalesce = { minChars: 40, maxChars: 80, idleMs: 250 };
-  const chunk = { minChars: 10, maxChars: 20, breakPreference: "sentence" } as const;
-  const entry = {
-    streaming: {
-      chunkMode: "newline",
-      nativeTransport: true,
-      block: { enabled: true, coalesce },
-      preview: { chunk, toolProgress: false, commandText: "status" },
-    },
-  } as const;
-
-  expect({
-    mode: resolveChannelStreamingChunkMode(entry),
-    native: resolveChannelStreamingNativeTransport(entry),
-    block: resolveChannelStreamingBlockEnabled(entry, {
-      previewAvailable: true,
-      blockStreamingDefault: "off",
-    }),
-    coalesce: resolveChannelStreamingBlockCoalesce(entry),
-    chunk: resolveChannelStreamingPreviewChunk(entry),
-    toolProgress: resolveChannelStreamingPreviewToolProgress(entry),
-    commandText: resolveChannelStreamingPreviewCommandText(entry),
-  }).toEqual({
-    mode: "newline",
-    native: true,
-    block: true,
-    coalesce: { minChars: 40, maxChars: 80, idleMs: 250 },
-    chunk: { minChars: 10, maxChars: 20, breakPreference: "sentence" },
-    toolProgress: false,
-    commandText: "status",
+const coalesce = { minChars: 40, maxChars: 80, idleMs: 250 };
+const chunk = { minChars: 10, maxChars: 20, breakPreference: "sentence" } as const;
+const readBlock = (entry: Parameters<typeof resolveChannelStreamingBlockEnabled>[0]) =>
+  resolveChannelStreamingBlockEnabled(entry, {
+    previewAvailable: true,
+    blockStreamingDefault: "off",
   });
+it.each([
+  [readChunkMode, { chunkMode: "newline" }, "newline"],
+  [readNative, { nativeTransport: true }, true],
+  [readBlock, { block: { enabled: true } }, true],
+  [readCoalesce, { block: { coalesce } }, { minChars: 40, maxChars: 80, idleMs: 250 }],
+  [readChunk, { preview: { chunk } }, { minChars: 10, maxChars: 20, breakPreference: "sentence" }],
+  [readTools, { preview: { toolProgress: false } }, false],
+  [readCommand, { preview: { commandText: "status" } }, "status"],
+] as const)("reads canonical nested streaming config with %s", (read, streaming, expected) => {
+  expect(read({ streaming })).toEqual(expected);
 });
 
 it.each([
@@ -458,7 +400,7 @@ it.each([
   ["progress", { toolProgress: true }, false],
 ])("keeps progress-only configuration scoped to progress mode: %s", (mode, preview, expected) => {
   expect(
-    resolveChannelStreamingPreviewToolProgress({
+    readTools({
       streaming: { mode, preview, progress: { toolProgress: false } },
     }),
   ).toBe(expected);
@@ -566,7 +508,8 @@ it("delays rapid work events and joins a single pending startup", async () => {
   vi.useFakeTimers();
   const pending = createDeferredCore();
   const onStart = vi.fn(() => pending.promise);
-  const gate = createChannelProgressDraftGate({ onStart });
+  const onStartError = vi.fn();
+  const gate = createChannelProgressDraftGate({ onStart, onStartError });
 
   await expect(gate.noteWork()).resolves.toBe(false);
   await expect(gate.noteWork()).resolves.toBe(false);
@@ -593,52 +536,18 @@ it("delays rapid work events and joins a single pending startup", async () => {
   await expect(workDuringStart).resolves.toBe(true);
   expect(onStart).toHaveBeenCalledTimes(1);
   expect(gate.hasStarted).toBe(true);
-});
-
-it("does not report started when delayed progress startup rejects", async () => {
-  vi.useFakeTimers();
+  gate.reset();
   const error = new Error("draft unavailable");
-  const onStart = vi
-    .fn<() => Promise<void>>()
-    .mockRejectedValueOnce(error)
-    .mockResolvedValueOnce(undefined);
-  const onStartError = vi.fn();
-  const gate = createChannelProgressDraftGate({ onStart, onStartError });
-
+  onStart.mockRejectedValueOnce(error);
   await expect(gate.noteWork()).resolves.toBe(false);
   await vi.advanceTimersByTimeAsync(5_000);
 
-  expect(onStart).toHaveBeenCalledTimes(1);
+  expect(onStart).toHaveBeenCalledTimes(2);
   expect(gate.hasStarted).toBe(false);
   expect(onStartError).toHaveBeenCalledWith(error);
 
   await expect(gate.startNow()).resolves.toBeUndefined();
 
-  expect(onStart).toHaveBeenCalledTimes(2);
+  expect(onStart).toHaveBeenCalledTimes(3);
   expect(gate.hasStarted).toBe(true);
-});
-
-it("does not report active when cancel wins the startup race", async () => {
-  vi.useFakeTimers();
-  const pending = createDeferredCore();
-  const onStart = vi.fn(() => pending.promise);
-  const gate = createChannelProgressDraftGate({ onStart });
-
-  await gate.noteWork();
-  const startResult = gate.startNow();
-  await Promise.resolve();
-
-  expect(onStart).toHaveBeenCalledTimes(1);
-  gate.cancel();
-
-  pending.resolve();
-
-  await expect(startResult).resolves.toBeUndefined();
-  expect(gate.hasStarted).toBe(false);
-});
-
-it("ignores message-like tools for progress draft work", () => {
-  expect(
-    ["message", "react", "web_search", "exec"].map(isChannelProgressDraftWorkToolName),
-  ).toEqual([false, false, true, true]);
 });

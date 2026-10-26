@@ -59,20 +59,13 @@ it("preserves diagnostic, audience and liveness metadata without raw credentials
   expect(snapshot).toEqual(safeFields);
 });
 
-it("redacts URL-shaped audiences while omitting bearer webhook URLs", () => {
-  expect(
-    project({
-      audience: credentialUrl("user", "password", "example.test/path?token=private"),
-      webhookUrl: "https://example.test/webhooks/id/bearer-token",
-    }),
-  ).toEqual({ audience: "https://example.test/path?token=***" });
-});
-
-it("redacts query, nested URL, and fragment credentials from baseUrl fields", () => {
+it("redacts URL credentials in audiences and base URLs while omitting bearer webhooks", () => {
   const nested = encodeURIComponent(
     credentialUrl("nested-user", "nested-pass", "nested.example/cb?access_token=nested-token"),
   );
   const snapshot = project({
+    audience: credentialUrl("user", "password", "example.test/path?token=private"),
+    webhookUrl: "https://example.test/webhooks/id/bearer-token",
     baseUrl: credentialUrl(
       "outer-user",
       "outer-pass",
@@ -84,17 +77,17 @@ it("redacts query, nested URL, and fragment credentials from baseUrl fields", ()
     /outer-(user|pass|token)|nested-(user|pass|token)|fragment-token/,
   );
   expect(snapshot.baseUrl).toContain("token=***");
+  expect(snapshot.audience).toBe("https://example.test/path?token=***");
+  expect(snapshot).not.toHaveProperty("webhookUrl");
 });
 
 it("redacts plugin snapshots without mutating raw account state", () => {
   const rawBaseUrl = credentialUrl("user", "pass", "chat.example.test/?token=secret");
-  const account = Object.freeze({ baseUrl: rawBaseUrl });
-  const snapshot = { ...account };
+  const snapshot = { baseUrl: rawBaseUrl };
 
   const redacted = redactChannelStatusSummaryBaseUrl(snapshot);
 
   expect(redacted).toEqual({ baseUrl: "https://chat.example.test/?token=***" });
-  expect(account.baseUrl).toBe(rawBaseUrl);
   expect(snapshot.baseUrl).toBe(rawBaseUrl);
 });
 

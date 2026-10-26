@@ -42,24 +42,15 @@ function reflectionParams(id: string) {
 
 function deliverReflection(text: string) {
   dispatchRoutedChannelTurn.mockImplementationOnce(async (plan) => {
+    expect(
+      consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(plan.ctxPayload)),
+    ).toMatchObject({ ingressState: "unsupported", decisionCoverage: "unsupported" });
     await plan.delivery.deliver({ text });
     return { admission: { kind: "dispatch" }, dispatched: true };
   });
 }
 
 beforeEach(() => vi.clearAllMocks());
-
-it("classifies internal reflection as explicitly unsupported provenance", async () => {
-  dispatchRoutedChannelTurn.mockImplementationOnce(async (plan) => {
-    expect(
-      consumeChannelAdmissionEvidence(
-        readChannelContextAdmissionEvidence(plan.ctxPayload as object),
-      ),
-    ).toMatchObject({ ingressState: "unsupported", decisionCoverage: "unsupported" });
-    return { admission: { kind: "dispatch" }, dispatched: false };
-  });
-  await runChannelFeedbackReflection(reflectionParams("unsupported"));
-});
 
 it("runs reflection in the original session and enforces cooldown", async () => {
   deliverReflection(
@@ -97,14 +88,12 @@ it("runs reflection in the original session and enforces cooldown", async () => 
   expect(dispatchRoutedChannelTurn).toHaveBeenCalledTimes(1);
 });
 
-it("preserves a plain-text reflection as internal learning", async () => {
-  deliverReflection(learning);
-  await expect(runChannelFeedbackReflection(reflectionParams("plain"))).resolves.toEqual(complete);
-});
-
-it("does not treat structured follow-up values as directives", async () => {
-  deliverReflection(JSON.stringify({ learning: "Be concise.", followUp: ["yes"] }));
-
-  const result = await runChannelFeedbackReflection(reflectionParams("structured"));
-  expect(result).toMatchObject({ status: "complete", followUp: false });
+const structured = JSON.stringify({ learning, followUp: ["yes"] });
+it.each([
+  ["plain", learning, complete],
+  ["empty", "", { status: "empty" }],
+  ["structured", structured, { ...complete, responseLength: structured.length }],
+] as const)("parses %s reflection without inventing directives", async (id, text, expected) => {
+  deliverReflection(text);
+  await expect(runChannelFeedbackReflection(reflectionParams(id))).resolves.toEqual(expected);
 });

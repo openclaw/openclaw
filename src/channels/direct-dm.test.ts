@@ -71,20 +71,8 @@ const ingressPolicy = (
     contextBinding,
   });
 
-it("forwards the canonical model-selection reply pipeline", async () => {
-  const channelIngress = await ingressPolicy();
-  await dispatchDm({ channelIngress });
-
-  expect(mocks.dispatchRoutedChannelTurn).toHaveBeenCalledWith(
-    expect.objectContaining({
-      replyPipeline: { humanDelay: { minMs: 1, maxMs: 2 } },
-      replyOptions: { onModelSelected: mocks.onModelSelected },
-    }),
-  );
-  expect(contextParams()?.channelIngress).toBe(channelIngress);
-});
-
-it("threads a durable ingress adoption lifecycle into the turn plan", async () => {
+it("dispatches resolved ingress through the canonical reply and adoption pipeline", async () => {
+  const resolveChannelIngress = vi.fn(ingressPolicy);
   const assertAuthority = vi.fn();
   const turnAdoptionLifecycle = {
     admission: "exclusive" as const,
@@ -95,24 +83,19 @@ it("threads a durable ingress adoption lifecycle into the turn plan", async () =
   };
 
   await dispatchDm({
-    channelIngress: "unsupported",
+    resolveChannelIngress,
     turnAdoptionLifecycle,
     assertAuthority,
   });
 
-  expect(mocks.dispatchRoutedChannelTurn.mock.calls.at(-1)?.[0]).toMatchObject({
-    assertAuthority,
-    replyOptions: { turnAdoptionLifecycle },
-  });
+  expect(mocks.dispatchRoutedChannelTurn).toHaveBeenCalledWith(
+    expect.objectContaining({
+      assertAuthority,
+      replyPipeline: { humanDelay: { minMs: 1, maxMs: 2 } },
+      replyOptions: { onModelSelected: mocks.onModelSelected, turnAdoptionLifecycle },
+    }),
+  );
   expect(assertAuthority).not.toHaveBeenCalled();
-  expect(contextParams()?.channelIngress).toBe("unsupported");
-});
-
-it("resolves exact ingress provenance once after the final route is known", async () => {
-  const resolveChannelIngress = vi.fn(ingressPolicy);
-
-  await dispatchDm({ resolveChannelIngress });
-
   expect(resolveChannelIngress).toHaveBeenCalledExactlyOnceWith({
     agentId: "agent-1",
     sessionKey: "agent:agent-1:nostr:direct:peer-1",
@@ -129,8 +112,9 @@ it("preserves the shipped SDK contract for callers without ingress provenance", 
 });
 
 it("preserves Reef's explicit unsupported trust-path classification", async () => {
+  const channelIngress = "unsupported";
   await dispatchDm({
-    channelIngress: "unsupported",
+    channelIngress,
     channel: "reef",
     channelLabel: "Reef",
     senderAddress: "reef:peer-1",
