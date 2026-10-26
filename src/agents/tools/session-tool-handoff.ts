@@ -223,7 +223,7 @@ export async function handoffSessionTool(
                   {
                     agentId: caller.agentId,
                     sessionKey: caller.sessionKey,
-                    source: "plugin",
+                    source: "tool_handoff",
                     contextKey,
                     expectedTarget: target,
                     assertCurrent: retained.assertCurrent,
