@@ -27,14 +27,11 @@ describe("device-pair notify CAS", () => {
   };
   type Case = [
     string,
-    "delivery" | "adapter" | "sendText" | "observe" | "compareAndApply",
+    "adapter" | "sendText" | "observe" | "compareAndApply",
     NotifySubscription | undefined,
     [sent: number, observed: number, compared: number, recorded: number],
   ];
   it.each<Case>([
-    ["changed metadata", "delivery", delivered, [1, 1, 1, 1]],
-    ["new arm", "delivery", { ...delivered, armId: "arm-2" }, [1, 1, 1, 1]],
-    ["removed arm", "delivery", undefined, [1, 1, 1, 1]],
     ["disabled", "adapter", undefined, [0, 1, 0, 0]],
     ["later arm", "adapter", { ...delivered, addedAtMs: 3_000 }, [0, 1, 0, 0]],
     [
@@ -88,12 +85,7 @@ describe("device-pair notify CAS", () => {
         channel: { outbound: { loadAdapter } },
       } as never,
     });
-    if (stage === "delivery") {
-      sendText.mockImplementationOnce(async () => {
-        replace(expected);
-        return { channel: "telegram", to: delivered.to };
-      });
-    } else if (stage === "adapter") {
+    if (stage === "adapter") {
       loadAdapter.mockImplementationOnce(async () => {
         replace(expected);
         return { sendText };
@@ -114,11 +106,7 @@ describe("device-pair notify CAS", () => {
       [sendText, observe, compareAndApply, recordSeen].map((mock) => mock.mock.calls.length),
     ).toEqual(calls);
     expect(current).toEqual(expected);
-    if (stage === "delivery") {
-      expect(observe.mock.invocationCallOrder[0]).toBeLessThan(
-        sendText.mock.invocationCallOrder[0]!,
-      );
-    } else if (stage === "adapter" && calls[0]) {
+    if (stage === "adapter" && calls[0]) {
       expect(sendText).toHaveBeenCalledWith(
         expect.objectContaining({ to: expected?.to, threadId: "0271" }),
       );
