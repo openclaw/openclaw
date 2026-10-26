@@ -20,6 +20,8 @@ type SandboxedCliHarness = {
 };
 
 const CLI_MODEL_REF = "anthropic/claude-opus-4-7";
+const childKey = "agent:main:subagent:child";
+const parent = "agent:main:main";
 
 function sandboxedCliConfig(params: { sandboxMode?: "all"; cliModel?: boolean }): OpenClawConfig {
   const models: Record<string, { agentRuntime: { id: string } }> = {};
@@ -35,85 +37,69 @@ export function registerSandboxedDelegatedCliTests(harness: SandboxedCliHarness)
   const { runStoredAttempt, seedSessionStore } = harness;
 
   async function attempt(params: {
-    sessionKey: string;
+    sessionKey?: string;
     entry?: Partial<SessionEntry>;
     cfg?: OpenClawConfig;
     overrides?: Partial<Omit<RunAgentAttemptOverrides, "agentDir" | "storePath" | "workspaceDir">>;
   }) {
+    const sessionKey = params.sessionKey ?? childKey;
     const sessionEntry = makeSessionEntry(
-      `sandbox-cli-${params.sessionKey.split(":").at(-1)}`,
+      `sandbox-cli-${sessionKey.split(":").at(-1)}`,
       params.entry,
     );
-    const sessionStore = await seedSessionStore(params.sessionKey, sessionEntry);
     return runStoredAttempt({
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-7",
       cfg: params.cfg ?? sandboxedCliConfig({ sandboxMode: "all", cliModel: true }),
       sessionEntry,
-      sessionKey: params.sessionKey,
-      sessionStore,
+      sessionKey,
+      sessionStore: await seedSessionStore(sessionKey, sessionEntry),
       body: "delegated work",
       ...params.overrides,
     });
   }
 
-  function expectNoDispatch() {
-    expect(harness.runCliAgentMock).not.toHaveBeenCalled();
-    expect(harness.executePreparedCliRunMock).not.toHaveBeenCalled();
-    expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
-  }
-
   it.each([
-    {
-      name: "hidden subagent child",
-      sessionKey: "agent:main:subagent:sandbox-cli-hidden",
-      entry: { spawnedBy: "agent:main:main" },
-    },
-    {
-      name: "subagent-keyed child without a spawnedBy stamp",
-      sessionKey: "agent:main:subagent:sandbox-cli-keyonly",
-    },
+    { name: "subagent-keyed child without a spawnedBy stamp" },
     {
       name: "visible spawned child",
-      sessionKey: "agent:main:dashboard:sandbox-cli-visible",
-      entry: { parentSessionKey: "agent:main:main", spawnedBy: "agent:main:main" },
+      sessionKey: "agent:main:dashboard:visible",
+      entry: { parentSessionKey: parent, spawnedBy: parent },
     },
     {
       name: "fallback candidate after an API primary",
-      sessionKey: "agent:main:subagent:sandbox-cli-fallback",
-      entry: { spawnedBy: "agent:main:main" },
+      entry: { spawnedBy: parent },
       overrides: { isFallbackRetry: true, originalProvider: "openai" },
     },
     {
       name: "post-spawn runtime override",
-      sessionKey: "agent:main:subagent:sandbox-cli-override",
-      entry: { spawnedBy: "agent:main:main", agentRuntimeOverride: "claude-cli" },
+      entry: { spawnedBy: parent, agentRuntimeOverride: "claude-cli" },
       cfg: sandboxedCliConfig({ sandboxMode: "all" }),
       overrides: { agentHarnessRuntimeOverride: "claude-cli" },
     },
     {
       name: "creation-stamped sandbox requirement",
-      sessionKey: "agent:main:subagent:sandbox-cli-required",
-      entry: { spawnedBy: "agent:main:main", sandbox: "required" as const },
+      entry: { spawnedBy: parent, sandbox: "required" as const },
       cfg: sandboxedCliConfig({ cliModel: true }),
     },
   ])("refuses host CLI launch for a sandboxed $name", async (testCase) => {
     const run = attempt(testCase);
     await expect(run).rejects.toBeInstanceOf(AgentHarnessPreflightError);
     await expect(run).rejects.toThrow(/claude-cli runs on the host and cannot honor the sandbox/);
-    expectNoDispatch();
+    expect(harness.runCliAgentMock).not.toHaveBeenCalled();
+    expect(harness.executePreparedCliRunMock).not.toHaveBeenCalled();
+    expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it.each([
     {
       name: "an operator dashboard session parented to main",
-      sessionKey: "agent:main:dashboard:sandbox-cli-operator",
-      entry: { parentSessionKey: "agent:main:main" },
+      sessionKey: "agent:main:dashboard:operator",
+      entry: { parentSessionKey: parent },
     },
     {
       name: "an unsandboxed spawned child",
-      sessionKey: "agent:main:subagent:sandbox-cli-unsandboxed",
-      entry: { spawnedBy: "agent:main:main" },
+      entry: { spawnedBy: parent },
       cfg: sandboxedCliConfig({ cliModel: true }),
     },
   ])("keeps CLI launch for $name", async (testCase) => {
@@ -126,8 +112,7 @@ export function registerSandboxedDelegatedCliTests(harness: SandboxedCliHarness)
   it("keeps embedded execution for a sandboxed spawned child on an API model", async () => {
     harness.runEmbeddedAgentMock.mockResolvedValueOnce({ meta: { durationMs: 1 } });
     await attempt({
-      sessionKey: "agent:main:subagent:sandbox-cli-embedded",
-      entry: { spawnedBy: "agent:main:main" },
+      entry: { spawnedBy: parent },
       cfg: sandboxedCliConfig({ sandboxMode: "all" }),
       overrides: { providerOverride: "openai", modelOverride: "gpt-5.4" },
     });

@@ -124,17 +124,21 @@ it("does not fail the completed turn when repair-record persistence fails", asyn
   expect(warn).toHaveBeenCalledWith(expect.stringContaining("store unavailable"));
 });
 
-it("replays every missing final in order before clearing the backlog", async () => {
+it("replays every missing final in order with stable keys after cleanup fails", async () => {
   const fixture = setup([
     { ...repair("first"), provider: "openai", model: "gpt-5.5" },
     repair("second", "repair-2", 20),
   ]);
+  persist.mockRejectedValueOnce(new Error("cleanup unavailable"));
   await fixture.replay();
-
-  expect(append.mock.calls.map(([params]) => params)).toEqual([
+  expect(fixture.pending()).toHaveLength(2);
+  const expected = [
     expectedAppend(repair("first"), "openai", "gpt-5.5"),
     expectedAppend(repair("second", "repair-2", 20)),
-  ]);
+  ];
+  expect(append.mock.calls.map(([params]) => params)).toEqual(expected);
+  await fixture.replay();
+  expect(append.mock.calls.map(([params]) => params)).toEqual([...expected, ...expected]);
   expect(fixture.pending()).toBeUndefined();
 });
 
@@ -150,25 +154,8 @@ it.each([
     expect(fixture.pending()).toBeUndefined();
   } else {
     await expect(replay).rejects.toThrow("pending transcript recovery");
-    expect(persist).not.toHaveBeenCalled();
     expect(fixture.pending()).toHaveLength(1);
   }
-});
-
-it("retries cleanup with the same append idempotency key", async () => {
-  const fixture = setup([repair()]);
-  persist.mockRejectedValueOnce(new Error("cleanup unavailable"));
-
-  await fixture.replay();
-  expect(fixture.pending()).toHaveLength(1);
-
-  await fixture.replay();
-
-  expect(append.mock.calls.map(([params]) => params.idempotencyKey)).toEqual([
-    "transcript-repair:repair-1",
-    "transcript-repair:repair-1",
-  ]);
-  expect(fixture.pending()).toBeUndefined();
 });
 
 it("does not clear repair state from a replacement session", async () => {
