@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { McpAppView } from "../../components/mcp-app-view-lazy.ts";
@@ -38,13 +37,11 @@ vi.mock("../chat/chat-pane.tsx", async () => {
 // mock-isolation: The chat route's styles and page registration are covered by browser CI.
 vi.mock("../chat/route-entry.ts", () => ({}));
 
-beforeEach(async () => {
-  await i18n.setLocale("en");
-});
+beforeEach(() => i18n.setLocale("en"));
 
 function mountApps(
   discovered: Promise<void>,
-  options: { selectedId?: string; sessionKey?: string } = {},
+  options: { selectedId?: string | null; sessionKey?: string; connected?: boolean } = {},
 ) {
   const [search, setSearch] = createSignal("");
   const { gateway, publish } = createApplicationGateway();
@@ -70,7 +67,7 @@ function mountApps(
   publish({
     ...gateway.snapshot,
     client: createTestGatewayClient(request),
-    phase: "connected",
+    phase: options.connected === false ? "stopped" : "connected",
     sessionKey: options.sessionKey ?? "agent:main:one",
     hello: gatewayHelloForMethods(["mcp.app.discover"]),
   });
@@ -79,7 +76,7 @@ function mountApps(
     gateway,
     navigate: vi.fn(),
     agentSelection: {
-      state: { selectedId: options.selectedId ?? "main" },
+      state: { selectedId: options.selectedId === undefined ? "main" : options.selectedId },
       subscribe: () => () => {},
     },
     sessions: { describe: async () => ({ session: { key: "agent:main:one" } }) },
@@ -107,7 +104,8 @@ it("loads app view and conversation alongside discovery, retries errors, and ret
   }
   mockLoad(first.promise);
   const mounted = mountApps(discovered.promise);
-  const { container, setSearch } = mounted;
+  const { container, setSearch, queryByRole } = mounted;
+  const pane = () => container.querySelector("openclaw-chat-pane");
   await waitForSolid(() => expect(container.querySelector(".apps-page")).not.toBeNull());
   expect(started).not.toHaveBeenCalled();
   expect(preload).not.toHaveBeenCalled();
@@ -115,50 +113,47 @@ it("loads app view and conversation alongside discovery, retries errors, and ret
   setSearch("?server=parts&tool=library");
   await waitForSolid(() => expect(started).toHaveBeenCalledOnce());
   expect(preload).toHaveBeenCalledOnce();
-  expect(container.querySelector('[role="status"]')?.textContent).toContain("Loading");
-  expect(container.querySelector("openclaw-chat-pane")).toBeNull();
+  expect(queryByRole("status")?.textContent).toContain("Loading");
+  expect(pane()).toBeNull();
   appView.reject(new Error("App view preload failed"));
   await expect(appView.promise).rejects.toThrow("App view preload failed");
   await waitForSolid(() => {
-    expect(container.querySelector('[role="status"]')?.textContent).toContain("Loading");
-    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(queryByRole("status")?.textContent).toContain("Loading");
+    expect(queryByRole("alert")).toBeNull();
   });
   first.reject(new Error("Conversation download failed"));
   await waitForSolid(() =>
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-      "Conversation download failed",
-    ),
+    expect(queryByRole("alert")?.textContent).toContain("Conversation download failed"),
   );
 
   mockLoad(retry.promise);
   mounted.getByRole("button", { name: "Try again" }).click();
   await waitForSolid(() => expect(started).toHaveBeenCalledTimes(2));
-  expect(container.querySelector("openclaw-chat-pane")).toBeNull();
+  expect(pane()).toBeNull();
   setSearch("");
   await waitForSolid(() => expect(container.querySelector(".apps-page")).not.toBeNull());
   retry.reject(new Error("Retired conversation download"));
   await expect(import("./apps-conversation.tsx")).rejects.toThrow();
-  await waitForSolid(() => expect(container.querySelector('[role="alert"]')).toBeNull());
+  await waitForSolid(() => expect(queryByRole("alert")).toBeNull());
 
   mockLoad(Promise.resolve());
   setSearch("?server=parts&tool=library");
   await waitForSolid(() => expect(started).toHaveBeenCalledTimes(3));
-  expect(container.querySelector("openclaw-chat-pane")).toBeNull();
+  expect(pane()).toBeNull();
   discovered.resolve();
   await waitForSolid(() =>
-    expect(container.querySelector("openclaw-chat-pane")?.mcpAppLaunch).toMatchObject({
-      sessionKey: "agent:main:one",
-      serverName: "parts",
+    expect(pane()).toMatchObject({
+      className: "mcp-app-conversation",
+      paneId: "plugin-app",
+      presentationId: "plugin-app:agent:main:one",
+      mcpAppLaunch: { sessionKey: "agent:main:one", serverName: "parts" },
     }),
   );
-  const pane = container.querySelector("openclaw-chat-pane")!;
-  expect(pane.className).toBe("mcp-app-conversation");
-  expect(pane.paneId).toBe("plugin-app");
-  expect(pane.presentationId).toBe("plugin-app:agent:main:one");
+  const conversation = pane()!;
   setSearch("?server=parts&tool=library&path=/updated");
-  await waitForSolid(() => expect(pane.mcpAppLaunch?.deepLink).toBe("/updated"));
-  expect(container.querySelector("openclaw-chat-pane")).toBe(pane);
-  expect(container.querySelector('[role="alert"]')).toBeNull();
+  await waitForSolid(() => expect(conversation.mcpAppLaunch?.deepLink).toBe("/updated"));
+  expect(pane()).toBe(conversation);
+  expect(queryByRole("alert")).toBeNull();
 });
 
 it("discovers the session's agent while selection is switching", async () => {
@@ -190,23 +185,10 @@ afterEach(() => {
   vi.doUnmock("./apps-conversation.tsx");
 });
 
-describe("AppsPage", () => {
-  it("names the page with one level-one heading above the hero", () => {
-    const provider = createSolidApplicationContextProvider({
-      gateway: createApplicationGateway().gateway,
-      agentSelection: {
-        state: { selectedId: null },
-        intentRevision: 0,
-        subscribe: () => () => undefined,
-      },
-      navigate: () => undefined,
-    } as unknown as ApplicationContext);
-    const { container } = mountSolid(() => <AppsPage />, { wrapper: provider.wrapper });
-    flush();
-
-    const page = getQueriesForElement(container);
-    expect(page.getByRole("heading", { level: 1, name: "Apps" })).toBeTruthy();
-    expect(container.querySelectorAll("h1")).toHaveLength(1);
-    expect(page.getByRole("heading", { level: 2, name: "Take OpenClaw everywhere" })).toBeTruthy();
-  });
+it("names the page with one level-one heading above the hero", () => {
+  const page = mountApps(Promise.resolve(), { connected: false, selectedId: null });
+  flush();
+  expect(page.getByRole("heading", { level: 1, name: "Apps" })).toBeTruthy();
+  expect(page.container.querySelectorAll("h1")).toHaveLength(1);
+  expect(page.getByRole("heading", { level: 2, name: "Take OpenClaw everywhere" })).toBeTruthy();
 });
