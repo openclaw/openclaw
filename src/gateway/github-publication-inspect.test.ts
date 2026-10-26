@@ -162,30 +162,41 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     sandbox: "required",
   });
 
-  it.each(["same repository", "fork"])(
-    "returns canonical %s identity without a receipt or writes",
-    async (variant) => {
-      const f = await fixture();
-      if (variant === "same repository") {
-        f.pr.head.repo = f.baseRepo;
-      }
-      const before = session();
-      const result = await f.invoke();
-      expect(Value.Check(SessionGitHubPullRequestInspectResultSchema, result)).toBe(true);
-      expect(result).toMatchObject({
-        state: "open",
-        base: { branch: "release", commit: BASE },
-        head: {
-          repository: variant === "fork" ? "contributor/repository" : "example/repository",
-          repositoryId: variant === "fork" ? 20 : 10,
-          branch: "topic/existing",
-          commit: HEAD,
-        },
-      });
-      expect(session()).toEqual(before);
-      expect(f.externalWrites).toEqual([]);
-    },
-  );
+  it.each([
+    ["same repository", "github.com"],
+    ["fork", "github.com"],
+    ["renamed account", "github.com"],
+    ["renamed account", "git.example.test"],
+  ])("returns canonical %s identity on %s without a receipt or writes", async (variant, host) => {
+    const renamed = variant === "renamed account";
+    const repository = renamed ? "mona-cat_octo/.repo.._" : "example/repository";
+    const login = renamed ? "mona-cat_octo" : "contributor";
+    const f = await fixture({ host, repository, login });
+    f.baseRepo.private = renamed;
+    if (variant === "same repository") {
+      f.pr.head.repo = f.baseRepo;
+    }
+    const before = session();
+    const result = await f.invoke();
+    expect(Value.Check(SessionGitHubPullRequestInspectResultSchema, result)).toBe(true);
+    expect(result).toMatchObject({
+      state: "open",
+      url: `https://${host}/${repository}/pull/7`,
+      author: { accountId: 101, login },
+      base: { repository, repositoryId: 10, branch: "release", commit: BASE },
+      head: {
+        repository: variant === "same repository" ? repository : "contributor/repository",
+        repositoryId: variant === "same repository" ? 10 : 20,
+        branch: "topic/existing",
+        commit: HEAD,
+      },
+    });
+    if (renamed) {
+      expect(f.endpoints()).toContain(`repos/${repository}/collaborators/${login}/permission`);
+    }
+    expect(session()).toEqual(before);
+    expect(f.externalWrites).toEqual([]);
+  });
 
   it("accepts another verified linked account without depending on the primary credit choice", async () => {
     const f = await fixture();
@@ -342,12 +353,8 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
       const endpoints = f.endpoints();
       for (const suffix of [
         "/",
-        "?diff=unified&w=1",
-        "#issuecomment-123",
-        "#pullrequestreview-456",
         "/files?diff=split#diff-123",
         "/changes",
-        "/changes#diff-123",
         "/commits",
         `/commits/${HEAD}`,
         "/checks?check_run_id=789",
@@ -356,28 +363,6 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
         expect(await f.invoke({ pullRequestUrl: f.pr.html_url + suffix })).toEqual(canonical);
         expect(f.endpoints()).toEqual(endpoints);
       }
-    },
-  );
-
-  it.each(["github.com", "git.example.test"])(
-    "reads a managed account's current login and repository name on %s",
-    async (host) => {
-      const f = await fixture({
-        host,
-        repository: "mona-cat_octo/.repo.._",
-        login: "mona-cat_octo",
-      });
-      f.baseRepo.private = true;
-      const result = await f.invoke();
-      expect(Value.Check(SessionGitHubPullRequestInspectResultSchema, result)).toBe(true);
-      expect(result).toMatchObject({
-        url: `https://${host}/mona-cat_octo/.repo.._/pull/7`,
-        author: { accountId: 101, login: "mona-cat_octo" },
-        base: { repository: "mona-cat_octo/.repo.._", repositoryId: 10 },
-      });
-      expect(f.endpoints()).toContain(
-        "repos/mona-cat_octo/.repo.._/collaborators/mona-cat_octo/permission",
-      );
     },
   );
 

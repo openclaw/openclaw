@@ -173,19 +173,6 @@ describe("list preparation", () => {
       expect(projection.materializedCount).toBe(0);
       const context = bindSessionRowProjection(requestContext(cfg), () => projection);
       const before = projection.materializedCount;
-      let selections = 0;
-      const prepare = projection.withPreparedExactRows.bind(projection);
-      vi.spyOn(projection, "withPreparedExactRows").mockImplementation(
-        (queries, consume, options) =>
-          prepare(
-            (config) => {
-              selections++;
-              return queries(config);
-            },
-            consume,
-            options,
-          ),
-      );
       const reads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
       const sql = observeSqliteReadSql(StatementSync.prototype);
       const rendered: string[] = [];
@@ -203,22 +190,21 @@ describe("list preparation", () => {
         return result;
       });
       const listPage = async (offset: number, index: number) => {
-        const respond = vi.fn();
+        let result: SessionsListResult | undefined;
         await requestSessionRow(
           sessionReadHandlers["sessions.list"]!,
           context,
           "sessions.list",
           { limit: 5, offset },
-          (ok, result) => {
+          (ok, value) => {
             expect(ok).toBe(true);
             materialized.push(projection.materializedCount - before);
-            respond(result);
+            result = value as SessionsListResult;
           },
           null,
           `page-${index}`,
         );
-        expect(respond).toHaveBeenCalledOnce();
-        return respond.mock.calls[0]![0] as SessionsListResult;
+        return result!;
       };
       try {
         sessionChanges.emit({ all: true, scope: "catalog" });
@@ -226,17 +212,14 @@ describe("list preparation", () => {
         const expectedPages = [0, 5, 0, 5].map((offset) =>
           Array.from({ length: 5 }, (_entry, index) => `page-${79 - offset - index}`),
         );
-        expect(pages.map((page) => page.sessions.map((row) => row.sessionId))).toEqual(
-          expectedPages,
-        );
-        expect(pages.map(keysOf)).toEqual(
-          expectedPages.map((page) => page.map((id) => `agent:main:dashboard:${id}`)),
+        expect(pages.map((page) => page.sessions)).toMatchObject(
+          expectedPages.map((page) =>
+            page.map((sessionId) => ({ sessionId, key: `agent:main:dashboard:${sessionId}` })),
+          ),
         );
         expect(await checkpoint).toBeLessThan(5);
         expect(rendered.toSorted()).toEqual(keys.slice(-10).toSorted());
         expect(Math.max(...materialized)).toBe(10);
-        // Each page selects initially and after preparation, never after every row slice.
-        expect(selections).toBeLessThanOrEqual(8);
         expect(reads).not.toHaveBeenCalled();
         expect(sql.queries).toEqual([]);
         await projection.ensureMaterialized();

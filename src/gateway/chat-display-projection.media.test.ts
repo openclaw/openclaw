@@ -295,43 +295,40 @@ describe("multimodal display privacy", () => {
       {
         type: "image",
         mimeType: "image/png",
-        url: "https://media.example/image.png",
+        url: "https://e.test/i",
         source: source("base64", "media://inbound/image-claim"),
       },
       {
         type: "audio",
         mimeType: "audio/wav",
         audio_url: "media://inbound/audio-claim",
-        source: source("url", "https://media.example/audio.wav", { omitted: true }),
+        source: source("url", "https://e.test/a", { omitted: true }),
       },
       {
         type: "video",
         mimeType: "video/mp4",
-        video_url: "https://media.example/video.mp4",
+        video_url: "https://e.test/v",
         source: source("url", "media://inbound/video-claim", { omitted: true }),
       },
     ];
     const privateFields = [
       {
         path: "/tmp/private-image.png",
-        url: "https://image-user@media.example/image.png?signature=image-secret#image-fragment",
+        url: "https://image-user@e.test/i?signature=image-secret#image-fragment",
         source: source("base64", "media://inbound/image-claim", { data, blob: data }),
       },
       {
         data,
         filePath: "C:\\private-audio.wav",
-        source: source(
-          "url",
-          "https://audio-user@media.example/audio.wav?token=audio-secret#audio-fragment",
-          { data },
-        ),
+        source: source("url", "https://audio-user@e.test/a?token=audio-secret#audio-fragment", {
+          data,
+        }),
       },
       {
         blob: data,
         localPath: "\\\\server\\share\\private-video.mp4",
         openclawReasoningReplay: { private: true },
-        video_url:
-          "https://video-user@media.example/video.mp4?X-Amz-Signature=video-secret#video-fragment",
+        video_url: "https://video-user@e.test/v?X-Amz-Signature=video-secret#video-fragment",
         source: source("url", "media://inbound/video-claim", { blob: data }),
       },
     ];

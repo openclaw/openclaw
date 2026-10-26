@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -21,6 +21,7 @@ import {
   collectPublicSessionAttachments,
   readPublicSessionAttachment,
 } from "./control-ui-public-session-attachments.js";
+import { publicReadBarrier } from "./control-ui-public-session-barrier.test-support.js";
 import { projectPublicSessionItems } from "./control-ui-public-session-project.js";
 import {
   isPublicSessionShareActive as readActive,
@@ -63,16 +64,14 @@ function currentProjection() {
   }
   return projection;
 }
-function readPublicSessionShare(
-  config: OpenClawConfig,
-  target: typeof locator,
+function readPage(
   options: { offset?: number; card?: boolean } = {},
+  target = locator,
+  config: OpenClawConfig = cfg,
 ) {
   return readShare(config, target, { ...options, projection: currentProjection() });
 }
-function isPublicSessionShareActive(config: OpenClawConfig, target: typeof locator) {
-  return readActive(config, target, currentProjection());
-}
+const isActive = () => readActive(cfg, locator, currentProjection());
 async function withPublicTestState(run: () => Promise<void>) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot(cfg);
@@ -109,11 +108,11 @@ describe("anonymous published session reader", () => {
   it("checks twenty warm publication readers without Gateway-thread SQLite", async () => {
     await withPublicTestState(async () => {
       await seed(["Public text"]);
-      expect(await readPublicSessionShare(cfg, locator)).not.toBeNull();
+      expect(await readPage()).not.toBeNull();
       const sql = observeHostDataSql();
       try {
         for (let viewer = 0; viewer < 20; viewer++) {
-          expect(isPublicSessionShareActive(cfg, locator)).toBe(true);
+          expect(isActive()).toBe(true);
         }
         expect(sql.queries).toEqual([]);
       } finally {
@@ -140,7 +139,7 @@ describe("anonymous published session reader", () => {
       const pages = [];
       let offset = 0;
       do {
-        const page = await readPublicSessionShare(cfg, locator, { offset });
+        const page = await readPage({ offset });
         expect(page).toMatchObject({
           title: "Public example",
           totalMessages: 440,
@@ -245,14 +244,14 @@ describe("anonymous published session reader", () => {
   it("enforces the byte bound and advances past oversized source rows without losing older messages", async () => {
     await withPublicTestState(async () => {
       await seed(["Oldest", "x".repeat(1024 * 1024 + 1), "Newest"]);
-      const latest = await readPublicSessionShare(cfg, locator);
+      const latest = await readPage();
       expect(latest).toMatchObject({ messages: [{ content: "Newest" }], olderOffset: 1 });
-      const oversized = await readPublicSessionShare(cfg, locator, { offset: 1 });
+      const oversized = await readPage({ offset: 1 });
       expect(oversized).toMatchObject({ messages: [], truncated: true, olderOffset: 2 });
-      const oldest = await readPublicSessionShare(cfg, locator, { offset: 2 });
+      const oldest = await readPage({ offset: 2 });
       expect(oldest?.messages).toMatchObject([{ content: "Oldest" }]);
       expect(oldest?.olderOffset).toBeUndefined();
-      const preview = await readPublicSessionShare(cfg, locator, { card: true });
+      const preview = await readPage({ card: true });
       expect(preview).toMatchObject({ messages: [{ content: "Oldest" }], totalMessages: 3 });
     });
   });
@@ -266,7 +265,7 @@ describe("anonymous published session reader", () => {
         "Opening public request",
         ...Array.from({ length: 205 }, (_, index) => `Later request ${index}`),
       ]);
-      const preview = await readPublicSessionShare(cfg, locator, { card: true });
+      const preview = await readPage({ card: true });
       expect(preview).toMatchObject({
         messages: [{ content: "Opening public request" }],
         totalMessages: 209,
@@ -280,7 +279,7 @@ describe("anonymous published session reader", () => {
         ...Array.from({ length: 100 }, () => ({ role: "assistant", content: "Prelude" })),
         "Later request outside the opening window",
       ]);
-      const preview = await readPublicSessionShare(cfg, locator, { card: true });
+      const preview = await readPage({ card: true });
       expect(preview).toMatchObject({ messages: [], totalMessages: 101 });
     });
   });
@@ -317,9 +316,9 @@ describe("anonymous published session reader", () => {
           },
           "Newest",
         ]);
-        const latest = await readPublicSessionShare(cfg, locator);
+        const latest = await readPage();
         expect(latest).toMatchObject({ messages: [{ content: "Newest" }], olderOffset: 1 });
-        const page = await readPublicSessionShare(cfg, locator, { offset: latest?.olderOffset });
+        const page = await readPage({ offset: latest?.olderOffset });
         expect(page).toMatchObject({ olderOffset: 2 });
         expect(page?.messages).toHaveLength(1);
         expect(page?.messages[0]).toMatchObject({
@@ -336,9 +335,9 @@ describe("anonymous published session reader", () => {
         });
         const loaded = await readPublicSessionAttachment(exact, "content-1", locator);
         expect(loaded?.equals(png)).toBe(true);
-        expect(
-          (await readPublicSessionShare(cfg, locator, { offset: page?.olderOffset }))?.messages,
-        ).toMatchObject([{ content: "Oldest" }]);
+        expect((await readPage({ offset: page?.olderOffset }))?.messages).toMatchObject([
+          { content: "Oldest" },
+        ]);
       });
     },
   );
@@ -346,7 +345,7 @@ describe("anonymous published session reader", () => {
   it("rejects private, unknown-agent, mismatched-instance and mismatched-grant requests", async () => {
     await withPublicTestState(async () => {
       await seed(["Published"]);
-      expect(isPublicSessionShareActive(cfg, locator)).toBe(true);
+      expect(isActive()).toBe(true);
       for (const target of [
         { ...locator, agentId: "other" },
         { ...locator, sessionKey: "agent:other:public-history" },
@@ -355,12 +354,12 @@ describe("anonymous published session reader", () => {
         { ...locator, shareId: "b".repeat(48) },
         { ...locator, sessionKey: "agent:main:incognito-private" },
       ]) {
-        expect(await readPublicSessionShare(cfg, target)).toBeNull();
+        expect(await readPage({}, target)).toBeNull();
       }
-      expect(await readPublicSessionShare({ agents: { entries: {} } }, locator)).toBeNull();
+      expect(await readPage({}, locator, { agents: { entries: {} } })).toBeNull();
       await patchSessionEntryCore(locator, () => ({ publicShare: undefined }));
-      expect(isPublicSessionShareActive(cfg, locator)).toBe(false);
-      expect(await readPublicSessionShare(cfg, locator)).toBeNull();
+      expect(isActive()).toBe(false);
+      expect(await readPage()).toBeNull();
     });
   });
 
@@ -369,9 +368,8 @@ describe("anonymous published session reader", () => {
     async (action, { signal }) => {
       await withPublicTestState(async () => {
         await seed(["Must not escape after closure"]);
-        const membershipRead = Promise.withResolvers<void>();
-        const releaseMembership = Promise.withResolvers<void>();
-        const revalidation = Promise.withResolvers<void>();
+        const membership = publicReadBarrier(signal);
+        const revalidation = publicReadBarrier(signal);
         let holdMembership = false;
         let historyReturned = false;
         if (action === "metadata") {
@@ -383,8 +381,7 @@ describe("anonymous published session reader", () => {
               readers.readMembershipFacts = async (...input) => {
                 const result = await readMembership.call(readers, ...input);
                 if (holdMembership) {
-                  membershipRead.resolve();
-                  await withinTest(releaseMembership.promise, signal);
+                  await membership.hold();
                 }
                 return result;
               };
@@ -395,7 +392,7 @@ describe("anonymous published session reader", () => {
           const prepare = owner.withPreparedExactRows.bind(owner);
           vi.spyOn(owner, "withPreparedExactRows").mockImplementation((...args) => {
             if (historyReturned) {
-              revalidation.resolve();
+              revalidation.enter();
             }
             return prepare(...args);
           });
@@ -425,25 +422,21 @@ describe("anonymous published session reader", () => {
                 factsInvalidated: "category",
               });
               // Hold the real worker result before the projection accepts it.
-              await withinTest(membershipRead.promise, signal);
+              await withinTest(membership.entered, signal);
               expect(currentProjection().sharingTargetState(rowQuery).status).toBe("pending");
             }
             historyReturned = true;
             return result;
           },
         );
-        const reading = readPublicSessionShare(cfg, locator);
+        const reading = readPage();
         try {
           if (action === "metadata") {
-            await withinTest(
-              awaitGateBeforeSettlement(
-                revalidation.promise,
-                reading,
-                "Public session read settled before rejoining invalidated membership",
-              ),
-              signal,
+            await revalidation.wait(
+              reading,
+              "Public session read settled before rejoining invalidated membership",
             );
-            releaseMembership.resolve();
+            membership.release();
           }
           const result = await reading;
           if (action === "metadata") {
@@ -457,7 +450,7 @@ describe("anonymous published session reader", () => {
             expect(loadSessionEntry(locator)?.publicShare).toBeUndefined();
           }
         } finally {
-          releaseMembership.resolve();
+          membership.release();
           await Promise.allSettled([reading]);
         }
       });
@@ -468,7 +461,7 @@ describe("anonymous published session reader", () => {
     await withPublicTestState(async () => {
       const global = { ...locator, sessionKey: "global" };
       await seed(["Global publication"], global);
-      expect((await readPublicSessionShare(cfg, global))?.messages).toMatchObject([
+      expect((await readPage({}, global))?.messages).toMatchObject([
         { content: "Global publication" },
       ]);
     });

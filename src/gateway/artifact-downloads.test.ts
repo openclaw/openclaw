@@ -5,7 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { createImageProcessor } from "../media/image-processor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -256,22 +255,12 @@ it("serves distinct fixed WebP renditions over HTTP with alpha, orientation, and
   const grantImage = (source: Buffer, mimeType = "image/png") =>
     grantFor(client, artifactFrom(source, { title: "photo.png", mimeType })).url;
   const fetchImage = async (url: string, method = "GET", headers?: Record<string, string>) => {
-    const origin = "http://127.0.0.1:" + server.claim.port;
-    const target = new URL(url, origin);
-    if (target.origin !== origin) {
-      throw new Error("Image fixture requests must stay on the leased loopback origin");
-    }
-    const { response, release } = await fetchWithSsrFGuard({
-      url: target.href,
-      policy: { allowedOrigins: [origin] },
-      maxRedirects: 0,
-      init: { method, headers },
+    const response = await fetch(`http://127.0.0.1:${server.claim.port}${url}`, {
+      method,
+      headers,
+      redirect: "error",
     });
-    try {
-      return { response, bytes: Buffer.from(await response.arrayBuffer()) };
-    } finally {
-      await release();
-    }
+    return { response, bytes: Buffer.from(await response.arrayBuffer()) };
   };
   try {
     const source = solidPng(2400, 1200, 96);
