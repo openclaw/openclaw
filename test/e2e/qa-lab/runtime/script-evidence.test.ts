@@ -3,9 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { validateQaEvidenceSummaryJson } from "../../../../extensions/qa-lab/test-api.js";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
-const tempRoots: string[] = [];
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 const writerDefaults = {
   logFileName: "producer.log",
   primaryModel: "mock-openai/gpt-5.6-luna",
@@ -27,8 +28,7 @@ async function makeWriter(
     "maxDetailsBytes" | "maxLogBytes"
   > = {},
 ) {
-  const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-script-evidence-"));
-  tempRoots.push(repoRoot);
+  const repoRoot = tempRoots.make("openclaw-script-evidence-");
   const artifactBase = path.join(repoRoot, ".artifacts", "qa-e2e", "script");
   const writer = createQaScriptEvidenceWriter({
     ...writerDefaults,
@@ -48,12 +48,7 @@ async function makeWriter(
   };
 }
 
-afterEach(async () => {
-  vi.unstubAllEnvs();
-  await Promise.all(
-    tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
-  );
-});
+afterEach(() => vi.unstubAllEnvs());
 
 it("writes evidence with normalized artifact paths", async () => {
   const { artifactBase, writer } = await makeWriter();

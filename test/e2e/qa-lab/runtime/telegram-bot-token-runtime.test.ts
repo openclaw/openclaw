@@ -1,40 +1,17 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { runTelegramBotTokenRuntime, testing } from "./telegram-bot-token-runtime.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const leasedToken = "123456:leased-secret";
 type Dependencies = NonNullable<Parameters<typeof runTelegramBotTokenRuntime>[2]>;
 
-function createCredentialDependencies(token: string) {
+async function fixture() {
+  const artifactBase = tempDirs.make("telegram-bot-token-");
   const release = vi.fn(async () => undefined);
   const stop = vi.fn(async () => undefined);
-  return {
-    dependencies: {
-      acquireCredential: async () => ({
-        heartbeat: async () => undefined,
-        heartbeatIntervalMs: 0,
-        kind: "telegram",
-        payload: { sutToken: token },
-        release,
-        source: "env" as const,
-      }),
-      startCredentialHeartbeat: () => ({
-        stop,
-        throwIfFailed: () => undefined,
-      }),
-    },
-    release,
-    stop,
-  };
-}
-
-async function fixture() {
-  const artifactBase = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-bot-token-"));
-  tempDirs.push(artifactBase);
-  const credential = createCredentialDependencies(leasedToken);
   const instance = {
     cleanup: vi.fn(async () => undefined),
     startGateway: vi.fn(async () => undefined),
@@ -44,22 +21,29 @@ async function fixture() {
   };
   const createInstance = vi.fn<Dependencies["createInstance"]>(async () => instance);
   return {
-    credential,
+    credential: { release, stop },
     instance,
     createInstance,
     run: (env: NodeJS.ProcessEnv = { OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: leasedToken }) =>
       runTelegramBotTokenRuntime(
         { artifactBase, repoRoot: process.cwd(), startupTimeoutMs: 100 },
         env,
-        { ...credential.dependencies, createInstance },
+        {
+          createInstance,
+          acquireCredential: async () => ({
+            heartbeat: async () => undefined,
+            heartbeatIntervalMs: 0,
+            kind: "telegram",
+            payload: { sutToken: leasedToken },
+            release,
+            source: "env",
+          }),
+          startCredentialHeartbeat: () => ({ stop, throwIfFailed: () => undefined }),
+        },
       ),
     log: () => fs.readFile(path.join(artifactBase, "telegram-startup-getme-live.log"), "utf8"),
   };
 }
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
-});
 
 describe("telegram bot token runtime evidence", () => {
   it("writes blocked evidence without a dedicated credential", async () => {
@@ -111,18 +95,12 @@ describe("telegram bot token runtime evidence", () => {
   });
 
   it("requires product startup to precede polling and bounds the wait", async () => {
-    await expect(
-      testing.waitForProductStartup(
-        {
-          cleanup: async () => undefined,
-          startGateway: async () => undefined,
-          logs: () =>
-            "[telegram][diag] polling cycle started\n" +
-            "[qa-live] starting provider (@qa_test_bot)\n",
-        },
-        10,
-      ),
-    ).rejects.toThrow("product startup getMe timed out");
+    const { instance } = await fixture();
+    instance.logs = () =>
+      "[telegram][diag] polling cycle started\n[qa-live] starting provider (@qa_test_bot)\n";
+    await expect(testing.waitForProductStartup(instance, 10)).rejects.toThrow(
+      "product startup getMe timed out",
+    );
   });
 
   it("redacts leased tokens from startup failure evidence", async () => {

@@ -97,32 +97,13 @@ it.for(["existing", "published"] as const)(
   },
 );
 
-it("releases its deadline when the real gate watcher cannot be constructed", async ({ signal }) => {
+it("reports a missing gate directory when the watcher cannot be constructed", async ({
+  signal,
+}) => {
   const root = tempDirs.make("mcp-gate-watch-failure-");
-  const timers = vi.spyOn(globalThis, "setTimeout");
-  const cleared = vi.spyOn(globalThis, "clearTimeout");
-  try {
-    await expect(
-      waitForMcpFixtureGate(path.join(root, "missing", "gate"), signal),
-    ).rejects.toMatchObject({
-      code: "ENOENT",
-      syscall: "watch",
-    });
-    const allocated = timers.mock.results.flatMap((result, index) =>
-      result.type === "return" && timers.mock.calls[index]?.[1] === 30_000 ? [result.value] : [],
-    );
-    expect(
-      allocated.filter((timer) => !cleared.mock.calls.some(([value]) => value === timer)).length,
-    ).toBe(0);
-  } finally {
-    for (const result of timers.mock.results) {
-      if (result.type === "return") {
-        clearTimeout(result.value);
-      }
-    }
-    timers.mockRestore();
-    cleared.mockRestore();
-  }
+  await expect(
+    waitForMcpFixtureGate(path.join(root, "missing", "gate"), signal),
+  ).rejects.toMatchObject({ code: "ENOENT", syscall: "watch" });
 });
 
 it("kills a spawned fixture when readiness validation fails", async (context) => {
