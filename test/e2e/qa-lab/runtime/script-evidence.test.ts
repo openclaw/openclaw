@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { validateQaEvidenceSummaryJson } from "../../../../extensions/qa-lab/test-api.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
@@ -60,7 +61,9 @@ it("writes evidence with normalized artifact paths", async () => {
     { kind: "log", path: "producer.log", source: "script" },
     { kind: "summary", path: path.join("nested", "summary.json"), source: "script" },
   ]);
-  expect(await readJson(path.join(artifactBase, "qa-evidence.json"))).toEqual(evidence);
+  expect(
+    validateQaEvidenceSummaryJson(await readJson(path.join(artifactBase, "qa-evidence.json"))),
+  ).toEqual(evidence);
   expect(await readJson(path.join(artifactBase, "latest-run.json"))).toEqual({
     qaEvidence: "qa-evidence.json",
   });

@@ -19,8 +19,12 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // Tree signaling joins dispatch, not the foreign descendant's waitpid completion.
 async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<void> {
-  while (processIsAlive(pid)) {
-    await waitForProcessTick(10, undefined, { signal });
+  try {
+    while (processIsAlive(pid)) {
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (error) {
+    throw new Error(`timed out waiting for fixture descendant ${pid} to exit`, { cause: error });
   }
 }
 
@@ -93,13 +97,32 @@ it.for(["existing", "published"] as const)(
   },
 );
 
-it("reports a missing gate directory when the watcher cannot be constructed", async ({
-  signal,
-}) => {
+it("releases its deadline when the real gate watcher cannot be constructed", async ({ signal }) => {
   const root = tempDirs.make("mcp-gate-watch-failure-");
-  await expect(
-    waitForMcpFixtureGate(path.join(root, "missing", "gate"), signal),
-  ).rejects.toMatchObject({ code: "ENOENT", syscall: "watch" });
+  const timers = vi.spyOn(globalThis, "setTimeout");
+  const cleared = vi.spyOn(globalThis, "clearTimeout");
+  try {
+    await expect(
+      waitForMcpFixtureGate(path.join(root, "missing", "gate"), signal),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+      syscall: "watch",
+    });
+    const allocated = timers.mock.results.flatMap((result, index) =>
+      result.type === "return" && timers.mock.calls[index]?.[1] === 30_000 ? [result.value] : [],
+    );
+    expect(
+      allocated.filter((timer) => !cleared.mock.calls.some(([value]) => value === timer)).length,
+    ).toBe(0);
+  } finally {
+    for (const result of timers.mock.results) {
+      if (result.type === "return") {
+        clearTimeout(result.value);
+      }
+    }
+    timers.mockRestore();
+    cleared.mockRestore();
+  }
 });
 
 it("kills a spawned fixture when readiness validation fails", async (context) => {
