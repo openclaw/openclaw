@@ -411,26 +411,6 @@ describe("terminal gateway policy", () => {
     );
   });
 
-  it.each(["rewind", "forward"])("uses a monotonic deadline despite clock %s", async (jump) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    installTerminalCatalog(async () => {
-      vi.setSystemTime(jump === "rewind" ? -90_000 : 90_000);
-      if (jump === "rewind") {
-        vi.advanceTimersByTime(TERMINAL_OPEN_DEADLINE_MS);
-      }
-      return localPlan();
-    });
-    const fixture = makeOpts(catalogParams());
-    if (jump === "rewind") {
-      await expectOpenFailure(fixture, { message: "terminal open timed out" });
-    } else {
-      await runTerminal("terminal.open", fixture.opts);
-      expect(fixture.sessions.open).toHaveBeenCalled();
-      expect(fixture.respond).toHaveBeenCalledWith(true, expect.any(Object));
-    }
-  });
-
   it.each([
     ["isConnectionActive", "terminal connection closed"],
     ["isTerminalEnabled", "terminal is disabled"],

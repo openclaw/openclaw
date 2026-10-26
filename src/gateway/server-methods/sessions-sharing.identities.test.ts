@@ -215,14 +215,7 @@ it("lists current identities and adds members without decoding unrelated saved p
     vi.spyOn(userProfileReads, "listProfiles").mockRejectedValue(
       new Error("Profile worker enumeration is unavailable"),
     );
-    const parse = JSON.parse;
-    let unrelatedDecodes = 0;
-    vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
-      if (typeof value === "string" && value.includes(savedPrompt)) {
-        unrelatedDecodes++;
-      }
-      return parse(value, reviver);
-    });
+    const parse = vi.spyOn(JSON, "parse");
     for (const method of ["session.members.list", "session.members.listEvidence"] as const) {
       const listed = await call(method, { sessionKey }, requestContext);
       expect(listed[0]?.[1]).toMatchObject({ identities: expected });
@@ -231,7 +224,7 @@ it("lists current identities and adds members without decoding unrelated saved p
     expect(
       await call("session.members.add", { sessionKey, identityId: profile.id }, requestContext),
     ).toEqual([[true, { ok: true, sessionKey, identityId: profile.id }, undefined]]);
-    expect(unrelatedDecodes).toBe(0);
+    expect(parse.mock.calls.flat()).not.toContainEqual(expect.stringContaining(savedPrompt));
     vi.restoreAllMocks();
     expect(
       await authorizeResolvedSessionMutationAsync({
@@ -665,11 +658,6 @@ it("projects current participation and exact choices through the sharing handler
     await invoke("session.members.add", { identityId: explicit.id });
     const first = await read();
     const permission = (id: string) => first.permissions?.find((row) => row.identityId === id);
-    const expectedPermission = (
-      identityId: string,
-      level: SessionMemberPermissionLevel,
-      options: SessionMemberPermissionLevel[],
-    ) => ({ identityId, level, options });
     for (const [person, level, options] of [
       [baseline, "read", ["read", "send"]],
       [explicit, "send", ["read", "send"]],
@@ -678,7 +666,7 @@ it("projects current participation and exact choices through the sharing handler
       [sandboxed, "read", ["read"]],
       [wrongAgent, "read", ["read"]],
     ] as const) {
-      expect(permission(person.id)).toEqual(expectedPermission(person.id, level, [...options]));
+      expect(permission(person.id)).toEqual({ identityId: person.id, level, options });
     }
     expect(permission(denied.id)).toBeUndefined();
     expect(permission(owner.id)).toBeUndefined();
@@ -690,9 +678,7 @@ it("projects current participation and exact choices through the sharing handler
       level: SessionMemberPermissionLevel,
       options: SessionMemberPermissionLevel[],
     ) =>
-      expect((await read()).permissions).toContainEqual(
-        expectedPermission(person.id, level, options),
-      );
+      expect((await read()).permissions).toContainEqual({ identityId: person.id, level, options });
     await expectPermission(baseline, "send", ["read", "send"]);
     await invoke("session.members.remove", { identityId: baseline.id });
     await invoke("session.visibility.set", { visibility: "suggest" });
@@ -710,12 +696,16 @@ it("projects current participation and exact choices through the sharing handler
     setRuntimeConfigSnapshot(unconfiguredCfg);
     requestContext = context(vi.fn(), unconfiguredCfg);
     const unconfigured = await read();
-    expect(unconfigured.permissions).toContainEqual(
-      expectedPermission(baseline.id, "read", ["read", "send"]),
-    );
-    expect(unconfigured.permissions).toContainEqual(
-      expectedPermission(explicit.id, "send", ["read", "send"]),
-    );
+    expect(unconfigured.permissions).toContainEqual({
+      identityId: baseline.id,
+      level: "read",
+      options: ["read", "send"],
+    });
+    expect(unconfigured.permissions).toContainEqual({
+      identityId: explicit.id,
+      level: "send",
+      options: ["read", "send"],
+    });
     const legacy = await invoke("session.members.list");
     expect(legacy[0]?.[1]).not.toHaveProperty("permissions");
   }));

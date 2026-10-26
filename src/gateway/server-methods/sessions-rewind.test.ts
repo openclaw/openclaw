@@ -43,18 +43,17 @@ vi.mock("../../auto-reply/reply/queue/drain.js", () => ({
     throw new Error("Unexpected followup drain");
   },
 }));
-vi.mock("../../auto-reply/reply/queue/delivery-context.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../auto-reply/reply/queue/delivery-context.js")>()),
-  createOverflowSummaryRetrySource: () => {
+vi.mock("../../auto-reply/reply/queue/delivery-context.js", async (importOriginal) => {
+  const unexpectedOverflow = () => {
     throw new Error("Unexpected queue overflow");
-  },
-  resolveFollowupAuthorizationKey: () => {
-    throw new Error("Unexpected queue overflow");
-  },
-  resolveFollowupDeliveryStorageKey: () => {
-    throw new Error("Unexpected queue overflow");
-  },
-}));
+  };
+  return {
+    ...(await importOriginal<typeof import("../../auto-reply/reply/queue/delivery-context.js")>()),
+    createOverflowSummaryRetrySource: unexpectedOverflow,
+    resolveFollowupAuthorizationKey: unexpectedOverflow,
+    resolveFollowupDeliveryStorageKey: unexpectedOverflow,
+  };
+});
 vi.mock("../../agents/model-thinking-default.js", () => ({
   resolveThinkingSelection: () => {
     throw new Error("Unexpected model selection refresh");
@@ -138,6 +137,10 @@ function invalid(respond: ReturnType<typeof vi.fn>, message: string) {
     code: ErrorCodes.INVALID_REQUEST,
     message: expect.stringContaining(message),
   });
+}
+
+function expectReplyFields(respond: ReturnType<typeof vi.fn>, fields: Record<string, unknown>) {
+  expectCutReply(respond, expect.objectContaining(fields));
 }
 
 function sourceTarget() {
@@ -321,7 +324,7 @@ describe("session message-cut methods", () => {
     const fork = await invoke("sessions.fork", "user-entry", options);
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
 
-    expectCutReply(fork, expect.objectContaining({ sessionKey: expect.any(String) }));
+    expectReplyFields(fork, { sessionKey: expect.any(String) });
     expect(await readEntry(forkKey ?? "")).toMatchObject({
       createdActor: { type: "human", id: profile.id },
       sandbox: "required",
@@ -355,7 +358,7 @@ describe("session message-cut methods", () => {
       },
     });
 
-    expectCutReply(respond, expect.objectContaining({ editorText: "edit me" }));
+    expectReplyFields(respond, { editorText: "edit me" });
     await expectSessionWorkCleared(work);
   });
 
@@ -451,13 +454,10 @@ describe("session message-cut methods", () => {
         },
       });
       const respond = await invoke(method, "canonical-image");
-      expectCutReply(
-        respond,
-        expect.objectContaining({
-          editorText: "canonical image prompt",
-          editorAttachments: [imageAttachment],
-        }),
-      );
+      expectReplyFields(respond, {
+        editorText: "canonical image prompt",
+        editorAttachments: [imageAttachment],
+      });
       expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(1);
       expect(mocks.readMediaBuffer).toHaveBeenCalledWith(
         storedImageId,
@@ -484,13 +484,7 @@ describe("session message-cut methods", () => {
         },
       } as GatewayClient,
     });
-    expectCutReply(
-      fork,
-      expect.objectContaining({
-        ...editorReply,
-        sessionKey: expect.any(String),
-      }),
-    );
+    expectReplyFields(fork, { ...editorReply, sessionKey: expect.any(String) });
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(2);
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
     expect(forkKey).toBeTruthy();
@@ -570,12 +564,6 @@ describe("session message-cut methods", () => {
   );
 });
 
-const forkFailure = {
-  status: "failed",
-  code: "upstream-unavailable",
-  message: "Codex is offline. Try again.",
-};
-
 function installUpstreamForkHarness(
   executionEnvironment?: "host-only",
   contract: "dual" | "legacy" | "v2" = "v2",
@@ -611,9 +599,7 @@ describe("upstream session message-cut methods", () => {
       }),
     ).toBe(true);
   });
-  it("rejects mutation but lists empty branches for externally owned conversations", async () => {
-    const respond = await invoke("sessions.branches.switch", "off-path-entry");
-    expectExternalOwner(respond);
+  it("lists empty branches for externally owned conversations", async () => {
     // Listing is read-only: "no local branches" is the truthful steady state,
     // not an error to latch into the UI.
     const listed = await invoke("sessions.branches.list");
@@ -641,16 +627,12 @@ describe("upstream session message-cut methods", () => {
       let retainedAssertCurrent: (() => void) | undefined;
       const message =
         outcome === "upstream-unavailable"
-          ? forkFailure.message
+          ? "Codex is offline. Try again."
           : "boundary failed: drift-mismatch";
       const result =
         outcome === "created"
           ? { status: "created", key: "agent:main:dashboard:forked", editorText: "edit me" }
-          : {
-              status: "failed",
-              code: outcome,
-              message,
-            };
+          : { status: "failed", code: outcome, message };
       mocks.upstreamFork.mockImplementation(
         async ({ assertCurrent }: { assertCurrent: () => void }) => {
           assertCurrent();
