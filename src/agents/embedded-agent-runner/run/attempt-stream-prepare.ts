@@ -325,6 +325,7 @@ function prepareStream(
     onPartialReply: attempt.onPartialReply,
     onAssistantMessageStart: attempt.onAssistantMessageStart,
     onAgentEvent: attempt.onAgentEvent,
+    onExecutionPhase: attempt.onExecutionPhase,
     onToolStreamBoundary: attempt.onToolStreamBoundary,
     enforceFinalTag: attempt.enforceFinalTag,
     silentExpected: attempt.silentExpected,

@@ -25,7 +25,6 @@ import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixt
 import { getActiveNativeAttempt, getEmbeddedRunAttachment } from "../run-state.js";
 import { registerReplyPromotionTests } from "./attempt-stream-prepare.reply-promotion.test-support.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type QuestionDispatcher = Extract<
   Parameters<typeof registerPendingAgentQuestion>[0]["gatewayCall"],
@@ -163,6 +162,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       // A callback here causes the real subscriber to spread its input again;
       // keeping it absent lets the Proxy observe the nested event consumers.
       onAgentEvent: undefined,
+      onExecutionPhase: record,
       onToolStreamBoundary: record,
       enforceFinalTag: false,
       silentExpected: false,
@@ -290,17 +290,10 @@ describe("prepareEmbeddedAttemptStream", () => {
     expect(projectedResult.effects.length).toBeGreaterThan(0);
     expect(projectedResult.assistantTexts).toEqual(["Projected stream answer"]);
     expect(projectedResult.compactions).toBe(1);
-    // Compiler probe: every absent read is outside BOTH attempt contracts; no
-    // fixture omission can silently bless dropping an optional attempt fact.
-    const absentReadKeys = ["onExecutionPhase"] satisfies Array<
-      Exclude<
-        keyof SubscribeEmbeddedAgentSessionParams,
-        keyof EmbeddedRunAttemptParams | keyof EmbeddedRunAttemptInternalParams
-      >
-    >;
+    // Every real callee read is present, including inherited attempt callbacks.
     expect([
       ...new Set(projectedResult.reads.filter((read) => !read.present).map((read) => read.key)),
-    ]).toEqual(absentReadKeys);
+    ]).toEqual([]);
     prepared.subscription.unsubscribe();
   });
 
