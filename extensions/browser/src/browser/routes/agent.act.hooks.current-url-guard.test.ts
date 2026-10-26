@@ -35,7 +35,6 @@ const { registerBrowserAgentActHookRoutes } = await import("./agent.act.hooks.js
 function createProfileContext(options?: {
   attachOnly?: boolean;
   driver?: "openclaw" | "extension" | "existing-session";
-  tabUrl?: string;
 }) {
   return {
     profile: {
@@ -48,7 +47,7 @@ function createProfileContext(options?: {
     ensureTabAvailable: vi.fn(async () => ({
       targetId: "tab-1",
       title: "Internal Admin",
-      url: options?.tabUrl ?? "http://127.0.0.1:8080/admin",
+      url: "http://127.0.0.1:8080/admin",
       type: "page",
     })),
     listTabs: vi.fn(async () => []),
@@ -75,55 +74,39 @@ async function callHook(params: {
   return await runRoute(postHandlers.get(params.path), { body: params.body });
 }
 
-async function upload(profile: Parameters<typeof createProfileContext>[0]) {
+async function upload(
+  profile: Parameters<typeof createProfileContext>[0],
+  body: Record<string, unknown> = { paths: ["/tmp/upload.txt"], ref: "upload-button" },
+) {
   return await callHook({
     path: "/hooks/file-chooser",
-    body: { paths: ["/tmp/upload.txt"], ref: "upload-button" },
-    profileCtx: createProfileContext({ tabUrl: "http://127.0.0.1:8080/upload", ...profile }),
+    body,
+    profileCtx: createProfileContext(profile),
     allowPrivateNetwork: true,
   });
 }
 
-const blockedHookCases = [
-  {
-    label: "file chooser",
-    path: "/hooks/file-chooser" as const,
-    body: { paths: ["/tmp/upload.txt"], ref: "upload-button" },
-    sideEffects: [
-      pathMocks.resolveExistingUploadPaths,
-      mcp.uploadChromeMcpFile,
-      pwMocks.armFileUploadViaPlaywright,
-      pwMocks.uploadViaPlaywright,
-      pwMocks.clickViaPlaywright,
-      pwMocks.setInputFilesViaPlaywright,
-    ],
-  },
-  {
-    label: "dialog",
-    path: "/hooks/dialog" as const,
-    body: { accept: true },
-    sideEffects: [mcp.evaluateChromeMcpScript, pwMocks.armDialogViaPlaywright],
-  },
-];
+const sideEffects = Object.values({ ...mcp, ...pathMocks, ...pwMocks });
 
 describe("agent act hook current URL guard", () => {
   beforeEach(() => {
-    for (const fn of Object.values({ ...mcp, ...pathMocks, ...pwMocks })) {
+    for (const fn of sideEffects) {
       fn.mockClear();
     }
   });
 
-  it.each(blockedHookCases)(
-    "blocks $label hooks before page side effects on a disallowed current tab",
-    async ({ path, body, sideEffects }) => {
-      const profileCtx = createProfileContext();
-      const response = await callHook({ path, body, profileCtx });
+  it.each([
+    ["/hooks/file-chooser", { paths: ["/tmp/upload.txt"], ref: "upload-button" }],
+    ["/hooks/dialog", { accept: true }],
+  ] as const)(
+    "blocks %s before page side effects on a disallowed current tab",
+    async (path, body) => {
+      const response = await callHook({ path, body, profileCtx: createProfileContext() });
       expectResponse(
         response,
         { error: "browser navigation blocked by policy", reason: "navigation_blocked" },
         400,
       );
-      expect(profileCtx.ensureTabAvailable).toHaveBeenCalledOnce();
       for (const sideEffect of sideEffects) {
         expect(sideEffect).not.toHaveBeenCalled();
       }
@@ -155,15 +138,7 @@ describe("agent act hook current URL guard", () => {
   ])("uploads every resolved file through Chrome MCP: $paths", async ({ targeting, paths }) => {
     const resolvedPaths = paths.map((file) => `/tmp/openclaw/uploads/${file}`);
     pathMocks.resolveExistingUploadPaths.mockResolvedValueOnce({ ok: true, paths: resolvedPaths });
-    const response = await callHook({
-      path: "/hooks/file-chooser",
-      body: { paths, ...targeting },
-      profileCtx: createProfileContext({
-        driver: "existing-session",
-        tabUrl: "http://127.0.0.1:8080/upload",
-      }),
-      allowPrivateNetwork: true,
-    });
+    const response = await upload({ driver: "existing-session" }, { paths, ...targeting });
 
     expectResponse(response, { ok: true });
     expect(mcp.uploadChromeMcpFile).toHaveBeenCalledWith(

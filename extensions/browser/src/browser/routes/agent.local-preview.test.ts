@@ -61,13 +61,17 @@ describe("local preview navigation policy", () => {
     }
     return browserNavigationPolicyForProfile(ctx, profileCtx);
   }
+  async function navigate(
+    url = "http://127.0.0.1/",
+    browser?: Parameters<typeof resolveBrowserConfig>[0],
+  ) {
+    return assertBrowserNavigationAllowed({ url, ...(await navigationPolicy(browser)) });
+  }
   it.each(["http://127.0.0.1:49187/", "http://localhost:49187/", "http://[::1]:49187/"])(
     "allows an unrestricted local managed preview at %s",
     async (url) => {
       await withBrowserRequestScope(scope, async () => {
-        await expect(
-          assertBrowserNavigationAllowed({ url, ...(await navigationPolicy()) }),
-        ).resolves.toBeUndefined();
+        await expect(navigate(url)).resolves.toBeUndefined();
       });
     },
   );
@@ -147,9 +151,7 @@ describe("local preview navigation policy", () => {
   });
   it("requires a host invocation assertion for an automatic preview grant", async () => {
     await withBrowserRequestScope({ ...scope, assertInvocationCurrent: undefined }, async () => {
-      await expect(
-        assertBrowserNavigationAllowed({ url: "http://127.0.0.1/", ...(await navigationPolicy()) }),
-      ).rejects.toThrow(/private|internal|special-use/i);
+      await expect(navigate()).rejects.toThrow(/private|internal|special-use/i);
     });
   });
   it("expires an inherited asynchronous preview grant when the request ends", async () => {
@@ -168,53 +170,31 @@ describe("local preview navigation policy", () => {
     await lateCheck;
   });
   it.each([
-    { name: "explicit empty policy", browser: { ssrfPolicy: {} } },
-    {
-      name: "explicit strict policy",
-      browser: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } },
+    ["explicit empty policy", { ssrfPolicy: {} }],
+    ["explicit strict policy", { ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } }],
+    ["explicit other allowlist", { ssrfPolicy: { allowedHostnames: ["preview.example"] } }],
+    ["explicit deny", { ssrfPolicy: { blockedHostnames: ["127.0.0.1"] } }],
+    ["remote CDP", { profiles: { openclaw: { cdpUrl: "https://browser.example" } } }],
+    ["loopback attach-only", { attachOnly: true }],
+    ["explicit browser proxy", { extraArgs: ["--proxy-server=http://proxy.example"] }],
+    ["existing session", { profiles: { openclaw: { driver: "existing-session" } } }],
+  ] satisfies Array<[string, Parameters<typeof resolveBrowserConfig>[0]]>)(
+    "preserves %s",
+    async (_name, browser) => {
+      await withBrowserRequestScope(scope, async () => {
+        await expect(navigate("http://127.0.0.1:49187/", browser)).rejects.toThrow();
+      });
     },
-    {
-      name: "explicit other allowlist",
-      browser: { ssrfPolicy: { allowedHostnames: ["preview.example"] } },
-    },
-    { name: "explicit deny", browser: { ssrfPolicy: { blockedHostnames: ["127.0.0.1"] } } },
-    {
-      name: "remote CDP",
-      browser: { profiles: { openclaw: { cdpUrl: "https://browser.example" } } },
-    },
-    { name: "loopback attach-only", browser: { attachOnly: true } },
-    {
-      name: "explicit browser proxy",
-      browser: { extraArgs: ["--proxy-server=http://proxy.example"] },
-    },
-    {
-      name: "existing session",
-      browser: { profiles: { openclaw: { driver: "existing-session" as const } } },
-    },
-  ])("preserves $name", async ({ browser }) => {
-    await withBrowserRequestScope(scope, async () => {
-      await expect(
-        assertBrowserNavigationAllowed({
-          url: "http://127.0.0.1:49187/",
-          ...(await navigationPolicy(browser)),
-        }),
-      ).rejects.toThrow();
-    });
-  });
+  );
   it("does not leak the default into another request or the stored policy", async () => {
     const policy = await navigationPolicy();
     await withBrowserRequestScope(scope, async () => {
-      await assertBrowserNavigationAllowed({
-        url: "http://127.0.0.1/",
-        ...(await navigationPolicy()),
-      });
+      await navigate();
     });
     await expect(
       assertBrowserNavigationAllowed({ url: "http://127.0.0.1/", ...policy }),
     ).rejects.toThrow();
-    await expect(
-      assertBrowserNavigationAllowed({ url: "http://127.0.0.1/", ...(await navigationPolicy()) }),
-    ).rejects.toThrow();
+    await expect(navigate()).rejects.toThrow();
   });
   it.each([
     "http://10.0.0.1/",
@@ -223,9 +203,7 @@ describe("local preview navigation policy", () => {
     "http://127.0.0.2/",
   ])("keeps other protected addresses blocked: %s", async (url) => {
     await withBrowserRequestScope(scope, async () => {
-      await expect(
-        assertBrowserNavigationAllowed({ url, ...(await navigationPolicy()) }),
-      ).rejects.toThrow();
+      await expect(navigate(url)).rejects.toThrow();
     });
   });
 });
