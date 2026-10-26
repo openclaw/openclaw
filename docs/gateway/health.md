@@ -271,7 +271,10 @@ its CPU and delay readings. If the sampler resets, health responses omit
 The optional `cpuBreakdown` separates independent native counters:
 
 - `hostUtilization` is the busy fraction of the host CPU time reported by
-  `os.cpus()`, from `0` to `1` across `hostCpuCount` logical CPUs. This includes
+  the aggregate `/proc/stat` counters on Linux and `os.cpus()` elsewhere, from
+  `0` to `1` across `hostCpuCount` online logical CPUs. Linux counts user, nice,
+  system, idle, and hard IRQ time, matching `os.cpus()`; iowait, softirq, and
+  steal are excluded, and guest time is not counted twice. This includes
   other processes and is not the Gateway's CPU quota or container allowance.
 - `mainThreadCoreRatio` measures the Gateway main thread with
   `process.threadCpuUsage()`, not event-loop utilization.

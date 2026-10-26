@@ -19,6 +19,7 @@ import type {
   SessionIdentityMutationListener,
 } from "../../../sessions/session-lifecycle-events.js";
 import { notifyListeners, registerListener } from "../../../shared/listeners.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.test-support.js";
 import type { MockSubagentRegistryRows } from "../../subagent-test-fixtures.test-helpers.js";
 import type { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -151,7 +152,7 @@ export function createSubagentRegistryMockState() {
     runSubagentAnnounceFlow: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
     getGlobalHookRunner: vi.fn(() => null),
     ensureContextEnginesInitialized: vi.fn(),
-    loadAgentRuntimePluginRegistryHandle: vi.fn(),
+    loadAgentRuntimePluginRegistryHandle,
     resolveContextEngine: vi.fn(),
     onSubagentEnded: vi.fn<
       (params: { childSessionKey?: string }, context?: unknown) => Promise<void>

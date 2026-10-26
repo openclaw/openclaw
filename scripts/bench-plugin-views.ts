@@ -5,7 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import type { WorkboardLink } from "@openclaw/workboard-contract";
+import { WORKBOARD_STATUSES, type WorkboardLink } from "@openclaw/workboard-contract";
 import { chromium, expect, type CDPSession, type Page } from "playwright/test";
 import { controlUiPluginAssetPrefix } from "../src/gateway/control-ui-plugin-assets-contract.js";
 import { readPluginControlUiAssets } from "../src/plugins/control-ui-assets.js";
@@ -55,6 +55,8 @@ const { values } = parseArgs({
     "pair-offset": { type: "string", default: "0" },
     cards: { type: "string", default: "300" },
     items: { type: "string", default: "300" },
+    columns: { type: "string", default: "6" },
+    "windowed-variants": { type: "string", default: "" },
     "linked-dependencies": { type: "boolean", default: false },
     output: { type: "string", default: ".artifacts/plugin-views/measure" },
     trace: { type: "boolean", default: false },
@@ -68,6 +70,10 @@ const pairs = Number(values.pairs);
 const pairOffset = Number(values["pair-offset"]);
 const cardCount = Number(values.cards);
 const itemCount = Number(values.items);
+const columnCount = Number(values.columns);
+const windowedVariants = new Set(
+  values["windowed-variants"].split(",").filter(Boolean).map(Number),
+);
 const pluginIds = values.plugins.split(",");
 const profiles = values.profiles.split(",");
 if (
@@ -80,13 +86,15 @@ if (
   !Number.isInteger(itemCount) ||
   itemCount < 50 ||
   itemCount > 1000 ||
+  ![6, 9].includes(columnCount) ||
+  [...windowedVariants].some((variant) => !Number.isInteger(variant) || variant < 0) ||
   pluginIds.some(
     (id) => !["workboard", "memory-core", "nostr", ...remainingPluginIds].includes(id),
   ) ||
   profiles.some((id) => !["local", "remote"].includes(id))
 ) {
   throw new Error(
-    "Use positive --pairs, nonnegative --pair-offset, --cards >= 6, --items 50..1000, known --plugins and --profiles local,remote",
+    "Use positive --pairs, nonnegative --pair-offset, --cards >= 6, --items 50..1000, --columns 6|9, nonnegative --windowed-variants, known --plugins and --profiles local,remote",
   );
 }
 const output = path.resolve(values.output);
@@ -104,6 +112,9 @@ type Step = {
   nodes: number;
   elements: number;
   menuElements: number;
+  comments: number;
+  workboardCards: number;
+  workboardSlots: number;
 };
 type Sample = {
   plugin: string;
@@ -121,6 +132,13 @@ type Sample = {
   warmCoverage?: unknown;
   menuReturnFocusAfterRowsChange?: boolean;
   dependencyChildRetainedAfterParentUpdate?: boolean;
+  windowChecks?: {
+    middleCard: string;
+    bottomCard: string;
+    tabFrom: string;
+    tabTo: string;
+    detailReturnFocus: boolean;
+  };
   hostPrefetch?: unknown;
   pluginObservations?: Record<string, unknown>;
   workboardFixture?: {
@@ -132,13 +150,19 @@ type Sample = {
     coldObservedAt?: number;
     warmObservedAt?: number;
   };
-  postGcMemory?: { heapBytes: number; nodes: number; elements: number; menuElements: number };
+  postGcMemory?: { heapBytes: number; nodes: number } & ReturnType<typeof domCounts>;
 };
 const results: Sample[] = [];
 const roots = [values["plugin-root"], values["compare-plugin-root"]].filter(
   (root): root is string => Boolean(root),
 );
-const statuses = ["todo", "ready", "running", "review", "blocked", "done"];
+if ([...windowedVariants].some((variant) => variant >= roots.length)) {
+  throw new Error("--windowed-variants must name supplied plugin-root variant indexes");
+}
+const statuses =
+  columnCount === 9
+    ? [...WORKBOARD_STATUSES]
+    : ["todo", "ready", "running", "review", "blocked", "done"];
 const linkedDependencies = values["linked-dependencies"];
 const rootCount = linkedDependencies ? Math.max(2, Math.ceil(cardCount / 10)) : 0;
 const workboardInitialAgeMs = (2 * 24 + 3) * 60 * 60 * 1000;
@@ -231,6 +255,7 @@ function createWorkboardFixture(fixtureTime: number) {
     },
   ];
   seed.methodResponses["workboard.cards.list"].cards = seed.cards;
+  seed.methodResponses["workboard.cards.list"].statuses = statuses;
   seed.methodResponses["workboard.cards.list"].boards = seed.boards;
   seed.methodResponses["workboard.boards.list"].boards = seed.boards;
   return seed;
@@ -254,6 +279,20 @@ async function frames(page: Page) {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       }),
   );
+}
+function domCounts() {
+  const comments = document.createTreeWalker(document, NodeFilter.SHOW_COMMENT);
+  let commentCount = 0;
+  while (comments.nextNode()) {
+    commentCount++;
+  }
+  return {
+    elements: document.getElementsByTagName("*").length,
+    comments: commentCount,
+    menuElements: document.querySelectorAll(".workboard-card__action-menu-panel *").length,
+    workboardCards: document.querySelectorAll(".workboard-card").length,
+    workboardSlots: document.querySelectorAll(".workboard-column__slot").length,
+  };
 }
 function distribution(numbers: number[]) {
   const sorted = numbers.toSorted((a, b) => a - b);
@@ -750,11 +789,7 @@ try {
                 assets: assets.slice(assetsBefore),
                 heapBytes: after.JSHeapUsedSize ?? 0,
                 nodes: after.Nodes ?? 0,
-                ...(await page.evaluate(() => ({
-                  elements: document.getElementsByTagName("*").length,
-                  menuElements: document.querySelectorAll(".workboard-card__action-menu-panel *")
-                    .length,
-                }))),
+                ...(await page.evaluate(domCounts)),
               };
               sample.steps.push(measured);
               if (!navigation) {
@@ -772,13 +807,39 @@ try {
                   : plugin === "memory-core"
                     ? "settings/memory/memories"
                     : "settings/channels";
+            const assertWorkboardCards = async (cards: (typeof seed.cards)[number][]) => {
+              const counts = statuses.map((status) => ({
+                status,
+                count: cards.filter((card) => card.status === status).length,
+              }));
+              await page.waitForFunction(
+                ({ counts: columnCounts, windowed }) =>
+                  columnCounts.every(({ status, count }) => {
+                    const column = document.querySelector(`.workboard-column--${status}`);
+                    if (!column?.getAttribute("aria-label")?.endsWith(`, ${count}`)) {
+                      return false;
+                    }
+                    const rendered = column.querySelectorAll(".workboard-card").length;
+                    if (
+                      column.querySelectorAll(".workboard-card__menu-trigger").length !== rendered
+                    ) {
+                      return false;
+                    }
+                    return windowed && count > 24
+                      ? Boolean(column.querySelector(".workboard-column__window--active")) &&
+                          rendered > 0 &&
+                          rendered <= 24
+                      : rendered === count;
+                  }),
+                { counts, windowed: windowedVariants.has(variant) },
+              );
+            };
             const ready = async () => {
               if (remainingFixture) {
                 await remainingPluginReady(page, remainingFixture);
               } else if (plugin === "workboard") {
-                await expect(page.locator(".workboard-card")).toHaveCount(cardCount);
+                await assertWorkboardCards(seed.cards);
                 await expect(page.locator(".workboard-create")).toBeEnabled();
-                await expect(page.locator(".workboard-card__menu-trigger")).toHaveCount(cardCount);
                 await expect(page.locator(".workboard-card__menu-trigger").nth(1)).toBeVisible();
                 await expect(
                   page.locator('[data-card-id="bench-0"] .workboard-card__updated'),
@@ -797,6 +858,37 @@ try {
                   page.getByRole("button", { name: "Edit Profile", exact: true }),
                 ).toBeVisible();
               }
+            };
+            const revealCard = async (id: string) => {
+              const card = seed.cards.find((entry) => entry.id === id);
+              if (!card) {
+                throw new Error(`Unknown fixture card ${id}`);
+              }
+              const viewport = page.locator(
+                `.workboard-column--${card.status} .workboard-column__cards`,
+              );
+              const target = page.locator(
+                `.workboard-column__item[data-card-id="${id}"] .workboard-card`,
+              );
+              await viewport.evaluate((element) => {
+                element.scrollTop = 0;
+              });
+              await frames(page);
+              for (let attempt = 0; attempt < cardCount && !(await target.count()); attempt++) {
+                const moved = await viewport.evaluate((element) => {
+                  const before = element.scrollTop;
+                  element.scrollTop += element.clientHeight * 0.8;
+                  return element.scrollTop > before;
+                });
+                await frames(page);
+                if (!moved) {
+                  break;
+                }
+              }
+              await expect(target).toHaveCount(1);
+              await target.scrollIntoViewIfNeeded();
+              await expect(target).toBeInViewport();
+              return target;
             };
             const stopCoverage = async (phase: "cold" | "warm") => {
               const entries = await page.coverage.stopJSCoverage();
@@ -957,11 +1049,11 @@ try {
                 await page
                   .getByRole("searchbox", { name: "Search cards" })
                   .fill("Benchmark card 000");
-                await expect(page.locator(".workboard-card")).toHaveCount(1);
+                await assertWorkboardCards(seed.cards.filter((card) => card.id === "bench-0"));
               });
               await step("clear-search", async () => {
                 await page.getByRole("searchbox", { name: "Search cards" }).fill("");
-                await expect(page.locator(".workboard-card")).toHaveCount(cardCount);
+                await assertWorkboardCards(seed.cards);
               });
               await page.getByRole("button", { name: "Filters", exact: true }).click();
               await step("filter-priority", async () => {
@@ -970,12 +1062,10 @@ try {
                     '.workboard-filter-section__options[aria-label="Priority"] label[title="High"] input',
                   )
                   .check();
-                await expect(page.locator(".workboard-card")).toHaveCount(
-                  Math.floor(cardCount / 2),
-                );
+                await assertWorkboardCards(seed.cards.filter((card) => card.priority === "high"));
               });
               await page.getByRole("button", { name: "Clear filters", exact: true }).click();
-              await expect(page.locator(".workboard-card")).toHaveCount(cardCount);
+              await assertWorkboardCards(seed.cards);
               await page.keyboard.press("Escape");
               await step("select", async () => {
                 await page
@@ -994,13 +1084,11 @@ try {
                   .poll(() => cards.evaluate((element) => element.scrollTop))
                   .toBeGreaterThan(before);
               });
+              const cardToOpen = linkedDependencies
+                ? await revealCard(`bench-${rootCount}`)
+                : page.locator(".workboard-card").first();
               await step("open-card", async () => {
-                const card = linkedDependencies
-                  ? page.locator(
-                      `.workboard-column__item[data-card-id="bench-${rootCount}"] .workboard-card`,
-                    )
-                  : page.locator(".workboard-card").first();
-                await card.click();
+                await cardToOpen.click();
                 await expect(page.locator(".workboard-detail")).toBeVisible();
                 if (linkedDependencies) {
                   const dependencies = page.locator(".workboard-detail__dependencies li");
@@ -1016,6 +1104,18 @@ try {
                 .locator(".workboard-card")
                 .first();
               const target = page.locator(".workboard-column").nth(1);
+              const targetViewport = target.locator(".workboard-column__cards");
+              const targetFirst = target.locator(".workboard-card").first();
+              let gapPoint: { x: number; y: number } | undefined;
+              if (await targetFirst.count()) {
+                await targetFirst.scrollIntoViewIfNeeded();
+                gapPoint = await targetFirst.evaluate((card) => {
+                  const viewport = card.closest(".workboard-column__cards")!;
+                  const bounds = card.getBoundingClientRect();
+                  const container = viewport.getBoundingClientRect();
+                  return { x: container.width / 2, y: bounds.bottom - container.top + 6 };
+                });
+              }
               const sourceTitle = await source.locator("h3").textContent();
               if (!sourceTitle) {
                 throw new Error("Benchmark card is missing its unique title");
@@ -1025,7 +1125,9 @@ try {
                 | undefined;
               await step("drag-reorder", async () => {
                 const before = (await gateway.getRequests("workboard.cards.move")).length;
-                await source.dragTo(target);
+                await source.dragTo(gapPoint ? targetViewport : target, {
+                  targetPosition: gapPoint,
+                });
                 const request = await gateway.waitForRequest("workboard.cards.move", {
                   after: before,
                 });
@@ -1041,16 +1143,26 @@ try {
               });
               expect(acknowledgedMove).toMatchObject({
                 id: "bench-0",
-                status: "ready",
+                status: statuses[1],
                 position: expect.any(Number),
               });
+              if (gapPoint) {
+                const positions = seed.cards
+                  .filter((card) => card.status === statuses[1])
+                  .map((card) => card.position)
+                  .toSorted((a, b) => a - b);
+                expect(acknowledgedMove!.position).toBeGreaterThan(positions[0]!);
+                if (positions.length > 1) {
+                  expect(acknowledgedMove!.position).toBeLessThan(positions[1]!);
+                }
+              }
               const dependencyChild = linkedDependencies
                 ? page.locator(
                     `.workboard-column__item[data-card-id="bench-${rootCount * 2 - 1}"] .workboard-card`,
                   )
                 : undefined;
               if (dependencyChild) {
-                await dependencyChild.scrollIntoViewIfNeeded();
+                await revealCard(`bench-${rootCount * 2 - 1}`);
                 await expect(dependencyChild.locator(".workboard-card__alert")).toHaveText(
                   "1 blocked",
                 );
@@ -1167,6 +1279,90 @@ try {
               await page.keyboard.press("Escape");
               await expect(updatedTrigger).toBeFocused();
               sample.menuReturnFocusAfterRowsChange = true;
+              const columnCards = seed.cards
+                .filter((card) => card.status === statuses[0] && card.id !== "bench-0")
+                .toSorted((a, b) => a.position - b.position);
+              if (columnCards.length > 24) {
+                const middle = columnCards[Math.floor(columnCards.length / 2)]!;
+                await revealCard(middle.id);
+                const mounted = new Set(
+                  await page
+                    .locator(`.workboard-column--${statuses[0]} .workboard-column__item`)
+                    .evaluateAll((elements) =>
+                      elements.map((element) => element.getAttribute("data-card-id")),
+                    ),
+                );
+                const boundary = columnCards.findLastIndex(
+                  (card, index) =>
+                    index + 1 < columnCards.length &&
+                    mounted.has(card.id) &&
+                    !mounted.has(columnCards[index + 1]!.id),
+                );
+                // Full-render baselines have no window edge; exercise their middle adjacent pair.
+                const from =
+                  columnCards[boundary < 0 ? Math.floor(columnCards.length / 2) : boundary]!;
+                const next = columnCards[columnCards.indexOf(from) + 1]!;
+                const fromRow = page.locator(
+                  `.workboard-column__item[data-card-id="${from.id}"] .workboard-card`,
+                );
+                const nextRow = page.locator(
+                  `.workboard-column__item[data-card-id="${next.id}"] .workboard-card`,
+                );
+                if (windowedVariants.has(variant)) {
+                  expect(boundary).toBeGreaterThanOrEqual(0);
+                  await expect(nextRow).toHaveCount(0);
+                }
+                await fromRow.focus();
+                for (let keypress = 0; keypress < 16; keypress++) {
+                  await page.keyboard.press("Tab");
+                  if (
+                    (await nextRow.count()) &&
+                    (await nextRow.evaluate((element) => document.activeElement === element))
+                  ) {
+                    break;
+                  }
+                }
+                await expect(nextRow).toBeFocused();
+                for (let keypress = 0; keypress < 16; keypress++) {
+                  await page.keyboard.press("Shift+Tab");
+                  if (await fromRow.evaluate((element) => document.activeElement === element)) {
+                    break;
+                  }
+                }
+                await expect(fromRow).toBeFocused();
+                const bottom = columnCards.at(-1)!;
+                await revealCard(bottom.id);
+                const returnCard = await revealCard(middle.id);
+                const retained = await returnCard.elementHandle();
+                if (!retained) {
+                  throw new Error("Missing detail return-focus card");
+                }
+                await returnCard.focus();
+                await returnCard.press("Enter");
+                await expect(page.locator(".workboard-detail")).toBeVisible();
+                const viewport = page.locator(
+                  `.workboard-column--${middle.status} .workboard-column__cards`,
+                );
+                // The modal makes the board inert; move its scrollport to exercise deferred return.
+                await viewport.evaluate((element) => {
+                  element.scrollTop = element.scrollHeight;
+                });
+                await frames(page);
+                await expect(returnCard).not.toBeInViewport();
+                await page.keyboard.press("Escape");
+                await expect(page.locator(".workboard-detail")).toHaveCount(0);
+                await expect(returnCard).toBeFocused();
+                expect(
+                  await returnCard.evaluate((element, original) => element === original, retained),
+                ).toBe(true);
+                sample.windowChecks = {
+                  middleCard: middle.id,
+                  bottomCard: bottom.id,
+                  tabFrom: from.id,
+                  tabTo: next.id,
+                  detailReturnFocus: true,
+                };
+              }
             }
             if (sample.errors.length) {
               throw new Error(sample.errors.join("\n"));
@@ -1271,11 +1467,7 @@ try {
                 sample.postGcMemory = {
                   heapBytes: afterGc.JSHeapUsedSize ?? 0,
                   nodes: afterGc.Nodes ?? 0,
-                  ...(await page.evaluate(() => ({
-                    elements: document.getElementsByTagName("*").length,
-                    menuElements: document.querySelectorAll(".workboard-card__action-menu-panel *")
-                      .length,
-                  }))),
+                  ...(await page.evaluate(domCounts)),
                 };
               }
             } catch (error) {
@@ -1360,6 +1552,9 @@ for (const plugin of pluginIds) {
           nodes: distribution(steps.map((step) => step.nodes)),
           elements: distribution(steps.map((step) => step.elements)),
           menuElements: distribution(steps.map((step) => step.menuElements)),
+          comments: distribution(steps.map((step) => step.comments)),
+          workboardCards: distribution(steps.map((step) => step.workboardCards)),
+          workboardSlots: distribution(steps.map((step) => step.workboardSlots)),
           assetRequests: distribution(steps.map((step) => step.assets.length)),
         });
       }
@@ -1372,6 +1567,9 @@ await writeFile(
     {
       workload: {
         cards: cardCount,
+        columns: columnCount,
+        statuses,
+        windowedVariants: [...windowedVariants],
         linkedDependencies,
         dependencyRoots: rootCount,
         dependencyChildren: linkedDependencies ? cardCount - rootCount : 0,

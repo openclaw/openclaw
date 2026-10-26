@@ -86,12 +86,16 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
   >(async () => {}),
 }));
 
+// mock-isolation: Archive tests supply registry handles without discovering installed plugins.
 vi.mock("../../runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
+  const loadRegistry = vi.fn<
+    typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
+  >(() => createEmptyPluginRegistry());
   return {
-    loadAgentRuntimePluginRegistryHandle: vi.fn<
-      typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
-    >(() => createEmptyPluginRegistry()),
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
   };
 });
 

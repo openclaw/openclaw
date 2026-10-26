@@ -24,6 +24,7 @@ import { resolveControlUiLinks } from "./onboard-helpers.js";
 
 const CONTROL_UI_DOCUMENT_REQUEST_TIMEOUT_MS = 2_000;
 const CONTROL_UI_DOCUMENT_ERROR_MAX_BYTES = 2_048;
+const CONTROL_UI_DOCUMENT_TRANSIENT_RETRY_DELAY_MS = 500;
 
 /** One canonical target keeps advertised identity, local browser delivery, and document probes distinct. */
 export async function resolveControlUiHandoffTarget(params: {
@@ -160,7 +161,7 @@ type ControlUiDocumentReadiness =
   | { ready: true; tlsFingerprint?: string }
   | { ready: false; reason: string; status?: number };
 
-/** Wait only for an explicitly preparing dashboard; fail immediately for terminal HTTP states. */
+/** Wait for a preparing or temporarily slow dashboard; fail immediately for terminal errors. */
 export async function waitForControlUiDocument(params: {
   url: string;
   tlsConfig?: GatewayTlsConfig;
@@ -199,6 +200,7 @@ export async function waitForControlUiDocument(params: {
   }
 
   let pendingReported = false;
+  let lastTransientError: Error | undefined;
   const origin = new URL(params.url).origin;
   const requestDocument = async (method: "HEAD" | "GET", remainingMs: number) =>
     await fetchConfiguredLocalOriginWithSsrFGuard({
@@ -218,11 +220,17 @@ export async function waitForControlUiDocument(params: {
   while (true) {
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
-      return { ready: false, reason: "Control UI assets did not finish preparing in time." };
+      return lastTransientError
+        ? {
+            ready: false,
+            reason: `Control UI dashboard is unavailable: ${lastTransientError.message}`,
+          }
+        : { ready: false, reason: "Control UI assets did not finish preparing in time." };
     }
+    let pendingDelayMs = CONTROL_UI_DOCUMENT_TRANSIENT_RETRY_DELAY_MS;
     try {
       const request = await requestDocument("HEAD", remainingMs);
-      let pendingDelayMs: number | undefined;
+      lastTransientError = undefined;
       try {
         const mediaType = request.response.headers.get("content-type")?.split(";", 1)[0]?.trim();
         if (request.response.status === 200 && mediaType?.toLowerCase() === "text/html") {
@@ -276,16 +284,23 @@ export async function waitForControlUiDocument(params: {
       } finally {
         await request.release();
       }
-      if (!pendingReported) {
-        pendingReported = true;
-        params.onPending?.();
-      }
-      await sleep(Math.min(pendingDelayMs, Math.max(0, deadline - Date.now())));
     } catch (error) {
-      return {
-        ready: false,
-        reason: `Control UI dashboard is unavailable: ${error instanceof Error ? error.message : String(error)}`,
-      };
+      if (
+        params.waitForPending === false ||
+        !(error instanceof Error) ||
+        error.name !== "TimeoutError"
+      ) {
+        return {
+          ready: false,
+          reason: `Control UI dashboard is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      lastTransientError = error;
     }
+    if (!pendingReported) {
+      pendingReported = true;
+      params.onPending?.();
+    }
+    await sleep(Math.min(pendingDelayMs, Math.max(0, deadline - Date.now())));
   }
 }

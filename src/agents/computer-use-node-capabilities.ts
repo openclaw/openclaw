@@ -103,7 +103,8 @@ export async function loadPairedComputerUseAvailabilityForSurface(params: {
   const cacheKey = stableStringify({
     gateway,
     nodes: eligible
-      .toSorted((a, b) => a.nodeId.localeCompare(b.nodeId))
+      // oxlint-disable-next-line unicorn/no-array-sort -- filter created this private array; node records stay untouched.
+      .sort((a, b) => a.nodeId.localeCompare(b.nodeId))
       .map(({ nodeId, computerUse }) => ({ nodeId, computerUse })),
   });
   const capabilities = [

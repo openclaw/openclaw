@@ -566,6 +566,7 @@ export async function executePreparedReplyRun(
         resolveAgentRunCwd(cfg, agentId),
       permissionMode: admittedSessionSettings?.permissionMode,
       sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
+      blindPrompt: preparedSessionState.sessionEntry?.blindPrompt,
       config: cfg,
       toolOverrides: admittedSessionSettings?.toolOverrides,
       skillsSnapshot,

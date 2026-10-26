@@ -346,7 +346,7 @@ it.each(["unchanged", "revoked"] as const)(
         .mockImplementation(() => {
           const source = captureSource();
           return {
-            ...source,
+            own: (close) => source.own(close),
             createTransport(command) {
               const owned = source.createTransport(command);
               if (held || command.type !== "agentDatabaseDeletion.snapshot") {
@@ -354,7 +354,8 @@ it.each(["unchanged", "revoked"] as const)(
               }
               held = true;
               return {
-                ...owned,
+                startValidateFresh: (...args) => owned.startValidateFresh(...args),
+                startClose: () => owned.startClose(),
                 async startRead(...args) {
                   const result = await owned.startRead(...args);
                   entered.resolve();
