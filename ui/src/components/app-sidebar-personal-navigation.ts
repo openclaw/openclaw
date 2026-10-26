@@ -107,10 +107,13 @@ export function createSidebarPinnedSessions(
     observation?: ReturnType<ApplicationContext["sessions"]["observeRow"]>;
     settled: boolean;
   };
-  const reads = new Map<string, Read>();
+  const reads = new Map<string, Read | "invalidated">();
   const seeds = new Map<string, GatewaySessionRow>();
   function retire(key: string) {
-    reads.get(key)?.observation?.dispose();
+    const read = reads.get(key);
+    if (read && read !== "invalidated") {
+      read.observation?.dispose();
+    }
     reads.delete(key);
     seeds.delete(key);
   }
@@ -162,7 +165,8 @@ export function createSidebarPinnedSessions(
       return;
     }
     for (const row of snapshot) {
-      if (!seeds.has(row.key) && !reads.get(row.key)?.settled) {
+      const read = reads.get(row.key);
+      if (!seeds.has(row.key) && (read === "invalidated" || !read?.settled)) {
         seeds.set(row.key, {
           key: row.key,
           kind: "direct",
@@ -186,7 +190,8 @@ export function createSidebarPinnedSessions(
       return undefined;
     }
     let read = reads.get(key);
-    if (!read) {
+    if (!read || read === "invalidated") {
+      const refresh = read === "invalidated";
       const owned: Read = { settled: false };
       read = owned;
       reads.set(key, owned);
@@ -197,7 +202,12 @@ export function createSidebarPinnedSessions(
         scope === currentScope &&
         currentSource.isConnectionScopeCurrent(currentScope);
       const publish = () => {
-        if (current() && host.isConnected) {
+        if (!current()) {
+          return;
+        }
+        if (owned.observation?.isCurrent() === false) {
+          invalidate();
+        } else if (host.isConnected) {
           host.sessionData.requestSessionDataUpdate();
         }
       };
@@ -206,6 +216,7 @@ export function createSidebarPinnedSessions(
           return;
         }
         retire(key);
+        reads.set(key, "invalidated");
         if (host.isConnected) {
           host.sessionData.requestSessionDataUpdate();
         }
@@ -221,7 +232,11 @@ export function createSidebarPinnedSessions(
           host.findSidebarSessionByKey(key) ||
           host.navigationCatalog.dashboards?.result?.sessions.some((row) => row.key === key)
         ) {
-          reads.delete(key);
+          if (refresh) {
+            reads.set(key, "invalidated");
+          } else {
+            reads.delete(key);
+          }
           return;
         }
         const observation = currentSource.observeRow(
@@ -233,8 +248,7 @@ export function createSidebarPinnedSessions(
               if (
                 !result.generationRejected &&
                 event.event === "sessions.changed" &&
-                (!readSessionChangedEvent(event.payload) ||
-                  owned.observation?.isCurrent() === false)
+                !readSessionChangedEvent(event.payload)
               ) {
                 invalidate();
               }
@@ -252,7 +266,11 @@ export function createSidebarPinnedSessions(
           reconcile(row ?? undefined);
           publish();
         };
-        await currentSource.describe({ key }).then(
+        // A supplemental read can retire the row without clearing its old descriptor.
+        const description = refresh
+          ? currentSource.describe({ key }, { refresh: true })
+          : currentSource.describe({ key });
+        await description.then(
           (result) => accept(result.session),
           () => accept(),
         );

@@ -16,7 +16,7 @@ import { disposeRoster, mountRoster } from "./app-sidebar-freshness.test-support
 it("keeps off-page personal pins current and releases their observations", async () => {
   const key = "agent:main:shared-pin";
   let accessible = true;
-  const row = {
+  let row = {
     key,
     sessionId: "shared-pin",
     kind: "direct" as const,
@@ -78,17 +78,29 @@ it("keeps off-page personal pins current and releases their observations", async
     expect(sidebar.textContent).toContain("Updated research");
     expect(describe).toHaveBeenCalledTimes(3);
 
+    // A history response can admit a new generation without a session event.
+    row = { ...row, sessionId: "successor-pin", label: "Recreated research", updatedAt: 30 };
+    const reconcile = mounted.sessions.captureReconcile();
+    expect(reconcile(row, undefined, { archivedFilter: "all" })).toBe(true);
+    // The next canonical page excludes the pin again after the supplemental read.
+    await mounted.sessions.refresh({ agentId: "main", force: true });
+    await vi.advanceTimersByTimeAsync(0);
+    await settleLitElement(sidebar);
+    expect(sidebar.textContent).toContain("Recreated research");
+    expect(mounted.sessions.state.result?.sessions).toEqual([]);
+    expect(describe).toHaveBeenCalledTimes(4);
+
     sidebar.sidebarEntries = [];
     await settleLitElement(sidebar);
     released();
     harness.publishEvent("sessions.changed", {});
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(describe).toHaveBeenCalledTimes(3);
+    expect(describe).toHaveBeenCalledTimes(4);
 
     sidebar.sidebarEntries = [`session:${key}`];
     await vi.advanceTimersByTimeAsync(0);
     await settleLitElement(sidebar);
-    expect(sidebar.textContent).toContain("Shared research");
+    expect(sidebar.textContent).toContain("Recreated research");
     mounted.provider.remove();
     await vi.advanceTimersByTimeAsync(0);
     released();
