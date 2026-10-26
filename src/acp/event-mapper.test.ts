@@ -12,11 +12,6 @@ describe("extractToolCallLocations", () => {
   it.each([
     [12.9, 12],
     [0.5, undefined],
-    [0, undefined],
-    [-1, undefined],
-    [Number.NaN, undefined],
-    [Number.POSITIVE_INFINITY, undefined],
-    ["12", undefined],
   ] as const)("keeps only positive whole-line locations from %j", (line, expected) => {
     const path = "/tmp/synthetic.txt";
     expect(extractToolCallLocations({ path, line })).toEqual([

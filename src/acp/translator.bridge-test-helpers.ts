@@ -110,11 +110,9 @@ export function expectConfigOption(options: unknown, id: string, fields: Record<
   const option = (options as Array<Record<string, unknown>>).find(
     (candidate) => candidate.id === id,
   );
-  if (!option) {
-    throw new Error(`Expected config option ${id}`);
-  }
+  expect(option, `config option ${id}`).toBeDefined();
   for (const [field, value] of Object.entries(fields)) {
-    expect(option[field]).toEqual(value);
+    expect(option?.[field]).toEqual(value);
   }
 }
 
