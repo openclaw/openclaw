@@ -159,30 +159,15 @@ it("retains growing duplicate archives and the restore refusal without leaking i
     const read = fs.readSync;
     let descriptor: number | undefined;
     using reads = vi.spyOn(fs, "readSync");
-    reads.mockImplementation(
-      (
-        fd: number,
-        buffer: NodeJS.ArrayBufferView,
-        offsetOrOptions: number | fs.ReadOptions = {},
-        length?: number,
-        position?: fs.ReadPosition | null,
-      ) => {
-        const opened = fs.fstatSync(fd);
-        if (
-          descriptor === undefined &&
-          opened.dev === identity.dev &&
-          opened.ino === identity.ino
-        ) {
-          descriptor = fd;
-          fs.appendFileSync(archivePath, "\n");
-        }
-        const options =
-          typeof offsetOrOptions === "number"
-            ? { offset: offsetOrOptions, length, position }
-            : offsetOrOptions;
-        return read(fd, buffer, options);
-      },
-    );
+    reads.mockImplementation((...args: Parameters<typeof read>) => {
+      const [fd] = args;
+      const opened = fs.fstatSync(fd);
+      if (descriptor === undefined && opened.dev === identity.dev && opened.ino === identity.ino) {
+        descriptor = fd;
+        fs.appendFileSync(archivePath, "\n");
+      }
+      return read(...args);
+    });
     const report = await restoreSessionSqliteMigrationRun({
       env: state.env,
       manifestPath: run.manifestPath,
@@ -277,16 +262,12 @@ it.each(["lineage", "generated"] as const)(
 
 it("recovers a completed old archive once, preserves bytes, and does not resurrect user-deleted history", () =>
   withOpenClawTestState({ label: "doctor-archive-discovery" }, async (state) => {
-    const { sessions, store, target, run, scope, search } = discoveryState(state);
+    const { sessions, store, target, archiveDir, run, scope, search } = discoveryState(state);
     const id = "33333333-3333-4333-8333-333333333333";
     const original = path.join(sessions, `${id}.jsonl`);
     const bytes = transcript(id, "archivedneedle");
     fs.writeFileSync(original, bytes);
-    const archive = path.join(
-      path.dirname(sessions),
-      "session-sqlite-import-archive",
-      `archive-tier.${id}.jsonl.imported-1`,
-    );
+    const archive = path.join(archiveDir, `archive-tier.${id}.jsonl.imported-1`);
     fs.mkdirSync(path.dirname(archive), { recursive: true });
     const old = createSessionSqliteMigrationRun(state.env, [target]);
     const move = await publishArchive(old, target, original, archive);

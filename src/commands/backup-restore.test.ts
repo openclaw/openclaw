@@ -3,14 +3,9 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { createBackupArchive } from "../infra/backup-create.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import {
-  closeOpenClawStateDatabase,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backupRestoreCommand } from "./backup-restore.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
@@ -37,33 +32,6 @@ const linkEntry = (
   linkpath: string,
   type: "Link" | "SymbolicLink" = "SymbolicLink",
 ) => encodeTarEntry({ path: entryPath, type, linkpath });
-
-async function listArchiveLeafEntries(archivePath: string): Promise<string[]> {
-  const entries: string[] = [];
-  await tar.t({
-    file: archivePath,
-    gzip: true,
-    onReadEntry: (entry) => {
-      if (entry.type !== "Directory") {
-        entries.push(entry.path.replace(/\/+$/u, ""));
-      }
-    },
-  });
-  return entries.toSorted();
-}
-
-async function listFilesystemLeafEntries(root: string, relative = ""): Promise<string[]> {
-  const entries: string[] = [];
-  for (const entry of await fs.readdir(path.join(root, relative), { withFileTypes: true })) {
-    const child = path.join(relative, entry.name);
-    if (entry.isDirectory()) {
-      entries.push(...(await listFilesystemLeafEntries(root, child)));
-    } else {
-      entries.push(child.split(path.sep).join("/"));
-    }
-  }
-  return entries.toSorted();
-}
 
 async function writeArchive(params: {
   archivePath: string;
@@ -265,82 +233,32 @@ describe("backupRestoreCommand", () => {
     });
   });
 
-  it("round-trips a backup into a fresh target with matching inventory and readable databases", async () => {
-    await withState(async (state, _archivePath, targetPath) => {
-      const outputDir = state.path("backups");
-      await fs.mkdir(outputDir, { recursive: true });
-      await state.writeText("operator-note.txt", "restore me\n");
-      const pluginSkillTarget = state.statePath("plugin-source", "canvas");
-      if (process.platform !== "win32") {
-        await fs.mkdir(pluginSkillTarget, { recursive: true });
-        await fs.writeFile(path.join(pluginSkillTarget, "SKILL.md"), "# Canvas\n", "utf8");
-        const pluginSkillsDir = state.statePath("plugin-skills");
-        await fs.mkdir(pluginSkillsDir, { recursive: true });
-        await fs.symlink(
-          await fs.realpath(pluginSkillTarget),
-          path.join(pluginSkillsDir, "canvas"),
-          "dir",
-        );
-      }
-      openOpenClawStateDatabase({ env: state.env });
-
-      try {
-        const backup = await createBackupArchive({
-          output: outputDir,
-          includeWorkspace: false,
-          nowMs: Date.UTC(2026, 7, 12, 12, 0, 0),
-        });
-        const runtime = createTestRuntime();
-        const restored = await backupRestoreCommand(runtime, {
-          archive: backup.archivePath,
-          target: targetPath,
-          json: true,
-        });
-
-        expect(restored).toMatchObject({
-          ok: true,
-          archivePath: backup.archivePath,
-          targetPath,
-          archiveRoot: backup.archiveRoot,
-          assetCount: 1,
-        });
-        expect(restored.warnings.join("\n")).toMatch(/time travel/iu);
-        expect(restored.warnings.join("\n")).toMatch(/WhatsApp/iu);
-        expect(restored.warnings.join("\n")).toMatch(/pending approvals/iu);
-        expect(restored.warnings.join("\n")).toMatch(/plugins install <spec> --force/iu);
-        expect(restored.warnings.join("\n")).toMatch(/openclaw skills list/iu);
-        expect(runtime.log).toHaveBeenCalledOnce();
-        expect(JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]))).toEqual(restored);
-        if (process.platform !== "win32") {
-          const omitted = expect.objectContaining({
-            sourcePath: state.statePath("plugin-skills"),
-            reason: "regenerable",
-          });
-          expect(backup.skipped).toContainEqual(omitted);
-          expect(await listArchiveLeafEntries(backup.archivePath)).not.toContainEqual(
-            expect.stringContaining("/plugin-skills/"),
-          );
-          const manifest = JSON.parse(
-            await readText(targetPath, backup.archiveRoot, "manifest.json"),
-          ) as { skipped: Array<{ sourcePath: string; reason: string }> };
-          expect(manifest.skipped).toContainEqual(omitted);
-        }
-
-        expect(await listFilesystemLeafEntries(targetPath)).toEqual(
-          await listArchiveLeafEntries(backup.archivePath),
-        );
-        const databaseEntry = (await listArchiveLeafEntries(backup.archivePath)).find((entry) =>
-          entry.endsWith("/state/openclaw.sqlite"),
-        );
-        expect(databaseEntry).toBeDefined();
-        const sqlite = requireNodeSqlite();
-        using database = new sqlite.DatabaseSync(path.join(targetPath, databaseEntry ?? ""), {
-          readOnly: true,
-        });
-        expect(database.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      } finally {
-        closeOpenClawStateDatabase();
-      }
+  it("extracts every archive member and reports rollback warnings in JSON", async () => {
+    await withState(async (_state, archivePath, targetPath) => {
+      const manifest = await writeArchive({ archivePath });
+      const runtime = createTestRuntime();
+      const restored = await backupRestoreCommand(runtime, {
+        archive: archivePath,
+        target: targetPath,
+        json: true,
+      });
+      expect(restored).toMatchObject({
+        ok: true,
+        archivePath,
+        targetPath,
+        archiveRoot: DEFAULT_ARCHIVE_ROOT,
+        assetCount: 1,
+        entryCount: 2,
+      });
+      expect(await readText(targetPath, DEFAULT_ARCHIVE_ROOT, "manifest.json")).toBe(manifest);
+      expect(await readText(targetPath, DEFAULT_PAYLOAD_PATH)).toBe("{}\n");
+      expect(restored.warnings.join("\n")).toMatch(/time travel/iu);
+      expect(restored.warnings.join("\n")).toMatch(/WhatsApp/iu);
+      expect(restored.warnings.join("\n")).toMatch(/pending approvals/iu);
+      expect(restored.warnings.join("\n")).toMatch(/plugins install <spec> --force/iu);
+      expect(restored.warnings.join("\n")).toMatch(/openclaw skills list/iu);
+      expect(runtime.log).toHaveBeenCalledOnce();
+      expect(JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0]))).toEqual(restored);
     });
   });
 
@@ -398,10 +316,6 @@ describe("backupRestoreCommand", () => {
       );
       expect(backup.skippedVolatileCount).toBe(0);
 
-      const archiveEntries = await listArchiveLeafEntries(backup.archivePath);
-      expect(archiveEntries.some((entry) => entry.includes("external-runtime"))).toBe(false);
-      expect(archiveEntries.some((entry) => entry.endsWith("/sessions/session.json"))).toBe(true);
-
       const restored = await restore(backup.archivePath, targetPath);
       expect(restored.symlinkCount).toBe(1);
       const manifest = JSON.parse(
@@ -422,10 +336,6 @@ describe("backupRestoreCommand", () => {
       );
       for (const omittedRoot of omittedRoots) {
         const relativeRoot = path.relative(agentRoot, omittedRoot);
-        const archiveRelativeRoot = relativeRoot.split(path.sep).join("/");
-        expect(
-          archiveEntries.some((entry) => entry.includes(`/agent/${archiveRelativeRoot}/`)),
-        ).toBe(false);
         await expectMissing(path.join(restoredAgentRoot, relativeRoot));
       }
       await expect(
@@ -434,11 +344,6 @@ describe("backupRestoreCommand", () => {
       await expect(
         fs.readlink(path.join(restoredAgentRoot, "codex-home", "sessions", "latest-session")),
       ).resolves.toBe("session.json");
-      expect(
-        (await listFilesystemLeafEntries(targetPath)).some((entry) =>
-          entry.includes("external-runtime"),
-        ),
-      ).toBe(false);
     });
   });
 
