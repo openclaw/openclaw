@@ -6,7 +6,7 @@ import {
   pluginToolWithExecute,
   resetCodeModeTestState,
 } from "./code-mode.test-support.js";
-import { resolveMainSessionResumePolicy } from "./main-session-recovery/main-session-restart-recovery-resume-policy.js";
+import { resolveMainSessionResumePolicy as resumePolicy } from "./main-session-recovery/main-session-restart-recovery-resume-policy.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { copyInternalToolResultState } from "./runtime/internal-hooks.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
@@ -21,6 +21,8 @@ const toolResult = ({ content, details }: AgentToolResult<unknown>, toolCallId: 
   isError: false,
   timestamp: 1,
 });
+const coldMessages = (sm: SessionManager) =>
+  SessionManager.fromEntries(sm.getPersistedEntries()).buildSessionContext().messages;
 
 afterEach(resetCodeModeTestState);
 
@@ -53,23 +55,15 @@ it.each([false, true])("recovers capped network output (fullAccess=%s)", async (
   await sm.appendMessageAsync(
     copyInternalToolResultState(result, toolResult(result, "checkpoint-call")),
   );
-  const cold = SessionManager.fromEntries(sm.getPersistedEntries()).buildSessionContext().messages;
+  const cold = coldMessages(sm);
   expect(cold.at(-1)).toMatchObject({ details: { persistedDetailsTruncated: true } });
-  expect(
-    resolveMainSessionResumePolicy(
-      cold,
-      false,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      fullAccess,
-    ),
-  ).toEqual({
-    action: "resume",
-    forceRestartSafeTools: true,
-    forceCodeModeTools: true,
-  });
+  expect(resumePolicy(cold, false, undefined, undefined, undefined, undefined, fullAccess)).toEqual(
+    {
+      action: "resume",
+      forceRestartSafeTools: true,
+      forceCodeModeTools: true,
+    },
+  );
 });
 
 it.each(["unowned", "different-call", "unsafe-producer", "serializer"])(
@@ -92,18 +86,15 @@ it.each(["unowned", "different-call", "unsafe-producer", "serializer"])(
               ? { toJSON: () => ({ codeModeCheckpoint: forged }) }
               : { codeModeCheckpoint: forged },
         };
-        return {
-          message: kind === "unsafe-producer" ? Object.freeze(replacement) : replacement,
-        };
+        return { message: kind === "unsafe-producer" ? Object.freeze(replacement) : replacement };
       },
     });
     const message = toolResult(result, kind === "different-call" ? "other" : "call");
     await sm.appendMessageAsync(
       kind === "unowned" ? message : copyInternalToolResultState(result, message),
     );
-    const cold = SessionManager.fromEntries(sm.getPersistedEntries()).buildSessionContext()
-      .messages;
-    expect(resolveMainSessionResumePolicy(cold)).not.toHaveProperty("forceCodeModeTools");
+    const cold = coldMessages(sm);
+    expect(resumePolicy(cold)).not.toHaveProperty("forceCodeModeTools");
     expect(cold.at(-1)).toMatchObject({
       __openclaw: {
         codeModeCheckpoint:

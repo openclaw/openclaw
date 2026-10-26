@@ -25,8 +25,8 @@ function captureWork() {
   return captured;
 }
 
-function prepareRoutingAdmission(runId: string) {
-  return prepareAgentRunAdmission({
+async function admitRoute(runId: string) {
+  const admission = prepareAgentRunAdmission({
     cfg: { logging: { audit: { executionIdentity: true } } },
     operationalRunInstance: createOperationalRunInstanceRef(runId),
     facts: {
@@ -35,12 +35,13 @@ function prepareRoutingAdmission(runId: string) {
       ingress: { kind: "system", boundary: "model-routing-test", state: "present" },
     },
   });
+  onTestFinished(() => admission.close());
+  return { admission, admittedRunContext: await admission.admit("embedded") };
 }
 
 it("keeps a selected credential raw only in the private work ref", async () => {
   const captured = captureWork();
-  const admission = prepareRoutingAdmission("model-route-run");
-  const admittedRunContext = await admission.admit("embedded");
+  const { admittedRunContext } = await admitRoute("model-route-run");
   const rawProfile = "openai:user@example.test";
   const rawTargetSecret = "Authorization: Bearer selected-model-secret";
 
@@ -55,8 +56,6 @@ it("keeps a selected credential raw only in the private work ref", async () => {
       occurredAt: 1_001,
     }),
   ).toBe(true);
-  admission.close();
-
   expect(captured).toMatchObject([
     {
       token: admittedRunContext.executionIdentityToken,
@@ -80,11 +79,8 @@ it("does not fabricate work without admission and marks an unknown credential ow
   const captured = captureWork();
 
   expect(recordAdmittedModelRoutingDecision(route)).toBe(false);
-  const admission = prepareRoutingAdmission("unknown-owner-run");
-  const admittedRunContext = await admission.admit("embedded");
+  const { admittedRunContext } = await admitRoute("unknown-owner-run");
   expect(recordAdmittedModelRoutingDecision({ ...route, admittedRunContext })).toBe(true);
-  admission.close();
-
   expect(captured).toHaveLength(1);
   expect(captured[0]?.receipt).toMatchObject({
     enforcement: { coverageState: "unknown" },
@@ -97,11 +93,9 @@ it.each(["close", "replace"] as const)(
   "rejects %s authority without queuing private work",
   async (loss) => {
     const runId = `model-route-${loss}`;
-    const admission = prepareRoutingAdmission(runId);
-    const admittedRunContext = await admission.admit("embedded");
-    const replacement = loss === "replace" ? prepareRoutingAdmission(runId) : undefined;
-    if (replacement) {
-      await replacement.admit("embedded");
+    const { admission, admittedRunContext } = await admitRoute(runId);
+    if (loss === "replace") {
+      await admitRoute(runId);
     } else {
       admission.close();
     }
@@ -111,7 +105,6 @@ it.each(["close", "replace"] as const)(
       "admitted run authority is no longer active",
     );
     admission.close();
-    replacement?.close();
 
     expect(captured).toEqual([]);
   },
