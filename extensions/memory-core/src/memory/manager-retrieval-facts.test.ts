@@ -14,11 +14,15 @@ function replacement(model: string, hash: string) {
   }
   return input;
 }
+const readerFor = (writer: ReturnType<typeof createPublication>) =>
+  createPublication({ filename: writer.filename, initialize: false });
+const publish = (writer: ReturnType<typeof createPublication>, model: string, hash: string) =>
+  writer.expectResult({ type: "source.replace.group", input: replacement(model, hash) });
 
 it("scans corpus facts once per persisted revision across independent writers", () => {
   using writer = createPublication();
-  writer.expectResult({ type: "source.replace.group", input: replacement("fts-only", "initial") });
-  using reader = createPublication({ filename: writer.filename, initialize: false });
+  publish(writer, "fts-only", "initial");
+  using reader = readerFor(writer);
   const visits = { model: 0, hash: 0 };
   for (const name of ["model", "hash"] as const) {
     reader.db.function(`visit_${name}`, (value) => {
@@ -54,10 +58,7 @@ it("scans corpus facts once per persisted revision across independent writers", 
     });
     expect(facts()).toMatchObject({ meta: { provider: "none" } });
     expect(visits).toEqual({ model: 4, hash: 2 });
-    writer.expectResult({
-      type: "source.replace.group",
-      input: replacement("fts-only", "changed"),
-    });
+    publish(writer, "fts-only", "changed");
     expect(facts()).toMatchObject({ revision: 2, hasSemanticChunks: false });
     expect(visits).toEqual({ model: 8, hash: 4 });
     facts();
@@ -69,11 +70,11 @@ it("scans corpus facts once per persisted revision across independent writers", 
 
 it("matches uncached snapshots through invalidation, semantic and FTS-only publications", () => {
   using writer = createPublication();
-  using reader = createPublication({ filename: writer.filename, initialize: false });
+  using reader = readerFor(writer);
   const check = (expected: object) => {
     const actual = readMemoryDatabaseFacts(reader.db);
     expect(actual).toMatchObject(expected);
-    using fresh = createPublication({ filename: writer.filename, initialize: false });
+    using fresh = readerFor(writer);
     expect(actual).toEqual(readMemoryDatabaseFacts(fresh.db));
   };
   check({ hasIndexedChunks: false, hasSemanticChunks: false, invalidatedSources: [] });
@@ -83,7 +84,7 @@ it("matches uncached snapshots through invalidation, semantic and FTS-only publi
     ["semantic-model", "semantic", { invalidatedSources: [], hasSemanticChunks: true }],
     ["fts-only", "provider-switch", { invalidatedSources: [], hasSemanticChunks: false }],
   ] as const) {
-    writer.expectResult({ type: "source.replace.group", input: replacement(model, hash) });
+    publish(writer, model, hash);
     check({ ...expected, hasIndexedChunks: true });
   }
 });
@@ -91,7 +92,7 @@ it("matches uncached snapshots through invalidation, semantic and FTS-only publi
 it("does not reuse transactional facts after a refused inline publication reuses its revision", () => {
   using fixture = createPublication();
   const { backend, db, admission } = fixture;
-  fixture.expectResult({ type: "source.replace.group", input: replacement("fts-only", "initial") });
+  publish(fixture, "fts-only", "initial");
   db.exec("BEGIN IMMEDIATE; UPDATE memory_index_sources SET hash = ''");
   try {
     expect(readMemoryDatabaseFacts(db)).toMatchObject({
@@ -110,15 +111,12 @@ it("does not reuse transactional facts after a refused inline publication reuses
     }),
   ).toMatchObject({ ok: false, committed: false });
   admission.denied = false;
-  fixture.expectResult({
-    type: "source.replace.group",
-    input: replacement("fts-only", "committed"),
-  });
+  publish(fixture, "fts-only", "committed");
   expect(readMemoryDatabaseFacts(db)).toMatchObject({
     revision: 2,
     hasSemanticChunks: false,
     invalidatedSources: [],
   });
-  using fresh = createPublication({ filename: fixture.filename, initialize: false });
+  using fresh = readerFor(fixture);
   expect(readMemoryDatabaseFacts(db)).toEqual(readMemoryDatabaseFacts(fresh.db));
 });
