@@ -1,6 +1,5 @@
 import fs from "node:fs";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { OpenClawStateExternalOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
@@ -13,6 +12,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import {
@@ -61,13 +61,7 @@ function tableIds(database: Database, table: string) {
     }>
   ).map((row) => row.launch_id);
 }
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeDatabase();
-    cleanup();
-  }),
-);
+const tempDirs = useStateDatabaseTempDirs();
 
 async function fixture() {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("node-worker-launch-store-") };
@@ -75,6 +69,27 @@ async function fixture() {
   const store = new NodeWorkerLaunchStore(journal);
   await store.get("schema-probe");
   return { database: openOpenClawStateDatabase({ env }).db, env, journal, store };
+}
+
+async function reopenStore(env: NodeJS.ProcessEnv) {
+  await closeDatabase();
+  return new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
+}
+
+async function startLaunch(
+  store: NodeWorkerLaunchStore,
+  launchId: string,
+  options: Partial<Parameters<NodeWorkerLaunchStore["markRunning"]>[0]> = {},
+) {
+  const owner = await claimLaunch(store, launchId);
+  return store.markRunning({
+    launchId,
+    ...owner,
+    worker: owner.supervisor,
+    cleanupMode: "process-group",
+    nowMs: NOW_MS,
+    ...options,
+  });
 }
 
 function insertLaunch(
@@ -128,52 +143,48 @@ describe("node worker launch admitted schema", () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("node-worker-launch-schema-") };
     const opened = openOpenClawStateDatabase({ env });
     const kernel = new NodeWorkerLaunchKernel({ database: opened, env });
-    const admission = vi
-      .spyOn(operationAdmission, "requestSqliteWorkerOperationAdmission")
-      .mockImplementation(() => {});
+    vi.spyOn(operationAdmission, "requestSqliteWorkerOperationAdmission").mockImplementation(
+      () => {},
+    );
     kernel.get("schema-probe");
     if (seed) {
       insertLaunch(opened.db, "schema-launch", "pending");
     }
-    return { ...opened, opened, env, kernel, admission };
+    return { ...opened, opened, env, kernel };
   }
 
   it("refreshes lazy companion facts after a transaction rollback", () => {
-    const { opened, env, kernel, admission } = kernelFixture();
-    try {
-      const pending = kernel.get("schema-launch")!;
-      const start = () =>
-        kernel.markRunning({
-          ...pending,
-          worker: pending.supervisor,
-          cleanupMode: "linux-subreaper",
-          nowMs: NOW_MS,
-        });
-      const rollback = new Error("roll back first-use companion DDL");
-      expect(() =>
-        runOpenClawStateWriteTransaction(
-          () => {
-            expect(start()).toMatchObject({
-              workerCleanupMode: "linux-subreaper",
-              workerDescendantsReaped: false,
-            });
-            throw rollback;
-          },
-          { database: opened, env },
-        ),
-      ).toThrow(rollback);
-      expect(kernel.get(pending.launchId)).toEqual(pending);
-      const running = start();
-      expect(running.workerCleanupMode).toBe("linux-subreaper");
-      expect(running.workerDescendantsReaped).toBe(false);
-      expect(kernel.listNonterminal()).toEqual([running]);
-    } finally {
-      admission.mockRestore();
-    }
+    const { opened, env, kernel } = kernelFixture();
+    const pending = kernel.get("schema-launch")!;
+    const start = () =>
+      kernel.markRunning({
+        ...pending,
+        worker: pending.supervisor,
+        cleanupMode: "linux-subreaper",
+        nowMs: NOW_MS,
+      });
+    const rollback = new Error("roll back first-use companion DDL");
+    expect(() =>
+      runOpenClawStateWriteTransaction(
+        () => {
+          expect(start()).toMatchObject({
+            workerCleanupMode: "linux-subreaper",
+            workerDescendantsReaped: false,
+          });
+          throw rollback;
+        },
+        { database: opened, env },
+      ),
+    ).toThrow(rollback);
+    expect(kernel.get(pending.launchId)).toEqual(pending);
+    const running = start();
+    expect(running.workerCleanupMode).toBe("linux-subreaper");
+    expect(running.workerDescendantsReaped).toBe(false);
+    expect(kernel.listNonterminal()).toEqual([running]);
   });
 
   it("observes foreign companion row commits after the current snapshot without inventing certificates", () => {
-    const { db, path, kernel, admission } = kernelFixture();
+    const { db, path, kernel } = kernelFixture();
     // Native connection bypasses in-process schema publications, like a separate worker.
     const foreign = new (requireNodeSqlite().DatabaseSync)(path);
     const write = (sql: string, ...values: Array<string | number | null>) =>
@@ -216,7 +227,6 @@ describe("node worker launch admitted schema", () => {
       expect(kernel.get(legacy.launchId)).toEqual(legacy);
     } finally {
       foreign.close();
-      admission.mockRestore();
     }
   });
   function claimFixture() {
@@ -327,9 +337,7 @@ describe("node worker launch store pruning", () => {
     expect(hasExpiryIndex(database)).toBe(true);
     database.exec("DROP INDEX idx_node_worker_launches_terminal_completed");
     expect(hasExpiryIndex(database)).toBe(false);
-    await closeDatabase();
-
-    const reopenedStore = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
+    const reopenedStore = await reopenStore(env);
     expect(await reopenedStore.get("released-worker")).toEqual(releasedReceipt);
     const reopened = openOpenClawStateDatabase({ env }).db;
 
@@ -341,15 +349,7 @@ describe("node worker launch store pruning", () => {
         .get("node_worker_launch_cleanup"),
     ).toBeUndefined();
     const launchSql = schema(reopened, "node_worker_launches")?.sql;
-    const { planHash, supervisor } = await claimLaunch(reopenedStore, "current-worker");
-    await reopenedStore.markRunning({
-      launchId: "current-worker",
-      planHash,
-      supervisor,
-      worker: supervisor,
-      cleanupMode: "process-group",
-      nowMs: NOW_MS,
-    });
+    await startLaunch(reopenedStore, "current-worker");
     expect(await reopenedStore.get("released-worker")).toEqual(releasedReceipt);
     expect(schema(reopened, "node_worker_launches")?.sql).toBe(launchSql);
     expect(reopened.prepare("PRAGMA user_version").get()).toEqual(versionBefore);
@@ -374,13 +374,7 @@ describe("node worker launch store pruning", () => {
     const boot = vi
       .spyOn(workerProcessIdentity, "getNodeWorkerBootIdentity")
       .mockReturnValue("win32:test-boot");
-    const previous = await claimLaunch(store, "old-windows-worker");
-    await store.markRunning({
-      launchId: "old-windows-worker",
-      ...previous,
-      worker: previous.supervisor,
-      cleanupMode: "process-group",
-    });
+    await startLaunch(store, "old-windows-worker", { nowMs: undefined });
     const current = await claimLaunch(store, "job-worker");
     boot.mockRestore();
     await store.markRunning({
@@ -554,10 +548,7 @@ describe("node worker launch store container identity", () => {
         expect(Object.hasOwn(receipt, "container")).toBe(false);
         expect(await store.get(launchId)).toEqual(receipt);
       }
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-
-      const reopened = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
+      const reopened = await reopenStore(env);
       expect(await reopened.get(launchId)).toEqual(receipt);
       if (!withContainer) {
         expect(hasContainers(openOpenClawStateDatabase({ env }).db)).toBe(false);
@@ -592,15 +583,9 @@ describe("node worker launch store container identity", () => {
     ["unexpected identity field", { ...containerIdentity, extra: true }],
   ])("fails closed when a persisted container identity has %s", async (_reason, malformed) => {
     const { database, store } = await fixture();
-    const { planHash, supervisor } = await claimLaunch(store, "corrupt-container-launch");
-    await store.markRunning({
-      launchId: "corrupt-container-launch",
-      planHash,
-      supervisor,
-      worker: supervisor,
+    await startLaunch(store, "corrupt-container-launch", {
       cleanupMode: null,
       container: containerIdentity,
-      nowMs: NOW_MS,
     });
     database
       .prepare("UPDATE node_worker_launch_containers SET container_json = ? WHERE launch_id = ?")
@@ -654,8 +639,7 @@ describe("node worker cleanup journal", () => {
         )
         .get(binding.launchId),
     ).toEqual({ cleanup_mode: "owned-anchor", lineage_settled: null });
-    await closeDatabase();
-    const reopened = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
+    const reopened = await reopenStore(env);
     expect(await reopened.get(binding.launchId)).toEqual({
       ...receipt,
       workerDescendantsReaped: true,
@@ -723,9 +707,7 @@ describe("node worker cleanup journal", () => {
     });
     expect((await store.get(binding.launchId))?.workerDescendantsReaped).toBeUndefined();
     expect(await store.nonterminalCount()).toBe(1);
-    await closeDatabase();
-
-    const reopened = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
+    const reopened = await reopenStore(env);
     const settled = await reopened.get(binding.launchId);
     expect(settled).toEqual({ ...receipt, workerLineageSettled: true });
     expect(projectNodeWorkerSupervisorReceipt(settled!)).toEqual(
