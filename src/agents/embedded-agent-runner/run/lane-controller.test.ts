@@ -177,20 +177,23 @@ describe("controller-owned execution guard", () => {
   });
 
   it.each([
-    ["same physical session", false, false, false, true],
-    ["different session ID", true, false, false, false],
-    ["different store", false, true, false, false],
-    ["explicit detached run", false, false, true, false],
+    ["same physical session", false, false, false, true, false],
+    ["different session ID", true, false, false, false, false],
+    ["different store", false, true, false, false, false],
+    ["explicit detached run", false, false, true, false, false],
+    ["borrowed routable outer turn", false, false, false, false, true],
   ] as const)(
     "preserves sessionless admission for %s",
-    async (_name, otherId, otherStore, detached, queued) => {
+    async (_name, otherId, otherStore, detached, queued, borrowed) => {
       const sessionId = "native-sessionless-owner";
       const storePath = "/synthetic/native-sessionless/sessions.sqlite";
+      const operation = borrowed ? replyOperation(sessionId) : undefined;
       const first = create("native-sessionless-first", {
         sessionKey: undefined,
         sessionId,
         sessionFile: sessionId,
-        sessionTarget: { storePath },
+        sessionTarget: borrowed ? undefined : { storePath },
+        replyOperation: operation,
       });
       const entered = createDeferred();
       const finish = createDeferred();
@@ -221,10 +224,15 @@ describe("controller-owned execution guard", () => {
         sessionKey: undefined,
         sessionId: otherId ? "native-sessionless-other" : sessionId,
         sessionFile: otherId ? "native-sessionless-other" : sessionId,
-        sessionTarget: {
-          storePath: otherStore ? "/synthetic/native-sessionless-other/sessions.sqlite" : storePath,
-        },
+        sessionTarget: borrowed
+          ? undefined
+          : {
+              storePath: otherStore
+                ? "/synthetic/native-sessionless-other/sessions.sqlite"
+                : storePath,
+            },
         ...(detached ? { sessionPersistence: "detached" } : {}),
+        replyOperation: operation,
       });
       const successor = second.controller.enqueueSession(async () => {
         expect(second.getParams().sessionKey).toBeUndefined();
@@ -238,36 +246,17 @@ describe("controller-owned execution guard", () => {
         expect(order).toEqual(
           queued ? ["first", "first settled", "second"] : ["first", "second", "first settled"],
         );
+        if (operation) {
+          expect(operation.result).toBeNull();
+        }
       } finally {
         finish.resolve();
         await Promise.allSettled([predecessor, successor]);
+        operation?.complete();
+        await operation?.ownerSettlement;
       }
     },
   );
-
-  it("registers a keyless native attempt borrowed from a routable outer turn", async () => {
-    const sessionId = "native-sessionless-borrowed";
-    const operation = replyOperation(sessionId);
-    const owned = create("native-sessionless-borrowed", {
-      sessionKey: undefined,
-      sessionId,
-      sessionFile: sessionId,
-      replyOperation: operation,
-    });
-    const handle = createEmbeddedRunHandle({ runId: "native-sessionless-borrowed" });
-    try {
-      await owned.controller.enqueueSession(async () => {
-        attachActiveEmbeddedRun(sessionId, handle, undefined, sessionId, undefined, operation);
-        expect(owned.getParams().sessionKey).toBeUndefined();
-        detachActiveEmbeddedRun(sessionId, handle);
-      });
-      expect(operation.result).toBeNull();
-    } finally {
-      detachActiveEmbeddedRun(sessionId, handle);
-      operation.complete();
-      await operation.ownerSettlement;
-    }
-  });
 
   it("keeps a borrowed outer turn active when its nested caller cancels", async () => {
     const operation = replyOperation();

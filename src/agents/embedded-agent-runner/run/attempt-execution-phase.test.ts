@@ -403,11 +403,13 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     },
   );
 
-  it.each(["active", "replaced", "closed"] as const)(
-    "fences automatic memory compaction with %s admission during summarization",
+  it.each(["active", "cleanup-failed", "replaced", "closed"] as const)(
+    "preserves automatic compaction ownership and publication (%s)",
     async (owner) => {
       const fixture = await createFixture({ exerciseTerminalMerges: false });
       const { admission } = fixture;
+      const active = owner === "active" || owner === "cleanup-failed";
+      const cleanupError = new Error("attempt cleanup failed after compaction committed");
       const replacement = prepareSystemAgentRunAdmission({}, "run-1", "main", "compaction-test");
       const admittedRunContext = await admission.admit("embedded");
       const model = { ...testModel, api: "compaction-test-api", contextWindow: 4_096 };
@@ -441,7 +443,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         if (event.type === "compaction_end") {
           ends.push(event);
           if (event.outcome.status === "completed") {
-            expect(events).toHaveLength(1);
+            expect(events).toEqual([{ kind: "compaction", tokensAfter: expect.any(Number) }]);
             expect(fixture.skillInstructionDeliveryCache.size).toBe(0);
           }
         }
@@ -489,6 +491,9 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       mocks.installStreamGuards.mockImplementation(installEmbeddedAttemptStreamGuards);
       mocks.runSettledPhase.mockImplementation(async ({ preparedStreamRuntime }) => {
         await preparedStreamRuntime.promptActiveSession("Continue Blue Heron");
+        if (owner === "cleanup-failed") {
+          throw cleanupError;
+        }
         return fixture.result;
       });
       const retireAdmission = async () => {
@@ -511,22 +516,22 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         const messagesBefore = structuredClone(session.messages);
         await retireAdmission();
         releaseSummary.resolve();
-        expect(await outcome).toBeUndefined();
+        expect(await outcome).toBe(owner === "cleanup-failed" ? cleanupError : undefined);
         expect(summarySignalAborted).toBe(false);
         const compacted = sessionManager
           .getEntries()
           .filter((entry) => entry.type === "compaction");
-        expect(compacted).toHaveLength(owner === "active" ? 1 : 0);
+        expect(compacted).toHaveLength(active ? 1 : 0);
         expect(ends).toMatchObject([
           {
             type: "compaction_end",
             reason: "threshold",
-            outcome: { status: owner === "active" ? "completed" : "failed" },
+            outcome: { status: active ? "completed" : "failed" },
           },
         ]);
-        expect(events).toHaveLength(owner === "active" ? 1 : 0);
-        expect(fixture.skillInstructionDeliveryCache.size).toBe(owner === "active" ? 0 : 1);
-        if (owner !== "active") {
+        expect(events).toHaveLength(active ? 1 : 0);
+        expect(fixture.skillInstructionDeliveryCache.size).toBe(active ? 0 : 1);
+        if (!active) {
           expect(sessionManager.getEntries()).toEqual(entriesBefore);
           expect(session.messages).toEqual(messagesBefore);
         }
@@ -539,30 +544,6 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       }
     },
   );
-
-  it("publishes the replacement fact and invalidates the skill cache before attempt cleanup throws", async () => {
-    const fixture = await createFixture({ exerciseTerminalMerges: false });
-    const events: EmbeddedContextAccountingEvent[] = [];
-    fixture.input.attempt.onContextAccountingEvent = (event) => events.push(event);
-    const cleanupError = new Error("attempt cleanup failed after compaction committed");
-    let eventsBeforeCleanup: EmbeddedContextAccountingEvent[] | undefined;
-    let cacheSizeBeforeCleanup: number | undefined;
-    mocks.runSettledPhase.mockImplementationOnce(async () => {
-      const replacementHook = fixture.setContextReplacementHook.mock.calls[0]?.[0];
-      if (typeof replacementHook !== "function") {
-        throw new Error("expected the attempt-owned context replacement hook");
-      }
-      replacementHook(40, 120);
-      eventsBeforeCleanup = [...events];
-      cacheSizeBeforeCleanup = fixture.skillInstructionDeliveryCache.size;
-      throw cleanupError;
-    });
-
-    await expect(runEmbeddedAttemptExecutionPhase(fixture.input)).rejects.toBe(cleanupError);
-
-    expect(eventsBeforeCleanup).toEqual([{ kind: "compaction", tokensAfter: 40 }]);
-    expect(cacheSizeBeforeCleanup).toBe(0);
-  });
 
   it("does not start a prompt after external cancellation", async () => {
     const fixture = await createFixture();

@@ -21,7 +21,7 @@ import * as workerStore from "../../../infra/sqlite-worker-store.js";
 import type { SqliteWorkerOperations } from "../../../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
-import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
+import { withoutMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -80,6 +80,7 @@ import {
   createPersistedImageNoteFixture,
 } from "./attempt-execution-settle.test-support.js";
 import { runEmbeddedAttemptSettledPhase as settle } from "./attempt-settle.js";
+import { createSettledStreamResult } from "./attempt-stream.test-helpers.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -218,30 +219,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     await withNotes("file-backed", async (f) => {
       const { fixture, target, before, previousLeaf, previousMessages } = f;
       await useActualResult(true);
-      const database = openOpenClawAgentDatabase({ agentId: "main", path: target.storePath });
-      // Prepare before instrumentation so the probes must observe cached statements too.
-      const calibration = database.db.prepare("SELECT 1 AS value");
-      const probes = observeMainThreadSql();
-      const result = await (async () => {
-        try {
-          database.db.exec("SELECT 1");
-          database.db.prepare("SELECT 1");
-          calibration.get();
-          calibration.all();
-          calibration.run();
-          expect([...calibration.iterate()]).toEqual([{ value: 1 }]);
-          for (const probe of probes.calls) {
-            expect(probe).toHaveBeenCalled();
-          }
-          probes.clear();
-
-          const measuredResult = await settle(fixture.input);
-          probes.expectIdle();
-          return measuredResult;
-        } finally {
-          probes.restore();
-        }
-      })();
+      const result = await withoutMainThreadSql(() => settle(fixture.input));
 
       const after = await loadTranscriptEvents(target);
       expectAppended(before, after);
@@ -705,19 +683,13 @@ describe("runEmbeddedAttemptSettledPhase", () => {
   it("defaults a source-less settlement failure without dropping it", async () => {
     const fixture = createFixture(mocks);
     const failure = new Error("settlement failed");
-    mocks.settleStream.mockImplementationOnce(async () => ({
-      promptError: failure,
-      promptErrorSource: null,
-      timedOutDuringCompaction: true,
-      messagesSnapshot: [],
-      sessionIdUsed: "settled-session",
-      lastAssistant: undefined,
-      currentAttemptAssistant: undefined,
-      attemptUsage: undefined,
-      promptCache: undefined,
-      lastCallUsage: undefined,
-      compactionOccurredThisAttempt: false,
-    }));
+    mocks.settleStream.mockResolvedValueOnce(
+      createSettledStreamResult({
+        promptError: failure,
+        timedOutDuringCompaction: true,
+        sessionIdUsed: "settled-session",
+      }),
+    );
 
     await settle(fixture.input);
 
