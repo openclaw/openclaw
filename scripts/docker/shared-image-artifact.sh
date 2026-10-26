@@ -70,6 +70,7 @@ is_transient_gh_api_get_error() {
   fi
 
   [[ "$error_text" == *"i/o timeout"* ||
+    "$error_text" == *"request deadline"* ||
     "$error_text" =~ [Cc]ontext[[:space:]]+deadline[[:space:]]+exceeded ||
     "$error_text" =~ [Cc]onnection[[:space:]]+(refused|reset) ||
     "$error_text" =~ [Nn]etwork[[:space:]]+is[[:space:]]+unreachable ||
@@ -86,7 +87,7 @@ gh_api_get_with_retry() {
   local label="$1"
   local endpoint="$2"
   local not_found_policy="$3"
-  local attempt error_file response_file retry_delay retry_dir
+  local attempt error_file response_file retry_delay retry_dir request_status
   case "$not_found_policy" in
     fail-fast) ;;
     retry-fresh-artifact)
@@ -107,10 +108,18 @@ gh_api_get_with_retry() {
   for attempt in 1 2 3; do
     : > "$response_file"
     : > "$error_file"
-    if gh api --method GET "$endpoint" > "$response_file" 2> "$error_file"; then
+    # Bound stalled requests even when gh ignores TERM, so the retry loop can progress.
+    if timeout --signal=TERM --kill-after=10s 30s \
+      gh api --method GET "$endpoint" > "$response_file" 2> "$error_file"; then
       cat "$response_file"
       rm -rf -- "$retry_dir"
       return 0
+    else
+      request_status=$?
+    fi
+
+    if [[ "$request_status" -eq 124 || "$request_status" -eq 137 ]]; then
+      printf 'gh: GitHub API GET exceeded the 30s request deadline.\n' >> "$error_file"
     fi
 
     if [[ "$attempt" -lt 3 ]] &&
@@ -161,6 +170,7 @@ verify_uploaded_artifact() {
   fi
   command -v gh >/dev/null
   command -v jq >/dev/null
+  command -v timeout >/dev/null
 
   local artifact_json attempt_json
   artifact_json="$(
