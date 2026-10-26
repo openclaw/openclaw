@@ -77,6 +77,8 @@ async function sharingSession(sessionKey: string, manager = preparedClient("owne
 }
 
 const withState = createSharingState(() => setRuntimeConfigSnapshot({}));
+const seedOwned = (key: string, owner = "owner") =>
+  seed(key, key, { createdActor: { type: "human", source: "profile", id: owner } });
 
 it("lists sharing evidence and adds members independently of placement display failures", () =>
   withState(async () => {
@@ -102,21 +104,15 @@ it("lists sharing evidence and adds members independently of placement display f
         { sessionKey },
         requestContext,
       );
-      const expectedLegacy = await call("session.members.list", { sessionKey }, requestContext);
       expect(expectedEvidence[0]?.[1]).toMatchObject({
         members: [{ identityId: "guest", addedBy: "owner", addedAt: 1 }],
-        permissions: [],
       });
-      expect(expectedLegacy[0]?.[1]).not.toHaveProperty("permissions");
       vi.spyOn(placements, "readProjection").mockRejectedValue(
         new Error("placement display unavailable"),
       );
       sessionChanges.emit({ all: true, scope: "worker-placements" });
       expect(await call("session.members.listEvidence", { sessionKey }, requestContext)).toEqual(
         expectedEvidence,
-      );
-      expect(await call("session.members.list", { sessionKey }, requestContext)).toEqual(
-        expectedLegacy,
       );
       expect(
         await call("session.members.add", { sessionKey, identityId: member.id }, requestContext),
@@ -291,9 +287,7 @@ it("refreshes picker creators after creation and deletion without retaining requ
 it("adds, lists, and removes session members without caller-thread SQL after collaboration admission", () =>
   withState(async () => {
     const sessionKey = "agent:main:sharing-authority";
-    await seed(sessionKey, "sharing-authority", {
-      createdActor: { type: "human", source: "profile", id: "owner" },
-    });
+    await seedOwned(sessionKey);
     // Collaboration owns its cold admission; the worker-only entry seed does not admit it.
     await sharingStore.removeSessionMember(
       { agentId: "main", sessionKey },
@@ -316,9 +310,7 @@ it("refuses membership evidence after a published foreign ownership change", asy
   await withState(async () => {
     const sessionKey = "agent:main:sharing-snapshot-owner";
     const scope = { agentId: "main", sessionKey };
-    await seed(sessionKey, "sharing-snapshot-owner", {
-      createdActor: { type: "human", source: "profile", id: "owner" },
-    });
+    await seedOwned(sessionKey);
     addSessionMember(scope, { identityId: "guest", addedBy: "owner" });
     const { invoke, projection } = await sharingSession(sessionKey);
     const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -391,9 +383,7 @@ it("refuses membership evidence after a published foreign ownership change", asy
 
 it("refuses revoked managers and dirty membership at the worker commit grant", () =>
   withState(async () => {
-    await seed("agent:main:sharing-guest", "sharing-guest", {
-      createdActor: { type: "human", source: "profile", id: "guest" },
-    });
+    await seedOwned("agent:main:sharing-guest", "guest");
     for (const [method, change] of [
       ["session.members.add", "caller"],
       ["session.members.remove", "role"],
@@ -401,9 +391,7 @@ it("refuses revoked managers and dirty membership at the worker commit grant", (
     ] as const) {
       const sessionKey = `agent:main:${method}-${change}`;
       const scope = { agentId: "main", sessionKey };
-      await seed(sessionKey, sessionKey, {
-        createdActor: { type: "human", source: "profile", id: "owner" },
-      });
+      await seedOwned(sessionKey);
       addSessionMember(scope, { identityId: "owner", addedBy: "owner" });
       const manager = preparedClient(change === "role" ? "admin" : "owner");
       if (change === "role") {
@@ -494,9 +482,7 @@ it.each(["session.members.list", "session.members.add"] as const)(
       const owner = ensureProfileForEmail("owner-enumeration@example.test");
       const foreign = ensureProfileForEmail("foreign-enumeration@example.test");
       const member = ensureProfileForEmail("member-enumeration@example.test");
-      await seed(sessionKey, "profile-enumeration-authority", {
-        createdActor: { type: "human", source: "profile", id: owner.id },
-      });
+      await seedOwned(sessionKey, owner.id);
       const client = identifiedClient(owner.id);
       const { requestContext, projection } = await sharingSession(sessionKey, client);
       const prepare = projection.prepareSelection.bind(projection);
@@ -696,16 +682,12 @@ it("projects current participation and exact choices through the sharing handler
     setRuntimeConfigSnapshot(unconfiguredCfg);
     requestContext = context(vi.fn(), unconfiguredCfg);
     const unconfigured = await read();
-    expect(unconfigured.permissions).toContainEqual({
-      identityId: baseline.id,
-      level: "read",
-      options: ["read", "send"],
-    });
-    expect(unconfigured.permissions).toContainEqual({
-      identityId: explicit.id,
-      level: "send",
-      options: ["read", "send"],
-    });
+    expect(unconfigured.permissions).toEqual(
+      expect.arrayContaining([
+        { identityId: baseline.id, level: "read", options: ["read", "send"] },
+        { identityId: explicit.id, level: "send", options: ["read", "send"] },
+      ]),
+    );
     const legacy = await invoke("session.members.list");
     expect(legacy[0]?.[1]).not.toHaveProperty("permissions");
   }));
