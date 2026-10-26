@@ -10,6 +10,21 @@ type ToolExecutionDeadlineOwner = ((deadlineAtMs: number | undefined) => void) &
   register?: (deadlineAtMs: number) => () => void;
 };
 
+const noop = () => {};
+
+// Socket frames retain this carrier, never the closed invocation's lexical scope.
+function createDeadlineCarrier(record: ToolExecutionDeadlineOwner) {
+  let current: ToolExecutionDeadlineOwner | undefined = record;
+  const carrier: ToolExecutionDeadlineOwner = (deadline) => current?.(deadline);
+  carrier.register = (deadline) => current?.register?.(deadline) ?? noop;
+  return {
+    carrier,
+    close() {
+      current = undefined;
+    },
+  };
+}
+
 const state = resolveGlobalSingleton(
   Symbol.for("openclaw.diagnosticToolExecutionLiveness"),
   () => ({
@@ -59,14 +74,16 @@ export function createDiagnosticToolExecutionLiveness(
       waits.delete(wait);
     };
   };
+  const carrier = createDeadlineCarrier(record);
   return {
     view,
     run<T>(execute: () => T): T {
-      return state.context.run(record, execute);
+      return state.context.run(carrier.carrier, execute);
     },
     close(completed = false) {
       finishOwnedTool?.(completed && !signal?.aborted);
       active = false;
+      carrier.close();
       waits.clear();
       // The queued terminal retires the marker. Preserve exec's fixed allowance
       // until then, without letting a retained callback extend it.
