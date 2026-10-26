@@ -7,7 +7,7 @@ import {
 import { SqliteSchemaVersionError } from "./sqlite-user-version.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
-  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
+  UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE as advisoryExitCode,
 } from "./update-doctor-result.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 
@@ -18,20 +18,21 @@ function doctorStep(
 ) {
   return { exitCode, stderrTail, termination, signal: null, killed: false };
 }
-it.each([0, UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE])(
+const deferred = createDeferredConfiguredPluginRepairDoctorResult(["deferred plugin repair"]);
+it.each([
+  [0, { status: "ok" as const }, []],
+  [
+    advisoryExitCode,
+    deferred,
+    ["deferred plugin repair\nRun openclaw doctor --fix to finish deferred repairs."],
+  ],
+] as const)(
   "retains specific Doctor warnings on normal exit %s",
-  (exitCode) => {
+  (exitCode, result, deferredWarnings) => {
     const warning = "Skipped derived cache cleanup: permission denied. Run openclaw doctor --fix.";
-    const result =
-      exitCode === 0
-        ? { status: "ok" as const, warnings: [warning] }
-        : {
-            ...createDeferredConfiguredPluginRepairDoctorResult(["deferred plugin repair"]),
-            warnings: [warning],
-          };
     const step = markPackagePostInstallDoctorAdvisory(
       { exitCode, termination: "exit" as const, stderrTail: "doctor diagnostics" },
-      result,
+      { ...result, warnings: [warning] },
     );
     expect(step.advisory).toMatchObject({
       kind: "package-post-install-doctor",
@@ -39,22 +40,15 @@ it.each([0, UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE])(
     });
     expect(step.advisory?.message).toContain(warning);
     expect(step.stderrTail).toContain("doctor diagnostics");
-    if (exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE) {
+    if (exitCode === advisoryExitCode) {
       expect(step.stderrTail).toContain("deferred plugin repair");
     }
-    expect(step).toMatchObject({
-      warnings: [
-        warning,
-        ...(exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE
-          ? ["deferred plugin repair\nRun openclaw doctor --fix to finish deferred repairs."]
-          : []),
-      ],
-    });
+    expect(step.warnings).toEqual([warning, ...deferredWarnings]);
   },
 );
 it("keeps advisory diagnostics bounded after appending deferred repair details", () => {
   const step = markPackagePostInstallDoctorAdvisory(
-    doctorStep(UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE, "doctor deferred repair"),
+    doctorStep(advisoryExitCode, "doctor deferred repair"),
     createDeferredConfiguredPluginRepairDoctorResult([
       `Deferred configured plugin repair. ${"x".repeat(10_000)}`,
     ]),
@@ -71,7 +65,7 @@ it("keeps advisory diagnostics bounded after appending deferred repair details",
 it.each([
   [doctorStep(1, "doctor refused migration"), null],
   [
-    doctorStep(UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE, "doctor timed out", "timeout"),
+    doctorStep(advisoryExitCode, "doctor timed out", "timeout"),
     createDeferredConfiguredPluginRepairDoctorResult(["deferred configured plugin repair"]),
   ],
 ] as const)("preserves non-advisory diagnostics: %j", (original, receipt) => {
