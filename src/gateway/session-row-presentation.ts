@@ -242,11 +242,8 @@ export function prepareSessionRowPublication(
     let presentation: ReturnType<typeof prepareProjectedSessionPresentation> | undefined;
     return {
       getAudienceKey() {
-        return JSON.stringify([
-          recipient.sharing.getCacheKey(projection.sharingRevision),
-          recipient.presentFastMode("ultrafast"),
-          recipient.publicationState?.factsRevision,
-        ]);
+        // Fixed-domain prefixes keep the opaque sharing key intact without re-encoding it.
+        return `${recipient.presentFastMode("ultrafast") === true ? 0 : 1}:${recipient.publicationState?.factsRevision ?? ""}:${recipient.sharing.getCacheKey(projection.sharingRevision)}`;
       },
       // Event fanout needs display structures only on an audience miss, after live authority.
       getPresentation() {
@@ -269,10 +266,6 @@ function prepareSessionRowRecipient(
 ) {
   const { cfg, policyConfig, rowContext } = projection.state;
   const presentFastMode = prepareSessionFastModePresentation(client);
-  const models =
-    client === undefined
-      ? undefined
-      : prepareOperatorModelPresentation({ cfg, policyConfig, client });
   const publicationState = publication?.();
   const sharing = prepareProjectedSessionSharing({
     cfg: policyConfig,
@@ -286,7 +279,7 @@ function prepareSessionRowRecipient(
         })
         ?.has(identityId) ?? false,
   });
-  return { cfg, policyConfig, rowContext, presentFastMode, models, publicationState, sharing };
+  return { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing };
 }
 
 /** Recreate after yields: the caller identity and clock belong to one synchronous presentation. */
@@ -297,8 +290,11 @@ export function prepareProjectedSessionPresentation(
   projectRun?: VisibleActiveSessionRunProjector,
   recipient = prepareSessionRowRecipient(projection, client),
 ) {
-  const { cfg, policyConfig, rowContext, presentFastMode, models, publicationState, sharing } =
-    recipient;
+  const { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing } = recipient;
+  const models =
+    client === undefined
+      ? undefined
+      : prepareOperatorModelPresentation({ cfg, policyConfig, client });
   const publicationRows = publicationState?.rows;
   const subagentRuns = rowContext.subagentRuns.atTime(now);
   const preparedRowContext = { ...rowContext, subagentRuns };

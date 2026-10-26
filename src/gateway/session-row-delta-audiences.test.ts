@@ -7,6 +7,7 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as modelPresentation from "./operator-model-presentation.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import {
   initializeSessionReadContext,
@@ -321,6 +322,91 @@ it("shares recipient encodings only for matching authority and delivered baselin
       expect(rowEncodings).toBeLessThanOrEqual(16);
       // Two wire capabilities per group, plus one legacy envelope per authority.
       expect(envelopeEncodings).toBeLessThanOrEqual(10);
+    } finally {
+      detach();
+      await connection.mentionInbox.dispose();
+      projection.dispose();
+    }
+  });
+});
+
+it("prepares model presentation once per audience at growing fanout", async () => {
+  using _ = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    cfg.agents = { entries: { main: {} } };
+    cfg.gateway!.roles!.definitions.view!.modelPolicy = { allow: ["fixture/visible"] };
+    const profile = ensureProfileForEmail("fanout@example.test");
+    setUserProfileRole(profile.id, "view");
+    const key = "agent:main:fanout";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: key },
+      {
+        sessionId: "fanout",
+        updatedAt: 1,
+        visibility: "shared",
+        modelProvider: "fixture",
+        model: "hidden",
+        fastMode: "ultrafast",
+      },
+    );
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const connection = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "fanout",
+      cfg,
+    });
+    const detach = connection.attachSessionRowProjection(projection);
+    using modelPreparations = vi.spyOn(modelPresentation, "prepareOperatorModelPresentation");
+    try {
+      for (const count of [1, 4, 16, 65]) {
+        const peers = Array.from({ length: count }, (_entry, i) => {
+          const peer = createSessionRowEventPeer(profile, `fanout-${count}-${i}`, 1);
+          peer.client.connect.caps = i % 2 ? ["ultrafast"] : [];
+          connection.clients.add(peer.client);
+          connection.sessionEventSubscribers.subscribe(peer.client.connId);
+          return peer;
+        });
+        modelPreparations.mockClear();
+        const stringify = JSON.stringify;
+        let nestedKeyEncodings = 0;
+        const encoding = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
+          const value: unknown = args[0];
+          if (
+            Array.isArray(value) &&
+            value.length === 3 &&
+            typeof value[0] === "string" &&
+            (value[1] === true || value[1] === "ultrafast")
+          ) {
+            nestedKeyEncodings++;
+          }
+          return stringify(...args);
+        });
+        try {
+          connection.broadcastToConnIds(
+            "sessions.changed",
+            { sessionKey: key, agentId: "main" },
+            new Set(peers.map((peer) => peer.client.connId)),
+          );
+        } finally {
+          encoding.mockRestore();
+        }
+        expect.soft(modelPreparations).toHaveBeenCalledTimes(Math.min(count, 2));
+        expect.soft(nestedKeyEncodings).toBe(0);
+        for (const [i, peer] of peers.entries()) {
+          expect(peer.send).toHaveBeenCalledOnce();
+          const frame = peer.send.mock.lastCall![0];
+          expect(frame).toBe(peers[i % 2]!.send.mock.lastCall![0]);
+          const row = JSON.parse(frame).payload.session;
+          expect(row).toMatchObject({
+            key,
+            sharingRole: "viewer",
+            fastMode: i % 2 ? "ultrafast" : true,
+          });
+          expect(row).not.toHaveProperty("model");
+          expect(row).not.toHaveProperty("modelProvider");
+        }
+      }
     } finally {
       detach();
       await connection.mentionInbox.dispose();
