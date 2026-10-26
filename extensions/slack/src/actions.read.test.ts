@@ -4,7 +4,8 @@ import { downloadSlackFile, readSlackMessages } from "./actions.js";
 
 const createSlackLookupClientMock = vi.hoisted(() => vi.fn());
 const resolveSlackMedia = vi.fn<typeof import("./monitor/media.js").resolveSlackMedia>();
-vi.mock("./monitor/media.js", () => ({
+vi.mock("./monitor/media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor/media.js")>()),
   resolveSlackMedia: (...args: Parameters<typeof resolveSlackMedia>) => resolveSlackMedia(...args),
 }));
 vi.mock("./client.js", () => ({

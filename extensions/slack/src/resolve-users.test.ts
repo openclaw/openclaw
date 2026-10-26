@@ -3,7 +3,8 @@ import { resolveSlackUserAllowlist } from "./resolve-users.js";
 
 const { createClient, list } = vi.hoisted(() => ({ createClient: vi.fn(), list: vi.fn() }));
 
-vi.mock("./client.js", () => ({
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
   createSlackLookupClient: createClient,
 }));
 

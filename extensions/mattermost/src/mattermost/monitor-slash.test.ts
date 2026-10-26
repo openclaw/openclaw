@@ -28,6 +28,7 @@ vi.mock("./slash-commands.js", () => ({
   resolveSlashCommandConfig,
 }));
 
+// mock-isolation: Capture activation without loading the process-global slash route registry.
 vi.mock("./slash-state.js", () => ({ activateSlashCommands }));
 
 let runtime = { log: vi.fn(), error: vi.fn() };
