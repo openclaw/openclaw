@@ -936,7 +936,6 @@
 ["extensions/voice-call/index.test.ts","./runtime-entry.js","f529f5573b8f2036634221d124d76854986eece6c9e49d56645666b1fad1fe24",1]
 ["extensions/voice-call/src/providers/shared/guarded-json-api.test.ts","../../../api.js","eefef02ad50d20545a54af6c1ca61acfcfdcb463003af11bad2ffa6259776320",1]
 ["extensions/voice-call/src/providers/telnyx.test.ts","../../api.js","8c454cff20897e668a81a0a613cd1c6ca6bbe56f144954b4a06bc57bcee3ed86",1]
-["extensions/voice-call/src/providers/twilio/api.test.ts","../../../api.js","eefef02ad50d20545a54af6c1ca61acfcfdcb463003af11bad2ffa6259776320",1]
 ["extensions/voice-call/src/runtime.test.ts","./manager.js","7c7f4e10cc5429c2e33a7d2e3883c0690f9d957c1e67f2fc6da0d3d56f1f8fc4",1]
 ["extensions/voice-call/src/runtime.test.ts","./tunnel.js","78a47180bd23855d2f4cd6b72f59c471de3b13e4e135725d6a1665029b833ec5",1]
 ["extensions/voice-call/src/runtime.test.ts","./webhook.js","dd05dab8fe8f15056422eb37d87e3c611e16310ad197e1bcde104efdffe5e849",1]
