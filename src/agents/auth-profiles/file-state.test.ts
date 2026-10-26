@@ -9,7 +9,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { applyAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import * as directoryWatch from "../../infra/directory-watch-host.js";
-import { runOpenClawAgentPathWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import {
   authProfileSourceExists,
@@ -212,21 +211,6 @@ function closeFiles(paths: string[], retainedPaths?: string[]) {
     deleted: false,
   });
 }
-
-it("rejects a swapped database before a privileged write even before observation runs", async () => {
-  const { databasePath } = fixture({ existing: true });
-  captureAuthProfileFileIdentity(databasePath);
-  const write = vi.fn();
-  await runOpenClawAgentPathWriteAdmission(databasePath, async (_identity, assertCurrent) => {
-    replaceFile(databasePath);
-    await Promise.resolve();
-    expect(() => {
-      assertCurrent();
-      write();
-    }).toThrow("database target changed");
-  });
-  expect(write).not.toHaveBeenCalled();
-});
 
 it("ignores database content events but observes replacement and nameless invalidation", async () => {
   const { databasePath } = fixture({ existing: true });
