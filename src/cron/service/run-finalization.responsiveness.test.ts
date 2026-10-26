@@ -7,7 +7,7 @@ import {
   createCronRegressionState,
   createDueIsolatedJob,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
@@ -51,12 +51,7 @@ async function whileContended<T>(
       settled = true;
     };
     void pending.then(markSettled, markSettled);
-    await Promise.race([
-      posted.promise,
-      pending.then(() => {
-        throw new Error(`${type} completed without dispatch`);
-      }),
-    ]);
+    await awaitGateBeforeSettlement(posted.promise, pending, `${type} completed without dispatch`);
     await nextTurn();
     expect(
       Atomics.load(holder.released, 0),

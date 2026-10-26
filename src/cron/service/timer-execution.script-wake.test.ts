@@ -42,15 +42,21 @@ function createFixture(wake: "now" | "next-heartbeat", cronEnabled = true) {
     wakeMode: "now",
     payload: { kind: "script", script: "return { wake: 'now' }" },
   });
-  return { state, job, enqueueSessionEvent, deferSessionEvent, captureSessionEventTarget };
+  return {
+    state,
+    job,
+    enqueueSessionEvent,
+    deferSessionEvent,
+    captureSessionEventTarget,
+    execute: (signal?: AbortSignal) =>
+      executeJobCore(state, job, signal, { migrationPending: false }),
+  };
 }
 
 describe("script follow-up handoff", () => {
   it("sends an immediate follow-up to the captured session while scheduling is disabled", async () => {
     const fixture = createFixture("now", false);
-    const result = await executeJobCore(fixture.state, fixture.job, undefined, {
-      migrationPending: false,
-    });
+    const result = await fixture.execute();
     expect(result.status).toBe("ok");
     expect(fixture.captureSessionEventTarget.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(fixture.state.deps.runScriptJob!).mock.invocationCallOrder[0]!,
@@ -74,11 +80,7 @@ describe("script follow-up handoff", () => {
       state: { nextRunAtMs: 60_000 },
     };
     fixture.state.store = { version: 1, jobs: [receiver] };
-    expect(
-      await executeJobCore(fixture.state, fixture.job, undefined, { migrationPending: false }),
-    ).toMatchObject({
-      status: "ok" as const,
-    });
+    expect(await fixture.execute()).toMatchObject({ status: "ok" });
     expect(fixture.deferSessionEvent).toHaveBeenCalledExactlyOnceWith(
       "Review the result.",
       receiver,
@@ -90,9 +92,7 @@ describe("script follow-up handoff", () => {
     );
     expect(fixture.enqueueSessionEvent).not.toHaveBeenCalled();
     receiver.enabled = false;
-    expect(
-      await executeJobCore(fixture.state, fixture.job, undefined, { migrationPending: false }),
-    ).toMatchObject({
+    expect(await fixture.execute()).toMatchObject({
       status: "error",
       error: expect.stringContaining("No enabled ordinary scheduled session job"),
     });
@@ -102,9 +102,7 @@ describe("script follow-up handoff", () => {
   it("records a visible error when the original destination cannot be captured", async () => {
     const fixture = createFixture("now");
     fixture.state.deps.captureSessionEventTarget = async () => undefined;
-    expect(
-      await executeJobCore(fixture.state, fixture.job, undefined, { migrationPending: false }),
-    ).toMatchObject({
+    expect(await fixture.execute()).toMatchObject({
       status: "error",
       error: expect.stringContaining("no original session target"),
     });
@@ -121,9 +119,7 @@ describe("script follow-up handoff", () => {
       await release.promise;
       return undefined;
     };
-    const pending = executeJobCore(fixture.state, fixture.job, controller.signal, {
-      migrationPending: false,
-    });
+    const pending = fixture.execute(controller.signal);
     try {
       await awaitGateBeforeSettlement(
         entered.promise,

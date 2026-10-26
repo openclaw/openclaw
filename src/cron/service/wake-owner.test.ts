@@ -3,7 +3,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import type { CronJob } from "../types.js";
+import { makeCronJob } from "../delivery.test-helpers.js";
 import { createCronServiceState, type CronServiceDeps } from "./state.js";
 import { executeJobCore } from "./timer-execution.js";
 import { wake } from "./wake.js";
@@ -26,18 +26,15 @@ function createState(overrides: Partial<CronServiceDeps>) {
 
 function createHarness(runSessionEvent: RunSessionEvent) {
   const state = createState({ runSessionEvent });
-  const job: CronJob = {
+  const job = makeCronJob({
     id: "reminder",
     name: "reminder",
-    enabled: true,
     createdAtMs: 0,
     updatedAtMs: 0,
-    schedule: { kind: "every", everyMs: 60_000 },
     payload: { kind: "systemEvent", text: "  check pending work  " },
     sessionTarget: "main",
     wakeMode: "now",
-    state: {},
-  };
+  });
   return { state, job };
 }
 
