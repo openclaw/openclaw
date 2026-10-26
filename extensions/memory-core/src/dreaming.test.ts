@@ -402,15 +402,23 @@ describe("dreaming service reconciliation", () => {
     vi.useFakeTimers();
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
-    const { api, harness, logger } = createDreamingTestContext();
-    const list = vi.spyOn(harness.cron, "list").mockImplementationOnce(async () => {
+    const { api, logger } = createDreamingTestContext();
+    const list = vi.fn(async () => {
       entered.resolve();
       await release.promise;
       throw new Error("startup list failed");
     });
+    const add = vi.fn(async () => ({}));
     const removeStaleJobFamily = vi.fn(async () => 0);
     const cron = {
-      ...harness.cron,
+      list,
+      add,
+      async update() {
+        return {};
+      },
+      async remove() {
+        return { removed: false };
+      },
       removeStaleJobFamily,
     } satisfies NonNullable<ReturnType<NonNullable<OpenClawPluginServiceContext["getCron"]>>>;
     try {
@@ -429,7 +437,7 @@ describe("dreaming service reconciliation", () => {
       await expect(Promise.all(api.backgroundTasks)).resolves.toEqual([undefined]);
       await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
       expect(list).toHaveBeenCalledOnce();
-      expect(harness.addCalls).toEqual([]);
+      expect(add).not.toHaveBeenCalled();
       expect(removeStaleJobFamily).not.toHaveBeenCalled();
       expectLogContains(logger.error, "dreaming startup reconciliation failed");
     } finally {
