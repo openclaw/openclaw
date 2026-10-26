@@ -411,7 +411,7 @@ if (values.server) {
   process.once("disconnect", disconnected);
   const result = await measure();
   process.off("disconnect", disconnected);
-  process.send?.(result, () => process.disconnect());
+  process.send?.(result, () => process.disconnect?.());
 } else {
   await main();
 }
