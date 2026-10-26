@@ -635,6 +635,7 @@ suite.define(() => {
       after: requestCountB,
     });
     expect(requestB.params).toMatchObject({ sessionKey: sessionB });
+    await openChatPublication(page);
     const publishingB = page.getByRole("button", { name: "Publishing…" });
     const publishingBState = () =>
       publishingB.evaluateAll((buttons) => ({

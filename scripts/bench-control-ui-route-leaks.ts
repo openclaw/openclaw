@@ -71,6 +71,7 @@ type ProbeRoute =
   | AppsPilotId
   | "desktop-document"
   | "portal-embedded"
+  | "settings-native-root"
   | DockScenarioId;
 let appsSandbox: Awaited<ReturnType<typeof startAppsPilotSandbox>> | undefined;
 
@@ -91,6 +92,7 @@ const { values } = parseArgs({
 if (values.help) {
   console.log(
     "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,cron-transcript probes follow cold readiness. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
+    "Native Settings root: --routes settings-native-root uses the iOS phone embed at 390x844; do not combine with --interactions.",
     `Browser/Reader cells: ${DOCK_SCENARIO_IDS.join(",")}. Each owns its cold/native first-open phases; do not combine with --interactions.`,
   );
   process.exit(0);
@@ -132,6 +134,7 @@ const defaults = [
 const routes = (values.routes?.split(",") ?? defaults).map((id) => {
   if (
     id !== "sharing" &&
+    id !== "settings-native-root" &&
     id !== "desktop-document" &&
     id !== "portal-embedded" &&
     !isAppsPilotId(id) &&
@@ -144,6 +147,9 @@ const routes = (values.routes?.split(",") ?? defaults).map((id) => {
 });
 const appsProbesEnabled = routes.some(isAppsPilotId);
 const interactionIds = values.interactions?.split(",") ?? [];
+if (routes.includes("settings-native-root") && interactionIds.length) {
+  throw new Error("Native Settings root is a cold-only cell; do not combine with --interactions");
+}
 if (routes.some(isDockScenario) && interactionIds.length) {
   throw new Error(`Dock cells (${DOCK_SCENARIO_IDS.join(",")}) own their native first-open phases`);
 }
@@ -182,6 +188,14 @@ function routeTarget(
   selector: string | undefined;
   requiredMethods?: string[];
 } {
+  if (id === "settings-native-root") {
+    return {
+      route: "settings",
+      pathname: "/settings",
+      search: "",
+      selector: '.settings-embed-list a[href="/settings/appearance"]',
+    };
+  }
   if (isDockScenario(id)) {
     return dockTarget(id);
   }
@@ -294,6 +308,9 @@ function fixtureFor(
   return {
     ...fixture,
     ...workboard,
+    ...(id === "settings-native-root"
+      ? { automaticallyFetchFavicons: false, operatorScopes: ["operator.admin", "operator.read"] }
+      : {}),
     serverBuildId: build.buildId,
     serverVersion: build.version,
     ...(id === "systems" || id === "desktop-document"
@@ -930,6 +947,9 @@ try {
             await server.selectBuild(variant.root);
             const context = await browser.newContext({
               viewport: { width: 1440, height: 1000 },
+              ...(route === "settings-native-root"
+                ? { viewport: { width: 390, height: 844 }, hasTouch: true, locale: "en-US" }
+                : {}),
               ...(isDockScenario(route) ? dockContextOptions(route) : {}),
               serviceWorkers: "block",
             });
@@ -975,6 +995,13 @@ try {
                 throw new Error(String(result.gap));
               }
               await page.addInitScript("globalThis.__name = (fn) => fn");
+              if (route === "settings-native-root") {
+                await page.addInitScript(() => {
+                  Object.assign(window, {
+                    __OPENCLAW_NATIVE_EMBED__: { platform: "ios", formFactor: "phone" },
+                  });
+                });
+              }
               if (isDockScenario(route)) {
                 await page.addInitScript(installDockInputTrace);
               }
@@ -1184,6 +1211,29 @@ try {
                         frame.contentDocument.querySelector("button:not(:disabled)") !== null
                       );
                     })();
+                  const nativeSettingsSettled =
+                    probeRoute !== "settings-native-root" ||
+                    (() => {
+                      const rows = [...document.querySelectorAll(".settings-embed-list a")];
+                      return (
+                        document.querySelector("html.openclaw-native-embed .shell--embed") !==
+                          null &&
+                        document.querySelector(
+                          ".native-embed-header openclaw-settings-save-indicator",
+                        ) !== null &&
+                        rows.length > 0 &&
+                        rows.every(
+                          (row) =>
+                            row.getClientRects().length > 0 &&
+                            getComputedStyle(row).visibility !== "hidden" &&
+                            row.getBoundingClientRect().height >= 44,
+                        ) &&
+                        document.querySelector(
+                          ".shell-nav, openclaw-app-topbar, .shell-chrome-controls, openclaw-macos-titlebar-controls",
+                        ) === null &&
+                        document.documentElement.scrollWidth <= innerWidth
+                      );
+                    })();
                   const portalRailSettled =
                     probeRoute !== "portal-embedded" ||
                     (() => {
@@ -1200,6 +1250,7 @@ try {
                     desktopSettled &&
                     portalSettled &&
                     portalRailSettled &&
+                    nativeSettingsSettled &&
                     approvalsSettled &&
                     (routeId === "desktop-document" ||
                       (snapshot?.routeReady &&

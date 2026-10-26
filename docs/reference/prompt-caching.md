@@ -70,6 +70,11 @@ Isolated settled-turn finalization uses a separate cache key scoped to the run.
 Its tool-free prompt and full transcript differ from the conversation request,
 so it does not replace the conversation's cache or history-diagnostic baseline.
 
+Live embedded turns carry watched-group membership and titles beside the current
+turn instead of rebuilding the system suffix. Routes that retain runtime context
+replay earlier snapshots unchanged. The watch registry and existing read-access
+gates still determine what the model may see; a watch never grants send access.
+
 ## Keep replayed tool results stable
 
 OpenClaw applies the same tool-result text cap before the first model request

@@ -381,12 +381,14 @@ it("reports unavailable publication and saved-only mutations", async ({ signal }
           (error: unknown) => ({ error }),
         );
       await withinTest(written.promise, signal);
-      const acquire = vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLease").mockRejectedValue(
-        new OpenClawStateLeaseAcquisitionError("plugin lifecycle lease", {
-          kind: "store-unavailable",
-          reason,
-        }),
-      );
+      const acquire = vi
+        .spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync")
+        .mockRejectedValue(
+          new OpenClawStateLeaseAcquisitionError("plugin lifecycle lease", {
+            kind: "store-unavailable",
+            reason,
+          }),
+        );
       try {
         for (const delay of reason === "storage-error"
           ? [0]

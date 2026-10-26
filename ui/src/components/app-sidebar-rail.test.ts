@@ -164,6 +164,7 @@ describe("personal navigation rail", () => {
       [false, false],
     );
     await click(sidebar, '[data-navigation-view="pages"]');
+    await vi.dynamicImportSettled();
     await waitForSolid(() => expect(dom.query(".sidebar-pages")).not.toBeNull());
     expect(dom.query(".sidebar-session-content")).toBeNull();
     expect(dom.query("aside.sidebar")).toBe(frame);

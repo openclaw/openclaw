@@ -68,7 +68,7 @@ import {
 import { hasMissingInstalledPluginOwnerMetadata } from "./installed-plugin-package-ownership.js";
 import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "./plugin-lifecycle-lease-identity.js";
 import {
-  withPluginLifecycleLease,
+  withPluginLifecycleLeaseAsync,
   type PluginMetadataLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -353,7 +353,7 @@ export async function writePersistedInstalledPluginIndex(
     ),
     filePath: resolveInstalledPluginIndexStorePath(options),
   };
-  return await withPluginLifecycleLease(
+  return await withPluginLifecycleLeaseAsync(
     resolveInstalledPluginIndexStateDatabaseOptions(captured),
     async (lease) => {
       await runInstalledPluginIndexWrite(captured, lease, (scope, identity) =>
@@ -626,7 +626,7 @@ export async function refreshPersistedInstalledPluginIndexWithReceipt(
     );
     return receipt;
   };
-  return callerLease ? refresh(callerLease) : withPluginLifecycleLease(options, refresh);
+  return callerLease ? refresh(callerLease) : withPluginLifecycleLeaseAsync(options, refresh);
 }
 
 export function refreshPersistedInstalledPluginIndexWithLeaseSync(

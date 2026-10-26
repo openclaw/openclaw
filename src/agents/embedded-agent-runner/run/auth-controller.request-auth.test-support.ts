@@ -1,11 +1,16 @@
 import { vi } from "vitest";
+import type { ProviderExternalAuthProfile } from "../../../plugins/provider-external-auth.types.js";
 import { writeConfigMachineState } from "../../../state/config-machine-state-write.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { oauthCred } from "../../auth-profiles/credential-fixtures.test-support.js";
+import { createExternalAuthRuntime } from "../../auth-profiles/external-auth.js";
 import { mockOAuthProviderOperations } from "../../auth-profiles/oauth-native-provider.test-support.js";
 import { storeWith } from "../../auth-profiles/oauth-test-utils.js";
+import { createAuthProfileStoreRuntime } from "../../auth-profiles/store.js";
+import type { AuthProfileStore } from "../../auth-profiles/types.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createEmbeddedRunAuthController, type EmbeddedRunAuthState } from "./auth-controller.js";
+import { createScopedAuthProfileStore } from "./auth-store.js";
 
 export const provider = "request-auth-fixture";
 export const profileId = `${provider}:selected`;
@@ -16,6 +21,7 @@ type RequestFixture = {
   agentDir: string;
   controller: ReturnType<typeof createEmbeddedRunAuthController>;
   authState: EmbeddedRunAuthState;
+  authStore: AuthProfileStore;
   refresh: ReturnType<
     typeof vi.fn<
       (credential: ReturnType<typeof oauthCred>) => Promise<ReturnType<typeof oauthCred>>
@@ -25,7 +31,17 @@ type RequestFixture = {
 };
 export async function withRequestFixture(
   run: (fixture: RequestFixture) => Promise<void>,
-  { agentId = "main", sharedStateOwner = false, replacement = false } = {},
+  {
+    agentId = "main",
+    sharedStateOwner = false,
+    replacement = false,
+    externalProfile,
+  }: {
+    agentId?: string;
+    sharedStateOwner?: boolean;
+    replacement?: boolean;
+    externalProfile?: Pick<ProviderExternalAuthProfile, "profileId" | "persistence">;
+  } = {},
 ) {
   await withOpenClawTestState(
     { layout: "state-only", agentEnv: "main", prefix: "request-auth-" },
@@ -48,8 +64,28 @@ export async function withRequestFixture(
       if (sharedStateOwner) {
         writeConfigMachineState("auth.sharedStore", { location: "state-db" });
       }
-      await state.writeAuthProfiles(store, agentId);
+      await state.writeAuthProfiles(
+        externalProfile?.profileId === profileId && externalProfile.persistence !== "persisted"
+          ? { version: 1, profiles: {} }
+          : store,
+        agentId,
+      );
       const agentDir = state.agentDir(agentId);
+      const authStore = externalProfile
+        ? createScopedAuthProfileStore(
+            await createAuthProfileStoreRuntime(
+              createExternalAuthRuntime(
+                () => [{ ...externalProfile, credential }],
+                async (_params, execute) => execute(),
+              ),
+            ).ensureAuthProfileStoreAsync(agentDir, {
+              readOnly: true,
+              syncExternalCli: false,
+              config: { plugins: { enabled: false } },
+            }),
+            [profileId, externalProfile.profileId],
+          )
+        : store;
       const refresh = vi.fn(async () => ({
         ...credential,
         access: "synthetic-access-after",
@@ -77,7 +113,7 @@ export async function withRequestFixture(
         config: { plugins: { enabled: false } },
         agentDir,
         workspaceDir: state.workspaceDir,
-        authStore: store,
+        authStore,
         authStorage: {
           setRuntimeApiKey: (_provider, key) => {
             installed = key;
@@ -101,6 +137,7 @@ export async function withRequestFixture(
           agentDir,
           controller,
           authState,
+          authStore,
           refresh,
           installed: () => installed,
         });

@@ -5,6 +5,7 @@
  */
 import { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
+import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { resolveScheduledSenderBit } from "./execution-context-registry.js";
 import type {
   ScheduledAdmissionFacts,
@@ -27,6 +28,8 @@ type ScheduledDecisionField =
   | "ownerEmbedded"
   | "ownerCli"
   | "automations"
+  | "automationsCli"
+  | "requesterYield"
   | "board"
   | "eventTarget"
   | "memory"
@@ -45,6 +48,9 @@ type ScheduledDecisionVector = Readonly<{
   ownerEmbedded: ScheduledOwnerSurface;
   ownerCli: ScheduledOwnerSurface;
   automations: "none" | "self" | "self-and-parent-wake";
+  /** The CLI loopback's automations tool; `session-turn` is the turn's owner-only rule. */
+  automationsCli: "none" | "self" | "self-and-parent-wake" | "session-turn";
+  requesterYield: "offered" | "refused";
   board: string;
   eventTarget: string;
   /** The parent's memory as the owner's private memory, or only its conversation. */
@@ -76,6 +82,10 @@ function projectLegacyDecisions(
     ownerCli: sessionTurn ? "session-turn" : "non-owner",
     // Scheduled and ingress turns are both limited to their own automation.
     automations: !automationsAllowed ? "none" : "self",
+    // The loopback denied automations to child and detached runs; in-session turns
+    // kept the grant's owner-only rule.
+    automationsCli: sessionTurn ? "session-turn" : "none",
+    requesterYield: isCronSessionKey(facts.runSessionKey) ? "refused" : "offered",
     board: facts.runSessionKey,
     eventTarget: inSession ? facts.runSessionKey : facts.agentMainSessionKey,
     memory: "run-session",
@@ -106,7 +116,7 @@ function projectContextDecisions(
       ? { admissionSource: facts.authority.admissionSource }
       : {}),
     ...projectContextOwner(result, legacy),
-    automations: facts.toolPolicy.automations.scope,
+    ...projectContextAutomations(result, legacy),
     board: facts.resources.boardSessionKey,
     eventTarget: facts.resources.eventTargetSessionKey,
     memory:
@@ -132,6 +142,25 @@ function projectContextOwner(
   }
   const surface = bit.senderIsOwner === false ? "non-owner" : "owner";
   return { ownerEmbedded: surface, ownerCli: surface };
+}
+
+// The automations tool and requester yield a run's tools get. The parent wake is
+// not offered yet, so a `self-and-parent-wake` scope offers the self actions.
+// Ingress turns keep their legacy CLI surface and yield.
+function projectContextAutomations(
+  result: Extract<ScheduledExecutionContextResult, { status: "ready" }>,
+  legacy: ScheduledDecisionVector,
+): Pick<ScheduledDecisionVector, "automations" | "automationsCli" | "requesterYield"> {
+  const { facts } = result;
+  const offered = facts.toolPolicy.automations.scope === "none" ? "none" : "self";
+  if (facts.principal.kind === "ingress") {
+    return {
+      automations: offered,
+      automationsCli: legacy.automationsCli,
+      requesterYield: legacy.requesterYield,
+    };
+  }
+  return { automations: offered, automationsCli: offered, requesterYield: "refused" };
 }
 
 const AUTOMATIONS_RANK: Record<ScheduledDecisionVector["automations"], number> = {
@@ -175,6 +204,17 @@ function labelField(
       ? "gain-intended"
       : "loss";
   }
+  if (field === "automationsCli") {
+    // The CLI taking the embedded run's scope is the parity fix; an in-session
+    // turn's unscoped owner tool narrowing to its own job is a loss.
+    if (before === "session-turn" || after === "none") {
+      return "loss";
+    }
+    return after === legacy.automations ? "gain-intended" : "gain-unexpected";
+  }
+  if (field === "requesterYield") {
+    return after === "refused" ? "loss" : "gain-unexpected";
+  }
   if (field === "admissionSource") {
     return after === "operator-schedule" ? "gain-unexpected" : "loss";
   }
@@ -201,6 +241,8 @@ const FIELDS: readonly ScheduledDecisionField[] = [
   "ownerEmbedded",
   "ownerCli",
   "automations",
+  "automationsCli",
+  "requesterYield",
   "board",
   "eventTarget",
   "memory",

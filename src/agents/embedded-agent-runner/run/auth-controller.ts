@@ -126,9 +126,7 @@ export function createEmbeddedAuthProfileAdmission(
 }
 
 /**
- * Coordinates auth profile selection, runtime auth preparation/refresh, and
- * profile failover for one embedded run. Runtime snapshots and auth refreshes
- * share this state so profile rotation cannot leave either with stale credentials.
+ * Own profile selection, runtime auth refresh and failover for one run's shared snapshots.
  */
 export function createEmbeddedRunAuthController(params: {
   authProfileBinding?: RunEmbeddedAgentParams["authProfileBinding"];
@@ -533,14 +531,16 @@ export function createEmbeddedRunAuthController(params: {
       params.authProfileBinding?.assertCurrent();
       assertProviderAuthAuthority(runtimeModel);
     };
-    // Keep the canonical account's authorization, not just its rotating bearer.
-    // Its existing writer publications retire this handle on reconnect/removal.
+    // Canonical writers retire account authorization on reconnect/removal; overlays keep their owner.
     const setupVerification =
       profileId &&
       selected?.setup?.replacement &&
       isSetupCredentialAccessible({ profileId, credential: selected, agentDir: params.agentDir });
     const requestAuthSupported =
-      !isEnvOnlyAuthProfileRuntime() && !getScopedSharedAuthStore() && !setupVerification;
+      !isEnvOnlyAuthProfileRuntime() &&
+      !getScopedSharedAuthStore() &&
+      !setupVerification &&
+      !params.authStore.runtimeExternalProfileIds?.includes(profileId ?? "");
     const authorization =
       requestAuthSupported && apiKeyInfo.mode === "oauth" && profileId && selected?.type === "oauth"
         ? await captureAuthProfileAuthorization({

@@ -21,12 +21,14 @@ import {
 registerModelControlsEnglish();
 
 type ChatModelSelectStateInput = {
-  activeSession?: GatewaySessionRow;
+  activeSession?: Pick<GatewaySessionRow, "model" | "modelProvider" | "modelOverrideSource">;
   agentDefaultModel?: string;
   chatModelCatalog: ModelCatalogEntry[];
   modelOverrides: Readonly<Record<string, string | null | undefined>>;
   sessionKey: string;
-  sessionsResult: SessionsListResult | null;
+  sessionsResult: {
+    defaults: Partial<Pick<SessionsListResult["defaults"], "model" | "modelProvider">>;
+  } | null;
   modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
   catalogRetired?: boolean;
   catalogInitialized?: boolean;
@@ -386,10 +388,14 @@ export function resolveChatFastModeSelectState(input: {
   catalog: ModelCatalogEntry[];
   connected: boolean;
   currentModelOverride: string;
-  fastModeTarget?: ChatFastModeTarget;
+  fastModeTarget?: Omit<ChatFastModeTarget, "agentRuntime"> & {
+    agentRuntime?: Pick<NonNullable<ChatFastModeTarget["agentRuntime"]>, "id">;
+  };
   gatewayAvailable: boolean;
   loading: boolean;
-  sessionsResult: SessionsListResult | null;
+  sessionsResult: {
+    defaults: Partial<Pick<SessionsListResult["defaults"], "model" | "modelProvider">>;
+  } | null;
 }): ChatFastModeSelectState {
   const activeRow = input.fastModeTarget;
   const activeProvider = normalizeChatModelProviderId(activeRow?.modelProvider ?? "") || null;

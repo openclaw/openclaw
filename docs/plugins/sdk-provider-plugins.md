@@ -657,6 +657,9 @@ existing local-credential and shared-OAuth exclusion rules remain unchanged.
 Setup-owned verification of a replacement OAuth sign-in also omits the capability:
 it uses the exact active setup credential scope, not ambient account authorization.
 The replacement stays unavailable outside that scope until verified activation.
+Runtime-only external OAuth profiles also omit the capability: the external
+credential source retains ownership, without requiring a canonical stored row.
+Persisted external profiles retain canonical capture and retirement checks.
 Absence retains the existing static `apiKey` behavior, not a guarantee of renewal
 during an attempt. Static API keys are unchanged. Account-less legacy OAuth
 credentials may keep the same refresh
