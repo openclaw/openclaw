@@ -4,6 +4,7 @@ import type { AgentToolsConfig } from "../config/types.tools.js";
 import {
   resolveEffectiveToolFsRootExpansionAllowed,
   resolveEffectiveToolFsWorkspaceOnly,
+  resolveOpenClawToolsFsPolicy,
 } from "./tool-fs-policy.js";
 
 function policy(tools: OpenClawConfig["tools"], agentTools?: AgentToolsConfig) {
@@ -91,5 +92,57 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
         ),
       ),
     ).toBe(false);
+  });
+});
+
+describe("resolveOpenClawToolsFsPolicy", () => {
+  it("is unrestricted by default", () => {
+    expect(resolveOpenClawToolsFsPolicy({ cfg: {}, agentId: "main" })).toBeUndefined();
+  });
+
+  it("restricts from global tools.fs.workspaceOnly", () => {
+    expect(resolveOpenClawToolsFsPolicy(policy({ fs: { workspaceOnly: true } }))).toEqual({
+      workspaceOnly: true,
+    });
+  });
+
+  it("honors an agent override over the global setting", () => {
+    expect(
+      resolveOpenClawToolsFsPolicy(
+        policy({ fs: { workspaceOnly: true } }, { fs: { workspaceOnly: false } }),
+      ),
+    ).toBeUndefined();
+    expect(
+      resolveOpenClawToolsFsPolicy(
+        policy({ fs: { workspaceOnly: false } }, { fs: { workspaceOnly: true } }),
+      ),
+    ).toEqual({ workspaceOnly: true });
+  });
+
+  it("lets an explicit session permission mode decide and pins its root", () => {
+    expect(
+      resolveOpenClawToolsFsPolicy({
+        ...policy({ fs: { workspaceOnly: false } }),
+        sessionPermissionPolicy: { mode: "workspace", root: "/work/root" },
+      }),
+    ).toEqual({ workspaceOnly: true, root: "/work/root" });
+    expect(
+      resolveOpenClawToolsFsPolicy({
+        ...policy({ fs: { workspaceOnly: true } }),
+        sessionPermissionPolicy: { mode: "full", root: "/work/root" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps the subagent attachment root readable without widening the workspace", () => {
+    expect(
+      resolveOpenClawToolsFsPolicy({
+        ...policy({ fs: { workspaceOnly: true } }),
+        attachmentReadRoot: "/state/attachments/child",
+      }),
+    ).toEqual({ workspaceOnly: true, readOnlyRoots: ["/state/attachments/child"] });
+    expect(
+      resolveOpenClawToolsFsPolicy({ cfg: {}, agentId: "main", attachmentReadRoot: "/x" }),
+    ).toBeUndefined();
   });
 });
