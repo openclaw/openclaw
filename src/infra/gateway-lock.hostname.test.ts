@@ -22,7 +22,9 @@ function ownerLocation() {
   const root = roots.make("openclaw-hostname-owner-");
   const databasePath = path.join(root, "state", "openclaw.sqlite");
   fs.mkdirSync(path.dirname(databasePath));
-  return { databasePath, ownerPath: resolveGatewayStateOwnerPath(databasePath) };
+  const ownerPath = resolveGatewayStateOwnerPath(databasePath);
+  fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
+  return { databasePath, ownerPath };
 }
 
 function previousBoot(

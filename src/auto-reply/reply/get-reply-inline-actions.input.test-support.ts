@@ -1,11 +1,12 @@
 import type { TemplateContext } from "../templating.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import type { handleInlineActions } from "./get-reply-inline-actions.js";
+import type { buildTestCtx } from "./test-ctx.js";
 
 export type HandleInlineActionsInput = Parameters<typeof handleInlineActions>[0];
 
 export const createHandleInlineActionsInput = (params: {
-  ctx: HandleInlineActionsInput["ctx"];
+  ctx: ReturnType<typeof buildTestCtx>;
   typing: HandleInlineActionsInput["typing"];
   cleanedBody: string;
   command?: Partial<HandleInlineActionsInput["command"]>;

@@ -1,6 +1,10 @@
 // Tests payload visibility, threading, and source-send deduplication.
 import { describe, expect, it, vi } from "vitest";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 
 vi.mock("../../channels/plugins/index.js", () => ({

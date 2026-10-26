@@ -78,7 +78,9 @@ it.each([{ lookupFn: async () => [] }, { ssrfPolicy: { allowedOrigins: [] } }])(
 it("does not route an outside async owner", async ({ onTestFinished }) => {
   const { save, wrapped, options } = captureSave();
   const externalOwner = new AsyncResource("outside-store-fixture");
-  onTestFinished(() => externalOwner.emitDestroy());
+  onTestFinished(() => {
+    externalOwner.emitDestroy();
+  });
   await withStoreRemoteFixture({ url: options.url }, async () => {
     await externalOwner.runInAsyncScope(() => wrapped(options));
   });
