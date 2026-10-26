@@ -152,6 +152,19 @@ function dataModuleUrl(source: string): string {
   return `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
 }
 
+async function expectEncodings(
+  file: string,
+  source: string | Buffer,
+  encodings: string[] = [],
+  startup?: Set<string>,
+) {
+  const variants = await createControlUiPrecompressedAssetVariants(file, source, startup);
+  expect(variants.map(({ fileName }) => fileName)).toEqual(
+    encodings.map((ext) => `${file}.${ext}`),
+  );
+  return variants;
+}
+
 async function executeLocale(
   load: Awaited<ReturnType<typeof localeHooks>>["load"],
   baseSource: string,
@@ -217,46 +230,29 @@ it("emits Brotli and gzip variants only for bundled compressible assets", async 
   );
   // No timestamp, filename, or host OS field may make the pinned gzip bytes host-dependent.
   expect(variants[1]!.source.subarray(0, 10).toString("hex")).toBe("1f8b08000000000002ff");
-  const repeated = await createControlUiPrecompressedAssetVariants(
-    "assets/app-AbCd1234.js",
-    Buffer.from(source),
-  );
+  const repeated = await createControlUiPrecompressedAssetVariants(file, Buffer.from(source));
   expect(repeated).toEqual(variants);
-  expect(await createControlUiPrecompressedAssetVariants("index.html", source)).toEqual([]);
-  expect(await createControlUiPrecompressedAssetVariants("assets/logo.png", source)).toEqual([]);
-  expect(await createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual([]);
+  for (const excluded of ["index.html", "assets/logo.png", "assets/app.js.map"]) {
+    await expectEncodings(excluded, source);
+  }
 });
 
 it("precompresses assets starting at 4 KiB only when the encoding saves bytes", async () => {
-  expect(
-    await createControlUiPrecompressedAssetVariants("assets/small.js", "x".repeat(4095)),
-  ).toEqual([]);
+  await expectEncodings("assets/small.js", "x".repeat(4095));
   const boundary = "é".repeat(2048);
-  const variants = await createControlUiPrecompressedAssetVariants("assets/boundary.js", boundary);
-  expect(variants.map((variant) => variant.fileName)).toEqual([
-    "assets/boundary.js.br",
-    "assets/boundary.js.gz",
-  ]);
+  const variants = await expectEncodings("assets/boundary.js", boundary, ["br", "gz"]);
   for (const variant of variants) {
     expect(variant.source.byteLength).toBeLessThan(Buffer.byteLength(boundary));
   }
   const incompressible = Buffer.concat(
     Array.from({ length: 128 }, (_, index) => createHash("sha256").update(String(index)).digest()),
   );
-  expect(
-    await createControlUiPrecompressedAssetVariants("assets/random.wasm", incompressible),
-  ).toEqual([]);
+  await expectEncodings("assets/random.wasm", incompressible);
   // These tails produce an exactly 4096-byte Brotli or gzip output, respectively.
   incompressible.fill(0, 4096 - 29);
-  expect(
-    await createControlUiPrecompressedAssetVariants("assets/equal-br.wasm", incompressible),
-  ).toEqual([]);
+  await expectEncodings("assets/equal-br.wasm", incompressible);
   incompressible.fill(0, 4096 - 66);
-  expect(
-    (await createControlUiPrecompressedAssetVariants("assets/equal-gzip.wasm", incompressible)).map(
-      (variant) => variant.fileName,
-    ),
-  ).toEqual(["assets/equal-gzip.wasm.br"]);
+  await expectEncodings("assets/equal-gzip.wasm", incompressible, ["br"]);
 });
 
 it("keeps small CSS and measured startup assets compressed, excluding deferred route preloads", async () => {
@@ -271,25 +267,11 @@ it("keeps small CSS and measured startup assets compressed, excluding deferred r
   );
   const source = "export const value = 123;\n".repeat(20);
   for (const fileName of ["assets/entry.js", "assets/runtime.js", "assets/lazy.css"]) {
-    const variants = await createControlUiPrecompressedAssetVariants(
-      fileName,
-      source,
-      startupAssets,
-    );
-    expect(variants.map((variant) => variant.fileName)).toEqual([
-      `${fileName}.br`,
-      `${fileName}.gz`,
-    ]);
+    await expectEncodings(fileName, source, ["br", "gz"], startupAssets);
   }
-  expect(
-    await createControlUiPrecompressedAssetVariants("assets/chat.js", source, startupAssets),
-  ).toEqual([]);
-  expect(
-    await createControlUiPrecompressedAssetVariants("assets/tiny.css", "x", startupAssets),
-  ).toEqual([]);
-  expect(
-    await createControlUiPrecompressedAssetVariants("assets/entry.js", "x", startupAssets),
-  ).toEqual([]);
+  await expectEncodings("assets/chat.js", source, [], startupAssets);
+  await expectEncodings("assets/tiny.css", "x", [], startupAssets);
+  await expectEncodings("assets/entry.js", "x", [], startupAssets);
 });
 
 it("uses the supplied artifact identity without reading Git metadata", () => {

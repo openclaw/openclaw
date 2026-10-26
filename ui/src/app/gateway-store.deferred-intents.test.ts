@@ -22,6 +22,18 @@ describe("Gateway deferred intents", () => {
   const hello = () => store.current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
   const disconnect = () =>
     store.current().testOptions.onClose?.({ code: 1006, reason: "network lost", willRetry: true });
+  const enqueue = (
+    calls: string[],
+    key: string,
+    options: Partial<Parameters<typeof store.gateway.defer>[0]> = {},
+  ) =>
+    store.gateway.defer({
+      key,
+      run: async () => {
+        calls.push(key);
+      },
+      ...options,
+    });
   const settle = async () => {
     for (let step = 0; step < 5; step += 1) {
       await Promise.resolve();
@@ -50,29 +62,10 @@ describe("Gateway deferred intents", () => {
     const calls: string[] = [];
     const discarded = vi.fn();
     disconnect();
-    store.gateway.defer({
-      key: "lifecycle",
-      group: "session",
-      run: async () => {
-        calls.push("archive");
-      },
-    });
-    store.gateway.defer({
-      key: "other",
-      run: async () => {
-        calls.push("other");
-      },
-    });
-    store.gateway.defer({
-      key: "metadata",
-      group: "session",
-      run: async () => {
-        calls.push("metadata");
-      },
-      discard: discarded,
-    });
-    store.gateway.defer({
-      key: "lifecycle",
+    enqueue(calls, "lifecycle", { group: "session" });
+    enqueue(calls, "other");
+    enqueue(calls, "metadata", { group: "session", discard: discarded });
+    enqueue(calls, "lifecycle", {
       group: "session",
       preservePosition: true,
       discardGroup: true,
@@ -93,21 +86,8 @@ describe("Gateway deferred intents", () => {
     const counts: number[] = [];
     store.gateway.subscribe((snapshot) => counts.push(snapshot.deferredIntentCount ?? 0));
     disconnect();
-    expect(
-      store.gateway.defer({
-        key: "label",
-        run: async () => {
-          calls.push("old");
-        },
-        discard: oldDiscard,
-      }),
-    ).toBe(true);
-    store.gateway.defer({
-      key: "icon",
-      run: async () => {
-        calls.push("icon");
-      },
-    });
+    expect(enqueue(calls, "label", { discard: oldDiscard })).toBe(true);
+    enqueue(calls, "icon");
     store.gateway.defer({
       key: "label",
       run: async (client) => {

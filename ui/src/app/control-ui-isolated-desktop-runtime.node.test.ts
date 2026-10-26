@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { build } from "vite";
+import { build, type Plugin } from "vite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import { controlUiBootPreloadsPlugin } from "../../config/control-ui-boot-preloads.ts";
@@ -22,6 +22,47 @@ function routePreloads(html: string, route: "chat" | "new"): string[] {
   ).exec(html);
   expect(template).not.toBeNull();
   return [...template![1]!.matchAll(/href="\.\/([^"]+)"/gu)].map((match) => match[1]!);
+}
+
+async function buildFixture(
+  root: string,
+  outDir: string,
+  sources: Record<string, string>,
+  aliases: Record<string, string>,
+  plugins: Plugin[] = [],
+  codeSplitting = controlUiCodeSplitting,
+) {
+  const result = await build({
+    configFile: false,
+    root,
+    publicDir: false,
+    logLevel: "silent",
+    plugins: [
+      {
+        name: "preload-build-fixture",
+        enforce: "pre",
+        resolveId: (source) => (Object.hasOwn(aliases, source) ? aliases[source] : null),
+        load: (id) => (Object.hasOwn(sources, id) ? sources[id] : null),
+      },
+      ...plugins,
+      controlUiBootPreloadsPlugin(),
+    ],
+    build: {
+      outDir,
+      minify: false,
+      target: "esnext",
+      modulePreload: false,
+      rolldownOptions: { output: { strictExecutionOrder: true, codeSplitting } },
+    },
+  });
+  if (Array.isArray(result) || !("output" in result)) {
+    throw new Error("Expected one Control UI fixture bundle");
+  }
+  return {
+    outDir,
+    chunks: result.output.filter((output) => output.type === "chunk"),
+    html: await fs.readFile(path.join(outDir, "index.html"), "utf8"),
+  };
 }
 
 it.each([false, true])(
@@ -72,48 +113,10 @@ it.each([false, true])(
       "fixture:composer": composer,
       "fixture:composer-interaction": composerInteraction,
     };
-    const buildFixture = async (isolated: boolean) => {
-      const outDir = local(isolated ? "isolated" : "original");
-      const result = await build({
-        configFile: false,
-        root,
-        publicDir: false,
-        logLevel: "silent",
-        plugins: [
-          {
-            name: "desktop-build-fixture",
-            enforce: "pre",
-            resolveId: (source) => (Object.hasOwn(aliases, source) ? aliases[source] : null),
-            load: (id) => (Object.hasOwn(sources, id) ? sources[id] : null),
-          },
-          ...(isolated ? [controlUiIsolatedDesktopRuntimePlugin()] : []),
-          controlUiBootPreloadsPlugin(),
-        ],
-        build: {
-          outDir,
-          minify: false,
-          target: "esnext",
-          modulePreload: false,
-          rolldownOptions: {
-            output: {
-              strictExecutionOrder: true,
-              codeSplitting: controlUiCodeSplitting,
-            },
-          },
-        },
-      });
-      if (Array.isArray(result) || !("output" in result)) {
-        throw new Error("Expected one Control UI fixture bundle");
-      }
-      return {
-        outDir,
-        chunks: result.output.filter((output) => output.type === "chunk"),
-        html: await fs.readFile(path.join(outDir, "index.html"), "utf8"),
-      };
-    };
-
-    const original = await buildFixture(false);
-    const isolated = await buildFixture(true);
+    const original = await buildFixture(root, local("original"), sources, aliases);
+    const isolated = await buildFixture(root, local("isolated"), sources, aliases, [
+      controlUiIsolatedDesktopRuntimePlugin(),
+    ]);
     const shared = isolated.chunks.find(
       (chunk) => sidebar in chunk.modules && outbox in chunk.modules,
     );
@@ -255,38 +258,15 @@ it("prioritizes signing and route dependencies over unevaluated interaction hint
       .join("\n"),
   );
   const outDir = local("dist");
-  const result = await build({
-    configFile: false,
+  // Exercise hints independently of the previous measured boot grouping.
+  const { chunks, html } = await buildFixture(
     root,
-    publicDir: false,
-    logLevel: "silent",
-    plugins: [
-      {
-        name: "renderer-preload-fixture",
-        enforce: "pre",
-        resolveId: (source) => aliases[source] ?? null,
-        load: (id) => sources[id] ?? null,
-      },
-      controlUiBootPreloadsPlugin(),
-    ],
-    build: {
-      outDir,
-      minify: false,
-      target: "esnext",
-      modulePreload: false,
-      rolldownOptions: {
-        output: {
-          strictExecutionOrder: true,
-          // Exercise hints independently of the previous measured boot grouping.
-          codeSplitting: createControlUiCodeSplitting({ includeBootGroups: false }),
-        },
-      },
-    },
-  });
-  if (Array.isArray(result) || !("output" in result)) {
-    throw new Error("Expected one Control UI renderer fixture bundle");
-  }
-  const chunks = result.output.filter((output) => output.type === "chunk");
+    outDir,
+    sources,
+    aliases,
+    [],
+    createControlUiCodeSplitting({ includeBootGroups: false }),
+  );
   const chunkFor = (id: string) => {
     const chunk = chunks.find((output) => id in output.modules);
     expect(chunk).toBeDefined();
@@ -298,7 +278,6 @@ it("prioritizes signing and route dependencies over unevaluated interaction hint
   const placementChunks = [entries.placement, placementDependency].map(
     (id) => chunkFor(id).fileName,
   );
-  const html = await fs.readFile(local("dist/index.html"), "utf8");
   const chatPreloads = routePreloads(html, "chat");
   expect(chatPreloads.toSorted()).toEqual(
     [...new Set([signerChunk, chatChunk, ...commonChunks])].toSorted(),
