@@ -23,10 +23,18 @@ describe.skipIf(!isLiveTestEnabled())(
     let documents = 0;
     const source = createServer((req, res) => {
       if (req.url === "/stream") {
-        res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-store" });
-        res.write("<!doctype html><title>Committed action stream</title><body>ready</body>");
         heldResponses.add(res);
-        res.on("close", () => heldResponses.delete(res));
+        const timer = setTimeout(() => {
+          if (res.destroyed) {
+            return;
+          }
+          res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-store" });
+          res.write("<!doctype html><title>Committed action stream</title><body>ready</body>");
+        }, 1_000);
+        res.on("close", () => {
+          clearTimeout(timer);
+          heldResponses.delete(res);
+        });
         return;
       }
       const allowed = req.url === "/allowed";
@@ -107,6 +115,9 @@ describe.skipIf(!isLiveTestEnabled())(
             await page.waitForFunction(() => document.title === "denied");
           }
           expect(methods).toEqual(["OPTIONS"]);
+          if (process.env.OPENCLAW_LIVE_PROOF === "1") {
+            console.info(`[browser-proof] cors owner=${owner} methods=OPTIONS put=0`);
+          }
         } finally {
           await page.close();
         }
@@ -133,7 +144,7 @@ describe.skipIf(!isLiveTestEnabled())(
           action: async () => {
             await page.evaluate((url) => {
               location.href = url;
-            }, "http://169.254.169.254/document");
+            }, targetUrl + "/document");
           },
         }).catch((caught: unknown) => caught);
         expect(error).toBeInstanceOf(SsrFBlockedError);
@@ -141,6 +152,11 @@ describe.skipIf(!isLiveTestEnabled())(
         expect(documents).toBe(0);
         expect(page.url()).toBe(sourceUrl + "/allowed");
         expect(await page.title()).toBe("allowed");
+        if (process.env.OPENCLAW_LIVE_PROOF === "1") {
+          console.info(
+            "[browser-proof] cors consenting=OPTIONS,PUT deniedDocuments=0 sourcePreserved=true",
+          );
+        }
       } finally {
         await page.close();
       }
@@ -163,6 +179,9 @@ describe.skipIf(!isLiveTestEnabled())(
         expect(await page.title()).toBe("Committed action stream");
         await page.goto(sourceUrl + "/after-stream");
         expect(page.url()).toBe(sourceUrl + "/after-stream");
+        if (process.env.OPENCLAW_LIVE_PROOF === "1") {
+          console.info("[browser-proof] stream committed=true subsequentNavigation=true");
+        }
       } finally {
         await page.close();
       }

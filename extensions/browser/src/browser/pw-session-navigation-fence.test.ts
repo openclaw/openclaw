@@ -157,8 +157,13 @@ describe("navigation authority fence lifecycle", () => {
       type: "Document",
       frameId: "main",
     });
+    const mainCleanup = main.dispose({ stopLoadingOnMainFrameCommit: true });
+    await vi.waitFor(() =>
+      expect(main.send).toHaveBeenCalledWith("Runtime.evaluate", { expression: "void 0" }),
+    );
+    expect(main.send).not.toHaveBeenCalledWith("Page.stopLoading", undefined);
     main.session.emit("Page.frameNavigated", { frame: { id: "main" } });
-    await expect(main.dispose({ stopLoadingOnMainFrameCommit: true })).resolves.toBeUndefined();
+    await expect(mainCleanup).resolves.toBeUndefined();
     expect(main.send).toHaveBeenCalledWith("Page.stopLoading", undefined);
 
     const child = await fence();

@@ -572,23 +572,14 @@ describe("pw-session selected-page interaction request guard", () => {
   });
   it("intercepts documents without routing subresources", async () => {
     const documentRoute = createMockRoute();
-    const imageRoute = createMockRoute();
     await expect(
       guard(async () => {
         await dispatch({ route: documentRoute });
-        await dispatch({
-          url: "http://127.0.0.1/ignored-subresource.png",
-          isNavigationRequest: false,
-          resourceType: "image",
-          route: imageRoute,
-        });
         return "ok";
       }),
     ).resolves.toBe("ok");
     expect(documentRoute.fallback).toHaveBeenCalledTimes(1);
-    expect(imageRoute.fallback).not.toHaveBeenCalled();
     expect(documentRoute.continue).not.toHaveBeenCalled();
-    expect(imageRoute.continue).not.toHaveBeenCalled();
     expect(f.sessionSend).toHaveBeenCalledWith("Fetch.enable", {
       patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }],
     });

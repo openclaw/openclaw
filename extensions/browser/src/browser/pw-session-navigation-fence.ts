@@ -542,17 +542,21 @@ export async function installNavigationAuthorityFence(
       // A same-target round trip establishes an event-delivery barrier before
       // the first idle-state decision tears down interception.
       await bounded(session.send("Runtime.evaluate", { expression: "void 0" }));
-      if (options.stopLoading || (options.stopLoadingOnMainFrameCommit && mainFrameCommitted)) {
-        // A Playwright navigation timeout can leave a committed document's
-        // response open indefinitely. The caller owns that timed-out load, so
-        // settle it before waiting for Network.loadingFailed and preserve the
-        // original recoverable TimeoutError for committed-tab adoption.
-        await stopLoading();
-      }
+      let loadingSettled = false;
       for (;;) {
         // Capture before reading state so a terminal event cannot notify
         // between the predicate and the wait and leave cleanup asleep.
         const changed = stateChanged.promise;
+        if (
+          !loadingSettled &&
+          (options.stopLoading || (options.stopLoadingOnMainFrameCommit && mainFrameCommitted))
+        ) {
+          // A committed document can remain open indefinitely. Its commit may
+          // arrive after cleanup starts, so re-evaluate this boundary whenever
+          // protocol state changes instead of sampling it only once.
+          await stopLoading();
+          loadingSettled = true;
+        }
         const activeDocuments = [...states.values()].some((state) => state.documents.size > 0);
         if (
           failed ||
