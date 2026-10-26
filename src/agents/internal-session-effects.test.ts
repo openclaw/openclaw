@@ -146,12 +146,7 @@ describe("internal session effects", () => {
         onError: (error) => errors.push(error),
       });
       const initial = await prepare("tracked-run");
-      const rotated = {
-        agentId: initial.agentId,
-        sessionId: "rotated-hidden-session",
-        sessionKey: initial.sessionKey,
-        storePath,
-      };
+      const rotated = { ...initial, sessionId: "rotated-hidden-session" };
       await upsertSessionEntryCore(rotated, { sessionId: rotated.sessionId, updatedAt: 2 });
       const additional = await prepare("additional-binding");
       const untracked = await prepare("other-run");

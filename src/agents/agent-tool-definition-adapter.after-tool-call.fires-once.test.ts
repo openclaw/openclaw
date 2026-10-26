@@ -9,7 +9,9 @@ import { prepareToolResult } from "./embedded-agent-tool-results.js";
 const hookMocks = vi.hoisted(() => ({
   runner: {
     hasHooks: vi.fn(() => true),
-    runAfterToolCall: vi.fn(async () => {}),
+    runAfterToolCall: vi.fn(
+      async (_event: { error?: unknown; params?: Record<string, unknown> }) => {},
+    ),
     runBeforeToolCall: vi.fn(async () => {}),
   },
 }));
@@ -23,22 +25,12 @@ const beforeToolCallMocks = vi.hoisted(() => ({
     blocked: false,
     params,
   })),
+  buildBlockedToolResult: ({ reason }: { reason: string }) => ({
+    content: [{ type: "text", text: reason }],
+    details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason },
+  }),
+  consumePreExecutionBlockedToolCall: vi.fn(() => false),
 }));
-
-function createTestTool(name: string, fail = false) {
-  return {
-    name,
-    label: name,
-    description: `test tool: ${name}`,
-    parameters: Type.Object({}),
-    execute: vi.fn(async () => {
-      if (fail) {
-        throw new Error("tool failed");
-      }
-      return { content: [{ type: "text" as const, text: "ok" }], details: { ok: true } };
-    }),
-  } satisfies AgentTool;
-}
 
 function createToolHandlerCtx() {
   return {
@@ -70,19 +62,7 @@ async function loadFreshAfterToolCallModulesForTest() {
     peekAdjustedParamsForToolCall: vi.fn(() => undefined),
     peekPreExecutionBlockedToolCall: vi.fn(() => false),
   }));
-  vi.doMock("./agent-tools.before-tool-call.js", () => ({
-    buildBlockedToolResult: ({ reason }: { reason: string }) => ({
-      content: [{ type: "text", text: reason }],
-      details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason },
-    }),
-    consumeAdjustedParamsForToolCall: beforeToolCallMocks.consumeAdjustedParamsForToolCall,
-    consumePreExecutionBlockedToolCall: vi.fn(() => false),
-    recordAdjustedParamsForToolCall: beforeToolCallMocks.recordAdjustedParamsForToolCall,
-    recordStructuredReplayTrustForToolCall:
-      beforeToolCallMocks.recordStructuredReplayTrustForToolCall,
-    isToolWrappedWithBeforeToolCallHook: beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook,
-    runBeforeToolCallHook: beforeToolCallMocks.runBeforeToolCallHook,
-  }));
+  vi.doMock("./agent-tools.before-tool-call.js", () => beforeToolCallMocks);
   ({ toToolDefinitions } = await import("./agent-tool-definition-adapter.js"));
   ({ handleToolExecutionStart } =
     await import("./embedded-agent-subscribe.handlers.tools.start.js"));
@@ -95,19 +75,23 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    hookMocks.runner.hasHooks.mockReturnValue(true);
-    hookMocks.runner.runAfterToolCall.mockResolvedValue(undefined);
-    hookMocks.runner.runBeforeToolCall.mockResolvedValue(undefined);
     beforeToolCallMocks.consumeAdjustedParamsForToolCall.mockReturnValue(undefined);
     beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(false);
-    beforeToolCallMocks.runBeforeToolCallHook.mockImplementation(async ({ params }) => ({
-      blocked: false,
-      params,
-    }));
   });
 
   function createToolCall(toolName: string, fail = false) {
-    const tool = createTestTool(toolName, fail);
+    const tool: AgentTool = {
+      name: toolName,
+      label: toolName,
+      description: `test tool: ${toolName}`,
+      parameters: Type.Object({}),
+      execute: async () => {
+        if (fail) {
+          throw new Error("tool failed");
+        }
+        return { content: [{ type: "text", text: "ok" }], details: { ok: true } };
+      },
+    };
     const def = toToolDefinitions([tool])[0];
     if (!def) {
       throw new Error("missing tool definition");
@@ -137,8 +121,7 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
     await call.end({ status: "error", error: "tool failed" });
 
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
-    const event = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock
-      .calls[0]?.[0] as { error?: unknown } | undefined;
+    const event = hookMocks.runner.runAfterToolCall.mock.calls[0]?.[0];
     expect(event?.error).toBe("tool failed");
   });
 
@@ -161,11 +144,10 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
       toolCallId,
       "integration-test",
     );
-    const event = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock
-      .calls[0]?.[0] as { params?: unknown } | undefined;
+    const event = hookMocks.runner.runAfterToolCall.mock.calls[0]?.[0];
     expect(event?.params).toEqual(adjusted);
     // Plugin-owned hook inputs remain mutable without changing retained execution facts.
-    (event!.params as typeof adjusted).path = "/tmp/plugin.txt";
+    event!.params!.path = "/tmp/plugin.txt";
     expect(terminal.executedArguments).toEqual({ path: "/tmp/adjusted.txt", mode: "safe" });
   });
 
