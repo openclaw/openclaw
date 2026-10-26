@@ -42,14 +42,7 @@ it("returns no issues when payload accounts are missing or not arrays", () => {
 });
 
 it("uses Gateway-owned diagnostics without loading local plugins or duplicating issues", () => {
-  const statusIssues = [
-    {
-      channel: "guildchat",
-      kind: "config",
-      message: "Configuration reload is deferred.",
-      accountId: "work",
-    },
-  ];
+  const statusIssues = [issue("Configuration reload is deferred.")];
   expect(collectChannelStatusIssues({ statusIssues })).toEqual(statusIssues);
   expect(collectChannelStatusIssues({ statusIssues: [] })).toEqual([]);
   expect(mocks.listChannelPlugins).not.toHaveBeenCalled();

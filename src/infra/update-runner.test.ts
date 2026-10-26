@@ -1,5 +1,9 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import * as exec from "../process/exec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import * as updateGlobal from "./update-global.js";
+import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { resolveUpdateInstallSurface } from "./update-runner-install-surface.js";
 
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -8,28 +12,21 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 it("owns default updater subprocess trees", async () => {
-  const runCommandWithTimeout = vi.fn(async () => ({ stdout: "", stderr: "", code: 0 }));
-  vi.resetModules();
-  vi.doMock("../process/exec.js", () => ({ runCommandWithTimeout }));
-  vi.doMock("./update-global.js", () => ({
-    createGlobalInstallEnv: async () => ({ OPENCLAW_UPDATE_TEST_ENV: "1" }),
-  }));
-  try {
-    const { buildUpdateCommandRunner } = await import("./update-runner-command.js");
-    const { runCommand } = await buildUpdateCommandRunner();
-    const cwd = process.cwd();
-    await runCommand(["pnpm", "install"], { cwd, timeoutMs: 500 });
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(["pnpm", "install"], {
-      cwd,
-      env: { OPENCLAW_UPDATE_TEST_ENV: "1" },
-      killProcessTree: true,
-      timeoutMs: 500,
-    });
-  } finally {
-    vi.doUnmock("../process/exec.js");
-    vi.doUnmock("./update-global.js");
-    vi.resetModules();
-  }
+  using runCommandWithTimeout = vi
+    .spyOn(exec, "runCommandWithTimeout")
+    .mockResolvedValue(createCommandResult());
+  using _ = vi
+    .spyOn(updateGlobal, "createGlobalInstallEnv")
+    .mockResolvedValue({ OPENCLAW_UPDATE_TEST_ENV: "1" });
+  const { runCommand } = await buildUpdateCommandRunner();
+  const cwd = process.cwd();
+  await runCommand(["pnpm", "install"], { cwd, timeoutMs: 500 });
+  expect(runCommandWithTimeout).toHaveBeenCalledWith(["pnpm", "install"], {
+    cwd,
+    env: { OPENCLAW_UPDATE_TEST_ENV: "1" },
+    killProcessTree: true,
+    timeoutMs: 500,
+  });
 });
 
 it.each(["git", "package"] as const)(
