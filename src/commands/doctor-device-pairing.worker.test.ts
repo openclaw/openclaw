@@ -32,27 +32,22 @@ it("creates and reads the token inventory off the host, preserving role order an
     await expect(fs.stat(state.statePath("client", "credentials.sqlite"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    const operator = seedDeviceAuthToken({
-      deviceId: "synthetic-device",
+    const seed = (overrides: Partial<Parameters<typeof seedDeviceAuthToken>[0]>) =>
+      seedDeviceAuthToken({
+        deviceId: "synthetic-device",
+        role: "operator",
+        token: "synthetic-other-token",
+        env: state.env,
+        ...overrides,
+      });
+    const operator = seed({
       role: " operator ",
       token: "synthetic-operator-token",
       scopes: ["operator.write", " operator.read ", "operator.read"],
       updatedAtMs: 20,
-      env: state.env,
     });
-    const node = seedDeviceAuthToken({
-      deviceId: "synthetic-device",
-      role: "node",
-      token: "synthetic-node-token",
-      updatedAtMs: 10,
-      env: state.env,
-    });
-    seedDeviceAuthToken({
-      deviceId: "another-device",
-      role: "operator",
-      token: "synthetic-other-token",
-      env: state.env,
-    });
+    const node = seed({ role: "node", token: "synthetic-node-token", updatedAtMs: 10 });
+    seed({ deviceId: "another-device" });
     withClientCredentialStore(state.env, false, (db) =>
       db
         .prepare(

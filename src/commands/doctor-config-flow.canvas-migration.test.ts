@@ -4,7 +4,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
@@ -20,10 +19,7 @@ async function repair(configPath: string) {
   return JSON.parse(await fs.readFile(configPath, "utf8"));
 }
 
-afterEach(() => {
-  note.mockClear();
-  closeOpenClawStateDatabaseForTest();
-});
+afterEach(() => note.mockClear());
 
 function migrate(scenario: "blind" | "env-root" | "canonical-alias" | "legacy-root") {
   return withHome(async (home) => {

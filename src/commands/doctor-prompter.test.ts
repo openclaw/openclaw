@@ -1,5 +1,5 @@
 import { PassThrough } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
@@ -33,108 +33,106 @@ function makePrompter(
   return createDoctorPrompter({ runtime: runtime(), options });
 }
 
-describe("createDoctorPrompter", () => {
-  const ttyMock = createCliTtyMock([process.stdin]);
+const ttyMock = createCliTtyMock([process.stdin]);
 
-  afterEach(() => {
-    vi.resetAllMocks();
-    ttyMock.restore();
-    vi.unstubAllEnvs();
-  });
+afterEach(() => {
+  vi.resetAllMocks();
+  ttyMock.restore();
+  vi.unstubAllEnvs();
+});
 
-  it.each([false, true])(
-    "cancels maintenance approval without waiting for input (already aborted=%s)",
-    async (alreadyAborted) => {
-      setTerminal(true);
-      const controller = new AbortController();
-      const input = new PassThrough();
-      const output = new PassThrough();
-      output.resume();
-      const clack = await vi.importActual<typeof import("@clack/prompts")>("@clack/prompts");
-      confirmMock.mockImplementation(clack.confirm);
-      const prompter = createDoctorPrompter({
-        runtime: createNonExitingRuntime(),
-        options: { repair: true },
-        signal: controller.signal,
-      });
-      if (alreadyAborted) {
-        controller.abort();
-      }
-      try {
-        const pending = prompter.confirmRuntimeRepair({
-          message: "Repair fixture service?",
-          requiresInteractiveConfirmation: true,
-          input,
-          output,
-        });
-        controller.abort();
-        await expect(pending).resolves.toBe(false);
-        if (alreadyAborted) {
-          expect(confirmMock).not.toHaveBeenCalled();
-        }
-      } finally {
-        input.destroy();
-        output.destroy();
-      }
-    },
-  );
-
-  it.each([
-    [false, false, true, false],
-    [true, false, true, true],
-    [false, true, false, false],
-  ])(
-    "applies non-interactive repair policy (force=%s, update=%s)",
-    async (force, update, runtimeRepair, aggressive) => {
-      if (update) {
-        vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
-      }
-      const prompter = makePrompter({ repair: true, nonInteractive: true, force }, false);
-      await expect(prompter.confirm(repairPrompt)).resolves.toBe(true);
-      await expect(prompter.confirmAutoFix(repairPrompt)).resolves.toBe(true);
-      await expect(
-        prompter.confirmRuntimeRepair({ ...repairPrompt, initialValue: update }),
-      ).resolves.toBe(runtimeRepair);
-      await expect(
-        prompter.confirmAggressiveAutoFix({ ...repairPrompt, initialValue: !force }),
-      ).resolves.toBe(aggressive);
-      expect(confirmMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it("refuses interactive-only repairs without a terminal even with --yes", async () => {
-    const repair = makePrompter({ yes: true }, false);
-    await expect(repair.confirmRuntimeRepair(interactivePrompt)).resolves.toBe(false);
-    expect(confirmMock).not.toHaveBeenCalled();
-  });
-
-  it("requires an explicit interactive choice for an ambiguous repair under --fix", async () => {
-    const prompt = {
-      message: "Select the default cron partition",
-      options: [{ value: "old", label: "Old partition" }],
-    };
-    selectMock.mockResolvedValueOnce("old");
-    await expect(
-      makePrompter({ repair: true }).selectRuntimeRepair(prompt, undefined),
-    ).resolves.toBe("old");
-    for (const options of [{ yes: true }, { repair: true, nonInteractive: true }]) {
-      await expect(
-        makePrompter(options).selectRuntimeRepair(prompt, undefined),
-      ).resolves.toBeUndefined();
+it.each([false, true])(
+  "cancels maintenance approval without waiting for input (already aborted=%s)",
+  async (alreadyAborted) => {
+    setTerminal(true);
+    const controller = new AbortController();
+    const input = new PassThrough();
+    const output = new PassThrough();
+    output.resume();
+    const clack = await vi.importActual<typeof import("@clack/prompts")>("@clack/prompts");
+    confirmMock.mockImplementation(clack.confirm);
+    const prompter = createDoctorPrompter({
+      runtime: createNonExitingRuntime(),
+      options: { repair: true },
+      signal: controller.signal,
+    });
+    if (alreadyAborted) {
+      controller.abort();
     }
-    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
-    await expect(
-      makePrompter({ repair: true }).selectRuntimeRepair(prompt, undefined),
-    ).resolves.toBeUndefined();
-    expect(selectMock).toHaveBeenCalledOnce();
-  });
+    try {
+      const pending = prompter.confirmRuntimeRepair({
+        message: "Repair fixture service?",
+        requiresInteractiveConfirmation: true,
+        input,
+        output,
+      });
+      controller.abort();
+      await expect(pending).resolves.toBe(false);
+      if (alreadyAborted) {
+        expect(confirmMock).not.toHaveBeenCalled();
+      }
+    } finally {
+      input.destroy();
+      output.destroy();
+    }
+  },
+);
 
-  it.each([false, true])("honors interactive consent with force alone: %s", async (approved) => {
-    confirmMock.mockResolvedValueOnce(approved);
-    const repair = makePrompter({ force: true });
-    expect(repair.shouldRepair).toBe(false);
-    expect(repair.shouldForce).toBe(true);
-    await expect(repair.confirmRuntimeRepair(interactivePrompt)).resolves.toBe(approved);
-    expect(confirmMock).toHaveBeenCalledOnce();
-  });
+it.each([
+  [false, false, true, false],
+  [true, false, true, true],
+  [false, true, false, false],
+])(
+  "applies non-interactive repair policy (force=%s, update=%s)",
+  async (force, update, runtimeRepair, aggressive) => {
+    if (update) {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    }
+    const prompter = makePrompter({ repair: true, nonInteractive: true, force }, false);
+    await expect(prompter.confirm(repairPrompt)).resolves.toBe(true);
+    await expect(prompter.confirmAutoFix(repairPrompt)).resolves.toBe(true);
+    await expect(
+      prompter.confirmRuntimeRepair({ ...repairPrompt, initialValue: update }),
+    ).resolves.toBe(runtimeRepair);
+    await expect(
+      prompter.confirmAggressiveAutoFix({ ...repairPrompt, initialValue: !force }),
+    ).resolves.toBe(aggressive);
+    expect(confirmMock).not.toHaveBeenCalled();
+  },
+);
+
+it("refuses interactive-only repairs without a terminal even with --yes", async () => {
+  const repair = makePrompter({ yes: true }, false);
+  await expect(repair.confirmRuntimeRepair(interactivePrompt)).resolves.toBe(false);
+  expect(confirmMock).not.toHaveBeenCalled();
+});
+
+it("requires an explicit interactive choice for an ambiguous repair under --fix", async () => {
+  const prompt = {
+    message: "Select the default cron partition",
+    options: [{ value: "old", label: "Old partition" }],
+  };
+  selectMock.mockResolvedValueOnce("old");
+  await expect(makePrompter({ repair: true }).selectRuntimeRepair(prompt, undefined)).resolves.toBe(
+    "old",
+  );
+  for (const options of [{ yes: true }, { repair: true, nonInteractive: true }]) {
+    await expect(
+      makePrompter(options).selectRuntimeRepair(prompt, undefined),
+    ).resolves.toBeUndefined();
+  }
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+  await expect(
+    makePrompter({ repair: true }).selectRuntimeRepair(prompt, undefined),
+  ).resolves.toBeUndefined();
+  expect(selectMock).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])("honors interactive consent with force alone: %s", async (approved) => {
+  confirmMock.mockResolvedValueOnce(approved);
+  const repair = makePrompter({ force: true });
+  expect(repair.shouldRepair).toBe(false);
+  expect(repair.shouldForce).toBe(true);
+  await expect(repair.confirmRuntimeRepair(interactivePrompt)).resolves.toBe(approved);
+  expect(confirmMock).toHaveBeenCalledOnce();
 });

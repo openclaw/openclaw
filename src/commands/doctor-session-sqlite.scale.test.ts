@@ -4,7 +4,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as legacyInspection from "../config/sessions/legacy-store-inspection.js";
 import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
 import * as migrationReaders from "../infra/session-sqlite-migration-readers.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createCanonicalRepairFixture } from "./doctor-session-repair-fixture.test-support.js";
 import { appendLegacyHistoricalTranscripts } from "./doctor-session-sqlite-discovery.js";
@@ -13,10 +12,7 @@ import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
 const ENTRY_COUNT = 500_000;
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  closeOpenClawAgentDatabasesForTest();
-});
+afterEach(() => vi.restoreAllMocks());
 
 it("preserves archived ownership with half a million metadata entries", async () => {
   await withOpenClawTestState({ label: "doctor-archive-scale" }, async (state) => {
