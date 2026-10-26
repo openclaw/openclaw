@@ -43,6 +43,7 @@ export type ResolvedMemorySearchConfig = Omit<
   ProducedMemorySearchConfig,
   | "cache"
   | "documentInputType"
+  | "inputFormat"
   | "inputType"
   | "local"
   | "outputDimensionality"
@@ -52,6 +53,7 @@ export type ResolvedMemorySearchConfig = Omit<
   | "store"
   | "sync"
 > & {
+  inputFormat?: { query: string; document: string };
   inputType?: string;
   queryInputType?: string;
   queryInstruction?: string;
@@ -214,6 +216,7 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
     remote,
     fallback,
     model,
+    inputFormat: overrides?.inputFormat ?? defaults?.inputFormat,
     inputType,
     queryInputType,
     queryInstruction: (overrides?.queryInstruction ?? defaults?.queryInstruction) || undefined,

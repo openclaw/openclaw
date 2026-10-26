@@ -122,7 +122,7 @@ describe("doctor command", () => {
     terminalNoteMock.mockClear();
   });
 
-  it("reports when the state directory was missing at doctor start", async () => {
+  it("reports a missing state directory without initializing it", async () => {
     mockDoctorConfigSnapshot();
 
     const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-missing-state-"));
@@ -131,11 +131,12 @@ describe("doctor command", () => {
       await runDoctorNonInteractive();
     });
 
-    const stateNote = requireTerminalNote({ title: "State integrity" });
-    // Startup can initialize the directory before integrity inspects it.
-    expect(String(stateNote[0])).toMatch(
-      /- (?:CRITICAL: state directory missing|State directory was missing at doctor start and was initialized during startup checks) \(/,
-    );
+    const warning = requireTerminalNote({
+      title: "State integrity",
+      messageIncludes: "CRITICAL: state directory missing",
+    });
+    expect(String(warning[0])).toContain(missingDir);
+    expect(fs.existsSync(missingDir)).toBe(false);
   });
 
   it("routes browser readiness through health contributions", async () => {

@@ -16,6 +16,7 @@ import {
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
+import { getAcceptedChatHistorySession } from "./chat-history-state.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
@@ -219,15 +220,21 @@ export function renderChatPaneComposerControls(params: {
           ...settingsPreview,
         }
       : selectedSession;
+  const sessionReady =
+    state.connected &&
+    selectedSession &&
+    (!state.sessions.state.resultCached || getAcceptedChatHistorySession(state));
+  const snapshot =
+    sessionReady && state.chatModelCatalogInitialized
+      ? undefined
+      : (readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })?.composer ??
+        undefined);
+  const permissionSnapshot = sessionReady ? undefined : snapshot;
   return {
     composerControls: {
       component: ChatPaneModelControl,
       model: {
-        snapshot:
-          state.connected && state.chatModelCatalogInitialized && selectedSession
-            ? undefined
-            : (readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
-                ?.composer ?? undefined),
+        snapshot,
         modelAuthStatusResult: state.modelAuthStatusResult,
         accountSelection,
         renderAccountSection: (accountModel) =>
@@ -328,10 +335,16 @@ export function renderChatPaneComposerControls(params: {
     },
     permissionPicker: {
       canSelectFull,
-      defaultMode: agentDefaultPermissionMode,
-      disabled: !permissionAccess.allowed,
+      defaultMode: permissionSnapshot
+        ? permissionSnapshot.defaultPermissionMode
+        : agentDefaultPermissionMode,
+      disabled: Boolean(permissionSnapshot) || !permissionAccess.allowed,
       disabledReason: permissionAccess.allowed ? undefined : permissionAccess.reason,
-      mode: currentChange ? currentChange.nextMode : selectedSession?.permissionMode,
+      mode: currentChange
+        ? currentChange.nextMode
+        : permissionSnapshot
+          ? permissionSnapshot.permissionMode
+          : selectedSession?.permissionMode,
       pending: permissionPending,
       onSelect: async (permissionMode) => {
         const activeChange = selection.pending;
