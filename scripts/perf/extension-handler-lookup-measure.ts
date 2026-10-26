@@ -94,21 +94,14 @@ let ownerAllocatedBytes: number | undefined;
 if (values.allocations) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
   allocatedBytes = profile.samples.reduce((sum, sample) => sum + sample.size, 0);
-  const ownerNodeIds = new Set<number>();
-  function visit(node: HeapProfiler.SamplingHeapProfileNode, insideOwner = false) {
+  function ownerBytes(node: HeapProfiler.SamplingHeapProfileNode, insideOwner = false): number {
     const owned = insideOwner || node.callFrame.functionName === "hasHandlers";
-    if (owned) {
-      ownerNodeIds.add(node.id);
-    }
-    for (const child of node.children) {
-      visit(child, owned);
-    }
+    return (
+      (owned ? node.selfSize : 0) +
+      node.children.reduce((sum, child) => sum + ownerBytes(child, owned), 0)
+    );
   }
-  visit(profile.head);
-  ownerAllocatedBytes = profile.samples.reduce(
-    (sum, sample) => sum + (ownerNodeIds.has(sample.nodeId) ? sample.size : 0),
-    0,
-  );
+  ownerAllocatedBytes = ownerBytes(profile.head);
   inspector.disconnect();
 }
 assert.equal(result.matches, 0);
