@@ -40,6 +40,8 @@ const REQUESTER_HINT =
 const frame = (json: string) =>
   `Conversation info: ⟦openclaw:ctx⟧\n\`\`\`json\n${json}\n\`\`\`\n\n`;
 const execPrompt = LEGACY_EXEC_COMPLETION_PROMPT;
+const writeRows = (filePath: string, rows: readonly unknown[]) =>
+  fs.writeFile(filePath, rows.map((row) => JSON.stringify(row)).join("\n"));
 
 function merge(localMessages: unknown[], importedMessages: unknown[]) {
   return mergeImportedChatHistoryMessages({ localMessages, importedMessages });
@@ -131,10 +133,7 @@ it.each(["[Request interrupted by user]", "[Request interrupted by user for tool
         claudeUser(blocks(` ${text}`), { uuid: "whitespace" }),
         claudeUser([...blocks(text), ...blocks("Please explain.")], { uuid: "sibling" }),
       ];
-      await fs.writeFile(
-        filePath,
-        [interrupt, ...visible].map((entry) => JSON.stringify(entry)).join("\n"),
-      );
+      await writeRows(filePath, [interrupt, ...visible]);
       const projected = projectChatDisplayMessagesWithState(merge([], await readMessages()));
       expect(projected.messages.map((message) => message.content)).toEqual(
         visible.map((entry) => entry.message.content),
@@ -257,17 +256,12 @@ it.each([
 it("hides decorated internal rows through JSONL import, merge and the common client history projection", async () => {
   await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
     const note = buildCliSessionDriftNote(["prompt-tools"]);
-    await fs.writeFile(
-      filePath,
-      [
-        claudeUser("real question", { uuid: "human" }),
-        ...internalInputs.map(([kind, text]) =>
-          claudeUser(kind === "resume" ? text : `${note}\n\n${text}`, { uuid: kind }),
-        ),
-      ]
-        .map((entry) => JSON.stringify(entry))
-        .join("\n"),
-    );
+    await writeRows(filePath, [
+      claudeUser("real question", { uuid: "human" }),
+      ...internalInputs.map(([kind, text]) =>
+        claudeUser(kind === "resume" ? text : `${note}\n\n${text}`, { uuid: kind }),
+      ),
+    ]);
     const messages = merge([], await readMessages());
     expect(projectChatDisplayMessages(messages)).toMatchObject([
       { role: "user", content: "real question" },
@@ -324,10 +318,9 @@ it("collects valid turns through the HOME-resolved session store despite null ro
   expect(seed?.summaryText).toBeUndefined();
 });
 
-it.each([
-  [
-    "latest explicit summary",
-    [
+it("seeds from the latest explicit summary", async () => {
+  expect(
+    await readSeed([
       claudeUser("PRE-COMPACT user turn"),
       assistantTurn("PRE-COMPACT assistant turn"),
       summary("EARLY"),
@@ -337,35 +330,34 @@ it.each([
       boundary(),
       claudeUser("tail turn"),
       assistantTurn("tail reply"),
-    ],
-    {
-      summaryText: "LATER",
-      recentTurns: [user("tail turn"), assistantTurn("tail reply").message],
-    },
-  ],
-  [
-    "boundary fallback after a compaction without a summary",
-    [
+    ]),
+  ).toMatchObject({
+    summaryText: "LATER",
+    recentTurns: [user("tail turn"), assistantTurn("tail reply").message],
+  });
+});
+
+it("seeds from the boundary after a compaction without a summary", async () => {
+  expect(
+    await readSeed([
       summary("FIRST"),
       boundary("Conversation compacted (1)"),
       claudeUser("post-first-compact turn"),
       boundary("Conversation compacted (2)"),
       claudeUser("post-second-compact turn"),
-    ],
-    {
-      summaryText: "Conversation compacted (2)",
-      recentTurns: [user("post-second-compact turn")],
-    },
-  ],
-  [
-    "trailing summary without a boundary",
-    [
+    ]),
+  ).toMatchObject({
+    summaryText: "Conversation compacted (2)",
+    recentTurns: [user("post-second-compact turn")],
+  });
+});
+
+it("seeds from a trailing summary without a boundary", async () => {
+  expect(
+    await readSeed([
       claudeUser("earlier turn"),
       summary("trailing summary without boundary"),
       claudeUser("later turn"),
-    ],
-    { summaryText: "trailing summary without boundary" },
-  ],
-] as const)("seeds from the %s", async (_name, lines, expected) => {
-  expect(await readSeed(lines)).toMatchObject(expected);
+    ]),
+  ).toMatchObject({ summaryText: "trailing summary without boundary" });
 });

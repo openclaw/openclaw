@@ -27,26 +27,59 @@ export function registerChatAdmissionRetryTests(harness: {
     respond: RespondFn;
   }) => Promise<void>;
 }) {
+  const send = async (
+    context: GatewayRequestContext,
+    runId: string,
+    message: string,
+    expectedSessionRoutingContract?: ReturnType<typeof resolveSessionRoutingContract>,
+  ) => {
+    const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+    await harness.sendControlUiChat({
+      context,
+      idempotencyKey: runId,
+      message,
+      expectedSessionRoutingContract,
+      respond: captureChatResult(responses),
+    });
+    return responses;
+  };
+  const settle = (scope: ChatScope) =>
+    captureSessionControllerSettlement({
+      scope: scope.storePath,
+      identities: [scope.sessionKey, scope.sessionId],
+    });
+  const expectOneInput = (scope: ChatScope, runId: string) => {
+    expect(
+      loadTranscriptEventsSync(scope).filter(
+        (event) =>
+          isRecord(event) &&
+          event.type === "message" &&
+          isRecord(event.message) &&
+          event.message.idempotencyKey === `${runId}:user`,
+      ),
+    ).toHaveLength(1);
+  };
+  const expectFailedClaim = (scope: ChatScope, runId: string) => {
+    expect(loadSessionEntry(scope)).toMatchObject({
+      abortedLastRun: false,
+      status: "failed",
+      restartRecoveryDeliveryRequestFingerprint: expect.stringMatching(/^hmac-sha256:v1:/u),
+      restartRecoveryDeliveryRunId: runId,
+      restartRecoveryDeliverySourceRunId: runId,
+    });
+  };
+  const resolveDispatch = () =>
+    dispatchInboundMessageMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
   test.each([
     { caseName: "tombstones an explicit abort", retryable: false, stopReason: "rpc" },
     { caseName: "retains a restart interruption", retryable: true, stopReason: "restart" },
   ])("chat.send $caseName after SQLite admission commits", async ({ retryable, stopReason }) => {
     const runId = `idem-restart-safe-abort-${stopReason}`;
-    const send = async (context: GatewayRequestContext) => {
-      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-      await harness.sendControlUiChat({
-        context,
-        idempotencyKey: runId,
-        message: "persist, then stop",
-        respond: captureChatResult(responses),
-      });
-      return responses;
-    };
-    const userInput = (event: unknown) =>
-      isRecord(event) &&
-      event.type === "message" &&
-      isRecord(event.message) &&
-      event.message.idempotencyKey === `${runId}:user`;
+    const sendStopped = (context: GatewayRequestContext) =>
+      send(context, runId, "persist, then stop");
     let stopListening: (() => void) | undefined;
     await harness.withCommittedChatSession(async (scope) => {
       try {
@@ -82,7 +115,7 @@ export function registerChatAdmissionRetryTests(harness: {
             abortCommittedTurn();
           }
         });
-        const responses = await send(context);
+        const responses = await sendStopped(context);
         stopListening();
         expect(abortCommittedTurn).toHaveBeenCalledOnce();
         expect(responses).toEqual([
@@ -122,7 +155,7 @@ export function registerChatAdmissionRetryTests(harness: {
           expect(stored?.restartRecoveryTerminalRunIds).toEqual([runId]);
           expect(context.chatRunState.hasAbortMarker(runId)).toBe(true);
           expect(context.dedupe.delete(`chat:${runId}`)).toBe(true);
-          const abortedRetryResponses = await send(context);
+          const abortedRetryResponses = await sendStopped(context);
           expect(abortedRetryResponses).toEqual([
             {
               ok: true,
@@ -143,11 +176,8 @@ export function registerChatAdmissionRetryTests(harness: {
         );
 
         const retryContext = createDirectChatContext();
-        dispatchInboundMessageMock.mockResolvedValue({
-          queuedFinal: false,
-          counts: { tool: 0, block: 0, final: 0 },
-        });
-        const retryResponses = await send(retryContext);
+        resolveDispatch();
+        const retryResponses = await sendStopped(retryContext);
         expect(retryResponses).toEqual([
           {
             ok: true,
@@ -156,178 +186,87 @@ export function registerChatAdmissionRetryTests(harness: {
               : { runId, status: "ok", messageSeq: 1 },
           },
         ]);
-        await captureSessionControllerSettlement({
-          scope: scope.storePath,
-          identities: [scope.sessionKey, scope.sessionId],
-        });
+        await settle(scope);
         expect(retryContext.removeChatRun).toHaveBeenCalledTimes(retryable ? 1 : 0);
         expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(retryable ? 1 : 0);
         if (!retryable) {
           expect(loadSessionEntry(scope)).toEqual(stored);
         }
-        expect(loadTranscriptEventsSync(scope).filter(userInput)).toHaveLength(1);
+        expectOneInput(scope, runId);
       } finally {
         stopListening?.();
       }
     });
   });
 
-  test("chat.send resumes failed dispatch custody without duplicating recorded input", async () => {
-    const runId = "idem-restart-safe-dispatch-error";
-    await harness.withCommittedChatSession(async (scope) => {
-      const context = createDirectChatContext();
-      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-      dispatchInboundMessageMock.mockRejectedValueOnce(new Error("dispatch rejected"));
+  test.each(["dispatch", "routing"] as const)(
+    "chat.send resumes failed %s custody without duplicating recorded input",
+    async (failure) => {
+      const routing = failure === "routing";
+      const runId = `idem-restart-safe-${routing ? "routing-change" : "dispatch-error"}`;
+      const message = routing
+        ? "retry me after routing changes"
+        : "retry me after dispatch failure";
+      await harness.withCommittedChatSession(async (scope) => {
+        const context = createDirectChatContext();
+        const initialRuntimeConfig = getRuntimeConfig();
+        if (routing) {
+          const changedRuntimeConfig = {
+            ...initialRuntimeConfig,
+            session: {
+              ...initialRuntimeConfig.session,
+              scope: initialRuntimeConfig.session?.scope === "global" ? "per-sender" : "global",
+            },
+          } as const;
+          context.getRuntimeConfig = () =>
+            loadSessionEntry(scope)?.restartRecoveryDeliveryRunId === runId
+              ? changedRuntimeConfig
+              : initialRuntimeConfig;
+        } else {
+          dispatchInboundMessageMock.mockRejectedValueOnce(new Error("dispatch rejected"));
+        }
+        const responses = await send(
+          context,
+          runId,
+          message,
+          routing ? resolveSessionRoutingContract(initialRuntimeConfig) : undefined,
+        );
+        if (routing) {
+          expect(responses).toEqual([{ ok: false, payload: undefined }]);
+          expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        } else {
+          expect(responses).toEqual([
+            { ok: true, payload: expect.objectContaining({ runId, status: "started" }) },
+          ]);
+          await settle(scope);
+          expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+        }
+        expectFailedClaim(scope, runId);
+        if (!routing) {
+          expect(
+            await send(createDirectChatContext(), runId, "changed text under the same run id"),
+          ).toEqual([{ ok: false, payload: undefined }]);
+          expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+          expect(loadSessionEntry(scope)).toMatchObject({
+            abortedLastRun: false,
+            status: "failed",
+          });
+        }
 
-      await harness.sendControlUiChat({
-        context,
-        idempotencyKey: runId,
-        message: "retry me after dispatch failure",
-        respond: captureChatResult(responses),
+        const retryContext = createDirectChatContext();
+        resolveDispatch();
+        const retryResponses = await send(retryContext, runId, message);
+        expect(retryResponses).toEqual([
+          {
+            ok: true,
+            payload: expect.objectContaining({ runId, status: "started", messageSeq: 1 }),
+          },
+        ]);
+        await settle(scope);
+        expect(retryContext.removeChatRun).toHaveBeenCalledOnce();
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(routing ? 1 : 2);
+        expectOneInput(scope, runId);
       });
-      expect(responses).toEqual([
-        {
-          ok: true,
-          payload: expect.objectContaining({ runId, status: "started" }),
-        },
-      ]);
-      await captureSessionControllerSettlement({
-        scope: scope.storePath,
-        identities: [scope.sessionKey, scope.sessionId],
-      });
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
-      const failed = loadSessionEntry(scope);
-      expect(failed).toMatchObject({ abortedLastRun: false, status: "failed" });
-      expect(failed?.restartRecoveryDeliveryRequestFingerprint).toEqual(
-        expect.stringMatching(/^hmac-sha256:v1:/u),
-      );
-      expect(failed?.restartRecoveryDeliveryRunId).toBe(runId);
-      expect(failed?.restartRecoveryDeliverySourceRunId).toBe(runId);
-
-      const collisionContext = createDirectChatContext();
-      const collisionResponses: Array<{ ok: boolean; payload?: unknown }> = [];
-      await harness.sendControlUiChat({
-        context: collisionContext,
-        idempotencyKey: runId,
-        message: "changed text under the same run id",
-        respond: captureChatResult(collisionResponses),
-      });
-      expect(collisionResponses).toEqual([
-        {
-          ok: false,
-          payload: undefined,
-        },
-      ]);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-      expect(loadSessionEntry(scope)).toMatchObject({
-        abortedLastRun: false,
-        status: "failed",
-      });
-
-      const retryContext = createDirectChatContext();
-      const retryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
-      dispatchInboundMessageMock.mockResolvedValue({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
-      await harness.sendControlUiChat({
-        context: retryContext,
-        idempotencyKey: runId,
-        message: "retry me after dispatch failure",
-        respond: captureChatResult(retryResponses),
-      });
-      expect(retryResponses).toEqual([
-        {
-          ok: true,
-          payload: expect.objectContaining({ runId, status: "started", messageSeq: 1 }),
-        },
-      ]);
-      await captureSessionControllerSettlement({
-        scope: scope.storePath,
-        identities: [scope.sessionKey, scope.sessionId],
-      });
-      expect(retryContext.removeChatRun).toHaveBeenCalledOnce();
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-      expect(
-        loadTranscriptEventsSync(scope).filter(
-          (event) =>
-            isRecord(event) &&
-            event.type === "message" &&
-            isRecord(event.message) &&
-            event.message.idempotencyKey === `${runId}:user`,
-        ),
-      ).toHaveLength(1);
-    });
-  });
-
-  test("chat.send resumes failed routing custody without duplicating recorded input", async () => {
-    const runId = "idem-restart-safe-routing-change";
-    await harness.withCommittedChatSession(async (scope) => {
-      const context = createDirectChatContext();
-      const initialRuntimeConfig = getRuntimeConfig();
-      const changedRuntimeConfig = {
-        ...initialRuntimeConfig,
-        session: {
-          ...initialRuntimeConfig.session,
-          scope: initialRuntimeConfig.session?.scope === "global" ? "per-sender" : "global",
-        },
-      } as const;
-      context.getRuntimeConfig = () =>
-        loadSessionEntry(scope)?.restartRecoveryDeliveryRunId === runId
-          ? changedRuntimeConfig
-          : initialRuntimeConfig;
-      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-
-      await harness.sendControlUiChat({
-        context,
-        expectedSessionRoutingContract: resolveSessionRoutingContract(initialRuntimeConfig),
-        idempotencyKey: runId,
-        message: "retry me after routing changes",
-        respond: captureChatResult(responses),
-      });
-      expect(responses).toEqual([{ ok: false, payload: undefined }]);
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      const failed = loadSessionEntry(scope);
-      expect(failed).toMatchObject({ abortedLastRun: false, status: "failed" });
-      expect(failed?.restartRecoveryDeliveryRequestFingerprint).toEqual(
-        expect.stringMatching(/^hmac-sha256:v1:/u),
-      );
-      expect(failed?.restartRecoveryDeliveryRunId).toBe(runId);
-      expect(failed?.restartRecoveryDeliverySourceRunId).toBe(runId);
-
-      const retryContext = createDirectChatContext();
-      const retryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
-      dispatchInboundMessageMock.mockResolvedValue({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
-      await harness.sendControlUiChat({
-        context: retryContext,
-        idempotencyKey: runId,
-        message: "retry me after routing changes",
-        respond: captureChatResult(retryResponses),
-      });
-      expect(retryResponses).toEqual([
-        {
-          ok: true,
-          payload: expect.objectContaining({ runId, status: "started", messageSeq: 1 }),
-        },
-      ]);
-      await captureSessionControllerSettlement({
-        scope: scope.storePath,
-        identities: [scope.sessionKey, scope.sessionId],
-      });
-      expect(retryContext.removeChatRun).toHaveBeenCalledOnce();
-      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-      expect(
-        loadTranscriptEventsSync(scope).filter(
-          (event) =>
-            isRecord(event) &&
-            event.type === "message" &&
-            isRecord(event.message) &&
-            event.message.idempotencyKey === `${runId}:user`,
-        ),
-      ).toHaveLength(1);
-    });
-  });
+    },
+  );
 }

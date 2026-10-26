@@ -41,6 +41,22 @@ import type { GatewaySessionRow, SessionsListResult } from "./session-utils.type
 
 afterEach(() => vi.restoreAllMocks());
 
+const expanded = (result: SessionsListResult) =>
+  expandSessionRowFacts(result.sessions, result.sharedFacts);
+const changedKeys = (result: SessionsListResult) => expanded(result).map((row) => row.key);
+function createReader(context: ReturnType<typeof requestContext>, client: GatewayClient) {
+  return (request: SessionsListParams, base?: SessionsListResult, recipient = client) =>
+    listSessions({
+      context,
+      client: recipient,
+      acceptsSerializedJson: true,
+      request: {
+        ...request,
+        ...(base ? { ifRowsRevision: `${SESSION_ROWS_DELTA_PREFIX}${base.rowsRevision}` } : {}),
+      },
+    });
+}
+
 it("keeps unrelated sidebar views across session-ID-only run start, finish, abort and recovery", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const now = 1_800_000_000_000;
@@ -101,9 +117,11 @@ it("keeps unrelated sidebar views across session-ID-only run start, finish, abor
       const otherQuery = { ...primary, agentId: "other" };
       const initialOther = await read(otherQuery);
       expect(initialOther.count).toBe(1);
-      expect(
-        expandSessionRowFacts(initial.sessions, initial.sharedFacts).map((row) => row.key),
-      ).toEqual(["agent:main:unrelated", "agent:main:alias-a", "agent:main:alias-b"]);
+      expect(changedKeys(initial)).toEqual([
+        "agent:main:unrelated",
+        "agent:main:alias-a",
+        "agent:main:alias-b",
+      ]);
       expect(initialPersonal.count).toBe(1);
       const changes = vi.fn();
       getSessionRowProjection(context)!.onFactsChange(changes);
@@ -175,11 +193,7 @@ it("encodes insertions, replacements, reorders and removals against an exact imm
     label: "A",
     updatedAt: 1,
   };
-  const b: GatewaySessionRow = {
-    ...a,
-    agentId: "other",
-    label: "B",
-  };
+  const b: GatewaySessionRow = { ...a, agentId: "other", label: "B" };
   const c: GatewaySessionRow = { key: "c", kind: "direct", label: "C", updatedAt: 1 };
   const previous = [a, b, c];
   const first = shareSidebarSessionRows(previous);
@@ -273,18 +287,7 @@ it("keeps deltas inside the authorized owner, personal and paginated list owners
     const personal = { agentId: "main", rowMode: "sidebar", limit: 2, involvingMe: true } as const;
     const owned = { agentId: "main", rowMode: "sidebar", limit: 2, ownerId: viewer } as const;
     const page = { ...primary, offset: 2 };
-    const read = (request: SessionsListParams, base?: SessionsListResult, recipient = client) =>
-      listSessions({
-        context,
-        client: recipient,
-        acceptsSerializedJson: true,
-        request: {
-          ...request,
-          ...(base ? { ifRowsRevision: `${SESSION_ROWS_DELTA_PREFIX}${base.rowsRevision}` } : {}),
-        },
-      });
-    const changedKeys = (result: SessionsListResult) =>
-      expandSessionRowFacts(result.sessions, result.sharedFacts).map((row) => row.key);
+    const read = createReader(context, client);
     const expectDelta = (
       result: SessionsListResult,
       base: SessionsListResult,

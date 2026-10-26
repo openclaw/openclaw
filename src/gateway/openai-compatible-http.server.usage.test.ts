@@ -7,7 +7,6 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   collectSseEventTypes,
   findSseEvent,
-  parseSseData,
   parseSseDataLines,
   parseSseEvents,
 } from "./http-stream.test-support.js";
@@ -81,6 +80,23 @@ function expectDone(data: string[]) {
   expect(data.filter((entry) => entry === "[DONE]")).toHaveLength(1);
   expect(data.at(-1)).toBe("[DONE]");
 }
+function chatText(choices: OpenAI.ChatCompletionChunk.Choice[]) {
+  return choices.map((choice) => choice.delta.content ?? "").join("");
+}
+function responseFrom(text: string, stream: boolean, status: string): ResponseResource {
+  return stream
+    ? (
+        JSON.parse(findSseEvent(parseSseEvents(text), `response.${status}`).data) as {
+          response: ResponseResource;
+        }
+      ).response
+    : (JSON.parse(text) as ResponseResource);
+}
+function terminalTypes(events: ReturnType<typeof parseSseEvents>) {
+  return collectSseEventTypes(events).filter((type) =>
+    ["response.completed", "response.incomplete", "response.failed"].includes(type),
+  );
+}
 const earlierUsage = { input: 11, output: 7, total: 18 };
 const unavailableUsage = { ...earlierUsage, usageReport: { state: "unavailable" as const } };
 
@@ -111,9 +127,7 @@ describe("OpenAI-compatible HTTP usage", () => {
           const data = parseSseDataLines(text);
           const chunks = chunksFrom(data);
           const choices = chunks.flatMap((chunk) => chunk.choices);
-          expect(choices.map((choice) => choice.delta.content ?? "").join("")).toBe(
-            "Partial answer",
-          );
+          expect(chatText(choices)).toBe("Partial answer");
           expect(choices.map((choice) => choice.finish_reason).filter(Boolean)).toEqual(["stop"]);
           expect(chunks.every((chunk) => !("usage" in chunk))).toBe(true);
           expectDone(data);
@@ -122,23 +136,13 @@ describe("OpenAI-compatible HTTP usage", () => {
       }
       const status = failed ? "failed" : "completed";
       const events = stream ? parseSseEvents(text) : [];
-      const response = stream
-        ? (
-            parseSseData(findSseEvent(events, `response.${status}`)) as {
-              response: ResponseResource;
-            }
-          ).response
-        : (JSON.parse(text) as ResponseResource);
+      const response = responseFrom(text, stream, status);
       expect(response.status).toBe(status);
       expect(response).not.toHaveProperty("usage");
       if (stream) {
         expectDone(events.map((event) => event.data));
         if (!failed) {
-          expect(
-            collectSseEventTypes(events).filter((type) =>
-              ["response.completed", "response.incomplete", "response.failed"].includes(type),
-            ),
-          ).toEqual(["response.completed"]);
+          expect(terminalTypes(events)).toEqual(["response.completed"]);
         }
       }
       if (failed) {
@@ -267,31 +271,17 @@ describe("OpenAI-compatible recovered incomplete turns", () => {
           });
         } else {
           const chunks = chunksFrom(parseSseDataLines(text));
-          expect(
-            chunks
-              .flatMap((chunk) => chunk.choices ?? [])
-              .map((choice) => choice.delta.content ?? "")
-              .join(""),
-          ).toBe(expectedStreamText);
+          const choices = chunks.flatMap((chunk) => chunk.choices ?? []);
+          expect(chatText(choices)).toBe(expectedStreamText);
           expect(chunks.at(-1)).toEqual({
             error: { message: finalText, type: "api_error", code: "incomplete_turn" },
           });
-          expect(
-            chunks
-              .flatMap((chunk) => chunk.choices ?? [])
-              .every((choice) => choice.finish_reason === null),
-          ).toBe(true);
+          expect(choices.every((choice) => choice.finish_reason === null)).toBe(true);
         }
         return;
       }
       const events = stream ? parseSseEvents(text) : [];
-      const response = stream
-        ? (
-            JSON.parse(findSseEvent(events, "response.failed").data) as {
-              response: ResponseResource;
-            }
-          ).response
-        : (JSON.parse(text) as ResponseResource);
+      const response = responseFrom(text, stream, "failed");
       expect(response.status).toBe("failed");
       expect(response.error?.code).toBe("incomplete_turn");
       expect(response.output).toMatchObject([
@@ -308,17 +298,7 @@ describe("OpenAI-compatible recovered incomplete turns", () => {
             .map((event) => JSON.parse(event.data).delta)
             .join(""),
         ).toBe(expectedStreamText);
-        expect(
-          events
-            .filter(
-              (event) =>
-                event.event !== undefined &&
-                ["response.completed", "response.incomplete", "response.failed"].includes(
-                  event.event,
-                ),
-            )
-            .map((event) => event.event),
-        ).toEqual(["response.failed"]);
+        expect(terminalTypes(events)).toEqual(["response.failed"]);
       }
     },
   );
