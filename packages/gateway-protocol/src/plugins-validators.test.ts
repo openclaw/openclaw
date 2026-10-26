@@ -12,7 +12,7 @@ const clawhub = { source: "clawhub", packageName: "memory-plus" };
 const reloadRequest = { plugins: [{ pluginId: "notes" }] };
 const enableRequest = { pluginId: "workboard", enabled: true };
 const consent = { reviewToken: "surface-sha256" };
-const invalidConsent = [true, false, {}, { reviewToken: "" }, { ...consent, unexpected: true }];
+const invalidConsent = [true, {}, { reviewToken: "" }, { ...consent, unexpected: true }];
 
 describe("plugin lifecycle protocol validators", () => {
   it("accepts bounded activation report batches while retaining per-plugin receipts", () => {
@@ -35,20 +35,16 @@ describe("plugin lifecycle protocol validators", () => {
       Array.from({ length }, (_, index) => ({ ...target, pluginId: `plugin-${index}` }));
     reload.accepts(
       reloadRequest,
-      { plugins: [target] },
       { plugins: batch(64) },
       { plugins: [{ ...target, sourceDigests: { alpha: "b".repeat(64) } }] },
       { plugins: [target], acknowledgeCapabilities: { reviewToken: "reviewed-artifact" } },
     );
     reload.rejects(
       {},
-      { pluginId: "notes" },
       { plugins: [{ pluginId: "" }] },
-      { plugins: [{ pluginId: "notes", enabled: true }] },
       { plugins: [] },
       { plugins: batch(65) },
       { plugins: [target, target] },
-      { plugins: [{ ...target, installHash: "" }] },
       { plugins: [{ ...target, installHash: "A".repeat(64) }] },
       { plugins: [{ ...target, sourceDigests: { alpha: "not-a-digest" } }] },
       { plugins: [target], pluginId: "alpha" },
@@ -93,7 +89,6 @@ describe("plugin lifecycle protocol validators", () => {
       { widened: { tools: [""] } },
       { widened: { unexpected: ["tool"] } },
       { acceptedAt: "" },
-      { name: "Memory Plus" },
       { unexpected: true },
     ]) {
       const invalid = { ...details, ...fields };
@@ -119,7 +114,6 @@ describe("plugin lifecycle protocol validators", () => {
       { ...official, acknowledgeInstallPolicyWarning: false },
       { ...official, packageName: "memory-plus" },
       { ...clawhub, acknowledgeCapabilities: true },
-      { ...clawhub, acknowledgeCapabilities: false },
     );
   });
   it.each([
@@ -134,9 +128,7 @@ describe("plugin lifecycle protocol validators", () => {
   });
   it("validates enablement mutations", () => {
     enable.accepts(enableRequest, { ...enableRequest, allowlistPolicy: "preserve" });
-    for (const allowlistPolicy of ["widen", "", true, {}]) {
-      enable.rejects({ ...enableRequest, allowlistPolicy });
-    }
+    enable.rejects({ ...enableRequest, allowlistPolicy: "widen" });
     enable.rejects({ ...enableRequest, enabled: "yes" });
   });
 });

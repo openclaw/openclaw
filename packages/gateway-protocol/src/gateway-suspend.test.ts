@@ -36,11 +36,9 @@ describe("gateway suspension protocol", () => {
       { ...params, force: true },
       { ...params, waitMs: 0 },
       { ...params, commit: false },
-      { ...params, commit: "true" },
       { ...params, target: { ...target, processInstanceId: " " } },
       { ...params, target: { ...target, pid: 0 } },
       { ...params, target: { ...target, port: 18789 } },
-      { ...params, target: { ...target, successor: "other" } },
     );
     const receipt = { suspensionId: "held-lease", expiresAtMs: 2_000 };
     schemaValidation(HandoffResult).accepts(

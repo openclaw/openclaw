@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { IsLiteralString, IsUnion } from "typebox";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   nativeProtocolOutputDirectories,
@@ -24,21 +25,11 @@ async function assertPatterns(file: string, patterns: RegExp[]) {
 }
 
 function stringLiteralUnionValues(schema: unknown): string[] | undefined {
-  if (!schema || typeof schema !== "object") {
+  if (!IsUnion(schema) || schema.anyOf.length === 0 || !schema.anyOf.every(IsLiteralString)) {
     return undefined;
   }
-  const candidate = schema as { anyOf?: unknown; oneOf?: unknown };
-  const branches = candidate.oneOf ?? candidate.anyOf;
-  if (!Array.isArray(branches) || branches.length === 0) {
-    return undefined;
-  }
-  const values = branches.map((branch: unknown) =>
-    branch && typeof branch === "object" && "const" in branch ? branch.const : undefined,
-  );
-  return values.every((value): value is string => typeof value === "string") &&
-    new Set(values).size === values.length
-    ? values
-    : undefined;
+  const values = schema.anyOf.map((branch) => branch.const);
+  return new Set(values).size === values.length ? values : undefined;
 }
 
 // Cross-language clients cannot derive these compatibility floors at runtime.

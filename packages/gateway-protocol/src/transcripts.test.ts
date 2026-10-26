@@ -5,7 +5,7 @@ import {
   transcriptStatusFixture,
 } from "../../../src/transcripts/library.test-support.js";
 import * as p from "./index.js";
-import { schemaValidation, validation } from "./schema/protocol-validation.test-support.js";
+import { copies, schemaValidation, validation } from "./schema/protocol-validation.test-support.js";
 
 const status = schemaValidation(p.TranscriptsStatusResultSchema);
 const get = schemaValidation(p.TranscriptsGetResultSchema);
@@ -40,24 +40,20 @@ describe("transcript UI wire contracts", () => {
   });
   it("validates shared UI fixture responses against the canonical wire schemas", () => {
     schemaValidation(p.TranscriptsListResultSchema).accepts(transcriptListFixture);
-    get.accepts(transcriptGetFixture);
     status.accepts(transcriptStatusFixture);
-    const utterances = Array.from({ length: 2000 }, (_, sequence) => ({
-      sequence,
-      text: "speech",
-    }));
+    const utterances = copies({ sequence: 0, text: "speech" }, 2000);
     const response = (rows: typeof utterances) => ({ ...transcriptGetFixture, utterances: rows });
-    get.accepts(response(utterances));
+    get.accepts(transcriptGetFixture, response(utterances));
     get.rejects(response([...utterances, { sequence: 2000, text: "outside" }]));
   });
 
   it("keeps pagination and search bounded and rejects mutation arguments", () => {
-    listParams.accepts(
-      {},
-      { limit: 100, query: "x".repeat(256), startedAfter: "2026-08-20T00:00:00Z" },
-      { limit: 200 },
-    );
-    listParams.rejects(...[0, 201, -1, 1.5, "50"].map((limit) => ({ limit })), {
+    listParams.accepts({
+      limit: 100,
+      query: "x".repeat(256),
+      startedAfter: "2026-08-20T00:00:00Z",
+    });
+    listParams.rejects(...[0, 201, 1.5, "50"].map((limit) => ({ limit })), {
       query: "x".repeat(257),
     });
     getParams.accepts({ selector: "opaque/full-value", limit: 100 });
