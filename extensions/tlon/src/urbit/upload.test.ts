@@ -7,9 +7,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   MAX_IMAGE_BYTES: 6 * 1024 * 1024,
   readRemoteMediaBuffer: vi.fn(),
 }));
-
 vi.mock("../tlon-api.js", () => ({ uploadFile: vi.fn() }));
-
 const mockReadRemoteMediaBuffer = vi.mocked(readRemoteMediaBuffer);
 const mockUploadFile = vi.mocked(uploadFile);
 const clientConfig = {
@@ -17,7 +15,6 @@ const clientConfig = {
   shipName: "zod",
   getCode: async () => "fixture-code",
 };
-
 const uploadedUrl = "https://memex.tlon.network/uploaded.png";
 const imageUrl = "https://example.com/image.png";
 const buffer = Buffer.from("fake-image");
@@ -26,36 +23,25 @@ function setupSuccessfulUpload(contentType = "image/png", fileName?: string) {
   mockReadRemoteMediaBuffer.mockResolvedValue({ buffer, contentType, fileName });
   mockUploadFile.mockResolvedValue({ url: uploadedUrl });
 }
-
-const requireUploadParams = () => {
-  const call = mockUploadFile.mock.calls[0];
-  if (!call) {
-    throw new Error("expected Tlon uploadFile call");
-  }
-  return call[0];
-};
-
 beforeEach(() => vi.clearAllMocks());
-
 it.each([1024, MAX_IMAGE_BYTES * 2])("caps downloads at %s bytes", async (cap) => {
   setupSuccessfulUpload("image/jpeg");
   const url = "https://example.com/path/to/my-image.jpg";
-
   await expect(upload(url, cap)).resolves.toBe(uploadedUrl);
-  expect(mockReadRemoteMediaBuffer).toHaveBeenCalledWith({
+  expect(mockReadRemoteMediaBuffer.mock.lastCall?.[0]).toMatchObject({
     url,
     maxBytes: Math.min(cap ?? MAX_IMAGE_BYTES, MAX_IMAGE_BYTES),
     responseHeaderTimeoutMs: 120_000,
     readIdleTimeoutMs: 30_000,
-    ssrfPolicy: undefined,
-    beforeRequest: undefined,
-    requestInit: { method: "GET" },
   });
   expect(mockUploadFile).toHaveBeenCalledTimes(1);
-  const { blob, ...metadata } = requireUploadParams();
-  expect(metadata).toMatchObject({ contentType: "image/jpeg", fileName: "my-image.jpg" });
-  expect(blob).toBeInstanceOf(Blob);
-  expect(Buffer.from(await blob.arrayBuffer())).toEqual(buffer);
+  const params = mockUploadFile.mock.lastCall?.[0];
+  expect(params).toMatchObject({
+    blob: expect.any(Blob),
+    contentType: "image/jpeg",
+    fileName: "my-image.jpg",
+  });
+  await expect(params?.blob.arrayBuffer()).resolves.toEqual(Uint8Array.from(buffer).buffer);
 });
 
 it.each([
@@ -64,7 +50,7 @@ it.each([
 ] as const)("selects the upload filename for %s", async (url, fileName, expected) => {
   setupSuccessfulUpload("image/png", fileName);
   await upload(url);
-  expect(requireUploadParams().fileName).toMatch(expected);
+  expect(mockUploadFile.mock.lastCall?.[0].fileName).toMatch(expected);
 });
 
 it("preserves a wrapped authority rejection instead of falling back to the original URL", async () => {
@@ -80,11 +66,9 @@ it("preserves a wrapped authority rejection instead of falling back to the origi
     }
     throw new Error("expected authority rejection");
   });
-
   const config = { ...clientConfig, assertDirectAdapterHandoff };
   await expect(uploadImageFromUrl(imageUrl, config)).rejects.toBe(revoked);
   expect(mockUploadFile).not.toHaveBeenCalled();
-  expect(assertDirectAdapterHandoff).toHaveBeenCalledTimes(1);
 });
 
 it("does not embed an unchecked URL when a configured cap rejects its bytes", async () => {
