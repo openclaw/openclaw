@@ -71,7 +71,8 @@ export async function discoverAllSessionsForUsage(params: {
         return sessions.map((session) => Object.assign({}, session, { agentId }));
       }),
     );
-    return discovered.flat().toSorted((a, b) => b.mtime - a.mtime);
+    // oxlint-disable-next-line unicorn/no-array-sort -- flat returns a fresh, private array.
+    return discovered.flat().sort((a, b) => b.mtime - a.mtime);
   });
 }
 
@@ -236,8 +237,7 @@ export function withUsageRequestBudget(
       caller.beginClose(parent.reason);
       data.beginClose(parent.reason);
     };
-    const timer = setTimeout(() => data.beginClose(exhausted), 15_000);
-    timer.unref?.();
+    const timer = setTimeout(() => data.beginClose(exhausted), 15_000).unref();
     parent.addEventListener("abort", cancel, { once: true });
     if (parent.aborted) {
       cancel();

@@ -75,9 +75,9 @@ function isValidCpuUsage(usage: NodeJS.CpuUsage | undefined): usage is NodeJS.Cp
   return cpuUsageDelta(usage, CPU_USAGE_ORIGIN) !== undefined;
 }
 
-function readHostCpuTimes(): CpuInfo["times"][] | undefined {
+function readHostCpuTimes(): CpuInfo[] | undefined {
   try {
-    const times = cpus().map((cpu) => cpu.times);
+    const times = cpus();
     return times.length ? times : undefined;
   } catch {
     return undefined;
@@ -85,8 +85,8 @@ function readHostCpuTimes(): CpuInfo["times"][] | undefined {
 }
 
 function hostCpuUtilization(
-  current: CpuInfo["times"][] | undefined,
-  previous: CpuInfo["times"][] | undefined,
+  current: CpuInfo[] | undefined,
+  previous: CpuInfo[] | undefined,
 ): number | undefined {
   if (!current || !previous || current.length !== previous.length) {
     return undefined;
@@ -94,8 +94,8 @@ function hostCpuUtilization(
   let total = 0;
   let idle = 0;
   for (let index = 0; index < current.length; index++) {
-    const cpu = current[index]!;
-    const before = previous[index]!;
+    const cpu = current[index]!.times;
+    const before = previous[index]!.times;
     for (const key of HOST_CPU_TIME_KEYS) {
       const delta = cpu[key] - before[key];
       if (delta < 0) {

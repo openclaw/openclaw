@@ -44,7 +44,7 @@ type ScheduledDecisionVector = Readonly<{
   admissionSource?: "operator-schedule" | "requester-schedule";
   ownerEmbedded: ScheduledOwnerSurface;
   ownerCli: ScheduledOwnerSurface;
-  automations: "none" | "self" | "self-and-parent-wake" | "unscoped";
+  automations: "none" | "self" | "self-and-parent-wake";
   board: string;
   eventTarget: string;
   /** The parent's memory as the owner's private memory, or only its conversation. */
@@ -74,7 +74,8 @@ function projectLegacyDecisions(
     // CLI grant coerces that absent bit to `false`. In-session turns run their own check.
     ownerEmbedded: sessionTurn ? "session-turn" : "owner",
     ownerCli: sessionTurn ? "session-turn" : "non-owner",
-    automations: !automationsAllowed ? "none" : facts.trigger === "cron" ? "self" : "unscoped",
+    // Scheduled and ingress turns are both limited to their own automation.
+    automations: !automationsAllowed ? "none" : "self",
     board: facts.runSessionKey,
     eventTarget: inSession ? facts.runSessionKey : facts.agentMainSessionKey,
     memory: "run-session",
@@ -137,7 +138,6 @@ const AUTOMATIONS_RANK: Record<ScheduledDecisionVector["automations"], number> =
   none: 0,
   self: 1,
   "self-and-parent-wake": 2,
-  unscoped: 3,
 };
 
 // Fields whose widening is the intended fix for parent-linked runs.

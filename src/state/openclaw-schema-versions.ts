@@ -1,10 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
+// v36 indexes PostgreSQL memory exact-path candidates without changing ranking.
 // v35 extends native PostgreSQL index ordering to predicate-proven non-null keys.
 // v34 aligns non-null PostgreSQL index keys with default query ordering.
 // v33 adds a stored PostgreSQL binary vector candidate projection.
 // v32 replaces the PostgreSQL vector decoder without rewriting canonical rows.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 35;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 36;
 
 // v33 extends native PostgreSQL index ordering to predicate-proven non-null keys.
 // v32 aligns non-null PostgreSQL index keys with default query ordering.

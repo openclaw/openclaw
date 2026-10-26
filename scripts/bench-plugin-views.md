@@ -36,6 +36,34 @@ Workboard covers search, clearing search, selecting, scrolling, opening a card,
 dragging to another column, and a live update. Memory covers search, expansion and
 scrolling. Every meaningful state change has a visible assertion; drag waits for
 the move RPC and the card rendered in its destination within the timed interval.
+
+Each sample creates fresh Workboard data with an initial update age of 2 days and
+3 hours and an older creation time. Cold and warm readiness assert the existing
+renderer’s `2d ago` text: the owner rounds day-aged cards to whole days before
+formatting. This consistently exercises the non-recent formatter path with native
+clocks, instead of crossing out of “just now” as a shared process fixture ages.
+`samples.json` records fixture generation, creation and update timestamps, initial
+age, expected text, and observation times after cold and warm load. The live update
+intentionally advances the changed card to a recent timestamp. Earlier runs made
+with process-wide fresh timestamps retain their evidence but do not establish a
+comparison on this stable age workload.
+
+Add `--plugins workboard --linked-dependencies --cards 300` for the dependency
+workload. It keeps 300 cards: 30 roots and 270 children with two distinct parents
+each, 540 parent links plus their reciprocal child links, and at most 18 links per
+card. Child readiness follows parent completion, checked before timing; the six
+columns contain 275/5/5/5/5/5 cards at 300 cards.
+The last root is Done, including at other supported card counts, so its child with
+root zero has one blocked parent. The detail action opens a dependent card and
+asserts both parents. The live action finishes root zero and asserts that this
+child's warning clears; afterward an untimed check confirms its DOM node survived
+the refresh (card objects are normalized anew). At 300 cards this is `bench-59`.
+The live payload preserves the acknowledged drag's status/position before the
+parent completion, advances its timestamp, and recomputes board counts. Summary
+metadata records the linked option and root/child/link counts. Keep partial-page
+completeness in the focused correctness test, separate from this full-board timing
+workload. Without the option, the original unlinked fixture remains available.
+
 Cold load starts with a new browser context. After that interval, the harness
 waits on the plugin route for the host's naturally admitted New Session prefetch
 assets: observed link completion, or a completed resource when the owner already
@@ -51,7 +79,10 @@ The remote profile adds 100 ms per HTTP request and per synthetic WebSocket
 delivery. Results measure renderer/mock performance, not real Gateway latency.
 AB/BA order alternates between serial pairs; `samples.json` retains every attempt,
 including failures and host load. `summary.json` includes distributions, plugin
-asset hashes/bytes, fixture counts, and instrumentation. Screenshots cover the
+asset hashes/bytes, fixture counts, and instrumentation. Distributions include
+only pairs where every requested variant completed successfully. `comparisonPairs`
+records every planned pair's inclusion and failed/missing variants; failures remain
+in `samples.json` and make the command fail. Screenshots cover the
 first pair and failures. Trace runs retain renderer traces, CPU profiles and
 source-mapping coverage (unmapped production assets are reported explicitly).
 The untimed final Workboard check reopens the updated card's menu and verifies

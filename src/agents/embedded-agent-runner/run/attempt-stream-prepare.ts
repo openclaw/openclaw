@@ -618,7 +618,7 @@ function prepareStream(
           parameters,
           ...(async === false ? { async } : {}),
         })),
-        messages: activeSession.messages.slice(),
+        messages: activeSession.messages,
         projectMessages: input.projectSessionForkMessages,
         sessionVersion: activeSession.sessionManager.getHeader()?.version,
         boundary: input.readSessionForkBoundary?.(),

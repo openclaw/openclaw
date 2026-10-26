@@ -535,7 +535,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["src/boards/sqlite-board-store.worker.ts"],
   })),
   ...[
-    "src/cli/capability-cli/model.account-secrets.provenance.test.ts",
+    "src/cli/capability-cli/model.resources.test.ts",
     "src/commands/models/list.probe.resources.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,

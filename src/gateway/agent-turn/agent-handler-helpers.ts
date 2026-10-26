@@ -180,7 +180,6 @@ export function yieldAfterAgentAcceptedAck(): Promise<void> {
 
 export function waitForCronContinuationReleaseRecovery(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setSafeTimeout(resolve, delayMs);
-    timer.unref?.();
+    setSafeTimeout(resolve, delayMs).unref();
   });
 }

@@ -1644,7 +1644,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cli/agent-cli-recovery.process.test.ts",
   "src/cli/agent-session-affinity.process.test.ts",
   "src/cli/capability-cli.test.ts",
-  "src/cli/capability-cli/model.account-secrets.provenance.test.ts",
   "src/cli/capability-cli/model.resources.test.ts",
   "src/cli/capability-web-output.process.test.ts",
   "src/cli/channels-account-selector.integration.test.ts",
