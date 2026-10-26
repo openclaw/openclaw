@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createEnteredGate } from "../../agents/entered-gate.test-support.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
@@ -7,6 +7,11 @@ import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  runOutboundDelivery,
+  runOutboundDeliveryInternal,
+  runStructuredOutboundDeliveryInternal,
+} from "./deliver-queue.js";
 import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-support.js";
 import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
 
@@ -48,11 +53,6 @@ export function useDeliveryCleanup(after?: () => void) {
 }
 
 export function useOutboundRuntime() {
-  let runtime: typeof import("./deliver.js");
-  let queue: typeof import("./deliver-queue.js");
-  beforeAll(async () => {
-    [runtime, queue] = await Promise.all([import("./deliver.js"), import("./deliver-queue.js")]);
-  });
   afterEach(() => {
     vi.restoreAllMocks();
     resetPluginRuntimeStateForTest();
@@ -60,22 +60,17 @@ export function useOutboundRuntime() {
     vi.unstubAllEnvs();
   });
   return {
-    deliver: (params: Parameters<typeof runtime.deliverOutboundPayloads>[0]) =>
-      runtime.deliverOutboundPayloads(params),
-    internal: (params: Parameters<typeof runtime.deliverOutboundPayloadsInternal>[0]) =>
-      runtime.deliverOutboundPayloadsInternal(params),
-    structured: (params: Parameters<typeof runtime.deliverStructuredOutboundPayloadsInternal>[0]) =>
-      runtime.deliverStructuredOutboundPayloadsInternal(params),
-    run: (params: Parameters<typeof queue.runOutboundDeliveryInternal>[0]) =>
-      queue.runOutboundDeliveryInternal(params),
+    deliver: runOutboundDelivery,
+    internal: runOutboundDeliveryInternal,
+    structured: runStructuredOutboundDeliveryInternal,
+    run: runOutboundDeliveryInternal,
   };
 }
 
 export function useOutboundFixture() {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
-  const runtime = useOutboundRuntime();
   beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir()));
-  return { ...runtime, tmpDir };
+  return { ...useOutboundRuntime(), tmpDir };
 }
 
 export function matrixDeliveryResult(messageId: string, kind: "text" | "media" = "text") {
