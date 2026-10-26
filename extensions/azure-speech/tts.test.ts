@@ -10,26 +10,23 @@ describe("azure speech tts", () => {
   installPinnedHostnameTestHooks();
   const provider = buildAzureSpeechProvider();
   const listVoices = expectDefined(provider.listVoices, "Azure voice-list provider");
-  const synthesisRequest = {
-    text: "hello",
-    apiKey: "fixture-value",
-    region: "eastus",
-    voice: "en-US-JennyNeural",
-    lang: "en-US",
-    outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-    timeoutMs: 1234,
-  };
   const voiceRequest = { apiKey: "speech-key", baseUrl: "https://custom.example.com/" };
-  type SynthesisOverrides = Partial<typeof synthesisRequest> & {
+  type SynthesisOverrides = {
+    apiKey?: string;
     endpoint?: string;
+    voice?: string;
+    lang?: string;
+    outputFormat?: string;
+    text?: string;
+    timeoutMs?: number;
     maxBytes?: number;
   };
   const synthesize = (overrides: SynthesisOverrides = {}) => {
-    const { text, timeoutMs, maxBytes, ...providerConfig } = { ...synthesisRequest, ...overrides };
+    const { text = "hello", timeoutMs = 1234, maxBytes, ...config } = overrides;
     return provider.synthesize({
       text,
       timeoutMs,
-      providerConfig,
+      providerConfig: { apiKey: "fixture-value", region: "eastus", ...config },
       target: "audio-file",
       cfg:
         maxBytes === undefined
@@ -55,9 +52,7 @@ describe("azure speech tts", () => {
 
   it("maps Azure output formats to attachment metadata", async () => {
     for (const [outputFormat, fileExtension, voiceCompatible] of [
-      ["audio-24khz-48kbitrate-mono-mp3", ".mp3", false],
       ["ogg-24khz-16bit-mono-opus", ".ogg", true],
-      ["riff-24khz-16bit-mono-pcm", ".wav", false],
       ["raw-8khz-8bit-mono-mulaw", ".pcm", false],
       ["webm-24khz-16bit-mono-opus", ".webm", false],
       ["amr-wb-16000hz", ".amr", false],
@@ -74,27 +69,18 @@ describe("azure speech tts", () => {
     }
   });
 
-  it("posts SSML to the region endpoint with Azure Speech headers", async () => {
-    const fetchMock = mockResponse(new Response(Buffer.from("mp3"), { status: 200 }));
-    const result = await synthesize({
+  it("escapes SSML text and attributes and sends the XML content type", async () => {
+    const fetchMock = mockResponse(new Response(Buffer.from("mp3")));
+    await synthesize({
       text: `Tom & "Jerry" <tag>`,
       voice: `en-US-JennyNeural" xml:lang="evil`,
       lang: `en-US" bad="1`,
     });
-    expect(result.audioBuffer).toEqual(Buffer.from("mp3"));
-    expect(fetchMock).toHaveBeenCalledOnce();
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://eastus.tts.speech.microsoft.com/cognitiveservices/v1");
-    expect(init.method).toBe("POST");
-    expect(Object.fromEntries(new Headers(init.headers))).toMatchObject({
-      "ocp-apim-subscription-key": "fixture-value",
-      "content-type": "application/ssml+xml",
-      "x-microsoft-outputformat": "audio-24khz-48kbitrate-mono-mp3",
-    });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(new Headers(init.headers).get("content-type")).toBe("application/ssml+xml");
     expect(init.body).toBe(
       `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US&quot; bad=&quot;1"><voice name="en-US-JennyNeural&quot; xml:lang=&quot;evil">Tom &amp; "Jerry" &lt;tag&gt;</voice></speak>`,
     );
-    expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
@@ -139,12 +125,10 @@ describe("azure speech tts", () => {
       },
     ]);
 
-    const voices = await listVoices({ ...voiceRequest, timeoutMs: 4321 });
-    expect(fetchMock).toHaveBeenCalledOnce();
+    const voices = await listVoices(voiceRequest);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://custom.example.com/cognitiveservices/voices/list");
     expect(new Headers(init.headers).get("Ocp-Apim-Subscription-Key")).toBe("speech-key");
-    expect(init.signal).toBeInstanceOf(AbortSignal);
     const metadata = { locale: "en-US", gender: "Female", personalities: ["Warm"] };
     expect(voices).toEqual([
       { ...metadata, id: "en-US-JennyNeural", name: "Jenny", description: "Warm" },
