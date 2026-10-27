@@ -61,6 +61,7 @@ import {
   readTrackedText,
   readWorkflow,
   readWorkflowOutputs,
+  runControlUiE2eWorkflow,
   runGit,
   runWorkflowShellScript,
   testNodeExecPath,
@@ -2466,7 +2467,7 @@ describe("ci workflow guards", () => {
           "test/vitest/vitest.ui-e2e.config.ts",
           "ui_e2e_test_groups_gzip_base64",
           "checks-ui-e2e",
-          "Test Control UI end-to-end",
+          "Decode Control UI E2E selection",
         ],
       ] as const) {
         const packed = expectDefined(manifest.outputs[output], `${name} packed test selection`);
@@ -10335,7 +10336,7 @@ describe("ci workflow guards", () => {
       'printf "%s" "${VITEST_MAX_WORKERS:-}" > "$UI_E2E_COMMAND_NATIVE_WORKERS"',
     ]);
     const runCommand = (env: Record<string, string>) => {
-      const result = runWorkflowShellScript(expectDefined(scenario.run, "UI E2E command"), {
+      const result = runControlUiE2eWorkflow({
         cwd: commandRoot,
         env: {
           ...process.env,
@@ -11268,6 +11269,15 @@ describe("ci workflow guards", () => {
       uiE2e.steps.find((step: WorkflowStep) => step.name === "Test Control UI end-to-end"),
       "Control UI E2E suite",
     );
+    const selection = expectDefined(
+      uiE2e.steps.find((step: WorkflowStep) => step.name === "Decode Control UI E2E selection"),
+      "Control UI E2E selection",
+    );
+    expect(selection.if).toBe("matrix.task == 'control-ui'");
+    expect(selection.env).toEqual({
+      OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:
+        "${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}",
+    });
     expect(scenario.if).toBe("matrix.task == 'control-ui'");
     expect(scenario.env).toEqual({
       OPENCLAW_UI_E2E_DIAGNOSTIC_DIR:
@@ -11275,8 +11285,6 @@ describe("ci workflow guards", () => {
       VITEST_SHARD_INDEX: "${{ matrix.shard }}",
       VITEST_SHARD_COUNT: "${{ matrix.vitest_shard_count }}",
       OPENCLAW_VITEST_MAX_WORKERS: "${{ matrix.vitest_max_workers || 2 }}",
-      OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:
-        "${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}",
     });
     expect(scenario.run).not.toContain("--project");
     const timeoutDiagnostics = expectDefined(

@@ -71,6 +71,7 @@ import {
   readWorkflow,
   readWorkflowOutputs,
   requiredWorkflowStep,
+  runControlUiE2eWorkflow,
   runGit,
   runWorkflowShellScript,
   testNodeExecPath,
@@ -2514,10 +2515,6 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
   );
 
   it("prepares the selected Control UI Gateway runtime before Vitest and stops on preparation failure", () => {
-    const step = requiredWorkflowStep(
-      readCiWorkflow().jobs["checks-ui-e2e"].steps,
-      "Test Control UI end-to-end",
-    );
     const root = tempDirs.make("openclaw-ui-runtime-preparation-");
     const bin = path.join(root, "bin");
     const vitest = path.join(root, "node_modules/vitest");
@@ -2557,23 +2554,19 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       ["1", "7", "prepare\n"],
     ]) {
       writeFileSync(events, "");
-      // Actions invokes Bash with -e; retain that failure contract in the local harness.
-      const result = runWorkflowShellScript(
-        `set -e\n${expectDefined(step.run, "UI E2E command")}`,
-        {
-          cwd: root,
-          env: {
-            ...process.env,
-            PATH: `${bin}:${process.env.PATH ?? ""}`,
-            EVENTS: events,
-            SELECT_RUNTIME: selected,
-            PREPARE_EXIT: exit,
-            OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "",
-            VITEST_SHARD_INDEX: "1",
-            VITEST_SHARD_COUNT: "1",
-          },
+      const result = runControlUiE2eWorkflow({
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          EVENTS: events,
+          SELECT_RUNTIME: selected,
+          PREPARE_EXIT: exit,
+          OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "",
+          VITEST_SHARD_INDEX: "1",
+          VITEST_SHARD_COUNT: "1",
         },
-      );
+      });
       expect(result.status, result.stdout + result.stderr).toBe(Number(exit));
       expect(readFileSync(events, "utf8")).toBe(expected);
     }
