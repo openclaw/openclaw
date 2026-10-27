@@ -501,14 +501,13 @@ export function createProfileSessionEntryFilter(
   return (
     sessionKey: string | undefined,
     entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">,
-    isMember = params.membership?.has(params.profileId) ?? false,
+    isMember = params.membership?.has(params.profileId),
   ) =>
     entry.incognito !== true &&
     !isIncognitoSessionKey(sessionKey) &&
     (creatorMatches(entry.createdActor) ||
       (params.sessionCap !== "none" &&
         // Projection callbacks may pass metadata as the third argument; only true grants membership.
-        // oxlint-disable-next-line typescript/no-unnecessary-boolean-literal-compare
         (params.sessionCap !== "invited" || isMember === true) &&
         resolveSessionVisibility(entry) !== "draft"));
 }
