@@ -6,6 +6,7 @@ import {
   type IStoredClientOpts,
 } from "matrix-js-sdk/lib/matrix.js";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import { LogService } from "../sdk/logger.js";
@@ -62,6 +63,7 @@ export class SqliteBackedMatrixSyncStore extends MemoryStore {
       );
       persisted = await readPersistedStoreFromStore({ storageRootDir, store });
     } catch (error) {
+      materializeErrorStack(error);
       unavailableError = error;
       LogService.warn("MatrixSyncCacheStore", "Failed to load Matrix sync cache:", error);
     }

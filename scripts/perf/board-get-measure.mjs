@@ -4,8 +4,10 @@
  *   [owner=src/gateway/server-methods/board.ts] [iterations=3000]
  * Run pristine/candidate owners in counterbalanced order. A pristine source copy
  * must live beside board.ts so its relative imports resolve to the same dependencies.
- * 2,000 prepared session boards (500 subagent keys), 4 tabs, 24 HTML widgets, and
- * 10 synthetic caller identities. The store returns fresh snapshots; no database,
+ * For a dependency change, copy that pristine module beside its source too and
+ * point the pristine handler's import at that copy.
+ * 10,000 prepared session boards (8,000 subagent keys), 4 tabs, 24 HTML widgets, and
+ * 65 synthetic caller identities. The store returns fresh snapshots; no database,
  * sockets, model turns, or live Gateway are measured. CPU/wall and allocation use
  * separate passes; allocation includes collected objects. Stable response bytes
  * are hashed after verifying tickets and omitting their nonce/expiry/generation.
@@ -43,8 +45,8 @@ const tabs = Array.from({ length: 4 }, (_, index) => ({
   chatDock: "right",
 }));
 const boards = new Map(
-  Array.from({ length: 2000 }, (_, index) => {
-    const sessionKey = `agent:main:${index < 500 ? "subagent:" : "session:"}${index}`;
+  Array.from({ length: 10000 }, (_, index) => {
+    const sessionKey = `agent:main:${index < 8000 ? "subagent:" : "session:"}${index}`;
     return [sessionKey, { sessionKey, revision: 1, tabs, widgets }];
   }),
 );
@@ -73,7 +75,7 @@ const context = {
   getMcpAppSandboxPort: () => 40001,
   resolveGatewayContext: () => context,
 };
-const clients = Array.from({ length: 10 }, (_, index) => ({ connId: `synthetic-${index}` }));
+const clients = Array.from({ length: 65 }, (_, index) => ({ connId: `synthetic-${index}` }));
 let response;
 let sink = 0;
 async function call(index) {
@@ -92,6 +94,7 @@ async function call(index) {
   });
 }
 await call(0);
+const replyBytes = Buffer.byteLength(JSON.stringify(response));
 const stable = structuredClone(response);
 for (const widget of stable.widgets) {
   const claims = verifyBoardViewTicket(widget.viewTicket);
@@ -133,6 +136,30 @@ for (let index = 0; index < iterations; index++) {
 }
 const { profile } = await inspector.post("HeapProfiler.stopSampling");
 inspector.disconnect();
+const phases = new Map();
+function indexPhases(node, parentPhase = "other") {
+  let phase = parentPhase;
+  const name = node.callFrame.functionName;
+  if (name === "buildBoardWidgetSandboxPath") {
+    phase = "sandbox";
+  } else if (name === "createBoardViewTicket") {
+    phase = "tickets";
+  } else if (name === "getSnapshotWithHtmlViewMetadata") {
+    phase = "fixtureSnapshot";
+  } else if (name === "buildBoardWidgetFrameUrl") {
+    phase = "frameUrls";
+  }
+  phases.set(node.id, phase);
+  for (const child of node.children) {
+    indexPhases(child, phase);
+  }
+}
+indexPhases(profile.head);
+const allocationByPhase = {};
+for (const sample of profile.samples) {
+  const phase = phases.get(sample.nodeId) ?? "other";
+  allocationByPhase[phase] = (allocationByPhase[phase] ?? 0) + sample.size / iterations;
+}
 console.log(
   JSON.stringify({
     ownerSha256: createHash("sha256").update(readFileSync(owner)).digest("hex"),
@@ -140,6 +167,8 @@ console.log(
     sessions: boards.size,
     clients: clients.length,
     widgets: widgets.length,
+    replyBytes,
+    allocationByPhase,
     hostLoad,
     loadAfter: loadavg(),
     wallUsPerCall: (elapsedMs * 1000) / iterations,

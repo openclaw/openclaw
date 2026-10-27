@@ -11,8 +11,10 @@ import {
   createCatalogCodeModeHarness,
   expectFailure,
   expectCompleted,
+  expectCodeModeSharedBudget,
   pluginToolWithExecute,
   resetCodeModeTestState,
+  testing,
 } from "./code-mode.test-support.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";
 import { jsonResult, ToolInputError } from "./tools/common.js";
@@ -33,6 +35,54 @@ function phaseHarness(executor: "node" | "quickjs", reject: boolean) {
 }
 
 describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (executor) => {
+  it.each(["add", "delete", "values", "next"])(
+    "owns rejection tracking after guest replacement of %s",
+    async (method) => {
+      const h = createCatalogCodeModeHarness([], {
+        codeMode: { executor, maxOutputBytes: 1024 },
+      });
+      let details = await h.run(`
+        const target = ${method === "next" ? "Object.getPrototypeOf(new Set().values())" : "Set.prototype"};
+        target[${JSON.stringify(method)}] = () => { throw new Error("tracker poison".repeat(4096)); };
+        const rejected = Promise.reject(new Error("fixture rejection"));
+        ${method === "delete" ? "await yield_control(); rejected.catch(() => {});" : ""}
+        return 42;
+      `);
+      if (method === "delete") {
+        expect(details.status).toBe("waiting");
+        details = await h.resume(details);
+        expectCompleted(details, 42);
+      } else {
+        expectFailure(details, "guest");
+        expect(details.error).toContain("fixture rejection");
+        expect(details.error).not.toContain("tracker poison");
+        expectCodeModeSharedBudget(details, 1024);
+      }
+      expect(await h.complete("return 42;")).toMatchObject({ status: "completed", value: 42 });
+      expect(testing.activeRuns.size).toBe(0);
+    },
+  );
+
+  it.each([
+    ["sparse array", 'Object.defineProperty(new Array(65536), "0", descriptor)'],
+    [
+      "object",
+      'Object.defineProperty({ toString() { text("diagnostic getter ran"); return "detail"; } }, "detail", descriptor)',
+    ],
+  ])("does not traverse a thrown %s to format its diagnostic", async (_name, value) => {
+    const { run } = createCatalogCodeModeHarness([], {
+      codeMode: { executor, maxOutputBytes: 1024 },
+    });
+    const details = await run(`
+      const descriptor = { enumerable: true, get() { text("diagnostic getter ran"); return "detail"; } };
+      throw ${value};
+    `);
+    expectFailure(details, "guest");
+    expect(details.output).toEqual([]);
+    expect(details.error).toContain("[Thrown object]");
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
   it.each([
     { reject: false, parked: false },
     { reject: true, parked: false },
@@ -140,6 +190,11 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
       if (phase === "input") {
         expect(details.error).toContain("correct the JavaScript source");
       }
+      if (_name.startsWith("throwing stack getter")) {
+        expect(details.error).toContain("tool failure");
+        expect(details.error).not.toContain("stack unavailable");
+      }
+      expect(testing.activeRuns.size).toBe(0);
     },
   );
   it.each([false, true])(

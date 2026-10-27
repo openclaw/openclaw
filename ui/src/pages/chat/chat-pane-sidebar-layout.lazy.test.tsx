@@ -3,6 +3,7 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatUiError } from "../../lib/format-error.ts";
+import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSidebarRegionCallbackMocks } from "../../test-helpers/sidebar-region-callbacks.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -85,23 +86,29 @@ describe("chat pane lazy sidebar failures", () => {
         .render()
         .layout!.region.panelDefinitions.find((entry) => entry.slot === slot)!;
       if (slot === "dashboard") {
+        const owner = getPaneTestRuntime(pane);
+        const provider = createMockBoardProvider(state.sessionKey);
         const data = pane
           .render()
           .layout!.region.panelDefinitions.find((entry) => entry.slot === "workspace")!.view!;
         definition.view = {
           ...data,
           dashboard: {
-            error: undefined,
-            surface: {
-              active: true,
-              session: { sessionKey: state.sessionKey },
-              snapshot: undefined,
+            owner,
+            board: {
+              provider,
+              snapshot: provider.snapshot$.value,
+              available: true,
+              hasBoard: true,
+              face: "dashboard",
               activeTabId: "",
-              canMutate: false,
-              canGrant: false,
-              callbacks: { applyOps: async () => {}, grant: async () => {}, selectTab() {} },
-              widgetFrameUrl: () => "",
             },
+            get layout() {
+              return state.sidebarLayout;
+            },
+            session: { sessionKey: state.sessionKey },
+            connectionGeneration: owner.connectionGeneration,
+            pageWidgetName: undefined,
           },
         };
       }

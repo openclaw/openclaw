@@ -95,6 +95,13 @@ The next visible message preserves an interrupted turn's recovery claim even
 when its saved status is failed, timed out, or killed. Recovery resumes the
 interrupted work before the new message takes foreground ownership.
 
+For non-Stop `chat.send` requests carrying a main-session recovery cycle, the Gateway logs
+one structured `chat.send recovery admission` event. It records the admission
+outcome (`rejected`, `admitted`, or `retried`), a session ID hash, the request and
+recovery run IDs, and `chargedAttempts` observed before admitting the request.
+It contains no message content. Rejected stale-session, permission, tool-setting,
+or changed-input requests leave that recovery custody unchanged.
+
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.
 
@@ -373,6 +380,11 @@ a restart, or a gateway update) does not kill in-flight work immediately. The
 gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
+
+A plain stop (`SIGTERM` or `SIGINT`, such as a service stop) that arrives while
+a restart drains turns that restart into a stop: the Gateway exits after the
+drain instead of starting again. Managed update handoffs keep their own stop
+handling.
 
 A confirmed unavailable child Node runtime follows this same graceful drain when
 the effective native service command's Node can still start. The lifecycle owner

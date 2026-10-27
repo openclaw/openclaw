@@ -4,6 +4,7 @@ import {
   type WorkerTranscriptMessage,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { takeFittingWorkerTranscriptBatch } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { type WorkerConnection, WorkerConnectionInterruptedError } from "./worker-connection.js";
 import type { TranscriptResponseError } from "./worker-rpc-client-shared.js";
 import { fenceForOwnershipError } from "./worker-rpc-client-shared.js";
@@ -125,12 +126,14 @@ export class WorkerTranscriptCommitClient {
             response.error,
             "Worker transcript base changed; uncommitted messages were not committed; relaunch required.",
           );
+          materializeErrorStack(this.terminalFailure);
           throw this.terminalFailure;
         }
         fenceForOwnershipError(this.connection, response.error);
         const failure = new WorkerTranscriptCommitError(response.error);
         if (response.error.code === "UNAVAILABLE" && response.error.retryable === false) {
           // Turn cleanup must retain the rejection instead of submitting the failed batch again.
+          materializeErrorStack(failure);
           this.terminalFailure = failure;
         }
         throw failure;

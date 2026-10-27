@@ -6,6 +6,7 @@ import { withTestDir } from "./test-helpers/temp-dir.js";
 import { withEnv } from "./test-utils/env.js";
 import {
   CONFIG_DIR,
+  displayPath,
   ensureDir,
   normalizeE164,
   pinConfigDir,
@@ -95,6 +96,18 @@ it.each([
 ] as const)("%s selects display prefix for %s", (shorten, home, input, expected) => {
   withEnv({ OPENCLAW_HOME: home, HOME: displayHome }, () => {
     expect(shorten(input)).toBe(expected);
+  });
+});
+
+it("escapes terminal path displays without changing raw home shortening", () => {
+  const home = path.resolve("terminal-home");
+  withEnv({ OPENCLAW_HOME: home }, () => {
+    const value = path.join(
+      home,
+      "café\u001b[31m\u001b]8;;https://example.invalid\u0007link\u001b]8;;\u0007\u009b2J\nfile",
+    );
+    expect(displayPath(value)).toBe(`$OPENCLAW_HOME${path.sep}cafélink\\nfile`);
+    expect(shortenHomePath(value)).toBe(value.replace(home, "$OPENCLAW_HOME"));
   });
 });
 
