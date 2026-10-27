@@ -5,6 +5,7 @@ import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-underst
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import {
+  formatMatrixGalleryText,
   formatMatrixMessageText,
   isLikelyBareFilename,
   resolveMatrixMessageAttachment,
@@ -17,6 +18,8 @@ import {
   resolveMatrixInboundMediaContent,
   resolveMatrixMentionPrecheckText,
   resolveMatrixPendingHistoryText,
+  resolveMatrixPreflightAudioItem,
+  type MatrixInboundMediaItem,
 } from "./handler-helpers.js";
 import type {
   MatrixIngressAccessParams,
@@ -26,10 +29,12 @@ import { loadAcpBindingRuntime, loadSessionBindingRuntime } from "./handler-runt
 import type { MatrixHandlerRuntimeConfig } from "./handler-types.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
-import { isMatrixAudioContent, matrixPreflightAudio } from "./preflight-audio.js";
+import { matrixPreflightAudio } from "./preflight-audio.js";
 import { createRoomHistoryTracker, type HistoryEntry } from "./room-history.js";
 import { resolveMatrixInboundRouteAsync } from "./route.js";
 import type { MatrixRawEvent } from "./types.js";
+
+type DownloadedMatrixMedia = Awaited<ReturnType<typeof downloadMatrixMedia>>;
 
 export async function resolveMatrixIngressContent(config: {
   handler: MatrixHandlerRuntimeConfig;
@@ -114,50 +119,48 @@ export async function resolveMatrixIngressContent(config: {
     locationText: locationPayload?.text,
   });
   let mediaContent = resolveMatrixInboundMediaContent(content);
-  const mediaUrl = mediaContent.url;
   const pendingHistoryText = resolveMatrixPendingHistoryText({
     mentionPrecheckText,
     content,
-    mediaUrl,
+    media: mediaContent,
   });
   const pendingHistoryPollText =
     !pendingHistoryText && isPollEvent && historyLimit > 0 ? (await getPollSnapshot())?.text : "";
-  if (!mentionPrecheckText && !mediaUrl && !isPollEvent) {
+  if (!mentionPrecheckText && mediaContent.attachmentCount === 0 && !isPollEvent) {
     discardReservedHistorySlot();
     return undefined;
   }
 
-  let preflightMedia: {
-    path: string;
-    contentType?: string;
-    placeholder: string;
-  } | null = null;
-  let mediaDownloadFailed = false;
-  let mediaSizeLimitExceeded = false;
+  let preflightMedia: DownloadedMatrixMedia | null = null;
+  let mediaDownloadFailures = 0;
+  let mediaSizeLimitFailures = 0;
   let preflightAudioTranscript: string | undefined;
-  const downloadMedia = async (mxcUrl: string) => {
+  const downloadMedia = async (item: MatrixInboundMediaItem, index: number) => {
     try {
       return await downloadMatrixMedia({
         client,
-        mxcUrl,
-        contentType: mediaContent.contentType,
-        sizeBytes: mediaContent.sizeBytes,
+        mxcUrl: item.url,
+        contentType: item.contentType,
+        sizeBytes: item.sizeBytes,
         maxBytes: mediaMaxBytes,
-        file: mediaContent.file,
-        originalFilename: mediaContent.originalFilename,
+        file: item.file,
+        originalFilename: item.originalFilename,
       });
     } catch (err) {
-      mediaDownloadFailed = true;
-      mediaSizeLimitExceeded = isMatrixMediaSizeLimitError(err);
+      mediaDownloadFailures += 1;
+      if (isMatrixMediaSizeLimitError(err)) {
+        mediaSizeLimitFailures += 1;
+      }
       const errorText = formatErrorMessage(err);
       logVerboseMessage(
-        `matrix: media download failed room=${roomId} id=${event.event_id ?? "unknown"} type=${content.msgtype} error=${errorText}`,
+        `matrix: media download failed room=${roomId} id=${event.event_id ?? "unknown"} type=${content.msgtype} item=${index} error=${errorText}`,
       );
       logger.warn("matrix media download failed", {
         roomId,
         eventId: event.event_id,
         msgtype: content.msgtype,
-        encrypted: Boolean(mediaContent.file),
+        itemIndex: index,
+        encrypted: Boolean(item.file),
         error: errorText,
       });
       return null;
@@ -179,16 +182,11 @@ export async function resolveMatrixIngressContent(config: {
     resolveAgentRoute: core.channel.routing.resolveAgentRoute,
   });
   const hasExplicitSessionBinding = _configuredBinding !== null || _runtimeBindingId !== null;
-  const preflightAudioMediaUrl = mediaUrl?.startsWith("mxc://") ? mediaUrl : undefined;
-  const shouldRunMatrixAudioPreflight =
-    isMatrixAudioContent({
-      msgtype: typeof content.msgtype === "string" ? content.msgtype : undefined,
-      mimetype: mediaContent.contentType,
-    }) &&
-    isMatrixAudioMediaEnabled(cfg) &&
-    preflightAudioMediaUrl !== undefined;
+  const preflightAudioItem = isMatrixAudioMediaEnabled(cfg)
+    ? resolveMatrixPreflightAudioItem(content, mediaContent)
+    : undefined;
   if (
-    shouldRunMatrixAudioPreflight &&
+    preflightAudioItem &&
     audioPreflightMode === "defer" &&
     isRoom &&
     historyLimit > 0 &&
@@ -213,8 +211,8 @@ export async function resolveMatrixIngressContent(config: {
       },
     } as const;
   }
-  if (shouldRunMatrixAudioPreflight) {
-    preflightMedia = await downloadMedia(preflightAudioMediaUrl);
+  if (preflightAudioItem) {
+    preflightMedia = await downloadMedia(preflightAudioItem, 0);
     if (preflightMedia) {
       preflightAudioTranscript = await matrixPreflightAudio.resolve({
         request: {
@@ -374,17 +372,33 @@ export async function resolveMatrixIngressContent(config: {
     mediaContent = resolveMatrixInboundMediaContent(content);
   }
 
-  let media = preflightMedia;
-  const finalMediaUrl = mediaContent.url;
-  if (!media && !mediaDownloadFailed && finalMediaUrl?.startsWith("mxc://")) {
-    media = await downloadMedia(finalMediaUrl);
+  // Items download one at a time, in event order; one failure leaves the rest intact.
+  const mediaList: DownloadedMatrixMedia[] = preflightMedia ? [preflightMedia] : [];
+  if (!preflightAudioItem) {
+    for (const [index, item] of mediaContent.items.entries()) {
+      const saved = await downloadMedia(item, index);
+      if (saved) {
+        mediaList.push(saved);
+      }
+    }
   }
 
   const rawBody = locationPayload?.text ?? mediaContent.body;
   const filename = typeof content.filename === "string" ? content.filename : undefined;
-  const mediaPlaceholder = media?.placeholder;
+  const mediaPlaceholder = mediaList[0]?.placeholder;
   let bodyText = rawBody;
-  if (mediaPlaceholder) {
+  if (mediaContent.isGallery) {
+    // Entries skipped at resolve time (no mxc url, unknown itemtype, over the cap) count as unavailable.
+    const unavailableCount = mediaContent.attachmentCount - mediaList.length;
+    if (unavailableCount > 0 || !rawBody) {
+      bodyText = formatMatrixGalleryText({
+        caption: rawBody,
+        attachmentCount: mediaContent.attachmentCount,
+        unavailableCount,
+        tooLarge: mediaSizeLimitFailures === unavailableCount,
+      });
+    }
+  } else if (mediaPlaceholder) {
     bodyText = rawBody || mediaPlaceholder;
     if (filename?.trim()) {
       const attachment = resolveMatrixMessageAttachment({
@@ -396,13 +410,13 @@ export async function resolveMatrixIngressContent(config: {
         bodyText = mediaPlaceholder;
       }
     }
-  } else if (mediaDownloadFailed && Boolean(finalMediaUrl)) {
+  } else if (mediaDownloadFailures > 0) {
     bodyText =
       formatMatrixMessageText({
         body: rawBody,
         filename,
         msgtype: content.msgtype,
-        tooLarge: mediaSizeLimitExceeded,
+        tooLarge: mediaSizeLimitFailures > 0,
         unavailable: true,
       }) ?? "";
   }
@@ -418,7 +432,7 @@ export async function resolveMatrixIngressContent(config: {
   if (preflightAudioTranscript) {
     const transcriptBody = formatAudioTranscriptForAgent(preflightAudioTranscript);
     bodyText =
-      !bodyText || bodyText === media?.placeholder
+      !bodyText || bodyText === mediaPlaceholder
         ? transcriptBody
         : `${bodyText}\n${transcriptBody}`;
   }
@@ -488,7 +502,7 @@ export async function resolveMatrixIngressContent(config: {
     senderName,
     bodyText,
     commandBodyText,
-    media,
+    mediaList,
     preflightAudioTranscript,
     triggerSnapshot: preparedTrigger,
     threadContext,

@@ -1,5 +1,5 @@
 ---
-summary: "Inbound restart recovery, streaming previews, voice-note transcription, and reactions"
+summary: "Inbound restart recovery, streaming previews, voice-note transcription, galleries, and reactions"
 read_when:
   - Turning on live reply previews in Matrix
   - Configuring Matrix ack reactions and custom emotes
@@ -7,7 +7,7 @@ title: "Matrix message behavior"
 sidebarTitle: "Messaging"
 ---
 
-How OpenClaw receives Matrix messages and delivers replies: restart recovery, streaming previews, inbound voice notes, and reactions.
+How OpenClaw receives Matrix messages and delivers replies: restart recovery, streaming previews, inbound voice notes, galleries, and reactions.
 
 ## Inbound delivery across restarts
 
@@ -115,6 +115,17 @@ Matrix uses the shared audio media provider under `tools.media.audio`, such as O
 - The transcript is marked machine-generated and untrusted in the agent prompt.
 - The attachment is marked as already transcribed so downstream media tools do not transcribe it again.
 - Set `tools.media.audio.enabled: false` to disable audio transcription globally.
+
+## Galleries
+
+Inbound Matrix gallery messages (MSC4274, msgtype `m.gallery` or the unstable `dm.filament.gallery`) deliver their attachments to the agent in the order sent, within the limits below. Galleries are inbound only.
+
+- The gallery caption is the message text. A gallery without a caption is not dropped; the agent sees `[matrix gallery: N attachments]`.
+- Entries typed `m.image`, `m.video`, `m.audio`, and `m.file` are downloaded, decrypted in encrypted rooms, and attached like single media messages. Gallery audio skips the Matrix audio preflight above; later media processing follows the configured audio settings.
+- At most 20 items per gallery are downloaded. Remaining entries, entries that fail to download, and entries with an unsupported or missing type or URL are reported as `[matrix gallery: K of N attachments unavailable]`. When every unavailable entry exceeded the size limit, the marker says `too large`.
+- `mediaMaxMb` applies to each item, not to the gallery as a whole.
+- In rooms with `historyLimit` set, an unmentioned gallery appears in the room history as text only: its caption plus `[matrix gallery: N attachments]`. Its items are downloaded only when the gallery message itself triggers the agent; a later mention does not fetch them.
+- Edits of a gallery are ignored, as for other messages.
 
 ## Reactions
 

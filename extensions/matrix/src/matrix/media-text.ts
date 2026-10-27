@@ -123,6 +123,24 @@ export function resolveMatrixMessageAttachment(
   };
 }
 
+/** Caption plus one marker: how many gallery attachments exist, or how many could not be fetched. */
+export function formatMatrixGalleryText(params: {
+  caption?: string;
+  attachmentCount: number;
+  unavailableCount?: number;
+  tooLarge?: boolean;
+}): string {
+  const unavailable = params.unavailableCount ?? 0;
+  const noun = params.attachmentCount === 1 ? "attachment" : "attachments";
+  const marker =
+    unavailable > 0
+      ? `[matrix gallery: ${unavailable} of ${params.attachmentCount} ${noun} ${params.tooLarge ? "too large" : "unavailable"}]`
+      : params.attachmentCount > 0
+        ? `[matrix gallery: ${params.attachmentCount} ${noun}]`
+        : "";
+  return [params.caption?.trim(), marker].filter(Boolean).join("\n\n");
+}
+
 export function formatMatrixMessageText(params: {
   body?: string;
   filename?: string;

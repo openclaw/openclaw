@@ -75,7 +75,7 @@ export async function resolveMatrixInboundContext(config: {
     commandAuthorized,
     isControlCommand,
     locationPayload,
-    media,
+    mediaList,
     preflightAudioTranscript,
     hasExplicitSessionBinding,
   } = ingress;
@@ -206,16 +206,12 @@ export async function resolveMatrixInboundContext(config: {
       groupSystemPrompt: isRoom ? groupSystemPrompt : undefined,
     },
     media: await toInboundMediaFactsWithMetadata(
-      media
-        ? [
-            {
-              path: media.path,
-              url: media.path,
-              contentType: media.contentType,
-              transcribed: preflightAudioTranscript !== undefined,
-            },
-          ]
-        : undefined,
+      mediaList.map((media) => ({
+        path: media.path,
+        url: media.path,
+        contentType: media.contentType,
+        transcribed: preflightAudioTranscript !== undefined,
+      })),
     ),
     messageId,
     timestamp: eventTs ?? undefined,

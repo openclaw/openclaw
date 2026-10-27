@@ -173,7 +173,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 - `textChunkLimit`: outbound chunk size in characters when `streaming.chunkMode: "length"`. Default: `4000`.
 - `streaming.chunkMode`: `"length"` (default, splits by character count) or `"newline"` (splits at line boundaries).
 - `historyLimit`: number of recent room messages included as `InboundHistory` when a room message triggers the agent. Falls back to `messages.groupChat.historyLimit`; effective default `0` (disabled).
-- `mediaMaxMb`: media size cap in MB for outbound sends and inbound processing. Default: `20`.
+- `mediaMaxMb`: media size cap in MB for outbound sends and inbound processing; applies to each attachment, including each gallery item. Default: `20`.
 
 ### Reaction settings
 
