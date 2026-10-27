@@ -10,12 +10,13 @@ import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 /** Display facts cannot outlive the transcript window they describe. */
 export function projectChatRowDisplay(
   snapshot: ChatSessionSnapshot,
+  start = 0,
 ): ChatSessionSnapshot["rowDisplay"] {
   if (!snapshot.rowDisplay) {
     return undefined;
   }
   const rows: NonNullable<ChatSessionSnapshot["rowDisplay"]> = {};
-  for (const message of snapshot.messages.slice(-80)) {
+  for (const message of snapshot.messages.slice(Math.max(start, snapshot.messages.length - 80))) {
     const id = readChatThreadMessageIdentity(message)?.id;
     if (id && snapshot.rowDisplay[id] && removePairingQrContent(message) === message) {
       rows[id] = snapshot.rowDisplay[id]!;

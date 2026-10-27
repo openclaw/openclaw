@@ -11,7 +11,7 @@ type ChatSessionSnapshot = {
   >;
 };
 type SessionSnapshotStore = {
-  write(key: string, snapshot: ChatSessionSnapshot): void;
+  write(key: string, snapshot: ChatSessionSnapshot, weight: number): void;
   flush(): Promise<void>;
 };
 
@@ -46,14 +46,14 @@ export async function persistColdLoadWarmState(input: {
   const store: SessionSnapshotStore | undefined = pane
     ? Reflect.get(pane, "sessionSnapshotStore")
     : undefined;
-  const cache: Map<string, { snapshot: ChatSessionSnapshot }> | undefined = pane
+  const cache: Map<string, { snapshot: ChatSessionSnapshot; weight: number }> | undefined = pane
     ? Reflect.get(pane, "chatMessagesBySession")
     : undefined;
   const entry = cache && [...cache].find(([key]) => key.endsWith(`\u0000${input.sessionKey}`));
   if (!store || !entry) {
     throw new Error("Warm reload requires the active transcript cache owner");
   }
-  store.write(entry[0], { ...entry[1].snapshot });
+  store.write(entry[0], { ...entry[1].snapshot }, entry[1].weight);
   await store.flush();
   const result = <T>(request: IDBRequest<T>) =>
     new Promise<T>((resolve, reject) => {

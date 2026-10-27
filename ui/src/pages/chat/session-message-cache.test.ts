@@ -77,6 +77,63 @@ describe("session message cache", () => {
     expect(persisted).toHaveBeenCalledTimes(2);
     expect(read()?.sessionState?.archived).toBe(false);
   });
+  it("publishes each admitted snapshot once with its pruned thumbnail weight", () => {
+    const cache: ChatMessageCache = new Map();
+    const host = { assistantAgentId: "main" };
+    const target = { sessionKey: "agent:main:thumbnails" };
+    const thumbnail = new Blob([new Uint8Array(256 * 1024)], { type: "image/webp" });
+    const image = { width: 480, height: 240, rendition: 480 as const, thumbnail };
+    const messages = Array.from({ length: 34 }, (_, index) => ({
+      role: "assistant",
+      content: "Synthetic image",
+      __openclaw: { id: `image-${index}`, seq: index + 1 },
+    }));
+    const write = vi.fn((_key: string, value: ChatSessionSnapshot, weight: number) => {
+      expect(weight).toBe(JSON.stringify(value).length);
+    });
+    observeChatCache(cache, { write, delete: vi.fn() });
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      target,
+      widgetSnapshot(messages, "session-1", {
+        rowDisplay: Object.fromEntries(
+          messages.map((message) => [message.__openclaw.id, { images: { source: image } }]),
+        ),
+      }),
+    );
+    expect(write).toHaveBeenCalledTimes(1);
+    const saved = readChatSessionSnapshot(cache, host, target)!;
+    expect(saved.messages).toBe(messages);
+    expect(
+      Object.values(saved.rowDisplay ?? {}).filter((row) => row.images?.source?.thumbnail),
+    ).toHaveLength(32);
+    appendChatMessageToCache(cache, host, target, {
+      role: "assistant",
+      content: "Following message",
+      __openclaw: { id: "following", seq: 35 },
+    });
+    expect(write).toHaveBeenCalledTimes(2);
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      { sessionKey: "agent:main:other" },
+      widgetSnapshot(
+        [{ role: "assistant", content: "Other", __openclaw: { id: "other" } }],
+        "two",
+        {
+          rowDisplay: { other: { images: { source: image } } },
+        },
+      ),
+    );
+    expect(write).toHaveBeenCalledTimes(4);
+    expect(
+      Object.values(readChatSessionSnapshot(cache, host, target)?.rowDisplay ?? {}).filter(
+        (row) => row.images?.source?.thumbnail,
+      ),
+    ).toHaveLength(31);
+  });
+
   it.each([
     { messageReactions: { reply: [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }] } },
     { composer: { id: "saved", provider: "example", name: "Saved", permissionMode: "full" } },
@@ -478,20 +535,31 @@ describe("session message cache", () => {
   });
 
   it("caps an oversized snapshot at a raw transcript boundary", () => {
-    const { write, read } = createCacheContext();
+    const { cache, write, read } = createCacheContext();
+    observeChatCache(cache, {
+      write: (_key, snapshot, weight) => expect(weight).toBe(JSON.stringify(snapshot).length),
+      delete: vi.fn(),
+    });
     const content = "x".repeat(4 * 1024 * 1024);
     write({
       messages: [
-        { content, __openclaw: { seq: 1 } },
-        { content, projection: "sibling", __openclaw: { seq: 1 } },
-        { content, __openclaw: { seq: 2 } },
+        { content, __openclaw: { id: "first", seq: 1 } },
+        { content, projection: "sibling", __openclaw: { id: "sibling", seq: 1 } },
+        { content, __openclaw: { id: "last", seq: 2 } },
       ],
+      rowDisplay: {
+        first: { links: { source: { title: "First linked task" } } },
+        last: { links: { source: { title: "Last linked task" } } },
+      },
       pagination: { hasMore: false, totalMessages: 2 },
       sessionId: "session-1",
     });
     const snapshot = read();
     expect(snapshot?.messages).toHaveLength(1);
     expect(snapshot?.pagination).toEqual({ hasMore: true, nextOffset: 1, totalMessages: 2 });
+    expect(snapshot?.rowDisplay).toEqual({
+      last: { links: { source: { title: "Last linked task" } } },
+    });
   });
 
   it("evicts whole least-recently-used snapshots when the global budget is exceeded", () => {
