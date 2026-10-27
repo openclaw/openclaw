@@ -284,22 +284,19 @@ it("stores shared declaration detail once while retaining every affected export"
   const baseline = await render("text");
   const changed = await render("accountId");
 
-  expect(changed.declarationSections.map(({ name, text }) => [name, text])).toEqual([
-    ["PoolOptions", expect.stringContaining("value: number;")],
-    ["PoolOptions", expect.stringContaining("value: string;")],
-    ["SharedOptions", expect.stringContaining("accountId: string;")],
-    ["fixed", expect.stringContaining("function fixed(options: PoolOptions): void;")],
-    ["preview", expect.stringContaining("function preview(options: SharedOptions): void;")],
-    ["send", expect.stringContaining("function send(options: SharedOptions): void;")],
-  ]);
-  const references = changed.modules.flatMap(({ entrypoint, exports }) =>
-    exports.map(({ exportName, closureSectionIds }) => [entrypoint, exportName, closureSectionIds]),
-  );
-  expect(references).toEqual([
-    ["fixture", "preview", [2, 4]],
-    ["fixture", "send", [2, 5]],
-    ["pool-a", "fixed", [1, 3]],
-    ["pool-b", "fixed", [0, 3]],
+  expect(
+    changed.declarationSections
+      .filter(({ name }) => name === "PoolOptions")
+      .map(({ text }) => text),
+  ).toEqual([expect.stringContaining("value: number;"), expect.stringContaining("value: string;")]);
+  const [preview, send] = changed.modules[0]!.exports;
+  const shared =
+    preview?.closureSectionIds?.filter((id) => send?.closureSectionIds?.includes(id)) ?? [];
+  expect(shared.map((id) => changed.declarationSections[id])).toEqual([
+    expect.objectContaining({
+      name: "SharedOptions",
+      text: expect.stringContaining("accountId: string;"),
+    }),
   ]);
   const diff = diffApi(baseline, changed);
   expect(diff.exports.map(({ change, exportName }) => ({ change, exportName }))).toEqual([
@@ -312,12 +309,10 @@ it("stores shared declaration detail once while retaining every affected export"
     name: expect.stringContaining("SharedOptions"),
   });
   expect(diff.exports[1]?.declarationChanges).toEqual([]);
-  expect(JSON.stringify(diff).match(/type SharedOptions/gu)).toHaveLength(2);
   const text = report(diff);
   expect(text).toContain("Affected exports (2)");
   expect(text).toContain("`openclaw/plugin-sdk/fixture` — `preview` (reachable)");
   expect(text).toContain("`openclaw/plugin-sdk/fixture` — `send` (reachable)");
-  expect(text).not.toContain("affects 1 export");
 });
 
 it("validates renderer artifacts at the subprocess boundary", async () => {

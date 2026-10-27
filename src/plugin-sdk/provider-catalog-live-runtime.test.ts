@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
+import assert from "node:assert/strict";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withProviderCatalogDiscoveryBudget } from "../plugins/provider-catalog-expiry.js";
 import { NON_ENV_SECRETREF_MARKER } from "./provider-auth-runtime.js";
@@ -42,6 +43,12 @@ function buildFetchGuard(body: unknown) {
     catalogResponse(body, release),
   );
   return { fetchGuard: fetchGuardMock, fetchGuardMock, release };
+}
+
+function requestHeaders(guard: ReturnType<typeof buildFetchGuard>["fetchGuardMock"], index = 0) {
+  const headers = guard.mock.calls[index]?.[0].init?.headers;
+  assert(headers instanceof Headers);
+  return headers;
 }
 
 describe("provider-catalog-live-runtime", () => {
@@ -116,9 +123,7 @@ describe("provider-catalog-live-runtime", () => {
     expect(request?.timeoutMs).toBeGreaterThan(0);
     expect(request?.timeoutMs).toBeLessThanOrEqual(1234);
     expect(Number.isInteger(request?.timeoutMs)).toBe(true);
-    const headers = request?.init?.headers;
-    expect(headers).toBeInstanceOf(Headers);
-    expect((headers as Headers).get("authorization")).toBe(`Bearer ${discoveryApiKey}`);
+    expect(requestHeaders(fetchGuardMock).get("authorization")).toBe(`Bearer ${discoveryApiKey}`);
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -142,10 +147,9 @@ describe("provider-catalog-live-runtime", () => {
       apiKey: undefined,
       discoveryApiKey: undefined,
     });
-    const headers = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
-    expect(headers).toBeInstanceOf(Headers);
-    expect((headers as Headers).get("authorization")).toBeNull();
-    expect((headers as Headers).get("x-api-key")).toBeNull();
+    const headers = requestHeaders(fetchGuardMock);
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("x-api-key")).toBeNull();
   });
 
   it("contextualizes paginated malformed JSON through the guarded network path", async () => {
@@ -193,8 +197,8 @@ describe("provider-catalog-live-runtime", () => {
 
   it("does not re-add credentials to redirected-origin pagination requests", async () => {
     const release = vi.fn(async () => undefined);
-    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
-      .fn()
+    const fetchGuardMock = vi
+      .fn<LiveModelCatalogFetchGuard>()
       .mockResolvedValueOnce(
         catalogResponse(
           { data: modelRows("model-a"), links: { next: "?page=2" } },
@@ -222,23 +226,21 @@ describe("provider-catalog-live-runtime", () => {
       }),
     ).resolves.toEqual(["model-a", "model-b"]);
 
-    const firstHeaders = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
-    const secondHeaders = fetchGuardMock.mock.calls[1]?.[0].init?.headers;
-    expect(firstHeaders).toBeInstanceOf(Headers);
-    expect(secondHeaders).toBeInstanceOf(Headers);
-    expect((firstHeaders as Headers).get("authorization")).toBe("Bearer provider-token");
-    expect((firstHeaders as Headers).get("chatgpt-account-id")).toBe("acct-1");
+    const firstHeaders = requestHeaders(fetchGuardMock);
+    const secondHeaders = requestHeaders(fetchGuardMock, 1);
+    expect(firstHeaders.get("authorization")).toBe("Bearer provider-token");
+    expect(firstHeaders.get("chatgpt-account-id")).toBe("acct-1");
     expect(fetchGuardMock.mock.calls[1]?.[0].url).toBe(
       "https://redirected.example.test/v1/models/?page=2",
     );
-    expect((secondHeaders as Headers).get("authorization")).toBeNull();
-    expect((secondHeaders as Headers).get("chatgpt-account-id")).toBeNull();
-    expect((secondHeaders as Headers).get("accept")).toBe("application/json");
+    expect(secondHeaders.get("authorization")).toBeNull();
+    expect(secondHeaders.get("chatgpt-account-id")).toBeNull();
+    expect(secondHeaders.get("accept")).toBe("application/json");
   });
 
   it("fails truncated live catalog pagination instead of returning partial rows", async () => {
     const release = vi.fn(async () => undefined);
-    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async ({ url }) => {
+    const fetchGuardMock = vi.fn<LiveModelCatalogFetchGuard>(async ({ url }) => {
       const page = Number(new URL(url).searchParams.get("after") ?? "0");
       return catalogResponse(
         {
@@ -277,8 +279,8 @@ describe("provider-catalog-live-runtime", () => {
     vi.useFakeTimers();
     try {
       const release = vi.fn(async () => undefined);
-      const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi
-        .fn()
+      const fetchGuardMock = vi
+        .fn<LiveModelCatalogFetchGuard>()
         .mockImplementationOnce(async () => {
           await vi.advanceTimersByTimeAsync(800);
           vi.setSystemTime(Date.now() + 2_000);
@@ -529,9 +531,7 @@ describe("provider-catalog-live-runtime", () => {
       }),
     ]);
     expect(fetchGuardMock.mock.calls[0]?.[0].url).toBe("https://provider.example.test/v1/models");
-    const headers = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
-    expect(headers).toBeInstanceOf(Headers);
-    expect((headers as Headers).get("authorization")).toBe("Bearer provider-key");
+    expect(requestHeaders(fetchGuardMock).get("authorization")).toBe("Bearer provider-key");
   });
 
   it("supports provider-specific model-list paths and headers", async () => {
@@ -558,14 +558,13 @@ describe("provider-catalog-live-runtime", () => {
     });
 
     expect(fetchGuardMock.mock.calls[0]?.[0].url).toBe("https://provider.example.test/v1/models");
-    const headers = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
-    expect(headers).toBeInstanceOf(Headers);
-    expect((headers as Headers).get("x-api-key")).toBe("provider-key");
-    expect((headers as Headers).get("anthropic-version")).toBe("2023-06-01");
+    const headers = requestHeaders(fetchGuardMock);
+    expect(headers.get("x-api-key")).toBe("provider-key");
+    expect(headers.get("anthropic-version")).toBe("2023-06-01");
   });
 
   it("does not send credentials to a fixed discovery endpoint after a base URL override", async () => {
-    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn();
+    const fetchGuardMock = vi.fn<LiveModelCatalogFetchGuard>();
     const proxyConfig = {
       api: "openai-completions" as const,
       baseUrl: "https://private-proxy.example.test/v1",

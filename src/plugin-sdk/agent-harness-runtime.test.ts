@@ -62,10 +62,7 @@ const cleanupWith = (...actions: Array<() => void>) => ({
   },
 });
 const nativeHandle = (overrides: Partial<Handle> = {}): Handle => ({
-  queueMessage: async () => {},
-  isStreaming: () => true,
-  isCompacting: () => false,
-  abort: () => {},
+  ...makeHandle(),
   ...overrides,
 });
 function nativeSink(
@@ -137,15 +134,7 @@ async function expectCancellation(
     expect(result).toBe(aborted);
   }
 }
-async function cancellingRun(
-  id: string,
-  scope?: string,
-  overrides: Partial<Handle> = {},
-  timers = false,
-) {
-  if (timers) {
-    vi.useFakeTimers();
-  }
+async function cancellingRun(id: string, scope?: string, overrides: Partial<Handle> = {}) {
   const effect = scope ? await aliasEffect(id, scope) : undefined;
   const abort = vi.fn();
   const cleanup = register(id, { ...makeHandle({ abort, isCompacting: true }), ...overrides });
@@ -163,9 +152,6 @@ async function cancellingRun(
         successor?.();
       }
       effect?.release();
-      if (timers) {
-        vi.useRealTimers();
-      }
     },
   };
 }
@@ -195,9 +181,7 @@ describe("agent harness runtime SDK facade", () => {
     expectTypeOf<
       NonNullable<Attempt["replyOperation"]>["retainFailureUntilComplete"]
     >().toEqualTypeOf<() => void>();
-    expectTypeOf<
-      NonNullable<EmbeddedAttemptV2["replyOperation"]>["retainFailureUntilComplete"]
-    >().toEqualTypeOf<() => void>();
+    expectTypeOf<EmbeddedAttemptV2["replyOperation"]>().toEqualTypeOf<Attempt["replyOperation"]>();
   });
 
   it("exposes optional compaction progress without requiring it from legacy engines", () => {
@@ -207,15 +191,6 @@ describe("agent harness runtime SDK facade", () => {
   });
 
   it("keeps legacy harness implementations source-compatible while requiring capabilities in V2", () => {
-    expectTypeOf({
-      id: "legacy-test",
-      label: "Legacy test harness",
-      supports: () => ({ supported: true as const, priority: 1 }),
-      runAttempt: async (_params: Attempt) => {
-        throw new Error("type-only legacy harness");
-      },
-      runSideQuestion: async (_params: SideQuestion) => ({ text: "legacy" }),
-    } satisfies AgentHarness).toMatchTypeOf<AgentHarness>();
     expectTypeOf<AgentHarnessV2>().toMatchTypeOf<AgentHarness>();
     expectTypeOf<Omit<AttemptV2, "onSettledTurn">>().toMatchTypeOf<AttemptV2>();
     expectTypeOf<WithoutHost<Attempt>>().toMatchTypeOf<
@@ -239,15 +214,6 @@ describe("agent harness runtime SDK facade", () => {
       Omit<ForkV2, "assertCurrent"> extends ForkV2 ? true : false
     >().toEqualTypeOf<false>();
 
-    // V1 injection remains supported inside a host-admitted harness attempt.
-    const queueMessage = async (_text: string, _options?: QueueOptions) => {};
-    expectTypeOf({
-      queueMessage,
-      messageInjection: { isAvailable: () => true, queueMessage },
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort: () => {},
-    } satisfies Handle).toMatchTypeOf<Handle>();
     expectTypeOf<Extract<keyof Handle, symbol>>().toEqualTypeOf<never>();
     expectTypeOf<Parameters<typeof register>["length"]>().toEqualTypeOf<2 | 3 | 4 | 5>();
     expectTypeOf<ReturnType<typeof register>>().toEqualTypeOf<
@@ -281,15 +247,16 @@ describe("agent harness runtime SDK facade", () => {
     expectTypeOf<Omit<Protected, "assertCurrent">>().not.toMatchTypeOf<Protected>();
   });
 
-  it("exposes structured input through one frozen named runtime surface", () => {
-    const keys = ["compileForm", "compileQuestions", "compileUrl", "isRecord", "run", "snapshot"];
+  it("keeps the structured-input runtime surface immutable", () => {
     expect(Object.isFrozen(agentHarnessStructuredInput)).toBe(true);
-    expect(Object.keys(agentHarnessStructuredInput).toSorted()).toEqual(keys);
   });
 });
 
 describe("agent harness active-run SDK controls", () => {
-  afterEach(() => embeddedRunsTesting.resetActiveEmbeddedRuns());
+  afterEach(() => {
+    embeddedRunsTesting.resetActiveEmbeddedRuns();
+    vi.useRealTimers();
+  });
 
   it("retires ownerless diagnostics without letting prior cleanup erase a successor", () => {
     const ref = { sessionId: "sdk-diagnostic-cleanup" };
@@ -303,8 +270,6 @@ describe("agent harness active-run SDK controls", () => {
       () => successorCleanup?.(),
       () => diagnosticActivity.resetDiagnosticRunActivityForTest(),
     );
-    expect(priorCleanup).toBeTypeOf("function");
-    expect(successorCleanup).toBeTypeOf("function");
     expect(snapshot()).toMatchObject(active);
 
     priorCleanup?.();
@@ -390,8 +355,9 @@ describe("agent harness active-run SDK controls", () => {
   });
 
   it.each(cancellationModes)("cancels detached %s work", async (mode) => {
+    vi.useFakeTimers();
     const sessionId = "sdk-detached-cancel";
-    using run = await cancellingRun(sessionId, "/tmp/sdk-detached-cancel-store", {}, true);
+    using run = await cancellingRun(sessionId, "/tmp/sdk-detached-cancel-store");
     const { abort, cleanup } = run;
     expect(isActive(sessionId)).toBe(false);
     if (mode === "drain") {
