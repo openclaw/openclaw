@@ -2,6 +2,7 @@
 
 import { beforeEach, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { buildModelProviderCards } from "./data.ts";
 import { card, mount, props, text } from "./view.test-support.tsx";
 
@@ -44,7 +45,7 @@ it("uses catalog evidence for short-lived OAuth without treating expiry alone as
     },
     container,
   );
-  expect(status()).toBe("Sign-in unavailable");
+  expect(status()).toBe("Expired");
   mount(
     { ...viewProps, cards: [{ ...providerCard, auth: { kind: "expired" }, profiles: [] }] },
     container,
@@ -122,3 +123,40 @@ it("does not prescribe OAuth sign-in for a rejected API key with excluded OAuth 
   expect(text(excluded)).toContain("Sign-in unavailable");
   expect(text(excluded)).not.toContain("Sign in again");
 });
+
+it.each(["missing_credential", "expired"] as const)(
+  "preserves selected static-token expiry beside an excluded OAuth %s reason",
+  (reasonCode) => {
+    const cards = buildModelProviderCards({
+      authStatus: {
+        ts: 1,
+        providers: [
+          {
+            provider: "example",
+            displayName: "Example",
+            status: "expiring",
+            profileOrder: ["example:token"],
+            profiles: [
+              { profileId: "example:token", type: "token", status: "expiring" },
+              {
+                profileId: "example:excluded",
+                type: "oauth",
+                status: reasonCode === "missing_credential" ? "missing" : "expired",
+                reasonCode,
+              },
+            ],
+          },
+        ],
+      },
+      models: [],
+      providerUsage: null,
+    });
+    const container = mount(props({ cards, configuredModels: [] }));
+    expect(text(container.querySelector(".provider-row__status"))).toBe("Expiring");
+    container.querySelector<HTMLButtonElement>(".provider-row__summary")!.click();
+    flush();
+    expect(text(container.querySelector('[data-profile-id="example:excluded"]'))).toContain(
+      reasonCode === "missing_credential" ? "Sign in again" : "Sign-in unavailable",
+    );
+  },
+);

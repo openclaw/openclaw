@@ -93,6 +93,23 @@ suite.define(() => {
             ],
           },
           {
+            provider: "example-selected",
+            displayName: "Example selected token",
+            status: "expiring",
+            expiry,
+            profileOrder: ["example-selected:token"],
+            profiles: [
+              { profileId: "example-selected:token", type: "token", status: "expiring", expiry },
+              {
+                profileId: "example-selected:excluded",
+                displayName: "Excluded account",
+                type: "oauth",
+                status: "missing",
+                reasonCode: "missing_credential",
+              },
+            ],
+          },
+          {
             provider: "example-token",
             displayName: "Example static token",
             status: "expired",
@@ -169,6 +186,13 @@ suite.define(() => {
             );
           }
         }
+        const selected = page.locator('[data-provider-id="example-selected"]');
+        expect((await selected.locator(".provider-row__status").textContent())?.trim()).toBe(
+          "Expiring",
+        );
+        expect(
+          await selected.locator('[data-profile-id="example-selected:excluded"]').textContent(),
+        ).toContain("Sign in again");
         const mixed = page.locator('[data-provider-id="example-mixed"]');
         expect((await mixed.locator(".provider-row__status").textContent())?.trim()).toBe(
           "Credentials rejected",

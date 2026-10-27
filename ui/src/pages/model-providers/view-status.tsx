@@ -38,12 +38,7 @@ const AUTH_STATUS: Record<
   "api-key": { kind: "muted", labelKey: "modelProviders.status.apiKey" },
 };
 
-function renderAuthStatus(card: ModelProviderCard) {
-  const problem = card.profiles.map(profileAuthProblem).find(Boolean);
-  if (problem) {
-    return <SettingsStatus kind="danger" label={t(problem)} />;
-  }
-  const auth = card.auth;
+function renderAuthStatus(auth: ModelProviderCard["auth"]) {
   if (!auth) {
     return undefined;
   }
@@ -112,13 +107,13 @@ export function renderProviderStatus(card: ModelProviderCard) {
     return <SettingsStatus kind="danger" label={t("modelProviders.status.denied")} />;
   }
   if (needsAuthAttention(card)) {
-    return renderAuthStatus(card);
+    return renderAuthStatus(card.auth);
   }
   if (card.catalogStatus === "unavailable") {
     return <SettingsStatus kind={"warn"} label={t("modelProviders.status.modelsUnavailable")} />;
   }
   if (!isProviderUsable(card)) {
-    return renderAuthStatus(card);
+    return renderAuthStatus(card.auth);
   }
   const verified = hasVerifiedProvider(card);
   const ready = verified && card.availableModelCount > 0;
