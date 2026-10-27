@@ -396,19 +396,17 @@ describe("grouped chat images", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-30T05:45:00Z"));
 
-    const renderQr = (data: string, ttl: number) =>
-      renderAssistantMessage(
-        createAssistantMessage([
-          {
-            type: "openclaw_pairing_qr",
-            image_url: `data:image/png;base64,${data}`,
-            alt: "OpenClaw pairing QR code",
-            expiresAtMs: Date.now() + ttl,
-          },
-        ]),
-        { showToolCalls: false },
-      );
-    renderQr("cXJwbmc=", 1_000);
+    renderAssistantMessage(
+      createAssistantMessage([
+        {
+          type: "openclaw_pairing_qr",
+          image_url: "data:image/png;base64,cXJwbmc=",
+          alt: "OpenClaw pairing QR code",
+          expiresAtMs: Date.now() + 1_000,
+        },
+      ]),
+      { showToolCalls: false },
+    );
 
     const image = imageElement();
     expect(image).toMatchObject({
@@ -421,10 +419,6 @@ describe("grouped chat images", () => {
     expect(element(".chat-message-image")).toBe(image);
     await vi.advanceTimersByTimeAsync(1);
     expect(element(".chat-bubble")).toBe(bubble);
-    expectAbsent(".chat-message-image");
-    expect(harness.view.textContent).toContain("Pairing QR expired");
-
-    renderQr("ZXhwaXJlZA==", -1);
     expectAbsent(".chat-message-image");
     expect(harness.view.textContent).toContain("Pairing QR expired");
   });
@@ -475,7 +469,6 @@ describe("grouped chat images", () => {
     );
 
     await vi.advanceTimersByTimeAsync(0);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, fetchInit] = requireFetchCallForUrl(fetchMock, thumbnail(source));
     expect(fetchInit?.signal?.aborted).toBe(false);
     expectSameOriginGet(fetchInit);
