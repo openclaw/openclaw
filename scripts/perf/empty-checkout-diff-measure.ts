@@ -200,7 +200,11 @@ registerHooks({ load(url, context, nextLoad) {
   const { loadCheckoutDiff } = await import("../../src/sessions/session-diff.js");
   const { drainGlobalSingletonLifecycleState } =
     await import("../../src/shared/global-singleton.js");
-  const input = { cwd: repo, scope: values.scope, summaryOnly: false };
+  const input: Parameters<typeof collectCheckoutDiff>[0] = {
+    cwd: repo,
+    scope: values.scope,
+    summaryOnly: false,
+  };
   const read = async () => {
     const result =
       values.boundary === "owner"
