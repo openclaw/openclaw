@@ -1,12 +1,9 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  createGatewayHarness,
-  createTestSessionCapability,
-  sessionsResult,
-} from "../../lib/sessions/session-capability.test-support.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SessionsListResult } from "../../api/types.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
@@ -200,15 +197,31 @@ describe("app-tool-stream fallback lifecycle handling", () => {
         model: "gpt-5.6-sol",
         modelOverrideSource: null,
       };
-      const result = sessionsResult([row]);
+      const result: SessionsListResult = {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [row],
+      };
       const pendingPatch = createDeferred<unknown>();
       const request = vi.fn(async (method: string) =>
         method === "sessions.patch" ? pendingPatch.promise : result,
       );
-      const { gateway } = createGatewayHarness(createTestGatewayClient(request), undefined, {
-        initial: { assistantAgentId: agentId, sessionKey: key },
-      });
-      const sessions = createTestSessionCapability(gateway, agentId);
+      const sessions = createTestSessionCapability(
+        {
+          snapshot: {
+            client: { request } as unknown as GatewayBrowserClient,
+            phase: "connected",
+            hello: null,
+            assistantAgentId: agentId,
+            sessionKey: key,
+          },
+          subscribe: () => () => undefined,
+          subscribeEvents: () => () => undefined,
+        },
+        agentId,
+      );
       const sessionHost = () =>
         createHost({
           sessionKey: key,
