@@ -2737,6 +2737,7 @@ src/infra/session-sqlite-migration-manifest.ts
 src/infra/sqlite-integrity-operation.ts
 src/infra/sqlite-migration-scoped-snapshot.ts
 src/infra/update-candidate-plugin-code-links.ts
+src/gateway/session-transcript-preview-bounds.ts
 src/agents/cli-backends.ts
 src/agents/plugin-text-transforms.ts
 src/agents/stream-iterator-wrapper.ts

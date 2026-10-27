@@ -193,6 +193,7 @@ export function readSessionActorBoundedHistory(
       totalEvents: active.length,
       transcriptMutationAt: version.updatedAt,
       truncated,
+      selectedEventCount: selectedRows.length,
       ...(!truncated && selectedRows.length === active.length ? { completeActivePath: true } : {}),
     },
   };
