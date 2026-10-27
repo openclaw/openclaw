@@ -34,6 +34,7 @@ import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession } from "./sdk.js";
 import { withSessionState } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
+import { text as textContent, toolResult } from "./session-message-fixtures.test-support.js";
 import { SettingsManager } from "./settings-manager.js";
 
 const streamMocks = { streamSimple: vi.fn() };
@@ -138,11 +139,6 @@ function createSessionManagerWithPersistedAssistantMessages(
   ]);
 }
 
-async function createSessionFromManager(sessionManager: SessionManager) {
-  const { session } = await createSdkSession({ sessionManager });
-  return session;
-}
-
 function createTool(overrides: Partial<ToolDefinition> = {}): ToolDefinition {
   return {
     name: "custom_lookup",
@@ -179,7 +175,8 @@ it.each([
   [[{ content: "previous answer" }, { content: null, stopReason: "aborted" }], "previous answer"],
 ] as const)("reads assistant text from malformed history: %j", async (messages, expected) => {
   const manager = createSessionManagerWithPersistedAssistantMessages([...messages]);
-  expect((await createSessionFromManager(manager)).getLastAssistantText()).toBe(expected);
+  const { session } = await createSdkSession({ sessionManager: manager });
+  expect(session.getLastAssistantText()).toBe(expected);
 });
 
 it("applies changing image settings to inline and deferred images without altering parent facts", async () => {
@@ -192,26 +189,17 @@ it("applies changing image settings to inline and deferred images without alteri
   ]);
   const messages: AgentMessage[] = [
     user,
-    {
-      role: "toolResult",
-      toolCallId: "read-image",
-      toolName: "read",
-      isError: false,
-      content: [image, image],
-      timestamp: 2,
-    },
+    { ...toolResult("", "read-image", 2), content: [image, image] },
     { role: "user", content: [image], timestamp: 3 },
   ];
   expect((await session.agent.convertToLlm(messages))[0]).toBe(user);
   settingsManager.applyOverrides({ images: { blockImages: true } });
   const blocked = await session.agent.convertToLlm(messages);
+  const disabled = textContent("Image reading is disabled.");
   expect(blocked.map((message) => message.content)).toEqual([
-    [
-      { type: "text", text: "Deferred attachment" },
-      { type: "text", text: "Image reading is disabled." },
-    ],
-    [{ type: "text", text: "Image reading is disabled." }],
-    [{ type: "text", text: "Image reading is disabled." }],
+    [...textContent("Deferred attachment"), ...disabled],
+    disabled,
+    disabled,
   ]);
   expect(readRuntimePromptMediaFacts(blocked[0]!)).toEqual([
     expect.objectContaining({ path: "/synthetic/private.png", hydrationSuppressed: true }),
@@ -226,7 +214,7 @@ it("applies changing image settings to inline and deferred images without alteri
 
 describe("AgentSession queued user turns", () => {
   it("preserves prompt image ownership across steered and follow-up messages", async () => {
-    const session = await createSessionFromManager(SessionManager.inMemory());
+    const { session } = await createSdkSession();
     const steer = vi
       .spyOn(session.agent, "admitSteeringMessage")
       .mockImplementation(() => () => {});
@@ -594,7 +582,7 @@ describe("SDK tool outcomes", () => {
               }
               if (toolName === "middleware_error") {
                 return {
-                  content: [{ type: "text", text: `middleware failed ${secret}` }],
+                  content: textContent(`middleware failed ${secret}`),
                   details: { status: "error", error: "middleware failed" },
                 };
               }

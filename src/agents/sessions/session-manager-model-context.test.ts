@@ -23,12 +23,13 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   afterModelRead,
+  assistantText,
   expectCancelledReads,
   sessionScope,
   withSessionState,
 } from "./session-manager-fixtures.test-support.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
-import { toolResult } from "./session-message-fixtures.test-support.js";
+import { text as textContent, toolResult } from "./session-message-fixtures.test-support.js";
 
 function readModel(...args: Parameters<typeof SessionManager.openModelContext>) {
   return SessionManager.openModelContext(...args).buildSessionContext();
@@ -38,22 +39,21 @@ async function readModelAsync(...args: Parameters<typeof SessionManager.openMode
   return (await SessionManager.openModelContextAsync(...args)).buildSessionContext();
 }
 
+const contents = (messages: ReturnType<typeof readModel>["messages"]) =>
+  messages.map((message) => ("content" in message ? message.content : undefined));
+
 function withoutPayload<T>(markers: string[], read: () => T): T {
   const parse = JSON.parse;
   let bytes = 0;
-  const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+  using _ = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
     if (typeof text === "string" && markers.some((marker) => text.includes(marker))) {
       bytes += text.length;
     }
     return parse(text, reviver);
   });
-  try {
-    const result = read();
-    expect(bytes).toBe(0);
-    return result;
-  } finally {
-    spy.mockRestore();
-  }
+  const result = read();
+  expect(bytes).toBe(0);
+  return result;
 }
 
 function fingerprint(scope: Parameters<typeof SessionManager.open>[0]) {
@@ -127,9 +127,7 @@ it("acquires a long sparse context with bounded queries and preserved message or
       parentId: index === 0 ? null : `message-${index - 1}`,
       timestamp: new Date(index).toISOString(),
       message: {
-        role: "user",
-        content: `message ${index}`,
-        timestamp: index,
+        ...makeUserMessage(`message ${index}`, index),
         excludeFromContext: index % 17 === 0,
       },
     }));
@@ -139,22 +137,17 @@ it("acquires a long sparse context with bounded queries and preserved message or
     ]);
     const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
     const prototype = Object.getPrototypeOf(database.db.prepare("SELECT 1")) as StatementSync;
-    const iterate = vi.spyOn(prototype, "iterate");
-    const get = vi.spyOn(prototype, "get");
-    try {
-      const context = SessionManager.openModelContext(scope).buildSessionContext();
-      expect(context.messages.map((message) => "content" in message && message.content)).toEqual(
-        messages
-          .filter((entry) => !entry.message.excludeFromContext)
-          .map((entry) => entry.message.content),
-      );
-      // Protect acquisition cost independently of the exact chunk size or query implementation.
-      expect(iterate.mock.calls.length + get.mock.calls.length).toBeLessThan(20);
-      expect(await readModelAsync(scope)).toEqual(context);
-    } finally {
-      iterate.mockRestore();
-      get.mockRestore();
-    }
+    using iterate = vi.spyOn(prototype, "iterate");
+    using get = vi.spyOn(prototype, "get");
+    const context = SessionManager.openModelContext(scope).buildSessionContext();
+    expect(contents(context.messages)).toEqual(
+      messages
+        .filter((entry) => !entry.message.excludeFromContext)
+        .map((entry) => entry.message.content),
+    );
+    // Protect acquisition cost independently of the exact chunk size or query implementation.
+    expect(iterate.mock.calls.length + get.mock.calls.length).toBeLessThan(20);
+    expect(await readModelAsync(scope)).toEqual(context);
   });
 });
 
@@ -211,11 +204,9 @@ it.each([
       }
       if (scenario === "leaf") {
         source.branch(old);
-        const inactive = source.appendMessage({
-          role: "user",
-          content: marker + "abandoned".repeat(4096),
-          timestamp: 4,
-        });
+        const inactive = source.appendMessage(
+          makeUserMessage(marker + "abandoned".repeat(4096), 4),
+        );
         source.appendLeafControl({
           targetId: result,
           appendParentId: inactive,
@@ -244,8 +235,7 @@ it.each([
       const detached = withoutPayload([marker], () => SessionManager.openModelContext(scope));
       const context = detached.buildSessionContext();
       expect(visible(context.messages)).toEqual(visible(expected.messages));
-      expect(context.model).toEqual(expected.model);
-      expect(context.thinkingLevel).toBe("high");
+      expect([context.model, context.thinkingLevel]).toEqual([expected.model, "high"]);
       if (scenario === "reset") {
         const retainedUser = context.messages.find(
           (message) => message.role === "user" && message.content === "kept",
@@ -323,9 +313,7 @@ it.each([
           : undefined;
       const message = {
         ...(role === "assistant"
-          ? makeAgentAssistantMessage({
-              content: [{ type: "text", text: "synthetic retained text" }],
-            })
+          ? assistantText("synthetic retained text")
           : role === "user"
             ? makeUserMessage("synthetic retained text", 1)
             : toolResult("synthetic retained text", "paired", 1)),
@@ -338,13 +326,10 @@ it.each([
       } else if (boundary === "compaction") {
         source.appendCompaction("summary", pairedCall ?? retained, 100);
       }
-      const ordinaryExcluded = {
-        role: "user" as const,
-        content: "ordinary-excluded:" + "x".repeat(256 * 1024),
-        timestamp: 2,
+      source.appendMessage({
+        ...makeUserMessage("ordinary-excluded:" + "x".repeat(256 * 1024), 2),
         excludeFromContext: true,
-      };
-      source.appendMessage(ordinaryExcluded);
+      });
       source.appendMessage(makeUserMessage("synthetic current text", 3));
       const expected = source.buildSessionContext();
       expect(
@@ -358,9 +343,7 @@ it.each([
       );
       expect(fingerprint(scope)).toBe(before);
       expect(actual.model).toEqual(expected.model);
-      expect(
-        actual.messages.map((entry) => ("content" in entry ? entry.content : undefined)),
-      ).toEqual(expected.messages.map((entry) => ("content" in entry ? entry.content : undefined)));
+      expect(contents(actual.messages)).toEqual(contents(expected.messages));
     });
   },
 );
@@ -406,16 +389,14 @@ it("keeps durable model reads non-persisting", async () => {
         .get(scope.sessionId)?.n,
     ).toBe(0);
     const parse = JSON.parse;
-    const parseSpy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-      if (typeof text === "string" && text.includes('"role":"user"')) {
-        throw new Error("synthetic decode failure");
-      }
-      return parse(text, reviver);
-    });
-    try {
+    {
+      using _ = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+        if (typeof text === "string" && text.includes('"role":"user"')) {
+          throw new Error("synthetic decode failure");
+        }
+        return parse(text, reviver);
+      });
       expect(() => SessionManager.openModelContext(scope)).toThrow("synthetic decode failure");
-    } finally {
-      parseSpy.mockRestore();
     }
     expect(database.db.isTransaction).toBe(false);
     expect(readModel(scope)).toEqual(source.buildSessionContext());
@@ -470,7 +451,7 @@ it.each([
         await upsertSessionEntryCore(otherScope, { sessionId: otherScope.sessionId, updatedAt: 1 });
         mutationSource = SessionManager.open(otherScope);
       }
-      const spy = afterModelRead(() => {
+      using _ = afterModelRead(() => {
         if (mutation === "rewrite" && !admitted) {
           const original = source.getEntry(first);
           assert(original?.type === "message", "missing first message");
@@ -499,19 +480,15 @@ it.each([
           makeUserMessage(admitted ? "replacement" : "after", admitted ? 3 : 2),
         );
       }, true);
-      try {
-        const pending = SessionManager.openModelContextAsync(scope, options);
-        if (mutation === "append" || mutation === "other-session") {
-          expect((await pending).buildSessionContext()).toEqual(expected);
-        } else {
-          await expect(pending).rejects.toThrow(
-            admitted
-              ? "Current-turn transcript admission"
-              : "Session transcript changed during context read",
-          );
-        }
-      } finally {
-        spy.mockRestore();
+      const pending = SessionManager.openModelContextAsync(scope, options);
+      if (mutation === "append" || mutation === "other-session") {
+        expect((await pending).buildSessionContext()).toEqual(expected);
+      } else {
+        await expect(pending).rejects.toThrow(
+          admitted
+            ? "Current-turn transcript admission"
+            : "Session transcript changed during context read",
+        );
       }
     });
   },
@@ -524,11 +501,7 @@ it.each([false, true])(
       const source = SessionManager.open(scope);
       source.appendMessage(makeUserMessage("first", 1));
       const marker = "synthetic-unread-context:";
-      source.appendMessage({
-        role: "user",
-        content: marker + "x".repeat(256 * 1024),
-        timestamp: 2,
-      });
+      source.appendMessage(makeUserMessage(marker + "x".repeat(256 * 1024), 2));
       let retained: Iterator<unknown> | undefined;
       withoutPayload([marker], () => {
         const read = () =>
@@ -620,7 +593,7 @@ it.each(["reset", "compaction"])(
       };
       source.appendMessage(
         makeAgentAssistantMessage({
-          content: [{ type: "text", text: "kept answer" }],
+          content: textContent("kept answer"),
           model: "gpt-5.6-luna",
           providerReplay: checkpoint,
         }),
@@ -633,7 +606,7 @@ it.each(["reset", "compaction"])(
       const valid = { ...checkpoint, data: "valid-post-boundary-checkpoint" };
       source.appendMessage(
         makeAgentAssistantMessage({
-          content: [{ type: "text", text: "new answer" }],
+          content: textContent("new answer"),
           model: "gpt-5.6-luna",
           providerReplay: valid,
         }),

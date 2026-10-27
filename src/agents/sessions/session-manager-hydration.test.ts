@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement as awaitGate } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import * as configEnv from "../../config/config-env-vars.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -178,12 +179,7 @@ function pauseRead(
     release: () => release.resolve(),
     restore: () => spy.mockRestore(),
     wait: (pending: Promise<unknown>, message: string) =>
-      Promise.race([
-        entered.promise,
-        pending.then(() => {
-          throw new Error(message);
-        }),
-      ]),
+      awaitGate(entered.promise, pending, message),
   };
 }
 
@@ -262,12 +258,11 @@ it.each(["canonical", "shared"])(
           () => cold.reloadPersistedTranscriptAsync(),
         );
         try {
-          await Promise.race([
+          await awaitGate(
             reloading,
-            retirementEntered.promise.then(() => {
-              throw new Error("Manager reload cleanup waits on its own queued writer");
-            }),
-          ]);
+            retirementEntered.promise,
+            "Manager reload cleanup waits on its own queued writer",
+          );
         } finally {
           releaseRetirement.resolve();
           await Promise.allSettled([reloading, following]);
@@ -457,12 +452,11 @@ it.each(["hydration", "current-turn"] as const)(
       const predecessors = Promise.all(predecessorReads);
       const reads: Promise<unknown>[] = [...predecessorReads, predecessors];
       try {
-        await Promise.race([
+        await awaitGate(
           entered.promise,
-          predecessors.then(() => {
-            throw new Error("Hydration predecessors settled before filling the worker pool");
-          }),
-        ]);
+          predecessors,
+          "Hydration predecessors settled before filling the worker pool",
+        );
         expectQueue();
         const controller = new AbortController();
         const reason = new Error("queued hydration cancelled");
