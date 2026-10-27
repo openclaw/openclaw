@@ -149,7 +149,7 @@ it("returns undefined when liveModelSwitchPending is false", async () => {
 
   expect(await mod.shouldSwitchToLiveModel(makeShouldSwitchParams())).toBeUndefined();
   expect(state.loadSessionStoreMock).toHaveBeenCalledWith({
-    hydrateSkillPromptRefs: false,
+    projection: "list",
     clone: false,
     readConsistency: "latest",
     sessionKey: "main",
