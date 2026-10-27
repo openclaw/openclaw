@@ -382,6 +382,64 @@ describe("SQLite trajectory runtime store", () => {
     expect(readRows()).toEqual([existing, ...events].map((event, seq) => ({ event, seq })));
   });
 
+  it.each(["UTF-8", "UTF-16le", "UTF-16be"])(
+    "reads only the expired prefix when a full %s window advances",
+    async (encoding) => {
+      await seedEncoding(encoding);
+      const database = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: encoding === "UTF-8" ? sqlitePath() : storePath,
+      });
+      const event = createTrajectoryEvent({ type: "rolling-window🦞" });
+      const bytes = eventBytes([event]);
+      const append = (
+        events: TrajectoryEvent[],
+        windowFacts?: { nextSeq: number; retainedBytes: number },
+      ) =>
+        appendSqliteTrajectoryRuntimeEventsWithWriter(
+          {
+            sessionId: "session-1",
+            maxRuntimeBytes: bytes * 128,
+            events: events.map(serialized),
+            windowFacts,
+          },
+          database,
+          (operationLabel, write) =>
+            runOpenClawAgentWriteTransaction(
+              write,
+              { agentId: "main", path: database.path },
+              { operationLabel },
+            ),
+        ).receipt.windowFacts;
+      const initial = append(Array.from({ length: 128 }, () => event));
+      const native = requireNativeSqliteDatabase(database.db);
+      const prepare = native.prepare.bind(native);
+      let visited = 0;
+      const spy = vi.spyOn(native, "prepare").mockImplementation((sql) => {
+        const statement = prepare(sql);
+        if (sql.includes('from "trajectory_runtime_events"')) {
+          const iterate = statement.iterate.bind(statement);
+          statement.iterate = function* (...parameters) {
+            for (const row of iterate(...parameters)) {
+              visited++;
+              yield row;
+            }
+          };
+        }
+        return statement;
+      });
+      try {
+        expect(append([event], initial)).toEqual({ nextSeq: 129, retainedBytes: bytes * 128 });
+      } finally {
+        spy.mockRestore();
+      }
+      expect(readRows()).toEqual(
+        Array.from({ length: 128 }, (_, index) => ({ event, seq: index + 1 })),
+      );
+      expect(visited).toBe(1);
+    },
+  );
+
   it.each(["0", "1969-12-31T23:59:59.000Z"])(
     "stores Date.parse-compatible trajectory timestamp %s",
     (timestamp) => {

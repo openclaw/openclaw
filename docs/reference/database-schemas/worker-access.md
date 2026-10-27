@@ -1046,6 +1046,10 @@ or transcript changes, so it does not invalidate unrelated actor facts. Durable
 runtime appends always use the existing agent execution worker. Transcript
 appends, content rewrites, rewind, compaction, archive/restore, deletion, and unknown
 writes retain their session-scoped invalidation or committed actor update.
+When an append has committed window facts, rolling-window overflow reads only
+the oldest events it must expire through the existing session/sequence index.
+A cold window still reconstructs its retained suffix; global retention keeps its
+separate summary and deletion lifecycle. Byte limits and persisted ordering are unchanged.
 
 Activity-summary batches also reuse the actor's complete retained linear context
 at its committed write token, including canonical model snapshots and runtime-context
