@@ -8,10 +8,69 @@ import { recordSessionParticipantFromWorker } from "./session-accessor.sqlite-pa
 import { participantRecord, withActor } from "./session-actor-worker.test-support.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { readSessionMembershipFactsInDatabase } from "./session-membership-facts.js";
+import type { SessionParticipantIdentity } from "./session-participant-identity.js";
 
 const participant = (id: string, promptedAt: number) => ({
   identity: { type: "agent" as const, id },
   promptedAt,
+});
+
+it("shares identical membership participants within one worker reply without retaining stale facts", async () => {
+  await withActor((f) => {
+    const agent: SessionParticipantIdentity = { type: "agent", id: "peer" };
+    const remote: SessionParticipantIdentity = {
+      type: "remote",
+      id: "peer",
+      pluginId: "synthetic",
+      domain: "chat",
+      idKind: "user",
+    };
+    const cohorts = [
+      [agent, remote],
+      [agent, remote],
+      [remote, agent],
+      [agent, { ...remote, pluginId: "another" }],
+    ];
+    const keys = cohorts.map((_, index) => `agent:main:membership-${index}`);
+    const scope = (sessionKey: string) => ({
+      agentId: "main",
+      path: f.database.path,
+      sessionKey,
+    });
+    runSqliteImmediateTransactionSync(f.database.db, () => {
+      for (const [index, identities] of cohorts.entries()) {
+        const key = keys[index]!;
+        writeSessionEntry(f.database, key, { sessionId: `membership-${index}`, updatedAt: 1 });
+        for (const [order, identity] of identities.entries()) {
+          recordSessionParticipantFromWorker(f.database, scope(key), {
+            identity,
+            promptedAt: 10 * (index + 1) + order,
+          });
+        }
+      }
+      recordSessionParticipantFromWorker(f.database, scope(keys[1]!), {
+        identity: agent,
+        promptedAt: 100,
+      });
+    });
+    const read = () =>
+      structuredClone(readSessionMembershipFactsInDatabase(f.database, keys)).facts;
+    const first = read();
+    expect(first[0]![3]).toEqual({
+      participants: [{ identity: agent }, { identity: remote }],
+      participantCount: 2,
+    });
+    expect(first[1]![3]).toBe(first[0]![3]);
+    expect(first[2]![3]).not.toBe(first[0]![3]);
+    expect(first[3]![3]).not.toBe(first[0]![3]);
+    runSqliteImmediateTransactionSync(f.database.db, () =>
+      recordSessionParticipantFromWorker(f.database, scope(keys[0]!), participant("new", 200)),
+    );
+    const next = read();
+    expect(next[0]![3].participantCount).toBe(3);
+    expect(next[1]![3]).toEqual(first[0]![3]);
+    expect(next[1]![3]).not.toBe(first[0]![3]);
+  });
 });
 
 it.each(["same-store", "cross-store"])(
