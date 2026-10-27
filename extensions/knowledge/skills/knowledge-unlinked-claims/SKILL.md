@@ -132,10 +132,11 @@ The **Review unlinked claims** scribe runs this review unattended. Its
 messages follow [scribe setup](references/scribe-setup.md) with id
 `unlinked-review`; it is always ongoing.
 
-- **Setup:** declare the automation with schedule `45 3 * * *` (daily 03:45 in
-  the received timezone, after the nightly maintenance pass). When
-  `maintenance.reviewJobId` is not set, maintenance also queues this job, found
-  by its declaration key, after any pass that leaves private claims unlinked.
+- **Setup:** declare the automation with schedule `45 3 * * 0` (Sundays 03:45
+  in the received timezone). Maintenance queues this job, found by its
+  declaration key, after each nightly pass that leaves private claims unlinked
+  (unless `maintenance.reviewJobId` names another job); the weekly schedule only
+  catches what maintenance missed, without a daily turn that finds nothing.
 - **Scheduled run:** work through steps 1 to 6, and check the residue again
   before stopping, since claims saved during the run are part of the same
   backlog. With nothing to do, say so in one sentence. Otherwise give the
