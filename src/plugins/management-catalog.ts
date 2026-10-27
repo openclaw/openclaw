@@ -134,7 +134,7 @@ export function resolvePluginActivityIconSource(params: {
   const iconPath = override ?? manifest.activityIconPath;
   return iconPath ? { kind: "file", path: iconPath, rootPath: manifest.rootDir } : undefined;
 }
-export function getManagedPluginCache(metadata?: PluginMetadataSnapshot) {
+function getManagedPluginCache(metadata?: PluginMetadataSnapshot) {
   if (metadata) {
     return getPluginMetadataSnapshotCache(metadata);
   }
