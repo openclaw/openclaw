@@ -254,6 +254,21 @@ describe("gateway lock namespaces", () => {
       identity: "01234567-89ab-cdef-0123-456789abcdef",
       pidNsInode: "4026532609",
     });
+    // Termux reports android but exposes the same Linux kernel identities.
+    platform.mockReturnValue("android");
+    boot.mockRestore();
+    const read = fsSync.readFileSync.bind(fsSync);
+    vi.spyOn(fsSync, "readFileSync").mockImplementation((file, options) =>
+      file === "/proc/sys/kernel/random/boot_id"
+        ? "FEDCBA98-7654-3210-FEDC-BA9876543210\n"
+        : read(file, options),
+    );
+    expect(readGatewayLockProcessNamespace()).toEqual({
+      host: os.hostname(),
+      platform: "linux",
+      identity: "fedcba98-7654-3210-fedc-ba9876543210",
+      pidNsInode: "4026532609",
+    });
   });
 
   it("uses native process identity for local Windows owners without a boot probe", async () => {
