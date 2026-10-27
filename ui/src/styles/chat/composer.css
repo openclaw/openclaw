@@ -306,6 +306,11 @@
   flex: 0 0 var(--chat-composer-menu-icon);
 }
 
+.agent-chat__attach-menu-option {
+  min-height: 44px;
+  font-size: 13px;
+}
+
 .agent-chat__attach-menu-option svg {
   stroke-width: 1.5px;
 }

@@ -159,7 +159,7 @@ suite.define(() => {
         }
         for (const [width, height] of widths) {
           await page.setViewportSize({ width, height });
-          const mediaChooser = await choose(page, "media");
+          const mediaChooser = await choose(page, cameraFallback ? "media" : "file");
           await expectPickerAtPlusButton(mediaChooser);
           await mediaChooser.setFiles([]);
           await trigger.click();
@@ -249,8 +249,20 @@ suite.define(() => {
           await trigger.press("Enter");
           await attachmentOption(page, "file").waitFor({ state: "visible" });
           expect((await items.allTextContents()).map((text) => text.trim())).toEqual(
-            fixture.single ? ["Media", "Attach…"] : ["Camera", "Media", "File"],
+            fixture.single ? ["Add attachment…"] : ["Camera", "Media", "File"],
           );
+          if (fixture.single) {
+            await expect
+              .poll(() =>
+                page
+                  .locator(".agent-chat__capability-menu-panel:visible")
+                  .getAttribute("data-phase"),
+              )
+              .toBe("open");
+            const rowHeight = (await items.first().boundingBox())!.height;
+            expect(rowHeight).toBeGreaterThanOrEqual(44);
+            expect(rowHeight).toBeLessThan(64);
+          }
           await page.keyboard.press("Escape");
           await attachmentOption(page, "file").waitFor({ state: "hidden" });
         }

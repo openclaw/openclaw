@@ -124,11 +124,9 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
     const mediaOption = menu.attachments.imagesOnly
       ? (["photo", "image", t("chat.composer.attachPhoto")] as const)
       : (["media", "image", t("chat.composer.attachMedia")] as const);
+    // Safari already offers library, camera, and files in its native source menu.
     for (const [id, icon, label] of useNativeAttachmentSourceMenu()
-      ? ([
-          ...(!menu.attachments.imagesOnly ? [mediaOption] : []),
-          ["file", "paperclip", t("chat.composer.attach")],
-        ] as const)
+      ? ([["file", "paperclip", t("chat.composer.attach")]] as const)
       : ([
           ["camera", "camera", t("chat.composer.cameraInput")],
           mediaOption,
@@ -147,7 +145,7 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
     entries.push({
       kind: "group",
       id: "attachment-sources",
-      class: "agent-chat__attachment-sources",
+      class: sources.length === 1 ? undefined : "agent-chat__attachment-sources",
       items: sources,
     });
   }
