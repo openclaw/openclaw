@@ -650,3 +650,55 @@ struct DashboardNativeBrowserFaviconTests {
             requestBrowserProfileImportOffer: { _ in false })
     }
 }
+
+@Suite(.serialized, .timeLimit(.minutes(1)))
+@MainActor
+struct DashboardNativeBrowserInspectTests {
+    @Test func `inspection reports the real element when the page replaces the DOM lookups`() async throws {
+        let server = try await DashboardHTTPFixture.start(
+            html: """
+            <!doctype html><html><body style="margin:0">
+            <div id="real" style="width:600px;height:400px">Real content</div>
+            <script>
+            window.hookCalls = 0;
+            document.elementFromPoint = () => {
+              window.hookCalls += 1;
+              const fake = document.createElement("button");
+              fake.id = "spoofed";
+              return fake;
+            };
+            const getAttribute = Element.prototype.getAttribute;
+            Element.prototype.getAttribute = function (name) {
+              window.hookCalls += 1;
+              return getAttribute.call(this, name);
+            };
+            </script></body></html>
+            """,
+            contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
+        defer { server.stop() }
+        let controller = DashboardWindowController(
+            url: server.url("/control/"),
+            auth: DashboardWindowAuth.unauthenticated,
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        try controller.nativeBrowser.open(tabId: "mac-page", url: server.url("/page"), sessionKey: "")
+        try controller.nativeBrowser.present(
+            scope: "panel", tabId: "mac-page", rect: DashboardBrowserRect(x: 0, y: 0, width: 600, height: 400),
+            visible: true)
+        let page = try #require(controller.nativeBrowser.webView(for: "mac-page"))
+        try await TestWait.state("hooked page") { !page.isLoading && page.url?.path == "/page" }
+        let pageWorld = try await page.evaluateJavaScript("(\(BrowserInspectScript.source))(10, 10)") as? [String: Any]
+        #expect(pageWorld?["id"] as? String == "spoofed")
+        _ = try await page.evaluateJavaScript("window.hookCalls = 0")
+
+        let reply = try await controller.nativeBrowser.inspect(tabId: "mac-page", x: 10, y: 10)
+
+        let node = try #require(reply["node"] as? [String: Any])
+        #expect(node["id"] as? String == "real")
+        #expect(node["tag"] as? String == "div")
+        let hookCalls = try await page.evaluateJavaScript("window.hookCalls") as? Int
+        #expect(hookCalls == 0)
+    }
+}
