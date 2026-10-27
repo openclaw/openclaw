@@ -10,7 +10,6 @@ import {
   bottom,
   layoutBox,
   right,
-  twoFrames,
   exactButton,
   polledFocus,
   polledAttribute,
@@ -236,9 +235,47 @@ suite.define(() => {
         microphonePicker.evaluate((node) => node.getBoundingClientRect().width);
       await expect.poll(pickerWidth).toBe(0);
       await page.emulateMedia({ reducedMotion: "no-preference" });
+      // Browser round trips can outlast the hover dwell. Sample the actual
+      // width transition at 125 ms, inside the intended 250 ms delay.
+      const hoverDelay = await microphonePicker.evaluateHandle((picker) => {
+        const shell = picker.closest(".chat-talk-input-picker");
+        if (!shell) {
+          throw new Error("Missing microphone picker shell");
+        }
+        return {
+          proof: new Promise<{ delay: number; width: number }>((resolve, reject) => {
+            const onTransition = (event: Event) => {
+              if (
+                !(event instanceof TransitionEvent) ||
+                event.target !== shell ||
+                event.propertyName !== "width"
+              ) {
+                return;
+              }
+              shell.removeEventListener("transitionrun", onTransition);
+              const transition = shell
+                .getAnimations()
+                .find(
+                  (animation) =>
+                    animation instanceof CSSTransition && animation.transitionProperty === "width",
+                );
+              if (!transition?.effect) {
+                reject(new Error("Missing microphone width transition"));
+                return;
+              }
+              const delay = transition.effect.getTiming().delay ?? 0;
+              transition.currentTime = 125;
+              resolve({ delay, width: picker.getBoundingClientRect().width });
+            };
+            shell.addEventListener("transitionrun", onTransition);
+          }),
+        };
+      });
       await voice.hover();
-      await twoFrames(page);
-      expect(await pickerWidth()).toBe(0);
+      const dwell = await hoverDelay.evaluate(({ proof }) => proof);
+      await hoverDelay.dispose();
+      expect(dwell.delay).toBeGreaterThan(0);
+      expect(dwell.width).toBe(0);
       await expect.poll(pickerWidth).toBeGreaterThanOrEqual(27.5);
       const [voiceBeforeHold, pickerBeforeHold] = await Promise.all([
         voice.boundingBox(),
