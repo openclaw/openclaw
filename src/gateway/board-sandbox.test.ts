@@ -26,23 +26,6 @@ const hostPolicy = (csp?: Parameters<typeof buildHost>[0]) =>
 const directives = (policy: string | undefined) =>
   policy?.split(";").map((entry) => entry.trim().split(/\s+/u));
 
-it("reuses the fixed sandbox policy without reparsing origins and observes grant changes", () => {
-  const widget = document("pending");
-  const fixed = buildBoardWidgetSandboxPath(widget);
-  const parse = vi.spyOn(URL, "parse");
-  try {
-    expect(buildBoardWidgetSandboxPath(widget)).toBe(fixed);
-    expect(buildBoardWidgetSandboxPath({ grantState: "none" })).toBe(fixed);
-    expect(parse).not.toHaveBeenCalled();
-    widget.grantState = "granted";
-    expect(sandbox(widget).csp?.connectDomains).toEqual(widget.declared.netOrigins);
-    widget.grantState = "pending";
-    expect(buildBoardWidgetSandboxPath(widget)).toBe(fixed);
-  } finally {
-    parse.mockRestore();
-  }
-});
-
 it("permits HTTPS and generated media without granting other network access", () => {
   const { policies } = sandbox(document("pending"));
   const html = buildWidgetDocument("Video", '<video src="https://media.test/v.mp4"></video>');
@@ -73,7 +56,13 @@ it("normalizes media-only sources without widening resource or connection source
 
 it("grants API access only to the declared widget origins", () => {
   const origins = ["https://api.test", "https://s.test:8443", "https://[2001:db8::1]:9443"];
-  const { csp, policies } = sandbox(document("granted", origins));
+  const widget = document("pending", origins);
+  const fixed = buildBoardWidgetSandboxPath(widget);
+  using parse = vi.spyOn(URL, "parse");
+  expect(buildBoardWidgetSandboxPath(widget)).toBe(fixed);
+  expect(parse).not.toHaveBeenCalled();
+  widget.grantState = "granted";
+  const { csp, policies } = sandbox(widget);
 
   expect(csp).toEqual({
     connectDomains: origins,
@@ -84,6 +73,8 @@ it("grants API access only to the declared widget origins", () => {
   for (const policy of policies) {
     expect(policy).toContain(`connect-src ${origins.join(" ")}`);
   }
+  widget.grantState = "pending";
+  expect(buildBoardWidgetSandboxPath(widget)).toBe(fixed);
 });
 
 it("preserves registered resource origins alongside the widget CDNs without granting fetch", () => {
