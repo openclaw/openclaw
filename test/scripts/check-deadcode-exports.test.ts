@@ -270,8 +270,9 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
   });
 
   it("models only Vite runner members consumed by the build", () => {
-    const source = `const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(
-  path.join(here, "src/app-route-paths.ts"), options);
+    const source = `const { module: routes, dependencies: routeDependencies } = await runnerImport<
+  typeof import("./src/app-route-paths.ts")
+>(routePath, options);
 const offlineShell = { routes: routes.APP_ROUTE_PATHS };`;
     const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
     expect(knipConfig.workspaces["."].project).toContain("config/knip-vite-consumers.mjs!");

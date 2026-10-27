@@ -2,8 +2,10 @@ import { isCurrentPluginMetadataSnapshotRuntimeGeneration } from "../../../plugi
 import { loadPluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { getPreparedModelRuntimeBorrowedSnapshot } from "../../prepared-model-runtime-generation-scope.js";
-import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
-import { preparedModelRuntimeConfigsMatch } from "../../prepared-model-runtime.owner.js";
+import {
+  preparedModelRuntimeConfigsMatch,
+  type PreparedModelRuntimeSnapshot,
+} from "../../prepared-model-runtime.js";
 import {
   resolveCanonicalRunRuntimeWorkspace,
   resolveRootedRunRuntimeWorkspace,
@@ -50,6 +52,7 @@ export function resolvePreparedRuntimeWorkspaces(params: RunEmbeddedAgentParamsW
   const borrowedWorkspace =
     params.preparedModelRuntimeMode !== "isolated-read-only" &&
     borrowed?.workspaceDir &&
+    // Runs carry config projections; match by model-runtime fingerprint like lease borrowing.
     params.config !== undefined &&
     preparedModelRuntimeConfigsMatch(borrowed.config, params.config) &&
     borrowed.agentId === requestedWorkspaceResolution.agentId &&

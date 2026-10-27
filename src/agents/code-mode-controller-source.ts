@@ -350,7 +350,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       }
       rememberBridgeError(
         error,
-        code === "invalid_input" || code === "input_contract" ? "invalid_input" : "internal_error",
+        code === "invalid_input" || code === "input_contract" || code === "store_range" || code === "store_type"
+          ? "invalid_input" : "internal_error",
       );
       entry.reject(error);
     }
@@ -416,6 +417,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
         : error.code === "store_type" ? GuestTypeError : undefined;
       if (!Constructor) throw error;
       const typed = new Constructor(error.message);
+      typed.code = error.code;
       typed.stack = error.stack;
       const bridgeCode = bridgeFailureCode(error);
       if (bridgeCode) rememberBridgeError(typed, bridgeCode);
