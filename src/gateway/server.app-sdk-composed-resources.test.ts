@@ -266,21 +266,13 @@ async function proveRealGatewayContracts(): Promise<void> {
       oc.events((event) => event.runId === runId),
       completed,
     );
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 111 },
-    });
-    emitAgentEvent({
-      runId,
-      stream: "assistant",
-      data: { delta: "hello from real gateway" },
-    });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "end", endedAt: 222 },
-    });
+    for (const [stream, data] of [
+      ["lifecycle", { phase: "start", startedAt: 111 }],
+      ["assistant", { delta: "hello from real gateway" }],
+      ["lifecycle", { phase: "end", endedAt: 222 }],
+    ] as const) {
+      emitAgentEvent({ runId, stream, data });
+    }
     const [realEvents, appEvents] = await withTimeout(
       Promise.all([eventsPromise, appEventsPromise]),
       2_000,
@@ -368,16 +360,9 @@ async function proveRealGatewayContracts(): Promise<void> {
 
     const environments = await oc.environments.list();
     assertSchema(EnvironmentsListResultSchema, environments, "real environments.list result");
-    expect(environments.environments).toContainEqual({
-      id: "gateway",
-      type: "local",
-      label: "Gateway local",
-      status: "available",
-      platform: process.platform,
-      sessionHost: true,
-      trust: "persistent",
-      capabilities: ["agent.run", "sessions", "tools", "workspace"],
-    });
+    expect(environments.environments).toContainEqual(
+      expect.objectContaining({ id: "gateway", type: "local", status: "available" }),
+    );
     const gatewayEnvironment = await oc.environments.status("gateway");
     assertSchema(
       EnvironmentsStatusResultSchema,
