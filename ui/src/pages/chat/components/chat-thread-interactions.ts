@@ -364,6 +364,50 @@ function toggleTouchMessageMeta(event: PointerEvent, messageElements: Iterable<H
   }
 }
 
+export function handleTranscriptDoubleClick(event: MouseEvent) {
+  const thread = event.currentTarget;
+  const selection = window.getSelection();
+  if (
+    !(thread instanceof HTMLElement) ||
+    !selection ||
+    selection.isCollapsed ||
+    selection.rangeCount !== 1 ||
+    (event.target instanceof Element &&
+      event.target.closest("a, button, input, select, textarea, summary, [contenteditable]"))
+  ) {
+    return;
+  }
+  const anchor = selection.anchorNode;
+  const element = anchor instanceof Element ? anchor : anchor?.parentElement;
+  const bubble = element?.closest(".chat-bubble");
+  if (!bubble || !thread.contains(bubble)) {
+    return;
+  }
+  const range = selection.getRangeAt(0);
+  if (bubble.contains(range.startContainer) && bubble.contains(range.endContainer)) {
+    return;
+  }
+  // A second-click drag can extend the browser's word selection into another
+  // message. Bound only that gesture; ordinary drag and Select All remain native.
+  const backwards =
+    selection.anchorNode === range.endContainer && selection.anchorOffset === range.endOffset;
+  const bounded = range.cloneRange();
+  const contents = bubble.ownerDocument.createRange();
+  contents.selectNodeContents(bubble);
+  if (bounded.compareBoundaryPoints(Range.START_TO_START, contents) < 0) {
+    bounded.setStart(contents.startContainer, contents.startOffset);
+  }
+  if (bounded.compareBoundaryPoints(Range.END_TO_END, contents) > 0) {
+    bounded.setEnd(contents.endContainer, contents.endOffset);
+  }
+  selection.setBaseAndExtent(
+    backwards ? bounded.endContainer : bounded.startContainer,
+    backwards ? bounded.endOffset : bounded.startOffset,
+    backwards ? bounded.startContainer : bounded.endContainer,
+    backwards ? bounded.startOffset : bounded.endOffset,
+  );
+}
+
 export function handleTranscriptPointerUp(
   event: PointerEvent,
   props: TranscriptInteractionProps,

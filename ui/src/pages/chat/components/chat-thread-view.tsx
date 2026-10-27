@@ -40,6 +40,7 @@ import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import {
   getTranscriptState,
   handleTranscriptContextMenu,
+  handleTranscriptDoubleClick,
   handleTranscriptPointerUp,
   registerTranscriptElement,
   type ChatThreadProps,
@@ -274,6 +275,7 @@ export function ChatThread(input: {
             input.props.onOpenSessionLink?.(sessionTarget);
           }
         }}
+        onDblClick={handleTranscriptDoubleClick}
         onContextMenu={(event) =>
           handleTranscriptContextMenu(
             event,

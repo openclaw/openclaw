@@ -297,6 +297,10 @@ restored text thread. Reattach an image when asking a later question about it.
 A failed question keeps its image for **Retry** while the current pane is retained;
 reloading the page discards that failed input.
 
+Double-click selections stay inside the message where they started, including
+when you drag on the second click. Ordinary drag selection and Select All can
+still span multiple messages.
+
 Highlight text and choose **Add to chat** to attach a comment to the main
 composer. The optional comment field starts on one line, grows to five lines,
 then scrolls internally. Confirm or press Enter to save; Shift+Enter adds a line.
