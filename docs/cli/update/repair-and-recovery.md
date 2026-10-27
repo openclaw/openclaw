@@ -1110,7 +1110,9 @@ or snapshots. They do not make immutable releases eligible for `update cleanup`;
 Doctor's `<database>.pre-startup-migration-<id>.bak` groups, including their
 `.scoped.bak` members, become eligible only
 after Doctor verifies migration completion and update history records a successful
-update that started later. Until then they appear as protected. Changed backups remain blocked; unrecorded backups remain protected unless
+update that started later. Until then they appear as protected. An external
+supervisor's native update counts once the supervisor accepts it with `update finish`.
+Releases it swaps without `update migrate` are not recorded. Changed backups remain blocked; unrecorded backups remain protected unless
 explicitly selected as described below; cleanup never infers permission
 to delete from their filenames. Keep these files with your pre-upgrade backups
 while you still need to restore the matching database generation.

@@ -47,6 +47,15 @@ existing standing-grant references to the restricted definition. Stale captures
 stay stale; runtime authorization, conversation identity and revocation checks
 remain required. The candidate must contain this repair.
 
+An external supervisor's accepted native update (`update migrate`, then
+`update finish`) is recorded in update history as a succeeded run that started
+at migration. A later recorded update therefore lets `openclaw update cleanup`
+retire rollback originals that earlier migrations left, while the latest
+update's own originals stay protected. The candidate must contain this change;
+the supervisor needs none. A failed history write leaves a retry warning in the
+`update finish` result. Releases swapped without the native protocol are not
+recorded.
+
 Background discovery failures are logged and retried at the next scheduled check.
 Gateway shutdown cancellation stays quiet; unexpected scheduled task failures
 are reported by the scheduler without restarting the Gateway.
