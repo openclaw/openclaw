@@ -13,7 +13,7 @@ const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
 
-export type PerplexityTransport = "search_api" | "chat_completions";
+export type PerplexityTransport = "search_api" | "agent_api" | "chat_completions";
 export type PerplexityConfig = {
   apiKey?: string;
   baseUrl?: string;
@@ -81,9 +81,12 @@ export function resolvePerplexityRuntime(
     apiKey: auth.apiKey,
     baseUrl,
     model: normalizeOptionalString(perplexity?.model) || DEFAULT_PERPLEXITY_MODEL,
-    transport:
-      hasPerplexityLegacyOverride(perplexity) || !isDirectPerplexityBaseUrl(baseUrl)
-        ? "chat_completions"
-        : "search_api",
+    transport: hasPerplexityLegacyOverride(perplexity)
+      ? isDirectPerplexityBaseUrl(baseUrl)
+        ? "agent_api"
+        : "chat_completions"
+      : isDirectPerplexityBaseUrl(baseUrl)
+        ? "search_api"
+        : "chat_completions",
   };
 }

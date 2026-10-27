@@ -8,7 +8,9 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
   return { ...actual, withTrustedWebSearchEndpoint: endpointMock };
 });
 
+import { createPerplexityResearchTool } from "./perplexity-research-tool.js";
 import { createPerplexityWebSearchProvider } from "./perplexity-web-search-provider.js";
+import { executePerplexityResearch } from "./perplexity-web-search-provider.runtime.js";
 
 const openRouterApiKeyEnv = ["OPENROUTER_API", "KEY"].join("_");
 const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
@@ -37,6 +39,8 @@ type RoutingCase = {
   fallbackEnvVar?: string;
   url: string;
   model?: string;
+  transport?: "search_api" | "agent_api" | "chat_completions";
+  agentEffort?: "fast" | "low" | "medium" | "high";
   overrides?: { baseUrl?: string; model?: string };
 };
 type ValidationCase = {
@@ -62,13 +66,40 @@ function searchResponse(...names: string[]) {
   };
 }
 
+function agentResponse(content: string, citations: string[] = []) {
+  return {
+    status: "completed",
+    output: [
+      { type: "search_results", results: citations.map((url) => ({ url })) },
+      { type: "message", content: [{ type: "output_text", text: content }] },
+    ],
+  };
+}
+
 function createTool(structured: boolean, apiKey = directKey, cacheTtlMinutes?: number) {
-  const webSearch = { apiKey, ...(structured ? {} : { baseUrl: directUrl }) };
+  const webSearch = { apiKey, ...(structured ? {} : { baseUrl: routerUrl }) };
   const tool = createPerplexityWebSearchProvider().createTool({
     config: { plugins: { entries: { perplexity: { config: { webSearch } } } } },
     searchConfig: { cacheTtlMinutes },
   });
   assert(tool, "Expected tool definition");
+  return tool;
+}
+
+function createAgentTool(cacheTtlMinutes?: number) {
+  const webSearch = { apiKey: directKey, baseUrl: directUrl };
+  const provider = createPerplexityWebSearchProvider();
+  const config = { plugins: { entries: { perplexity: { config: { webSearch } } } } };
+  const tool = provider.createTool({
+    config,
+    searchConfig: { cacheTtlMinutes },
+    runtimeMetadata: {
+      providerSource: "configured",
+      diagnostics: [],
+      perplexityTransport: "agent_api",
+    },
+  });
+  assert(tool, "Expected Agent API tool definition");
   return tool;
 }
 
@@ -265,19 +296,29 @@ it.each([
 });
 
 it.each`
-  name                                                   | key                           | source         | fallbackEnvVar         | url                                             | model                    | overrides
-  ${"unrecognized configured key"}                       | ${enterprisePerplexityApiKey} | ${"config"}    | ${undefined}           | ${`${directUrl}/search`}                        | ${undefined}             | ${undefined}
-  ${"configured key ahead of native environment key"}    | ${openRouterPerplexityApiKey} | ${"config"}    | ${perplexityApiKeyEnv} | ${`${routerUrl}/chat/completions`}              | ${defaultModel}          | ${undefined}
-  ${"native environment source ahead of key prefix"}     | ${openRouterPerplexityApiKey} | ${"env"}       | ${perplexityApiKeyEnv} | ${`${directUrl}/search`}                        | ${undefined}             | ${undefined}
-  ${"OpenRouter environment source ahead of key prefix"} | ${directKey}                  | ${"env"}       | ${openRouterApiKeyEnv} | ${`${routerUrl}/chat/completions`}              | ${defaultModel}          | ${undefined}
-  ${"resolved OpenRouter SecretRef"}                     | ${openRouterPerplexityApiKey} | ${"secretRef"} | ${undefined}           | ${`${routerUrl}/chat/completions`}              | ${defaultModel}          | ${undefined}
-  ${"explicit direct base URL"}                          | ${directKey}                  | ${"config"}    | ${undefined}           | ${`${directUrl}/chat/completions`}              | ${"sonar-pro"}           | ${{ baseUrl: ` ${directUrl}/ ` }}
-  ${"explicit remote base URL"}                          | ${directKey}                  | ${"config"}    | ${undefined}           | ${"https://search.example/v1/chat/completions"} | ${defaultModel}          | ${{ baseUrl: "https://search.example/v1/" }}
-  ${"explicit model"}                                    | ${directKey}                  | ${"config"}    | ${undefined}           | ${`${directUrl}/chat/completions`}              | ${"sonar-reasoning-pro"} | ${{ model: " perplexity/sonar-reasoning-pro " }}
-  ${"blank overrides"}                                   | ${directKey}                  | ${"config"}    | ${undefined}           | ${`${directUrl}/search`}                        | ${undefined}             | ${{ baseUrl: " ", model: " " }}
+  name                                                   | key                           | source         | fallbackEnvVar         | url                                             | transport             | model           | agentEffort  | overrides
+  ${"unrecognized configured key"}                       | ${enterprisePerplexityApiKey} | ${"config"}    | ${undefined}           | ${`${directUrl}/search`}                        | ${"search_api"}       | ${undefined}    | ${undefined} | ${undefined}
+  ${"configured key ahead of native environment key"}    | ${openRouterPerplexityApiKey} | ${"config"}    | ${perplexityApiKeyEnv} | ${`${routerUrl}/chat/completions`}              | ${"chat_completions"} | ${defaultModel} | ${undefined} | ${undefined}
+  ${"native environment source ahead of key prefix"}     | ${openRouterPerplexityApiKey} | ${"env"}       | ${perplexityApiKeyEnv} | ${`${directUrl}/search`}                        | ${"search_api"}       | ${undefined}    | ${undefined} | ${undefined}
+  ${"OpenRouter environment source ahead of key prefix"} | ${directKey}                  | ${"env"}       | ${openRouterApiKeyEnv} | ${`${routerUrl}/chat/completions`}              | ${"chat_completions"} | ${defaultModel} | ${undefined} | ${undefined}
+  ${"resolved OpenRouter SecretRef"}                     | ${openRouterPerplexityApiKey} | ${"secretRef"} | ${undefined}           | ${`${routerUrl}/chat/completions`}              | ${"chat_completions"} | ${defaultModel} | ${undefined} | ${undefined}
+  ${"explicit direct base URL"}                          | ${directKey}                  | ${"config"}    | ${undefined}           | ${`${directUrl}/v1/agent`}                      | ${"agent_api"}        | ${undefined}    | ${"low"}     | ${{ baseUrl: ` ${directUrl}/ ` }}
+  ${"explicit remote base URL"}                          | ${directKey}                  | ${"config"}    | ${undefined}           | ${"https://search.example/v1/chat/completions"} | ${"chat_completions"} | ${defaultModel} | ${undefined} | ${{ baseUrl: "https://search.example/v1/" }}
+  ${"explicit model"}                                    | ${directKey}                  | ${"config"}    | ${undefined}           | ${`${directUrl}/v1/agent`}                      | ${"agent_api"}        | ${undefined}    | ${"medium"}  | ${{ model: " perplexity/sonar-reasoning-pro " }}
+  ${"blank overrides"}                                   | ${directKey}                  | ${"config"}    | ${undefined}           | ${`${directUrl}/search`}                        | ${"search_api"}       | ${undefined}    | ${undefined} | ${{ baseUrl: " ", model: " " }}
 `(
   "routes $name consistently through metadata, schema and execution",
-  async ({ key, source, url, fallbackEnvVar, overrides, model, name }: RoutingCase) => {
+  async ({
+    key,
+    source,
+    url,
+    fallbackEnvVar,
+    overrides,
+    model,
+    transport,
+    agentEffort,
+    name,
+  }: RoutingCase) => {
     await withEnvAsync(
       {
         [perplexityApiKeyEnv]: undefined,
@@ -298,8 +339,8 @@ it.each`
           config,
           resolvedCredential: { value: key, source, fallbackEnvVar },
         });
-        const chat = model !== undefined;
-        expect(metadata?.perplexityTransport).toBe(chat ? "chat_completions" : "search_api");
+        const synthesized = transport !== "search_api";
+        expect(metadata?.perplexityTransport).toBe(transport);
         if (source === "secretRef") {
           provider.setConfiguredCredentialValue?.(config, key);
         }
@@ -309,20 +350,28 @@ it.each`
         });
         assert(tool, "Expected Perplexity tool");
         const schema = expect(tool.parameters);
-        (chat ? schema.not : schema).toHaveProperty("properties.country");
-        mockResponse(chat ? chatResponse() : { results: [] });
+        (synthesized ? schema.not : schema).toHaveProperty("properties.country");
+        mockResponse(
+          transport === "agent_api"
+            ? agentResponse("Grounded answer")
+            : transport === "chat_completions"
+              ? chatResponse()
+              : { results: [] },
+        );
         const query = `routing ${name}`;
         await expect(tool.execute({ query })).resolves.toMatchObject(
-          chat
+          synthesized
             ? { content: expect.stringContaining("Grounded answer") }
             : { count: 0, results: [] },
         );
         expect(request().url).toBe(url);
         expect(new Headers(request().init.headers).get("authorization")).toBe(`Bearer ${key}`);
         expect(requestBody()).toEqual(
-          chat
-            ? { model, messages: [{ role: "user", content: query }] }
-            : { query, max_results: 5 },
+          transport === "agent_api"
+            ? { effort: agentEffort, input: query }
+            : transport === "chat_completions"
+              ? { model, messages: [{ role: "user", content: query }] }
+              : { query, max_results: 5 },
         );
       },
     );
@@ -337,4 +386,177 @@ it.each<[boolean, Record<string, unknown>, string]>([
   await expect(createTool(structured).execute({ query: "validation", ...args })).rejects.toThrow(
     message,
   );
+});
+
+it("maps Agent API freshness, citations, and count-insensitive caching", async () => {
+  mockResponse(agentResponse("Grounded answer", ["https://example.test/source"]));
+  const tool = createAgentTool();
+  const query = "recent OpenClaw changes";
+
+  const first = await tool.execute({ query, count: 1, freshness: "week" });
+  const repeated = await tool.execute({ query, count: 9, freshness: "week" });
+
+  expect(first).toMatchObject({
+    provider: "perplexity",
+    content: expect.stringContaining("Grounded answer"),
+    citations: ["https://example.test/source"],
+  });
+  expect(repeated).toEqual({ ...first, cached: true });
+  expect(endpointMock).toHaveBeenCalledOnce();
+  expect(request().url).toBe(`${directUrl}/v1/agent`);
+  expect(requestBody()).toEqual({
+    effort: "low",
+    input: query,
+    tools: [{ type: "web_search", filters: { search_recency_filter: "week" } }],
+  });
+});
+
+it("preserves explicit Agent model IDs and requires grounded search", async () => {
+  const webSearch = { apiKey: directKey, model: "perplexity/sonar" };
+  const provider = createPerplexityWebSearchProvider();
+  const config = { plugins: { entries: { perplexity: { config: { webSearch } } } } };
+  const tool = provider.createTool({
+    config,
+    searchConfig: {},
+    runtimeMetadata: {
+      providerSource: "configured",
+      diagnostics: [],
+      perplexityTransport: "agent_api",
+    },
+  });
+  assert(tool, "Expected Agent API tool definition");
+  mockResponse(agentResponse("Grounded answer"));
+
+  await tool.execute({ query: "agent model routing" });
+
+  expect(requestBody()).toEqual({
+    model: "perplexity/sonar",
+    input: "agent model routing",
+    instructions:
+      "You must use the web_search tool before answering. Answer only from source-grounded search results.",
+    tool_choice: { type: "web_search" },
+    tools: [{ type: "web_search" }],
+  });
+});
+
+it.each(["failed", "incomplete", "in_progress", "queued", "cancelled", undefined])(
+  "rejects and does not cache Agent API status %s",
+  async (status) => {
+    mockResponse({
+      ...agentResponse("Do not accept this text"),
+      status,
+      ...(status === "failed" ? { error: { message: "agent execution failed" } } : {}),
+    });
+    mockResponse(agentResponse("Recovered grounded answer"));
+    const tool = createAgentTool();
+    const args = { query: `Agent API status ${status ?? "missing"}` };
+
+    await expect(tool.execute(args)).rejects.toThrow(
+      status === "failed"
+        ? 'Perplexity Agent API returned status "failed": agent execution failed.'
+        : `Perplexity Agent API returned status ${JSON.stringify(status ?? "missing")}.`,
+    );
+    await expect(tool.execute(args)).resolves.toMatchObject({
+      content: expect.stringContaining("Recovered grounded answer"),
+    });
+    expect(endpointMock).toHaveBeenCalledTimes(2);
+  },
+);
+
+it.each([true, false])(
+  "cancels Agent API requests (alreadyCanceled=%s)",
+  async (alreadyCanceled) => {
+    endpointMock.mockImplementation(async ({ signal }: { signal?: AbortSignal }) => {
+      assert(signal, "Perplexity Agent API request lost caller cancellation");
+      return await new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason as Error), { once: true });
+      });
+    });
+    const controller = new AbortController();
+    const reason = new Error("Perplexity caller canceled");
+    if (alreadyCanceled) {
+      controller.abort(reason);
+    }
+    const result = createAgentTool().execute(
+      { query: `Agent API cancellation ${alreadyCanceled}` },
+      { signal: controller.signal },
+    );
+    if (alreadyCanceled) {
+      expect(endpointMock).not.toHaveBeenCalled();
+    } else {
+      await vi.waitFor(() => expect(endpointMock).toHaveBeenCalledOnce());
+      controller.abort(reason);
+    }
+    await expect(result).rejects.toThrow(reason.message);
+  },
+);
+
+it("defaults perplexity_research to high effort and a 300-second timeout", async () => {
+  mockResponse(agentResponse("Grounded research", ["https://example.test/source"]));
+
+  await expect(
+    executePerplexityResearch(
+      { query: "Research OpenClaw" },
+      { perplexity: { apiKey: directKey } },
+    ),
+  ).resolves.toEqual({
+    effort: "high",
+    content: expect.stringContaining("Grounded research"),
+    citations: ["https://example.test/source"],
+  });
+  expect(request().url).toBe(`${directUrl}/v1/agent`);
+  expect(requestBody()).toEqual({ effort: "high", input: "Research OpenClaw" });
+  expect(endpointMock).toHaveBeenCalledWith(
+    expect.objectContaining({ timeoutSeconds: 300 }),
+    expect.any(Function),
+  );
+});
+
+it("preserves the configured global timeout through perplexity_research", async () => {
+  mockResponse(agentResponse("Grounded research"));
+  const config = {
+    tools: { web: { search: { timeoutSeconds: 17 } } },
+    plugins: { entries: { perplexity: { config: { webSearch: { apiKey: directKey } } } } },
+  };
+  const tool = createPerplexityResearchTool({ config } as never, { config } as never);
+
+  await tool.execute("call-1", { query: "Research OpenClaw" });
+
+  expect(endpointMock).toHaveBeenCalledWith(
+    expect.objectContaining({ timeoutSeconds: 17 }),
+    expect.any(Function),
+  );
+});
+
+it("passes explicit xhigh effort and freshness to perplexity_research", async () => {
+  mockResponse(agentResponse("Fresh research"));
+
+  await executePerplexityResearch(
+    { query: "Recent OpenClaw changes", effort: "xhigh", freshness: "month" },
+    { perplexity: { apiKey: directKey } },
+  );
+
+  expect(requestBody()).toEqual({
+    effort: "xhigh",
+    input: "Recent OpenClaw changes",
+    tools: [{ type: "web_search", filters: { search_recency_filter: "month" } }],
+  });
+});
+
+it.each([
+  {
+    name: "OpenRouter credential",
+    args: { query: "Research OpenClaw" },
+    config: { perplexity: { apiKey: openRouterPerplexityApiKey } },
+    error: "missing_perplexity_agent_api_key",
+  },
+  {
+    name: "invalid effort",
+    args: { query: "Research OpenClaw", effort: "maximum" },
+    config: { perplexity: { apiKey: directKey } },
+    error: "invalid_effort",
+  },
+])("rejects perplexity_research $name without a request", async ({ args, config, error }) => {
+  await expect(executePerplexityResearch(args, config)).resolves.toMatchObject({ error });
+  expect(endpointMock).not.toHaveBeenCalled();
 });

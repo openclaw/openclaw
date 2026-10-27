@@ -28,8 +28,25 @@
       "help": "Optional Sonar/OpenRouter model override."
     }
   },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "webSearch.apiKey",
+          "expected": "string",
+          "ownerKind": "capability"
+        }
+      ]
+    }
+  },
   "contracts": {
-    "webSearchProviders": ["perplexity"]
+    "webSearchProviders": ["perplexity"],
+    "tools": ["perplexity_research"]
+  },
+  "toolMetadata": {
+    "perplexity_research": {
+      "optional": true
+    }
   },
   "configGroups": [
     {

@@ -56,7 +56,7 @@ export function createPerplexityWebSearchProvider(): WebSearchProviderPlugin {
         },
       };
 
-      if (schemaTransport !== "chat_completions") {
+      if (schemaTransport !== "chat_completions" && schemaTransport !== "agent_api") {
         properties.country = {
           type: "string",
           description: "Native Perplexity Search API only. 2-letter country code.",
@@ -96,9 +96,11 @@ export function createPerplexityWebSearchProvider(): WebSearchProviderPlugin {
 
       return {
         description:
-          schemaTransport === "chat_completions"
-            ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
-            : "Search the web using Perplexity. Runtime routing decides between native Search API and Sonar chat-completions compatibility. Structured filters are available on the native Search API path.",
+          schemaTransport === "agent_api"
+            ? "Search the web using Perplexity Agent API. Returns an AI-synthesized answer with citations from web-grounded search."
+            : schemaTransport === "chat_completions"
+              ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
+              : "Search the web using Perplexity. Runtime routing chooses the native Search API, Agent API compatibility, or Sonar chat completions. Structured filters are available on the native Search API path.",
         parameters: { type: "object", properties, required: ["query"] },
         execute: async (args, context) => {
           context?.signal?.throwIfAborted();

@@ -2108,6 +2108,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/perplexity:
+    dependencies:
+      typebox:
+        specifier: 1.4.1
+        version: 1.4.1
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
