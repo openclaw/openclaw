@@ -38,7 +38,7 @@ export function createTeamScaleCounts(options: {
     transcriptMessages:
       (options.offlineFirstPage ? 9 : options.transcriptMessages) ??
       (options.largeSnapshot ? 1_100 : TEAM_SCALE_COUNTS.transcriptMessages),
-    inlineWidgets: options.offlineFirstPage ? 1 : TEAM_SCALE_COUNTS.inlineWidgets,
+    inlineWidgets: options.offlineFirstPage ? 0 : TEAM_SCALE_COUNTS.inlineWidgets,
   };
 }
 

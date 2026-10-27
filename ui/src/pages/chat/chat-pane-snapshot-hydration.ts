@@ -32,18 +32,8 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
       this.ownsChatSnapshot(target) &&
       areUiSessionKeysEquivalent(state.sessionKey, sessionKey) &&
       resolveChatSnapshotKey(state, target) === cacheKey;
-    const restoreBoard = async (storedBoard: ChatSessionSnapshot["board"]) => {
-      let { board = storedBoard } = readChatSessionSnapshot(cache, state, target) ?? {};
-      if (!board) {
-        return;
-      }
-      const gateway = this.context.gateway.snapshot;
-      if (gateway.client && gateway.phase !== "connected") {
-        // Let connect leave before the cached dashboard's first render.
-        await gateway.client.initialConnectSent;
-        // A live board or removal can supersede the cached receipt while waiting.
-        ({ board = storedBoard } = readChatSessionSnapshot(cache, state, target) ?? {});
-      }
+    const restoreBoard = (storedBoard: ChatSessionSnapshot["board"]) => {
+      const { board = storedBoard } = readChatSessionSnapshot(cache, state, target) ?? {};
       if (isCurrent() && board) {
         this.resolveBoardProvider();
         this.boardProviderLease?.restoreSnapshot(board.snapshot, board.receivedAtMs);
@@ -54,18 +44,18 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
         return;
       }
       const cached = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
-      if (requests.acceptedHistory || !cached) {
-        return;
-      }
-      applyChatCacheSnapshot(state, cached);
-      cacheChatSessionSnapshot(cache, state, target, { ...cached, messages: state.chatMessages });
-      this.syncSessionReactions();
-      if (cached.progressCard !== undefined) {
-        const progressTarget = this.resolveChatReadTarget();
-        if (progressTarget) {
-          this.progressCards.hydrate(progressTarget, cached.progressCard);
+      if (!requests.acceptedHistory && cached) {
+        applyChatCacheSnapshot(state, cached);
+        cacheChatSessionSnapshot(cache, state, target, { ...cached, messages: state.chatMessages });
+        this.syncSessionReactions();
+        if (cached.progressCard !== undefined) {
+          const progressTarget = this.resolveChatReadTarget();
+          if (progressTarget) {
+            this.progressCards.hydrate(progressTarget, cached.progressCard);
+          }
         }
       }
+      restoreBoard(storedSnapshot?.board);
     };
     const hydration: InitialChatSnapshotHydration = {
       titlePending: true,
@@ -80,16 +70,8 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
       adoptSnapshot(ready);
     }
     hydration.promise = (
-      ready
-        ? Promise.resolve(ready)
-        : this.sessionSnapshotStore
-            .read(cacheKey, (board) => void restoreBoard(board))
-            .then((snapshot) => {
-              adoptSnapshot(snapshot);
-              return snapshot;
-            })
+      ready ? Promise.resolve() : this.sessionSnapshotStore.read(cacheKey).then(adoptSnapshot)
     )
-      .then((snapshot) => restoreBoard(snapshot?.board))
       .catch(() => undefined)
       .finally(() => {
         hydration.titlePending = false;

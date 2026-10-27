@@ -2,7 +2,23 @@
 export function warmReloadProbe(
   input: { rowFacts?: boolean; avatars?: boolean } = {},
   samplePaneChrome?: (at: number) => void,
+  readPageSignature?: typeof import("./control-ui-warm-page-signature.ts").readWarmPageSignature,
 ) {
+  const referenceValue = sessionStorage.getItem("openclaw.bench.warm-page-reference");
+  const reference =
+    referenceValue && readPageSignature
+      ? (JSON.parse(referenceValue) as ReturnType<NonNullable<typeof readPageSignature>>)
+      : undefined;
+  let pageSignatureDirty = true;
+  let lastPageSignature: ReturnType<NonNullable<typeof readPageSignature>> | undefined;
+  let unmatchedRegions: string[] = [];
+  document.addEventListener(
+    "load",
+    () => {
+      pageSignatureDirty = true;
+    },
+    true,
+  );
   const milestones: Record<string, number> = {};
   const mutations: Array<{ at: number; count: number; region: string }> = [];
   const shifts: Array<{ at: number; value: number }> = [];
@@ -297,6 +313,7 @@ export function warmReloadProbe(
     },
   });
   const observer = new MutationObserver((records) => {
+    pageSignatureDirty = true;
     const regions = new Map<string, number>();
     const textRoots = new Set<Element>();
     for (const record of records) {
@@ -377,6 +394,22 @@ export function warmReloadProbe(
   const sample = (frameAt: number) => {
     if (stopped) {
       return;
+    }
+    if (reference && readPageSignature && pageSignatureDirty) {
+      pageSignatureDirty = false;
+      lastPageSignature = readPageSignature();
+      unmatchedRegions = Object.keys(reference.signatures).filter(
+        (name) => reference.signatures[name] !== lastPageSignature?.signatures[name],
+      );
+      if (
+        !unmatchedRegions.length &&
+        !lastPageSignature.missing.length &&
+        !lastPageSignature.skeletons &&
+        lastPageSignature.imagesReady &&
+        lastPageSignature.dashboardContentsVerified
+      ) {
+        mark("completeCachedCommit");
+      }
     }
     const sidebar = document.querySelector("aside.sidebar");
     if (sidebar || sidebarFrames.length) {
@@ -697,6 +730,16 @@ export function warmReloadProbe(
           : undefined,
         states,
         mainPaneStates,
+        completeCachedPage: reference
+          ? {
+              observedCommitMs: milestones.completeCachedCommit ?? null,
+              reference,
+              lastSignature: lastPageSignature,
+              unmatchedRegions,
+              measurement:
+                "First animation-frame observation matching settled prior-visit text, images and half-pixel geometry across header, visible transcript rows, composer, Details and dashboard; DOM commit upper bound, not compositor paint.",
+            }
+          : null,
         rowWindows,
         longTasks,
         sidebarFrames,

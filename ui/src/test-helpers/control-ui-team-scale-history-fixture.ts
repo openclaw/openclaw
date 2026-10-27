@@ -103,9 +103,6 @@ export function createTeamScaleHistoryFixture(options: {
                     ).join("\n"),
                 ]
               : []),
-            ...(index === 8
-              ? ['[embed ref="team-scale-chart-1" title="Team metric 1" height="220" /]']
-              : []),
           ].join("\n\n"),
         },
       ];

@@ -49,7 +49,7 @@ describe("Team-scale Gateway fixture", () => {
       ),
     );
     expect(String(asOptionalRecord(table)?.text).match(/\| Check \d+ \|/gu)).toHaveLength(24);
-    expect(fixture.counts.inlineWidgets).toBe(1);
+    expect(fixture.counts.inlineWidgets).toBe(0);
   });
 
   sessionGatewayTest.for(["normal", "large"] as const)(
