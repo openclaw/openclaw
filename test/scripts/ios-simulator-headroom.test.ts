@@ -10,7 +10,12 @@ afterEach(() => {
   vi.mocked(sleep).mockReset();
 });
 
-function cpuFixture(idle: number[], options: { firstDelayMs?: number; frozen?: boolean } = {}) {
+function cpuFixture(
+  idle: readonly [number, ...number[]],
+  options: { firstDelayMs?: number; frozen?: boolean } = {},
+) {
+  const idleSamples = idle.values();
+  let idlePercent = idle[0];
   let elapsed = 0;
   let reads = 0;
   let idleTime = 0;
@@ -18,7 +23,8 @@ function cpuFixture(idle: number[], options: { firstDelayMs?: number; frozen?: b
   vi.spyOn(performance, "now").mockImplementation(() => elapsed);
   vi.spyOn(os, "cpus").mockImplementation(() => {
     if (reads++ > 0 && !options.frozen) {
-      idleTime += idle[Math.min(reads - 2, idle.length - 1)];
+      idlePercent = idleSamples.next().value ?? idlePercent;
+      idleTime += idlePercent;
       totalTime += 100;
     }
     return [

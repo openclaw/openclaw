@@ -111,7 +111,8 @@ vi.mock("../../scripts/lib/ios-release-e2e-build.js", () => ({
 vi.mock("../../scripts/lib/ios-release-gateway.js", () => ({
   prepareIOSReleaseGateway: nativeMocks.install,
 }));
-vi.mock("../../scripts/lib/ios-simulator-headroom.js", () => ({
+vi.mock("../../scripts/lib/ios-simulator-headroom.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/lib/ios-simulator-headroom.js")>()),
   waitForIOSSimulatorHeadroom: nativeMocks.headroom,
 }));
 vi.mock("../helpers/openclaw-test-instance.js", () => ({
