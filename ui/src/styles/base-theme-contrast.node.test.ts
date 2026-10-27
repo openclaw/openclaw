@@ -7,6 +7,9 @@ import { describe, expect, it } from "vitest";
 import {
   oklchToLinearRgb,
   participantColors,
+  readableLinkColor,
+  fitSrgb,
+  isSrgb,
   rgbToOklch,
   type Oklch,
   type ParticipantPalette,
@@ -51,6 +54,14 @@ function contrastRatio(foreground: RGB, background: RGB): number {
     b = relativeLuminance(background);
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
+
+const toOklch = ([r, g, b]: RGB) => rgbToOklch([r / 255, g / 255, b / 255]);
+const rgb = (color: Oklch): RGB => {
+  const encode = (channel: number) =>
+    255 * (channel <= 0.0031308 ? 12.92 * channel : 1.055 * channel ** (1 / 2.4) - 0.055);
+  const [r, g, b] = oklchToLinearRgb(color);
+  return [encode(r), encode(g), encode(b)];
+};
 
 function composite(color: Color, background: RGB): RGB {
   return [
@@ -137,18 +148,12 @@ describe("Control UI theme contrast", () => {
   const bubblePaints = (theme: string, tokens: TokenMap) => {
     const light = theme === "light" || theme.endsWith("-light");
     const page = resolveOpaqueColor("var(--bg-content)", tokens);
-    const toOklch = ([r, g, b]: RGB) => rgbToOklch([r / 255, g / 255, b / 255]);
     const palette: ParticipantPalette = {
       mode: light ? "light" : "dark",
       background: toOklch(page),
       accent: toOklch(resolveOpaqueColor("var(--accent)", tokens)),
     };
-    const rgb = (color: Oklch): RGB => {
-      const encode = (channel: number) =>
-        255 * (channel <= 0.0031308 ? 12.92 * channel : 1.055 * channel ** (1 / 2.4) - 0.055);
-      const [r, g, b] = oklchToLinearRgb(color);
-      return [encode(r), encode(g), encode(b)];
-    };
+
     // Production palette samples are measured against the independent WCAG floors below.
     const identities = Array.from({ length: 360 }, (_, hue) => participantColors(palette, hue));
     const surfaces = identities.map((colors) => rgb(colors.bubble));
@@ -322,14 +327,7 @@ describe("Control UI theme contrast", () => {
     }
   });
 
-  it("keeps chat text and links at WCAG AA on every bubble surface", () => {
-    const link = readColorToken(readPaint(readRule(textRules, ".chat-text :where(a)"), "color"));
-    const linkTokens = {
-      link,
-      hover:
-        readColorToken(readRule(textRules, ".chat-text :where(a:hover)").get("color") ?? "") ||
-        link,
-    };
+  it("keeps body text at AA and textual links at 7:1 on canvas and bubble surfaces", () => {
     for (const [themeName, tokens] of themes) {
       const { page, light, user, sender, senderNames, lightUserText } = bubblePaints(
         themeName,
@@ -354,19 +352,47 @@ describe("Control UI theme contrast", () => {
       }
 
       for (const [state, token] of [
-        ["link", linkTokens.link],
-        ["link hover", linkTokens.hover],
+        ["link", "--link"],
+        ["link hover", "--link-hover"],
       ] as const) {
-        const foreground = resolveColor(`var(${token})`, tokens);
+        const foreground = toOklch(resolveOpaqueColor(`var(${token})`, tokens));
         const ratioOn = (background: RGB) =>
-          contrastRatio(composite(foreground, background), background);
-        expectFloor(ratioOn(user), AA_NORMAL_TEXT_MIN, `${themeName}: ${state} on user bubble`);
+          contrastRatio(rgb(readableLinkColor(foreground, toOklch(background))), background);
+        expectFloor(ratioOn(page), 7, `${themeName}: ${state} on canvas`);
+        expectFloor(ratioOn(user), 7, `${themeName}: ${state} on viewer bubble`);
         expectFloor(
           Math.min(...sender.map(ratioOn)),
-          AA_NORMAL_TEXT_MIN,
-          `${themeName}: ${state} on sender tints`,
+          7,
+          `${themeName}: ${state} on identity tints`,
         );
       }
     }
   });
+  it.each([
+    {
+      background: { l: 0.890208, c: 0.024, h: 207.354 },
+      source: [87.753, 135.934, 153.05] as const,
+      direction: -1,
+    },
+    {
+      background: { l: 0.261762, c: 0.024, h: 207.354 },
+      source: [109.053, 157.534, 174.65] as const,
+      direction: 1,
+    },
+  ])(
+    "moves only the needed link lightness toward contrast ($direction)",
+    ({ background, source, direction }) => {
+      const original = toOklch(source);
+      const adjusted = readableLinkColor(original, background);
+      expect(contrastRatio(rgb(adjusted), rgb(background))).toBeGreaterThanOrEqual(7);
+      expect(adjusted.h).toBe(original.h);
+      expect(adjusted.c).toBe(original.c);
+      expect(isSrgb(adjusted)).toBe(true);
+      const closer = fitSrgb({ ...original, l: adjusted.l - direction * 0.001 });
+      expect(contrastRatio(rgb(closer), rgb(background))).toBeLessThan(7.01);
+      expect(readableLinkColor(adjusted, background)).toEqual(adjusted);
+      const alreadyReadable = toOklch(direction === -1 ? [0, 0, 0] : [240, 240, 240]);
+      expect(readableLinkColor(alreadyReadable, background)).toEqual(alreadyReadable);
+    },
+  );
 });

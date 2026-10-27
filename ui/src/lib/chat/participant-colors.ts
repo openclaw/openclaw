@@ -100,13 +100,77 @@ export function participantColors(palette: ParticipantPalette, identityHue: numb
 
 const css = ({ l, c, h }: Oklch) => `oklch(${l} ${c} ${h})`;
 
-export function participantColorStyle(
-  palette: ParticipantPalette | undefined,
-  identityHue: number | null,
-): string | undefined {
-  if (!palette) {
-    return undefined;
+function luminance(color: Oklch): number {
+  const [r, g, b] = oklchToLinearRgb(color);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function linkContrast(foreground: Oklch, background: Oklch): number {
+  const first = luminance(foreground);
+  const second = luminance(background);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
+/** Keep readable ink intact; otherwise move L only, fitting C at the gamut boundary. */
+export function readableLinkColor(foreground: Oklch, background: Oklch): Oklch {
+  if (linkContrast(foreground, background) >= 7) {
+    return foreground;
   }
-  const colors = participantColors(palette, identityHue);
-  return `--chat-participant-surface: ${css(colors.bubble)}; --chat-sender-name-color: ${css(colors.name)}`;
+  const ends = [0, 1].map((l) => fitSrgb({ ...foreground, l }));
+  const candidates: Oklch[] = [];
+  for (const end of ends) {
+    if (linkContrast(end, background) < 7.01) {
+      continue;
+    }
+    let near = foreground.l;
+    let far = end.l;
+    for (let index = 0; index < 24; index += 1) {
+      const l = (near + far) / 2;
+      if (linkContrast(fitSrgb({ ...foreground, l }), background) >= 7.01) {
+        far = l;
+      } else {
+        near = l;
+      }
+    }
+    candidates.push(fitSrgb({ ...foreground, l: far }));
+  }
+  // Imported midtone canvases may not admit 7:1 even with black or white.
+  if (candidates.length === 0) {
+    return ends.reduce((best, color) =>
+      linkContrast(color, background) > linkContrast(best, background) ? color : best,
+    );
+  }
+  return candidates.reduce((best, color) =>
+    Math.abs(color.l - foreground.l) < Math.abs(best.l - foreground.l) ? color : best,
+  );
+}
+
+export function prepareParticipantPalette(
+  palette: ParticipantPalette,
+  links: { normal: Oklch; hover: Oklch },
+) {
+  const linkStyle = (background: Oklch) => {
+    const normal = readableLinkColor(links.normal, background);
+    const hover = readableLinkColor(links.hover, background);
+    return {
+      normal: normal === links.normal ? "var(--link)" : css(normal),
+      hover: hover === links.hover ? "var(--link-hover)" : css(hover),
+    };
+  };
+  // One prepared string per identity in this palette; streamed tokens only read it.
+  const identityStyles = new Map<number | null, string>();
+  return {
+    canvasLinks: linkStyle(palette.background),
+    style(identityHue: number | null): string {
+      const prepared = identityStyles.get(identityHue);
+      if (prepared !== undefined) {
+        return prepared;
+      }
+      const colors = participantColors(palette, identityHue);
+      const ink = linkStyle(colors.bubble);
+      const style = `--chat-participant-surface: ${css(colors.bubble)}; --chat-sender-name-color: ${css(colors.name)}; --chat-participant-link: ${ink.normal}; --chat-participant-link-hover: ${ink.hover}`;
+      identityStyles.set(identityHue, style);
+      return style;
+    },
+  };
 }

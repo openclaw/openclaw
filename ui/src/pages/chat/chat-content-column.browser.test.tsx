@@ -282,6 +282,8 @@ it.each(["light", "dark"])(
     documentRoot.dataset.themeMode = mode;
     const style = documentRoot.style;
     const previousAccent = style.getPropertyValue("--accent");
+    const previousLink = style.getPropertyValue("--link");
+    const previousLinkHover = style.getPropertyValue("--link-hover");
     onTestFinished(() => {
       root.remove();
       if (previousTheme === null) {
@@ -299,6 +301,16 @@ it.each(["light", "dark"])(
       } else {
         style.removeProperty("--accent");
       }
+      for (const [property, previous] of [
+        ["--link", previousLink],
+        ["--link-hover", previousLinkHover],
+      ] as const) {
+        if (previous) {
+          style.setProperty(property, previous);
+        } else {
+          style.removeProperty(property);
+        }
+      }
       syncControlUiSystemChrome(true);
     });
     const [viewer, setViewer] = createSignal("alice");
@@ -313,7 +325,7 @@ it.each(["light", "dark"])(
       key: id,
       message: {
         role: "user",
-        content: "A participant message.",
+        content: "A participant message. [Guide](https://example.com/guide)",
         timestamp: 1000,
         __openclaw: {
           senderId: id === "legacy" ? "alice" : id,
@@ -351,7 +363,7 @@ it.each(["light", "dark"])(
       name: getComputedStyle(bubble.closest(".chat-group")!.querySelector(".chat-sender-name")!)
         .color,
     });
-    for (const accent of ["#a04c29", "#357ac6"]) {
+    for (const accent of ["#a04c29", "#367f9b"]) {
       style.setProperty("--accent", accent);
       syncControlUiSystemChrome(true);
       let viewerColors: { bubble: string; name: string } | undefined;
@@ -385,6 +397,47 @@ it.each(["light", "dark"])(
     }
     expect(viewers[0]!.bubble).not.toBe(viewers[1]!.bubble);
     expect(viewers[0]!.name).not.toBe(viewers[1]!.name);
+    const link = root.querySelector<HTMLElement>(".chat-group.user .chat-text a")!;
+    const colorProbe = root.appendChild(document.createElement("span"));
+    colorProbe.hidden = true;
+    const luminance = (color: string) => {
+      colorProbe.style.color = `color(from ${color} srgb-linear r g b)`;
+      const resolved = getComputedStyle(colorProbe).color;
+      expect(resolved.startsWith("color(srgb-linear ")).toBe(true);
+      const [r, g, b] = resolved
+        .slice(resolved.indexOf(" ") + 1, -1)
+        .split(/\s+/u)
+        .map(Number);
+      return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+    };
+    const linkContrast = () => {
+      const ink = luminance(getComputedStyle(link).color);
+      const fill = luminance(getComputedStyle(link.closest(".chat-bubble")!).backgroundColor);
+      return (Math.max(ink, fill) + 0.05) / (Math.min(ink, fill) + 0.05);
+    };
+    const unchanged = colors(link.closest<HTMLElement>(".chat-bubble")!);
+    style.setProperty("--link", "#888888");
+    style.setProperty("--link-hover", "#999999");
+    syncControlUiSystemChrome(true);
+    flush();
+    const previousInk = getComputedStyle(link).color;
+    style.setProperty("--link", "#6688bb");
+    style.setProperty("--link-hover", "#bb8877");
+    syncControlUiSystemChrome(true);
+    await waitForSolid(() => expect(getComputedStyle(link).color).not.toBe(previousInk));
+    await Promise.all(link.getAnimations().map((animation) => animation.finished));
+    expect(colors(link.closest<HTMLElement>(".chat-bubble")!)).toEqual(unchanged);
+    expect(linkContrast()).toBeGreaterThanOrEqual(7);
+    await page.elementLocator(link).hover();
+    await Promise.all(link.getAnimations().map((animation) => animation.finished));
+    const previousHover = getComputedStyle(link).color;
+    style.setProperty("--link-hover", "#66aa77");
+    syncControlUiSystemChrome(true);
+    await waitForSolid(() => expect(getComputedStyle(link).color).not.toBe(previousHover));
+    await Promise.all(link.getAnimations().map((animation) => animation.finished));
+    expect(linkContrast()).toBeGreaterThanOrEqual(7);
+    await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
+
     const forwarded = root.querySelector<HTMLElement>(".chat-group--forwarded .chat-bubble")!;
     const originalFill = getComputedStyle(forwarded).backgroundColor;
     // Moving elevated panels into a separate PR must not change transcript colors.

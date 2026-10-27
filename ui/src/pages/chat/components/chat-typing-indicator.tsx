@@ -1,6 +1,5 @@
 import { createMemo, For, Show } from "solid-js";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { participantColorStyle } from "../../../lib/chat/participant-colors.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { getLocale, t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { participantPalette } from "../../../lib/reactive/participant-palette.ts";
@@ -79,7 +78,7 @@ function TypingRow(props: { actor: ChatTypingActorView; avatarPlacement: AvatarP
       <div class="agent-chat__typing-row-content">
         <div
           class="chat-group user chat-group--peer chat-group--sender-tint chat-group--with-footer chat-group--typing"
-          style={participantColorStyle(participantPalette.read(), resolveIdentityHue(sender()))}
+          style={participantPalette.read()?.style(resolveIdentityHue(sender()))}
           aria-live="off"
         >
           <div class="chat-group-messages">

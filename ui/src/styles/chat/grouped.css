@@ -1440,6 +1440,14 @@ button.chat-reply-attribution__target:disabled {
   box-shadow: none;
 }
 
+.chat-group:is(.user, .chat-group--forwarded) .chat-bubble:not(.chat-bubble--tool-shell) {
+  --chat-text-link: var(--chat-participant-link, var(--chat-canvas-link, var(--link)));
+  --chat-text-link-hover: var(
+    --chat-participant-link-hover,
+    var(--chat-canvas-link-hover, var(--link-hover))
+  );
+}
+
 /* User bubbles have different styling */
 .chat-group.user .chat-bubble {
   --chat-bubble-background: var(--chat-participant-surface);
