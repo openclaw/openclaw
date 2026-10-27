@@ -399,6 +399,24 @@ describe("POST /tools/invoke", () => {
     expectOkInvokeResponse,
   });
 
+  it("keeps HTTP operator invocations out of the agent tool-loop guardrails", async () => {
+    allowAgentsListForMain();
+    cfg = { ...cfg, tools: { loopDetection: { enabled: true } } };
+
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const response = await invokeTool({ tool: "agents_list", sessionKey: "main" });
+      await expectOkInvokeResponse(response);
+    }
+
+    expect(hookMocks.runBeforeToolCallHook).toHaveBeenCalledTimes(12);
+    for (const [hookArg] of hookMocks.runBeforeToolCallHook.mock.calls) {
+      expect(expectDefined(hookArg.ctx, "before-tool-call hook context")).not.toHaveProperty(
+        "loopDetection",
+      );
+    }
+    expect(hookMocks.resolveToolLoopDetectionConfig).not.toHaveBeenCalled();
+  });
+
   it("enforces action policy for administrator tool calls after hook rewrites", async () => {
     cfg = {
       tools: { gatewayPolicy: { allow: ["policy_action"], actions: { policy_action: ["read"] } } },
@@ -711,6 +729,26 @@ describe("POST /tools/invoke", () => {
 });
 
 describe("tools.invoke Gateway RPC", () => {
+  it("keeps operator RPC invocations out of the agent tool-loop guardrails", async () => {
+    allowAgentsListForMain();
+    cfg = { ...cfg, tools: { loopDetection: { enabled: true } } };
+
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const call = await invokeToolsRpc({ name: "agents_list", args: {}, sessionKey: "main" });
+      expect(call?.[0]).toBe(true);
+      expect(call?.[1]).toMatchObject({ ok: true, toolName: "agents_list" });
+    }
+
+    // Operator RPC calls carry no run identity, so agent loop history must never see them.
+    expect(hookMocks.runBeforeToolCallHook).toHaveBeenCalledTimes(12);
+    for (const [hookArg] of hookMocks.runBeforeToolCallHook.mock.calls) {
+      expect(expectDefined(hookArg.ctx, "before-tool-call hook context")).not.toHaveProperty(
+        "loopDetection",
+      );
+    }
+    expect(hookMocks.resolveToolLoopDetectionConfig).not.toHaveBeenCalled();
+  });
+
   it("invokes a tool through the SDK-facing RPC envelope", async () => {
     allowAgentsListForMain();
 

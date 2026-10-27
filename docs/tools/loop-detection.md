@@ -20,6 +20,9 @@ Two additional guardrails are configured under `tools.loopDetection`:
 
 1. **Loop detection** (`enabled`) - disabled by default. Watches the rolling
    tool-call history for repeated patterns and unknown-tool retries.
+   This history belongs to agent runs: operator tool invocations
+   (`tools.invoke` over the Gateway RPC and `/tools/invoke` over HTTP) are not
+   checked against it and do not add to it.
 2. **Post-compaction guard** - enabled whenever
    `enabled` is not explicitly `false`. Arms after every compaction-retry and
    aborts the run if the agent repeats the same `(tool, args, result)` triple
