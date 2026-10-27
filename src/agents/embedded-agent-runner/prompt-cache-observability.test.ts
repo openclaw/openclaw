@@ -264,12 +264,90 @@ describe("prompt cache observability", () => {
     expect(complete(2_000)?.changes).toEqual([
       {
         code: side === "prefix" ? "systemPrompt" : "systemPromptSuffix",
-        detail: `system prompt${side === "suffix" ? " suffix" : ""} digest changed (sections: ${section})`,
+        detail: `system prompt${side === "suffix" ? " suffix" : ""} digest changed (sections: ${section})${side === "suffix" ? "; facts: Runtime.line[1] changed" : ""}`,
       },
     ]);
   });
 
-  it("names unrecognized headings while bounding section keys and excluding contents", () => {
+  it.each([
+    [
+      "Runtime",
+      "Runtime: model=private-before | channel=webchat",
+      "Runtime: model=private-after | channel=webchat",
+      "Runtime.model",
+    ],
+    [
+      "Session routing",
+      "- Actual delegated helpers use `private-before`; use hidden children by default.",
+      "- Actual delegated helpers use `private-after`; use hidden children by default.",
+      "Session routing.hidden delegation",
+    ],
+    [
+      "Tooling",
+      "- private-before: Read files\n- private-after: Write files",
+      "- private-after: Write files\n- private-before: Read files",
+      "Tooling.tool list order",
+    ],
+    ["Tooling", "- read: private-before", "- read: private-after", "Tooling.tool summaries"],
+    ["Conversation Context", "private-before", "private-after", "Conversation Context.line[1]"],
+    ["Knowledge Index", "private-before", "private-after", "Knowledge Index.line[1]"],
+  ])("names changed facts in %s without exposing content", (section, before, after, fact) => {
+    const { begin, complete } = observation("changed-prompt-fact");
+    const prompt = (body: string) =>
+      `stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}## ${section}\n${body}\n`;
+    begin({ systemPrompt: prompt(before) });
+    complete(8_000);
+    const started = begin({ systemPrompt: prompt(after) });
+    expect(started.changes?.[0]?.detail).not.toContain("facts:");
+    const result = complete(2_000);
+    expect(result?.changes?.[0]?.detail).toContain(`facts: ${fact} changed`);
+    expect(JSON.stringify(result)).not.toContain("private-");
+  });
+
+  it("hashes fact values only when a drop is reported and keeps snapshots content-free", () => {
+    const { begin, complete } = observation("lazy-facts");
+    const prompt = (model: string) =>
+      `${"stable ".repeat(10_000)}${SYSTEM_PROMPT_CACHE_BOUNDARY}## Runtime\nRuntime: model=${model}`;
+    begin({ systemPrompt: prompt("private-before") });
+    complete(8_000);
+    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    const started = begin({ systemPrompt: prompt("private-after") });
+    expect(hashes).not.toHaveBeenCalledWith("model=private-before");
+    expect(hashes).not.toHaveBeenCalledWith("model=private-after");
+    expect(JSON.stringify(started)).not.toContain("private-");
+    expect(complete(2_000)?.changes?.[0]?.detail).toContain("Runtime.model changed");
+    expect(hashes).toHaveBeenCalledWith("model=private-before");
+    expect(hashes).toHaveBeenCalledWith("model=private-after");
+  });
+
+  it("attributes computer capability clauses and bounds oversized before-images", () => {
+    const { begin, complete } = observation("computer-facts");
+    const tools = (window: string) =>
+      collectPromptCacheTools([
+        {
+          name: "computer",
+          description: `Control this session's desktop. Observe first with \`get_window_state\` and ground on its advertised ${window} data. Target order: elementRef.`,
+        },
+      ]);
+    begin({ tools: tools("private-before") });
+    complete(8_000);
+    begin({ tools: tools("private-after") });
+    const result = complete(2_000);
+    expect(result?.changes?.[0]?.detail).toContain(
+      "computer.description.window observation changed",
+    );
+    expect(JSON.stringify(result)).not.toContain("private-");
+    const prompt = (revision: string) =>
+      `stable${SYSTEM_PROMPT_CACHE_BOUNDARY}## Runtime\nprivate-${"x".repeat(33_000)}${revision}`;
+    begin({ systemPrompt: prompt("before") });
+    complete(8_000);
+    begin({ systemPrompt: prompt("after") });
+    expect(complete(2_000)?.changes?.[0]?.detail).toContain(
+      "facts: unavailable (source size bound)",
+    );
+  });
+
+  it("uses bounded positions for unrecognized headings without exposing text", () => {
     const sessionId = scopedKey("bounded-prompt-sections");
     const unknown = Array.from(
       { length: 100 },
@@ -281,14 +359,14 @@ describe("prompt cache observability", () => {
     });
     const keys = Object.keys(first.snapshot.systemPromptSections ?? {});
     expect(keys).toHaveLength(50);
-    expect(keys.slice(0, 2)).toEqual(["## heading-0", "## heading-1"]);
+    expect(keys.slice(0, 2)).toEqual(["section[1]", "section[2]"]);
     expect(keys.slice(-2)).toEqual(["Other", "Skills"]);
     const changed = beginOpenAIObservation({
       sessionId,
       systemPrompt: `${unknown.replace("private-content-0", "private-replaced")}\n## Skills\nprivate-skill\n`,
     });
     expect(changed.changes).toEqual([
-      { code: "systemPrompt", detail: "system prompt digest changed (sections: ## heading-0)" },
+      { code: "systemPrompt", detail: "system prompt digest changed (sections: section[1])" },
     ]);
     expect(JSON.stringify([first.snapshot, changed])).not.toContain("private-");
   });
@@ -305,13 +383,12 @@ describe("prompt cache observability", () => {
     expect(observe(`## Silent Replies\nreply quietly\n${runtime}`).changes).toEqual([
       {
         code: "systemPromptSuffix",
-        detail:
-          "system prompt suffix digest changed (sections: ## Silent Replies, ## Control UI Embed)",
+        detail: "system prompt suffix digest changed (sections: Silent Replies, Control UI Embed)",
       },
     ]);
     const many = Array.from({ length: 10 }, (_, index) => `## Extra ${index}\nx\n`).join("");
     expect(observe(`${many}${runtime}`).changes?.[0]?.detail).toBe(
-      "system prompt suffix digest changed (sections: ## Extra 0, ## Extra 1, ## Extra 2, ## Extra 3, ## Extra 4, ## Extra 5, ## Extra 6, ## Extra 7, +3 more)",
+      "system prompt suffix digest changed (sections: section[1], section[2], section[3], section[4], section[5], section[6], section[7], section[8], +3 more)",
     );
   });
 
@@ -344,17 +421,17 @@ describe("prompt cache observability", () => {
     {
       change: "schema",
       override: { parameters: { type: "number" } },
-      detail: '1 -> 1 tools; schema: "read"',
+      detail: "1 -> 1 tools; schema: tool[1]",
     },
     {
       change: "description",
       override: { description: "Read a workspace file" },
-      detail: '1 -> 1 tools; description: "read"',
+      detail: "1 -> 1 tools; description: tool[1]; facts: tool[1].description.line[1] changed",
     },
     {
       change: "replacement",
       override: { name: "write" },
-      detail: '1 -> 1 tools; added: "write"; removed: "read"',
+      detail: "1 -> 1 tools; added: tool[1]; removed: tool[1]",
     },
   ])("attributes a tool $change to the changed definition", ({ override, detail }) => {
     const { begin, complete } = observation("changed-tool-schema");
@@ -383,7 +460,7 @@ describe("prompt cache observability", () => {
     });
   });
 
-  it("bounds and escapes names in tool-change diagnostics without exposing descriptor content", () => {
+  it("bounds tool positions without exposing names or descriptor content", () => {
     const sessionId = scopedKey("bounded-tool-change");
     beginOpenAIObservation({ sessionId, tools: [] });
     const next = beginOpenAIObservation({
@@ -396,7 +473,8 @@ describe("prompt cache observability", () => {
       ),
     });
     const detail = next.changes?.[0]?.detail ?? "";
-    expect(detail).toContain('added: "0\\n');
+    expect(detail).toContain("added: tool[1]");
+    expect(detail).not.toContain("xxx");
     expect(detail).toContain("(+1 more)");
     expect(detail).not.toContain("\n");
     expect(detail).not.toContain("private descriptor");
