@@ -11,7 +11,13 @@
  * --base-model-facts <adjacent baseline .ts copy> compares the model vocabulary owner
  * over identical resident rows and catalog/context inputs; --candidate-model-facts
  * optionally pins its candidate copy. Other selection and model-facts reads stay current.
- * Compare identical scripts on pinned revisions in alternating AB/BA launch order.
+ * For CPU/allocation comparisons, run one revision per fresh process: pass the SAME
+ * owner paths to both internal roles, then counterbalance revision processes AB/BA.
+ * Inspect their same-function controls. Duplicate owner instances in one process showed
+ * large identical-source CPU arm bias, even with shared dispatch; use that mode for
+ * equivalence/work counts, not causal timings. Keep scripts identical across revisions.
+ * --query '<no-search>' measures only that exact workload name; other names are the
+ * search text, or selection-workload names such as 'roster:viewer-0'.
  * Acceptance: identical response digests and fewer target reads, lower CPU or allocation
  * without a reproducible adverse sibling-query result. Record host load for each arm.
  * The canonical Team fixture supplies owners, ancestry, archived rows and real worktrees;
@@ -61,6 +67,7 @@ const { values } = parseArgs({
     "candidate-model-facts": { type: "string" },
     pairs: { type: "string", default: "5" },
     "selection-workload": { type: "boolean", default: false },
+    query: { type: "string" },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -372,7 +379,12 @@ try {
         opts: { search },
         client: undefined,
       }));
-  for (const workload of workloads) {
+  const selectedWorkloads =
+    values.query === undefined
+      ? workloads
+      : workloads.filter((workload) => workload.name === values.query);
+  assert(selectedWorkloads.length > 0, `Unknown workload: ${values.query}`);
+  for (const workload of selectedWorkloads) {
     const { name, client } = workload;
     const search = workload.opts.search;
     const opts: SessionsListParams = {
