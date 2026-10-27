@@ -246,8 +246,9 @@ Sessions are reused until you reset them manually or opt into an automatic reset
   metadata writes.
 - **Idle reset** (`mode: "idle"`) - opt into a new session after `session.reset.idleMinutes`
   of inactivity. Idle freshness is based on the last real user/channel
-  interaction, including voice consults (browser Talk, meetings, voice calls). Heartbeat, cron, and exec system
-  events do not keep the session alive.
+  interaction, including voice consults (browser Talk, meetings, voice
+  calls). Heartbeat, cron, and exec system events do not keep the session
+  alive.
 - **Manual reset** - type `/new` or `/reset` in chat. `/new <model>` also
   switches the model.
 
