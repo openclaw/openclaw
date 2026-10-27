@@ -849,6 +849,11 @@ let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
 const results = [];
+const sidebarProfilePeerSeeds: Array<{
+  before: Array<[string, string]>;
+  after: Array<[string, string]>;
+  frozen: Array<[string, string]>;
+}> = [];
 const waterfallArtifacts: Array<{
   file: string;
   capture: Awaited<ReturnType<typeof readCriticalPath>>;
@@ -1653,11 +1658,6 @@ try {
       .waitFor();
   }
   const warmStates: Array<Awaited<ReturnType<typeof persistColdLoadWarmState>>["storage"]> = [];
-  const sidebarProfilePeerSeeds: Array<{
-    before: Array<[string, string]>;
-    after: Array<[string, string]>;
-    frozen: Array<[string, string]>;
-  }> = [];
   async function flushUnresolvedSidebarPeer() {
     if (!values["sidebar-profile-peer"]) {
       return;
