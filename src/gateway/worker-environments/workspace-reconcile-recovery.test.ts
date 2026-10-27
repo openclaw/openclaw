@@ -165,6 +165,27 @@ describe("worker workspace reconciliation recovery", () => {
     await expect(fs.readFile(path.join(local, "src"), "utf8")).resolves.toBe("replacement");
   });
 
+  it.each(["file", "directory"])(
+    "preserves nested Git metadata when a remote file replaces its ancestor (%s)",
+    async (kind) => {
+      await gitInit(local);
+      const base = await manifestFor(local);
+      const metadata = kind === "file" ? "src/repository/.git" : "src/repository/.git/config";
+      await writeWorkspaceFiles(local, { [metadata]: "local Git metadata" });
+      await fs.writeFile(path.join(staged, "src"), "replacement");
+      const applied = await applyWorkspace({
+        root: local,
+        stagingRoot: staged,
+        base,
+        current: await manifestFor(staged),
+      });
+      expect(applied.conflictPaths).toEqual(["src"]);
+      await expect(fs.readFile(path.join(local, metadata), "utf8")).resolves.toBe(
+        "local Git metadata",
+      );
+    },
+  );
+
   it("rolls back a remote file that replaced a base directory", async () => {
     await gitInit(local);
     await writeWorkspaceFiles(local, { "src/old.txt": "base" });

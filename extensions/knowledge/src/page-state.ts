@@ -22,6 +22,8 @@ export type PageState = {
   storeMessage: string | undefined;
   tab: KnowledgeLocation["tab"];
   selectedId: string;
+  /** Scribe detail on the Scribes tab; empty for the list. */
+  scribe: string;
   query: string;
   kind: KnowledgeLocation["kind"];
   type: string;
@@ -79,6 +81,7 @@ export function createPageState(
     storeMessage: undefined,
     tab: location.tab,
     selectedId: location.record,
+    scribe: location.scribe,
     query: location.query,
     kind: location.kind,
     type: location.type,

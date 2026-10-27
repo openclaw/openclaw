@@ -3,6 +3,7 @@ import { loadPluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sna
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { getPreparedModelRuntimeBorrowedSnapshot } from "../../prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { preparedModelRuntimeConfigsMatch } from "../../prepared-model-runtime.owner.js";
 import {
   resolveCanonicalRunRuntimeWorkspace,
   resolveRootedRunRuntimeWorkspace,
@@ -49,7 +50,8 @@ export function resolvePreparedRuntimeWorkspaces(params: RunEmbeddedAgentParamsW
   const borrowedWorkspace =
     params.preparedModelRuntimeMode !== "isolated-read-only" &&
     borrowed?.workspaceDir &&
-    borrowed.config === params.config &&
+    params.config !== undefined &&
+    preparedModelRuntimeConfigsMatch(borrowed.config, params.config) &&
     borrowed.agentId === requestedWorkspaceResolution.agentId &&
     borrowed.agentDir === params.agentDir
       ? resolveRunWorkspaceDir({ ...params, workspaceDir: borrowed.workspaceDir })

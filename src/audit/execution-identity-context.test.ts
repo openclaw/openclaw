@@ -137,7 +137,26 @@ describe("execution identity context storage", () => {
     ]) {
       expect(Object.isFrozen(value)).toBe(true);
     }
-    const first = persistEnvelope(envelope, { ...store.options, now: 100 });
+    const stringify = vi.spyOn(JSON, "stringify");
+    let first: ExecutionIdentityContextV1;
+    try {
+      first = persistEnvelope(envelope, { ...store.options, now: 100 });
+      const encodings = stringify.mock.calls.flatMap(([value], index) =>
+        value === first ? [stringify.mock.results[index]?.value] : [],
+      );
+      expect(encodings).toHaveLength(1);
+      expect(
+        store
+          .open()
+          .db.prepare("SELECT context_json, context_bytes FROM execution_identity_contexts")
+          .get(),
+      ).toEqual({
+        context_json: encodings[0],
+        context_bytes: Buffer.byteLength(encodings[0], "utf8"),
+      });
+    } finally {
+      stringify.mockRestore();
+    }
     await restartDatabase();
     const second = persistEnvelope(structuredClone(envelope), { ...store.options, now: 999 });
     expect(second).toEqual(first);

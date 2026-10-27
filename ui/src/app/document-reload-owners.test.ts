@@ -10,7 +10,10 @@ afterEach(() => {
 it("retains unsaved starts when a terminal policy change would reload the document", async () => {
   vi.resetModules();
   const reload = vi.fn();
-  vi.stubGlobal("window", { location: { origin: "http://localhost", reload } });
+  vi.stubGlobal("window", {
+    location: { origin: "http://localhost", reload },
+    dispatchEvent: window.dispatchEvent.bind(window),
+  });
   const { registerControlUiReloadGuard } = await import("./document-reload-guard.ts");
   const release = registerControlUiReloadGuard(() => false, vi.fn());
   try {

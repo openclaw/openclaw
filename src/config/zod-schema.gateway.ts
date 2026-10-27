@@ -107,6 +107,14 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       deny: z.array(z.string().trim().min(1)).optional(),
     })
     .optional(),
+  /** Nonstandard Access requires an explicit grant, independent of model membership. */
+  accessPrograms: z
+    .strictObject({
+      cyber: z
+        .array(z.enum(["daybreak_blue", "daybreak_red"]))
+        .transform((programs) => uniqueValues(programs)),
+    })
+    .optional(),
   /** Ceiling applied to the authenticated profile's granted operator scopes. */
   scopes: z.array(OperatorScopeSchema).transform((scopes) => uniqueValues(scopes)),
   /** Required access-policy plugin; availability is checked at admission, not config parsing. */

@@ -421,7 +421,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         : await listSharedGitHubPublicationsAsync({ claimNull: true, pending: true });
       params.recovery?.shared.retain(rows.map((row) => row.request_id));
       params.assertCurrent();
-      if (isStopping?.()) {
+      if (isStopping?.() || rows.length === 0) {
         return;
       }
       const pending = new Set(
