@@ -464,6 +464,7 @@ it("tries the first run again on the next load when forcing it failed", async ()
     return answer(method, params);
   });
   const view = await render();
+  expect(view.textContent).toContain("OptionsWeekly");
   expect(view.textContent).not.toContain("First run");
   expect(ui.announce).toHaveBeenCalledWith(
     expect.stringContaining(
