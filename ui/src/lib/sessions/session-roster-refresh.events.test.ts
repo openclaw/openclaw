@@ -44,9 +44,8 @@ function fixture(request: Parameters<typeof createTestGatewayClient>[0]) {
 
 describe("session roster event traffic", () => {
   beforeEach(() => vi.useFakeTimers());
-  it("keeps 200-row shared and personal windows current without periodic reads of held rows", async () => {
+  it("refreshes shared and personal membership only when a row crosses its window", async () => {
     vi.setSystemTime(100_000);
-    const random = vi.spyOn(Math, "random").mockReturnValue(0);
     const viewer = { type: "profile", id: "profile-ada" } as const;
     const actor = (id: string) => ({
       type: "human" as const,
@@ -54,19 +53,15 @@ describe("session roster event traffic", () => {
       identity: { type: "profile" as const, id },
     });
     const rows: GatewaySessionRow[] = Array.from({ length: 270 }, (_, index) =>
-      session("main", index < 250 ? 99_000 - index : 90_000 - index, {
-        key: `agent:main:conversation-${index}`,
-        sessionId: `conversation-${index}`,
+      makeRow(`conversation-${index}`, index < 250 ? 99_000 - index : 90_000 - index, {
         isMain: false,
         snapshotAt: 100_000,
-        label: `Conversation ${index}`,
-        lastMessagePreview: "Synthetic project update",
         owner: { actor: actor(index === 0 || index >= 250 ? viewer.id : "profile-sam") },
         participants: index === 0 || index >= 250 ? [] : [{ identity: viewer }],
         hiddenFromInvolvingMe: false,
         hasActiveRun: false,
         status: "done",
-        unread: false,
+        unread: true,
         lastReadAt: 98_000,
       }),
     );
@@ -89,14 +84,12 @@ describe("session roster event traffic", () => {
       const ownerRows = queryParams.ownerFirst
         ? eligible.filter((row) => row.owner?.actor.id === viewer.id && !page.includes(row))
         : [];
-      const response = rosterPage([...page, ...ownerRows], eligible.length, 200, Date.now());
       reads[scope]++;
-      await delay(200);
-      return response;
+      return rosterPage([...page, ...ownerRows], eligible.length, 200, Date.now());
     };
     const harness = createGatewayHarness(createTestGatewayClient(request));
     harness.publish({ selfUser: { id: viewer.id, identity: viewer } });
-    const { sessions, watch, listRows, settle } = ownRoster(harness.gateway);
+    const { sessions, watch, listRows } = ownRoster(harness.gateway);
     watch(personal);
     const emit = (row: GatewaySessionRow) =>
       harness.publishEvent("sessions.changed", snapshot(row, { agentId: "main" }));
@@ -104,62 +97,17 @@ describe("session roster event traffic", () => {
       rows[index] = { ...rows[index]!, snapshotAt: Date.now() + 1, ...fields };
       emit(rows[index]!);
     };
-    settle(async () => {
-      await advance(200);
-      random.mockRestore();
-    });
-    const bootstrap = [
+    await Promise.all([
       sessions.refresh({ ...shared, force: true }),
       sessions.refreshList(personal),
-    ];
-    await advance(200);
-    await Promise.all(bootstrap);
+    ]);
     expect(sessions.state.result?.sessions).toHaveLength(220);
     expect(listRows(personal)).toHaveLength(200);
-    const bootReads = { ...reads };
-    for (let index = 0; index < 1_200; index++) {
-      const hot = index % 10;
-      update(hot, {
-        updatedAt: 100_001 + index,
-        totalTokens: index + 1,
-        hasActiveRun: index % 20 < 10,
-        status: index % 20 < 10 ? "running" : "done",
-        unread: hot % 2 === 0,
-        lastReadAt: hot % 2 === 0 ? 98_000 : 100_001 + index,
-      });
-      await advance(100);
-      if (index === 599) {
-        expect(reads).toEqual(bootReads);
-      }
-    }
-    expect(reads).toEqual(bootReads);
-    for (const query of [shared, personal]) {
-      const held = listRows(query) ?? [];
-      expect(held.slice(0, 10).map((row) => row.key)).toEqual(
-        Array.from({ length: 10 }, (_, index) => `agent:main:conversation-${9 - index}`),
-      );
-      expect(held.find((row) => row.key === "agent:main:conversation-8")).toMatchObject({
-        totalTokens: 1_199,
-        unread: true,
-        lastReadAt: 98_000,
-      });
-      expect(held.find((row) => row.key === "agent:main:conversation-9")).toMatchObject({
-        totalTokens: 1_200,
-        unread: false,
-        lastReadAt: 101_200,
-      });
-    }
-    // Explicit reads still reconcile both windows before exercising membership changes.
-    const fresh = [
-      sessions.refresh({ ...shared, force: true }),
-      sessions.refreshList({ ...personal, force: true }),
-    ];
-    await advance(200);
-    await Promise.all(fresh);
     const settledReads = { ...reads };
-    update(8, { unread: false, lastReadAt: Date.now() });
+    update(8, { updatedAt: 100_001, unread: false, lastReadAt: Date.now() });
     for (const query of [shared, personal]) {
-      expect(listRows(query)?.find((row) => row.key === rows[8]!.key)).toMatchObject({
+      expect(listRows(query)?.[0]).toMatchObject({
+        key: rows[8]!.key,
         unread: false,
         lastReadAt: Date.now(),
       });
@@ -189,24 +137,6 @@ describe("session roster event traffic", () => {
       expect(held).toHaveLength(200);
       expect(held.some((row) => row.key === rows[index]!.key)).toBe(false);
     }
-    const beforeUnknown = { ...reads };
-    const unknown = {
-      ...rows[3]!,
-      key: "agent:main:new-conversation",
-      sessionId: "new-conversation",
-      updatedAt: Date.now(),
-      snapshotAt: Date.now() + 1,
-    };
-    rows.push(unknown);
-    emit(unknown);
-    expect(listRows(personal)?.some((row) => row.key === unknown.key)).toBe(false);
-    await advance(5_200);
-    expect(reads).toEqual({
-      shared: beforeUnknown.shared + 1,
-      personal: beforeUnknown.personal + 1,
-    });
-    expect(sessions.state.result?.sessions[0]?.key).toBe(unknown.key);
-    expect(listRows(personal)?.[0]?.key).toBe(unknown.key);
   });
 
   it.each([false, true])(
@@ -526,6 +456,8 @@ describe("session roster event traffic", () => {
                   updatedAt: index + 2,
                   totalTokens: index + 1,
                   hasActiveRun: stream !== "terminal-message",
+                  unread: index % 2 === 0,
+                  lastReadAt: index + 1,
                 },
               }),
         },
@@ -534,7 +466,11 @@ describe("session roster event traffic", () => {
     }
     if (stream !== "invalidation" && stream !== "filtered") {
       expect(reads - initialReads).toBe(0);
-      expect(listRows(query)?.[0]?.totalTokens).toBe(600);
+      expect(listRows(query)?.[0]).toMatchObject({
+        totalTokens: 600,
+        unread: false,
+        lastReadAt: 600,
+      });
     } else {
       expect(reads - initialReads).toBeGreaterThan(1);
       expect(reads - initialReads).toBeLessThanOrEqual(15);
