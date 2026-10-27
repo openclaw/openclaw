@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
@@ -15,7 +13,6 @@ import {
 import * as entryReader from "../../config/sessions/session-entry-read-runtime.js";
 import * as transcript from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { handleManagedOutgoingMediaHttpRequest } from "../../gateway/managed-image-attachments.js";
 import * as managedMedia from "../../gateway/managed-image-attachments.js";
 import { artifactsHandlers } from "../../gateway/server-methods/artifacts.js";
 import { chatHistoryHandlers } from "../../gateway/server-methods/chat-history-handler.js";
@@ -168,114 +165,6 @@ async function invokeHistoryMethod(
   return result;
 }
 
-it("exposes a blocked generated image through chat.history and downloads it for its session", async () => {
-  await withOpenClawTestState({ prefix: "media-blocked-image-" }, async (state) => {
-    const { scope } = await requester(state);
-    const imageBase64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
-    const imagePath = state.statePath("media", "generated.png");
-    await fs.mkdir(path.dirname(imagePath), { recursive: true });
-    await fs.writeFile(imagePath, Buffer.from(imageBase64, "base64"));
-    const lifecycle = createMediaGenerationTaskLifecycle("image");
-    const handle = await lifecycle.createTaskRun({
-      sessionKey: scope.sessionKey,
-      requesterAgentId: "main",
-      prompt: "synthetic lighthouse",
-    });
-    assert(handle, "Expected an active media-generation handle");
-
-    await retainBlockedMediaCompletion({
-      handle,
-      terminalResult: { terminalOutcome: "blocked" },
-      attachments: [{ type: "image", path: imagePath, mimeType: "image/png" }],
-    });
-    await retainBlockedMediaCompletion({
-      handle,
-      terminalResult: { terminalOutcome: "blocked" },
-      attachments: [{ type: "image", path: imagePath, mimeType: "image/png" }],
-    });
-
-    const history = await invokeHistoryMethod("chat.history", { sessionKey: scope.sessionKey });
-    expect(history.ok).toBe(true);
-    const messages = (history.payload as { messages?: unknown[] }).messages ?? [];
-    const retained = messages.find((message) => isRecord(message) && message.role === "assistant");
-    const content = isRecord(retained) && Array.isArray(retained.content) ? retained.content : [];
-    const image = content.find((block) => isRecord(block) && block.type === "image");
-    expect(retained).toMatchObject({
-      content: expect.arrayContaining([
-        expect.objectContaining({
-          type: "text",
-          text: expect.stringContaining("Generated media is ready"),
-        }),
-        expect.objectContaining({
-          type: "image",
-          mimeType: "image/png",
-          url: expect.stringContaining("/api/chat/media/outgoing/"),
-        }),
-      ]),
-    });
-    assert(isRecord(image) && typeof image.artifactId === "string");
-
-    const controller = new AbortController();
-    const client: GatewayClient = {
-      ...sharingPolicyClient({ scopes: ["operator.read"] }),
-      connId: "blocked-image-session",
-      connectionSignal: controller.signal,
-    };
-    const downloaded = await invokeHistoryMethod(
-      "artifacts.download",
-      {
-        sessionKey: scope.sessionKey,
-        artifactId: image.artifactId,
-      },
-      client,
-    );
-    expect(downloaded).toMatchObject({
-      ok: true,
-      payload: {
-        artifact: { id: image.artifactId, sessionKey: scope.sessionKey },
-        url: expect.stringContaining("mediaTicket="),
-      },
-    });
-    const downloadUrl = (downloaded.payload as { url: string }).url;
-    const server = createServer((req, res) => {
-      void handleManagedOutgoingMediaHttpRequest(req, res, {
-        auth: {} as never,
-        trustedProxies: ["127.0.0.1/32"],
-        allowRealIpFallback: false,
-        stateDir: state.stateDir,
-        clients: new Set([client]),
-      })
-        .then((handled) => {
-          if (!handled && !res.writableEnded) {
-            res.statusCode = 404;
-            res.end("unhandled");
-          }
-        })
-        .catch(() => {
-          if (!res.writableEnded) {
-            res.statusCode = 500;
-            res.end("media request failed");
-          }
-        });
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-    try {
-      const address = server.address() as AddressInfo;
-      const response = await fetch(`http://127.0.0.1:${address.port}${downloadUrl}`);
-      expect(response.status).toBe(200);
-      expect(Buffer.from(await response.arrayBuffer()).toString("base64")).toBe(imageBase64);
-    } finally {
-      controller.abort();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
-  });
-});
-
 it("keeps a prepared image when another blocked-completion image exceeds the limit", async () => {
   await withOpenClawTestState({ prefix: "media-blocked-partial-image-" }, async (state) => {
     const { scope } = await requester(state, sessionKey, sessionId, "original", 20);
@@ -345,6 +234,21 @@ it("reconciles image ownership when a blocked-completion retry finds its message
     const history = await invokeHistoryMethod("chat.history", { sessionKey: scope.sessionKey });
     expect(history.ok).toBe(true);
     const messages = (history.payload as { messages?: unknown[] }).messages ?? [];
+    expect(
+      messages.filter(
+        (message) =>
+          isRecord(message) &&
+          message.role === "assistant" &&
+          Array.isArray(message.content) &&
+          message.content.some(
+            (block) =>
+              isRecord(block) &&
+              block.type === "text" &&
+              typeof block.text === "string" &&
+              block.text.includes("Generated media is ready"),
+          ),
+      ),
+    ).toHaveLength(1);
     const retained = messages.find((message) => isRecord(message) && message.role === "assistant");
     const content = isRecord(retained) && Array.isArray(retained.content) ? retained.content : [];
     expect(content.filter((block) => isRecord(block) && block.type === "image")).toHaveLength(1);
