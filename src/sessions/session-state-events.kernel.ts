@@ -450,7 +450,10 @@ export function pruneSessionStateEventsInDatabase(db: EngineConnection, now: num
         kysely.selectNoFrom((eb) => [
           eb.val(row.session_key).as("session_key"),
           eb.val(row.agent_id).as("agent_id"),
-          eb.val(normalizeSqliteNumber(row.max_sequence) ?? 0).as("max_sequence"),
+          // Untyped PostgreSQL parameters in SELECT lists resolve to text.
+          eb
+            .cast(eb.val(normalizeSqliteNumber(row.max_sequence) ?? 0), "bigint")
+            .as("max_sequence"),
         ]),
       );
       executeSqliteQuerySync(

@@ -18,6 +18,8 @@
  * equivalence/work counts, not causal timings. Keep scripts identical across revisions.
  * --query '<no-search>' measures only that exact workload name; other names are the
  * search text, or selection-workload names such as 'roster:viewer-0'.
+ * --goal-workload adds goals to one third of rows and includes goal/Unicode queries.
+ * Use --sessions 10800 --iterations 2000 for repeated entry-revision search work.
  * Acceptance: identical response digests and fewer target reads, lower CPU or allocation
  * without a reproducible adverse sibling-query result. Record host load for each arm.
  * The canonical Team fixture supplies owners, ancestry, archived rows and real worktrees;
@@ -67,6 +69,7 @@ const { values } = parseArgs({
     "candidate-model-facts": { type: "string" },
     pairs: { type: "string", default: "5" },
     "selection-workload": { type: "boolean", default: false },
+    "goal-workload": { type: "boolean", default: false },
     query: { type: "string" },
   },
 });
@@ -217,6 +220,7 @@ const queries = [
   "running",
   "idle",
   "zz-no-match",
+  ...(values["goal-workload"] ? ["goal paused", "日本語 🦞 mixed"] : []),
 ];
 const profileId = "team-shape-profile-0";
 const selectionQueries: Array<{ name: string; opts: SessionsListParams }> = [
@@ -283,6 +287,22 @@ try {
                 : {}),
               providerOverride: model.provider,
               modelOverride: model.id,
+              ...(values["goal-workload"] && ordinal % 3 === 0
+                ? {
+                    goal: {
+                      schemaVersion: 1 as const,
+                      id: `goal-${ordinal}`,
+                      objective: "Investigate 日本語 🦞 MiXeD worktree results",
+                      status: "paused" as const,
+                      createdAt: anchor,
+                      updatedAt: anchor,
+                      tokenStart: 0,
+                      tokensUsed: 1200,
+                      continuationTurns: 0,
+                      lastStatusNote: "Waiting for review",
+                    },
+                  }
+                : {}),
             });
           }
         },
@@ -332,6 +352,7 @@ try {
     parented: shapeRows.filter((row) => row.entry?.parentSessionKey).length,
     worktrees: shapeRows.filter((row) => row.entry?.worktree).length,
     groups: shapeRows.filter((row) => row.key.includes(":discord:")).length,
+    goals: shapeRows.filter((row) => row.entry?.goal).length,
     retainedRuns: memory.subagentRuns.size,
     liveRuns: liveRuns.length,
     materialized: projection.materializedCount,
@@ -361,7 +382,12 @@ try {
         ? pathToFileURL(path.resolve(values["candidate-model-facts"])).href
         : "../../src/gateway/session-row-model-facts.js"
     );
-  const baseModelFacts: typeof currentModelFacts | undefined = values["base-model-facts"]
+  type ModelSearchInputs = Parameters<typeof currentModelFacts.prepareSessionRowModelSearch>[0];
+  type ModelSearchOwner = {
+    prepareSessionRowModelSearch?: (params: ModelSearchInputs) => (search: string) => boolean;
+    mayMatchSessionRowModelSearch?: (params: ModelSearchInputs, search: string) => boolean;
+  };
+  const baseModelFacts: ModelSearchOwner | undefined = values["base-model-facts"]
     ? await import(pathToFileURL(path.resolve(values["base-model-facts"])).href)
     : undefined;
   inspector.connect();
@@ -437,18 +463,22 @@ try {
       armName: string,
       listOwner: typeof lists,
       filterOwner: typeof currentFilters,
-      modelOwner: typeof currentModelFacts,
+      modelOwner: ModelSearchOwner,
     ) => ({
       name: armName,
       prepare: () => {
         const prepared = prepare(listOwner);
         if (baseModelFacts) {
           const { cfg: modelConfig, modelCatalog, rowContext } = projection!.state;
-          prepared.modelSearchMayMatch = (query) =>
-            modelOwner.mayMatchSessionRowModelSearch(
-              { cfg: modelConfig, modelCatalog, rowContext, rows: shapeRows },
-              query,
-            );
+          prepared.modelSearchMayMatch = (query) => {
+            const inputs = { cfg: modelConfig, modelCatalog, rowContext, rows: shapeRows };
+            // Baseline copies precede the prepared-vocabulary API; keep their code unchanged.
+            if (modelOwner.prepareSessionRowModelSearch) {
+              return modelOwner.prepareSessionRowModelSearch(inputs)(query);
+            }
+            assert(modelOwner.mayMatchSessionRowModelSearch);
+            return modelOwner.mayMatchSessionRowModelSearch(inputs, query);
+          };
         }
         return prepared;
       },

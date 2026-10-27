@@ -33,6 +33,8 @@ const chatVisibleModules = new Set([
   "ui/src/lib/chat/tool-call-input.ts",
   "src/agents/tool-display-name.ts",
   "ui/src/i18n/locales/en-chat-details.ts",
+  "ui/src/i18n/locales/en-chat-permissions.ts",
+  "ui/src/pages/chat/components/chat-details-process-row.tsx",
   "ui/src/pages/chat/components/chat-environment-content.tsx",
 ]);
 
@@ -77,6 +79,23 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/components/modal-dialog.tsx":
+    case "ui/src/components/solid/modal-dialog.tsx":
+    case "ui/src/components/solid/modal-dialog.css":
+    case "ui/src/components/solid/modal-scroll-lock.css":
+      // Dialogs share the existing creation controls without loading the New Session route.
+      return "route-controls-runtime";
+    case "ui/src/pages/chat/chat-view-notices-content.tsx":
+    case "ui/src/pages/chat/chatgpt-usage-limit.tsx":
+      return "chat-notices-runtime";
+    case "ui/src/pages/chat/components/chat-selection-annotation-rows.tsx":
+      return "chat-saved-annotations-runtime";
+    case "ui/src/pages/chat/components/chat-transcript-search-content.tsx":
+      return "chat-search-runtime";
+    case "ui/src/pages/chat/chat-composer-capability-host.tsx":
+    case "ui/src/pages/chat/composer-library-session.ts":
+      // Opened composer controls share the preloaded interaction runtime.
+      return "chat-interaction-runtime";
     case "ui/src/pages/chat/components/chat-ci-automation-control.tsx":
     case "ui/src/pages/chat/components/chat-ci-automation.tsx":
     case "ui/src/pages/chat/components/chat-ci-details.tsx":
@@ -274,6 +293,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/styles/emoji-search-panel.css":
       return "emoji-search-panel";
     case "ui/src/pages/chat/components/chat-composer-emoji-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-emoji-engine.ts":
+    case "ui/src/pages/chat/components/chat-composer-mention-menu-engine.ts":
+    case "ui/src/components/textarea-token-anchor.ts":
     case "ui/src/pages/chat/components/chat-composer-emoji.tsx":
     case "ui/src/pages/chat/components/chat-composer-mention-menu-options.tsx":
     case "ui/src/pages/chat/components/chat-composer-mention-menu.tsx":
@@ -471,6 +493,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("ui/src/plugins/control-ui-actions.ts");
                 // Both routes read deferred resources; share their existing boot partition.
                 modules.add("node_modules/@solidjs/signals/dist/prod/deferred.js");
+                // Callback-backed leaf owners already share the boot projection runtime.
+                modules.add("ui/src/lib/reactive/callback-owner.ts");
                 // Chat and creation share the same identity-scoped preference owner.
                 modules.add("ui/src/pages/new-session/draft-preference-state.ts");
                 modules.add("ui/src/pages/new-session/preferences.ts");
@@ -478,6 +502,12 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("ui/src/lib/platform-label.ts");
                 // Placement and delivery share retries without importing either route's bundle.
                 modules.add("ui/src/pages/chat/chat-outbox-retry.ts");
+                // Creation still uses the catalog; Chat constructs its capability owner on demand.
+                modules.add("ui/src/pages/chat/composer-capability-catalog.ts");
+                modules.add("ui/src/lib/config/mcp-servers.ts");
+                modules.add("src/config/patch-replace-paths.ts");
+                modules.add("src/infra/plain-object.ts");
+                modules.add("src/infra/prototype-keys.ts");
               }
               return {
                 name: `control-ui-boot-${route}`,
@@ -512,6 +542,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 styles.add("ui/src/pages/chat/components/chat-pane-mobile-composition.css");
                 styles.add("ui/src/styles/chat/context-breakdown.css");
                 styles.add("ui/src/pages/chat/components/chat-session-activity.css");
+                styles.add("ui/src/pages/chat/components/chat-details-processes.css");
               }
               return {
                 name: `control-ui-boot-${route}-styles`,

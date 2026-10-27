@@ -39,7 +39,13 @@ export async function loadChatHistory(
   const requestAgentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
-  const startup = opts.startup === true;
+  const previous = getChatHistoryLoadState(state);
+  // Hidden custody refreshes may consume paused startup, but cannot downgrade
+  // the first authoritative admission or open its send gate prematurely.
+  const startup =
+    opts.startup === true ||
+    ((previous.phase === "pending-presentation" || previous.phase === "pending-connection") &&
+      previous.startup);
   const creationPending =
     state.chatSubmissions?.creation?.sessionKey === sessionKey ||
     state.hasPendingInitialTurn?.(sessionKey);
@@ -188,7 +194,11 @@ export function resumePendingChatHistoryLoad(
   state: ChatHistoryHost,
 ): Promise<ObservedChatHistoryResult | undefined> | undefined {
   const load = getChatHistoryLoadState(state);
-  if (load.phase === "pending-connection" || (load.phase === "failed" && load.retryable)) {
+  if (
+    load.phase === "pending-connection" ||
+    load.phase === "pending-presentation" ||
+    (load.phase === "failed" && load.retryable)
+  ) {
     return loadChatHistory(state, { startup: load.startup, deferBranches: true });
   }
   return undefined;

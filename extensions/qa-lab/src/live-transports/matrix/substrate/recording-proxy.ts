@@ -11,8 +11,6 @@ type MatrixQaRecordedExchange = {
   };
 };
 
-export type MatrixQaRecordingProxy = Awaited<ReturnType<typeof startMatrixQaRecordingProxy>>;
-
 export async function startMatrixQaRecordingProxy(params: { targetBaseUrl: string }) {
   const records: MatrixQaRecordedExchange[] = [];
   // Scenarios count completed native media uploads; never retain bodies, headers or query tokens.

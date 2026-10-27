@@ -439,35 +439,42 @@ it("recovers the roster after a subscription deadline without admitting late rep
   };
 
   try {
+    handlers?.open();
+    handlers?.message(
+      JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "fixture" } }),
+    );
+    expect(sent.shift()).toEqual({ id: "1:request", method: "connect" });
+    respond("1:request", { type: "hello-ok" });
+    await vi.advanceTimersByTimeAsync(0);
     connect();
     await vi.advanceTimersByTimeAsync(0);
     expect(sent).toEqual([
-      { id: "1:request", method: "sessions.subscribe" },
-      { id: "2:request", method: "sessions.list" },
+      { id: "2:request", method: "sessions.subscribe" },
+      { id: "3:request", method: "sessions.list" },
     ]);
-    respond("2:request", initialResult);
+    respond("3:request", initialResult);
     await vi.advanceTimersByTimeAsync(0);
     expect(sessions.state.result).toEqual(initialResult);
 
     await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
     expect(sessions.state.error).not.toBeNull();
     await vi.advanceTimersByTimeAsync(500);
-    expect(sent).toContainEqual({ id: "3:request", method: "sessions.subscribe" });
+    expect(sent).toContainEqual({ id: "4:request", method: "sessions.subscribe" });
 
-    respond("1:request", { status: "accepted" });
-    respond("1:request", { subscribed: true });
+    respond("2:request", { status: "accepted" });
+    respond("2:request", { subscribed: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(sessions.state.error).not.toBeNull();
     expect(sent.filter(({ method }) => method === "sessions.list")).toHaveLength(1);
 
-    respond("3:request", { subscribed: true });
+    respond("4:request", { subscribed: true });
     await vi.advanceTimersByTimeAsync(0);
-    expect(sent).toContainEqual({ id: "4:request", method: "sessions.list" });
-    respond("4:request", recovered);
+    expect(sent).toContainEqual({ id: "5:request", method: "sessions.list" });
+    respond("5:request", recovered);
     await vi.advanceTimersByTimeAsync(0);
 
-    respond("1:request", { status: "accepted" });
-    respond("1:request", { subscribed: true });
+    respond("2:request", { status: "accepted" });
+    respond("2:request", { subscribed: true });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(sessions.state.error).toBeNull();

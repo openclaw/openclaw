@@ -2,6 +2,8 @@
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/operator-authority-measure.ts \
 //   --scenario attempt-transcript-guard --plugins 40 --samples 5 --iterations 5000 --warmup 1000 \
 //   --timing-only --revision <sha> --output <timing.json>
+// For recovery-source policy checks, use --plugins 40 --access-policies 1 to keep
+// ordinary plugins in the inventory without inventing 40 authorization callbacks.
 // Repeat without --timing-only and with --sampling-interval 1024 for sampled bytes.
 // Compare identical arguments across revisions; allocation/CPU passes are separate.
 // Calls the prepared lifecycle's actual assertCommitAllowed; setup and cleanup are
@@ -63,6 +65,7 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "20000" },
     warmup: { type: "string", default: "5000" },
     plugins: { type: "string", default: "1" },
+    "access-policies": { type: "string" },
     samples: { type: "string", default: "1" },
     scenario: { type: "string", default: "all" },
     "counts-only": { type: "boolean", default: false },
@@ -82,6 +85,8 @@ assert(!(values["counts-only"] && values["timing-only"]), "Select one measuremen
 const iterations = positiveInteger(values.iterations, "iterations");
 const warmup = positiveInteger(values.warmup, "warmup");
 const pluginCount = positiveInteger(values.plugins, "plugins");
+const policyCount = positiveInteger(values["access-policies"] ?? values.plugins, "access-policies");
+assert(policyCount <= pluginCount, "access-policies must not exceed plugins");
 const sampleCount = positiveInteger(values.samples, "samples");
 const samplingInterval = positiveInteger(values["sampling-interval"], "sampling-interval");
 assert(values["counts-only"] || globalThis.gc, "Run Node with --expose-gc");
@@ -172,6 +177,9 @@ for (let index = 0; index < pluginCount; index++) {
   }
   config.plugins!.entries![id] = { enabled: true };
   builder.registry.plugins.push(record);
+  if (index >= policyCount) {
+    continue;
+  }
   const policy: PluginGatewayAccessPolicy = {
     authorize(context) {
       counts.authorize++;
@@ -191,7 +199,7 @@ for (let index = 0; index < pluginCount; index++) {
   builder.createApi(record, { config }).registerGatewayAccessPolicy(policy);
   assert(getPluginInstance(record), "Registration must install the real plugin invocation owner");
 }
-assert.equal(builder.registry.gatewayAccessPolicies.length, pluginCount);
+assert.equal(builder.registry.gatewayAccessPolicies.length, policyCount);
 setActivePluginRegistry(builder.registry);
 
 const access = resolvePreparedGatewayOperatorAccessAuthority(
@@ -609,6 +617,7 @@ try {
     countsOnly: values["counts-only"],
     warmup,
     pluginCount,
+    policyCount,
     sampleCount,
     setupCountsExcluded: true,
     nextCheckRevocationDenied: true,

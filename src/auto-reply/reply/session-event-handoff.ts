@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
@@ -187,6 +187,7 @@ export function enqueueSessionEventForHost(
   let settlement: "settling" | "finished" | undefined;
   let settings = options.expectedTarget?.settings;
   let checkedSettings: typeof settings | null = null;
+  let isDeletionBlocked: (() => boolean) | undefined;
   const jobTools = options.scheduledAutomation
     ? resolveCronRunToolsAllow(options.scheduledAutomation.job)
     : undefined;
@@ -205,7 +206,7 @@ export function enqueueSessionEventForHost(
     options.expectedTarget?.assertCurrent?.();
     const currentConfig = getSessionEventRuntimeConfig();
     resolveConfiguredAgentId(currentConfig, agentId);
-    if (isAgentDeletionBlocked(agentId, { env })) {
+    if (!isDeletionBlocked || isDeletionBlocked()) {
       throw new Error("Session event agent is being deleted");
     }
     options.scheduledAutomation?.assertCurrent();
@@ -484,6 +485,7 @@ export function enqueueSessionEventForHost(
     runWithGatewayDetachedWorkContinuation(async () => {
       admissionStarted = true;
       await readAgentDeletionJournalStatusInWorker(agentId, { env }, signal);
+      isDeletionBlocked = prepareAgentDeletionBlocked(agentId, { env });
       assertOwnerCurrent();
       const { dispatchInboundMessageWithRoutedChannelDispatcher } = await import("../dispatch.js");
       const { prepareSessionGenerationFacts } =

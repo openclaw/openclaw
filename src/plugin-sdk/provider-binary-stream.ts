@@ -1,3 +1,5 @@
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
+
 /** Create a byte-limited stream that owns its source reader and request cleanup. */
 export function createBoundedProviderBinaryStream(
   source: ReadableStream<Uint8Array>,
@@ -41,7 +43,11 @@ export function createBoundedProviderBinaryStream(
         })(),
       ]);
       if (cleanup.status === "rejected") {
+        materializeErrorStack(cleanup.reason);
         throw cleanup.reason;
+      }
+      if (cancellation.status === "rejected") {
+        materializeErrorStack(cancellation.reason);
       }
       return cancellation;
     }));
@@ -74,6 +80,7 @@ export function createBoundedProviderBinaryStream(
             size: nextSize,
             maxBytes: options.maxBytes,
           });
+          materializeErrorStack(error);
           if (remainingBytes > 0) {
             controller.enqueue(chunk.value.subarray(0, remainingBytes));
             pendingError = error;
@@ -89,6 +96,7 @@ export function createBoundedProviderBinaryStream(
         controller.enqueue(chunk.value);
       } catch (error) {
         releaseReader(activeReader);
+        materializeErrorStack(error);
         controller.error(error);
       }
     },

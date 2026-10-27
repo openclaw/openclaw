@@ -40,7 +40,6 @@ import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
-import { readRegisteredSandboxRuntimeIds } from "./registry.js";
 import {
   resolveSandboxRuntimeStatus,
   resolveSandboxRuntimeStatusAsync,
@@ -161,7 +160,7 @@ async function ensureSandboxWorkspaceLayout(
     }
   }
   const syncedSkills = await syncSandboxSkillsToWorkspace();
-  await ensureReadOnlyWorkspaceSkillMountSources(
+  const createdSkillMountSources = await ensureReadOnlyWorkspaceSkillMountSources(
     {
       workspaceDir,
       agentWorkspaceDir,
@@ -171,6 +170,12 @@ async function ensureSandboxWorkspaceLayout(
     },
     assertCurrent,
   );
+  if (createdSkillMountSources && localWorkspace) {
+    // Finish producer-created layout before first use, so source admission does
+    // not mistake protected mount directories for unsaved guest work.
+    await localWorkspace.checkpoint();
+    assertCurrent?.();
+  }
 
   return {
     agentWorkspaceDir,
@@ -442,18 +447,12 @@ async function resolveSandboxContextWithAuthority(
             (readOnlyResourceMounts ??= []).push(githubMount);
           }
 
-          phases.mark("attempt.setup.sandbox.registry");
-          const registeredRuntimeIds = await readRegisteredSandboxRuntimeIds({
-            backendId: resolvedCfg.backend,
-            scopeKey,
-          });
           const provisionBackend = () => {
             ownedParams.assertCurrent?.();
             return createSandboxBackend(
               {
                 sessionKey: rawSessionKey,
                 scopeKey,
-                ...(registeredRuntimeIds.length > 0 ? { registeredRuntimeIds } : {}),
                 workspaceDir,
                 ...(localWorkspace
                   ? {

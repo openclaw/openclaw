@@ -7,6 +7,7 @@ import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migratio
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "../infra/update-capture-privacy-marker.js";
 import { captureScopes } from "../infra/update-recovery-backup-reader.js";
+import { isNeverActivatedFailedUpdate } from "../infra/update-run-activation.js";
 import { getUpdateRun, listUpdateRuns } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { isUpdateRecoveryPending } from "../infra/update-run-recovery-schema.js";
@@ -55,6 +56,10 @@ function classifyCapture(
   const recovery = loadUpdateRecovery(run.runId, { env });
   if (recovery && isUpdateRecoveryPending(recovery)) {
     return { outcome: "protected", reason: "pending-update-recovery" };
+  }
+  // A failure that never activated left the original state live; its copy restores nothing.
+  if (isNeverActivatedFailedUpdate(run)) {
+    return { outcome: "candidate", reason: "never-activated-update-capture" };
   }
   const sealed =
     fs.existsSync(path.join(directory, "manifest.json")) &&
