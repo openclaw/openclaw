@@ -1,11 +1,11 @@
 // Install the shared GitHub fixture before loading the registered action owners.
 // oxfmt-ignore
-import { bindFixtureRuntime, fixture, mocks } from "./github-pr-workspace-preparation.test-support.js";
+import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, fixture, mocks } from "./github-pr-workspace-preparation.test-support.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isNodeError } from "@openclaw/fs-safe/path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ensureEmptyWorktreeSource } from "../agents/worktrees/empty-source.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
@@ -13,8 +13,6 @@ import {
   commandResult,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
-import * as workspaceStore from "./worker-environments/local-workspace-store.js";
-import { isLocalWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
 
 describe("existing PR preparation through the registered agent action", () => {
   installGitHubPublicationTestHarness({
@@ -482,29 +480,9 @@ describe("existing PR preparation through the registered agent action", () => {
       const originalHead = await f.git("rev-parse", "HEAD");
       const guestHead = await f.guestGit("rev-parse", "HEAD");
       const guestBranch = await f.guestGit("symbolic-ref", "HEAD");
-      const withStore = workspaceStore.withLocalWorkspaceStore;
-      let interrupted = false;
-      const interruption = vi
-        .spyOn(workspaceStore, "withLocalWorkspaceStore")
-        .mockImplementation((params, operation) =>
-          withStore(params, (store) =>
-            operation({
-              ...store,
-              update: async (row, patch, authority, manifest) => {
-                const result = await store.update(row, patch, authority, manifest);
-                if (
-                  !interrupted &&
-                  patch.pending_target === "projection" &&
-                  isLocalWorkspaceBaseRefreshRef(result.pending_ref)
-                ) {
-                  interrupted = true;
-                  throw new Error("interrupted after initial canonical acceptance");
-                }
-                return result;
-              },
-            }),
-          ),
-        );
+      const { interruption, wasInterrupted } = interruptCanonicalWorkspaceAcceptance(
+        "interrupted after initial canonical acceptance",
+      );
       try {
         await expect(f.invoke()).rejects.toThrow(
           "Accepted workspace publication is indeterminate and requires recovery",
@@ -512,7 +490,7 @@ describe("existing PR preparation through the registered agent action", () => {
       } finally {
         interruption.mockRestore();
       }
-      expect(interrupted).toBe(true);
+      expect(wasInterrupted()).toBe(true);
       expect(f.readSession().worktree?.githubPullRequest).toMatchObject({
         head: { commit: f.headCommit },
       });

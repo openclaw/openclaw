@@ -28,7 +28,7 @@ export function unrefLocalServiceOutput(child: ChildProcess): void {
   }
 }
 
-export function drainLocalServiceOutput(child: ChildProcess): void {
+function drainLocalServiceOutput(child: ChildProcess): void {
   child.stdout?.removeAllListeners("data");
   child.stderr?.removeAllListeners("data");
   child.stdout?.resume();

@@ -203,7 +203,9 @@ finishes before synchronous database execution; writer admission and receipts
 stay with their existing owners.
 
 The shared-state reader pool keeps its first worker warm for the normal handle
-idle timeout. Surplus readers retire after 30 seconds idle and restart on demand.
+idle timeout. Surplus readers initially retire after 30 seconds idle and restart on demand.
+When demand returns within five minutes of that retirement, one replacement
+reader stays warm for up to 90 idle seconds to avoid repeated startup work.
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
 
@@ -221,9 +223,10 @@ flushes the remaining batch. Fresh checkpoints remain untouched, and a failed or
 canceled scan leaves uncommitted derived totals for the next refresh. Persisted
 rollups, partitions, schemas, and report totals keep their existing format.
 
-Transcript history and search lanes likewise retire surplus workers after 30
-seconds idle. Each lane keeps one worker until its existing five-minute idle
-retirement, which waits for logical reader leases to be released. Surplus
+Transcript history and search lanes use the same 30-second surplus timeout and
+90-second warm timeout for one recurring burst worker. Each lane keeps one worker
+until its existing five-minute idle retirement, which waits for logical reader
+leases to be released. Surplus
 retirement preserves those leases and waits for active tasks; a later concurrent
 read starts another worker on demand.
 

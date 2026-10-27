@@ -164,7 +164,7 @@
   "uiHints": {
     "webSearch.apiKey": {
       "label": "DeepSeek Search API Key",
-      "help": "DeepSeek API key. Falls back to DEEPSEEK_API_KEY or models.providers.deepseek.apiKey.",
+      "help": "DeepSeek API key. Falls back to DEEPSEEK_API_KEY, then to models.providers.deepseek.apiKey while that provider and its models use https://api.deepseek.com.",
       "sensitive": true
     }
   },

@@ -125,6 +125,8 @@ export type CreateUpdateRunInput = Partial<
   preview?: boolean;
   /** Record an already completed repair without publishing a transient running row. */
   settlement?: { reason: string; detail: string };
+  /** Host-read update-request policy; storage records outcome eligibility only for a new run. */
+  reportResult?: boolean;
 };
 
 export type UpdateRunDiagnostics = Pick<

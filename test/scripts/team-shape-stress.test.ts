@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createTeamStressFanoutReceipts } from "../../scripts/perf/team-shape-stress-receipts.ts";
 import {
   compareStressRuns,
@@ -16,6 +16,42 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const executeFile = promisify(execFile);
+
+it("drains workload receipts despite background metadata, retaining late child and injection delivery", () => {
+  let now = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  try {
+    const receipts = createTeamStressFanoutReceipts(2, ["churn"]);
+    receipts.trackForeground(["parent"], false);
+    const child = { sessionKey: "child", messageId: "early" };
+    receipts.observe(0, "session.message", child);
+    now = 100;
+    receipts.trackForeground(["child"], false);
+    now = 900;
+    receipts.observe(1, "session.message", child);
+    now = 1100;
+    expect(receipts.isDrained()).toBe(false);
+    now = 1900;
+    receipts.observe(0, "chat.metadata.changed", { agentId: "main" });
+    receipts.observe(1, "sessions.changed", { sessionKey: "cron", reason: "updated" });
+    expect(receipts.isDrained()).toBe(true);
+
+    receipts.expectInjection("churn", "committed");
+    now = 2900;
+    const injection = { sessionKey: "churn", messageId: "committed" };
+    receipts.observe(0, "session.message", injection);
+    expect(receipts.isDrained(false)).toBe(false);
+    receipts.observe(1, "session.message", injection);
+    expect(receipts.isDrained(false)).toBe(true);
+    expect(receipts.isDrained()).toBe(false);
+    now = 3900;
+    receipts.observe(1, "chat.metadata.changed", { agentId: "main" });
+    expect(receipts.isDrained()).toBe(true);
+    expect(() => receipts.assertComplete()).not.toThrow();
+  } finally {
+    clock.mockRestore();
+  }
+});
 
 it("checks continuous workload receipts when a background fanout crosses the timing boundary", () => {
   const receipts = createTeamStressFanoutReceipts(2, ["churn"]);
@@ -244,6 +280,176 @@ it("counts built policy preparation only inside the diagnostic measurement windo
   expect(result.installed).toHaveLength(3);
 });
 
+it.each([false, true])(
+  "counts main-isolate receipt restoration only when guarded assignment succeeds (candidate: %s)",
+  async (candidate) => {
+    const root = temporary.make("team-stress-receipt-counts-");
+    const durable = path.join(root, "session-actor-durable-fixture.mjs");
+    fs.writeFileSync(
+      durable,
+      `export function settle(committed, entryReference) {
+        let result;
+        result = committed;
+        return result;
+      }`,
+    );
+    const owner = path.join(root, "session-actor-memory-owner-fixture.mjs");
+    fs.writeFileSync(
+      owner,
+      candidate
+        ? `export function restoreSessionActorCommittedOutcome(outcome, reference) {
+  const {receipt} = outcome;
+  if (receipt.entryReference !== undefined) {
+    if (!reference || receipt.entryReference !== reference.writeToken) throw new Error("token mismatch");
+    receipt.postimage.entry = reference.entry;
+    delete receipt.entryReference;
+  }
+  return outcome;
+}`
+        : "export const baseline = true;",
+    );
+    const entry = path.join(root, "entry.mjs");
+    fs.writeFileSync(
+      entry,
+      `import {Worker} from "node:worker_threads";
+       import {settle} from "./session-actor-durable-fixture.mjs";
+       import * as owner from "./session-actor-memory-owner-fixture.mjs";
+       const key = Symbol.for("openclaw.benchmark.session-actor-receipt-retention");
+       const entry = Object.freeze({sessionId: "synthetic"});
+       const reference = {writeToken: "match", entry};
+       const outcome = (phase, append) => ({receipt: {phase, transcript: {append}}});
+       const restore = (token, supplied = reference) => {
+         const committed = {receipt: {entryReference: token, postimage: {}}};
+         owner.restoreSessionActorCommittedOutcome(committed, supplied);
+         return committed;
+       };
+       settle(outcome("appendTranscriptEvent", {}), reference);
+       if (${candidate}) restore("match");
+       let acknowledgments = 0;
+       process.send = () => { acknowledgments++; return true; };
+       process.emit("message", {channel: "team-shape-stress", action: "start"});
+       const original = outcome("patch");
+       if (settle(original, reference) !== original) throw new Error("changed result");
+       settle(outcome("appendTranscriptEvent", {}), reference);
+       settle(outcome("appendToolResult", {}));
+       settle(outcome("appendToolResult", {initialEntry: {}}), reference);
+       settle(outcome("appendToolResult"), reference);
+       if (${candidate}) {
+         if (restore("match").receipt.postimage.entry !== entry) throw new Error("changed entry");
+         restore("match", {writeToken: "match"});
+         restore(undefined);
+         let refused = false;
+         try { restore("wrong"); } catch { refused = true; }
+         if (!refused) throw new Error("lost token refusal");
+       }
+       const worker = new Worker(
+         'const {parentPort} = require("node:worker_threads"); import(' + JSON.stringify(new URL("./session-actor-durable-fixture.mjs", import.meta.url).href) + ').then(({settle}) => { settle({receipt:{phase:"appendTranscriptEvent",transcript:{append:{}}}}, {}); parentPort.postMessage({hasCounters: Symbol.for("openclaw.benchmark.session-actor-receipt-retention") in globalThis}); });',
+         {eval: true}
+       );
+       const workerResult = await new Promise((resolve, reject) => { worker.once("message", resolve); worker.once("error", reject); });
+       await worker.terminate();
+       process.emit("message", {channel: "team-shape-stress", action: "stop", output: ${JSON.stringify(root)}});
+       settle(outcome("appendTranscriptEvent", {}), reference);
+       if (${candidate}) restore("match");
+       console.log(JSON.stringify({acknowledgments, workerResult, enabled: globalThis[key].enabled,
+         numericStateOnly: Object.values(globalThis[key]).every(value => typeof value === "number")}));`,
+    );
+    const preload = new URL(
+      "../../scripts/perf/session-actor-receipt-retention-preload.mjs",
+      import.meta.url,
+    );
+    const { stdout } = await executeFile(
+      resolveTestNodeExecPath(),
+      ["--import", preload.href, entry],
+      {
+        cwd: root,
+        timeout: 15_000,
+      },
+    );
+    expect(JSON.parse(stdout)).toEqual({
+      acknowledgments: 0,
+      workerResult: { hasCounters: false },
+      enabled: 0,
+      numericStateOnly: true,
+    });
+    const result = JSON.parse(
+      fs.readFileSync(path.join(root, "receipt-reference-counts.json"), "utf8"),
+    );
+    expect(result.counts).toEqual({
+      committed: 5,
+      committedWithHostPreimage: 4,
+      appendShaped: 2,
+      appendShapedWithHostPreimage: 1,
+      appendInitializationOutcomes: 1,
+      successfulRestores: candidate ? 2 : 0,
+      successfulNonemptyRestores: candidate ? 1 : 0,
+    });
+    expect(result.installedHookCount).toBe(candidate ? 2 : 1);
+    expect(result.installedHooks).toHaveLength(candidate ? 2 : 1);
+    expect(result.installedHooks).toEqual(
+      expect.arrayContaining([
+        { hook: "committed-outcome", bundle: path.basename(durable) },
+        ...(candidate ? [{ hook: "frozen-entry-restoration", bundle: path.basename(owner) }] : []),
+      ]),
+    );
+    expect(result.endedAtEpochMs).toBeGreaterThanOrEqual(result.startedAtEpochMs);
+    expect(result.scope).toContain("IPC span");
+  },
+);
+
+it.each([
+  [
+    "session-actor-durable-bad.mjs",
+    "export const unrelated = true;",
+    "requires one result = committed; anchor",
+  ],
+  [
+    "session-actor-durable-duplicate.mjs",
+    "export function settle(committed, entryReference) { let result; result = committed; result = committed; return result; }",
+    "requires one result = committed; anchor",
+  ],
+  [
+    "session-actor-memory-owner-bad.mjs",
+    "export function restoreSessionActorCommittedOutcome(outcome) { return outcome; }",
+    "requires one receipt.postimage.entry = reference.entry; anchor",
+  ],
+])("refuses malformed receipt instrumentation in %s", async (bundle, source, error) => {
+  const root = temporary.make("team-stress-receipt-bad-anchor-");
+  const entry = path.join(root, bundle);
+  fs.writeFileSync(entry, source);
+  const preload = new URL(
+    "../../scripts/perf/session-actor-receipt-retention-preload.mjs",
+    import.meta.url,
+  );
+  await expect(
+    executeFile(resolveTestNodeExecPath(), ["--import", preload.href, entry], {
+      cwd: root,
+      timeout: 15_000,
+    }),
+  ).rejects.toThrow(error);
+});
+
+it("refuses receipt counts when no committed-outcome hook was loaded", async () => {
+  const root = temporary.make("team-stress-receipt-missing-hook-");
+  const entry = path.join(root, "entry.mjs");
+  fs.writeFileSync(
+    entry,
+    `process.emit("message", {channel:"team-shape-stress", action:"start"});
+     process.emit("message", {channel:"team-shape-stress", action:"stop", output:${JSON.stringify(root)}});`,
+  );
+  const preload = new URL(
+    "../../scripts/perf/session-actor-receipt-retention-preload.mjs",
+    import.meta.url,
+  );
+  await expect(
+    executeFile(resolveTestNodeExecPath(), ["--import", preload.href, entry], {
+      cwd: root,
+      timeout: 15_000,
+    }),
+  ).rejects.toThrow("requires one committed hook and at most one restore hook");
+  expect(fs.existsSync(path.join(root, "receipt-reference-counts.json"))).toBe(false);
+});
+
 it("requires ten-minute evidence windows and marks explicit short runs as smoke", () => {
   const options = parseStressOptions(["--output", "/unused"]);
   expect(options).toMatchObject({
@@ -251,11 +457,13 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
     smoke: false,
     clients: 65,
     pairs: 2,
+    aaPairs: 0,
     pollMs: 25_000,
     listWeight: 16,
     roundMs: 60_000,
     churnMs: 6_000,
     operatorModelPolicy: false,
+    workerHeapSnapshot: false,
   });
   expect(parseStressOptions(["--output", "/unused", "--smoke-seconds", "1"])).toMatchObject({
     durationMs: 1_000,
@@ -264,6 +472,24 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
   expect(parseStressOptions(["--output", "/unused", "--operator-model-policy"])).toMatchObject({
     operatorModelPolicy: true,
   });
+  expect(parseStressOptions(["--output", "/unused", "--mode", "retention"])).toMatchObject({
+    mode: "retention",
+  });
+  expect(parseStressOptions(["--output", "/unused", "--worker-heap-snapshot"])).toMatchObject({
+    workerHeapSnapshot: true,
+  });
+  expect(
+    parseStressOptions([
+      "--output",
+      "/unused",
+      "--base",
+      "/base",
+      "--pairs",
+      "3",
+      "--aa-pairs",
+      "2",
+    ]),
+  ).toMatchObject({ pairs: 3, aaPairs: 2 });
   for (const args of [
     [],
     ["--output"],
@@ -278,6 +504,8 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
     ["--output", "/unused", "--list-weight", "0"],
     ["--output", "/unused", "--list-weight", "65"],
     ["--output", "/unused", "--pairs", "0"],
+    ["--output", "/unused", "--aa-pairs", "1"],
+    ["--output", "/unused", "--base", "/base", "--pairs", "1", "--aa-pairs", "2"],
     ["--output", "/unused", "--mode", "invalid"],
     ["--output", "/unused", "--port", "18789"],
     ["--output", "/unused", "--port", "65536"],
@@ -286,46 +514,96 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
   }
 });
 
-it("records real main-isolate timing windows and settles telemetry once", async () => {
-  const output = temporary.make("team-stress-telemetry-");
-  const telemetryModule = new URL(
-    "../../scripts/perf/team-shape-stress-telemetry.ts",
-    import.meta.url,
-  );
-  await executeFile(
-    resolveTestNodeExecPath(),
-    [
-      "--input-type=module",
-      "--eval",
-      `import { setTimeout as delay } from 'node:timers/promises';
+it.each(["timing", "allocation", "retention"])(
+  "records real main-isolate %s evidence and settles telemetry once",
+  async (mode) => {
+    const output = temporary.make("team-stress-telemetry-");
+    const telemetryModule = new URL(
+      "../../scripts/perf/team-shape-stress-telemetry.ts",
+      import.meta.url,
+    );
+    await executeFile(
+      resolveTestNodeExecPath(),
+      [
+        "--input-type=module",
+        "--eval",
+        `import { setTimeout as delay } from 'node:timers/promises';
        const { startTeamStressTelemetry } = await import(${JSON.stringify(telemetryModule.href)});
-       const stop = await startTeamStressTelemetry({output: ${JSON.stringify(output)}, allocations: false, intervalMs: 100});
+       const stop = await startTeamStressTelemetry({output: ${JSON.stringify(output)}, allocations: ${mode !== "timing"}, retention: ${mode === "retention"}, intervalMs: 100});
        await delay(250);
        await Promise.all([stop(), stop()]);`,
-    ],
-    { cwd: fileURLToPath(new URL("../../", import.meta.url)), timeout: 15_000 },
-  );
-  const summary = JSON.parse(fs.readFileSync(path.join(output, "stress-telemetry.json"), "utf8"));
-  const windows = fs
-    .readFileSync(path.join(output, "stress-minutes.jsonl"), "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
-  expect(summary).toMatchObject({ mode: "untraced-timing", sampledAllocatedBytes: null });
-  expect(summary.pid).not.toBe(process.pid);
-  expect(summary.durationMs).toBeGreaterThanOrEqual(200);
-  expect(summary.eventLoop.count).toBeGreaterThan(0);
-  expect(summary.mainThreadCpuMs).toBeGreaterThanOrEqual(0);
-  expect(summary.lastSample.memory.heapUsed).toBeGreaterThan(0);
-  expect(summary.lastSample.memory.rss).toBeGreaterThan(0);
-  expect(summary.windows).toBe(windows.length);
-  expect(windows.filter((window) => window.partial)).toHaveLength(1);
-  expect(windows.at(-1).partial).toBe(true);
-  expect(windows.every((window) => window.sampledAllocatedBytes === null)).toBe(true);
-  expect(fs.existsSync(path.join(output, "stress-allocation.heapprofile"))).toBe(false);
-});
+      ],
+      { cwd: fileURLToPath(new URL("../../", import.meta.url)), timeout: 15_000 },
+    );
+    const summary = JSON.parse(fs.readFileSync(path.join(output, "stress-telemetry.json"), "utf8"));
+    const windows = fs
+      .readFileSync(path.join(output, "stress-minutes.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(summary.mode).toBe(mode === "timing" ? "untraced-timing" : `${mode}-diagnostic`);
+    expect(summary.pid).not.toBe(process.pid);
+    expect(summary.durationMs).toBeGreaterThanOrEqual(200);
+    expect(summary.eventLoop.count).toBeGreaterThan(0);
+    expect(summary.mainThreadCpuMs).toBeGreaterThanOrEqual(0);
+    expect(summary.lastSample.memory.heapUsed).toBeGreaterThan(0);
+    expect(summary.lastSample.memory.rss).toBeGreaterThan(0);
+    expect(summary.initialMemory.heapUsed).toBeGreaterThan(0);
+    expect(
+      summary.initialHeapSpaces.some(
+        (space: { space_name: string }) => space.space_name === "old_space",
+      ),
+    ).toBe(true);
+    expect(summary.windows).toBe(windows.length);
+    expect(windows.filter((window) => window.partial)).toHaveLength(1);
+    expect(windows.at(-1).partial).toBe(true);
+    expect(windows.every((window) => window.sampledAllocatedBytes === null)).toBe(
+      mode !== "allocation",
+    );
+    expect(fs.existsSync(path.join(output, "stress-allocation.heapprofile"))).toBe(
+      mode === "allocation",
+    );
+    expect(fs.existsSync(path.join(output, "stress-retention.heapprofile"))).toBe(
+      mode === "retention",
+    );
+    expect(fs.existsSync(path.join(output, "stress-retained.heapsnapshot"))).toBe(
+      mode === "retention",
+    );
+    if (mode === "timing") {
+      expect(summary.samplingOptions).toBeNull();
+    } else {
+      expect(summary.samplingOptions).toMatchObject({
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: mode === "allocation",
+      });
+    }
+    if (mode === "retention") {
+      expect(summary.sampledAllocatedBytes).toBeNull();
+      expect(summary.sampledSurvivorBytes).toBeGreaterThanOrEqual(0);
+      // No periodic profile materialization should perturb survivor measurements.
+      expect(windows.every((window) => window.sampledSurvivorBytes === null)).toBe(true);
+      const retained = JSON.parse(
+        fs.readFileSync(path.join(output, "stress-retention.json"), "utf8"),
+      );
+      expect(retained.measuredWindowEndedAtEpochMs).toBe(summary.endedAtEpochMs);
+      expect(retained.beforeCollection.atEpochMs).toBeGreaterThanOrEqual(summary.endedAtEpochMs);
+      expect(retained.afterCollection.atEpochMs).toBeGreaterThanOrEqual(
+        retained.beforeCollection.atEpochMs,
+      );
+      expect(retained.afterSnapshot.atEpochMs).toBeGreaterThanOrEqual(
+        retained.afterCollection.atEpochMs,
+      );
+      const snapshot = JSON.parse(
+        fs.readFileSync(path.join(output, retained.heapSnapshot), "utf8"),
+      );
+      expect(snapshot.snapshot.meta.node_fields).toContain("self_size");
+      expect(snapshot.nodes.length).toBeGreaterThan(0);
+      expect(snapshot.edges.length).toBeGreaterThan(0);
+    }
+  },
+);
 
-it("compares matched pairs in swapped launch order without averaging tiny-base percentages", () => {
+it("compares swapped pairs without mixing A/A controls or averaging tiny-base percentages", () => {
   const run = (side: StressRun["side"], pair: number, cpu: number): StressRun => ({
     resultDir: "/synthetic",
     side,
@@ -347,8 +625,10 @@ it("compares matched pairs in swapped launch order without averaging tiny-base p
     run("candidate", 1, 3),
     run("candidate", 2, 80),
     run("base", 2, 100),
+    { ...run("base", 1, 7), control: true },
+    { ...run("candidate", 1, 9), control: true },
   ]);
-  const cpu = rows.find((row) => row.metric === "mainThreadCpuPercent");
+  const cpu = rows.find((row) => !row.control && row.metric === "mainThreadCpuPercent");
   expect(cpu).toMatchObject({
     base: 50.5,
     candidate: 41.5,
@@ -357,6 +637,14 @@ it("compares matched pairs in swapped launch order without averaging tiny-base p
     pairedDeltas: [2, -20],
   });
   expect(cpu?.percent).toBeCloseTo((-9 / 50.5) * 100);
+  expect(rows.filter((row) => row.metric === "mainThreadCpuPercent")).toHaveLength(2);
+  expect(rows.find((row) => row.control && row.metric === "mainThreadCpuPercent")).toMatchObject({
+    base: 7,
+    candidate: 9,
+    absolute: 2,
+    pairs: 1,
+    pairedDeltas: [2],
+  });
   expect(rows.find((row) => row.metric === "zeroCost")).toMatchObject({
     base: 0,
     absolute: 0,
@@ -372,7 +660,7 @@ it("compares matched pairs in swapped launch order without averaging tiny-base p
   });
 });
 
-it("keeps partial worker evidence without comparing incomplete heap totals", () => {
+it.each([false, true])("keeps partial worker evidence (%s)", (worktreeToolChurn) => {
   const capture = (side: StressRun["side"], reason?: string) => {
     const resultDir = temporary.make("team-stress-worker-census-");
     const workerMemoryMissing = reason ? [{ script: "fixture-worker", threadId: 2, reason }] : [];
@@ -388,6 +676,7 @@ it("keeps partial worker evidence without comparing incomplete heap totals", () 
       path.join(resultDir, "result.json"),
       JSON.stringify({
         completedTurns: 1,
+        worktreeToolChurn,
         teamStress: { committedWrites: 1, prometheusScrapes: 1, rpcMinutes: [] },
         memorySamples: [{ collectedGarbage: false, resources: { workers } }],
         samples: [
@@ -400,7 +689,7 @@ it("keeps partial worker evidence without comparing incomplete heap totals", () 
                 "chat.history",
                 "chat.startup",
                 "sessions.diff",
-                "connect",
+                ...(worktreeToolChurn ? [] : ["connect"]),
                 "chat.inject",
               ].map((method) => [method, { latenciesMs: [1] }]),
             ),

@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import {
@@ -8,9 +8,11 @@ import {
 } from "../../../lib/chat/model-select-state.ts";
 import { resolveChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { emulateOverlayMedia } from "../../../test-helpers/overlay-browser-media.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
+import type { ChatAccessProgramControlProps } from "./chat-access-program-control.tsx";
 import { focusComposerFromChrome } from "./chat-composer-dom.ts";
 import { ChatEffortPicker } from "./chat-effort-picker.tsx";
 import { installChatComposerPickerDismissal } from "./chat-picker-overlay.ts";
@@ -20,7 +22,6 @@ let updatePicker: ((props: Parameters<typeof ChatEffortPicker>[0]) => void) | un
 const speed = (value: string) =>
   host!.querySelector<HTMLButtonElement>(`[data-chat-speed-option="${value}"]`)!;
 const summary = () => host!.querySelector("summary")!;
-const noBoost = { fill: "none", glow: "none" };
 
 function speedState(
   mode: boolean | "ultrafast",
@@ -140,14 +141,7 @@ async function fixture(
   };
 }
 
-function appearance(input: HTMLInputElement) {
-  return {
-    fill: getComputedStyle(input.parentElement!).backgroundImage,
-    glow: getComputedStyle(input).boxShadow,
-  };
-}
-
-describe("effort bar colour and flow", () => {
+describe("effort selection", () => {
   it("returns Escape to its trigger after pointer and keyboard reopening with title tooltips", async () => {
     await fixture(["low", "medium", "high"], "high", false, undefined, false);
     const composer = host!;
@@ -181,7 +175,14 @@ describe("effort bar colour and flow", () => {
     await expect.poll(() => details.open).toBe(false);
     await userEvent.keyboard("{Enter}");
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
-    await userEvent.keyboard("{Tab}");
+    // macOS WebKit uses Option-Tab to traverse controls inside the open picker.
+    await userEvent.keyboard(
+      navigator.platform.includes("Mac") &&
+        navigator.userAgent.includes("AppleWebKit") &&
+        !navigator.userAgent.includes("Chrome")
+        ? "{Alt>}{Tab}{/Alt}"
+        : "{Tab}",
+    );
     await expect.poll(() => document.activeElement).toBe(host!.querySelector("input[type=range]"));
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
@@ -197,6 +198,7 @@ describe("effort bar colour and flow", () => {
       speedState("ultrafast", ["priority", "ultrafast"], true, true),
     );
     expect(summary().textContent?.trim()).toBe("High");
+    expect(host!.querySelector(".chat-controls__effort-zap")!.checkVisibility()).toBe(true);
     expect(summary().getAttribute("aria-label")).toContain("High · Ultrafast");
     expect(summary().title).toBe("High · Ultrafast");
     expect(
@@ -234,77 +236,59 @@ describe("effort bar colour and flow", () => {
     expect(speed("ultrafast").getAttribute("tabindex")).toBe("-1");
   });
 
-  it.each(["dark", "light"])("highlights the highest discrete effort in %s mode", async (theme) => {
-    document.documentElement.dataset.themeMode = theme;
-    for (const maximum of ["high", "xhigh", "max"]) {
-      const levels = ["off", "low", maximum, "adaptive", "ultra"];
-      const { input } = await fixture(levels, maximum);
-      const maximumStyle = appearance(input);
-      expect(maximumStyle.fill).toContain("linear-gradient");
-      expect(maximumStyle.glow).not.toBe("none");
-      expect(appearance((await fixture(levels, maximum, true)).input)).toEqual(maximumStyle);
-      const ultraStyle = appearance((await fixture(levels, "ultra")).input);
-      expect(ultraStyle.fill).toContain("linear-gradient");
-      expect(ultraStyle.fill).not.toBe(maximumStyle.fill);
-      expect(ultraStyle.glow).not.toBe(maximumStyle.glow);
-      for (const value of ["off", "low", "adaptive", "unsupported"]) {
-        expect(appearance((await fixture(levels, value)).input)).toEqual(noBoost);
-      }
-    }
-    expect(appearance((await fixture(["off", "on"], "on")).input)).toEqual(noBoost);
-    for (const id of ["low", "high"]) {
-      const { input } = await fixture(["off", { id, label: "on" }, "ultra"], id);
-      expect(appearance(input)).toEqual(noBoost);
-    }
-  });
-
-  it("previews colour without committing and restores the committed level on cancel or blur", async () => {
+  it("previews effort without committing and restores the committed level on cancel or blur", async () => {
     const { input, onThinkingSelect } = await fixture(["low", "max", "ultra"], "max", true);
-    const maximumStyle = appearance(input);
     for (const resetEvent of ["pointercancel", "blur"]) {
-      input.value = "2";
+      input.value = "1.72";
       input.dispatchEvent(new Event("input", { bubbles: true }));
       flush();
+      expect(input.value).toBe("1.72");
       expect(input.getAttribute("aria-valuetext")).toBe("Ultra");
-      expect(appearance(input)).not.toEqual(maximumStyle);
+      expect(summary().textContent?.trim()).toBe("Maximum");
       expect(onThinkingSelect).not.toHaveBeenCalled();
       input.dispatchEvent(new Event(resetEvent));
       flush();
       expect(input.value).toBe("1");
       expect(input.getAttribute("aria-valuetext")).toContain("Maximum");
-      expect(appearance(input)).toEqual(maximumStyle);
     }
-    input.value = "0";
+    input.value = "0.28";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
-    expect(appearance(input)).toEqual(noBoost);
+    expect(input.getAttribute("aria-valuetext")).toBe("Low");
     input.dispatchEvent(new Event("change"));
     flush();
+    expect(input.value).toBe("0");
     expect(onThinkingSelect).toHaveBeenCalledExactlyOnceWith("low", "effort-preview");
-    expect(appearance(input)).toEqual(maximumStyle);
+    expect(input.getAttribute("aria-valuetext")).toContain("Maximum");
+
+    const unanchored = await fixture(["low", "ultra"], "off");
+    unanchored.input.dispatchEvent(new PointerEvent("pointerdown"));
+    unanchored.input.value = "0.2";
+    unanchored.input.dispatchEvent(new Event("input", { bubbles: true }));
+    unanchored.input.dispatchEvent(new Event("change"));
+    unanchored.input.dispatchEvent(new MouseEvent("click"));
+    expect(unanchored.onThinkingSelect).toHaveBeenCalledExactlyOnceWith("low", "effort-preview");
   });
 });
 
-it("maps effort fill to actual supported stops without boosting a narrowed minimum", async () => {
-  for (const [level, index, fill] of [
-    ["low", 0, "0%"],
-    ["medium", 1, "50%"],
-    ["high", 2, "100%"],
+it("maps actual supported stops and handles a single available effort", async () => {
+  for (const [level, index] of [
+    ["low", 0],
+    ["medium", 1],
+    ["high", 2],
   ] as const) {
     const { input } = await fixture(["low", "medium", "high"], level);
     expect(input.value).toBe(String(index));
-    expect(input.style.getPropertyValue("--reasoning-fill")).toBe(fill);
-    expect(input.dataset.effortBoost).toBe(level === "high" ? "max" : "");
+    expect(input.getAttribute("aria-valuetext")?.toLowerCase()).toBe(level);
   }
   for (const minimum of ["low", "medium", "high"]) {
     const { input } = await fixture([minimum, "ultra"], minimum);
     expect(input.value).toBe("0");
-    expect(input.style.getPropertyValue("--reasoning-fill")).toBe("0%");
-    expect(appearance(input)).toEqual({ fill: "none", glow: "none" });
+    expect(input.getAttribute("aria-valuetext")?.toLowerCase()).toBe(minimum);
   }
   const { input } = await fixture(["medium", "ultra"], "ultra");
   expect(input.value).toBe("1");
-  expect(input.dataset.effortBoost).toBe("ultra");
+  expect(input.getAttribute("aria-valuetext")).toBe("Ultra");
   await fixture(["medium"], "medium");
   expect(host!.querySelector("input[type=range]")).toBeNull();
   expect(
@@ -312,61 +296,108 @@ it("maps effort fill to actual supported stops without boosting a narrowed minim
   ).toBe("true");
 });
 
-it("uses entitled Access segments with shared keyboard behavior and a separate default reset", async () => {
+it("plays Ultra feedback only when entering Ultra, including an uncommitted drag", async () => {
+  const { input, onThinkingSelect } = await fixture(["low", "high", "ultra"], "ultra");
+  const feedback = () => host!.querySelector(".chat-controls__reasoning-glow")!.getAnimations()[0];
+  expect(feedback()).toBeUndefined();
+  const preview = (value: string) => {
+    const currentInput = host!.querySelector<HTMLInputElement>("input[type=range]")!;
+    currentInput.value = value;
+    currentInput.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  preview("1");
+  expect(feedback()).toBeUndefined();
+  input.dispatchEvent(new PointerEvent("pointermove", { buttons: 1 }));
+  preview("2");
+  const first = feedback();
+  assert.isDefined(first);
+  expect(onThinkingSelect).not.toHaveBeenCalled();
+  preview("2");
+  expect(feedback()).toBe(first);
+  first.pause();
+  first.currentTime = 150;
+  preview("1");
+  expect(first.playState).toBe("idle");
+  const fading = feedback();
+  assert.isDefined(fading);
+  expect(fading).not.toBe(first);
+  preview("2");
+  expect(fading.playState).toBe("idle");
+  expect(feedback()).not.toBe(first);
+  input.dispatchEvent(new Event("pointercancel"));
+  expect(feedback()).toBeUndefined();
+  expect(summary().textContent?.trim()).toBe("Ultra");
+  await fixture(["low", "medium", "high"], "medium");
+  preview("2");
+  expect(feedback()).toBeUndefined();
+  await emulateOverlayMedia({ reducedMotion: "reduce" });
+  onTestFinished(() => emulateOverlayMedia({ reducedMotion: "no-preference" }));
+  await expect.poll(() => matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
+  // WebKit delivers changes to existing MediaQueryLists after the emulation response.
+  await expect
+    .poll(() => host!.querySelector(".chat-controls__effort-value")!.getAnimations().length)
+    .toBe(0);
+  await fixture(["low", "high", "ultra"], "high");
+  preview("2");
+  expect(feedback()).toBeUndefined();
+  expect(host!.querySelector(".chat-controls__effort-value")!.getAnimations()).toHaveLength(0);
+});
+
+it("keeps keyboard changes on real effort levels when pointer input is continuous", async () => {
+  const levels = ["low", "high", "ultra"];
+  let committed = "high";
+  for (const { key, expected } of [
+    { key: "ArrowRight", expected: "ultra" },
+    { key: "ArrowLeft", expected: "high" },
+    { key: "Home", expected: "low" },
+    { key: "End", expected: "ultra" },
+  ]) {
+    const { input, onThinkingSelect } = await fixture(levels, committed);
+    input.focus();
+    await userEvent.keyboard(`{${key}}`);
+    expect(onThinkingSelect).toHaveBeenCalledExactlyOnceWith(expected, "effort-preview");
+    expect(input.value).toBe(String(levels.indexOf(expected)));
+    committed = expected;
+  }
+});
+
+it("restores the remembered permitted Daybreak choice and recovers an unavailable selection", async () => {
   const onSelect = vi.fn();
-  const accessProgram = {
+  const access = {
     sessionKey: "effort-preview",
     disabled: false,
     programs: ["standard", "daybreak_blue", "daybreak_red"] as const,
     onSelect,
   };
-  const render = async (access = accessProgram) =>
-    fixture(["low", "high"], "low", false, undefined, true, access);
-  await render();
-  const sectionBorders = () =>
-    Array.from(
-      host!.querySelector(".chat-controls__effort-menu")!.children,
-      (section) => getComputedStyle(section).borderTopWidth,
-    );
-  expect(sectionBorders()).toEqual(["0px", "1px"]);
-  const group = host!.querySelector<HTMLElement>("[data-chat-access-program]")!;
+  const draw = (extra: Partial<ChatAccessProgramControlProps>) =>
+    fixture(["low", "high"], "low", false, undefined, true, { ...access, ...extra });
+  const toggle = () => host!.querySelector<HTMLInputElement>(".chat-controls__access-head input")!;
   const option = (value: string) =>
-    group.querySelector<HTMLButtonElement>('[data-chat-access-option="' + value + '"]')!;
-  expect(group.getAttribute("role")).toBe("radiogroup");
-  expect(group.querySelector("select")).toBeNull();
-  expect(group.querySelectorAll('[aria-checked="true"]')).toHaveLength(0);
-  expect(option("standard").tabIndex).toBe(0);
-  await userEvent.click(option("daybreak_red"));
+    host!.querySelector<HTMLButtonElement>(`[data-chat-access-option="${value}"]`)!;
+  await draw({ requested: "standard", previous: "daybreak_red" });
+  await userEvent.click(toggle());
   expect(onSelect).toHaveBeenLastCalledWith("daybreak_red", "effort-preview");
-  await fixture(["low", "high"], "low", false, undefined, true, {
-    ...accessProgram,
-    requested: "daybreak_red",
-  });
-  option("daybreak_red").focus();
-  option("daybreak_red").dispatchEvent(
-    new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
-  );
-  expect(document.activeElement).toBe(option("daybreak_blue"));
+  await draw({ requested: "daybreak_red" });
+  expect(option("daybreak_red").getAttribute("aria-pressed")).toBe("true");
+  await userEvent.click(toggle());
+  expect(onSelect).toHaveBeenLastCalledWith("standard", "effort-preview", "daybreak_red");
+  await draw({ requested: "daybreak_red", programs: ["standard", "daybreak_blue"] });
+  expect(host!.textContent).toContain("Red (unavailable)");
+  await userEvent.click(option("daybreak_blue"));
   expect(onSelect).toHaveBeenLastCalledWith("daybreak_blue", "effort-preview");
-  await userEvent.click(host!.querySelector<HTMLButtonElement>("[data-chat-access-default]")!);
-  expect(onSelect).toHaveBeenLastCalledWith(null, "effort-preview");
-  await fixture(["low", "high"], "low", false, undefined, true, {
-    ...accessProgram,
-    requested: "daybreak_red",
-    disabled: true,
-  });
-  expect(option("daybreak_red").disabled).toBe(true);
-  const count = onSelect.mock.calls.length;
-  option("daybreak_blue").click();
-  expect(onSelect).toHaveBeenCalledTimes(count);
-  await fixture(["low", "high"], "low", false, undefined, true, {
-    ...accessProgram,
+  await draw({
+    requested: "standard",
+    previous: "daybreak_red",
     programs: ["standard", "daybreak_blue"],
   });
-  expect(group.querySelector('[data-chat-access-option="daybreak_red"]')).toBeNull();
-  for (const programs of [[], ["standard"]] as const) {
-    await fixture(["low", "high"], "low", false, undefined, true, { ...accessProgram, programs });
-    expect(host!.querySelector("[data-chat-access-program]")).toBeNull();
-    expect(sectionBorders()).toEqual(["0px"]);
-  }
+  await userEvent.click(toggle());
+  expect(onSelect).toHaveBeenLastCalledWith("daybreak_blue", "effort-preview");
+  await draw({ requested: "daybreak_red", programs: undefined });
+  expect(host!.textContent).not.toContain("unavailable");
+  expect(toggle().disabled).toBe(false);
+  await userEvent.click(toggle());
+  expect(onSelect).toHaveBeenLastCalledWith("standard", "effort-preview", "daybreak_red");
+  await draw({ requested: "daybreak_red", disabled: true });
+  expect(toggle().disabled).toBe(true);
+  expect(option("daybreak_blue").disabled).toBe(true);
 });

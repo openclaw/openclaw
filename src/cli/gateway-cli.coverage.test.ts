@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createEmptyCostUsageTotals } from "../infra/session-cost-usage-totals.js";
 import type { CostUsageSummary } from "../infra/session-cost-usage.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
 type DiscoveredBeacon = Awaited<
@@ -508,10 +509,7 @@ describe("gateway-cli coverage", () => {
       ["\\\\?\\UNC\\server\\share\\config.json", "\\\\?\\UNC\\server\\share\\config.json"],
       ["\\\\.\\pipe\\openclaw-gateway", "\\\\.\\pipe\\openclaw-gateway"],
     ] as const;
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ logging: { file: logPath }, plugins: { enabled: false } }),
-    );
+    writeFixtureJsonSync(configPath, { logging: { file: logPath }, plugins: { enabled: false } });
     fs.writeFileSync(logPath, cases.map(([msg]) => JSON.stringify({ msg })).join("\n") + "\n");
     const expected = cases.map(([, msg]) => JSON.stringify({ msg })).join("\n") + "\n";
 

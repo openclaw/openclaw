@@ -442,5 +442,5 @@ function prepareSessionColdArchiveInWorker(
   return { plan, archive, chunks: chunks.length > 1 ? chunks : [], envelopeBytes };
 }
 
-export class ColdArchiveLimitError extends Error {}
-export class ColdArchiveBudgetError extends Error {}
+class ColdArchiveLimitError extends Error {}
+class ColdArchiveBudgetError extends Error {}

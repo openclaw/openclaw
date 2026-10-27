@@ -4,7 +4,7 @@ import { resolveMxcBinaryPath } from "./binary-resolver.js";
 import { resolveConfig } from "./config.js";
 import { createMxcSandboxBackendFactory } from "./mxc-backend-factory.js";
 import { mxcSandboxBackendManager } from "./mxc-backend.js";
-import { assertMxcReadiness, warnMxcHostPrepIfNeeded } from "./readiness.js";
+import { prepareMxcHost } from "./readiness.js";
 
 export function registerMxcPlugin(api: OpenClawPluginApi): void {
   if (api.registrationMode !== "full") {
@@ -30,11 +30,7 @@ export function registerMxcPlugin(api: OpenClawPluginApi): void {
       { cause: err },
     );
   }
-  assertMxcReadiness({ executablePath: mxcBinaryPath });
-
-  // Advisory: warn (don't block) when the system drive lacks AppContainer
-  // directory-access ACEs, which only degrades in-sandbox directory listing.
-  warnMxcHostPrepIfNeeded();
+  prepareMxcHost(mxcBinaryPath);
 
   const unregister = registerSandboxBackend("mxc", {
     factory: createMxcSandboxBackendFactory(config),

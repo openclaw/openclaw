@@ -231,6 +231,39 @@ export class EmbeddedAgentSubscribeState {
   deterministicApprovalPromptSent = false;
   declare lastAssistant?: AssistantMessage;
 
+  // Terminal results outlive the subscription; retain only its recorded facts.
+  setTerminalLifecycleMeta(meta: {
+    replayInvalid?: boolean;
+    livenessState?: EmbeddedRunLivenessState;
+    stopReason?: string;
+    yielded?: boolean;
+    timeoutPhase?: AgentRunTimeoutPhase;
+    providerStarted?: boolean;
+    aborted?: boolean;
+  }): void {
+    if (meta.replayInvalid !== undefined) {
+      this.replayState = { ...this.replayState, replayInvalid: meta.replayInvalid };
+    }
+    if (meta.livenessState) {
+      this.livenessState = meta.livenessState;
+    }
+    if (meta.stopReason !== undefined) {
+      this.terminalStopReason = meta.stopReason;
+    }
+    if (meta.yielded !== undefined) {
+      this.yielded = meta.yielded;
+    }
+    if (meta.timeoutPhase) {
+      this.timeoutPhase = meta.timeoutPhase;
+    }
+    if (meta.providerStarted !== undefined) {
+      this.providerStarted = meta.providerStarted;
+    }
+    if (meta.aborted !== undefined) {
+      this.terminalAborted = meta.aborted;
+    }
+  }
+
   constructor(
     params: Pick<
       SubscribeEmbeddedAgentSessionParams,

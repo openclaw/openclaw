@@ -84,6 +84,25 @@ function mountPicker(optionsReady = true) {
   return { params, update, picker, trigger, composer, toggle, modelOptions, open };
 }
 
+it("leaves touch pointerdown uncancelled for native model-picker activation", () => {
+  const { composer, trigger } = mountPicker();
+  composer.value = "Keep this draft";
+  composer.focus();
+  const touch = new PointerEvent("pointerdown", {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    button: 0,
+    pointerType: "touch",
+  });
+
+  // Native tap activation needs browser proof; this guards its uncancelled first event.
+  trigger.dispatchEvent(touch);
+
+  expect(touch.defaultPrevented).toBe(false);
+  expect(composer.value).toBe("Keep this draft");
+});
+
 it("opens during activation and preserves filter focus and query across catalog rerenders", async () => {
   const { composer, open, params, update, trigger } = mountPicker();
   expect(container.querySelector<HTMLElement>(modelControlSelector("option"))).toBeNull();
@@ -294,7 +313,12 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
   await open();
   const rows = () => [...container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]")];
   expect(rows()).toHaveLength(9);
-  const more = container.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]")!;
+  // Shortcut rows are pinned before the viewport's remaining rows are measured.
+  const more = await vi.waitFor(() => {
+    const button = container.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]");
+    expect(button?.checkVisibility()).toBe(true);
+    return button!;
+  });
   more.click();
   flush();
   const search = getSearch();

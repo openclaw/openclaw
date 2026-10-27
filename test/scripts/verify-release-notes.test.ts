@@ -349,9 +349,9 @@ describe("release-note verification", () => {
     expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(index);
   });
 
-  it("excludes maintainer and automation identities from contributor credit", () => {
+  it("credits human maintainers but excludes automation identities", () => {
     expect(isEligibleHandle("human-contributor")).toBe(true);
-    expect(isEligibleHandle("steipete")).toBe(false);
+    expect(isEligibleHandle("steipete")).toBe(true);
     expect(isEligibleHandle("steipete-oai")).toBe(false);
     expect(isEligibleHandle("hugin-bot")).toBe(false);
     expect(isEligibleHandle("roboclaw-bot")).toBe(false);
@@ -518,7 +518,7 @@ process.exitCode = errors.length ? 1 : 0;
     (mode) => {
       const number = 102147;
       const commit = {
-        authorHandle: undefined,
+        authorHandle: "release-operator",
         closingReferences: [102146],
         coauthors: [],
         committedAt: "2026-07-01T12:00:00Z",
@@ -546,7 +546,6 @@ process.exitCode = errors.length ? 1 : 0;
               ]
             : []),
         ],
-        coauthorsByReference: new Map<number, Set<string>>(),
         pullRequests: new Set<number>(),
         target: "c".repeat(40),
       };
@@ -576,11 +575,11 @@ process.exitCode = errors.length ? 1 : 0;
         title: "Fix silent maintenance delivery status",
         mergedAt: commit.committedAt,
         mergeCommit: { oid: commit.hash },
-        author: { __typename: "User", login: "coolmanns" },
+        recordedThanks: ["coolmanns"],
       });
       expect(commit.pullRequests).toEqual([number]);
       expect(source.pullRequests).toEqual(new Set([number]));
-      expect(source.coauthorsByReference.get(number)).toEqual(new Set(["coolmanns"]));
+      expect(recovered.get(number)).not.toHaveProperty("author");
     },
   );
 
@@ -1084,6 +1083,94 @@ Release provenance for ${hash} -> #3`
     expect(
       ledgerChecks({ source }, [entry], new Map([[262624, { __typename: "PullRequest" }]]), []),
     ).toEqual(expected);
+  });
+
+  it("credits the original PR, not its backport, and rejects stale generated thanks", () => {
+    const { cwd, base, changelog } = seedRepository("openclaw-release-credit-", "main");
+    const originalMessage =
+      "fix: preserve playback errors (#21)\n\nFixes #20\nCo-authored-by: Helper <helper@example.invalid>";
+    writeFileSync(join(cwd, "playback.txt"), "fixed\n");
+    const original = commitAll(cwd, originalMessage);
+    git(cwd, ["checkout", "-qb", "release", base]);
+    commitAll(cwd, "chore: release preparation");
+    git(cwd, ["cherry-pick", "-x", original]);
+    git(cwd, [
+      "commit",
+      "--amend",
+      "-qm",
+      `${git(cwd, ["log", "-1", "--format=%B"])}\nCo-authored-by: RomneyDa <6581799+RomneyDa@users.noreply.github.com>`,
+    ]);
+    const target = git(cwd, ["rev-parse", "HEAD"]);
+    const stale = `${changelog}- Preserve playback errors by @steipete and @original-helper. (#21) Thanks @RomneyDa.\n\n${contributionRecord(base, target, ["- **PR #21** Related #20. Thanks @RomneyDa."])}`;
+    writeFileSync(join(cwd, "CHANGELOG.md"), stale);
+    const seed = commitAll(cwd, "docs: old credit");
+    const gh = join(cwd, "gh");
+    writeFileSync(
+      gh,
+      `#!${process.execPath}\n
+const original = ${JSON.stringify(original)};
+const target = ${JSON.stringify(target)};
+const query = process.argv.find((arg) => arg.startsWith("query="))?.slice(6) ?? "";
+const data = {};
+for (const [, alias, hash] of query.matchAll(/(c\\d+): repository[\\s\\S]*?object\\(expression: "([0-9a-f]+)"\\)/g)) {
+  data[alias] = { object: {
+    associatedPullRequests: { nodes: hash === original ? [{ number: 21, mergedAt: "2020-01-01T00:00:00Z", mergeCommit: { oid: original } }] : [], pageInfo: { hasNextPage: false } },
+    authors: { nodes: [{ email: "helper@example.invalid", user: { login: "original-helper" } }, ...(hash === target ? [{ email: "6581799+RomneyDa@users.noreply.github.com", user: { login: "RomneyDa" } }] : [])] },
+    author: { user: { login: "release-operator" } }
+  } };
+}
+for (const [, alias, rawNumber] of query.matchAll(/(n\\d+): repository[\\s\\S]*?issueOrPullRequest\\(number: (\\d+)\\)/g)) {
+  const number = Number(rawNumber);
+  data[alias] = { issueOrPullRequest: number === 21 ? {
+    __typename: "PullRequest", number, title: "fix: preserve playback errors", baseRefName: "main",
+    mergedAt: "2020-01-01T00:00:00Z", mergeCommit: { oid: original, message: ${JSON.stringify(originalMessage)} },
+    author: { __typename: "User", login: "steipete" }, closingIssuesReferences: { nodes: [{ number: 20 }], pageInfo: { hasNextPage: false } }
+  } : { __typename: "Issue", number, title: "Playback failed", author: { __typename: "User", login: "reporter" }, closedByPullRequestsReferences: { nodes: [], pageInfo: { hasNextPage: false } } } };
+}
+for (const [, alias, login] of query.matchAll(/(u\\d+): user\\(login: "([^"]+)"\\)/g)) data[alias] = { __typename: "User", login };
+console.log(JSON.stringify({ data }));
+`,
+    );
+    chmodSync(gh, 0o755);
+    splitChangelog({ rootDir: cwd });
+    const run = (write: boolean) =>
+      runVerifier(cwd, {
+        base,
+        target,
+        mainRef: original,
+        write,
+        extraArgs: ["--seed-ref", seed],
+        env: { PATH: `${cwd}:${process.env.PATH}` },
+      });
+    const generated = run(true);
+    expect(generated.stderr).toBe("");
+    expect(generated.status, generated.stdout).toBe(0);
+    const entryPath = join(cwd, "CHANGELOG/2026.7.1.md");
+    const section = readFileSync(entryPath, "utf8");
+    expect(section).toContain(
+      "- **PR #21** Related #20. Thanks @steipete and @original-helper and @reporter.",
+    );
+    expect(section).toContain("(#21) Thanks @steipete, @original-helper, and @reporter.");
+    expect(section).not.toContain("@RomneyDa");
+    expect(section).not.toContain("@release-operator");
+    const checked = run(false);
+    expect(checked.status, checked.stderr + checked.stdout).toBe(0);
+    writeReleaseChangelog({
+      rootDir: cwd,
+      version: "2026.7.1",
+      section: section.replaceAll("Thanks @steipete", "Thanks @RomneyDa and @steipete"),
+    });
+    const rejected = run(false);
+    expect(rejected.status).toBe(1);
+    expect(JSON.parse(rejected.stdout).errors).toEqual(
+      expect.arrayContaining([
+        "unexpected Thanks @RomneyDa for #21",
+        "unexpected editorial Thanks @RomneyDa",
+      ]),
+    );
+    const repaired = run(true);
+    expect(repaired.status, repaired.stderr + repaired.stdout).toBe(0);
+    expect(readFileSync(entryPath, "utf8")).toBe(section);
   });
 
   it.each([0, 1, 2])(

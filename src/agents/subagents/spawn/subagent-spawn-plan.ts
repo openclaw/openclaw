@@ -1,4 +1,5 @@
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import type { CyberAccessProgram } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -54,6 +55,7 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
   callerThinkingExplicit?: boolean;
   inheritedModel?: ModelRef;
   fastMode?: FastMode;
+  cyberAccessProgram?: CyberAccessProgram;
   workspaceDir?: string;
   requiresTools?: boolean;
 }) {
@@ -165,6 +167,9 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
         : {}),
       ...thinkingPlan.initialSessionPatch,
       ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
+      ...(params.cyberAccessProgram !== undefined
+        ? { cyberAccessProgram: params.cyberAccessProgram }
+        : {}),
     } satisfies Partial<InternalSessionEntry>,
   };
 }

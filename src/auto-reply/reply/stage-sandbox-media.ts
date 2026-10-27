@@ -62,6 +62,8 @@ export async function stageSandboxMedia(params: {
   sessionKey?: string;
   workspaceDir: string;
   skillsSnapshot?: SkillSnapshot;
+  /** Borrowed from the caller, which retains and disposes its live workspace ownership. */
+  preparedWorkspace?: NonNullable<Awaited<ReturnType<typeof prepareSandboxWorkspaceForSession>>>;
   remoteMediaMode?: "sandbox-or-cache" | "cache";
   abortSignal?: AbortSignal;
   awaitSessionDiffBaseline?: () => Promise<void>;
@@ -111,8 +113,11 @@ export async function stageSandboxMedia(params: {
       : null;
   using sandboxLifetime = { [Symbol.dispose]: () => sshSandbox?.[Symbol.dispose]?.() };
   void sandboxLifetime;
-  using preparedWorkspace =
-    forceRemoteCache || sshSandbox ? null : await prepareSandboxWorkspaceForSession(sandboxParams);
+  using ownedWorkspace =
+    params.preparedWorkspace || forceRemoteCache || sshSandbox
+      ? null
+      : await prepareSandboxWorkspaceForSession(sandboxParams);
+  const preparedWorkspace = params.preparedWorkspace ?? ownedWorkspace;
   const sandbox = sshSandbox ?? preparedWorkspace?.workspace;
   const assertCurrent = () => {
     abortSignal?.throwIfAborted();

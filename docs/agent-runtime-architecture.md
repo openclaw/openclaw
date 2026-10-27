@@ -24,6 +24,18 @@ Core calls the built-in runtime through OpenClaw modules and SDK barrels. No ext
 
 `@earendil-works/pi-tui` remains a third-party dependency: a terminal component toolkit used by the local TUI and session tool renderers. Internalizing it would be a separate vendoring effort.
 
+## Streaming update ownership
+
+Assistant `message_update` envelopes reconstructed from partial-free text deltas
+are shallow-frozen and shared with the loop's current message. Later deltas create
+new envelopes, preserving retained earlier text snapshots. Nested metadata is not
+deep-frozen. Listeners should read updates and keep their own derived state;
+terminal-message hooks retain their existing mutation behavior.
+
+Provider-owned partial snapshots remain mutable while streaming. Agent-core
+copies their top-level envelope before publication so retained updates preserve
+references when a provider replaces fields such as `content` or `usage`.
+
 ## Manifests
 
 Resource packages declare OpenClaw resources in `package.json` metadata. Entries are file paths or globs relative to the package root:

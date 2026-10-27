@@ -263,6 +263,7 @@ beforeAll(async () => {
           workspace,
           apiRoot,
           command: createQaPreparedRepoCliCommand(repoRoot),
+          initializeCurrentRuntimeState: true,
           forcedRuntime: "codex",
           providerMode: "mock-openai",
           providerBaseUrl: `${apiRoot}/v1`,
@@ -376,7 +377,10 @@ test("delivers a recovered artifact once while preserving its inter-session tran
     expect(completedWrites).toHaveLength(1);
     expect(completedWrites[0]?.call_id).toBe(writeCalls[0]?.call_id);
     expect(overloads).toBe(1);
-    expect(finalizers[0]?.tools ?? []).toEqual([]);
+    // Codex 0.164 advertises apply_patch without an environment; native execution rejects it.
+    expect(finalizers[0]?.tools).toEqual([
+      expect.objectContaining({ type: "custom", name: "apply_patch" }),
+    ]);
     expect(JSON.stringify(finalizers[0]?.input)).toContain(
       "Tools are unavailable in this step: it is a text-only pass",
     );

@@ -351,6 +351,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (sourceChanged || metadataOwnerChanged) {
       retireChatMetadataRequests(state, { keepPresentation: !metadataOwnerChanged });
     }
+    if (draftOwnerChanged || reactionOwnerChanged) {
+      this.sessionCompanionThreads.retire();
+    }
     if (sourceChanged) {
       this.retireDetailsOutputs();
       this.resetSessionReadAcknowledgements();
@@ -381,7 +384,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.sessionDiscussionPanels.clear();
       this.sessionParticipationTracker.reset();
       if (state.client !== snapshot.client) {
-        this.sessionCompanionThreads.retire();
         // Local run identities belong to the previous client, even if the new
         // Gateway uses the same session key. Never bind its offline Stop to them.
         reconcileChatRunLifecycle(state, {

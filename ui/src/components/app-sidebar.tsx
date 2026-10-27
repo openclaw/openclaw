@@ -244,7 +244,7 @@ function AppSidebarContent(
   [owner.sessionData, owner.sessionOrganizer, owner.people].forEach(observe);
   owner.sessionPullRequests = createSessionPullRequestIndicators({
     getConnected: () => prepared().isConnected && props.connected,
-    getPresented: () => props.navigationVisible,
+    getPresented: () => props.navigationVisible && !prepared().sidebarSnapshot,
     getRows: () => prepared().readSessionPullRequestRows(),
     getSelectedAgentId: () => prepared().selectedAgentIdForSessions(),
     getGateway: () => prepared().sessionDataContext?.gateway,

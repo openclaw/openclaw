@@ -27,25 +27,27 @@ function hooks(...entries: Parameters<typeof createMockPluginRegistry>[0]) {
 
 afterEach(resetGlobalHookRunner);
 
-it("supports custom reply text builder", async () => {
+it("notifies and replies only when creating a request, preserving metadata and context", async () => {
+  const handler = vi.fn(async () => {});
+  hooks({ hookName: "channel_pairing_requested", handler });
+  const meta = { name: "alice" };
   const sendPairingReply = vi.fn(async (_text: string) => {});
-  await issue("ZXCV", {
-    buildReplyText: ({ code }) => `custom ${code}`,
-    sendPairingReply,
-  });
-  expect(sendPairingReply.mock.calls).toEqual([["custom ZXCV"]]);
-});
-
-it("calls onCreated and forwards meta to upsert", async () => {
   const onCreated = vi.fn();
   const upsertPairingRequest = vi.fn(async () => ({ code: "1111", created: true }));
+  const options = { accountId: "alerts", meta, onCreated, sendPairingReply };
   await issue("1111", {
-    meta: { name: "alice" },
+    ...options,
     upsertPairingRequest,
-    onCreated,
+    buildReplyText: ({ code }) => `custom ${code}`,
   });
-  expect(upsertPairingRequest).toHaveBeenCalledWith({ id: "123", meta: { name: "alice" } });
-  expect(onCreated).toHaveBeenCalledWith({ code: "1111" });
+  await issue("EXISTS12", options, false);
+  expect(upsertPairingRequest).toHaveBeenCalledWith({ id: "123", meta });
+  expect(onCreated).toHaveBeenCalledExactlyOnceWith({ code: "1111" });
+  expect(sendPairingReply.mock.calls).toEqual([["custom 1111"]]);
+  expect(handler).toHaveBeenCalledExactlyOnceWith(
+    { channel: "forum", accountId: "alerts", senderId: "123", code: "1111", metadata: meta },
+    { channelId: "forum", accountId: "alerts", senderId: "123" },
+  );
 });
 
 it("captures reply errors through onReplyError", async () => {
@@ -53,34 +55,9 @@ it("captures reply errors through onReplyError", async () => {
   const onReplyError = vi.fn();
   await issue("9999", {
     onReplyError,
-    sendPairingReply: async () => {
-      throw error;
-    },
+    sendPairingReply: () => Promise.reject(error),
   });
   expect(onReplyError).toHaveBeenCalledExactlyOnceWith(error);
-});
-
-it("fires channel_pairing_requested only for newly created requests", async () => {
-  const handler = vi.fn(async () => {});
-  hooks({ hookName: "channel_pairing_requested", handler });
-
-  await issue("HOOK1234", {
-    accountId: "alerts",
-    meta: { username: "alice" },
-  });
-  await issue("EXISTS12", { accountId: "alerts" }, false);
-
-  expect(handler).toHaveBeenCalledTimes(1);
-  expect(handler).toHaveBeenCalledWith(
-    {
-      channel: "forum",
-      accountId: "alerts",
-      senderId: "123",
-      code: "HOOK1234",
-      metadata: { username: "alice" },
-    },
-    { channelId: "forum", accountId: "alerts", senderId: "123" },
-  );
 });
 
 it("does not block pairing replies when pairing-request hooks fail or stall", async () => {

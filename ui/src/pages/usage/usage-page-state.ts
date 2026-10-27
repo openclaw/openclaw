@@ -335,7 +335,7 @@ export function createUsagePage(context: ApplicationContext) {
 
   function isCurrentQuery(
     query: SessionUsageQuery,
-    projection: "all" | "roster" | "calendar" = "all",
+    projection: "all" | "roster" | "calendar" | "filterOptions" = "all",
   ): boolean {
     const current = currentQuery();
     return (
@@ -345,7 +345,7 @@ export function createUsagePage(context: ApplicationContext) {
       query.timeZone === current.timeZone &&
       query.agentId === current.agentId &&
       query.creatorKey === current.creatorKey &&
-      query.query === current.query &&
+      (projection === "filterOptions" || query.query === current.query) &&
       (projection === "calendar" ||
         JSON.stringify(query.selectedDays) === JSON.stringify(current.selectedDays)) &&
       JSON.stringify(query.selectedHours) === JSON.stringify(current.selectedHours) &&
@@ -529,6 +529,11 @@ export function createUsagePage(context: ApplicationContext) {
         sessions: usageRosterResult()?.sessions ?? [],
         sessionPage: usageRosterResult()?.overview,
         creatorOptions: usageCreatorOptions(),
+        // The Gateway builds this inventory before applying the text query.
+        filterOptions:
+          usageSnapshot && isCurrentQuery(usageSnapshot.query, "filterOptions")
+            ? usageSnapshot.result?.overview?.filterOptions
+            : undefined,
         overview: usageResult()?.overview,
         selectedSession: details.session.data ?? selectedSession,
         totals: usageResult()?.totals ?? null,

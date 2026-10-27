@@ -256,6 +256,17 @@ and respect unsaved-work protection.
 The current route and stored drafts survive the reload. If browser storage is unavailable
 or reload protection blocks recovery, reload the tab after saving your work;
 do not clear site data while drafts or queued messages still need recovery.
+Unsent highlighted-text comments in Side chat also restore after a Gateway restart
+or page reload, including their quoted text and source anchors. They use the same
+Gateway- and account-scoped browser draft storage, not shared session history.
+Editing or removing a comment updates that saved draft; sending the Side chat
+question or clearing Side chat retires its unsent comments. Incognito comments
+remain memory-only. Clearing browser site data removes saved comments too.
+While a Side chat comment autosave is pending, the composer shows **Saving…**.
+Automatic and in-app reloads are blocked, and a browser reload or close warns
+before discarding that unsaved input. Wait for saving to finish before refreshing;
+a forced exit can still discard a write that has not committed. Storage failures
+keep the comment available in memory with the existing browser-storage warning.
 
 If a view or stylesheet download fails during a network interruption, the open
 page keeps checking reachability with a backoff capped at 15 seconds. Coming

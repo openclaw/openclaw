@@ -59,7 +59,6 @@ import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-l
 import type { PluginProviderRegistration } from "../plugins/registry.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
-import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { interruptSessionControllerEffects } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
@@ -88,6 +87,7 @@ import {
 } from "./agent-session.test-support.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
 import { registerAgentReplyPolicyTests } from "./agent.reply-policy.test-support.js";
+import { registerAgentStoredOverrideTests } from "./agent.stored-override.test-support.js";
 import { registerAgentThinkingTests } from "./agent.thinking.test-support.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -1034,7 +1034,7 @@ describe("agentCommand", () => {
     expect(fs.readFileSync(insidePath, "utf8")).toBe("inside");
   });
 
-  it("reuses a Discord voice session after one stale-session rollover", async ({ home, store }) => {
+  it("preserves a Discord voice transcript across one automatic reset", async ({ home, store }) => {
     const sessionKey = "agent:main:discord:channel:voice-1";
     const staleStartedAt = Date.now() - 2 * 24 * 60 * 60_000;
     const cfg = mockConfig(home, store);
@@ -1057,8 +1057,7 @@ describe("agentCommand", () => {
 
     await runVoiceTurn("remember 42");
     const firstSessionId = getLastEmbeddedCall()?.sessionId;
-    expect(firstSessionId).toBeTruthy();
-    expect(firstSessionId).not.toBe("stale-voice-session");
+    expect(firstSessionId).toBe("stale-voice-session");
     const firstPersisted = readSessionStore<SessionEntry>(store)[sessionKey];
     expect(firstPersisted?.sessionId).toBe(firstSessionId);
     expect(firstPersisted?.sessionStartedAt).toBeGreaterThan(staleStartedAt);
@@ -1291,6 +1290,14 @@ describe("agentCommand", () => {
   });
 
   registerAgentReplyPolicyTests({ withTempHome, mockConfig, runtime });
+  registerAgentStoredOverrideTests({
+    withTempHome,
+    mockConfig,
+    mockModelCatalogOnce,
+    expectLastRunProviderModel,
+    expectModelAttempts,
+    runtime,
+  });
 
   it("does not duplicate agent events from embedded runs", async ({ cfg: _cfg }) => {
     const assistantEvents: Array<{ runId: string; text?: string }> = [];
@@ -1320,191 +1327,6 @@ describe("agentCommand", () => {
 
     const matching = assistantEvents.filter((evt) => evt.text === "hello");
     expect(matching).toHaveLength(1);
-  });
-
-  type StoredModelCase = {
-    name: string;
-    source?: "auto" | "user";
-    provider?: string;
-    model?: string;
-    origin?: boolean;
-    locked?: boolean;
-    disallowed?: boolean;
-    oneoff?: boolean;
-    failure?: string;
-    fallback?: boolean;
-    expected?: string[];
-    clear?: Array<keyof SessionEntry>;
-  };
-  it.for<StoredModelCase>([
-    {
-      name: "origin-backed auto fallback",
-      source: "auto",
-      origin: true,
-      failure: "rate limited",
-      fallback: true,
-      expected: ["openai/gpt-4.1-mini", "openai/gpt-5.4"],
-    },
-    {
-      name: "locked auto override",
-      source: "auto",
-      origin: true,
-      locked: true,
-      failure: "rate limited",
-      expected: ["anthropic/claude-opus-4-6"],
-    },
-    {
-      name: "legacy auto override",
-      source: "auto",
-      expected: ["openai/gpt-4.1-mini"],
-      clear: ["providerOverride", "modelOverride", "modelOverrideSource"],
-    },
-    {
-      name: "user override without fallback",
-      source: "user",
-      provider: "ollama",
-      model: "qwen3.5:27b",
-      failure: "connect ECONNREFUSED",
-      expected: ["ollama/qwen3.5:27b"],
-    },
-    {
-      name: "disallowed override cleanup",
-      disallowed: true,
-      expected: ["openai/gpt-4.1-mini"],
-      clear: [
-        "providerOverride",
-        "modelOverride",
-        "authProfileOverride",
-        "authProfileOverrideSource",
-        "authProfileOverrideCompactionCount",
-        "fallbackNotice",
-      ],
-    },
-    {
-      name: "locked disallowed override",
-      source: "user",
-      locked: true,
-      disallowed: true,
-      expected: ["anthropic/claude-opus-4-6"],
-    },
-    { name: "locked one-off rejection", source: "user", locked: true, oneoff: true },
-  ])("respects stored model policy: $name", async (scenario, { home, store }) => {
-    const sessionKey = "agent:main:subagent:model-policy";
-    const sessionId = "model-policy-session";
-    const provider = scenario.provider ?? "anthropic";
-    const model = scenario.model ?? "claude-opus-4-6";
-    const storedRef = `${provider}/${model}`;
-    const primary = "openai/gpt-4.1-mini";
-    const fallback = "openai/gpt-5.4";
-    const cleanup = scenario.disallowed && !scenario.locked;
-    await seedSession(store, sessionKey, {
-      sessionId,
-      providerOverride: provider,
-      modelOverride: model,
-      ...(scenario.source && { modelOverrideSource: scenario.source }),
-      ...(scenario.locked && { modelSelectionLocked: true }),
-      ...(scenario.origin && {
-        modelOverrideFallbackOriginProvider: "openai",
-        modelOverrideFallbackOriginModel: "gpt-4.1-mini",
-      }),
-      ...(cleanup && {
-        authProfileOverride: "profile-legacy",
-        authProfileOverrideSource: "user",
-        authProfileOverrideCompactionCount: 2,
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: storedRef,
-          activeModel: primary,
-          reason: "fallback",
-        },
-      }),
-    });
-    const refs = cleanup
-      ? [primary]
-      : scenario.disallowed || scenario.oneoff
-        ? [storedRef, primary]
-        : [storedRef, primary, fallback];
-    mockConfig(home, store, {
-      model: {
-        primary: scenario.oneoff ? storedRef : primary,
-        ...((!scenario.oneoff && !scenario.locked) || scenario.origin
-          ? { fallbacks: [cleanup ? storedRef : fallback] }
-          : {}),
-      },
-      models: Object.fromEntries(refs.map((ref) => [ref, {}])),
-      ...(scenario.disallowed && { modelPolicy: { allow: [primary] } }),
-    });
-    if (!scenario.oneoff) {
-      mockModelCatalogOnce([
-        { provider, id: model, name: provider === "ollama" ? "Qwen 3.5" : "Opus" },
-        { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
-        ...(!scenario.disallowed
-          ? [
-              {
-                provider: "openai",
-                id: "gpt-5.4",
-                name: scenario.fallback ? "GPT-5.2" : "GPT-5.4",
-              },
-            ]
-          : []),
-      ]);
-    }
-    if (scenario.failure) {
-      vi.mocked(runEmbeddedAgent).mockRejectedValueOnce(
-        Object.assign(
-          new Error(scenario.failure),
-          scenario.failure === "rate limited" ? { status: 429 } : {},
-        ),
-      );
-    }
-    if (scenario.fallback) {
-      vi.mocked(runEmbeddedAgent).mockResolvedValueOnce({
-        payloads: [{ text: "ok" }],
-        meta: { durationMs: 5, agentMeta: { sessionId, provider: "openai", model: "gpt-5.4" } },
-      });
-    }
-    const command = runCommand({
-      sessionKey,
-      ...(scenario.oneoff && { model: primary, allowModelOverride: true }),
-    });
-    if (scenario.oneoff) {
-      await expect(command).rejects.toMatchObject({
-        name: "ModelSelectionLockedError",
-        message: MODEL_SELECTION_LOCKED_MESSAGE,
-      });
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-      return;
-    }
-    if (scenario.failure && !scenario.fallback) {
-      await expect(command).rejects.toThrow(scenario.failure);
-    } else {
-      await command;
-    }
-    expectModelAttempts(
-      (scenario.expected ?? []).map((ref) => {
-        const [expectedProvider, expectedModel] = ref.split("/");
-        return {
-          provider: expectDefined(expectedProvider, "expected provider"),
-          model: expectDefined(expectedModel, "expected model"),
-        };
-      }),
-    );
-    const entry = readSessionStore<SessionEntry>(store)[sessionKey];
-    for (const field of scenario.clear ?? []) {
-      expect(entry?.[field]).toBeUndefined();
-    }
-    if (scenario.disallowed && scenario.locked) {
-      expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-      expectLastRunProviderModel(provider, model);
-      expect(entry).toMatchObject({
-        providerOverride: provider,
-        modelOverride: model,
-        modelOverrideSource: "user",
-        modelSelectionLocked: true,
-      });
-    } else if (cleanup) {
-      expectLastRunProviderModel("openai", "gpt-4.1-mini");
-    }
   });
 
   it("handles one-off provider/model overrides and validates override values", async ({

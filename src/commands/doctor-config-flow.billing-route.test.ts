@@ -4,6 +4,7 @@ import { afterEach, expect, it } from "vitest";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { createModelAuthAvailabilityResolver } from "../agents/model-auth-availability.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
@@ -68,10 +69,7 @@ async function writeBillingFixture(
   const configPath = await writeOpenClawConfig(home, config);
   const agentDir = path.join(path.dirname(configPath), "agents", "main", "agent");
   await fs.mkdir(agentDir, { recursive: true });
-  await fs.writeFile(
-    path.join(agentDir, "auth-profiles.json"),
-    JSON.stringify({ version: 1, profiles }),
-  );
+  await writeFixtureJson(path.join(agentDir, "auth-profiles.json"), { version: 1, profiles });
   return { configPath, agentDir, config };
 }
 

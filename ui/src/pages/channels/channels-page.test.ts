@@ -916,6 +916,7 @@ it.each(["disconnect", "client", "admin", "unmount"] as const)(
     const account = f.context.login!.captureLogout()!;
     const confirmation = f.context.confirm!({ ...logoutPrompt, danger: true });
     const rejection = expect(confirmation).rejects.toThrow();
+    await import("../../components/confirm-dialog-view.tsx");
     await waitForSolid(() => expect(document.body.textContent).toContain(logoutPrompt.message));
     retire(f, retirement);
     request.mockClear();

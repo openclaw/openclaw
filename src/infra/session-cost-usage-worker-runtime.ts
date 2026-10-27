@@ -416,6 +416,12 @@ async function runPreparedUsageCostWorker(
                       });
                   }
                   break;
+                case "write-quarters":
+                  output = await requireLock("write cache rows").writeQuarters(
+                    request.input,
+                    context.signal,
+                  );
+                  break;
                 default:
                   throw new Error("Unknown usage worker host request");
               }

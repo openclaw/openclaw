@@ -13,7 +13,10 @@ import {
 import { logVerbose } from "../../globals.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
-import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
+import {
+  emitDiagnosticsTimelineEvent,
+  withDiagnosticsTimelineObserver,
+} from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
@@ -257,7 +260,10 @@ export async function handleChatSendWithStorage(
       );
     const persistGatewayUserTurnTranscript = (
       ...args: Parameters<typeof persistUserTurnTranscript>
-    ) => withUserTurnInputPublication(() => persistUserTurnTranscript(...args));
+    ) =>
+      withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+        withUserTurnInputPublication(() => persistUserTurnTranscript(...args)),
+      );
     const persistGatewayUserTurnTranscriptBestEffort = (
       ...args: Parameters<typeof userTurn.persistBestEffort>
     ) => withUserTurnInputPublication(() => userTurn.persistBestEffort(...args));
@@ -339,11 +345,13 @@ export async function handleChatSendWithStorage(
         assertCustodyLifetimeCurrent,
         assertClientUploadAllowed: admission.assertClientUploadAllowed,
       });
-      const staged = await userTurnRecorder.stageApproved?.({
-        ...pendingAdmission,
-        retryInterrupted: true,
-        ...(request.restartResume ? { lifecycleAdmission: request.restartResume } : {}),
-      });
+      const staged = await withDiagnosticsTimelineObserver(diagnostics.observeSpan, () =>
+        userTurnRecorder.stageApproved?.({
+          ...pendingAdmission,
+          retryInterrupted: true,
+          ...(request.restartResume ? { lifecycleAdmission: request.restartResume } : {}),
+        }),
+      );
       stagePhase?.finish();
       if (userTurnRecorder.isPendingInputConsumed?.()) {
         admission.cleanupAdmittedRun();

@@ -9,7 +9,7 @@ title: "Linux app"
 ---
 
 The Gateway is fully supported on Linux. Node is the primary, default, and
-recommended runtime; Bun 1.4.3+ builds with WAL-reset-safe `node:sqlite` can run
+recommended runtime; Bun 1.4.4+ builds with WAL-reset-safe `node:sqlite` can run
 OpenClaw as an explicit opt-in. Use `pnpm` rather than Bun for dependency
 installation.
 

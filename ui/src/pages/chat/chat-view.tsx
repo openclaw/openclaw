@@ -367,8 +367,9 @@ function ChatComposerCompanion(input: ChatViewInput) {
 /** Plugin mountDefault creates a separate root; restore application and conversation context here. */
 function ChatSurfaceContent(input: { view: Component<ChatViewInput>; viewProps: ChatViewInput }) {
   const View = dynamic(() => input.view);
+  const mobile = createMemo(() => input.viewProps.props.mobileComposer === true);
   return (
-    <ChatConversationMobile value={() => input.viewProps.props.mobileComposer === true}>
+    <ChatConversationMobile value={mobile}>
       <Show when={input.viewProps.application} keyed fallback={<View {...input.viewProps} />}>
         {(application) => (
           <ApplicationProvider value={application}>
@@ -513,6 +514,8 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
   return (
     <section
       class={["chat", { "chat--bubbles": input.props.chatBubbleMode }]}
+      // Person references resolve session-scoped people for callers without directory access.
+      data-chat-session-key={input.props.sessionKey}
       style={
         input.props.chatMessageMaxWidth
           ? {

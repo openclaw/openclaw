@@ -23,6 +23,7 @@ export async function persistColdLoadWarmState(input: {
   sessionKey: string;
   sidebarView: "sessions" | "online";
   offRosterSession?: boolean;
+  rowFacts?: boolean;
 }) {
   const pane = document.querySelector(".chat-pane-cache__pane--active");
   const store: SessionSnapshotStore | undefined = pane
@@ -75,10 +76,14 @@ export async function persistColdLoadWarmState(input: {
         session: Object.entries(sessionStorage),
       },
       messages: record.snapshot.messages.length,
+      ...(input.rowFacts
+        ? { snapshotBytes: new TextEncoder().encode(JSON.stringify(record)).byteLength }
+        : {}),
       databaseVersion: database.version,
       projectionVersion: record.projectionVersion,
       sidebarView: sidebar.model.navigationView,
       sidebarPeople: sidebar.model.onlineUsers.length,
+      sidebarBytes: new TextEncoder().encode(JSON.stringify(sidebar.model)).byteLength,
     };
   } finally {
     database.close();

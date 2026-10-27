@@ -17,48 +17,56 @@ import {
   setupDevicesPageFixtures,
 } from "./devices-page.test-support.tsx";
 
+const policyFile = { version: 1 as const, defaults: { security: "allowlist" as const } };
+
+function mountPolicySave() {
+  const saved = createDeferred();
+  const request = vi.fn(async (method: string) =>
+    method === "exec.approvals.set" ? saved.promise.then(() => ({})) : responseFor(method),
+  );
+  const { client } = clientFor(request);
+  const page = mountPage(gatewayFixture(gatewaySnapshot(client, true, [], ["operator.admin"])), {
+    nodes: [{ nodeId: "node-1" }],
+    execApprovalsSnapshot: {
+      path: "/synthetic/exec-approvals.json",
+      exists: true,
+      hash: "original-base",
+      file: { version: 1, defaults: { security: "deny" } },
+    },
+    execApprovalsForm: policyFile,
+    execApprovalsDirty: true,
+  });
+  return { saved, request, page };
+}
+
+async function startSave(container: ParentNode) {
+  const save = await waitForSolid(() =>
+    expectDefined(
+      [...container.querySelectorAll("button")].find(
+        (candidate) => candidate.textContent?.trim() === t("common.save") && !candidate.disabled,
+      ),
+      "enabled save",
+    ),
+  );
+  save.click();
+  await waitForSolid(() => {
+    expect(save.textContent).toContain(t("common.saving"));
+    expect(save.disabled).toBe(true);
+  });
+  return save;
+}
+
 describe("DevicesPage policy saves", () => {
   setupDevicesPageFixtures();
 
   it.each(["accepted", "rejected"])(
     "retains the policy control and draft while an exec save is %s",
     async (outcome) => {
-      const saved = createDeferred();
-      const request = vi.fn(async (method: string) => {
-        if (method === "exec.approvals.set") {
-          await saved.promise;
-          return {};
-        }
-        return responseFor(method);
-      });
-      const { client } = clientFor(request);
-      const page = mountPage(
-        gatewayFixture(gatewaySnapshot(client, true, [], ["operator.admin"])),
-        {
-          nodes: [{ nodeId: "node-1" }],
-          execApprovalsSnapshot: {
-            path: "/synthetic/exec-approvals.json",
-            exists: true,
-            hash: "original-base",
-            file: { version: 1, defaults: { security: "deny" } },
-          },
-          execApprovalsForm: { version: 1, defaults: { security: "allowlist" } },
-          execApprovalsDirty: true,
-        },
-      );
-      const save = await waitForSolid(() => {
-        const control = button(page.container, t("common.save"));
-        expect(control.disabled).toBe(false);
-        return control;
-      });
-      save.click();
-      await waitForSolid(() => {
-        expect(save.textContent).toContain(t("common.saving"));
-        expect(save.disabled).toBe(true);
-      });
+      const { saved, request, page } = mountPolicySave();
+      const save = await startSave(page.container);
       expect(request).toHaveBeenCalledWith("exec.approvals.set", {
         baseHash: "original-base",
-        file: { version: 1, defaults: { security: "allowlist" } },
+        file: policyFile,
       });
       if (outcome === "rejected") {
         saved.reject(new Error("Policy changed; reload before saving."));
@@ -67,44 +75,18 @@ describe("DevicesPage policy saves", () => {
       }
       await waitForSolid(() => expect(save.textContent?.trim()).toBe(t("common.save")));
       expect(button(page.container, t("common.save"))).toBe(save);
+      expect(save.disabled).toBe(outcome === "accepted");
       if (outcome === "rejected") {
         expect(page.container.textContent).toContain("Policy changed; reload before saving.");
-        expect(save.disabled).toBe(false);
-        expect(
-          page.container.querySelector<HTMLSelectElement>('select[aria-label="Mode"]')?.value,
-        ).toBe("allowlist");
-      } else {
-        expect(save.disabled).toBe(true);
+        const mode = page.container.querySelector<HTMLSelectElement>('select[aria-label="Mode"]');
+        expect(mode?.value).toBe("allowlist");
       }
     },
   );
 
   it("retires a pending exec save when its Gateway is replaced", async () => {
-    const saved = createDeferred();
-    const { client } = clientFor(
-      vi.fn(async (method: string) => {
-        if (method === "exec.approvals.set") {
-          await saved.promise;
-        }
-        return responseFor(method);
-      }),
-    );
-    const page = mountPage(gatewayFixture(gatewaySnapshot(client, true, [], ["operator.admin"])), {
-      execApprovalsSnapshot: {
-        path: "/synthetic/exec-approvals.json",
-        exists: true,
-        hash: "original-base",
-        file: { version: 1 },
-      },
-      execApprovalsDirty: true,
-    });
-    const save = await waitForSolid(() => {
-      const control = button(page.container, t("common.save"));
-      expect(control.disabled).toBe(false);
-      return control;
-    });
-    save.click();
-    await waitForSolid(() => expect(page.container.textContent).toContain(t("common.saving")));
+    const { saved, page } = mountPolicySave();
+    await startSave(page.container);
     const replacement = clientFor();
     page.replaceGateway(
       gatewayFixture(gatewaySnapshot(replacement.client, true, [], ["operator.admin"])),
@@ -149,23 +131,11 @@ describe("DevicesPage policy saves", () => {
     await runtimeConfig.ensureLoaded();
     runtimeConfig.patchForm(["tools", "exec", "node"], "node-1");
     const page = mountPage(fixture, { nodes: [{ nodeId: "node-1" }] }, undefined, runtimeConfig);
-    const save = await waitForSolid(() =>
-      expectDefined(
-        [...page.container.querySelectorAll("button")].find(
-          (candidate) => candidate.textContent?.trim() === t("common.save") && !candidate.disabled,
-        ),
-        "enabled binding save",
-      ),
-    );
-    save.click();
-    await waitForSolid(() => {
-      expect(save?.textContent).toContain(t("common.saving"));
-      expect(save?.disabled).toBe(true);
-    });
+    const save = await startSave(page.container);
     saved.resolve();
-    await waitForSolid(() => expect(save?.textContent?.trim()).toBe(t("common.save")));
+    await waitForSolid(() => expect(save.textContent?.trim()).toBe(t("common.save")));
     expect(runtimeConfig.state.configSnapshot?.hash).toBe("config-saved");
     expect(runtimeConfig.state.configFormDirty).toBe(false);
-    expect(save?.disabled).toBe(true);
+    expect(save.disabled).toBe(true);
   });
 });

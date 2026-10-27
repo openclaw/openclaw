@@ -497,6 +497,7 @@ describe("chat transcript invalidation", () => {
   });
 
   it("keeps message rows prepared and refreshes failure actions when a retained transcript returns", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
     const owner = new EventTarget();
     let visible = true;
     const props = {
@@ -649,7 +650,9 @@ describe("chat transcript invalidation", () => {
       rerender();
       transcript.start();
       await flushDeferredRowPrune();
-      expect(container.textContent).toContain("Received · waiting for worker setup");
+      await waitForSolid(() =>
+        expect(container.textContent).toContain("Received · waiting for worker setup"),
+      );
       expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
       expect(buildSpy).toHaveBeenCalledOnce();
 

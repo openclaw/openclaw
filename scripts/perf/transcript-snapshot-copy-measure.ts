@@ -1,7 +1,8 @@
 /**
  * Replica seed/read CPU and allocation with eight synthetic 128-message sessions.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/transcript-snapshot-copy-measure.ts
- *   --mode complete --iterations 3000 [--owner /absolute/base-snapshot.ts] [--allocations]
+ *   --mode complete --iterations 3000 [--owner /absolute/base-owner.ts] [--replica] [--allocations]
+ * --replica selects the transcript replica owner instead of the snapshot copier.
  * Repeat for window/exact, alternating base/candidate processes. Allocation sampling
  * includes collected objects; run it separately from timing. Setup and content/isolation
  * checks are outside measurement. Accept identical contents and less CPU/allocation;
@@ -26,6 +27,7 @@ const { values } = parseArgs({
   options: {
     mode: { type: "string", default: "complete" },
     owner: { type: "string" },
+    replica: { type: "boolean", default: false },
     iterations: { type: "string", default: "3000" },
     allocations: { type: "boolean", default: false },
   },
@@ -37,7 +39,10 @@ const iterations = parseStrictIntegerOption({
   min: 1,
   label: "iterations",
 });
-const ownerUrl = new URL("../../src/config/sessions/transcript-snapshot.ts", import.meta.url);
+const ownerUrl = new URL(
+  `../../src/config/sessions/${values.replica ? "session-actor-transcript-replica" : "transcript-snapshot"}.ts`,
+  import.meta.url,
+);
 let replaced = false;
 if (values.owner) {
   const replacement = pathToFileURL(path.resolve(values.owner)).href;
