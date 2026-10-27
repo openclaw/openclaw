@@ -185,6 +185,9 @@ async function measure() {
         assert.equal(facts.entry?.sessionId, target.sessionId);
       };
       const authorization: SessionMutationAuthorization = {
+        assertTargetCurrent() {
+          throw new Error("Target-specific authorization is outside this benchmark");
+        },
         assertCurrent() {
           assert(current);
           current.assertCurrent();
