@@ -67,6 +67,9 @@
     },
     "additionalProperties": false
   },
+  "doctorContract": {
+    "configRepair": true
+  },
   "activation": {
     "onStartup": true
   },

@@ -112,7 +112,9 @@ the `knowledge-unlinked-claims` skill over every private claim with no linked
 page and no source page, whichever tool saved it. It runs weekly by default
 (Sundays at 3:45 AM) or, if you choose, nightly at 3:45 AM, after the default
 3:30 AM maintenance pass. Each run is an agent turn over every unlinked claim,
-so nightly costs more; a run that finds nothing left stops right away.
+so nightly costs more; a run that finds nothing left stops right away. The
+retired `maintenance.reviewJobId` setting fails validation; run
+`openclaw doctor --fix` to remove it.
 
 The review edits private knowledge, so its automation must run in a session
 with the owner's private access. Turn on **Review unlinked claims** from the
