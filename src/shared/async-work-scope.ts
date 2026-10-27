@@ -67,6 +67,10 @@ export class AsyncWorkScope {
     if (this.phase === "closed") {
       throw new AsyncWorkScopeClosedError();
     }
+    // Existing work already makes reentrant drain yield until this synchronous call returns.
+    if (this.pending.size > 0) {
+      return this.enter(run);
+    }
     // Synchronous work is removed in finally and needs no promise cleanup reactions.
     const operation = createDeferredCore();
     this.pending.add(operation.promise);

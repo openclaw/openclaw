@@ -2,7 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { prepareGitHubAppInstallation } from "./github-app-installation.js";
+import { prepareAppGitHubIdentity } from "./github-app-identity.js";
 import type { GitHubAppSelection } from "./github-credential-reader.js";
 import {
   resolveGitHubToolIdentityStatus,
@@ -27,13 +27,16 @@ const installation = {
 };
 let selected: GitHubAppSelection;
 let config: OpenClawConfig;
-function prepare() {
-  return prepareGitHubAppInstallation({
-    selection: selected,
+async function prepare() {
+  const { prepared, readToken } = await prepareAppGitHubIdentity(
+    { config, agentId: "main", allowAppInstallation: true, assertCurrent() {} },
+    selected,
+    "system-configured",
+    {},
     host,
     apiBaseUrl,
-    assertCurrent() {},
-  });
+  );
+  return { ...prepared, readToken };
 }
 function prepareRead(options: Partial<Parameters<typeof prepareGitHubReadIdentity>[0]> = {}) {
   return prepareGitHubReadIdentity({

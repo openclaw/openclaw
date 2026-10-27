@@ -260,7 +260,7 @@ export {
   appendTranscriptMessages,
   persistSessionTranscriptTurn,
 } from "./session-accessor.transcript-turn.js";
-export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
+export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
 export { validateSessionTranscriptContextAdmission } from "./session-accessor.sqlite-model-context.js";
 export {
   isSessionTranscriptProjectionUnavailableError,

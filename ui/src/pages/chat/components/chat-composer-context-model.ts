@@ -9,11 +9,6 @@ import { resolveSessionContextLimit } from "../../../lib/sessions/context-budget
 
 const CONTEXT_NOTICE_RATIO = 0.85;
 
-type ContextNoticeOptions = {
-  messages?: unknown[];
-  providerUsage?: ProviderUsageDisplayProps;
-};
-
 export function latestAssistantProvider(messages: unknown[] | undefined): string | null {
   for (let index = (messages?.length ?? 0) - 1; index >= 0; index -= 1) {
     const message = readCostRecord(messages?.[index]);
@@ -64,7 +59,10 @@ export function getContextNoticeViewModel(session: GatewaySessionRow | undefined
   };
 }
 
-export type ContextNoticeProps = ContextNoticeOptions & {
+export type ContextNoticeProps = {
+  messages?: unknown[];
+  providerUsage?: ProviderUsageDisplayProps;
+} & {
   session?: GatewaySessionRow;
   gateway?: ApplicationGateway;
   agentId?: string;

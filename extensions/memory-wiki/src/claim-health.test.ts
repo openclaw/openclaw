@@ -28,6 +28,16 @@ function createPage(title: string, contradictions: string[] = []): WikiPageSumma
 }
 
 describe("wiki claim health", () => {
+  it("groups punctuation and Unicode whitespace without dropping combining marks", () => {
+    const clusters = buildPageContradictionClusters([
+      createPage("Alpha", ["किताब\u00a0\t---\nready"]),
+      createPage("Beta", ["किताब ready"]),
+    ]);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0]?.key).toBe("किताब ready");
+    expect(clusters[0]?.entries.map((entry) => entry.pageTitle)).toEqual(["Alpha", "Beta"]);
+  });
+
   it("keeps combining-mark contradiction notes in separate clusters", () => {
     const clusters = buildPageContradictionClusters([
       createPage("Alpha", ["किताब"]),

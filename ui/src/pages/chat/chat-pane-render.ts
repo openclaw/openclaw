@@ -15,7 +15,7 @@ import {
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { readSessionMethodScopeAccess } from "../../lib/session-method-access.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { isChatBubbleMode } from "./chat-bubble-mode.ts";
@@ -69,7 +69,10 @@ registerChatSessionEnglish();
 const emptyTranscriptItems: [] = [];
 
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
-  render(readProviderReview?: () => ChatProviderReviewOwner | undefined) {
+  render(
+    readProviderReview?: () => ChatProviderReviewOwner | undefined,
+    readRealtimeTalkConversation?: ChatProps["readRealtimeTalkConversation"],
+  ) {
     const state = this.state;
     if (!state) {
       return { layout: null, capabilityDialogs: undefined, providerReviewSource: undefined };
@@ -496,7 +499,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       realtimeTalkDetail: state.realtimeTalk.snapshot.realtimeTalkDetail,
       realtimeTalkInputNotice: state.realtimeTalk.snapshot.realtimeTalkInputNotice,
       realtimeTalkInputLevel: state.realtimeTalk.snapshot.realtimeTalkInputLevel,
-      realtimeTalkConversation: state.realtimeTalk.snapshot.realtimeTalkConversationState.entries,
+      readRealtimeTalkConversation:
+        readRealtimeTalkConversation ??
+        (() => state.realtimeTalk.snapshot.realtimeTalkConversationState.entries),
       realtimeTalkVideoStream: state.realtimeTalk.snapshot.realtimeTalkVideoStream,
       realtimeTalkCameraDevices: state.realtimeTalk.snapshot.realtimeTalkCameraDevices,
       realtimeTalkVideoCapable: state.realtimeTalk.snapshot.realtimeTalkVideoCapable,

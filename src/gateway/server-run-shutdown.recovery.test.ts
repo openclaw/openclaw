@@ -71,20 +71,15 @@ let storePath: string;
 
 type ShutdownParams = Parameters<typeof prepareGatewayRunShutdown>[0];
 function shutdown(
-  {
-    chatRunState,
-    agentRunSeq,
-    broadcast,
-    nodeSendToSession,
-  }: Pick<ShutdownParams, "chatRunState" | "agentRunSeq" | "broadcast" | "nodeSendToSession">,
+  harness: Pick<ShutdownParams, "chatRunState" | "agentRunSeq" | "broadcast" | "nodeSendToSession">,
   resolveGatewayContext: GatewayContextResolver,
   overrides: Partial<ShutdownParams> = {},
 ) {
   return prepareGatewayRunShutdown({
-    chatRunState,
-    agentRunSeq,
-    broadcast,
-    nodeSendToSession,
+    chatRunState: harness.chatRunState,
+    agentRunSeq: harness.agentRunSeq,
+    broadcast: harness.broadcast,
+    nodeSendToSession: harness.nodeSendToSession,
     resolveGatewayContext,
     timeoutMs: 0,
     warnings: [],
@@ -97,13 +92,44 @@ function shutdown(
   });
 }
 
-function recoveryTarget(sessionKey: string, sessionId: string) {
+function recoveryTarget(
+  sessionKey: string,
+  sessionId: string,
+  scope = storePath,
+  agentId = "main",
+) {
   return captureSessionTarget({
-    storeScope: storePath,
+    storeScope: scope,
     sessionKey,
     incarnation: sessionId,
-    agentId: "main",
+    agentId,
   });
+}
+
+function recoveryFixture(sessionKey: string, sessionId: string) {
+  const resolveGatewayContext = () => undefined;
+  const runId = `${sessionId}-run`;
+  return {
+    target: { storePath, sessionKey },
+    runId,
+    resolveGatewayContext,
+    admit: (overrides: Partial<Parameters<typeof beginSessionEffect>[0]> = {}) =>
+      beginSessionEffect({
+        scope: storePath,
+        identities: [sessionKey, sessionId],
+        resolveGatewayContext,
+        ...overrides,
+      }),
+    register: (overrides: Partial<Parameters<typeof registerRecoveryRun>[0]> = {}) =>
+      registerRecoveryRun({
+        sessionKey,
+        sessionId,
+        runId,
+        resolveGatewayContext,
+        timeoutMs: 60_000,
+        ...overrides,
+      }),
+  };
 }
 
 function registerRecoveryRun(
@@ -117,14 +143,12 @@ function registerRecoveryRun(
   const { resolveGatewayContext, storePath: scopedStorePath, ...options } = params;
   const registration = registerChatAbortController({
     ...options,
-    target: scopedStorePath
-      ? captureSessionTarget({
-          storeScope: scopedStorePath,
-          sessionKey: options.sessionKey,
-          incarnation: options.sessionId,
-          agentId: options.agentId ?? "main",
-        })
-      : recoveryTarget(options.sessionKey, options.sessionId),
+    target: recoveryTarget(
+      options.sessionKey,
+      options.sessionId,
+      scopedStorePath,
+      scopedStorePath ? (options.agentId ?? "main") : "main",
+    ),
   });
   if (!registration.registered) {
     throw new Error("Expected a fresh recovery source");
@@ -168,23 +192,11 @@ it.each([
 ] as const)("revalidates collected shutdown recovery custody after %s", async (releaseAt) => {
   const sessionKey = `agent:main:dashboard:released-${releaseAt}`;
   const sessionId = `released-${releaseAt}`;
-  const runId = `${sessionId}-run`;
-  const target = { storePath, sessionKey };
+  const f = recoveryFixture(sessionKey, sessionId);
+  const { runId, target, resolveGatewayContext } = f;
   await replaceSessionEntry(target, { sessionId, updatedAt: 1, lifecycleRunId: runId });
-  const resolveGatewayContext = () => undefined;
-  const admission = await beginSessionEffect({
-    scope: storePath,
-    identities: [sessionKey, sessionId],
-    resolveGatewayContext,
-    assertAllowed: () => {},
-  });
-  const registration = registerRecoveryRun({
-    resolveGatewayContext,
-    runId,
-    sessionKey,
-    sessionId,
-    timeoutMs: 60_000,
-  });
+  const admission = await f.admit({ assertAllowed: () => {} });
+  const registration = f.register();
   const releaseClaim = await claimRpcSourceForTest(registration.entry);
   const shouldMark =
     releaseAt === "before planning" ||
@@ -236,12 +248,8 @@ it.each([
           releaseAt === "newer run" ||
           releaseAt === "other physical store"
         ) {
-          replacement = registerRecoveryRun({
-            resolveGatewayContext,
+          replacement = f.register({
             runId: releaseAt === "newer run" ? "newer-run" : runId,
-            sessionKey,
-            sessionId,
-            timeoutMs: 60_000,
             ...(releaseAt === "other physical store"
               ? { storePath: state.statePath("other-store", "sessions.json") }
               : {}),
@@ -292,9 +300,9 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
     const sourceOnly = kind === "delegated source-only";
     const sessionKey = delegated ? "agent:main:main" : `agent:main:dashboard:restart-${kind}`;
     const sessionId = `restart-${kind}-session`;
+    const f = recoveryFixture(sessionKey, sessionId);
+    const { target, resolveGatewayContext } = f;
     const runId = `restart-${kind}-run`;
-    const target = { storePath, sessionKey };
-    const resolveGatewayContext = () => undefined;
     await replaceSessionEntry(target, {
       sessionId,
       updatedAt: 1_000,
@@ -316,12 +324,7 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
         },
       },
     );
-    const admission = await beginSessionEffect({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
-      resolveGatewayContext,
-      assertAllowed: () => {},
-    });
+    const admission = await f.admit({ assertAllowed: () => {} });
     const reply =
       kind === "queue"
         ? createReplyOperation({
@@ -333,12 +336,8 @@ it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
         : undefined;
     const queued =
       kind === "queue"
-        ? registerRecoveryRun({
-            resolveGatewayContext,
+        ? f.register({
             runId,
-            sessionKey,
-            sessionId,
-            timeoutMs: 60_000,
             onCancel: () => admission.release(),
           })
         : undefined;
@@ -433,8 +432,8 @@ it.each(["none", "active", "pending"] as const)(
   async (callbackFailure) => {
     const sessionKey = `agent:main:dashboard:owned-shutdown-${callbackFailure}`;
     const sessionId = `owned-shutdown-${callbackFailure}`;
-    const target = { storePath, sessionKey };
-    const resolveGatewayContext = () => undefined;
+    const f = recoveryFixture(sessionKey, sessionId);
+    const { target, resolveGatewayContext } = f;
     const owner = Symbol(sessionKey);
     const controller = new AbortController();
     const pendingController = new AbortController();
@@ -460,11 +459,8 @@ it.each(["none", "active", "pending"] as const)(
       status: "done",
     });
     let recoveryMarkedBeforeInterruption = false;
-    const admission = await beginSessionEffect({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
+    const admission = await f.admit({
       owner,
-      resolveGatewayContext,
       onInterrupt: (reason) => {
         recoveryMarkedBeforeInterruption = Boolean(loadSessionEntry(target)?.mainRestartRecovery);
         controller.abort(reason);
@@ -476,27 +472,26 @@ it.each(["none", "active", "pending"] as const)(
     });
     const pendingValidation = vi.fn();
     let pendingPromoted = false;
-    const pending = beginSessionEffect({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
-      owner,
-      serializeOwner: true,
-      resolveGatewayContext,
-      assertAllowed: pendingValidation,
-      onInterrupt: (reason) => {
-        pendingController.abort(reason);
-        if (callbackFailure === "pending") {
-          throw new Error("Synthetic pending admission cancellation failure");
-        }
-      },
-    }).then(
-      (lease) => {
-        pendingPromoted = true;
-        lease.release();
-        return undefined;
-      },
-      (error: unknown) => error,
-    );
+    const pending = f
+      .admit({
+        owner,
+        serializeOwner: true,
+        assertAllowed: pendingValidation,
+        onInterrupt: (reason) => {
+          pendingController.abort(reason);
+          if (callbackFailure === "pending") {
+            throw new Error("Synthetic pending admission cancellation failure");
+          }
+        },
+      })
+      .then(
+        (lease) => {
+          pendingPromoted = true;
+          lease.release();
+          return undefined;
+        },
+        (error: unknown) => error,
+      );
     const interruptFinalWrite = vi.fn();
     const finalAdmission = await beginSessionEffect({
       scope: storePath,
@@ -515,15 +510,11 @@ it.each(["none", "active", "pending"] as const)(
       .finally(() => finalAdmission.release());
     const siblingInterrupt = vi.fn();
     const unboundInterrupt = vi.fn();
-    const sibling = await beginSessionEffect({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
+    const sibling = await f.admit({
       resolveGatewayContext: () => undefined,
       onInterrupt: siblingInterrupt,
     });
-    const unbound = await beginSessionEffect({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
+    const unbound = await f.admit({
       resolveGatewayContext: undefined,
       onInterrupt: unboundInterrupt,
     });
@@ -559,12 +550,7 @@ it.each(["none", "active", "pending"] as const)(
       const closing = await shutdown(harness, resolveGatewayContext, {
         markMainSessionsAbortedForRestart: async (params) => {
           await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
-          successor = await beginSessionEffect({
-            scope: storePath,
-            identities: [sessionKey, sessionId],
-            resolveGatewayContext,
-            onInterrupt: successorInterrupt,
-          });
+          successor = await f.admit({ onInterrupt: successorInterrupt });
         },
       });
       expect(controller.signal.aborted).toBe(true);
@@ -580,23 +566,20 @@ it.each(["none", "active", "pending"] as const)(
       expect(queuedTask).not.toHaveBeenCalled();
       expect(admission.isActive()).toBe(false);
       expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 0, queuedCount: 0 });
-      expect(finalAdmission.isActive()).toBe(true);
-      expect(interruptFinalWrite).not.toHaveBeenCalled();
-      expect(sibling.isActive()).toBe(true);
-      expect(unbound.isActive()).toBe(true);
-      expect(siblingInterrupt).not.toHaveBeenCalled();
-      expect(unboundInterrupt).not.toHaveBeenCalled();
-      expect(successor?.isActive()).toBe(true);
-      expect(successorInterrupt).not.toHaveBeenCalled();
+      for (const [lease, interrupt] of [
+        [finalAdmission, interruptFinalWrite],
+        [sibling, siblingInterrupt],
+        [unbound, unboundInterrupt],
+        [successor, successorInterrupt],
+      ] as const) {
+        expect(lease?.isActive()).toBe(true);
+        expect(interrupt).not.toHaveBeenCalled();
+      }
       let released = false;
-      void closing.released.then(
-        () => {
-          released = true;
-        },
-        () => {
-          released = true;
-        },
-      );
+      const noteReleased = () => {
+        released = true;
+      };
+      void closing.released.then(noteReleased, noteReleased);
       await Promise.resolve();
       expect(released).toBe(false);
       persistFinalWrite.resolve();
@@ -651,6 +634,7 @@ it.each(
     const sessionId = `persisted-terminal-${outcome}-${aliased}`;
     const runId = `${sessionId}-run`;
     const clientRunId = aliased ? `${runId}-client` : runId;
+    const identity = { sessionKey, sessionId, agentId: "main" };
     const target = { storePath, sessionKey };
     const subscriptionConfig = { ...cfg, logging: { audit: { enabled: false } } };
     setRuntimeConfigSnapshot(subscriptionConfig, subscriptionConfig);
@@ -662,16 +646,14 @@ it.each(
     };
     params.chatRunState.registry.add(runId, { sessionKey, clientRunId });
     const registration = registerSubscriptionChatRun(params, {
+      ...identity,
       runId: clientRunId,
-      sessionKey,
-      sessionId,
-      agentId: "main",
       target: recoveryTarget(sessionKey, sessionId),
     });
     bindGatewayContextResolver(registration.entry.input, resolveGatewayContext);
     const releaseClaim = await claimRpcSourceForTest(registration.entry);
     registration.markExecutionStarted();
-    registerAgentRunContext(runId, { sessionKey, sessionId, agentId: "main" });
+    registerAgentRunContext(runId, identity);
     const unsubs = startGatewayEventSubscriptions(params);
     let unsubscribeAgent: Promise<void> | undefined;
     const drain = () => (unsubscribeAgent ??= unsubs.agentUnsub());
@@ -695,10 +677,8 @@ it.each(
         registration.controller.abort(createAgentRunRestartAbortError());
       }
       emitAgentEvent({
+        ...identity,
         runId,
-        sessionKey,
-        sessionId,
-        agentId: "main",
         stream: "lifecycle",
         data: {
           phase: "end",
@@ -731,25 +711,17 @@ it.each(
           if (outcome === "replacement") {
             // The old terminal is already durable; a newer turn wins before its marker writes.
             replacement = registerSubscriptionChatRun(params, {
+              ...identity,
               runId: replacementRunId,
-              sessionKey,
-              sessionId,
-              agentId: "main",
               target: recoveryTarget(sessionKey, sessionId),
             });
             bindGatewayContextResolver(replacement.entry.input, resolveGatewayContext);
             releaseReplacementClaim = await claimRpcSourceForTest(replacement.entry);
             replacement.markExecutionStarted();
-            registerAgentRunContext(replacementRunId, {
-              sessionKey,
-              sessionId,
-              agentId: "main",
-            });
+            registerAgentRunContext(replacementRunId, identity);
             emitAgentEvent({
+              ...identity,
               runId: replacementRunId,
-              sessionKey,
-              sessionId,
-              agentId: "main",
               stream: "lifecycle",
               data: { phase: "start", startedAt: Date.now() },
             });

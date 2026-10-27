@@ -39,7 +39,7 @@ const ChatSidebarRegion = lazy(() => import("./components/chat-sidebar-region.ru
   export: "ChatSidebarRegion",
 });
 
-function MobileHostBoundary(props: { children: Element }) {
+function MobileHostBoundary(props: { children: Element; fallback?: Element }) {
   return (
     <Errored
       fallback={(error, reset) => (
@@ -57,7 +57,7 @@ function MobileHostBoundary(props: { children: Element }) {
         />
       )}
     >
-      <Loading>{props.children}</Loading>
+      <Loading fallback={props.fallback}>{props.children}</Loading>
     </Errored>
   );
 }
@@ -327,7 +327,21 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         }}
       >
         <Show when={mobileActivated()}>
-          <MobileHostBoundary>
+          <MobileHostBoundary
+            fallback={
+              <Show when={props.mobileHost}>
+                <Show
+                  when={
+                    props.mobileHost?.destination.page?.expandable !== false ||
+                    props.mobileHost?.destination.page?.resizable === true
+                  }
+                >
+                  <div class="chat-mobile-host__grabber" aria-hidden="true" />
+                </Show>
+                <div class="chat-mobile-host__header" aria-hidden="true" />
+              </Show>
+            }
+          >
             <MobileHostChrome
               view={props}
               readRegion={() => region}

@@ -1,7 +1,7 @@
-/* @vitest-environment jsdom */
-
 import { createComponent } from "solid-js";
+/* @vitest-environment jsdom */
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import * as chatThread from "./chat-thread.ts";
@@ -58,12 +58,9 @@ describe("transcript run identity", () => {
         createComponent(ChatThread, {
           props: {
             ...threadProps("run-id-projection"),
-            sessions: {
-              ts: 0,
-              path: "",
-              count: 1,
-              defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-              sessions: [
+            sessions: sessionListResult(
+              0,
+              [
                 {
                   key: "agent:main:main",
                   kind: "direct",
@@ -72,7 +69,8 @@ describe("transcript run identity", () => {
                   activeRunIds: ["arbitrary-first", "other-run"],
                 },
               ],
-            },
+              { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+            ),
           },
           transcript,
         }),

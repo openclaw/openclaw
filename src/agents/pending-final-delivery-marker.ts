@@ -49,16 +49,14 @@ type PersistPendingFinalDeliveryMarkerParams = {
   assertCurrent?: () => void;
 };
 
-type PendingFinalDeliveryMarkerResult = {
+export async function persistPendingFinalDeliveryMarker(
+  params: PersistPendingFinalDeliveryMarkerParams,
+): Promise<{
   sessionEntry?: SessionEntry;
   pendingFinalDeliveryMarkerPersisted: boolean;
   pendingFinalDeliveryIntentId?: string;
   hasSendableFinalPayload: boolean;
-};
-
-export async function persistPendingFinalDeliveryMarker(
-  params: PersistPendingFinalDeliveryMarkerParams,
-): Promise<PendingFinalDeliveryMarkerResult> {
+}> {
   const sendablePayloads = params.payloads.filter(
     (payload) => normalizePendingFinalDeliveryPayloads([payload]).length > 0,
   );

@@ -30,6 +30,7 @@ import {
   settleChatPage,
   setNavigationContext,
   stubMatchMedia,
+  showSession,
 } from "./chat-page.test-support.ts";
 import "./chat-page.tsx";
 import type { ChatRouteData } from "./route-loader.ts";
@@ -56,14 +57,6 @@ const panesIn = (page: HTMLElementTagNameMap["openclaw-chat-page"]) => [
 ];
 function command(detail: UiCommandDetail) {
   window.dispatchEvent(new CustomEvent(UI_COMMAND_EVENT, { cancelable: true, detail }));
-}
-async function showSession(
-  page: HTMLElementTagNameMap["openclaw-chat-page"],
-  sessionKey: string,
-): Promise<void> {
-  page.data = { sessionKey };
-  await settleChatPage(page);
-  await settleChatPage(page);
 }
 
 describe("chat page close navigation", () => {

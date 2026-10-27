@@ -29,7 +29,8 @@ export function operatorReadShareKey(...[caller, params]: Parameters<ShareKey>):
     ],
     (_key, value: unknown) =>
       value && typeof value === "object" && !Array.isArray(value)
-        ? Object.fromEntries(Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b)))
+        ? // oxlint-disable-next-line unicorn/no-array-sort -- Object.entries creates a private array.
+          Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)))
         : value,
   );
 }

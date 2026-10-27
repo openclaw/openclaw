@@ -937,10 +937,12 @@ describe("agent request events", () => {
         registry.invalidateConnectionForPairingChange(client.connId);
       }
       const nowSpy = vi.spyOn(Date, "now").mockReturnValue(100_000);
+      using parse = vi.spyOn(JSON, "parse");
+      const payload = current ? stats : { ...stats, memoryFreeBytes: 1024 };
       setActiveNodeContexts([{ nodeId: "active-computer" }]);
       try {
         await expect(
-          emit("node.host.stats", current ? stats : { ...stats, memoryFreeBytes: 1024 }, {
+          emit("node.host.stats", payload, {
             connId: connection === "stale" ? "retired-connection" : client.connId,
             presenceAllowed: false,
           }),
@@ -948,6 +950,7 @@ describe("agent request events", () => {
           eventResult("node.host.stats", current ? "updated" : "stale_connection", current),
         );
         expect(session.hostStats).toEqual({ ...stats, updatedAtMs: current ? 100_000 : 100 });
+        expect(parse.mock.calls.filter(([raw]) => raw === JSON.stringify(payload))).toHaveLength(1);
         if (current) {
           expect(broadcast).toHaveBeenCalledExactlyOnceWith(
             "node.hostStats",

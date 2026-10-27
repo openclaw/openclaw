@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { buildMemoryIndex, promptLabel } from "./memory-index.js";
 import type { LoadedRecord } from "./model.js";
 
@@ -104,7 +104,25 @@ it("lists the busiest pages' newest decisions and commitments under them, once e
     about("A plain fact", "fact", "2026-10-22T04:00:00Z"),
     about("Shared decision", "decision", "2026-10-21T00:00:00Z", [other.id, hub.id]),
   ];
-  const text = buildMemoryIndex(records, AS_OF);
+  const before = structuredClone(records);
+  for (const record of records) {
+    Object.freeze(record.metadata.entities);
+    Object.freeze(record.metadata);
+    Object.freeze(record);
+  }
+  Object.freeze(records);
+  const copies = vi.spyOn(Array.prototype, "toSorted");
+  let text: string;
+  let copyCount: number;
+  try {
+    text = buildMemoryIndex(records, AS_OF);
+    copyCount = copies.mock.calls.length;
+  } finally {
+    copies.mockRestore();
+  }
+  expect(records).toEqual(before);
+  // Only the connected-page ordering needs a copy of an array reused elsewhere.
+  expect(copyCount).toBeLessThanOrEqual(1);
   expect(text).toContain(
     [
       "- project: Busy hub (6 new claims)",

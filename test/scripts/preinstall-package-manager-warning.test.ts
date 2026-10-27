@@ -118,9 +118,9 @@ describe("install runtime enforcement", () => {
     { name: "matching shim", accepted: true },
     { name: "foreign shim", shimMatchesBun: false },
     {
-      name: "old launcher",
-      bun: "1.4.2",
-      error: "Bun launcher /opt/bun/bin/bun requires Bun 1.4.3+",
+      name: "affected launcher",
+      bun: "1.4.3",
+      error: "Bun launcher /opt/bun/bin/bun requires Bun 1.4.4+",
     },
     { name: "relative launcher", launcher: "bin/bun" },
     { name: "old persistent Node", persistent: "old-node", error: "detected Node 24.14.1" },
@@ -135,7 +135,7 @@ describe("install runtime enforcement", () => {
     "enforces the explicit Bun launcher contract: $name",
     ({
       launcher = "/opt/bun/bin/bun",
-      bun = "1.4.3",
+      bun = "1.4.4",
       persistent,
       shimMatchesBun = true,
       accepted = false,

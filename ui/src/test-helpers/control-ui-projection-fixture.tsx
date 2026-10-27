@@ -8,6 +8,7 @@ import { GatewayBoardProvider } from "../lib/board/gateway-provider.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { WidgetPinButton } from "../pages/chat/components/widget-pin-button.tsx";
 import type { ControlUiMockGateway } from "./control-ui-e2e-contract.ts";
+import { createInstanceResourceFixture } from "./control-ui-instance-resource-fixture.ts";
 import type {
   CoreProjectionFamily,
   ProjectionFixtureFacts,
@@ -45,6 +46,7 @@ function mockGateway(): ControlUiMockGateway {
 let active:
   | ReturnType<typeof createFixture>
   | ReturnType<typeof createSdkAvatarFixture>
+  | ReturnType<typeof createInstanceResourceFixture>
   | undefined;
 function createFixture(family: CoreProjectionFamily, instrumented: boolean) {
   const groups: Group[] = [];
@@ -270,7 +272,13 @@ window.openclawProjectionFixture = {
     active =
       family === "sdk-avatars" || family === "sdk-avatar-identities"
         ? createSdkAvatarFixture(family, instrumented)
-        : createFixture(family, instrumented);
+        : family === "tooltips" ||
+            family === "link-providers" ||
+            family === "link-metadata" ||
+            family === "ci-pairs" ||
+            family === "clawhub-cards"
+          ? createInstanceResourceFixture(family, instrumented)
+          : createFixture(family, instrumented);
     return active.setup();
   },
   run: () => {

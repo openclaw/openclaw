@@ -195,13 +195,32 @@ export function prepareOperatorModelPolicyPresentation(params: {
     (typeof provider !== "string" ||
       typeof model !== "string" ||
       !policy.allows({ provider, model }));
-  const projectSession = <T extends HistoricalModelFields>(row: T): T => {
+  // Variants belong to this exact immutable row; visibility is still evaluated on every read.
+  const projectSession = <T extends HistoricalModelFields>(row: T, variants?: T[]): T => {
     const hideModel = hidden(row.modelProvider, row.model);
     const hideActiveModel = hidden(row.activeModelProvider, row.activeModel);
     const budget = asOptionalRecord(row.contextBudgetStatus);
     const hideBudget = budget && hidden(budget.provider, budget.model);
     if (!hideModel && !hideActiveModel && !hideBudget) {
       return row;
+    }
+    if (variants) {
+      for (const existing of variants) {
+        if (
+          existing.modelProvider ===
+            (hideModel && row.modelProvider != null ? undefined : row.modelProvider) &&
+          existing.model === (hideModel && row.model != null ? undefined : row.model) &&
+          existing.activeModelProvider ===
+            (hideActiveModel && row.activeModelProvider != null
+              ? undefined
+              : row.activeModelProvider) &&
+          existing.activeModel ===
+            (hideActiveModel && row.activeModel != null ? undefined : row.activeModel) &&
+          existing.contextBudgetStatus === (hideBudget ? undefined : row.contextBudgetStatus)
+        ) {
+          return existing;
+        }
+      }
     }
     const projected = { ...row };
     // Nulls clear merge-event state; omit identifiers without replacing those clearing facts.
@@ -217,6 +236,10 @@ export function prepareOperatorModelPolicyPresentation(params: {
     }
     if (hideBudget) {
       delete projected.contextBudgetStatus;
+    }
+    if (variants) {
+      Object.freeze(projected);
+      variants.push(projected);
     }
     return projected;
   };

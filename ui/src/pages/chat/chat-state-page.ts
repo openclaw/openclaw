@@ -13,6 +13,7 @@ import {
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
 import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { currentDisplaySpeechConfig } from "../../lib/config/config-state-model.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
@@ -31,6 +32,7 @@ import {
 } from "./chat-history-events.ts";
 import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
+import { ChatPaneComposerHandoff } from "./chat-pane-attachment-handoff.ts";
 import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
@@ -199,6 +201,11 @@ export function createPageState(
   } satisfies Partial<ChatPageHost>;
   const state = Object.assign(errors, presentedFields, {
     uploadConfig: context.config,
+    outboxRecovery: {
+      gateway: context.gateway,
+      retainedAttachmentIds: (attachments: readonly ChatAttachment[]) =>
+        ChatPaneComposerHandoff.retainedAttachmentIds(context, attachments),
+    },
     captureComposerRecoveryReload: () => {
       const options = createGatewayControlUiReloadOptions(context.gateway);
       return () => retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...options });

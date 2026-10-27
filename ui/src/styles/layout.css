@@ -676,7 +676,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--muted);
+  color: var(--icon-interactive, var(--muted));
   transition:
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
@@ -693,7 +693,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   padding: 0;
   border: 0;
   border-radius: var(--radius-md);
-  background: var(--accent);
+  background: var(--sidebar-rail-action-bg);
   color: var(--accent-foreground);
   text-decoration: none;
 }
@@ -704,7 +704,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .header-new-session:hover:not(:disabled, [aria-disabled="true"]) {
-  background: var(--accent-hover);
+  background: var(--sidebar-rail-action-hover-bg);
   color: var(--accent-foreground);
 }
 
@@ -986,7 +986,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted);
+  color: var(--icon-interactive, var(--muted));
   transition:
     opacity var(--duration-fast) ease,
     background var(--duration-fast) ease,
@@ -998,6 +998,10 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   height: 22px;
   padding: 0;
   opacity: 0.55;
+}
+
+.sidebar-session-toolbar__button:not(:disabled, [aria-disabled="true"]) {
+  opacity: var(--sidebar-toolbar-action-opacity, 0.55);
 }
 
 .sidebar-session-toolbar .sidebar-recent-sessions__label-text {
@@ -1356,7 +1360,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 .sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)) .sidebar-session-group-actions,
 .sidebar-session-group-actions[aria-expanded="true"],
 .sidebar-session-group-actions.sidebar-session-sort--filtered {
-  opacity: 0.55;
+  opacity: var(--sidebar-toolbar-action-opacity, 1);
   pointer-events: auto;
 }
 
@@ -1387,7 +1391,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   }
 
   .sidebar-session-group-actions {
-    opacity: 0.55;
+    opacity: var(--sidebar-toolbar-action-opacity, 1);
     pointer-events: auto;
   }
 }
@@ -2361,29 +2365,13 @@ openclaw-session-menu[popover] {
   color: var(--muted);
 }
 
-/* Keycap hint, not content: the app's quiet mono shortcut idiom, fixed-width so
-   letters and digits share one rail. Identity-menu chords use the system UI face
-   below because theme body fonts are not guaranteed to cover modifier glyphs. */
+/* Wrappers can contain multiple keycaps and an alias separator. The shared
+   keyboard stylesheet owns the badge skin, including modifier-glyph coverage. */
 .session-menu__shortcut,
-.side-panel-type-option__shortcut,
-.chat-controls__model-option-action kbd {
+.side-panel-type-option__shortcut {
   flex: 0 0 auto;
-  min-width: 12px;
-  color: var(--muted);
-  font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
-  line-height: 1;
   text-align: center;
-}
-
-.session-menu__shortcut,
-.side-panel-type-option__shortcut {
-  text-align: end;
-}
-
-.sidebar-identity-menu .session-menu__shortcut,
-.side-panel-type-option__shortcut {
-  font-family: var(--font-shortcut);
 }
 
 /* Sidebar destinations act as app controls, but stay anchors for native
@@ -2491,7 +2479,7 @@ a:is(
 .nav-item.active .nav-item__icon,
 .nav-item--active .nav-item__icon {
   opacity: 1;
-  color: var(--accent);
+  color: var(--navigation-selected-icon, var(--accent));
 }
 
 /* Pinned sessions share the page-nav chrome (hover/active fill, muted glyphs and
@@ -3565,7 +3553,7 @@ html.openclaw-native-web-chrome
   font-weight: 650;
   letter-spacing: -0.03em;
   line-height: 1.2;
-  color: var(--accent);
+  color: var(--text-strong);
 }
 
 .page-subtitle {

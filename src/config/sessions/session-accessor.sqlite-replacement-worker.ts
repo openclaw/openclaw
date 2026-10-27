@@ -37,7 +37,6 @@ import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-ident
 import type {
   SessionEntryWorkerLifecycle,
   SessionEntryReplacementCandidate,
-  SessionEntryReplacementCommitted,
 } from "./session-accessor.sqlite-replacement-types.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 import { withSessionEntryWriterReads } from "./session-entry-read-facts.js";
@@ -205,7 +204,6 @@ export async function withSessionEntryWorker<T>(
               ? err(decodeSessionTranscriptWorkerReadError(result.readError))
               : ok(result.entry)),
             source: result.source,
-            facts: result.facts,
           };
         },
         async entries(request) {
@@ -613,7 +611,7 @@ export async function commitSessionEntryReplacementsInWorker(
   lifecycle: Omit<SessionEntryWorkerLifecycle, "onResult">,
   retainedExecution?: OpenClawAgentDatabaseExecution,
   nativeDeletion?: ReturnType<typeof captureNativeSessionWorkerDeletion>,
-): Promise<SessionEntryReplacementCommitted> {
+): Promise<SessionEntryReplacementCandidate["result"]> {
   const source = await prepareSessionSourceAuthority(assertCurrent);
   const sameStore = source.checks.every(
     ({ predicate }) => predicate.source.databaseIdentity === databaseIdentity,
@@ -637,7 +635,7 @@ export async function commitSessionEntryReplacementsInWorker(
         await import("./session-native-binding.js");
       return await runSessionNativeBindingWorkerOperation<
         SessionEntryReplacementCandidate,
-        SessionEntryReplacementCommitted
+        SessionEntryReplacementCandidate["result"]
       >({
         database: options,
         databaseIdentity,
@@ -660,7 +658,7 @@ export async function commitSessionEntryReplacementsInWorker(
           lifecycle.beforeCommit?.(candidate.publication, operation),
         async onCommitted(candidate, published, identity, context) {
           try {
-            lifecycle.onLifecycleCommitted?.(candidate.result.pendingArchiveRecovery);
+            lifecycle.onLifecycleCommitted?.(candidate.publication.pendingArchiveRecovery);
           } finally {
             if (published) {
               publishCommittedSessionIdentity(
@@ -677,7 +675,7 @@ export async function commitSessionEntryReplacementsInWorker(
         },
       });
     }
-    return await runSessionEntryWorkerMutation<SessionEntryReplacementCommitted>(
+    return await runSessionEntryWorkerMutation<SessionEntryReplacementCandidate["result"]>(
       options,
       databaseIdentity,
       source.assertCurrent,

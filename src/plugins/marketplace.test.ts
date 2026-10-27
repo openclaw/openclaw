@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 import * as jsonFiles from "../infra/json-files.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
@@ -532,13 +533,7 @@ describe("marketplace archive downloads", () => {
   }
 
   function streamingResponse(cancel: () => void | Promise<void>, status = 200) {
-    return new Response(
-      new ReadableStream<Uint8Array>({
-        start: (controller) => controller.enqueue(Buffer.from("archive fixture")),
-        cancel,
-      }),
-      { status },
-    );
+    return new Response(makeStallingStream([Buffer.from("archive fixture")], cancel), { status });
   }
 
   function expectDownloadFailure(result: unknown, error: string) {

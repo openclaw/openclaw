@@ -25,6 +25,7 @@ import {
   projectMcpOAuthCredentialsStatus,
   type McpOAuthPrincipalStatus,
 } from "./mcp-oauth-status.js";
+import { mcpOAuthAuthorizationRequiredError } from "./mcp-oauth-store.authorization.js";
 import {
   clearMcpOAuthStore,
   consumeOAuthState,
@@ -74,12 +75,6 @@ async function withMcpOAuthLease<T>(
     },
     context,
     (lease) => run(lease, context),
-  );
-}
-
-function mcpOAuthAdditionalAuthorizationError(identity: McpOAuthIdentity): Error {
-  return new Error(
-    `MCP server "${identity.serverName}" requires additional OAuth authorization. ${mcpOAuthSignInHint(identity)}`,
   );
 }
 
@@ -177,10 +172,10 @@ export async function resolveMcpOAuthAccessToken(
         params.interactiveAuthorizationRequired === true &&
         challengeAppliesToCurrentState
       ) {
-        throw mcpOAuthAdditionalAuthorizationError(params.identity);
+        throw mcpOAuthAuthorizationRequiredError(params.identity, context.admission, true);
       }
       if (store.pendingAuthorizationChallenge?.requiresAuthorization === true) {
-        throw mcpOAuthAdditionalAuthorizationError(params.identity);
+        throw mcpOAuthAuthorizationRequiredError(params.identity, context.admission, true);
       }
       if (store.refreshClaim) {
         throw new Error("MCP OAuth refresh outcome is uncertain; sign in again.");
@@ -189,9 +184,7 @@ export async function resolveMcpOAuthAccessToken(
         if (params.allowMissingToken === true) {
           return undefined;
         }
-        throw new Error(
-          `MCP server "${params.identity.serverName}" requires OAuth authorization. ${mcpOAuthSignInHint(params.identity)}`,
-        );
+        throw mcpOAuthAuthorizationRequiredError(params.identity, context.admission);
       }
 
       if (isStoredMcpOAuthAccessTokenUsable(store, params)) {

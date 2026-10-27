@@ -41,7 +41,6 @@ import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.j
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionCommunicationPolicy } from "../sessions/communication-policy.js";
-import { canContinueSessionProviderReview } from "../sessions/provider-review.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
@@ -63,6 +62,7 @@ import {
 import { sessionModelRevision } from "./session-model-revision.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
+import { projectSessionRowProviderReview } from "./session-row-provider-review.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import type {
@@ -75,6 +75,7 @@ import {
   type SessionChildLink,
   resolveSessionChildOwners,
   resolveSessionChildController,
+  shouldPropagateChildActivity,
 } from "./session-utils-core.js";
 import {
   resolveGatewaySessionDisplayName,
@@ -427,21 +428,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   const pinnable = isPinnableSessionEntry(key, entry);
   const pinnedAt = pinnable ? entry?.pinnedAt : undefined;
 
-  const review = entry?.providerReview;
-  let providerReview: GatewaySessionRow["providerReview"];
-  if (review && review.sessionId === entry?.sessionId) {
-    const canContinue = canContinueSessionProviderReview(review, key);
-    providerReview = {
-      id: review.id,
-      runId: review.runId,
-      ...(review.review ? { explanation: review.review.explanation } : {}),
-      ...(canContinue && review.review?.continuation
-        ? { continuationMessage: review.review.continuation.message }
-        : {}),
-      canContinue,
-    };
-  }
-
   const row = omitUndefinedFields<GatewaySessionRow>({
     key,
     sessionModelRevision: sessionModelRevision(entry, undefined, input.preparedRuntimeOwnership),
@@ -542,6 +528,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     thinkingLevels: input.thinkingProjection.thinkingLevels,
     thinkingOptions: input.thinkingProjection.thinkingOptions,
     thinkingDefault: input.thinkingProjection.thinkingDefault,
+    cyberAccessProgram: entry?.cyberAccessProgram,
     fastMode: entry?.fastMode,
     toolOverrides: entry?.toolOverrides,
     effectiveFastMode: input.fastModeState.mode,
@@ -558,7 +545,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     inputTokens: entry?.inputTokens,
     outputTokens: entry?.outputTokens,
     usageReport: entry?.usageReport,
-    providerReview,
+    providerReview: projectSessionRowProviderReview(key, entry),
     lastRunId: entry?.lastRunId,
     hasAutomation: input.hasAutomation,
     // Navigation lineage is persisted; runtime control is exposed separately above.
@@ -687,14 +674,13 @@ export function presentSessionRow(
   row.estimatedCostUsd =
     source.estimatedCostUsd ??
     asNonNegativeFiniteNumber(source.lightweight ? undefined : usage?.estimatedCostUsd);
-  const children = source.childLinks?.flatMap(({ key, parsedKey, entry: childEntry }) => {
+  const children = source.childLinks?.flatMap((child) => {
+    const { key, entry: childEntry } = child;
     if (options.excludedChildKeys?.has(key)) {
       return [];
     }
     const childActive = projectGatewaySessionRunState({
-      key,
-      entry: childEntry,
-      parsedKey,
+      ...child,
       now,
       rowContext: {
         subagentRuns,
@@ -704,9 +690,7 @@ export function presentSessionRow(
     }).fields.hasActiveSubagentRun;
     if (
       !resolveSessionChildOwners({
-        key,
-        entry: childEntry,
-        parsedKey,
+        ...child,
         now,
         subagentRuns,
         hasActiveRun: childActive,
@@ -714,7 +698,7 @@ export function presentSessionRow(
     ) {
       return [];
     }
-    if (childActive) {
+    if (childActive && shouldPropagateChildActivity(key, childEntry, row.key)) {
       row.hasActiveSubagentRun = true;
     }
     return [key];

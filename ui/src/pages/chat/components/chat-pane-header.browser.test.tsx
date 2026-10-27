@@ -38,6 +38,32 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       containers.splice(0).forEach((container) => container.remove());
     });
 
+    it.each([false, true])(
+      "reserves the trailing header region before actions arrive (agent=%s)",
+      async (agent) => {
+        const { container, update } = mountChatPaneHeader(containers, {
+          agent: agent ? { id: "research", name: "Research", textAvatar: "🔬" } : undefined,
+          onToggleSidePanel: vi.fn(),
+        });
+        const trailing = container.querySelector<HTMLElement>(".chat-pane__header-trailing")!;
+        const actions = container.querySelector<HTMLElement>(".chat-pane__actions")!;
+        const actionsBefore = actions.getBoundingClientRect();
+        const panels = container.querySelector<HTMLElement>(".chat-pane__panels-toggle")!;
+        const before = trailing.getBoundingClientRect();
+        const panelsBefore = panels.getBoundingClientRect();
+        update({ runAction: { onAbort: vi.fn() } });
+        await waitForSolid(() =>
+          expect(container.querySelector(".chat-subagent-detail__stop")).not.toBeNull(),
+        );
+        const after = trailing.getBoundingClientRect();
+        expect(after.left).toBeCloseTo(before.left, 1);
+        expect(after.width).toBeCloseTo(before.width, 1);
+        expect(actions.getBoundingClientRect().left).toBeCloseTo(actionsBefore.left, 1);
+        expect(actions.getBoundingClientRect().width).toBeCloseTo(actionsBefore.width, 1);
+        expect(panels.getBoundingClientRect().right).toBeCloseTo(panelsBefore.right, 1);
+      },
+    );
+
     function findElement(root: ParentNode, selector: string) {
       return root.querySelector<HTMLElement>(selector)!;
     }

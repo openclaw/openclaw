@@ -42,6 +42,7 @@ import {
   expectEscapingEntryRejected,
   globalAfterEach0,
   globalAfterAll1,
+  writeFixtureJson,
 } from "./loader.test-harness.js";
 import { getActiveMemorySearchManagerCore } from "./memory-runtime.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
@@ -1289,19 +1290,11 @@ describe("loadOpenClawPlugins", () => {
       id: "profile-aware",
       body: simplePluginBody("profile-aware"),
     });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "profile-aware",
-          enabledByDefault: true,
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      id: "profile-aware",
+      enabledByDefault: true,
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+    });
 
     const registry = loadOpenClawPlugins({
       cache: false,

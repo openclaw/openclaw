@@ -29,6 +29,10 @@ import {
   resolveOperatorRolePolicy,
 } from "./operator-role-policy.js";
 import {
+  isOperatorRoleSourcePolicyCurrent,
+  sourceRolePolicy,
+} from "./operator-role-source-policy.js";
+import {
   captureChannelOperatorRunAuthority,
   captureGatewayOperatorRunAuthority,
 } from "./operator-run-authority.js";
@@ -45,6 +49,39 @@ import {
 function modelRef(model: string) {
   return { provider: "fixture", model };
 }
+
+it("checks canonical role scopes without reading unused grants and observes the next revocation", () => {
+  const grants: GatewayOperatorRoleDefinition["scopes"] = [
+    "operator.read",
+    "operator.talk",
+    "operator.talk.secrets",
+    "operator.pairing",
+    "operator.approvals",
+    "operator.questions",
+  ];
+  let reads = 0;
+  const role: GatewayOperatorRoleDefinition = {
+    sessions: { others: "none" },
+    agents: "*",
+    scopes: new Proxy(grants, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key)) {
+          reads++;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    }),
+  };
+  const captured = sourceRolePolicy({ ...role, scopes: [...grants] });
+  const current = sourceRolePolicy(role);
+  expect(isOperatorRoleSourcePolicyCurrent(captured, current, [" operator.read ", " "])).toBe(true);
+  expect(reads).toBe(1);
+  const other = sourceRolePolicy({ ...role, scopes: ["operator.write"] });
+  expect(isOperatorRoleSourcePolicyCurrent(other, other, ["operator.sessions.write"])).toBe(true);
+  grants[0] = "operator.sessions.read";
+  expect(isOperatorRoleSourcePolicyCurrent(captured, current, ["operator.read"])).toBe(false);
+  expect(isOperatorRoleSourcePolicyCurrent(other, other, ["operator.sessions.write"])).toBe(true);
+});
 function expectModels(
   authority: Awaited<ReturnType<typeof capture>>["authority"],
   expected: boolean[],

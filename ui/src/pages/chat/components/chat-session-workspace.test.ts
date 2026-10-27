@@ -2,7 +2,7 @@ import { createComponent, createSignal, flush } from "solid-js";
 import { assert, describe, expect, it, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../../api/gateway.ts";
+import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../../api/types.ts";
 import { useFakeClock } from "../../../test-helpers/fake-clock.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";

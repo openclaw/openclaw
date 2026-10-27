@@ -27,11 +27,9 @@ import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
 import { resolveStagedInputMaxBytes } from "../../media/configured-max-bytes.js";
+import { buildInboundMediaUriFromPath } from "../../media/inbound-media-path.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
-import {
-  buildInboundMediaUriFromPath,
-  resolveInboundMediaReference,
-} from "../../media/media-reference.js";
+import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import {
   STAGED_INPUT_MAX_BYTES,
   STAGED_INPUT_GITIGNORE,

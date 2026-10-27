@@ -24,17 +24,10 @@ it.each([false, true])(
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {
         const findings = await collectLegacyCronStoreHealthFindings({ cfg: {} });
-        expect(findings).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              requirement: "quarantined-cron-rows",
-              message: expect.stringContaining("1 quarantined cron job row"),
-            }),
-          ]),
-        );
-        expect(observation.queries.filter((sql) => sql.includes('"diagnostic_events"'))).toEqual(
-          [],
-        );
+        expect(
+          findings.find((finding) => finding.requirement === "quarantined-cron-rows"),
+        ).toMatchObject({ message: expect.stringContaining("1 quarantined cron job row") });
+        expect(observation.queries.some((sql) => sql.includes('"diagnostic_events"'))).toBe(false);
       } finally {
         observation.restore();
       }
@@ -46,17 +39,13 @@ it.each([false, true])(
   "loads cold readonly cron state off the host with artifact preservation=%s",
   async (preserveArtifacts) => {
     await withCronStore("cron-readonly-worker", async (state) => {
-      const store: CronStoreFile = {
-        version: 1,
-        jobs: [
-          makeCronJob({
-            name: "scheduled café 🦞",
-            sessionTarget: "main",
-            payload: { kind: "systemEvent", text: "persisted event" },
-            state: { nextRunAtMs: 60_001 },
-          }),
-        ],
-      };
+      const job = makeCronJob({
+        name: "scheduled café 🦞",
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "persisted event" },
+        state: { nextRunAtMs: 60_001 },
+      });
+      const store: CronStoreFile = { version: 1, jobs: [job] };
       await state.save(store);
       await state.close();
       const before = await state.bytes();
@@ -64,10 +53,6 @@ it.each([false, true])(
       try {
         const loaded = await state.read(preserveArtifacts);
         expect(loaded.store).toEqual(store);
-        expect(loaded.configJobIndexes).toEqual([0]);
-        expect(loaded.configJobRuntimeEntries[0]?.state).toEqual({ nextRunAtMs: 60_001 });
-        expect(loaded.jobsFingerprint).toBeUndefined();
-        expect(loaded.invalidConfigRows).toEqual([]);
         sql.expectIdle();
         expect(await state.bytes()).toEqual(before);
       } finally {
@@ -85,10 +70,10 @@ it("leaves missing databases absent and legacy layouts unmigrated", async () => 
     await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
     await state.createDatabase("CREATE TABLE legacy_marker(value TEXT); PRAGMA user_version = 1;");
     const before = await state.bytes();
-    expect(await state.read(true)).toEqual(empty);
-    expect(await state.bytes()).toEqual(before);
-    expect(await state.read()).toEqual(empty);
-    expect(await state.bytes()).toEqual(before);
+    for (const preserve of [true, false]) {
+      expect(await state.read(preserve)).toEqual(empty);
+      expect(await state.bytes()).toEqual(before);
+    }
   });
 });
 

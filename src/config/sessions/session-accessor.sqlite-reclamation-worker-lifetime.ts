@@ -7,6 +7,7 @@ import {
   getDatabaseEngineSelection,
   withDatabaseEngineSelection,
 } from "../../infra/database-engine/context.js";
+import { captureStateDatabaseAccess } from "../../infra/gateway-state-owner.js";
 import { resolveAgentDatabaseIdleHandleTtlMs } from "../../infra/sqlite-handle-lifecycle.js";
 import { publishSqliteWalCheckpointObservation } from "../../infra/sqlite-wal-checkpoint.js";
 import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
@@ -103,6 +104,7 @@ export class SqliteReclamationWorker {
   private readonly unregisterAgent: () => void;
   private readonly unregisterState: () => void;
   private readonly stateContext;
+  private stateAccess?: ReturnType<typeof captureStateDatabaseAccess>;
   private readonly beforeExit = () => {
     void this.close().catch((error: unknown) => log.error(String(error)));
   };
@@ -320,6 +322,10 @@ export class SqliteReclamationWorker {
   ): Promise<Result> {
     const startedAt = performance.now();
     params.assertCurrent();
+    const stateAccess = await (this.stateAccess ??= captureStateDatabaseAccess(
+      this.stateContext.admission.databasePath,
+    ));
+    params.assertCurrent();
     const transport = (this.transport ??= await this.start());
     params.assertCurrent();
     if (params.diagnostics) {
@@ -338,7 +344,7 @@ export class SqliteReclamationWorker {
           nativeStopped: this.nativeStopped.promise,
           completion: "result",
           databaseAuthority: {
-            databasePath: this.stateContext.admission.databasePath,
+            stateAccess,
             maintenanceScope: this.stateContext.maintenanceScope,
             creationPaths: [
               this.options.path,

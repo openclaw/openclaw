@@ -14,7 +14,7 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import { AppsPage } from "../pages/apps/apps-page.tsx";
-import { createInitializationContext } from "../pages/chat/chat-pane.test-support.ts";
+import { createInitializationContext } from "../pages/chat/chat-application-context.test-support.ts";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import {
   createGatewayRequestMock,
@@ -145,6 +145,23 @@ function mountCatalog(context: unknown, initial: Parameters<typeof McpAppCatalog
 }
 
 describe("app launch catalog", () => {
+  it("targets the agent named by a session key", async () => {
+    const request = vi.fn(async () => ({ servers: [], onboarding: [] }));
+    const { context } = discoveryContext(request);
+    context.agentSelection.state.selectedId = "claude";
+    const { element } = mountCatalog(context, {
+      sessionKey: "agent:main:main",
+      agentId: "claude",
+    });
+
+    await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
+    expect(request).toHaveBeenCalledWith("mcp.app.discover", {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    expect(element.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("prepares a global catalog again when its session was deleted offline", async () => {
     let sessionExists = true;
     const request = createGatewayRequestMock(() =>
@@ -232,7 +249,7 @@ describe("app launch catalog", () => {
     expect(catalog.textContent).not.toContain("Parts tray");
   });
 
-  it.each(["closed", "agent changed", "conversation changed", "open"] as const)(
+  it.each(["closed", "ignored agent prop", "conversation changed", "open"] as const)(
     "only creates a startup-waiting catalog session while its target remains open (%s)",
     async (lifetime) => {
       vi.useFakeTimers();
@@ -317,7 +334,7 @@ describe("app launch catalog", () => {
 
       if (lifetime === "closed") {
         mounted.unmount();
-      } else if (lifetime === "agent changed") {
+      } else if (lifetime === "ignored agent prop") {
         mounted.update({ agentId: "other" });
       } else if (lifetime === "conversation changed") {
         mounted.update({ sessionKey: "agent:main:two" });
@@ -326,11 +343,13 @@ describe("app launch catalog", () => {
       ready = true;
       await vi.advanceTimersByTimeAsync(GATEWAY_STARTUP_ADMISSION_WAIT_MS);
       expect(writes.map((frame) => frame.params)).toEqual(
-        lifetime === "open" ? [{ key: "agent:main:one", agentId: "main" }] : [],
+        lifetime === "open" || lifetime === "ignored agent prop"
+          ? [{ key: "agent:main:one", agentId: "main" }]
+          : [],
       );
       expect(pending.hasPending).toBe(false);
       expect(sessions.state.error).toBeNull();
-      if (lifetime === "open") {
+      if (lifetime === "open" || lifetime === "ignored agent prop") {
         expect(catalog.textContent).toContain("Library");
       }
     },
@@ -738,7 +757,7 @@ describe("app launch catalog", () => {
       expect(request).toHaveBeenCalledTimes(2);
     },
   );
-  it.each(["unchanged", "session changed", "agent changed"] as const)(
+  it.each(["unchanged", "session changed", "ignored agent prop"] as const)(
     "onboards once without crypto.randomUUID and respects the current target (%s)",
     async (target) => {
       vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
@@ -789,12 +808,12 @@ describe("app launch catalog", () => {
       });
       if (target === "session changed") {
         mounted.update({ sessionKey: "agent:main:two" });
-      } else if (target === "agent changed") {
+      } else if (target === "ignored agent prop") {
         mounted.update({ agentId: "other" });
       }
       onboarding.resolve({});
       await waitForSolid(() => expect(onboardingButton()?.disabled).toBe(false));
-      if (target === "unchanged") {
+      if (target === "unchanged" || target === "ignored agent prop") {
         await waitForSolid(() => expect(navigate).toHaveBeenCalledWith("chat", expect.any(Object)));
       } else {
         expect(navigate).not.toHaveBeenCalled();

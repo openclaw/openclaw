@@ -121,12 +121,9 @@ vi.mock("../plugins/plugin-metadata-snapshot-required.js", async (importOriginal
 }));
 
 // mock-isolation: Profile and environment precedence fixtures define every credential source, excluding live provider overlays.
-vi.mock("../plugins/provider-external-auth-core.js", () => ({
-  createProviderExternalAuthResolver: () => ({
-    resolveExternalAuthProfilesWithPlugins: () => [],
-    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
-  }),
-}));
+vi.mock("../plugins/provider-external-auth-core.js", async () =>
+  (await import("../plugins/provider-external-auth.test-support.js")).createExternalAuthMock(),
+);
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,

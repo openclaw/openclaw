@@ -218,7 +218,6 @@ const broadUnitFastCandidateSkipPatterns = prepareGlobPatterns(
     "src/proxy-capture/runtime.test.ts",
     "src/plugins/install.npm-spec.test.ts",
     "src/plugins/contracts/**/*.test.ts",
-    "src/pairing/pairing-store.test.ts",
     "src/plugin-sdk/browser-subpaths.test.ts",
     "src/security/**/*.test.ts",
     "src/secrets/**/*.test.ts",

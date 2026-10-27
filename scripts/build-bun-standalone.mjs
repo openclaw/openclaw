@@ -43,7 +43,11 @@ import {
   selectStandalonePluginModules,
   stageStandalonePluginLoader,
 } from "./lib/bun-standalone-plugins.mjs";
-import { createStandaloneRequireAdapter } from "./lib/bun-standalone-require.mjs";
+import {
+  createStandaloneExternalModuleBootstrap,
+  createStandaloneModuleResolverBootstrap,
+  createStandaloneRequireAdapter,
+} from "./lib/bun-standalone-require.mjs";
 import {
   planStandaloneRuntime,
   pruneStandaloneRuntime,
@@ -250,17 +254,17 @@ if (sourceEntries?.unmappedWorkers(workerEntries).length) {
   );
 }
 const metadataEntries = [...moduleEntries];
-// Source discovery retains lazy companions; emitted-JS builds keep their full inventory.
-moduleEntries = sourceEntries?.selectRuntimeEntries(moduleEntries) ?? moduleEntries;
 const pluginLoader = await stageStandalonePluginLoader({
   runtimeRoot,
   outputRoot,
   build: Bun.build,
 });
 const native = createStandaloneNativeAdapter({ runtimeRoot, parse });
-// Disk loaders still need their builtin imports retained in the compiled host.
-native.discover([...moduleEntries, pluginLoader.modulePath]);
-moduleEntries.push(...native.additionalModuleEntries);
+moduleEntries = native.discover(metadataEntries, {
+  selectRuntimeEntries: sourceEntries?.selectRuntimeEntries,
+  // Retain the disk loader's builtins without embedding the loader itself.
+  scanOnlyEntries: [pluginLoader.modulePath],
+});
 // Include conditional ESM/CJS entries reached through computed imports.
 for (const packageName of ["@openclaw/fs-safe", "@openclaw/proc-safe", "sqlite-vec", "ws"]) {
   const manifest = fs.realpathSync(
@@ -483,27 +487,8 @@ globalThis.__openclawStandaloneImport = (parent, specifier, options) => {
     commonJsEntries.has(target) ? { ...loaded.default, ...loaded } : loaded);
 };
 ${requireAdapter.bootstrap}
-let resolving = false;
-if (isMainThread) Bun.plugin({ name: "openclaw-embedded-modules", setup(build) {
-  // Bun checks the filter against the compiled entry before invoking callbacks.
-  const filter = new RegExp("^(?!" + RegExp.escape(Bun.main) + "(?![\\\\s\\\\S]))");
-  build.onResolve({ filter }, ({path: specifier, importer, kind}) => {
-    if (kind === "require-resolve" || resolving || specifier.startsWith("node:") || specifier.startsWith("bun:")) return;
-    let target;
-    try {
-      resolving = true;
-      target = globalThis.__openclawStandaloneNativeResolve(importer || path.join(root, "openclaw.mjs"), specifier)
-        ?? (specifier.startsWith("file:") ? fileURLToPath(specifier)
-        : path.isAbsolute(specifier) ? specifier
-        : (() => {
-          try { return Bun.resolveSync(specifier, importer ? path.dirname(importer) : root); }
-          catch { return Bun.resolveSync(specifier, root); }
-        })());
-    } catch { return; } finally { resolving = false; }
-    const entry = embedded(target);
-    if (entry) return {path: entry, namespace: "file"};
-  });
-}});
+${createStandaloneExternalModuleBootstrap({ source: Boolean(sourceGraph) })}
+${createStandaloneModuleResolverBootstrap()}
 if (process.env.OPENCLAW_STANDALONE_TRACE_PRELOAD) {
   await import(process.env.OPENCLAW_STANDALONE_TRACE_PRELOAD);
 }

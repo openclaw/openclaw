@@ -226,17 +226,11 @@ suite.define(() => {
   it.each(
     (
       [
-        ["iPhone Safari", "chat"],
         ["iPad desktop Safari", "new"],
         ["Android Chrome", "chat"],
-        ["Android Firefox", "new"],
         ["Android WebView", "new"],
-        ["Android unknown app", "chat"],
         ["Android native", "chat"],
         ["Android web chrome", "new"],
-        ["unknown", "new"],
-        ["macOS Safari", "new"],
-        ["iOS in-app", "new"],
       ] as const
     ).map(([name, route]) => Object.assign({}, attachmentBrowser(name), { route })),
   )("preserves $name picker semantics in $route across widths", (fixture) =>

@@ -5,6 +5,7 @@ import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionCommunicationPolicySchema } from "./sessions-communication.js";
 import {
+  CyberAccessProgramSchema,
   SessionDeviceFolderSchema,
   SessionPermissionModeSchema,
   SessionRepositorySourceSchema,
@@ -48,6 +49,7 @@ export const SessionsCreateParamsSchema = closedObject({
   agentRuntime: Type.Optional(NonEmptyString),
   contextWindow: Type.Optional(NonEmptyString),
   thinkingLevel: Type.Optional(NonEmptyString),
+  cyberAccessProgram: Type.Optional(Type.Union([CyberAccessProgramSchema, Type.Null()])),
   fastMode: Type.Optional(
     Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
   ),

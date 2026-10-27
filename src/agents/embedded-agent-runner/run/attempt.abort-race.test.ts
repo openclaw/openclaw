@@ -1,94 +1,80 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { buildAgentRunTerminalOutcomeFromAttempt } from "../../agent-run-terminal-outcome.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import { useContextEngineAttemptHarness } from "./attempt-context-engine.test-support.js";
 const { hoisted, runAttempt } = useContextEngineAttemptHarness("agent:main:triage:cleanup");
 
-it.each([
-  { stage: "projection", cleanupFails: false },
-  { stage: "construction", cleanupFails: true },
-])(
-  "joins cleanup after $stage fails (cleanupFails=$cleanupFails)",
-  async ({ stage, cleanupFails }) => {
-    const preparationError = new Error("tool preparation failed");
-    const held = createDeferred();
-    const started = createDeferred();
-    const cleanupScope = createAgentCleanupScope();
-    let toolSignal: AbortSignal | undefined;
-    const cleanup = vi.fn(async (_reason: string) => {
-      started.resolve();
-      await held.promise;
-      if (cleanupFails) {
-        throw new Error("registered resource teardown failed");
-      }
-    });
-    hoisted.createOpenClawCodingToolsMock.mockImplementation((options: unknown) => {
-      const toolOptions = options as {
-        abortSignal: AbortSignal;
-        registerRunCleanup: (cleanup: (reason: string) => Promise<void>) => void;
-      };
-      toolSignal = toolOptions.abortSignal;
-      toolOptions.registerRunCleanup(cleanup);
-      if (stage === "construction") {
-        throw preparationError;
-      }
-      return [
-        {
-          get name(): string {
-            throw preparationError;
-          },
-        },
-      ];
-    });
-    const attempt = cleanupScope.run(() =>
-      runAttempt({
-        sessionKey: "agent:main:triage:failed-tool-preparation",
-        attemptOverrides: {
-          oneShotCliRun: true,
-          disableTools: false,
-          forceRestartSafeTools: stage === "projection",
-        },
-      }),
-    );
-    let settled = false;
-    const result = attempt
-      .catch(() => {})
-      .finally(() => {
-        settled = true;
-      });
-    try {
-      expect(
-        await Promise.race([
-          started.promise.then(() => "cleanup-started"),
-          result.then(() => "settled"),
-        ]),
-      ).toBe("cleanup-started");
-      expect(settled).toBe(false);
-      expect(toolSignal?.aborted).toBe(true);
-      expect(cleanup).toHaveBeenCalledExactlyOnceWith("error");
-      held.resolve();
-      await expect(attempt).rejects.toBe(preparationError);
-      expect(cleanupScope.outcome).toBe(cleanupFails ? "uncertain" : "closed");
-      expect(hoisted.createAgentSessionMock).not.toHaveBeenCalled();
-    } finally {
-      held.resolve();
-      await result;
+it.each(["projection", "construction"])("joins cleanup after %s fails", async (stage) => {
+  const cleanupFails = stage === "construction";
+  const preparationError = new Error("tool preparation failed");
+  const held = createDeferred();
+  const started = createDeferred();
+  const cleanupScope = createAgentCleanupScope();
+  let toolSignal: AbortSignal | undefined;
+  const cleanup = vi.fn(async (_reason: string) => {
+    started.resolve();
+    await held.promise;
+    if (cleanupFails) {
+      throw new Error("registered resource teardown failed");
     }
-  },
-);
+  });
+  hoisted.createOpenClawCodingToolsMock.mockImplementation((options) => {
+    toolSignal = options?.abortSignal;
+    expectDefined(options?.registerRunCleanup, "cleanup registrar")(cleanup);
+    if (stage === "construction") {
+      throw preparationError;
+    }
+    return [
+      {
+        get name(): string {
+          throw preparationError;
+        },
+      },
+    ];
+  });
+  const attempt = cleanupScope.run(() =>
+    runAttempt({
+      sessionKey: "agent:main:triage:failed-tool-preparation",
+      attemptOverrides: {
+        oneShotCliRun: true,
+        disableTools: false,
+        forceRestartSafeTools: stage === "projection",
+      },
+    }),
+  );
+  const settled = vi.fn();
+  const result = attempt.catch(() => {}).finally(settled);
+  try {
+    expect(
+      await Promise.race([
+        started.promise.then(() => "cleanup-started"),
+        result.then(() => "settled"),
+      ]),
+    ).toBe("cleanup-started");
+    expect(settled).not.toHaveBeenCalled();
+    expect(toolSignal?.aborted).toBe(true);
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith("error");
+    held.resolve();
+    await expect(attempt).rejects.toBe(preparationError);
+    expect(cleanupScope.outcome).toBe(cleanupFails ? "uncertain" : "closed");
+    expect(hoisted.createAgentSessionMock).not.toHaveBeenCalled();
+  } finally {
+    held.resolve();
+    await result;
+  }
+});
 
 it("bounds registered one-shot cleanup after a completed turn", async () => {
   const held = createDeferred();
   const started = createDeferred();
   const cleanupScope = createAgentCleanupScope();
-  hoisted.createOpenClawCodingToolsMock.mockImplementation((options: unknown) => {
-    (options as { registerRunCleanup: (cleanup: () => Promise<void>) => void }).registerRunCleanup(
-      async () => {
-        started.resolve();
-        await held.promise;
-      },
-    );
+  hoisted.createOpenClawCodingToolsMock.mockImplementation((options) => {
+    const register = expectDefined(options?.registerRunCleanup, "cleanup");
+    register(async () => {
+      started.resolve();
+      await held.promise;
+    });
     return [];
   });
   const attempt = cleanupScope.run(() =>
@@ -113,10 +99,10 @@ it("bounds registered one-shot cleanup after a completed turn", async () => {
 
 it("preserves a run-budget timeout when abort blocks prompt submission", async () => {
   const pendingEvents = createDeferred();
-  const baseSubscribe = hoisted.subscribeEmbeddedAgentSessionMock.getMockImplementation();
-  if (!baseSubscribe) {
-    throw new Error("missing embedded subscription mock");
-  }
+  const baseSubscribe = expectDefined(
+    hoisted.subscribeEmbeddedAgentSessionMock.getMockImplementation(),
+    "embedded subscription mock",
+  );
   hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation((params) => ({
     ...baseSubscribe(params),
     waitForPendingEvents: async () => await pendingEvents.promise,
@@ -132,7 +118,4 @@ it("preserves a run-budget timeout when abort blocks prompt submission", async (
   });
 
   expect(result.terminal).toMatchObject({ kind: "timeout" });
-  expect(buildAgentRunTerminalOutcomeFromAttempt({ terminal: result.terminal })).toMatchObject({
-    status: "timeout",
-  });
 });

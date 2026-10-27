@@ -179,58 +179,78 @@ describe("Agent lifecycle and continuation", () => {
 });
 
 describe("agentLoop streaming updates", () => {
-  it("rebuilds assistant message snapshots for text deltas without partial snapshots", async () => {
-    const firstDeltaConsumed = createDeferred();
-    const streamFn: StreamFn = () => {
-      const stream = createAssistantMessageEventStream();
-      const startMessage = makeAssistantMessage([]);
-      const finalMessage = makeAssistantMessage([{ type: "text", text: "Hello world" }]);
-      stream.push({ type: "start", partial: startMessage });
-      stream.push({
-        type: "text_start",
-        contentIndex: 0,
-        partial: { ...startMessage, content: [] },
-      });
-      stream.push({ type: "text_delta", contentIndex: 0, delta: "Hello" });
-      void firstDeltaConsumed.promise.then(() => {
-        stream.push({ type: "text_delta", contentIndex: 0, delta: " world" });
+  it.each([false, true])(
+    "rebuilds text-delta snapshots (explicit undefined partial: %s)",
+    async (explicitPartial) => {
+      const firstDeltaConsumed = createDeferred();
+      const streamFn: StreamFn = () => {
+        const stream = createAssistantMessageEventStream();
+        const startMessage = makeAssistantMessage([]);
+        const finalMessage = makeAssistantMessage([{ type: "text", text: "Hello world" }]);
+        stream.push({ type: "start", partial: startMessage });
         stream.push({
-          type: "text_end",
+          type: "text_start",
           contentIndex: 0,
-          content: "Hello world",
-          partial: finalMessage,
+          partial: { ...startMessage, content: [] },
         });
-        stream.push({ type: "done", reason: "stop", message: finalMessage });
-      });
-      return stream;
-    };
-    const events: AgentEvent[] = [];
-    await runAgentLoop(
-      [user("hello")],
-      { systemPrompt: "", messages: [] },
-      config,
-      (event) => {
-        events.push(event);
-        if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-          firstDeltaConsumed.resolve();
+        stream.push({
+          type: "text_delta",
+          contentIndex: 0,
+          delta: "Hello",
+          ...(explicitPartial ? { partial: undefined } : {}),
+        });
+        void firstDeltaConsumed.promise.then(() => {
+          stream.push({
+            type: "text_delta",
+            contentIndex: 0,
+            delta: " world",
+            ...(explicitPartial ? { partial: undefined } : {}),
+          });
+          stream.push({
+            type: "text_end",
+            contentIndex: 0,
+            content: "Hello world",
+            partial: finalMessage,
+          });
+          stream.push({ type: "done", reason: "stop", message: finalMessage });
+        });
+        return stream;
+      };
+      const events: AgentEvent[] = [];
+      await runAgentLoop(
+        [user("hello")],
+        { systemPrompt: "", messages: [] },
+        config,
+        (event) => {
+          events.push(event);
+          if (
+            event.type === "message_update" &&
+            event.assistantMessageEvent.type === "text_delta"
+          ) {
+            firstDeltaConsumed.resolve();
+          }
+        },
+        undefined,
+        streamFn,
+      );
+      const deltas = events.filter(
+        (event): event is Extract<AgentEvent, { type: "message_update" }> =>
+          event.type === "message_update" && event.assistantMessageEvent.type === "text_delta",
+      );
+      expect(deltas).toHaveLength(2);
+      expect(deltas.map((event) => event.message)).toMatchObject([
+        { role: "assistant", content: [{ type: "text", text: "Hello" }] },
+        { role: "assistant", content: [{ type: "text", text: "Hello world" }] },
+      ]);
+      for (const event of deltas) {
+        if (explicitPartial) {
+          expect(event.assistantMessageEvent).toHaveProperty("partial", event.message);
+        } else {
+          expect(event.assistantMessageEvent).not.toHaveProperty("partial");
         }
-      },
-      undefined,
-      streamFn,
-    );
-    const deltas = events.filter(
-      (event): event is Extract<AgentEvent, { type: "message_update" }> =>
-        event.type === "message_update" && event.assistantMessageEvent.type === "text_delta",
-    );
-    expect(deltas).toHaveLength(2);
-    expect(deltas.map((event) => event.message)).toMatchObject([
-      { role: "assistant", content: [{ type: "text", text: "Hello" }] },
-      { role: "assistant", content: [{ type: "text", text: "Hello world" }] },
-    ]);
-    for (const event of deltas) {
-      expect(event.assistantMessageEvent).not.toHaveProperty("partial");
-    }
-  });
+      }
+    },
+  );
 
   it("does not execute tool calls from a max-token-truncated assistant turn", async () => {
     const execute = vi.fn(async () => ({ content: [], details: {} }));

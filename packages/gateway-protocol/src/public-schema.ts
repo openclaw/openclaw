@@ -409,6 +409,7 @@ export {
   TalkClientCloseParamsSchema,
   TalkClientMutationResultSchema,
   TalkAgentControlResultSchema,
+  TalkClientSayParamsSchema,
   TalkClientSteerParamsSchema,
   TalkClientToolCallParamsSchema,
   TalkClientToolCallResultSchema,

@@ -5,7 +5,9 @@ import path from "node:path";
 import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import {
+  GCProfiler,
   getHeapCodeStatistics,
+  getHeapSpaceStatistics,
   getHeapStatistics,
   setFlagsFromString,
   writeHeapSnapshot,
@@ -66,6 +68,10 @@ if (!isMainThread) {
   const port = workerData.diagnostics;
   const loop = monitorEventLoopDelay({ resolution: 1 });
   let active = false;
+  let cpuStart;
+  let allocationStart;
+  let spaceStart;
+  const gcProfiler = workerData.captureGc ? new GCProfiler() : undefined;
   let measuredAfter = Infinity;
   let samples = [];
   const record = (entries) => {
@@ -79,7 +85,16 @@ if (!isMainThread) {
   };
   const observer = new PerformanceObserver((list) => record(list.getEntries()));
   observer.observe({ entryTypes: ["gc"] });
+  const importCpu = process.threadCpuUsage();
+  const importAllocation = getHeapStatistics().total_allocated_bytes;
+  const importStarted = performance.now();
   await import(workerData.entry);
+  const startupCpu = process.threadCpuUsage(importCpu);
+  const startup = {
+    elapsedMs: performance.now() - importStarted,
+    cpuMs: (startupCpu.user + startupCpu.system) / 1000,
+    allocatedBytes: getHeapStatistics().total_allocated_bytes - importAllocation,
+  };
   port.on("message", async ({ id, operation, snapshot }) => {
     try {
       let value;
@@ -97,13 +112,27 @@ if (!isMainThread) {
         samples = [];
         loop.reset();
         loop.enable();
+        gcProfiler?.start();
+        cpuStart = process.threadCpuUsage();
+        allocationStart = getHeapStatistics().total_allocated_bytes;
+        spaceStart = workerData.gcDetails ? getHeapSpaceStatistics() : undefined;
+        if (!Number.isFinite(allocationStart)) {
+          throw new Error("Allocation measurement requires V8 total_allocated_bytes (Node 26.12+)");
+        }
+        if (workerData.sampleAllocation) {
+          await inspector.post("HeapProfiler.startSampling", {
+            samplingInterval: 16384,
+            includeObjectsCollectedByMajorGC: true,
+            includeObjectsCollectedByMinorGC: true,
+          });
+        }
         measuredAfter = performance.now();
         active = true;
         fs.writeSync(1, `WORKER_GC_BEGIN ${workerData.name}\n`);
         if (workerData.traceGc) {
           setFlagsFromString("--trace-gc-nvp");
         }
-        value = { started: true };
+        value = { started: true, memory: process.memoryUsage() };
       } else if (operation === "end") {
         record(observer.takeRecords());
         active = false;
@@ -112,7 +141,42 @@ if (!isMainThread) {
           setFlagsFromString("--no-trace-gc-nvp");
         }
         fs.writeSync(1, `WORKER_GC_END ${workerData.name}\n`);
+        const cpu = process.threadCpuUsage(cpuStart);
+        const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationStart;
+        const spaceEnd = workerData.gcDetails ? getHeapSpaceStatistics() : undefined;
+        const gcProfile = gcProfiler?.stop();
+        if (workerData.gcDetails) {
+          fs.writeFileSync(
+            workerData.gcDetails,
+            JSON.stringify({
+              before: spaceStart,
+              after: spaceEnd,
+              profile: gcProfile,
+            }),
+          );
+        }
+        if (workerData.sampleAllocation) {
+          const { profile } = await inspector.post("HeapProfiler.stopSampling");
+          fs.writeFileSync(workerData.sampleAllocation, JSON.stringify(profile));
+        }
         value = {
+          cpuMs: (cpu.user + cpu.system) / 1000,
+          allocatedBytes,
+          memory: process.memoryUsage(),
+          ...(gcProfile
+            ? {
+                gcReclaimedBytes: gcProfile.statistics.reduce(
+                  (total, gc) =>
+                    total +
+                    Math.max(
+                      0,
+                      gc.beforeGC.heapStatistics.usedHeapSize -
+                        gc.afterGC.heapStatistics.usedHeapSize,
+                    ),
+                  0,
+                ),
+              }
+            : {}),
           gc: {
             all: distribution(samples.map((sample) => sample.ms)),
             minor: distribution(
@@ -151,6 +215,7 @@ if (!isMainThread) {
           ...new Set([...scripts.values()].filter((url) => url.startsWith("file:"))),
         ];
         value = {
+          startup,
           heap,
           code,
           memory,

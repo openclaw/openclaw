@@ -2,11 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { resolveChatPaneDesktopTarget } from "../../../ui/src/components/desktop/desktop-source.js";
 import {
   createSessionCapabilityHarness,
   sessionsResult,
 } from "../../../ui/src/lib/sessions/session-capability.test-support.js";
-import { resolveChatPaneDesktopTarget } from "../../../ui/src/pages/chat/chat-pane-placement.js";
 import { createTestGatewayClient } from "../../../ui/src/test-helpers/gateway-client.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import {

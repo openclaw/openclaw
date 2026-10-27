@@ -35,7 +35,32 @@ export function compareSessionEntryPairs(
 export function sortAndLimitSessionEntries(
   entries: SessionEntryPair[],
   limit: number | undefined,
-  sortBy: SessionsListParams["sortBy"],
+  sortBy: SessionsListParams["sortBy"] = "updatedAt",
 ): SessionEntryPair[] {
-  return sortAndLimitBy(entries, limit, (a, b) => compareSessionEntryPairs(a, b, sortBy));
+  const timestamps = new Float64Array(entries.length);
+  const pins = sortBy === "updatedAt" ? new Float64Array(entries.length) : undefined;
+  const indices = Array<number>(entries.length);
+  for (let index = 0; index < entries.length; index++) {
+    const pair = entries[index]!;
+    const key = pair[0];
+    const entry = pair[1];
+    timestamps[index] =
+      (sortBy === "activity" ? sessionActivityTimestamp(entry) : entry[sortBy]) ?? 0;
+    if (pins && entry.pinnedAt !== undefined && isPinnableSessionEntry(key, entry)) {
+      pins[index] = entry.pinnedAt ?? 0;
+    }
+    indices[index] = index;
+  }
+  // Typed keys avoid boxing timestamp reads and differences in the comparison loop.
+  return sortAndLimitBy(indices, limit, (a, b) => {
+    if (pins && pins[a] !== pins[b]) {
+      return pins[b]! > pins[a]! ? 1 : -1;
+    }
+    if (timestamps[a] !== timestamps[b]) {
+      return timestamps[b]! > timestamps[a]! ? 1 : -1;
+    }
+    const aKey = entries[a]![0];
+    const bKey = entries[b]![0];
+    return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
+  }).map((index) => entries[index]!);
 }

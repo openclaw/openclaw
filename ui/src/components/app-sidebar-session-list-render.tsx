@@ -52,13 +52,7 @@ function RosterLoadMore(props: {
   );
 }
 
-function renderSessionListBody(params: {
-  host: SidebarSessionListHost;
-  sections: RenderableSessionSection[];
-  nativeSessionsHaveMore: boolean;
-  catalogs: SessionCatalogRenderSnapshot;
-  catalogRenderer: SessionCatalogGroupsRenderer;
-}) {
+function renderSessionListBody(params: Parameters<typeof renderSessionList>[0]) {
   const host = createMemo(() => params.host);
   const personHeaders = createMemo<PersonHeaders | undefined>(() => {
     if (host().sessionsGrouping !== "person") {

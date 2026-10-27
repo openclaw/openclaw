@@ -11,101 +11,82 @@ installAcpSessionManagerTestLifecycle();
 beforeEach(() => void vi.useFakeTimers());
 afterEach(() => void vi.useRealTimers());
 
-function setupRuntime() {
-  const { runtimeState: state, run } = managerFixture("agent:codex:acp:delivery");
-  return {
-    state,
-    deliveryStarted: createDeferred(),
-    result: createDeferred<AcpRuntimeTurnResult>(),
-    run: (input: Omit<Parameters<typeof run>[0], "text">) => run({ text: "Do work", ...input }),
-  };
-}
-
-it("preserves queued output behind slow delivery after backend failure", async () => {
-  const { state, run, deliveryStarted, result } = setupRuntime();
-  const releaseDelivery = createDeferred();
-  const events: AcpRuntimeEvent["type"][] = [];
-  let streamClosed = false;
-  state.runtime.startTurn = vi.fn((turn) =>
-    runtimeTurn(turn.requestId, {
-      promptStarted: Promise.resolve(),
-      events: (async function* () {
-        yield { type: "tool_call" as const, text: "Reading the result" };
-        // closeStream discards queued ACPX output.
-        if (!streamClosed) {
-          yield { type: "text_delta" as const, text: "Final deliverable" };
-        }
-      })(),
-      result: result.promise,
-      closeStream: async () => void (streamClosed = true),
-    }),
-  );
-  const turn = run({
-    requestId: "slow-delivery",
-    onEvent: async (event) => {
-      events.push(event.type);
-      if (event.type === "tool_call") {
-        deliveryStarted.resolve();
-        await releaseDelivery.promise;
+it.each(["backend", "delivery"] as const)(
+  "drains and settles %s failure during delivery",
+  async (failure) => {
+    const { runtimeState: state, run } = managerFixture("agent:codex:acp:delivery");
+    const deliveryStarted = createDeferred();
+    const releaseDelivery = createDeferred();
+    const promptStarted = createDeferred();
+    const result = createDeferred<AcpRuntimeTurnResult>();
+    const cancel = vi.fn(async () => {});
+    const error = new Error(
+      failure === "backend" ? "Backend failed after output" : "Channel delivery failed",
+    );
+    const events: AcpRuntimeEvent["type"][] = [];
+    const starts: string[] = [];
+    let streamClosed = false;
+    state.runtime.startTurn = (turn) => {
+      starts.push(turn.requestId);
+      if (turn.requestId !== "first") {
+        return runtimeTurn(turn.requestId, { promptStarted: Promise.resolve(), cancel });
       }
-    },
-  }).catch((error: unknown) => error);
-  try {
-    await deliveryStarted.promise;
-    result.resolve({ status: "failed", error: { message: "Backend failed after output" } });
-    await vi.advanceTimersByTimeAsync(1);
-    releaseDelivery.resolve();
-    expect(await turn).toMatchObject({ message: "Backend failed after output" });
-    expect(events).toEqual(["tool_call", "text_delta", "error"]);
-  } finally {
-    result.resolve({ status: "cancelled" });
-    releaseDelivery.resolve();
-    await turn;
-  }
-});
-
-it("cancels delivery failure before prompt readiness and holds queued work until cleanup", async () => {
-  const { state, run, deliveryStarted, result } = setupRuntime();
-  const promptStarted = createDeferred();
-  const cancel = vi.fn(async () => {});
-  const deliveryError = new Error("Channel delivery failed");
-  const starts: string[] = [];
-  state.runtime.startTurn = vi.fn((turn) => {
-    starts.push(turn.requestId);
-    const isFirst = turn.requestId === "first";
-    return runtimeTurn(turn.requestId, {
-      promptStarted: isFirst ? promptStarted.promise : Promise.resolve(),
-      events: (async function* () {
-        if (isFirst) {
-          yield { type: "status" as const, text: "Session resumed" };
+      return runtimeTurn(turn.requestId, {
+        promptStarted: failure === "backend" ? Promise.resolve() : promptStarted.promise,
+        events: (async function* () {
+          yield {
+            type: failure === "backend" ? "tool_call" : "status",
+            text: "Reading the result",
+          };
+          // Premature stream closure must lose the queued output and fail this case.
+          if (failure === "backend" && !streamClosed) {
+            yield { type: "text_delta" as const, text: "Final deliverable" };
+          }
+        })(),
+        result: result.promise,
+        closeStream: async () => void (streamClosed = true),
+        cancel,
+      });
+    };
+    const first = run({
+      text: "Do work",
+      requestId: "first",
+      onEvent: async (event) => {
+        events.push(event.type);
+        deliveryStarted.resolve();
+        if (failure === "delivery") {
+          throw error;
         }
-      })(),
-      result: isFirst ? result.promise : Promise.resolve({ status: "completed" as const }),
-      cancel,
-    });
-  });
-  const first = run({
-    requestId: "first",
-    onEvent: () => {
-      deliveryStarted.resolve();
-      throw deliveryError;
-    },
-  }).catch((error: unknown) => error);
-  let second: Promise<void> | undefined;
-  try {
-    await deliveryStarted.promise;
-    second = run({ requestId: "second" });
-    await vi.advanceTimersByTimeAsync(1);
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(starts).toEqual(["first"]);
-    result.resolve({ status: "cancelled" });
-    expect(await first).toMatchObject({ message: deliveryError.message });
-    await second;
-    expect(starts).toEqual(["first", "second"]);
-  } finally {
-    result.resolve({ status: "cancelled" });
-    promptStarted.resolve();
-    await first;
-    await second;
-  }
-});
+        if (event.type === "tool_call") {
+          await releaseDelivery.promise;
+        }
+      },
+    }).catch((caught: unknown) => caught);
+    let second: Promise<void> | undefined;
+    try {
+      await deliveryStarted.promise;
+      if (failure === "backend") {
+        result.resolve({ status: "failed", error: { message: error.message } });
+        await vi.advanceTimersByTimeAsync(1);
+        releaseDelivery.resolve();
+        expect(await first).toMatchObject({ message: error.message });
+        expect(events).toEqual(["tool_call", "text_delta", "error"]);
+      } else {
+        second = run({ text: "Do work", requestId: "second" });
+        await vi.advanceTimersByTimeAsync(1);
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(starts).toEqual(["first"]);
+        result.resolve({ status: "cancelled" });
+        expect(await first).toMatchObject({ message: error.message });
+        await second;
+        expect(starts).toEqual(["first", "second"]);
+      }
+    } finally {
+      result.resolve({ status: "cancelled" });
+      releaseDelivery.resolve();
+      promptStarted.resolve();
+      await first;
+      await second;
+    }
+  },
+);

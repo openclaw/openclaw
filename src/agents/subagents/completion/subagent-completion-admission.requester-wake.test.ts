@@ -152,22 +152,28 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
-  it.each([
-    "same terminal",
-    "terminal time",
-    "terminal result",
-    "start time",
-    "interruption reason",
-    "sticky fence",
-    "cleanup receipt",
-    "new recovery marker",
-    "running execution",
-    "kill intent",
-    "lifecycle",
-    "child incarnation",
-    "run generation",
-    "requester turn",
-  ] as const)(
+  const custodyChanges: Record<string, (run: SubagentRunRecord) => void> = {
+    "terminal time": (run) => Object.assign(run.execution, { endedAt: run.execution.endedAt! + 1 }),
+    "terminal result": (run) =>
+      Object.assign(run.execution, { outcome: { status: "error", error: "different terminal" } }),
+    "start time": (run) =>
+      Object.assign(run.execution, { startedAt: run.execution.startedAt! + 1 }),
+    "interruption reason": (run) => Object.assign(run.execution, { interruptionReason: undefined }),
+    "sticky fence": (run) => Object.assign(run.execution, { suppressSessionEffects: undefined }),
+    "cleanup receipt": (run) => Object.assign(run, { cleanupCompletedAt: undefined }),
+    "new recovery marker": (run) => Object.assign(run, { terminalOwner: "interrupted-recovery" }),
+    "running execution": (run) => Object.assign(run.execution, { status: "running" }),
+    "kill intent": (run) =>
+      Object.assign(run, { killIntent: { requestedAt: Date.now(), reason: "stop" } }),
+    lifecycle: (run) =>
+      Object.assign(run.execution, { lifecycleGeneration: "replacement-lifecycle" }),
+    "child incarnation": (run) =>
+      Object.assign(run.childSessionIdentity!, { sessionId: "replacement-session" }),
+    "run generation": (run) => Object.assign(run, { generation: 3 }),
+    "requester turn": (run) =>
+      Object.assign(run, { requesterTurnRunId: "different-requester-turn" }),
+  };
+  it.each(["same terminal", ...Object.keys(custodyChanges)])(
     "settles a cleaned interrupted winner only with unchanged custody: %s",
     async (change) => {
       const input = failedRecords("failed", { status: "error", error: "restart interrupted run" });
@@ -208,47 +214,7 @@ describe("persisted subagent requester wakes", () => {
       if (change !== "same terminal") {
         await updateCompletionOwner(observed.runId, (current) => {
           const next = structuredClone(current);
-          switch (change) {
-            case "terminal time":
-              next.execution.endedAt! += 1;
-              break;
-            case "terminal result":
-              next.execution.outcome = { status: "error", error: "different terminal" };
-              break;
-            case "start time":
-              next.execution.startedAt! += 1;
-              break;
-            case "interruption reason":
-              next.execution.interruptionReason = undefined;
-              break;
-            case "sticky fence":
-              next.execution.suppressSessionEffects = undefined;
-              break;
-            case "cleanup receipt":
-              next.cleanupCompletedAt = undefined;
-              break;
-            case "new recovery marker":
-              next.terminalOwner = "interrupted-recovery";
-              break;
-            case "running execution":
-              next.execution.status = "running";
-              break;
-            case "kill intent":
-              next.killIntent = { requestedAt: Date.now(), reason: "stop" };
-              break;
-            case "lifecycle":
-              next.execution.lifecycleGeneration = "replacement-lifecycle";
-              break;
-            case "child incarnation":
-              next.childSessionIdentity!.sessionId = "replacement-session";
-              break;
-            case "run generation":
-              next.generation = 3;
-              break;
-            case "requester turn":
-              next.requesterTurnRunId = "different-requester-turn";
-              break;
-          }
+          custodyChanges[change]!(next);
           return next;
         });
       }

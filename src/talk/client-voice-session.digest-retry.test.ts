@@ -4,6 +4,7 @@ import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { createSessionEntryWithTranscript } from "../config/sessions/session-accessor.entry-mutation.js";
 import {
   loadSessionEntry,
@@ -306,13 +307,9 @@ describe("client voice session lifecycle", () => {
       await settleDigestAttempts();
       expect(send).not.toHaveBeenCalled();
 
-      const entered = createDeferred();
-      const resume = createDeferred();
-      const blocker = runOpenClawAgentWorkerWrite(mainTarget, async () => {
-        entered.resolve();
-        await resume.promise;
-      });
-      await entered.promise;
+      const writerGate = createEnteredGate();
+      const blocker = runOpenClawAgentWorkerWrite(mainTarget, writerGate.wait);
+      await writerGate.entered;
       let settled = false;
       const registering = registerRun({ ...binding, config: {} }).then((release) => {
         settled = true;
@@ -334,7 +331,7 @@ describe("client voice session lifecycle", () => {
           await createOrResumeClientVoiceSession({ ...successor, origin: "client" });
           releaseReplacement = await registerRun({ ...successor, runId: binding.runId });
         }
-        resume.resolve();
+        writerGate.release();
         const releaseReplay = await registering;
         await settleDigestAttempts();
         expect(readRecord(voiceSessionId)).toMatchObject({
@@ -358,7 +355,7 @@ describe("client voice session lifecycle", () => {
         await settleDigestAttempts();
         expect(send).toHaveBeenCalledOnce();
       } finally {
-        resume.resolve();
+        writerGate.release();
         await blocker;
         (await registering)();
         releaseOriginal();

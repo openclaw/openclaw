@@ -272,7 +272,7 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 
 .session-hovercard__context-icon {
   align-self: center;
-  color: var(--muted);
+  color: var(--icon-decorative, var(--muted));
 }
 
 .session-hovercard__context-icon svg,

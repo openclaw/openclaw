@@ -173,6 +173,27 @@ function reloadInvalidated(fixture: Fixture) {
   return hydrate(fixture);
 }
 
+it("accounts for nested replica arrays without per-array reducer callbacks", ({ fixture }) => {
+  const state = hydrate(fixture);
+  const content = [{ type: "text", text: "synthetic" }];
+  const events = [{ rawSeq: 0, serializedBytes: 32, event: { content } }];
+  const transcript: SessionActorTranscriptReplica = {
+    sessionId: state.entry?.sessionId,
+    version: state.transcript.version,
+    tail: { coveredAfterSeq: -1, events },
+  };
+  const reduce = vi.spyOn(Array.prototype, "reduce");
+  try {
+    retainSessionActorTranscriptReplica(state, transcript);
+    expect(readSessionActorTranscriptReplica(state)).toBe(transcript);
+    expect(reduce.mock.contexts.filter((array) => array === events || array === content)).toEqual(
+      [],
+    );
+  } finally {
+    reduce.mockRestore();
+  }
+});
+
 it("keeps transcript replacement charges within the shared byte and entry budgets", async () => {
   await drainGlobalSingletonLifecycleState("restart");
   await withReplica((fixture) => {

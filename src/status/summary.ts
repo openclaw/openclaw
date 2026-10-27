@@ -27,6 +27,7 @@ import type { SessionRowProjection } from "../gateway/session-row-projection.js"
 import { getGatewayInstallationReplacement } from "../gateway/stale-install.js";
 import {
   projectHeartbeatSummary,
+  readHeartbeatSummaryForStatus,
   readHeartbeatSummarySnapshot,
 } from "../infra/heartbeat-summary-snapshot.js";
 import { hasResolvableProactiveOwnerRoute } from "../infra/outbound/targets.js";
@@ -336,14 +337,13 @@ export async function prepareStatusSummary(
     : null;
   const agentList = await listGatewayAgentsBasic(cfg);
   // Receipts list the primary job first; retain it when converted siblings share an agent.
-  const heartbeatJobs = new Map(
-    (await readHeartbeatSummarySnapshot(cfg)).toReversed().map((job) => [job.agentId, job]),
-  );
+  const heartbeat = await readHeartbeatSummaryForStatus(() => readHeartbeatSummarySnapshot(cfg));
+  const heartbeatJobs = new Map(heartbeat.jobs.toReversed().map((job) => [job.agentId, job]));
   // Share the remaining per-agent main-session resolution across the fleet.
   const heartbeatInputs = withAgentRosterFactsBatch(cfg, () => {
     return agentList.agents.map((agent) => {
       const job = heartbeatJobs.get(agent.id);
-      const summary = projectHeartbeatSummary(job);
+      const summary = projectHeartbeatSummary(job, heartbeat.selectionWarning);
       let routeTarget:
         | {
             storePath: string;
@@ -560,7 +560,10 @@ export async function prepareStatusSummary(
           },
           channelSummary,
           queuedSystemEvents,
-          startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
+          startupMigrationWarning:
+            [readStartupMigrationWarning(includeSensitive), heartbeat.selectionWarning]
+              .filter(Boolean)
+              .join("\n") || undefined,
           startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
           modelReasoningWarning: readModelReasoningWarning(includeSensitive),
           installationReplacementWarning: getGatewayInstallationReplacement()?.message,

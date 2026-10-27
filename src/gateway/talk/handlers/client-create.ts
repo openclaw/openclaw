@@ -50,14 +50,12 @@ import { assertValidParams } from "../../server-methods/validation.js";
 import { resolveOperatorSessionCreation } from "../../session-creation-provenance.js";
 import { formatForLog } from "../../ws-log.js";
 import { createTalkClientAgentConsultRunner } from "../client-agent-consult.js";
-import {
-  createTalkClientGatewayControlOwner,
-  resolveTalkAgentConsultAuthority,
-} from "../client-gateway-control.js";
+import { createTalkClientGatewayControlOwner } from "../client-gateway-control.js";
 import {
   retainTalkClientRunAuthority,
   type TalkClientRunAuthority,
 } from "../client-run-authority.js";
+import { resolveTalkAgentConsultAuthority } from "../client-tool-authority.js";
 import { talkRequestError } from "../request-error.js";
 import {
   assertTalkClientSessionEntryDeadline,

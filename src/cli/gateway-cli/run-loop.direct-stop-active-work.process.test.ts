@@ -15,6 +15,21 @@ import { createProcessFixtures } from "./run-loop-process.test-support.js";
 
 const fixtures = createProcessFixtures("direct-stop fixture cleanup failed; retaining state");
 
+async function waitForFixture(
+  gate: Promise<unknown>,
+  tracked: ReturnType<typeof fixtures.ownChild>,
+  signal: AbortSignal,
+) {
+  await withinTest(
+    awaitGateBeforeSettlement(gate, tracked.closed, "fixture not ready"),
+    signal,
+  ).catch((cause: unknown) => {
+    throw new Error(formatCliProcessFailure({ reason: String(cause), ...tracked.output }), {
+      cause,
+    });
+  });
+}
+
 const moduleUrl = (entry: Parameters<typeof resolveRuntimeWorkerUrl>[0]) =>
   resolveRuntimeWorkerUrl(entry).href;
 
@@ -96,23 +111,16 @@ posixIt("joins forced child cleanup before deleting its fixture directory", asyn
     ["-e", 'process.stdout.write("ready"); setInterval(() => {}, 1_000)'],
     { stdio: ["ignore", "pipe", "ignore"] },
   );
-  const { closed } = fixtures.ownChild(child);
+  const tracked = fixtures.ownChild(child);
   let rootExistsAtClose = false;
   child.once("close", () => {
     rootExistsAtClose = fs.existsSync(fixtureDir);
   });
-  await withinTest(
-    awaitGateBeforeSettlement(
-      once(child.stdout!, "data"),
-      closed,
-      "forced cleanup fixture did not start",
-    ),
-    signal,
-  );
+  await waitForFixture(once(child.stdout!, "data"), tracked, signal);
 
   await fixtures.cleanup();
 
-  expect(await closed).toEqual([null, "SIGKILL"]);
+  expect(await tracked.closed).toEqual([null, "SIGKILL"]);
   expect(rootExistsAtClose).toBe(true);
   expect(fs.existsSync(fixtureDir)).toBe(false);
 });
@@ -152,40 +160,22 @@ posixIt(
       }
     });
 
-    await withinTest(
-      awaitGateBeforeSettlement(
-        ready.promise,
-        tracked.closed,
-        "gateway-ready trace was not produced",
-      ),
-      signal,
-    ).catch((cause: unknown) => {
-      throw new Error(formatCliProcessFailure({ reason: String(cause), ...tracked.output }), {
-        cause,
-      });
-    });
+    await waitForFixture(ready.promise, tracked, signal);
     // The exit event can precede the final stdout data; close joins both streams.
     expect(child.kill("SIGTERM")).toBe(true);
 
     const exit = await withinTest(tracked.closed, signal);
     const output = tracked.output.stdout;
-    const trace = output
-      .split("\n")
-      .flatMap((line) =>
-        line.startsWith("process proof: ") ? [line.slice("process proof: ".length)] : [],
-      );
-    expect(exit, `${trace.join(" -> ")}\n${tracked.output.stderr}`).toEqual([0, null]);
-    expect(trace).toContain("adopted:roots=0:embedded=1");
-    expect(trace).not.toContain("embedded-aborted");
-    expect(trace.indexOf("signal:SIGTERM")).toBeLessThan(trace.indexOf("embedded-completed"));
-    expect(trace.indexOf("embedded-completed")).toBeLessThan(trace.indexOf("gateway-close"));
-    expect(trace.indexOf("gateway-close")).toBeLessThan(trace.indexOf("process-exit:0"));
-    const drainSettled = output.indexOf("active-work drain settled; beginning server close");
-    const embeddedCompleted = output.indexOf("process proof: embedded-completed");
-    expect(output).toContain("embeddedRuns=1");
-    expect(output.indexOf("embeddedRuns=1")).toBeLessThan(embeddedCompleted);
-    expect(drainSettled).toBeGreaterThanOrEqual(0);
-    expect(drainSettled).toBeLessThan(output.indexOf("process proof: gateway-close"));
+    expect(exit, `${output}\n${tracked.output.stderr}`).toEqual([0, null]);
+    expect(output).toContain("process proof: adopted:roots=0:embedded=1");
+    expect(output).not.toContain("embedded-aborted");
+    expect(output).toMatch(
+      /process proof: signal:SIGTERM[\s\S]*process proof: embedded-completed[\s\S]*process proof: gateway-close[\s\S]*process proof: process-exit:0/,
+    );
+    expect(output).toMatch(/embeddedRuns=1[\s\S]*process proof: embedded-completed/);
+    expect(output).toMatch(
+      /active-work drain settled; beginning server close[\s\S]*process proof: gateway-close/,
+    );
     for (const phase of ["stop.signal.received", "stop.drain.begin", "stop.drain"]) {
       expect(output).toContain(`restart trace: ${phase} `);
     }

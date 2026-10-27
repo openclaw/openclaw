@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveManagedUnsetPathsForWrite } from "../config/config-path-mutation.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
 import { replaceConfigFile } from "../config/config.js";
 import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
@@ -12,6 +13,7 @@ import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
 import type { ConfigSchemaResponse } from "../config/schema.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { visitConfigValueTree } from "../config/value-tree.js";
 import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
@@ -110,6 +112,14 @@ export async function runConfigOperations(params: {
   currentExpectation?: ConfigSetCurrentExpectation;
   beforePersistentApply?: () => void;
   databaseOnly?: true;
+  /**
+   * Replaces the local file write when another process owns the state root.
+   * Receives the authored config before and after the change; may return a reload hint.
+   */
+  commit?: (change: {
+    previous: OpenClawConfig;
+    next: OpenClawConfig;
+  }) => Promise<string | undefined>;
 }) {
   const { runtime, operations, options } = params;
   if (
@@ -482,28 +492,53 @@ export async function runConfigOperations(params: {
     return;
   }
 
-  await replaceConfigFile({
-    sourceConfig: authoredNextConfig,
-    snapshot,
-    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-    writeOptions: {
-      ...mutationStart.writeOptions,
-      auditOrigin: "cli",
-      ...(assertCurrentExpectation || params.beforePersistentApply
-        ? {
-            assertConfigPathForWrite: () => {
-              mutationStart.writeOptions.assertConfigPathForWrite?.();
-              assertCurrentExpectation?.();
-              params.beforePersistentApply?.();
-            },
-          }
-        : {}),
-      ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
-      ...(normalizedExplicitSetPaths.length > 0
-        ? { explicitSetPaths: normalizedExplicitSetPaths }
-        : {}),
-    },
-  });
+  let committedHint: string | undefined;
+  if (params.commit) {
+    // The local writer enforces immutable config at its write; a routed commit checks here.
+    assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
+    assertCurrentExpectation?.();
+    params.beforePersistentApply?.();
+    const { prepareConfigOwnerChange } = await import("./config-cli-owner-patch.js");
+    const change = await prepareConfigOwnerChange({
+      snapshot,
+      pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
+      previous: authoredPreviousConfig,
+      next: authoredNextConfig,
+      explicitSetPaths: normalizedExplicitSetPaths,
+      unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
+      env: resolutionEnv,
+    });
+    committedHint = await params.commit(change);
+    if (change.clearedSessionStoreOwner) {
+      // The local writer reports this itself; the Gateway's writer reports only to its own log.
+      runtime.error(
+        "Cleared agents.defaults.sessionStore.agentId because session.store changed. Set that owner path explicitly to assign the destination store's owner.",
+      );
+    }
+  } else {
+    await replaceConfigFile({
+      sourceConfig: authoredNextConfig,
+      snapshot,
+      ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+      writeOptions: {
+        ...mutationStart.writeOptions,
+        auditOrigin: "cli",
+        ...(assertCurrentExpectation || params.beforePersistentApply
+          ? {
+              assertConfigPathForWrite: () => {
+                mutationStart.writeOptions.assertConfigPathForWrite?.();
+                assertCurrentExpectation?.();
+                params.beforePersistentApply?.();
+              },
+            }
+          : {}),
+        ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
+        ...(normalizedExplicitSetPaths.length > 0
+          ? { explicitSetPaths: normalizedExplicitSetPaths }
+          : {}),
+      },
+    });
+  }
   if (removedGatewayAuthPaths.length > 0) {
     runtime.log(
       info(
@@ -533,8 +568,8 @@ export async function runConfigOperations(params: {
     paths.forEach((entry) => expanded.add(entry));
   }
   const paths = [...expanded];
-  let hint = "No gateway restart needed.";
-  if (paths.length > 0) {
+  let hint = committedHint ?? "No gateway restart needed.";
+  if (!committedHint && paths.length > 0) {
     const plan = buildGatewayReloadPlan(paths, { candidateConfig: nextConfig });
     if (
       plan.restartGateway ||

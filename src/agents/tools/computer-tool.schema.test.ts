@@ -14,6 +14,7 @@ import {
   createComputerTool,
   createVisionComputerTool,
   EFFECTIVE_REF_WIDTH,
+  gatewayComputerStatusMock,
   invalidateComputerFrameIfMissing,
   listNodesMock,
   loadPairedComputerUseAvailabilityForSurface,
@@ -633,6 +634,35 @@ describe("createComputerTool schema", () => {
     expect(session.parameters).not.toBe(paired.parameters);
     expect(paired.parameters).toHaveProperty("properties.target");
     expect(session.parameters).not.toHaveProperty("properties.target");
+  });
+
+  it("omits the Gateway target when the Gateway computer is not configured", async () => {
+    gatewayComputerStatusMock.mockResolvedValue({ configured: false, available: false });
+    listNodesMock.mockResolvedValue([
+      macComputerNode({ computerUse: v2Descriptor(["screenshot", "left_click"]) }),
+    ]);
+    const availability = await loadPairedComputerUseAvailabilityForSurface({
+      computerAllowed: true,
+    });
+    const tool = createComputerTool({ pairedNodeComputerUse: availability?.prepared });
+
+    expect(tool.parameters).toHaveProperty("properties.target.enum", ["node"]);
+    expect(tool.parameters).toHaveProperty(
+      "properties.target.description",
+      expect.stringContaining("no computer provider configured"),
+    );
+    expect(tool.description).toContain("The Gateway has no computer provider configured");
+    expect(tool.description).toMatch(/omit target/iu);
+
+    // Omitting the selector still resolves the sole paired desktop end to end.
+    const screenshot = await tool.execute("paired", { action: "screenshot" });
+    expect(screenshot.details).toMatchObject({ node: "mac-1" });
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({ nodeId: "mac-1", command: "screen.snapshot" }),
+      { signal: undefined },
+    );
   });
 
   it("loads paired capabilities only for an exposed ordinary paired surface", async () => {

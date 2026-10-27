@@ -6,6 +6,7 @@ import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { setConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import {
   cleanupMcpCliTestState,
   createWorkspace,
@@ -314,17 +315,17 @@ it.each([
   expect(await readServer()).toEqual({ command: "node", args: [script] });
 });
 
-it("updates approval mode without replacing saved Codex metadata", async () => {
+it("configures approval and exclusions without replacing sibling metadata", async () => {
   await setServer({
     command: process.execPath,
     codex: { agents: ["docs-agent"], defaultToolsApprovalMode: "auto" },
+    toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
   });
-
-  await mcp("configure", "docs", "--approval", "approve");
-
+  await mcp("configure", "docs", "--approval", "approve", "--exclude", "write_*");
   expect(await readServer()).toEqual({
     command: process.execPath,
     codex: { agents: ["docs-agent"], defaultToolsApprovalMode: "approve" },
+    toolFilter: { include: ["old_*"], exclude: ["write_*"] },
   });
 });
 
@@ -420,22 +421,6 @@ it("explains only disabled servers and overrides while preserving JSON output", 
   });
 });
 
-it("preserves sibling tool filters for configure --exclude", async () => {
-  await setServer({
-    command: "node",
-    args: ["server.mjs"],
-    toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
-  });
-  await mcp("configure", "docs", "--exclude", "write_*");
-
-  mockLog.mockClear();
-  await mcp("show", "docs", "--json");
-  expect(JSON.parse(lastLogLine()).toolFilter).toEqual({
-    include: ["old_*"],
-    exclude: ["write_*"],
-  });
-});
-
 it("requires an explicit MCP tool filter operation", async () => {
   await setServer();
   await expectFailure("Specify --include, --exclude, or --clear.", "tools", "docs");
@@ -509,25 +494,21 @@ it("reports MCP doctor setup errors and sensitive literals", async () => {
 it("does not flag authored MCP header/env references after environment resolution", async () => {
   vi.stubEnv("MCP_DOCTOR_AUTHORED_TOKEN", "Bearer test-token");
   const stateDir = path.join(home, ".openclaw");
-  await fs.writeFile(
-    path.join(stateDir, "mcp-servers.json"),
-    JSON.stringify({
-      docs: {
-        url: "https://mcp.example.com/mcp",
-        headers: {
-          Authorization: "${MCP_DOCTOR_AUTHORED_TOKEN}",
-          "Proxy-Authorization": "Bearer ${MCP_DOCTOR_AUTHORED_TOKEN}",
-          "X-API-Key": "${MCP_DOCTOR_AUTHORED_TOKEN:-}",
-          api_key: "${MCP_DOCTOR_AUTHORED_TOKEN}${MCP_DOCTOR_AUTHORED_TOKEN}",
-        },
-        env: { DOCS_API_KEY: "${MCP_DOCTOR_AUTHORED_TOKEN}" },
+  await writeFixtureJson(path.join(stateDir, "mcp-servers.json"), {
+    docs: {
+      url: "https://mcp.example.com/mcp",
+      headers: {
+        Authorization: "${MCP_DOCTOR_AUTHORED_TOKEN}",
+        "Proxy-Authorization": "Bearer ${MCP_DOCTOR_AUTHORED_TOKEN}",
+        "X-API-Key": "${MCP_DOCTOR_AUTHORED_TOKEN:-}",
+        api_key: "${MCP_DOCTOR_AUTHORED_TOKEN}${MCP_DOCTOR_AUTHORED_TOKEN}",
       },
-    }),
-  );
-  await fs.writeFile(
-    path.join(stateDir, "openclaw.json"),
-    JSON.stringify({ mcp: { servers: { $include: "./mcp-servers.json" } } }),
-  );
+      env: { DOCS_API_KEY: "${MCP_DOCTOR_AUTHORED_TOKEN}" },
+    },
+  });
+  await writeFixtureJson(path.join(stateDir, "openclaw.json"), {
+    mcp: { servers: { $include: "./mcp-servers.json" } },
+  });
 
   await mcp("doctor", "docs", "--json");
 

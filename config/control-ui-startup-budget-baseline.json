@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 270488,
-  "reason": "Heavy tool details avoid rendering hidden diff/raw views: rejected-patch script CPU -39.07% and main-thread task CPU -47.04% over 20 counterbalanced pairs. Integrated same-toolchain build on f8a97fe: startup 270323 to 270488 B gzip (+165 B), five JS and one CSS request unchanged; Chat -132 B, New +114 B. Accept the small startup tradeoff and ratchet to the measured head.",
-  "updatedAt": "2026-10-25"
+  "startupJsGzipBytes": 271650,
+  "reason": "Same-host route grouping measures 271528 to 271650 B gzip (+122 B), with five startup JS requests and one CSS request unchanged. In 20 base/A-A/head triplets, 100 ms Cron readiness improves 912.5 to 816.2 ms (paired A/A -10.745%); total CPU is flat. Retain the measured head value under the approved small-byte measured-win policy.",
+  "updatedAt": "2026-10-26"
 }

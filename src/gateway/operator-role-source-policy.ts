@@ -3,7 +3,7 @@ import type {
   GatewayOperatorRoleDefinition,
   GatewayOperatorRolesConfig,
 } from "../config/types.gateway.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 
 /** Model ceilings can narrow a run without retiring its original operator source. */
 export function sourceRolePolicy(role: GatewayOperatorRoleDefinition | undefined) {
@@ -32,10 +32,14 @@ export function isOperatorRoleSourcePolicyCurrent(
   if (!captured || !current) {
     return captured === current;
   }
-  return (
-    roleScopesAllow({ role: "operator", requestedScopes: scopes, allowedScopes: current.scopes }) &&
-    isDeepStrictEqual({ ...captured, scopes: current.scopes }, current)
-  );
+  // Role grants are schema-validated enum values; only requested scopes need trimming.
+  for (const scope of scopes) {
+    const requested = scope.trim();
+    if (requested && !operatorScopeSatisfied(requested, current.scopes)) {
+      return false;
+    }
+  }
+  return isDeepStrictEqual({ ...captured, scopes: current.scopes }, current);
 }
 
 export function sourceRolePolicies(roles: GatewayOperatorRolesConfig | undefined) {

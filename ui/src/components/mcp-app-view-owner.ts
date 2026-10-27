@@ -401,27 +401,6 @@ export function createMcpAppView(
     );
   }
 
-  function bindOpenLinkHandler(
-    bridge: OpenClawAppBridge,
-    binding: McpAppBinding,
-    resources: McpAppResources,
-    signal: AbortSignal,
-  ) {
-    bridge.onopenlink = ({ url }) => {
-      // Both external and plugin navigation require the current, focused App.
-      if (
-        !isCurrentBinding(binding, resources, signal) ||
-        !isWidgetFrameInteractable(resources.iframe)
-      ) {
-        return Promise.resolve({ isError: true });
-      }
-      if (!parseMcpAppLink(url)) {
-        return Promise.resolve(openExternalUrlSafe(url) ? {} : { isError: true });
-      }
-      return Promise.resolve(navigateMcpAppLink(context, url) ? {} : { isError: true });
-    };
-  }
-
   async function setupResources(binding: McpAppBinding, signal: AbortSignal): Promise<void> {
     const { sessionKey, viewId, agentId } = binding;
     let resources: McpAppResources | null = null;
@@ -640,7 +619,19 @@ export function createMcpAppView(
         bridge.setHostContext(buildHostContext());
         return Promise.resolve({ mode });
       };
-      bindOpenLinkHandler(bridge, binding, createdResources, signal);
+      bridge.onopenlink = ({ url }) => {
+        // Both external and plugin navigation require the current, focused App.
+        if (
+          !isCurrentBinding(binding, createdResources, signal) ||
+          !isWidgetFrameInteractable(createdResources.iframe)
+        ) {
+          return Promise.resolve({ isError: true });
+        }
+        if (!parseMcpAppLink(url)) {
+          return Promise.resolve(openExternalUrlSafe(url) ? {} : { isError: true });
+        }
+        return Promise.resolve(navigateMcpAppLink(context, url) ? {} : { isError: true });
+      };
       bridge.onsizechange = ({ height }) => {
         if (
           height !== undefined &&

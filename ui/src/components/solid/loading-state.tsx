@@ -14,6 +14,7 @@ export function LoadingState(props: { route?: boolean; messagesOnly?: boolean } 
       aria-label={t("common.loading")}
     >
       <LoadingSkeleton messagesOnly={props.messagesOnly} />
+      {props.route ? <span class="connect-splash__status">{t("common.loading")}</span> : null}
     </section>
   );
 }

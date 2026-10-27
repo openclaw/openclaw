@@ -9,7 +9,8 @@ import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { createCrustaceanSlug } from "../agents/session-slug.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
-import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
+import { withWorktreeSourceWait } from "../agents/worktrees/allocation.js";
+import type { WorktreeSourceStage, WorktreeWaitBudget } from "../agents/worktrees/types.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -430,6 +431,7 @@ export async function prepareDashboardSessionTitle(params: {
 export async function generateWorktreeSessionTitle(
   params: SessionTitleParams & {
     onError: (error: unknown) => void;
+    waitBudget?: WorktreeWaitBudget;
   },
 ): Promise<string | undefined> {
   const scope = {
@@ -437,7 +439,8 @@ export async function generateWorktreeSessionTitle(
     sessionKey: resolveStoredSessionKeyForAgentStore(params),
     storePath: params.storePath,
   };
-  const request = maybeGenerateSessionTitle({ ...params, initialMessagePending: true });
+  const { waitBudget, ...titleParams } = params;
+  const request = maybeGenerateSessionTitle({ ...titleParams, initialMessagePending: true });
   try {
     await withTimeout(request, WORKTREE_SESSION_TITLE_WAIT_MS, "worktree title generation");
   } catch (error) {
@@ -456,7 +459,9 @@ export async function generateWorktreeSessionTitle(
     return resolveExplicitSessionName(current);
   };
   return params.withSource
-    ? await params.withSource((source) => readCurrent(source.assertCurrent))
+    ? await withWorktreeSourceWait(params.withSource, waitBudget, (source) =>
+        readCurrent(source.assertCurrent),
+      )
     : readCurrent();
 }
 

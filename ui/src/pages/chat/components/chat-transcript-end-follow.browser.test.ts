@@ -91,6 +91,10 @@ async function mountEndFollowFixture(savedOffset?: number) {
   host.style.cssText = "display: block; width: 800px";
   document.body.append(host);
   await host.updateComplete;
+  if (savedOffset === undefined) {
+    // These growth cases start after navigation has measured both fixed-height rows.
+    host.transcript.scrollToEnd();
+  }
   const thread = host.querySelector<HTMLElement>(".chat-thread")!;
   const row = host.querySelector<HTMLElement>('[data-virtual-row-key="growing-run"]')!;
   const extent = host.querySelector<HTMLElement>(".chat-thread-inner--virtual")!;

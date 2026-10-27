@@ -3,11 +3,18 @@
  * Run: node --import ./scripts/tsx.mjs scripts/perf/catalog-worker-retention-measure.ts
  *   --output /absolute/new-fixture --workspaces 5 --models 5000 --runtime-plugin [--snapshot]
  * Alternate independent baseline/candidate launches; --owner-dir substitutes pinned source files.
+ * Add --idle-seconds 600 for an allocation/GC profile after catalog tasks settle, with
+ * production worker diagnostics enabled and memory requests every 30 seconds. No forced GC
+ * occurs inside that window. The preload's sampling/polling overhead is present in both arms.
  * Source-mode heap includes the TypeScript loader; do not equate it with packaged Gateway RSS.
+ * --task-rounds 20 --measure-tasks profiles tasks after the first cold request. Add
+ * --sample-allocation for a separate allocation pass; omit it for timing measurements.
+ * This exercises a real catalog worker, not a complete Gateway or its client workload.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
@@ -24,6 +31,10 @@ const { values } = parseArgs({
     "owner-dir": { type: "string" },
     snapshot: { type: "boolean", default: false },
     "runtime-plugin": { type: "boolean", default: false },
+    "idle-seconds": { type: "string", default: "0" },
+    "task-rounds": { type: "string", default: "2" },
+    "measure-tasks": { type: "boolean", default: false },
+    "sample-allocation": { type: "boolean", default: false },
   },
 });
 assert(values.output, "--output must name a new synthetic fixture directory");
@@ -31,8 +42,12 @@ const root = path.resolve(values.output);
 assert(!fs.existsSync(root), "Refusing to reuse an existing fixture directory");
 const rows = Number(values.models);
 const workspaces = Number(values.workspaces);
+const idleSeconds = Number(values["idle-seconds"]);
+const taskRounds = Number(values["task-rounds"]);
 assert(Number.isSafeInteger(rows) && rows > 0);
 assert(Number.isSafeInteger(workspaces) && workspaces > 0);
+assert(Number.isSafeInteger(taskRounds) && taskRounds > 0);
+assert(Number.isSafeInteger(idleSeconds) && idleSeconds >= 0, "--idle-seconds must be nonnegative");
 const output = path.join(root, "workers");
 const env = {
   PATH: process.env.PATH,
@@ -48,6 +63,9 @@ for (const dir of [output, env.HOME, env.OPENCLAW_STATE_DIR, env.CODEX_HOME, env
   fs.mkdirSync(dir, { recursive: true });
 }
 Object.assign(process.env, env, { OPENCLAW_BENCH_RETAINED_WORKER_DIR: output });
+if (idleSeconds > 0 || values["sample-allocation"]) {
+  process.env.OPENCLAW_BENCH_SAMPLE_ALLOCATION = "1";
+}
 if (values["owner-dir"]) {
   process.env.OPENCLAW_BENCH_BASELINE_DIR = path.resolve(values["owner-dir"]);
 } else {
@@ -55,6 +73,8 @@ if (values["owner-dir"]) {
 }
 // Install the same observer and optional source substitution before either owner imports.
 await import("./worker-retained-heap-preload.js");
+const workerMetrics = idleSeconds > 0 ? await import("../../src/infra/worker-cpu.js") : undefined;
+workerMetrics?.setTrackedWorkerGcObserver(() => {});
 const { CatalogWorkerTaskPool } =
   await import("../../src/agents/prepared-model-catalog-worker.pool.js");
 const { loadPluginMetadataSnapshot } =
@@ -157,7 +177,10 @@ const pool = new CatalogWorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedM
 );
 let commands = 0;
 const requests: Array<{ elapsedMs: number; entries: number; hash: string }> = [];
-async function sample(name: string, snapshot = false) {
+async function sample(
+  name: string,
+  operation: "collect" | "snapshot" | "start" | "stop" = "collect",
+) {
   const ready = fs
     .readdirSync(output)
     .find(
@@ -169,10 +192,7 @@ async function sample(name: string, snapshot = false) {
   assert(ready, "Missing catalog-worker instrumentation after completed task");
   const identity = JSON.parse(fs.readFileSync(path.join(output, ready), "utf8"));
   const reply = identity.commandPath.replace(".command.json", `.${name}.json`);
-  fs.writeFileSync(
-    identity.commandPath + ".tmp",
-    JSON.stringify({ id: name, operation: snapshot ? "snapshot" : "collect" }),
-  );
+  fs.writeFileSync(identity.commandPath + ".tmp", JSON.stringify({ id: name, operation }));
   fs.renameSync(identity.commandPath + ".tmp", identity.commandPath);
   const deadline = Date.now() + 120_000;
   while (!fs.existsSync(reply)) {
@@ -181,10 +201,12 @@ async function sample(name: string, snapshot = false) {
   }
   const result = JSON.parse(fs.readFileSync(reply, "utf8"));
   assert(result.ok, JSON.stringify(result));
-  console.log(JSON.stringify({ phase: name, commands, workspaces, rows, ...result }));
+  console.log(
+    JSON.stringify({ phase: name, commands, workspaces, rows, hostLoad: os.loadavg(), ...result }),
+  );
 }
 try {
-  for (let revision = 0; revision < 2; revision++) {
+  for (let revision = 0; revision < taskRounds; revision++) {
     const remoteCatalog = {
       sourceUrl: "https://catalog.invalid/catalog.json",
       revision: `synthetic-revision-${revision}`,
@@ -234,11 +256,54 @@ try {
       commands++;
       if (index === 0 && revision === 0) {
         await sample("one");
+        if (values["measure-tasks"]) {
+          await sample("tasks-start", "start");
+        }
       }
     }
-    await sample(`revision-${revision}`, values.snapshot && revision === 1);
+    if (!values["measure-tasks"]) {
+      await sample(
+        `revision-${revision}`,
+        values.snapshot && revision === taskRounds - 1 ? "snapshot" : "collect",
+      );
+    }
+  }
+  if (values["measure-tasks"]) {
+    await sample("tasks-stop", "stop");
   }
   console.log(JSON.stringify({ phase: "requests", requests }));
+  if (workerMetrics) {
+    // Let the task owner's delayed idle collection finish before the measured window.
+    await delay(1_100);
+    await sample("idle-start", "start");
+    let memoryRequests = 0;
+    const sampleMemory = () => {
+      memoryRequests++;
+      return workerMetrics.sampleTrackedWorkerMemory();
+    };
+    const initialMetrics = sampleMemory();
+    const timer = setInterval(sampleMemory, 30_000);
+    try {
+      await delay(idleSeconds * 1_000);
+    } finally {
+      clearInterval(timer);
+      await sample("idle-stop", "stop");
+    }
+    console.log(
+      JSON.stringify({
+        phase: "idle",
+        idleSeconds,
+        memoryRequests,
+        memorySampleIntervalMs: 30_000,
+        catalogDigest: createHash("sha256")
+          .update(JSON.stringify(requests.map(({ entries, hash }) => ({ entries, hash }))))
+          .digest("hex"),
+        initialMetrics,
+        finalMetrics: workerMetrics.sampleTrackedWorkerMemory(),
+      }),
+    );
+  }
 } finally {
   await pool.close();
+  workerMetrics?.setTrackedWorkerGcObserver(undefined);
 }

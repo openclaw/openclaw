@@ -75,10 +75,9 @@ export class Stores {
   /** The membership Knowledge enforces: the registry's reconciled section. */
   membership(): Membership {
     const reconciled = this.registry.current?.reconciled;
-    const section = reconciled ? JSON.parse(reconciled.section) : {};
     const revision = reconciled?.revision ?? storesRevision({});
     if (this.memo?.revision !== revision) {
-      this.memo = parseMembership(section);
+      this.memo = parseMembership(reconciled ? JSON.parse(reconciled.section) : {});
     }
     return this.memo;
   }

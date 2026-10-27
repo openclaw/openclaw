@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -202,6 +201,7 @@ vi.mock("./update-command-post-core.js", async (importOriginal) => ({
   writePostCoreUpdateFailureFile: vi.fn(async () => undefined),
 }));
 
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { readPackageVersion, resolveUpdateRoot, tryWriteCompletionCache } from "./shared.js";
 import { registerConvergenceCompletionTests } from "./update-command-convergence-completion.test-support.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
@@ -305,7 +305,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     vi.mocked(writePostCorePluginUpdateResultFile).mockReset().mockResolvedValue(undefined);
     vi.mocked(writePostCoreUpdateFailureFile).mockReset().mockResolvedValue(undefined);
     const root = dirs.make("update-lease-package-");
-    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+    await writeFixtureJson(path.join(root, "package.json"), { name: "openclaw" });
     vi.mocked(resolveUpdateRoot).mockResolvedValue(root);
     vi.mocked(readPackageVersion).mockResolvedValue(VERSION);
     vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementation(async () => {
@@ -448,10 +448,10 @@ describe("update plugin lifecycle lease boundaries", () => {
     async (interactive) => {
       mocks.interactive = interactive;
       vi.mocked(readPackageVersion).mockResolvedValue("2026.9.4");
-      await fs.writeFile(
-        path.join(await resolveUpdateRoot(), "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
-      );
+      await writeFixtureJson(path.join(await resolveUpdateRoot(), "package.json"), {
+        name: "openclaw",
+        version: "2026.9.4",
+      });
       const maintenance = createDoctorMaintenanceFixture();
       mocks.maintenance.mockResolvedValueOnce(maintenance);
       const verification = await vi.importActual<typeof gatewayVerification>(
@@ -686,13 +686,10 @@ describe("update plugin lifecycle lease boundaries", () => {
 
   it("forwards prepared source runtime from the parent handoff", async () => {
     const handoff = dirs.make("prepared-source-runtime-");
-    await fs.writeFile(
-      path.join(handoff, "handoff.json"),
-      JSON.stringify({
-        completionOwner: "parent",
-        sourceRuntimePrepared: true,
-      }),
-    );
+    await writeFixtureJson(path.join(handoff, "handoff.json"), {
+      completionOwner: "parent",
+      sourceRuntimePrepared: true,
+    });
     vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", path.join(handoff, "plugins.json"));
     await resumePostCoreUpdate({
       root: "/tmp/openclaw",
@@ -779,10 +776,10 @@ describe("update plugin lifecycle lease boundaries", () => {
       const custody = createRetainedCleanupFixture();
       const originalError = new Error("Finalization was cancelled");
       if (phase === "recovery") {
-        await fs.writeFile(
-          path.join(await resolveUpdateRoot(), "package.json"),
-          JSON.stringify({ name: "openclaw", version: VERSION }),
-        );
+        await writeFixtureJson(path.join(await resolveUpdateRoot(), "package.json"), {
+          name: "openclaw",
+          version: VERSION,
+        });
         mocks.verifyGateway.mockImplementationOnce(async () => {
           custody.retain();
           return { ok: true, summary: "healthy" };

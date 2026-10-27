@@ -31,7 +31,10 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
 import { readSessionPendingInputContext } from "./session-pending-input-history.js";
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
-import { createPendingHistoryFixture } from "./session-pending-input.test-support.js";
+import {
+  createUserPendingInput,
+  createPendingHistoryFixture,
+} from "./session-pending-input.test-support.js";
 import * as historyRuntime from "./session-transcript-worker-runtime.js";
 
 function pauseFirstPendingHistorySnapshot() {
@@ -107,16 +110,14 @@ it("skips covered empty history and reads a newly staged input after its owner c
       expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
       expect(history).not.toHaveBeenCalled();
 
-      receipt = await stageSessionPendingInput(scope, {
-        runId: "after-empty-read",
-        message: {
-          role: "user",
-          content: "Retain this newly accepted input",
-          timestamp: 1,
-          idempotencyKey: "after-empty-read:user",
-        },
-        assertCurrent() {},
-      });
+      receipt = await stageSessionPendingInput(
+        scope,
+        createUserPendingInput(
+          "after-empty-read",
+          "Retain this newly accepted input",
+          "after-empty-read:user",
+        ),
+      );
       expect(receipt).toBeDefined();
       expect(await listSessionPendingInputs(scope)).toMatchObject({
         total: 1,
@@ -240,16 +241,14 @@ it.each(["context", "id"] as const)(
       };
       expect(read().rows).toEqual([]);
       const receipt = expectDefined(
-        await stageSessionPendingInput(scope, {
-          runId: "later-input",
-          message: {
-            role: "user",
-            content: "Retained after the empty read",
-            timestamp: 1,
-            idempotencyKey: "later-input:user",
-          },
-          assertCurrent() {},
-        }),
+        await stageSessionPendingInput(
+          scope,
+          createUserPendingInput(
+            "later-input",
+            "Retained after the empty read",
+            "later-input:user",
+          ),
+        ),
         "Expected accepted input custody",
       );
       try {
@@ -399,16 +398,10 @@ it("keeps concurrent history readers consistent after one reconciles orphaned in
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { scope, database } = createPendingHistoryFixture("concurrent-pending-history");
     const receipt = expectDefined(
-      await stageSessionPendingInput(scope, {
-        runId: "orphaned",
-        message: {
-          role: "user",
-          content: "Saved update",
-          timestamp: 1,
-          idempotencyKey: "orphaned:user",
-        },
-        assertCurrent() {},
-      }),
+      await stageSessionPendingInput(
+        scope,
+        createUserPendingInput("orphaned", "Saved update", "orphaned:user"),
+      ),
       "Expected accepted input",
     );
     receipt.finish("interrupted");

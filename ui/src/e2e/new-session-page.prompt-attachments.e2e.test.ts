@@ -312,7 +312,7 @@ suite.define(() => {
         },
       });
       await startPrompt(page, message, sessionKey);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await page.getByText("SKILL.md", { exact: true }).waitFor();
 
       await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
@@ -337,7 +337,7 @@ suite.define(() => {
         ),
       });
       await startPrompt(page, message, sessionKey);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
 
       const socketsBeforeReconnect = await gateway.getSocketCount();
@@ -389,6 +389,7 @@ suite.define(() => {
       });
       const responses = initialPromptResponses(sessionKey, runId, "single-image-prompt");
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         deferredMethods: ["chat.startup"],
         methodResponses: {
           ...responses,

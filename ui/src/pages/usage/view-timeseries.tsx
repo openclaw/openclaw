@@ -26,7 +26,15 @@ type TimeSeriesProps = {
 };
 
 export function deriveTimeSeries(
-  detail: UsageProps["detail"],
+  detail: Pick<
+    UsageProps["detail"],
+    | "timeSeries"
+    | "timeSeriesStatus"
+    | "timeSeriesMode"
+    | "timeSeriesBreakdownMode"
+    | "timeSeriesCursorStart"
+    | "timeSeriesCursorEnd"
+  >,
   range: ReturnType<typeof prepareUsageDateRange>,
   usage: UsageSessionEntry["usage"],
 ) {

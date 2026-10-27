@@ -35,6 +35,7 @@ import {
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { captureProcessUnhandledRejections } from "./bash-tools.exec-runtime.test-support.js";
 import type {
@@ -218,12 +219,6 @@ function expectAuthorization(fields: object) {
   expectCall(commitExecAuthorizationMock, {
     authorization: expect.objectContaining(fields),
   });
-}
-
-function expectNoCalls(...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 function expectPending(result: GatewayResult) {

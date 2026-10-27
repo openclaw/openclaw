@@ -111,6 +111,29 @@ const retiredCount = (snapshot: Lifecycle, script: string, reason: string) =>
     ?.retired.find((entry) => entry.reason === reason)?.count ?? 0;
 
 describe("worker CPU lifecycle", () => {
+  it("reuses CPU source snapshots until native membership changes", () => {
+    const initial = getTrackedWorkerCpuSources();
+    const worker = registerWorker(9000, "./cpu-snapshot.worker.ts");
+    try {
+      const added = getTrackedWorkerCpuSources();
+      expect(added.workers).toHaveLength(initial.workers.length + 1);
+      for (let sample = 0; sample < 60; sample++) {
+        expect(getTrackedWorkerCpuSources()).toBe(added);
+      }
+      // Cleanup can remove exit listeners; pruning still invalidates the snapshot.
+      worker.removeAllListeners("exit");
+      worker.threadId = -1;
+      expect(added.currentRevision()).toBeGreaterThan(added.revision);
+      const removed = getTrackedWorkerCpuSources();
+      expect(removed.workers).toEqual(initial.workers);
+      expect(getTrackedWorkerCpuSources()).toBe(removed);
+      expect(added.workers).toHaveLength(initial.workers.length + 1);
+    } finally {
+      worker.threadId = -1;
+      getTrackedWorkerCpuSources();
+    }
+  });
+
   it("retains task heap and GC totals across worker retirement without retaining worker ids", async () => {
     const register = (id: number) => {
       const worker = registerWorker(id, "./provider-prompt-state.worker.ts");

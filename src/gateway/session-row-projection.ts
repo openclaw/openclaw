@@ -356,7 +356,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
           if (change.scope === "transcript" || change.factsInvalidated === true) {
             backfill.remove(records.identity(row));
           }
-          markStoredRow(row, change, prepared);
+          revisions.withChangeScope(change.scope ?? "session-entry", () =>
+            markStoredRow(row, change, prepared),
+          );
         },
       });
     }
@@ -623,6 +625,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
     readTaskPublicationRevision: revisions.taskPublication,
+    hasLogicalChildEntries: (parent: Pick<records.Row, "agentId" | "key">) =>
+      byParent.has(records.logicalSessionRowIdentity(parent.agentId, parent.key)),
     get physicalPaths() {
       return scope.physicalPaths;
     },

@@ -261,10 +261,11 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
     const retained = structuredClone(projectionState);
     const detached = projectSessionActorHotState(projectionState);
     const original = structuredClone(detached);
-    Object.assign(detached.target.database, { birthtime: "caller edit" });
-    Object.assign(detached.version, { sequence: -1 });
-    detached.participants[0]!.identity.id = "caller edit";
-    detached.members[0]!.identityId = "caller edit";
+    // Internal projections retain replace-only metadata; publication owns detachment.
+    expect(detached.target).toBe(projectionState.hot.target);
+    expect(detached.version).toBe(projectionState.hot.version);
+    expect(detached.participants).toBe(projectionState.hot.participants);
+    expect(detached.members).toBe(projectionState.hot.members);
     detached.pendingInputs[0]!.input_id = "caller edit";
     detached.transcript.version.rawSeq = -1;
     detached.transcript.watermark.maxSeq = -1;

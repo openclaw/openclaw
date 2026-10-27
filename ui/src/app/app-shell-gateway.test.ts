@@ -4,7 +4,8 @@ import { GatewayProtocolClient } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { configSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
@@ -21,6 +22,7 @@ import {
   holdProfileAppearanceRead,
   profileAppearanceReply,
 } from "./app-shell-gateway.test-support.ts";
+import { makeBootRoster } from "./bootstrap.test-support.ts";
 import { createGatewayMetadataObserver } from "./gateway-observers.ts";
 import { UI_NAVIGATION_PREFERENCE_KEYS } from "./server-prefs-state.ts";
 import { pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
@@ -255,12 +257,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
 
   it("loads current agent discovery when hello lands", async () => {
     const { context, host, owner, snapshot } = createProfileAppearanceGateway(null);
-    const agentsList = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender" as const,
-      agents: [{ id: "main" }],
-    };
+    const agentsList = makeBootRoster();
     const ensureList = vi.fn(async () => agentsList);
     Object.assign(context, {
       agents: { state: { agentsList: null }, ensureList },

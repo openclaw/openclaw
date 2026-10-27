@@ -45,6 +45,7 @@ suite.define(() => {
       const foreign = sharedSession("agent:main:shared-notes", "Shared notes");
       const otherAgentSession = sharedSession("agent:research:other-work", "Research notes");
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         operatorScopes: ["operator.sessions.write"],
         agentModel: "openai/model-a",
         models,

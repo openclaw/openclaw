@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { openSlot } from "../pages/chat/sidebar-layout.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
+import { createMediaQueryList } from "../test-helpers/media-query.ts";
 import {
   expectedGatewayUrl,
   installSettingsStorageLifecycle,
@@ -131,16 +132,9 @@ describe("gateway settings and layout persistence", () => {
 
   beforeEach(() => {
     setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
-    vi.stubGlobal("matchMedia", (media: string): MediaQueryList => ({
-      media,
-      matches: false,
-      onchange: null,
-      addListener() {},
-      removeListener() {},
-      addEventListener() {},
-      removeEventListener() {},
-      dispatchEvent: () => true,
-    }));
+    vi.stubGlobal("matchMedia", (media: string): MediaQueryList =>
+      createMediaQueryList(media, false),
+    );
   });
 
   it("keeps development credentials scoped to the upstream when the Vite target changes", () => {

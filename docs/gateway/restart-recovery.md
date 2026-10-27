@@ -22,11 +22,20 @@ tomorrow, without a new user message. Shutdown uses the same interruption and
 recovery marking as a managed restart, with the existing drain deadlines.
 Explicit session Stop/cancel remains terminal. The crash-loop breaker, recovery
 retry budgets, current-authority checks, and archived/reset exclusions still apply.
+Ordinary session interruptions and timeouts retain their original cancellation
+cause; they do not create Gateway-restart recovery custody. Chat admission uses
+the cancellation owner's recorded cause, including when interrupted before execution.
 Before accepting another message, the Gateway retires leftover recovery records
 whose runs are all recorded terminal and have no remaining execution or delivery
 owner. For a killed conversation, it also releases unfinished fences after checking
 that no run or session work remains active and no final delivery is pending. This
 lets a stopped conversation continue without resetting its history.
+A worker placement already marked failed does not start another automatic recovery
+turn. Recovery records the failure and its next step once; later restarts preserve
+that outcome. Inspect the placement error, finish any pending worker cleanup, then
+repair or restart the worker and use Resume. Explicit session recovery remains
+available after worker cleanup is complete.
+
 Cron owns recovery of interrupted scheduled turns. An enabled, unchanged,
 time-scheduled agent job interrupted before delivery gets one fresh retry after
 startup, including one-shot jobs. Its original run remains recorded as interrupted.
@@ -50,6 +59,11 @@ so they resume after a restart without another user message. They remain
 internal inputs: recovery does not inherit a sender's channel delivery rights,
 and a follow-up without an authenticated operator source cannot reconstruct
 authority from its transcript.
+
+Automatic goal continuations retain that same authenticated operator source,
+including continuations after subagent announcements or requester-settle yields.
+If interrupted mid-tool, they resume through normal startup recovery under current
+permissions. The saved goal and its transcript do not grant authority on their own.
 
 An accepted child continuation, including a child created with `sessions_spawn`
 or an interrupted child resumed with `sessions_send`,
@@ -102,6 +116,10 @@ interrupted work.
 | Restart continuation          | SQLite restart sentinel                                      | One-shot follow-up dispatched to the session that asked for the restart         |
 | Background exec processes     | Process memory; notification obligation in session row       | Processes end; eligible owning sessions wake once with an unknown outcome       |
 | Gateway terminal PTYs         | Process memory                                               | End with the old process; terminal sessions are not recovered                   |
+
+Outbound recovery keeps checking queued deliveries when the Gateway restarts
+before a platform-send lease expires. It waits for the lease before inspecting
+the send and still reconciles uncertain outcomes before any replay.
 
 The Gateway resumes eligible accepted `chat.send` inputs from SQLite at startup,
 in acceptance order within each session. This includes queued inputs left by a

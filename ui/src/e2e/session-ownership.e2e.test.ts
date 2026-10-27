@@ -52,7 +52,7 @@ function ownerSessions(visibility: "draft" | "shared" | "read-only", single = fa
 }
 
 async function newPage(width = 1200) {
-  const context = await suite.browser.newContext({ viewport: { height: 800, width } });
+  const context = await suite.newBrowserContext({ viewport: { height: 800, width } });
   activePage = await context.newPage();
   return activePage;
 }
@@ -118,11 +118,10 @@ function geometry(element: Element) {
 
 suite.define(() => {
   afterEach(async () => {
-    await activePage
-      ?.context()
-      .close()
-      .catch(() => {});
-    activePage = undefined;
+    if (activePage) {
+      await suite.closeBrowserContext(activePage.context());
+      activePage = undefined;
+    }
   });
 
   it("keeps collaborative owner stacks legible without shifting session rows", async () => {
@@ -260,9 +259,12 @@ suite.define(() => {
     await chooseSidebarMenuOption(page, "Group by", "Person");
     await closeSidebarMenu(page);
     await chooseOwner(page, "owner:profile-patrick");
-    // The picker helper's Escape also dismisses the mobile drawer.
+    // Escape may close only the picker, leaving the mobile drawer open.
     if (width === 390) {
-      await navigationDrawerToggle(page).click();
+      const toggle = navigationDrawerToggle(page);
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+        await toggle.click();
+      }
       await waitForMobileSidebarDrawerOpen(page);
     }
     const group = page.locator(".sidebar-recent-sessions__group--inline-owner");

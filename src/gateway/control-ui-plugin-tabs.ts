@@ -282,6 +282,12 @@ export function listControlUiLinkReaders(
   if (methods.pluginRegistry && methods.pluginRegistry !== registry) {
     return [];
   }
+  const readers = visibleDescriptors(registry.controlUiDescriptors, scopes).filter(
+    ({ descriptor }) => descriptor.surface === "link-reader" && descriptor.linkReader,
+  );
+  if (readers.length === 0) {
+    return [];
+  }
   const loaded = new Set(
     registry.plugins
       .filter((plugin) => plugin.enabled && plugin.status === "loaded")
@@ -298,7 +304,7 @@ export function listControlUiLinkReaders(
       !method.controlPlaneWrite
     );
   };
-  return visibleDescriptors(registry.controlUiDescriptors, scopes)
+  return readers
     .flatMap((entry) => {
       const descriptor = entry.descriptor;
       const metadata = descriptor.linkReader;
