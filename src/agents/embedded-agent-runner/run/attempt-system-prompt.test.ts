@@ -34,6 +34,7 @@ import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixt
 import type { ToolSearchCatalogRef } from "../../tool-search-types.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { createEmptyPromptBootstrap } from "./attempt-system-prompt.test-support.js";
+import { applyEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
 import { buildSystemUpdateMessage } from "./runtime-context-prompt.js";
 import { buildTurnDeliveryContextFragments } from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -154,15 +155,16 @@ async function preparePermissionPrompt({
     modelId: attempt.modelId,
     prepared: true as const,
   }));
-  const capabilityToolNames = new Set(tools.map(({ name }) => name));
+  const allowedTools = applyEmbeddedAttemptToolsAllow(tools, attempt.toolsAllow);
+  const capabilityToolNames = new Set(allowedTools.map(({ name }) => name));
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
     attempt,
     activeContextEngine: undefined,
     bootstrap: createEmptyPromptBootstrap(),
     capabilityToolNames,
     effectiveTools: skills?.initialToolNames
-      ? tools.filter(({ name }) => skills.initialToolNames?.includes(name))
-      : tools,
+      ? allowedTools.filter(({ name }) => skills.initialToolNames?.includes(name))
+      : allowedTools,
     setup: createAttemptSetupFixture({
       effectiveCwd: "/tmp/openclaw",
       effectiveWorkspace: "/tmp/openclaw",
@@ -185,7 +187,12 @@ async function preparePermissionPrompt({
     getProviderRuntimeHandle,
     read,
     refreshSystemPrompt: async (prompt: string, refreshedTools: AgentTool[]) =>
-      (await prepared.prepareToolPrompt!(refreshedTools, { permissionChanged: true }))(prompt),
+      (
+        await prepared.prepareToolPrompt!(
+          applyEmbeddedAttemptToolsAllow(refreshedTools, attempt.toolsAllow),
+          { permissionChanged: true },
+        )
+      )(prompt),
     write,
   };
 }
@@ -432,6 +439,34 @@ describe("buildAttemptSystemPrompt", () => {
   });
 
   const skillsCatalog = "<available_skills><skill><name>weather</name></skill></available_skills>";
+
+  it.each([
+    ["native reader", ["execute_code", "read"], ["execute_code", "read"], true],
+    ["skill reader", ["execute_code", "skills_read"], ["execute_code", "skills_read"], true],
+    ["excluded reader", ["execute_code"], ["execute_code", "read"], false],
+    ["unavailable reader", ["execute_code", "read"], ["execute_code"], false],
+    ["tool-less routine", [], ["execute_code", "read"], false],
+  ] as const)(
+    "includes routine skills only with an executable reader: %s",
+    async (_label, toolsAllow, toolNames, expected) => {
+      const { prepared } = await preparePermissionPrompt({
+        session: { sessionKey: "agent:main:cron:skill-reader:run:fixture" },
+        suppliedTools: toolNames.map(tool),
+        skills: { prompt: skillsCatalog, toolsAllow: [...toolsAllow] },
+      });
+      const { payload } = await captureAnthropicRequest("transport", {
+        context: {
+          systemPrompt: prepared.systemPromptText,
+          messages: [{ role: "user", content: "Check the weather.", timestamp: 1 }],
+        },
+      });
+
+      expect(JSON.stringify(payload.system).includes(skillsCatalog)).toBe(expected);
+      expect(prepared.systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual(
+        expected ? ["weather"] : [],
+      );
+    },
+  );
 
   it("refreshes skill diagnostics when read visibility changes or hooks replace the prompt", async () => {
     const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt({
