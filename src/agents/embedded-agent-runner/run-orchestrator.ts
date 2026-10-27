@@ -347,6 +347,7 @@ async function runEmbeddedAgentForSession(
             ...(!isolatedReadOnly
               ? {
                   retainIdleRunOwner,
+                  ...(refreshed ? { waitForReplacementPublication: true } : {}),
                   ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
                 }
               : {}),

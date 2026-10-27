@@ -53,7 +53,7 @@ import { forkSessionEntryFromParentTargetWithPatch } from "./session-accessor.sq
 import {
   appendTranscriptEventSnapshotSync,
   appendTranscriptMessageSnapshotSync,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-transcript-write.kernel.js";
 import {
   appendTranscriptEventSync,
   replaceTranscriptEvents,

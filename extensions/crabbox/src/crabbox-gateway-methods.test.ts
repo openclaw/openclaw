@@ -16,11 +16,11 @@ import {
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import { warmAllocation, warmImage, warmRecord } from "./crabbox-warm-scenarios.test-support.js";
 import type { CrabboxSnapshotActions } from "./crabbox-worker-snapshot-actions.js";
+import type { WarmProfileRecord } from "./crabbox-worker-warm-image-records.js";
 import {
   CrabboxWarmImageRequestError,
   listCrabboxWarmImages,
   listCrabboxLegacyWarmLeases,
-  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

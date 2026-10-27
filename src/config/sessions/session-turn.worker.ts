@@ -14,7 +14,7 @@ import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-go
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { createCliHistoryOwnerProbe, runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import { applySessionGoalOperation } from "./goals-operation-policy.js";
-import { readSessionGoalOperationReceipt } from "./goals-operations.js";
+import { readSessionGoalOperationReceipt } from "./goals-operation-receipts.js";
 import {
   readQualifiedSessionEntryRow,
   readSessionKeyBySessionIdInDatabase,

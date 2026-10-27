@@ -1,13 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { deserialize } from "node:v8";
+import { inflateRawSync } from "node:zlib";
 import { expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import {
-  encodeLocalWorkspaceTreePacks,
   localWorkspaceDigestBytes,
   prepareLocalWorkspaceSourcePathSet,
+  prepareLocalWorkspaceTreePacks,
+  type LocalWorkspacePreparation,
 } from "./local-workspace-cas.js";
 import {
   beginLocalWorkspaceSweepInDatabase,
@@ -31,6 +34,20 @@ function tree(character: string) {
   ]);
 }
 
+function prepareTreePacks(
+  db: DatabaseSync,
+  records: Parameters<typeof prepareLocalWorkspaceTreePacks>[0],
+  paths?: LocalWorkspacePreparation["paths"],
+) {
+  for (const [index, batch] of prepareLocalWorkspaceTreePacks(records).entries()) {
+    const preparation = deserialize(inflateRawSync(batch)) as LocalWorkspacePreparation;
+    prepareLocalWorkspaceContentInDatabase(
+      db,
+      index === 0 && paths ? { ...preparation, paths } : preparation,
+    );
+  }
+}
+
 it.each([2, 64])("loads %i directories with reads bounded by tree depth", (count) => {
   using cleanup = new DisposableStack();
   const db = new DatabaseSync(":memory:");
@@ -47,7 +64,7 @@ it.each([2, 64])("loads %i directories with reads bounded by tree depth", (count
       })),
     ]).flat(),
   );
-  prepareLocalWorkspaceContentInDatabase(db, { packs: encodeLocalWorkspaceTreePacks(records) });
+  prepareTreePacks(db, records);
   // One sentinel/root pack, one root-directory pack, and one per child directory.
   expect(db.prepare("SELECT count(*) AS n FROM local_workspace_tree_packs").get()!.n).toBe(
     count + 2,
@@ -87,7 +104,7 @@ it("shares an unchanged subdirectory pack across different projection roots", ()
       kind: "create",
       row: localWorkspaceProjectionFixture(id, `/synthetic/${id}`),
     });
-    prepareLocalWorkspaceContentInDatabase(db, { packs: encodeLocalWorkspaceTreePacks(records) });
+    prepareTreePacks(db, records);
     mutateLocalWorkspaceProjection(db, id, {
       kind: "update",
       revision: 0,
@@ -122,7 +139,7 @@ it("accepts a prepared tree with only the projection root flip inside the writer
     row: localWorkspaceProjectionFixture(id, "/synthetic"),
   });
   const records = tree("a");
-  prepareLocalWorkspaceContentInDatabase(db, { packs: encodeLocalWorkspaceTreePacks(records) });
+  prepareTreePacks(db, records);
   const counters = trackSqliteStatementExecutions(db, ["nodeWrites", "rootFlip"], (sql) => {
     if (
       /^(?:insert|update|delete)\b/i.test(sql) &&
@@ -136,7 +153,7 @@ it("accepts a prepared tree with only the projection root flip inside the writer
     return null;
   });
   cleanup.defer(counters.restore);
-  prepareLocalWorkspaceContentInDatabase(db, { packs: encodeLocalWorkspaceTreePacks(records) });
+  prepareTreePacks(db, records);
   expect(counters.counts.nodeWrites).toBe(0);
   mutateLocalWorkspaceProjection(db, id, {
     kind: "update",
@@ -173,7 +190,7 @@ it("sweeps unreachable content while retaining baseline, previous and pending ro
     row: localWorkspaceProjectionFixture(id, "/synthetic"),
   });
   for (const records of [baseline, previous, pending, abandoned, reused]) {
-    prepareLocalWorkspaceContentInDatabase(db, { packs: encodeLocalWorkspaceTreePacks(records) });
+    prepareTreePacks(db, records);
   }
   const livePaths = prepareLocalWorkspaceSourcePathSet('["entry.txt"]');
   const orphanPaths = prepareLocalWorkspaceSourcePathSet('["abandoned.txt"]');
@@ -219,10 +236,7 @@ it("sweeps unreachable content while retaining baseline, previous and pending ro
   expect(candidates.packs).toHaveLength(4);
   expect(candidates.paths).toHaveLength(2);
   // A writer reusing content after the snapshot protects it with the current epoch.
-  prepareLocalWorkspaceContentInDatabase(db, {
-    packs: encodeLocalWorkspaceTreePacks(reused),
-    paths: reusedPaths,
-  });
+  prepareTreePacks(db, reused, reusedPaths);
   deleteLocalWorkspaceSweepBatchInDatabase(db, epoch, candidates);
   for (const records of [baseline, previous, pending, reused]) {
     expect(readLocalWorkspaceTree(db, localWorkspaceDigestBytes(root(records)))).toEqual(records);

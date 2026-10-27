@@ -907,10 +907,6 @@
     display: none;
   }
 
-  & .chat-pane__sharing-access-option[aria-checked="true"] {
-    background: var(--menu-selected);
-  }
-
   & .chat-pane__sharing-back {
     min-height: 32px;
     margin-bottom: 4px;
