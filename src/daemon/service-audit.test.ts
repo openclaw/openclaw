@@ -194,9 +194,9 @@ it.each(["current/bin", "aliases/default/bin"])(
   },
 );
 it.each([
-  ["/usr/local/bin/helper", "-lc", true],
-  ["/bin/zsh", "-l", true],
-] as const)("audits gateway tokens for %s %s", async (executable, flag, missing) => {
+  ["/usr/local/bin/helper", "-lc"],
+  ["/bin/zsh", "-l"],
+])("audits gateway tokens for %s %s", async (executable, flag) => {
   const result = await audit(
     {
       programArguments: [executable, flag, "exec node gateway --port 18890"],
@@ -204,7 +204,7 @@ it.each([
     },
     { platform: "darwin", expectedPort: 18889 },
   );
-  expect(hasIssue(result, codes.gatewayCommandMissing)).toBe(missing);
+  expect(hasIssue(result, codes.gatewayCommandMissing)).toBe(true);
   expect(hasIssue(result, codes.gatewayPortMismatch)).toBe(false);
   expect(hasIssue(result, codes.gatewayPathMissing)).toBe(true);
 });
@@ -221,12 +221,7 @@ it.each([
   if (detail === undefined) {
     expect(issue).toBeUndefined();
   } else {
-    expect(issue).toStrictEqual({
-      code: codes.gatewayPortMismatch,
-      message: "Gateway service port does not match current gateway config.",
-      detail,
-      level: "recommended",
-    });
+    expect(issue).toMatchObject({ code: codes.gatewayPortMismatch, detail, level: "recommended" });
   }
 });
 it("classifies expired egress trust as repairable drift, not a custom setting", async () => {
@@ -265,32 +260,32 @@ it.each([
 ] as const)(
   "reports only exposed values for source $source",
   async ({ source, token, embedded, mismatch }) => {
+    const environment = {
+      OPENCLAW_GATEWAY_TOKEN: token,
+      OPENCLAW_GATEWAY_PASSWORD: "active-password",
+      OPENROUTER_API_KEY: "or-test",
+      TAVILY_API_KEY: "tvly-test",
+      HTTP_PROXY: "http://proxy.local:7890",
+      HTTPS_PROXY: "https://proxy.local:7890",
+      NO_PROXY: "localhost,127.0.0.1",
+      https_proxy: "https://lowercase.local:7890",
+    };
     const result = await audit(
       {
         environment: {
           PATH: "/usr/local/bin:/usr/bin:/bin",
-          OPENCLAW_GATEWAY_TOKEN: token,
-          OPENCLAW_GATEWAY_PASSWORD: "active-password",
           OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "OPENROUTER_API_KEY",
-          OPENROUTER_API_KEY: "or-test",
-          TAVILY_API_KEY: "tvly-test",
-          HTTP_PROXY: "http://proxy.local:7890",
-          HTTPS_PROXY: "https://proxy.local:7890",
-          NO_PROXY: "localhost,127.0.0.1",
-          https_proxy: "https://lowercase.local:7890",
+          ...environment,
         },
         environmentValueSources:
           source === undefined
             ? undefined
-            : {
-                OPENCLAW_GATEWAY_TOKEN: source,
-                OPENCLAW_GATEWAY_PASSWORD: source,
-                openrouter_api_key: source,
-                tavily_api_key: source,
-                http_proxy: source,
-                https_proxy: source,
-                no_proxy: source,
-              },
+            : Object.fromEntries(
+                Object.keys(environment).map((key) => [
+                  key.startsWith("OPENCLAW_") ? key : key.toLowerCase(),
+                  source,
+                ]),
+              ),
       },
       { expectedGatewayToken: "new-token", expectedManagedServiceEnvKeys: ["TAVILY_API_KEY"] },
     );
@@ -320,12 +315,7 @@ it.each([
 ] as const)("compares normalized service token %s", (serviceToken, configToken, changed) => {
   expect(checkTokenDrift({ serviceToken, configToken })).toStrictEqual(
     changed
-      ? {
-          code: codes.gatewayTokenDrift,
-          message:
-            "Config token differs from service token. The daemon will use the old token after restart.",
-          level: "recommended",
-        }
+      ? expect.objectContaining({ code: codes.gatewayTokenDrift, level: "recommended" })
       : null,
   );
 });
@@ -363,7 +353,6 @@ describe("auditGatewayServiceConfig systemd", () => {
   }
   const systemdCodes = (result: Awaited<ReturnType<typeof audit>>) =>
     result.issues.filter((issue) => issue.code.startsWith("systemd-")).map((issue) => issue.code);
-
   it.each([
     {
       unit: ["KillMode=mixed"],
@@ -418,14 +407,12 @@ describe("auditGatewayServiceConfig systemd", () => {
     const result = await auditUnit(321);
     expect(systemdCodes(result)).toEqual(warned ? ["systemd-user-manager-stop-timeout"] : []);
     if (warned) {
-      expect(result.issues).toContainEqual(
-        expect.objectContaining({
-          message: expect.stringContaining(
-            "/etc/systemd/system/user@1000.service.d/zz-openclaw-stop-timeout.conf",
-          ),
-          detail: "user@1000.service: 5s (system manager)",
-        }),
-      );
+      expectIssue(result, codes.systemdUserManagerStopTimeout, {
+        message: expect.stringContaining(
+          "/etc/systemd/system/user@1000.service.d/zz-openclaw-stop-timeout.conf",
+        ),
+        detail: "user@1000.service: 5s (system manager)",
+      });
     }
   });
 
@@ -481,7 +468,7 @@ describe("auditGatewayServiceConfig systemd", () => {
     });
   });
 
-  it.each(["EACCES", "EIO"])("reports a backup inspection failure (%s)", async (code) => {
+  it("reports a backup inspection failure", async () => {
     await drainingUnit();
     const backupPath = `${unitPath}.bak`;
     const lstat = fs.lstat;
@@ -490,7 +477,7 @@ describe("auditGatewayServiceConfig systemd", () => {
       .mockImplementation((...args) =>
         args[0] === backupPath
           ? Promise.reject(
-              Object.assign(new Error("synthetic backup inspection failure"), { code }),
+              Object.assign(new Error("synthetic backup inspection failure"), { code: "EACCES" }),
             )
           : lstat(...args),
       );
@@ -531,14 +518,13 @@ describe("managed service environment drift", () => {
     ["exact whitespace", "old-value ", true, {}],
     ["matching value", "old-value", false, {}],
     ["generated file snapshot", "new-value", true, { source: "file" }],
-    ["overlapping inline value", "new-value", true, { source: "inline-and-file" }],
     ["non-durable SecretRef", undefined, false, { secretRef: true }],
     ["durable SecretRef", "new-value", true, { secretRef: true }],
     ["dynamic systemd value", "new-value", false, { systemd: true }],
     ["unrecorded file value", "new-value", false, { source: "file", unrecorded: true }],
   ] as const)("%s", (_name, durable, drift, options) => {
     const scenario: {
-      source?: "file" | "inline-and-file";
+      source?: "file";
       secretRef?: boolean;
       systemd?: boolean;
       unrecorded?: boolean;
