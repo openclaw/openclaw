@@ -313,7 +313,8 @@ The built-in runtime reopens the session for finalization within the same
 replay byte bound as ordinary attempts (eight bytes per context token), with
 `toolResultOverflow: "omit"`: when large tool results such as screenshots would
 push the turn's request out of that bound, their bodies are replaced with an
-omission notice so the request stays in view. The stored transcript is
+omission notice before older messages are dropped. If the notices alone exceed
+the bound, older messages can still be dropped. The stored transcript is
 unchanged.
 
 OpenClaw invokes the callback once as a terminal sub-operation, outside the
