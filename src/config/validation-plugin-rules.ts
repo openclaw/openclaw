@@ -5,14 +5,17 @@ import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { normalizePluginId } from "../plugins/config-state.js";
+import { CORE_EMBEDDING_PROVIDERS } from "../plugins/core-embedding-providers.js";
 import {
   findUninspectedPluginDiagnostic,
   pluginDiagnosticToConfigWarning,
 } from "../plugins/discovery-availability.js";
+import { resolveConfiguredGenericEmbeddingProviderId } from "../plugins/embedding-provider-config.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { isRecord } from "../utils.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
@@ -367,6 +370,134 @@ export function validatePreparedConfigWithPlugins(
     }
   };
 
+  // Memory embedding providers are config values that resolve to registered adapters.
+  // "none" is the built-in FTS-only sentinel and "auto" defers to runtime discovery.
+  // The fallback slot has no "auto" mode: the runtime resolves the fallback as a provider id,
+  // so "auto" there fails with "Unknown memory embedding provider: auto".
+  const MEMORY_EMBEDDING_PROVIDER_SENTINEL_IDS = new Set(["none", "auto"]);
+  const MEMORY_EMBEDDING_FALLBACK_SENTINEL_IDS = new Set(["none"]);
+
+  const collectKnownMemoryEmbeddingProviderIds = (): string[] => {
+    const ids = new Set<string>();
+    const addId = (value: unknown): void => {
+      const id = normalizeLowercaseStringOrEmpty(value);
+      if (id) {
+        ids.add(id);
+      }
+    };
+    for (const entry of CORE_EMBEDDING_PROVIDERS) {
+      addId(entry.adapter.id);
+    }
+    for (const record of ensureRegistry().registry.plugins) {
+      for (const providerId of record.contracts?.embeddingProviders ?? []) {
+        addId(providerId);
+      }
+    }
+    // Runtime-registered adapters are only visible once a plugin registry is active.
+    // Read the existing state without initializing plugin runtime.
+    const activeRegistry = getPluginRegistryState()?.activeRegistry;
+    for (const entry of activeRegistry?.embeddingProviders ?? []) {
+      addId(entry.provider?.id);
+    }
+    return [...ids].toSorted((left, right) => left.localeCompare(right));
+  };
+
+  const validateMemoryEmbeddingProvider = (
+    rawProvider: unknown,
+    issuePath: string,
+    sentinelIds: ReadonlySet<string>,
+  ): void => {
+    if (typeof rawProvider !== "string") {
+      return;
+    }
+    const trimmed = rawProvider.trim();
+    const normalized = normalizeLowercaseStringOrEmpty(trimmed);
+    if (!normalized) {
+      // The schema normalizes an empty provider string to "unset"; the runtime then applies
+      // the default provider, so there is nothing to validate here.
+      return;
+    }
+    if (sentinelIds.has(normalized)) {
+      return;
+    }
+    const knownIds = collectKnownMemoryEmbeddingProviderIds();
+    if (knownIds.includes(normalized)) {
+      return;
+    }
+    // Configured generic providers may alias a registered provider id.
+    const aliasedId = resolveConfiguredGenericEmbeddingProviderId(normalized, config);
+    if (aliasedId && knownIds.includes(normalizeLowercaseStringOrEmpty(aliasedId))) {
+      return;
+    }
+    if (preserveUnavailableConfig(issuePath)) {
+      return;
+    }
+    const issue = {
+      path: issuePath,
+      message: `unknown memory embedding provider: ${trimmed}`,
+      allowedValues: [...sentinelIds, ...knownIds].toSorted((left, right) =>
+        left.localeCompare(right),
+      ),
+    };
+    if (hasStalePluginEvidence(normalized)) {
+      warnings.push({
+        ...issue,
+        message: `${issue.message} (stale memory provider plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
+      });
+      return;
+    }
+    issues.push(issue);
+  };
+
+  const validateMemorySearchModel = (
+    rawModel: unknown,
+    issuePath: string,
+    normalizedProvider: string,
+  ): void => {
+    if (typeof rawModel !== "string" || rawModel.length === 0) {
+      // An empty model is the explicit "unset" form and stays valid next to provider "none".
+      return;
+    }
+    if (!rawModel.trim()) {
+      // The runtime treats a blank model as unset and falls back to the adapter default,
+      // so this is reported without blocking the write.
+      warnings.push({
+        path: issuePath,
+        message: "memory embedding model is blank and will be treated as unset",
+      });
+      return;
+    }
+    if (normalizedProvider === "none") {
+      warnings.push({
+        path: issuePath,
+        message:
+          'memory embedding model is ignored while the memory embedding provider is "none" (FTS-only mode)',
+      });
+    }
+  };
+
+  const validateMemoryEmbeddingConfig = (
+    search: { provider?: unknown; fallback?: unknown; model?: unknown } | undefined,
+    pathPrefix: string,
+  ): void => {
+    if (!search) {
+      return;
+    }
+    const normalizedProvider =
+      typeof search.provider === "string" ? normalizeLowercaseStringOrEmpty(search.provider) : "";
+    validateMemoryEmbeddingProvider(
+      search.provider,
+      `${pathPrefix}.provider`,
+      MEMORY_EMBEDDING_PROVIDER_SENTINEL_IDS,
+    );
+    validateMemoryEmbeddingProvider(
+      search.fallback,
+      `${pathPrefix}.fallback`,
+      MEMORY_EMBEDDING_FALLBACK_SENTINEL_IDS,
+    );
+    validateMemorySearchModel(search.model, `${pathPrefix}.model`, normalizedProvider);
+  };
+
   const validateConfiguredModelRefs = (): void => {
     const configuredRefs = collectConfiguredModelRefs(config);
     if (configuredRefs.length === 0) {
@@ -578,6 +709,17 @@ export function validatePreparedConfigWithPlugins(
   }
   validateWebSearchProvider();
   validateConfiguredModelRefs();
+  // Memory embedding providers are validated on the config write path only: a rejected
+  // provider would otherwise surface later as an "Unknown memory embedding provider"
+  // runtime failure. Runtime loads stay permissive so startup behavior is unchanged.
+  if (opts.semanticValidation === "strict") {
+    validateMemoryEmbeddingConfig(config.memory?.search, "memory.search");
+    for (const { entry, source } of listAgentEntriesWithSource(config)) {
+      const pathPrefix =
+        source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`;
+      validateMemoryEmbeddingConfig(entry?.memory?.search, `${pathPrefix}.memory.search`);
+    }
+  }
 
   if (hasExplicitPluginsConfig) {
     const { registry } = ensureRegistry();

@@ -168,6 +168,45 @@ describe("createEmbeddingProvider", () => {
     expect(result.requestedProvider).toBe("openai");
   });
 
+  it("normalizes a mixed-case auto provider to the default provider", async () => {
+    registerTestMemoryAdapter({
+      id: "openai",
+      transport: "remote",
+      create: async () => ({
+        provider: {
+          id: "openai",
+          model: "text-embedding-3-small",
+          embed: async () => [1],
+          embedBatch: async (texts) => texts.map(() => [1]),
+        },
+      }),
+    });
+
+    const result = await createEmbeddingProvider(createOptions("AUTO"));
+
+    expect(result.provider?.id).toBe("openai");
+    expect(result.requestedProvider).toBe("openai");
+  });
+
+  it("treats a mixed-case none fallback as the FTS-only sentinel", async () => {
+    const create = vi.fn<MemoryEmbeddingProviderAdapter["create"]>(async () => {
+      throw new Error("synthetic primary provider unavailable");
+    });
+    registerTestMemoryAdapter({ id: "openai", create });
+
+    const error = await createEmbeddingProvider({
+      ...createOptions("openai"),
+      fallback: "None",
+    }).then(
+      () => undefined,
+      (err: unknown) => err as Error,
+    );
+
+    expect(error?.message).toContain("synthetic primary provider unavailable");
+    expect(error?.message).not.toContain("Fallback to");
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
   it("still throws missing credentials for an explicit provider request", async () => {
     registerTestMemoryAdapter(createMissingCredentialsAdapter());
 
