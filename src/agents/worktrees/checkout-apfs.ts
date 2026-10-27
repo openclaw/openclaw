@@ -157,9 +157,9 @@ export async function copyApfsCloneIndex(
   const sourcePrefix = path.join(source, ".") + path.sep;
   const destinationPrefix = path.join(destination, ".") + path.sep;
   const indexSecond = Number(stamp.mtimeNs / 1_000_000_000n);
-  for (let start = 0; start < parsed.entries.length; start += 256) {
+  for (let start = 0; start < parsed.entries.length; start += 4096) {
     const entries: IndexEntry[] = [];
-    const end = Math.min(start + 256, parsed.entries.length);
+    const end = Math.min(start + 4096, parsed.entries.length);
     for (let index = start; index < end; index++) {
       const entry = parsed.entries[index]!;
       if (
