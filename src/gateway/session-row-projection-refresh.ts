@@ -5,6 +5,7 @@ import {
   DEFAULT_WORKER_PENDING_TASKS,
 } from "../infra/worker-task-capacity.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { yieldSessionListWork } from "./session-projection-work.js";
 import { withSessionRowDatabaseFacts } from "./session-row-database-facts.js";
@@ -33,7 +34,13 @@ export function createSessionRowRefresh(
     lookup: (query: records.Lookup) => records.Row | undefined;
     prepareRegistryFacts: () => Promise<void> | undefined;
     topology: () => Promise<void>;
-    catalog: { needsInitialRead: boolean; isRefreshing: boolean; refresh: () => Promise<unknown> };
+    catalog: {
+      needsInitialRead: boolean;
+      needsCurrentRead: boolean;
+      isRefreshing: boolean;
+      refresh: () => Promise<unknown>;
+      prepareCurrent: (signal?: AbortSignal) => Promise<void>;
+    };
     placementFacts: { prepare: () => Promise<void>; needsPreparation: boolean };
     membership: { prepare: () => Promise<void>; needsPreparation: boolean };
     metadataReady: () => boolean;
@@ -237,6 +244,7 @@ export function createSessionRowRefresh(
       state.topologyDirty ||
       !state.registryPrepared ||
       (includeCatalog && owner.catalog.needsInitialRead) ||
+      (options.requireCurrentCatalog && owner.catalog.needsCurrentRead) ||
       owner.membership.needsPreparation
     ) {
       return true;
@@ -289,13 +297,23 @@ export function createSessionRowRefresh(
   ): Promise<void> | undefined {
     const metadataOnly = options.metadataOnly === true;
     const includeCatalog = !metadataOnly || options.includeCatalog === true;
+    if (options.requireCurrentCatalog && owner.catalog.needsCurrentRead) {
+      const scopeSignal = getAsyncWorkSignal();
+      const signal =
+        scopeSignal && options.catalogSignal
+          ? AbortSignal.any([scopeSignal, options.catalogSignal])
+          : (scopeSignal ?? options.catalogSignal);
+      return owner
+        .runAsOwner(() => owner.catalog.prepareCurrent(signal))
+        .then(() => prepareSelection(options, candidateIds));
+    }
     if (includeCatalog && !owner.state().disposed && !owner.catalog.needsInitialRead) {
       void owner.runAsOwner(() => owner.catalog.refresh());
     }
     if (options.yieldForCatalog && owner.catalog.isRefreshing) {
       // Adopt completed catalog publications without waiting for a pending renewal.
       return yieldSessionListWork().then(() =>
-        prepareSelection({ metadataOnly, includeCatalog }, candidateIds),
+        prepareSelection({ ...options, yieldForCatalog: false }, candidateIds),
       );
     }
     // Committed metadata can serve a picker while full-row readiness is still pending.

@@ -738,6 +738,7 @@
 }
 .chat-divider__rule {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 10px;
 }
@@ -769,6 +770,30 @@
 .chat-divider__icon svg {
   width: 100%;
   height: 100%;
+}
+
+.chat-divider__model {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.chat-divider__model .chat-divider__icon {
+  flex-shrink: 0;
+  margin-inline-end: 4px;
+}
+
+.chat-divider__model-affix {
+  flex-shrink: 0;
+  white-space: pre;
+}
+
+.chat-divider__model bdi {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-divider__separator,
@@ -812,6 +837,24 @@
   flex-wrap: wrap;
   justify-content: center;
   overflow-wrap: anywhere;
+}
+
+.chat-notice .chat-divider__title {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.chat-notice--model-change .chat-divider__label {
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.chat-notice--model-change .chat-divider__title {
+  text-wrap: balance;
+}
+
+.chat-notice--model-change .provider-brand-icon {
+  color: inherit;
 }
 
 .chat-notice .chat-text {
