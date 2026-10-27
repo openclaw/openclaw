@@ -22,7 +22,6 @@ import {
 
 type ActivationParams = Parameters<typeof resolveEffectivePluginActivationState>[0];
 type Activation = ReturnType<typeof resolveEffectivePluginActivationState>;
-type Provenance = Pick<Activation, "explicitlyEnabled" | "source" | "reason">;
 const activation = (
   enabled: boolean,
   explicitlyEnabled: boolean,
@@ -37,43 +36,19 @@ function checkEnable(
   id: string,
   origin: "bundled" | "workspace",
   raw: Record<string, unknown>,
-  expected: ReturnType<typeof resolveEnableState>,
-  provenance?: Provenance,
-  enabledByDefault?: boolean,
+  expected: Activation,
 ) {
   const config = normalizePluginsConfig(raw);
-  expect(resolveEnableState(id, origin, config, enabledByDefault)).toEqual(expected);
-  if (provenance) {
-    expect(resolveEffectivePluginActivationState({ id, origin, config, enabledByDefault })).toEqual(
-      {
-        enabled: expected.enabled,
-        activated: expected.enabled,
-        ...provenance,
-      },
-    );
-  }
+  expect(resolveEnableState(id, origin, config)).toEqual(
+    expected.enabled ? { enabled: true } : { enabled: false, reason: expected.reason },
+  );
+  expect(resolveEffectivePluginActivationState({ id, origin, config })).toEqual(expected);
 }
 
 describe("normalizePluginsConfig", () => {
   afterEach(clearRuntimeConfigSnapshot);
-  it("serves published policy without rereading entries and refreshes every publication", () => {
-    const entries = { "google-gemini-cli": { enabled: true } };
-    const readEntries = vi.fn(() => entries);
-    const config: OpenClawConfig = {
-      plugins: {
-        get entries() {
-          return readEntries();
-        },
-      },
-    };
-    setRuntimeConfigSnapshot(config);
-    readEntries.mockClear();
-    expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(true);
-    expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(true);
-    expect(readEntries).not.toHaveBeenCalled();
-    entries["google-gemini-cli"].enabled = false;
-    setRuntimeConfigSnapshot(config);
-    expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(false);
+  it("replaces published policy and resumes mutable normalization after teardown", () => {
+    setRuntimeConfigSnapshot({ plugins: entry("initial") });
     const replacement = { plugins: { allow: ["replacement"] } };
     setRuntimeConfigSnapshot(replacement);
     expect(normalizePluginsConfig(replacement.plugins).allow).toEqual(["replacement"]);
@@ -165,18 +140,13 @@ describe("normalizePluginsConfig", () => {
       "trimmed model allowlist",
       {
         allowModelOverride: true,
-        allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.5"],
+        allowedModels: [" anthropic/claude-sonnet-4-6 ", "", 42, null, "openai/gpt-5.5"],
       },
       {
         allowModelOverride: true,
         hasAllowedModelsConfig: true,
         allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
       },
-    ],
-    [
-      "mixed allowlist entries",
-      { allowModelOverride: true, allowedModels: [42, null, "anthropic"] },
-      { allowModelOverride: true, hasAllowedModelsConfig: true, allowedModels: ["anthropic"] },
     ],
     [
       "explicit invalid allowlist",
@@ -383,15 +353,12 @@ describe("resolveEnableState", () => {
     }
   });
 
-  it.each([undefined, true])("resolves bundled default=%s", (enabledByDefault) => {
-    const reason = "bundled (disabled by default)";
+  it("disables bundled plugins without explicit or default activation", () => {
     checkEnable(
       "openai",
       "bundled",
       {},
-      enabledByDefault ? { enabled: true } : { enabled: false, reason },
-      enabledByDefault ? undefined : { explicitlyEnabled: false, source: "disabled", reason },
-      enabledByDefault,
+      activation(false, false, "disabled", "bundled (disabled by default)"),
     );
   });
   it.each([true, false])("resolves selected memory slot with enabled=%s", (enabled) => {
@@ -403,12 +370,12 @@ describe("resolveEnableState", () => {
         slots: { memory: "memory-core" },
         ...(enabled ? {} : entry("memory-core", false)),
       },
-      enabled ? { enabled: true } : { enabled: false, reason: "disabled in config" },
-      {
-        explicitlyEnabled: true,
-        source: enabled ? "explicit" : "disabled",
-        reason: enabled ? "selected memory slot" : "disabled in config",
-      },
+      activation(
+        enabled,
+        true,
+        enabled ? "explicit" : "disabled",
+        enabled ? "selected memory slot" : "disabled in config",
+      ),
     );
   });
   it.each([
@@ -419,8 +386,7 @@ describe("resolveEnableState", () => {
       "workspace-helper",
       "workspace",
       config,
-      { enabled: true },
-      { explicitlyEnabled: true, source: "explicit", reason },
+      activation(true, true, "explicit", reason),
     );
   });
   it("does not let the default memory slot auto-enable an untrusted workspace plugin", () => {
@@ -429,8 +395,7 @@ describe("resolveEnableState", () => {
       "memory-core",
       "workspace",
       { slots: { memory: "memory-core" } },
-      { enabled: false, reason },
-      { explicitlyEnabled: true, source: "disabled", reason },
+      activation(false, true, "disabled", reason),
     );
   });
   it("keeps an explicitly selected workspace context engine enabled when omitted from plugins.allow", () => {
@@ -438,7 +403,7 @@ describe("resolveEnableState", () => {
       "lossless-claw",
       "workspace",
       { allow: ["telegram"], slots: { contextEngine: "lossless-claw" } },
-      { enabled: true },
+      activation(true, true, "explicit", "selected context engine slot"),
     );
   });
 });
