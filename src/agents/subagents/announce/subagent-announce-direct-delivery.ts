@@ -17,6 +17,7 @@ import {
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
 import { resolveEmbeddedRunAbandonment } from "../../embedded-agent-runner/runs.js";
+import { isReplaySafeTranscriptConflict } from "../../embedded-agent-runner/transcript-conflict.js";
 import {
   hasFailedSubagentNoOutputCompletion,
   hasVisibleCompletionResult,
@@ -536,11 +537,17 @@ async function sendSubagentAnnounceDirectlyBound(
         }
       }
       params.onDeliveryError?.(err);
+      const retryTranscriptConflict =
+        sourceToolId === "subagent_settle" && isReplaySafeTranscriptConflict(err);
       directFailure = {
         delivered: false,
         path: "direct",
+        ...(retryTranscriptConflict ? { reason: "requester_transcript_conflict" as const } : {}),
         error: summarizeDeliveryError(err),
-        disposition: isPermanentAnnounceDeliveryError(err) ? "permanent_failure" : "retryable",
+        disposition:
+          !retryTranscriptConflict && isPermanentAnnounceDeliveryError(err)
+            ? "permanent_failure"
+            : "retryable",
       };
     }
 

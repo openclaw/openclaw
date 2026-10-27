@@ -169,6 +169,17 @@ export function createSubagentRegistryCompletionRuntime(config: {
     ) {
       return;
     }
+    if (
+      latest.collect &&
+      latest.collectorCompletion &&
+      params.triggerCleanup &&
+      latest.execution.suppressSessionEffects !== true &&
+      latest.browserCleanupDispatchedAt === undefined
+    ) {
+      // Collector results have no announce tail that can retry terminal resource cleanup.
+      scheduleSubagentCompletionRetry(params, source, latest);
+      return;
+    }
     const resumeKey = getSubagentRunRuntimeKey(latest);
     const resume = await mutateSubagentRuns(
       [latest.runId],

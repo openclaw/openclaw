@@ -172,6 +172,8 @@ describe("announce loop guard (#18264)", () => {
       childSessionIdentity: { sessionId },
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "agent:main:main",
+      requesterStorePath: "/tmp/test-store",
+      controllerStorePath: "/tmp/test-store",
       task: runId,
       cleanup: "keep",
       createdAt: now - ages[0],

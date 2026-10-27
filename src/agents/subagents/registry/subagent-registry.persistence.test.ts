@@ -353,8 +353,20 @@ describe("subagent registry persistence", () => {
     } finally {
       clock.mockRestore();
     }
-    // Hydrated results carry no child authority; normal session retention owns the transcript.
-    expect(callGateway).not.toHaveBeenCalled();
+    // Retained cleanup owns only the recorded child incarnation, not execution replay.
+    expect(callGateway).toHaveBeenCalledExactlyOnceWith({
+      method: "sessions.delete",
+      params: {
+        key: run.childSessionKey,
+        agentId: "worker",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+        expectedSessionId: "session-swarm-restart",
+        expectedLifecycleRevision: "revision-swarm-restart",
+      },
+      timeoutMs: 10_000,
+      assertDispatchCurrent: expect.any(Function),
+    });
     expect(listSubagentRunsForRequester("agent:main:main")).toEqual([]);
     expect(readPersistedRun(run.runId)).toBeUndefined();
   });
