@@ -115,10 +115,11 @@ test("ordinary fact changes keep warm wire rows across three real sockets", asyn
   const completed = createDeferred();
   dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
     const { dispatcher, replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
-    const source = getRpcSource(runId);
-    assert(source, "Expected registered synthetic dispatch source");
-    const releaseSource = await claimRpcSourceForTest(source);
+    let releaseSource: (() => void) | undefined;
     try {
+      const source = getRpcSource(runId);
+      assert(source, "Expected registered synthetic dispatch source");
+      releaseSource = await claimRpcSourceForTest(source);
       await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
       await drain();
       await replyOptions?.onAgentRunStart?.(runId);
@@ -130,7 +131,7 @@ test("ordinary fact changes keep warm wire rows across three real sockets", asyn
       await lifecycle("end");
       return { queuedFinal, counts: dispatcher.getQueuedCounts() };
     } finally {
-      releaseSource();
+      releaseSource?.();
       completed.resolve();
     }
   });
