@@ -3587,9 +3587,13 @@ jobs:
       - name: Run Node 24 minimum compatibility
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          CI_COMPAT_FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
         run: |
           pnpm build
-          pnpm ui:build
+          # Frozen targets may predate the full build's UI phase.
+          if [[ "${CI_COMPAT_FROZEN_TARGET:-}" != "false" ]]; then
+            pnpm ui:build
+          fi
           node openclaw.mjs --help
           node openclaw.mjs status --json --timeout 1
           pnpm test:build:singleton

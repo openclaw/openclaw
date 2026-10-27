@@ -5,6 +5,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { runBestEffortCleanup } from "../infra/non-fatal-cleanup.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import type { WorkerRetirementReason } from "../infra/worker-cpu.js";
 import {
   WorkerTaskError,
@@ -224,6 +225,11 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
         retiringPools.add(owner);
       },
       workerOptions: {
+        // Node requires this flag to call the VM's rejecting module loader.
+        execArgv: [
+          ...resolveRuntimeWorkerThreadExecArgv(workerUrl),
+          ...(process.versions.bun ? [] : ["--experimental-vm-modules"]),
+        ],
         env: {},
         resourceLimits: {
           // V8 heap limits exclude ArrayBuffer/native allocations and are not an RSS boundary.

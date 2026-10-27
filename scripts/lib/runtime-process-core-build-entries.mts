@@ -48,6 +48,7 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
   runtimeProcessEntrypoints.sessionDiskBudget,
   runtimeProcessEntrypoints.pluginModelCatalogRead,
   runtimeProcessEntrypoints.attachmentProcessor,
+  runtimeProcessEntrypoints.codeModeNode,
   runtimeProcessEntrypoints.shellSnapshotEnvironment,
   runtimeProcessEntrypoints.nativeHookRelayClient,
   runtimeProcessEntrypoints.spawnBroker,
@@ -63,6 +64,7 @@ export function getStandaloneRuntimeProcessOutputOptions(name: string) {
       runtimeProcessEntrypoints.sessionDiskBudget,
       runtimeProcessEntrypoints.pluginModelCatalogRead,
       runtimeProcessEntrypoints.attachmentProcessor,
+      runtimeProcessEntrypoints.codeModeNode,
     ].some((entry) => entry.distWorkerPath.replace(/\.js$/u, "") === name)
   ) {
     // Small workers must not evaluate shared Gateway chunks; keep optional paths lazy.

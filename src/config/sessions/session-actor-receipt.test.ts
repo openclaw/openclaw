@@ -275,7 +275,7 @@ it.each([false, true])("restores only an exact preimage (delta=%s)", (changed) =
   expect(before.entry?.updatedAt).toBe(1);
 });
 
-it.each(["append", "patch"] as const)(
+it.each(["append", "tool", "patch"] as const)(
   "bounds receipts against the exact preimage held by a %s command",
   (phase) =>
     withActor(async (f) => {
@@ -298,29 +298,54 @@ it.each(["append", "patch"] as const)(
         const selected: Mutation =
           phase === "patch"
             ? { type: "session.actor.patch", input }
-            : {
-                type: "session.actor.appendTranscriptEvent",
-                input: {
-                  ...input,
-                  sessionId: f.scope.sessionId,
-                  lifecycleRevision: null,
-                  eventJson: JSON.stringify({
-                    type: "custom",
-                    customType: "synthetic-receipt",
-                    id: `new-event-${mode}`,
-                    parentId: null,
-                    data: { content: "x".repeat(6 * 1024) },
-                  }),
-                },
-              };
+            : phase === "tool"
+              ? {
+                  type: "session.actor.appendToolResult",
+                  input: {
+                    ...input,
+                    append: {
+                      kind: "message",
+                      input: {
+                        scope: f.scope,
+                        cwd: "/synthetic",
+                        messageJson: JSON.stringify({
+                          role: "toolResult",
+                          toolCallId: `tool-${mode}`,
+                          toolName: "synthetic",
+                          content: [{ type: "text", text: "x".repeat(1024) }],
+                          isError: false,
+                          timestamp: 1,
+                        }),
+                      },
+                    },
+                  },
+                }
+              : {
+                  type: "session.actor.appendTranscriptEvent",
+                  input: {
+                    ...input,
+                    sessionId: f.scope.sessionId,
+                    lifecycleRevision: null,
+                    eventJson: JSON.stringify({
+                      type: "custom",
+                      customType: "synthetic-receipt",
+                      id: `new-event-${mode}`,
+                      parentId: null,
+                      data: { content: "x".repeat(6 * 1024) },
+                    }),
+                  },
+                };
         await f.prepare(selected);
         const outcome = f.mutate(selected);
         assert(outcome.kind === "committed");
-        if (mode === "matching" || (phase === "patch" && mode === "changed")) {
+        if (mode !== "stale") {
           expect(serialize(outcome).byteLength).toBeLessThan(16 * 1024);
           const restored = restoreSessionActorCommittedOutcome(outcome, before);
 
           expect(restored.receipt.postimage).toEqual(f.read());
+          expect(restored.receipt.postimage.entry?.skillsSnapshot).toBe(
+            before.entry?.skillsSnapshot,
+          );
         } else {
           expect(outcome.receipt.postimage).toEqual(f.read());
           outcome.receipt.postimage.entry!.skillsSnapshot!.prompt = "caller edit";

@@ -238,6 +238,8 @@ export class EvidenceInspector {
       const failure = error instanceof Error ? error : new Error(String(error));
       // Only verdicts about the bytes are reusable; I/O failures are retried.
       if (settled && DETERMINISTIC.test(failure.message)) {
+        // Lazy Error stacks retain this inspector and its request-scoped file contents.
+        failure.stack = String(failure.stack);
         this.verified.set(key, { stamp, outcome: failure });
       } else {
         this.verified.delete(key);
