@@ -114,8 +114,11 @@ const configs: Array<{ name: string; cfg: OpenClawConfig }> = [false, true].map(
 }));
 const results = [];
 for (const { name, cfg } of configs) {
-  const run = (i: number) =>
-    resolvePreparedSandboxRuntimeStatus({ cfg, ...sessions[i % sessions.length] });
+  const run = (i: number) => {
+    const session = sessions[i % sessions.length];
+    assert(session, "synthetic session fixture is missing");
+    return resolvePreparedSandboxRuntimeStatus({ cfg, ...session });
+  };
   const digest = createHash("sha256");
   for (let i = 0; i < sessions.length; i++) {
     digest.update(JSON.stringify(run(i)));
