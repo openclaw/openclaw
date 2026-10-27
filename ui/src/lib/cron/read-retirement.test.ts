@@ -30,6 +30,40 @@ function runEntry(jobId: string, ts: number) {
 }
 
 describe("cron controller", () => {
+  it("retains the accepted page until the latest queued search returns", async () => {
+    const retained = createCronJob("retained", "Retained");
+    const superseded = createDeferred<CronJobsListResult>();
+    const current = createDeferred<CronJobsListResult>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(superseded.promise)
+      .mockReturnValueOnce(current.promise);
+    const state = createStateWithRequest(request, {
+      cronJobs: [retained],
+      cronJobsSnapshotRevision: "accepted",
+      cronJobsTotal: 2,
+      cronJobsHasMore: true,
+      cronJobsNextOffset: 1,
+      cronJobsQuery: "old",
+    });
+    const pending = loadCronJobsPage(state, { tableFilters: true });
+    updateCronJobsFilter(state, { cronJobsQuery: "latest" });
+    await loadCronJobsPage(state, { tableFilters: true });
+    superseded.resolve(cronJobsListResponse([createCronJob("old", "Old result")]));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(state.cronJobs).toEqual([retained]);
+    expect(state.cronJobsSnapshotRevision).toBe("accepted");
+    expect(state.cronJobsTotal).toBe(2);
+    expect(state.cronJobsHasMore).toBe(true);
+    expect(state.cronJobsNextOffset).toBe(1);
+    expect(state.cronLoading).toBe(true);
+    const latest = createCronJob("latest", "Latest result");
+    current.resolve(cronJobsListResponse([latest]));
+    await pending;
+    expect(state.cronJobs).toEqual([latest]);
+    expect(state.cronLoading).toBe(false);
+  });
+
   it("retires protected inventory and queued page reloads after a forbidden read", async () => {
     const pending = createDeferred<CronJobsListResult>();
     const request = vi.fn(() => pending.promise);
