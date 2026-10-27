@@ -226,6 +226,7 @@ describe("delivery queue pending terminal transition", () => {
       const prepare = vi.spyOn(db, "prepare").mockImplementation((sql) => {
         const statement = originalPrepare(sql);
         if (/^with\s/i.test(sql)) {
+          pruningQueries.set(statement, statement.expandedSQL);
           statement.run = new Proxy(statement.run.bind(statement), {
             apply(invoke, receiver: StatementSync, args) {
               const result = Reflect.apply(invoke, receiver, args);

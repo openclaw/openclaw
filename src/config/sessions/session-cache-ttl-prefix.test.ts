@@ -105,6 +105,7 @@ it.each([false, true])(
           query.includes('"transcript_event_identities"') &&
           statement.columns().some(({ name }) => name === "navigation_valid")
         ) {
+          statements.set(statement, statement.expandedSQL);
           const observe = <Method extends "all" | "get" | "iterate">(
             observed: Pick<StatementSync, Method | "expandedSQL">,
             method: Method,
