@@ -11901,7 +11901,7 @@ describe("ci workflow guards", () => {
       uses: SETUP_GO_V6,
       with: {
         cache: false,
-        "go-version": "1.27.2",
+        "go-version": "1.27.3",
       },
     });
     expect(setupGoStep.with).not.toHaveProperty("go-version-file");
@@ -11924,12 +11924,12 @@ describe("ci workflow guards", () => {
     });
     expect(verifyGoStep).toMatchObject({
       if: "matrix.requires_go == true",
-      run: 'test "$(go env GOVERSION)" = "go1.27.2"',
+      run: 'test "$(go env GOVERSION)" = "go1.27.3"',
     });
 
     const goMod = readTrackedText("scripts/docs-i18n/go.mod");
     expect(goMod).toMatch(/^go 1\.26\.0$/mu);
-    expect(goMod).toMatch(/^toolchain go1\.27\.2$/mu);
+    expect(goMod).toMatch(/^toolchain go1\.27\.3$/mu);
 
     const tooling = {
       configs: ["test/vitest/vitest.tooling.config.ts"],

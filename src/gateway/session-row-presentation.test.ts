@@ -548,6 +548,76 @@ it("keeps a live controller's child list consistent with the child's session ide
   });
 });
 
+it("selects collector children only when the recipient has a sharing filter", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const owner = ensureProfileForEmail("collector-owner@presentation.test");
+    const viewer = ensureProfileForEmail("collector-viewer@presentation.test");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    const parent = "agent:main:dashboard:collector-visibility";
+    const visible = "agent:main:subagent:collector-visible";
+    const hidden = "agent:main:subagent:collector-hidden";
+    const createdActor = { type: "human" as const, source: "profile" as const, id: owner.id };
+    seedRow(parent, { sessionId: parent, updatedAt: 1, createdActor, visibility: "shared" });
+    const runs = [visible, hidden].map((key, index) => {
+      seedRow(key, {
+        sessionId: key,
+        updatedAt: 1,
+        createdActor,
+        visibility: key === hidden ? "draft" : "shared",
+        parentSessionKey: parent,
+      });
+      const run = createSubagentRunRecord({
+        runId: `collector-visibility-${index}`,
+        childSessionKey: key,
+        childSessionIdentity: { sessionId: key },
+        requesterAgentId: "main",
+        requesterSessionKey: parent,
+        swarmRequesterSessionKey: parent,
+        collect: true,
+        groupId: "collector-visibility",
+        createdAt: index + 1,
+        endedAt: 3,
+        collectorCompletion: { status: "done" },
+        expectsCompletionMessage: false,
+      });
+      subagentRuns.set(run.runId, run);
+      return run;
+    });
+    try {
+      using projection = await createTestProjection({ cfg: rolePolicyConfig(), modelCatalog: [] });
+      await projection.ensureMaterialized();
+      const query = { agentId: "main", key: parent };
+      const selected = vi.spyOn(projection, "selectEntries");
+      const admin = prepareProjectedSessionPresentation(
+        projection,
+        sharingPolicyClient({ scopes: ["operator.admin"] }),
+      );
+      expect(
+        admin.snapshot(query).row?.swarm?.groups[0]?.children?.map((child) => child.sessionKey),
+      ).toEqual([visible, hidden]);
+      expect(
+        admin
+          .snapshot(query, { excludedChildKeys: new Set([hidden]) })
+          .row?.swarm?.groups[0]?.children?.map((child) => child.sessionKey),
+      ).toEqual([visible]);
+      expect(selected).not.toHaveBeenCalled();
+      const client = sharingPolicyClient({ user: viewer.id });
+      prepareGatewayRecipientProfile(client);
+      const restricted = prepareProjectedSessionPresentation(projection, client);
+      expect(
+        restricted
+          .snapshot(query)
+          .row?.swarm?.groups[0]?.children?.map((child) => child.sessionKey),
+      ).toEqual([visible]);
+      expect(selected).toHaveBeenCalledTimes(1);
+    } finally {
+      for (const run of runs) {
+        subagentRuns.delete(run.runId);
+      }
+    }
+  });
+});
+
 it("presents current recipient roles without SQLite while rejecting source overrides and excluded children", async () => {
   using clock = vi.spyOn(Date, "now");
   clock.mockReturnValue(1_800_000_000_000);

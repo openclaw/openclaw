@@ -15,6 +15,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
@@ -609,6 +610,18 @@ suite.define(() => {
           ),
         );
         const warmHistory = selectStartupHistory(rpc.slice(warmStart), selectedKey);
+        recordControlUiE2eFailureFacts(page, {
+          warmCache: cacheBeforeReload,
+          warmMessages: warmMessageNumbers.length,
+          warmHistoryRequests: warmHistory.length,
+          warmHistory: warmHistory.slice(0, 3).map((metric) => ({
+            cursorPresent: metric.cursorPresent ?? false,
+            kind: metric.historyKind ?? "missing",
+            messages: metric.messages ?? null,
+            sentMs: metric.sentMs,
+            receivedMs: metric.receivedMs ?? null,
+          })),
+        });
         await writeFile(
           path.join(suite.artifactDir, "warm-history-payload.json"),
           JSON.stringify(

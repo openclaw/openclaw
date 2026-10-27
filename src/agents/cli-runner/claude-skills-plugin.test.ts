@@ -68,4 +68,21 @@ describe("prepareClaudeCliSkillsPlugin", () => {
     ).rejects.toBe(error);
     await expect(fs.readdir(pluginTempRoot)).resolves.toEqual([]);
   });
+
+  it("delivers and cleans up copied skills when symlinks are unavailable", async () => {
+    vi.spyOn(fs, "symlink").mockRejectedValueOnce(new Error("unavailable"));
+    const prepared = await prepareClaudeCliSkillsPlugin({
+      backendId: "claude-cli",
+      skillsSnapshot,
+    });
+    try {
+      expect(prepared.pluginDir).toBeDefined();
+      const copied = path.join(prepared.pluginDir!, "skills", "demo");
+      expect((await fs.lstat(copied)).isDirectory()).toBe(true);
+      expect(await fs.readFile(path.join(copied, "SKILL.md"), "utf8")).toBe("# Demo\n");
+    } finally {
+      await prepared.cleanup();
+    }
+    await expect(fs.readdir(pluginTempRoot)).resolves.toEqual([]);
+  });
 });

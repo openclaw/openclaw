@@ -1150,6 +1150,16 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   color: var(--text);
 }
 
+/* Personal groups has a static heading, not a draggable session row. */
+.personal-session-groups__heading:hover,
+.personal-session-groups__heading .sidebar-session-toolbar__button:is(:hover, :focus-visible) {
+  background: transparent;
+}
+
+.personal-session-groups__heading .sidebar-session-toolbar__button {
+  margin-inline-start: auto;
+}
+
 .sidebar-recent-sessions__head--draggable {
   cursor: grab;
 }

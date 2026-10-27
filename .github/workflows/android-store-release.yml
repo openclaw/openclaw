@@ -123,7 +123,7 @@ jobs:
           install-screenshot-emulators: ${{ ((github.event_name == 'schedule' && github.event.schedule == '0 11 * * 1') || (github.event_name == 'workflow_dispatch' && inputs.operation == 'release')) && 'true' || 'false' }}
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
+        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: "4.0.7"
           bundler: "4.0.23"
