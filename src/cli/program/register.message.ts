@@ -6,7 +6,10 @@ import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import { CHANNEL_MESSAGE_ACTION_NAMES } from "../../channels/plugins/types.public.js";
+import {
+  CHANNEL_MESSAGE_ACTION_NAMES,
+  type ChannelMessageActionName,
+} from "../../channels/plugins/types.public.js";
 import { parseAccountSelector } from "../../commands/channels/account-selector.js";
 import { parseChannelSelector } from "../../commands/channels/channel-selector.js";
 import type { messageCommand } from "../../commands/message.js";
@@ -90,16 +93,46 @@ async function runPluginStopHooks(registry: PluginRegistry): Promise<void> {
   }
 }
 
-function isGatewayOwnedMessageAction(action: string, scopedChannel: string | undefined): boolean {
+/** Gateway-owned via the cheap plugin, or deferred to manifest metadata when none is local. */
+function resolveMessageActionOwnership(
+  action: string,
+  scopedChannel: string | undefined,
+): "gateway" | "local" | { channel: string; action: ChannelMessageActionName } {
   const messageAction = CHANNEL_MESSAGE_ACTION_NAMES.find((name) => name === action);
   if (!messageAction || !scopedChannel) {
-    return false;
+    return "local";
   }
   const plugin = getChannelPlugin(scopedChannel);
-  const executionMode = plugin?.actions?.resolveExecutionMode?.({
-    action: messageAction,
+  if (!plugin) {
+    return { channel: scopedChannel, action: messageAction };
+  }
+  return plugin.actions?.resolveExecutionMode?.({ action: messageAction }) === "gateway"
+    ? "gateway"
+    : "local";
+}
+
+// External channel plugins are neither bundled nor loaded here. Their manifest can name the
+// actions the plugin sends to the Gateway, so the route runs against a runtime-free adapter.
+async function resolveGatewayDelegatedRegistry(params: {
+  channel: string;
+  action: ChannelMessageActionName;
+}): Promise<PluginRegistry | undefined> {
+  const config = await captureRuntimeConfigAsyncReader()();
+  const { resolveGatewayDelegatedChannelPlugin } =
+    await import("../../channels/plugins/read-only.js");
+  const plugin = resolveGatewayDelegatedChannelPlugin({
+    channelId: params.channel,
+    action: params.action,
+    config,
+    env: process.env,
   });
-  return executionMode === "gateway";
+  if (!plugin) {
+    return undefined;
+  }
+  const { createEmptyPluginRegistry } = await import("../../plugins/registry-empty.js");
+  const registry = createEmptyPluginRegistry();
+  registry.channels.push({ pluginId: plugin.id, source: "manifest", plugin });
+  return registry;
 }
 
 function resolveThreadCreateRequest(opts: Record<string, unknown>) {
@@ -183,20 +216,32 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
               targets: opts.targets,
             });
             // Gateway-owned actions need no local plugin runtime; previews and broadcasts do.
-            const preloadPlugins =
-              opts.dryRun === true ||
-              action === "broadcast" ||
-              !isGatewayOwnedMessageAction(action, scopedChannel);
-            await measureCliCommandStartup("config-ready", async () => {
-              const { ensureConfigReady } = await import("./config-guard.js");
-              await ensureConfigReady({
-                runtime: defaultRuntime,
-                commandPath: ["message", action],
-                suppressDoctorStdout: opts.json === true,
-                validateConfigOnly: !preloadPlugins,
-                measure: (stage, run) => measureCliCommandStartup(stage, run),
+            const ownership =
+              opts.dryRun === true || action === "broadcast"
+                ? "local"
+                : resolveMessageActionOwnership(action, scopedChannel);
+            const ensureConfigReadyFor = (validateConfigOnly: boolean) =>
+              measureCliCommandStartup("config-ready", async () => {
+                const { ensureConfigReady } = await import("./config-guard.js");
+                await ensureConfigReady({
+                  runtime: defaultRuntime,
+                  commandPath: ["message", action],
+                  suppressDoctorStdout: opts.json === true,
+                  validateConfigOnly,
+                  measure: (stage, run) => measureCliCommandStartup(stage, run),
+                });
               });
-            });
+            await ensureConfigReadyFor(ownership !== "local");
+            let preloadPlugins = ownership === "local";
+            let delegatedRegistry: PluginRegistry | undefined;
+            if (typeof ownership === "object") {
+              delegatedRegistry = await resolveGatewayDelegatedRegistry(ownership);
+              if (!delegatedRegistry) {
+                // Undeclared actions keep local preparation, including state migrations.
+                preloadPlugins = true;
+                await ensureConfigReadyFor(false);
+              }
+            }
             if (preloadPlugins) {
               const config = await captureRuntimeConfigAsyncReader()();
               const pluginIds = scopedChannel
@@ -226,7 +271,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
             ]);
             const deps = createDefaultDeps();
             const { account, ...rest } = opts;
-            result = await withPluginRuntimeRegistryScope(pluginRegistry, () =>
+            result = await withPluginRuntimeRegistryScope(pluginRegistry ?? delegatedRegistry, () =>
               messageCommand(
                 {
                   ...rest,

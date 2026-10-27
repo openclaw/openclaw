@@ -13,7 +13,9 @@ import {
   resolvePluginMetadataSnapshot,
   restorePluginMetadataSnapshot,
 } from "../../plugins/plugin-metadata-snapshot.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -23,6 +25,7 @@ import { buildChannelUiCatalog } from "./catalog.js";
 import {
   listReadOnlyChannelPluginsForConfig,
   listReadOnlyChannelPluginsForConfigAsync,
+  resolveGatewayDelegatedChannelPlugin,
   resolveReadOnlyChannelPluginsForConfig,
 } from "./read-only.js";
 import {
@@ -717,5 +720,81 @@ Object.assign(module.exports.plugin.config, {
       }),
     ]);
     expectMarkers(setupMarker, fullMarker);
+  });
+});
+
+describe("resolveGatewayDelegatedChannelPlugin", () => {
+  it("does not delegate undeclared actions", () => {
+    const { cfg } = setupFixture({
+      setupEntry: false,
+      manifestChannelConfig: true,
+      manifestGatewayMessageActions: ["read"],
+    });
+    const plugin = resolveGatewayDelegatedChannelPlugin({
+      channelId: "external-chat",
+      action: "send",
+      config: cfg,
+      env: { ...process.env },
+    });
+
+    expect(plugin).toBeUndefined();
+  });
+
+  it("sends a delegated read to the Gateway without bootstrapping channel runtime", async () => {
+    const { cfg, fullMarker, setupMarker } = setupFixture({
+      setupEntry: false,
+      manifestChannelConfig: true,
+      manifestGatewayMessageActions: ["read"],
+    });
+    const plugin = resolveGatewayDelegatedChannelPlugin({
+      channelId: "external-chat",
+      action: "read",
+      config: cfg,
+      env: { ...process.env },
+    });
+    if (!plugin) {
+      throw new Error("expected a delegated channel plugin");
+    }
+    const registry = createEmptyPluginRegistry();
+    registry.channels.push({ pluginId: plugin.id, source: "manifest", plugin });
+    const request = vi.fn(async () => ({ ok: true, messages: [] }));
+    const { runMessageAction } = await import("../../infra/outbound/message-action-runner.js");
+
+    const result = await withPluginRuntimeRegistryScope(registry, () =>
+      runMessageAction({
+        cfg,
+        action: "read",
+        params: { channel: "external-chat", target: "channel:123", limit: 1 },
+        senderIsOwner: true,
+        conversationReadOrigin: "direct-operator",
+        gateway: { clientName: "cli", mode: "cli", request },
+      }),
+    );
+
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        method: "message.action",
+        params: expect.objectContaining({ channel: "external-chat", action: "read" }),
+      }),
+      expect.anything(),
+    );
+    expect(result).toMatchObject({ channel: "external-chat", action: "read" });
+    expectMarkers(setupMarker, fullMarker);
+  });
+
+  it("ignores disabled plugins", () => {
+    const { cfg } = setupFixture({
+      setupEntry: false,
+      manifestChannelConfig: true,
+      manifestGatewayMessageActions: ["read"],
+    });
+    expect(
+      resolveGatewayDelegatedChannelPlugin({
+        channelId: "external-chat",
+        action: "read",
+        config: { ...cfg, plugins: { ...cfg.plugins, enabled: false } },
+        env: { ...process.env },
+      }),
+    ).toBeUndefined();
   });
 });

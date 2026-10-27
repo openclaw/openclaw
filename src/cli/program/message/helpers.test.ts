@@ -19,6 +19,12 @@ const getChannelPluginMock = vi.fn();
 // mock-isolation: Action support comes from synthetic plugins, not the runtime registry.
 vi.mock("../../../channels/plugins/index.js", () => ({ getChannelPlugin: getChannelPluginMock }));
 
+const resolveGatewayDelegatedChannelPluginMock = vi.fn();
+// mock-isolation: Manifest delegation comes from synthetic adapters, not installed plugin state.
+vi.mock("../../../channels/plugins/read-only.js", () => ({
+  resolveGatewayDelegatedChannelPlugin: resolveGatewayDelegatedChannelPluginMock,
+}));
+
 // mock-isolation: Terminal styling and verbose state must not affect parser output assertions.
 vi.mock("../../../globals.js", () => ({ danger: (s: string) => s, setVerbose: vi.fn() }));
 
@@ -212,6 +218,7 @@ describe("message actions through the CLI parser", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getChannelPluginMock.mockReset();
+    resolveGatewayDelegatedChannelPluginMock.mockReset();
     mockChannelExecutionModes({ telegram: "gateway" });
     ensureConfigReadyMock.mockReset().mockResolvedValue(undefined);
     messageCommandMock.mockResolvedValue(undefined);
@@ -296,10 +303,35 @@ describe("message actions through the CLI parser", () => {
     expectMessageCommandOptions({ action: "custom-action" });
   });
 
+  it("skips local preload for reads an external channel manifest delegates to the Gateway", async () => {
+    getChannelPluginMock.mockReturnValue(undefined);
+    const delegate = { id: "discord", meta: { id: "discord" } };
+    resolveGatewayDelegatedChannelPluginMock.mockReturnValue(delegate);
+    const { getPluginRuntimeGatewayRequestScope } =
+      await import("../../../plugins/runtime/gateway-request-scope.js");
+    let scopedChannels: unknown;
+    messageCommandMock.mockImplementationOnce(async () => {
+      scopedChannels = getPluginRuntimeGatewayRequestScope()?.pluginRegistry?.channels;
+      return undefined;
+    });
+    await runAction("read", { channel: "discord", target: "channel:12345" });
+    expectConfigReady("read", true);
+    expect(resolveGatewayDelegatedChannelPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channelId: "discord", action: "read" }),
+    );
+    expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
+    expectMessageCommandOptions({ action: "read", channel: "discord", target: "channel:12345" });
+    expect(scopedChannels).toEqual([expect.objectContaining({ plugin: delegate })]);
+    expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
   it("preloads when the scoped channel plugin is not cheaply available", async () => {
     getChannelPluginMock.mockReturnValue(undefined);
     await runSendAction({ target: "channel:12345" });
     expectRegistryLoad(["discord"]);
+    expect(ensureConfigReadyMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ validateConfigOnly: false }),
+    );
   });
 
   it.each([

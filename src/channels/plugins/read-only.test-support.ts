@@ -17,6 +17,7 @@ export function writeExternalSetupChannelPlugin(
     manifestChannelConfig?: boolean;
     manifestChannelDescription?: string;
     manifestChannelLabel?: string;
+    manifestGatewayMessageActions?: string[];
     packagePresentation?: Pick<
       PluginPackageChannel,
       "label" | "blurb" | "selectionLabel" | "detailLabel" | "systemImage"
@@ -103,6 +104,9 @@ export function writeExternalSetupChannelPlugin(
                 label: options.manifestChannelLabel ?? "External Chat Manifest",
                 description: options.manifestChannelDescription ?? "manifest config",
                 preferOver: ["legacy-external-chat"],
+                ...(options.manifestGatewayMessageActions
+                  ? { gatewayMessageActions: options.manifestGatewayMessageActions }
+                  : {}),
               },
             ]),
           ),

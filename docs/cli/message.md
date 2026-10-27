@@ -27,7 +27,10 @@ openclaw message <subcommand> [flags]
 
 With an explicit channel, Gateway-owned actions such as `read --channel discord`
 validate config without running local state migrations. They require a reachable
-Gateway. Local actions, broadcasts, dry-runs, and commands that need local channel
+Gateway. External channel plugins that are not loaded locally qualify when their
+manifest lists the action in
+[`channelConfigs.<id>.gatewayMessageActions`](/plugins/manifest/surfaces#channelconfigs-reference).
+Local actions, broadcasts, dry-runs, and commands that need local channel
 discovery retain local config and plugin preparation.
 
 ## Agent ownership
