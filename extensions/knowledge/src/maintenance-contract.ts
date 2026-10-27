@@ -22,26 +22,6 @@ export const MaintenanceVault = Type.Object(
 );
 export type MaintenanceVault = Static<typeof MaintenanceVault>;
 
-/** The operator's review automation, handed the claims relink could not link. */
-export const MaintenanceReview = Type.Object(
-  {
-    jobId: Type.String({ maxLength: 100 }),
-    /** Private remembered claims still unlinked after this pass. */
-    pending: count,
-    outcome: Type.Union([
-      Type.Literal("enqueued"),
-      Type.Literal("not_needed"),
-      Type.Literal("skipped"),
-      Type.Literal("unavailable"),
-      Type.Literal("failed"),
-    ]),
-    runId: Type.Optional(Type.String({ maxLength: 200 })),
-    message: Type.Optional(message),
-  },
-  { additionalProperties: false },
-);
-export type MaintenanceReview = Static<typeof MaintenanceReview>;
-
 export const MaintenanceRun = Type.Object(
   {
     trigger: Type.Union([Type.Literal("scheduled"), Type.Literal("catch-up")]),
@@ -51,7 +31,6 @@ export const MaintenanceRun = Type.Object(
     finishedAt: timestamp,
     linked: count,
     vaults: Type.Array(MaintenanceVault, { maxItems: 500 }),
-    review: Type.Optional(MaintenanceReview),
   },
   { additionalProperties: false },
 );
@@ -70,7 +49,6 @@ export const MaintenanceStatus = Type.Object(
     nextRunAt: Type.Union([timestamp, Type.Null()]),
     lastRun: Type.Union([MaintenanceRun, Type.Null()]),
     jobs: Type.Array(Type.String({ maxLength: 40 }), { maxItems: 10 }),
-    reviewJobId: Type.Union([Type.String({ maxLength: 100 }), Type.Null()]),
   },
   { additionalProperties: false },
 );

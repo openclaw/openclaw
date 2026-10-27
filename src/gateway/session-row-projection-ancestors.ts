@@ -106,7 +106,14 @@ export function createSessionRowRelationReads(owner: {
           value = owner.acquireEntry(value, owner.readEntry(value));
         }
         return value?.entry && [...value.parents].some((ref) => owner.referenced(ref) === row)
-          ? [{ key: value.key, entry: value.entry }]
+          ? [
+              {
+                key: value.key,
+                entry: value.entry,
+                agentId: value.agentId,
+                storePath: value.storeTarget.storePath,
+              },
+            ]
           : [];
       });
       // Keyed child refreshes reorder the parent index; presentation must stay stable.

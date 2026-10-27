@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -245,7 +246,10 @@ function agentFixture(state: OpenClawTestState, agentId = "doomed") {
     paths,
     read: () => readJournalStatus(agentId, options),
     blocked(expected: boolean) {
+      using exits = vi.spyOn(AsyncLocalStorage.prototype, "exit");
       expect(isAgentDeletionBlocked(agentId, options)).toBe(expected);
+      // Published authority must not switch discovery contexts on each effect guard.
+      expect(exits).not.toHaveBeenCalled();
     },
     async deleting(run: () => Promise<void>) {
       await withAgentDeletion(

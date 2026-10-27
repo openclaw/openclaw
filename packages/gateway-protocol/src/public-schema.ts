@@ -524,6 +524,7 @@ export {
   SkillWorkshopChangeSchema,
   SkillWorkshopSkillSummarySchema,
   SkillWorkshopArchivedSkillSchema,
+  SkillWorkshopDraftSchema,
   SkillsWorkshopListParamsSchema,
   SkillsWorkshopListResultSchema,
   SkillsWorkshopChangesParamsSchema,

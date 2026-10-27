@@ -68,6 +68,26 @@ async function writeConfig(setup: Setup, value: Setup["config"] | string) {
 afterEach(resetSetupInferenceState);
 
 describe("setup activation credentials and configuration", () => {
+  it("restores a first config write when its activation is not applied", async () => {
+    // The write pipeline stamps metadata the in-memory candidate lacks.
+    const setup = await fixture({ authMethod: "api_key" });
+    delete setup.config.meta;
+    await writeConfig(setup, setup.config);
+    let complete: (() => Promise<boolean>) | undefined;
+    const result = await setup.activate("api-key", true, {
+      apiKey: "synthetic-recovery-key",
+      onActivationCompletion: (completion) => {
+        complete = completion;
+      },
+    });
+    expect(result).toMatchObject({ ok: true });
+    assert(complete);
+    // No reloader runs here, so the restore is written but never applied.
+    await expect(complete()).rejects.toThrow("The previous connection was restored on disk");
+    const { meta: _meta, ...restored } = JSON.parse(await fs.readFile(setup.configPath, "utf8"));
+    expect(restored).toEqual(setup.config);
+  });
+
   it.each([
     { target: "utility" as const, requested: undefined },
     { target: undefined, requested: "utility" as const },
@@ -656,7 +676,30 @@ describe("setup activation credentials and configuration", () => {
     vi.mocked(setup.prompter.confirm).mockImplementation(
       async ({ initialValue }) => initialValue ?? false,
     );
-    const accepted = await setup.activate(retryKind);
+    // Revocation after the config is saved must not undo the saved sign-in's promotion.
+    let revoked = false;
+    const commit = activationTransition.commitSetupInferenceActivation;
+    vi.spyOn(activationTransition, "commitSetupInferenceActivation").mockImplementation(
+      (activation) =>
+        commit({
+          ...activation,
+          configTarget: {
+            ...activation.configTarget,
+            write: async (...args) => {
+              const written = await activation.configTarget.write(...args);
+              revoked = true;
+              return written;
+            },
+          },
+        }),
+    );
+    const accepted = await setup.activate(retryKind, undefined, {
+      assertCurrent: () => {
+        if (revoked) {
+          throw new Error("Starting operator was revoked after the config was saved");
+        }
+      },
+    });
     expect(accepted).toMatchObject({ ok: true });
     expect(setup.readProfile()).toEqual([savedId, credential]);
     expectCalls(setup, 1, 3);

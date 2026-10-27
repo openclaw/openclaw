@@ -152,6 +152,10 @@ it("ignores errored turns and sessions while Workshop is off", () => {
   countedTurn(8, 0);
 });
 
+it("still queues reviews while Workshop proposes drafts", () => {
+  countedTurn(10, 1, { config: { skills: { workshop: { autonomous: { mode: "propose" } } } } });
+});
+
 it("never reviews ACP child sessions", () => {
   countedTurn(20, 0, { sessionKey: "agent:main:acp:child-1" });
 });

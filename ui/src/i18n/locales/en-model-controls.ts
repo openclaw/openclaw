@@ -93,6 +93,7 @@ const enModelControls = {
         "This model can chat, but it cannot use tools. Choose another model for files, commands, web, or media tasks.",
       loadingModels: "Loading models…",
       refreshingModels: "Refreshing models…",
+      refreshingSettings: "Refreshing session settings…",
       refreshingProviderModels: "Refreshing models for {providers}…",
       modelPending: "Model pending",
       modelsUnavailable: "Models unavailable",

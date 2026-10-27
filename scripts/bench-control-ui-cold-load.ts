@@ -8,6 +8,8 @@
 // --viewport desktop|mobile: 1719×1179 (default) or 390×844 browser viewport.
 // --allocations --untraced --live-events: collected-object renderer bytes per event.
 // --streaming-allocations: sampled allocation bytes including collected objects during deltas.
+// --streaming-content tool-code grows an expanded tool card and code fence together.
+// --streaming-panes 2 streams independent sessions in the native split layout.
 // Sampling inflates timings: never compare profiled runs with unprofiled runs.
 // --session-event-duration-ms 135000 --session-event-ancestor-refs extends the native churn.
 // Pair built bundles with --fixture-now-ms and --live-start-at-ms (one run per process).
@@ -70,6 +72,7 @@ import {
 } from "./lib/control-ui-bench-warm-state.ts";
 import {
   compareCpuTables,
+  controlUiScriptAssetUrl,
   formatCpuTables,
   medianCpuTables,
   readCpuProfileReport,
@@ -256,6 +259,11 @@ function summarizeSidebarWindows(
 
 const { values } = parseArgs({
   options: {
+    "new-session-first-token": { type: "boolean", default: false },
+    "new-session-token-ms": { type: "string", default: "1500" },
+    "new-session-worker": { type: "boolean", default: false },
+    "new-session-filmstrip": { type: "boolean", default: false },
+    "new-session-list-mode": { type: "string", default: "normal" },
     "cpu-profile": { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
     "cpu-profile-compare": { type: "string" },
@@ -265,6 +273,7 @@ const { values } = parseArgs({
     "warm-reload": { type: "boolean", default: false },
     "row-facts": { type: "boolean", default: false },
     "pane-chrome-probe": { type: "boolean", default: false },
+    "archived-session": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
@@ -288,6 +297,8 @@ const { values } = parseArgs({
     "streaming-allocations": { type: "boolean", default: false },
     "streaming-burst-size": { type: "string", default: "1" },
     "streaming-rate": { type: "string", default: "30" },
+    "streaming-content": { type: "string", default: "markdown" },
+    "streaming-panes": { type: "string", default: "1" },
     "session-switch": { type: "boolean", default: false },
     "critical-path": { type: "boolean", default: false },
     "critical-path-route": { type: "string", multiple: true, default: [] },
@@ -587,6 +598,17 @@ const transcriptMessages =
   values["transcript-messages"] === undefined ? undefined : Number(values["transcript-messages"]);
 const streamingBurstSize = Number(values["streaming-burst-size"]);
 const streamingRate = Number(values["streaming-rate"]);
+const streamingContent = values["streaming-content"];
+const streamingPanes = Number(values["streaming-panes"]);
+if (streamingContent !== "markdown" && streamingContent !== "tool-code") {
+  throw new Error("streaming-content must be markdown or tool-code");
+}
+if (streamingPanes !== 1 && streamingPanes !== 2) {
+  throw new Error("streaming-panes must be 1 or 2");
+}
+if ((streamingContent !== "markdown" || streamingPanes !== 1) && !values["streaming-reply"]) {
+  throw new Error("streaming-content and streaming-panes require streaming-reply");
+}
 if (!Number.isFinite(streamingRate) || streamingRate <= 0) {
   throw new Error("streaming-rate must be a positive number of deltas per second");
 }
@@ -777,6 +799,7 @@ const fixture = createControlUiTeamScaleFixture({
   largeSnapshot: values["large-snapshot"],
   rowFacts: values["row-facts"],
   offRosterSession: values["off-roster-route"],
+  archivedSession: values["archived-session"],
   transcriptMessages,
   dashboardWidgetFontUrl: dashboardFont
     ? `http://127.0.0.1:${address.port}${dashboardFontPath}`
@@ -784,8 +807,38 @@ const fixture = createControlUiTeamScaleFixture({
   dashboardPaintMarker: values["dashboard-paint-marker"],
 });
 const streamingReply = values["streaming-reply"]
-  ? createControlUiStreamingReply(streamingRate)
+  ? createControlUiStreamingReply(streamingRate, streamingContent)
   : undefined;
+const streamingSessions = streamingReply
+  ? Array.from({ length: streamingPanes }, (_, index) => ({
+      sessionKey: index === 0 ? fixture.selectedSessionKey : fixture.pinnedKeys[1]!,
+      runId: `${fixture.scenario.inFlightRun!.runId}${index === 0 ? "" : "-pane-2"}`,
+    }))
+  : [];
+const streamingSplitLayout =
+  streamingPanes === 2
+    ? {
+        activePaneId: "streaming-pane-1",
+        columnWeights: [0.5, 0.5],
+        columns: streamingSessions.map((session, index) => ({
+          id: `streaming-column-${index + 1}`,
+          paneWeights: [1],
+          panes: [{ id: `streaming-pane-${index + 1}`, sessionKey: session.sessionKey }],
+        })),
+      }
+    : undefined;
+if (streamingSplitLayout) {
+  for (const session of streamingSessions) {
+    Object.assign(
+      fixture.scenario.sessions!.find((row) => row.key === session.sessionKey)!,
+      {
+        hasActiveRun: true,
+        status: "running",
+        activeRunIds: [session.runId],
+      },
+    );
+  }
+}
 const extraInitScripts = await Promise.all(
   values["init-script"].map((file) => readFile(file, "utf8")),
 );
@@ -815,17 +868,35 @@ try {
   const settingsCoreSchema = values["settings-core-schema"]
     ? (await import("../src/config/schema.ts")).buildConfigSchemaCore()
     : undefined;
+  const agentsResponse = fixture.scenario.methodResponses?.["agents.list"];
+  const workerAgents =
+    values["new-session-worker"] && agentsResponse && typeof agentsResponse === "object"
+      ? {
+          ...agentsResponse,
+          sessionPlacement: { requiredProfile: { id: "l247-worker", providerId: "crabbox" } },
+        }
+      : undefined;
   const prepared = await prepareControlUiMockGatewayScenario({
     ...fixture.scenario,
-    subscriptionInitialHistory: true,
-    ...(settingsCoreSchema
+    ...(streamingSplitLayout
       ? {
-          methodResponses: {
-            ...fixture.scenario.methodResponses,
-            "config.schema": settingsCoreSchema,
-          },
+          sessionTranscripts: Object.fromEntries(
+            streamingSessions.map((session) => [
+              session.sessionKey,
+              {
+                messages: fixture.scenario.historyMessages!,
+                inFlightRun: { ...fixture.scenario.inFlightRun!, runId: session.runId },
+              },
+            ]),
+          ),
         }
       : {}),
+    subscriptionInitialHistory: true,
+    methodResponses: {
+      ...fixture.scenario.methodResponses,
+      ...(workerAgents ? { "agents.list": workerAgents } : {}),
+      ...(settingsCoreSchema ? { "config.schema": settingsCoreSchema } : {}),
+    },
     terminalEnabled,
     serverBuildId: buildId,
     serverVersion: JSON.parse(await readFile("package.json", "utf8")).version,
@@ -1209,7 +1280,7 @@ try {
     }
   }
   await page.addInitScript(
-    ({ key, pins, mode, bootstrap, bootstrapAttribute, fixtureUrl }) => {
+    ({ key, pins, mode, bootstrap, bootstrapAttribute, fixtureUrl, splitLayout }) => {
       if (window !== window.top || location.protocol === "about:") {
         return;
       }
@@ -1234,13 +1305,15 @@ try {
           observer.observe(document, { childList: true });
         }
       }
-      if (!localStorage.getItem(key)) {
+      if (!localStorage.getItem(key) || splitLayout) {
         localStorage.setItem(
           key,
           JSON.stringify({
+            ...(splitLayout ? JSON.parse(localStorage.getItem(key) ?? "{}") : {}),
             sidebarAgentsMode: mode,
             railShortcuts: pins,
             navigationByProfile: { "team-person-001": { railShortcuts: pins } },
+            ...(splitLayout ? { chatSplitLayout: splitLayout } : {}),
           }),
         );
       }
@@ -1255,6 +1328,7 @@ try {
         : null,
       bootstrapAttribute: CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
       pins: fixture.sidebarEntries,
+      splitLayout: streamingSplitLayout,
       mode:
         !values["session-event-ancestor-refs"] &&
         (values["sidebar-list-churn"] ||
@@ -1721,7 +1795,9 @@ try {
   }
   for (let run = 0; run < runs; run++) {
     const bundleIndex = run % bundleSlots.length;
-    const layoutCell = layoutCells[Math.floor(run / bundleSlots.length) % layoutCells.length];
+    // Compare every bundle under the same route and roster conditions.
+    const bundleCycle = Math.floor(run / bundleSlots.length);
+    const layoutCell = layoutCells[bundleCycle % layoutCells.length];
     const runRoute = layoutCell?.route ?? bootRoute;
     const cold = layoutCell?.cold ?? firstLoad;
     const runUrl =
@@ -1943,7 +2019,10 @@ try {
       layoutCell ||
       firstLoad ||
       values["critical-path"] ||
+      values["new-session-first-token"] ||
       bootRoute !== "chat" ||
+      // Typing in the second pane changes the URL; restore the fixture's primary route.
+      streamingPanes > 1 ||
       comparisonBundleDirs.length
     ) {
       await page.goto(runUrl, { waitUntil: "domcontentloaded" });
@@ -1953,7 +2032,7 @@ try {
     await settle(runRoute);
     const coverage = values.coverage
       ? (await page.coverage.stopJSCoverage())
-          .filter((entry) => URL.parse(entry.url)?.pathname.startsWith("/assets/"))
+          .filter((entry) => controlUiScriptAssetUrl(entry.url, new URL("assets/", baseUrl)))
           .map((entry) =>
             Object.assign(
               { url: entry.url, functions: entry.functions },
@@ -2375,12 +2454,54 @@ try {
     }
     let streaming;
     if (streamingReply) {
-      const composer = page.locator(".agent-chat__composer-combobox textarea").last();
-      const initialDraft = await composer.inputValue();
-      await composer.focus();
-      await composer.evaluate((input: HTMLTextAreaElement) =>
-        input.setSelectionRange(input.value.length, input.value.length),
+      await page.waitForFunction(
+        (sessions) =>
+          sessions.every(({ sessionKey }) =>
+            Array.from(document.querySelectorAll("openclaw-chat-pane")).some(
+              (pane) =>
+                Reflect.get(pane, "sessionKey") === sessionKey &&
+                pane.getClientRects().length &&
+                pane.querySelector(".chat-bubble.streaming") &&
+                pane.querySelector(".agent-chat__composer-combobox textarea"),
+            ),
+          ),
+        streamingSessions,
       );
+      const panes = page.locator(
+        streamingSplitLayout
+          ? "openclaw-chat-pane.chat-split-view__pane"
+          : "openclaw-chat-pane.chat-pane-cache__pane--active",
+      );
+      const composers = panes.locator(".agent-chat__composer-combobox textarea");
+      const initialDrafts = await composers.evaluateAll((inputs) =>
+        inputs.map((input) => (input instanceof HTMLTextAreaElement ? input.value : "")),
+      );
+      if (initialDrafts.length !== streamingPanes) {
+        throw new Error(
+          `Expected ${streamingPanes} streaming composers, found ${initialDrafts.length}`,
+        );
+      }
+      if (streamingReply.growingTool) {
+        await page.evaluate((input) => Reflect.get(window, "__streamingReply").prepare(input), {
+          streams: streamingSessions,
+          growingTool: true,
+        });
+        for (let index = 0; index < streamingPanes; index++) {
+          const tool = panes
+            .nth(index)
+            .locator(".chat-tool-msg-collapse")
+            .filter({ hasText: "verify-streaming" })
+            .last();
+          await tool.locator("button.chat-tool-row[aria-expanded='false']").click();
+          await tool.locator(".chat-tool-term__out").waitFor({ state: "visible" });
+        }
+      }
+      await composers.first().focus();
+      await composers
+        .first()
+        .evaluate((input: HTMLTextAreaElement) =>
+          input.setSelectionRange(input.value.length, input.value.length),
+        );
       await cdp.send("Performance.enable", { timeDomain: performanceTimeDomain });
       let previousCpu = (await cdp.send("Performance.getMetrics")).metrics;
       let previousDelivered = 0;
@@ -2413,15 +2534,23 @@ try {
         ...streamingReply,
         burstSize: streamingBurstSize,
         observeTextVisibility: captureTrace,
-        sessionKey: fixture.selectedSessionKey,
-        runId: fixture.scenario.inFlightRun!.runId,
+        streams: streamingSessions,
       });
       const streamingInput = new AbortController();
-      let typedCharacters = 0;
+      const typedCharacters = initialDrafts.map(() => 0);
       const nativeInput = (async () => {
+        let inputIndex = 0;
         while (!streamingInput.signal.aborted) {
+          const index = inputIndex++ % streamingPanes;
+          if (streamingPanes > 1) {
+            const composer = composers.nth(index);
+            await composer.focus();
+            await composer.evaluate((input: HTMLTextAreaElement) =>
+              input.setSelectionRange(input.value.length, input.value.length),
+            );
+          }
           await page.keyboard.press("x");
-          typedCharacters++;
+          typedCharacters[index]!++;
           await new Promise((resolve) => {
             setTimeout(resolve, 500);
           });
@@ -2431,7 +2560,7 @@ try {
         for (let quartile = 1; quartile <= 4; quartile++) {
           await page.waitForFunction(
             (count) => Reflect.get(window, "__streamingReply").read().delivered >= count,
-            Math.floor((streamingReply.deltas.length * quartile) / 4),
+            Math.floor((streamingReply.deltas.length * streamingPanes * quartile) / 4),
             { timeout: 60_000, polling: 50 },
           );
           await page.evaluate(
@@ -2519,8 +2648,14 @@ try {
         ...(await page.evaluate(() => Reflect.get(window, "__streamingReply").finish())),
         cpu,
         allocations: streamingAllocations,
-        typing: { characters: typedCharacters, draft: await composer.inputValue() },
+        typingByPane: await Promise.all(
+          typedCharacters.map(async (characters, index) => ({
+            characters,
+            draft: await composers.nth(index).inputValue(),
+          })),
+        ),
       };
+      streaming = { ...streaming, typing: streaming.typingByPane[0]! };
       if (allocationProfile) {
         await writeFile(
           path.join(artifactDir, `run-${run + 1}.streaming.heapprofile`),
@@ -2538,6 +2673,8 @@ try {
             chars: streamingReply.text.length,
             deltasPerSecond: streamingReply.deltasPerSecond,
             burstSize: streamingBurstSize,
+            content: streamingContent,
+            paneCount: streamingPanes,
             ...streaming,
           },
           null,
@@ -2545,21 +2682,44 @@ try {
         ),
       );
       await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.streaming.png`) });
-      if (
-        !typedCharacters ||
-        streaming.typing.draft !== initialDraft + "x".repeat(typedCharacters)
-      ) {
-        throw new Error(
-          `Streaming lost composer input: sent ${typedCharacters} characters, retained ${streaming.typing.draft.length}`,
-        );
+      for (const [index, typing] of streaming.typingByPane.entries()) {
+        if (
+          !typing.characters ||
+          typing.draft !== initialDrafts[index] + "x".repeat(typing.characters)
+        ) {
+          throw new Error(
+            `Streaming pane ${index + 1} lost composer input: ${JSON.stringify(typing)}`,
+          );
+        }
       }
-      if (
-        streaming.tailPosition.scrollHeight <= streaming.tailPosition.initialScrollHeight ||
-        Math.abs(streaming.tailPosition.distanceFromBottom) > 2
-      ) {
-        throw new Error(
-          `Streaming tail did not grow and stay followed: ${JSON.stringify(streaming.tailPosition)}`,
-        );
+      for (const pane of streaming.panes) {
+        const expected = streamingReply.growingTool
+          ? "Streaming code complete."
+          : "The result is ready for the next checkpoint.";
+        const finalBlock = streamingReply.growingTool
+          ? "export const checkpoint180 = 180;"
+          : "Checkpoint 24";
+        if (
+          !pane.visible ||
+          !pane.finalText?.trimEnd().endsWith(expected) ||
+          !pane.finalText.includes(finalBlock)
+        ) {
+          throw new Error(`Streaming pane ${pane.sessionKey} did not show the complete reply`);
+        }
+        if (
+          streamingReply.growingTool &&
+          !pane.toolOutput?.includes(`Tool progress ${streamingReply.deltas.length}`)
+        ) {
+          throw new Error(
+            `Streaming pane ${pane.sessionKey} did not show the complete tool output`,
+          );
+        }
+        if (
+          pane.tailPosition.scrollHeight <= pane.tailPosition.initialScrollHeight ||
+          Math.abs(pane.tailPosition.distanceFromBottom) > 2
+        ) {
+          throw new Error(`Streaming tail did not grow and stay followed: ${JSON.stringify(pane)}`);
+        }
       }
     }
     let live;
@@ -2817,15 +2977,28 @@ try {
       : undefined;
     let sessionSwitch;
     if (values["session-switch"]) {
+      if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+        await navigationDrawerToggle(page).click();
+        await page.locator(".shell--nav-drawer-open").waitFor();
+      }
       if (sidebarView !== "sessions") {
         await page.locator('[data-navigation-view="sessions"]').click();
       }
+      // Cold runs keep the default My sessions filter until this phase.
+      await page.locator("#sidebar-session-owner-title").click();
+      await page
+        .locator('.sidebar-session-owner-filter [role="option"][data-value="involving-me"]')
+        .click();
       // The first non-main chat is in the initial Involving me page.
       const target = fixture.scenario.sessions![1]!;
       const link = page.locator(
         `.sidebar-recent-session[data-session-key="${target.key}"] a.sidebar-recent-session__link`,
       );
       await link.scrollIntoViewIfNeeded();
+      await page.waitForFunction(() => {
+        const state = Reflect.get(window, "__coldLoad").read();
+        return !state.pending && !state.queued && state.idleMs > 750;
+      });
       const rpcOffset = await page.evaluate(
         () => Reflect.get(window, "__coldLoad").read().rpcs.length,
       );
@@ -3002,8 +3175,23 @@ try {
         await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.${route}.png`) });
       }
     }
+    const newSessionFirstToken = values["new-session-first-token"]
+      ? await (
+          await import("./lib/control-ui-new-session-first-token.ts")
+        ).measureNewSession(page, artifactDir, run + 1, {
+          initialHistory: fixture.scenario.methodResponses?.["chat.startup"],
+          viewerId: fixture.sidebarListInput.viewerProfileId,
+          tokenDelayMs: Number(values["new-session-token-ms"]),
+          worker: values["new-session-worker"],
+          filmstrip: values["new-session-filmstrip"],
+          held:
+            values["new-session-list-mode"] === "held" ||
+            (values["new-session-list-mode"] === "alternate" && bundleCycle % 2 === 1),
+        })
+      : undefined;
     await cdp.detach();
     const result = {
+      newSessionFirstToken,
       layoutCell,
       run: run + 1,
       hostLoadAverage,
@@ -3153,6 +3341,8 @@ try {
         omitHelloSelfPresence: values["omit-hello-self-presence"],
         streamingReply: values["streaming-reply"],
         streamingAllocations: values["streaming-allocations"],
+        streamingContent,
+        streamingPanes,
         sessionSwitch: values["session-switch"],
         criticalPathRoutes: values["critical-path"] ? navigationRoutes : undefined,
         criticalPathIntentMs: values["critical-path"] ? criticalPathIntentMs : undefined,

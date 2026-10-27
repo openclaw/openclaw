@@ -972,6 +972,7 @@ class NodeRuntime internal constructor(
   private class GatewayConnectionContext(
     private val initialAuth: GatewayConnectAuth,
     val attempt: GatewayConnectAttempt?,
+    val tls: GatewayTlsParams?,
     // A started session owns retries and auth pauses before readiness is published.
     // Only bootstrap without operator auth may admit this role after the node connects.
     var operatorConnectAdmitted: Boolean = false,
@@ -4475,10 +4476,10 @@ class NodeRuntime internal constructor(
     runGatewayConnectOperation {
       beforeConnect()
       activeGatewayConnection?.bootstrapHandoff?.invalidate()
-      val connection = GatewayConnectionContext(auth, acceptedConnectAttempt.value)
+      val tls = connectionManager.resolveTlsParams(endpoint)
+      val connection = GatewayConnectionContext(auth, acceptedConnectAttempt.value, tls)
       activeGatewayConnection = connection
       connection.attempt?.operatorReady?.value = null
-      val tls = connectionManager.resolveTlsParams(endpoint)
       val storedOperatorEntry = loadStoredRoleDeviceAuthEntry(endpoint, "operator")
       refreshGatewayControlPage(endpoint)
       val operatorAuth =
@@ -4776,7 +4777,9 @@ class NodeRuntime internal constructor(
     page =
       GatewayControlPage(
         baseUrl = gatewayControlPageBaseUrl(endpoint),
-        tlsFingerprintSha256 = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.let(::normalizeGatewayTlsFingerprintInput),
+        // Reflect the admitted connection's TLS, not merely a saved preference:
+        // an active pin must gate embedded auth; a saved-but-inactive pin must not.
+        tlsFingerprintSha256 = connection?.tls?.expectedFingerprint,
         connectAuth = { nonce, signedAt ->
           withCurrentCredential { credential ->
             buildNativeControlUiConnectAuth(identityStore, client, grantedScopes, credential, nonce, signedAt)

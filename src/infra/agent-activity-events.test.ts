@@ -129,13 +129,13 @@ test("projects Tool Search names for live and history activity without changing 
     expect(entry.items).toMatchObject([
       {
         name: "exec",
-        title: "Exec",
+        title: "Exec check-release",
         toolCallId: tool.toolCallId,
         status: "skipped",
         commandBearing: true,
       },
     ]);
-    expect(entry.items[0]?.meta).toBeUndefined();
+    expect(entry.items[0]?.meta).toBe("check-release");
   }
 });
 
@@ -292,7 +292,8 @@ test.each([true, false])("does not expose a child assignment in progress (named:
 test("marks only unpaired history calls as provisional, including terminal unknown outcomes", () => {
   const unpaired = call("call", "command");
   const missing = projectAgentHistoryActivity([unpaired])[0]?.items[0];
-  expect(missing).toMatchObject({ phase: "end", unpairedCall: true, summary: "Outcome unknown" });
+  expect(missing).toMatchObject({ phase: "end", unpairedCall: true });
+  expect(missing).not.toHaveProperty("summary");
   expect(missing?.status).toBeUndefined();
   const result = resultEntry("result", "command", {
     details: {

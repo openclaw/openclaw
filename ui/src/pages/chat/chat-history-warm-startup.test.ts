@@ -206,7 +206,7 @@ function shareConnection(
 
 function snapshotRecord(h: ReturnType<typeof mountPane>, snapshot: ChatSessionSnapshot) {
   return {
-    projectionVersion: 5,
+    projectionVersion: 6,
     savedAt: Date.now(),
     sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
     sessionId: snapshot.sessionId,
@@ -764,7 +764,7 @@ describe("first chat startup snapshot ordering", () => {
     ),
     { beforeHello: false, transition: "current" as const, hidden: true },
   ])(
-    "sends prepared history facts without publishing rows at dispatch ($transition, beforeHello=$beforeHello, hidden=$hidden)",
+    "displays prepared rows before dispatch with scope-owned live receipts across cache retirement ($transition, beforeHello=$beforeHello, hidden=$hidden)",
     async ({ beforeHello, transition, hidden }) => {
       vi.spyOn(document, "hidden", "get").mockReturnValue(hidden);
       const cacheKey = resolveChatSnapshotKey(
@@ -779,7 +779,7 @@ describe("first chat startup snapshot ordering", () => {
         commands: startupCommands(),
       };
       vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockResolvedValueOnce({
-        projectionVersion: 5,
+        projectionVersion: 6,
         savedAt: 0,
         sessionKey: cacheKey,
         sessionId: stored.sessionId,
@@ -788,13 +788,16 @@ describe("first chat startup snapshot ordering", () => {
       await prewarmChatSnapshot(cacheKey);
       await vi.dynamicImportSettled();
       const h = mountPane(sessionKey, false, new SessionSnapshotStore());
-      const display = createDeferred<boolean>();
-      Object.defineProperty(h.pane.context.gateway.snapshot.client!, "connectSent", {
-        get: () => display.promise,
+      expect(h.state.connected).toBe(false);
+      expect(h.state.chatMessages).toEqual(stored.messages);
+      expect(h.snapshot()).toMatchObject({ ...stored, historyState });
+      expect(chatHistoryRequests(h.state).acceptedHistory).toBeUndefined();
+      const dispatch = createDeferred<boolean>();
+      Object.defineProperty(h.client, "connectSent", {
+        get: () => dispatch.promise,
       });
       connectSessionOwner(h);
       h.state.connected = !beforeHello;
-      const replyReady = createDeferred();
       let rowsAtDispatch: unknown[] | undefined;
       let snapshotAtDispatch: ChatSessionSnapshot | null | undefined;
       h.request.mockImplementationOnce(async () => {
@@ -809,7 +812,6 @@ describe("first chat startup snapshot ordering", () => {
           h.connect();
           void syncSelectedSessionMessageSubscription(h.state);
         }
-        replyReady.resolve();
         return {
           key: sessionKey,
           initialHistory: {
@@ -827,25 +829,15 @@ describe("first chat startup snapshot ordering", () => {
         initialHistory: true,
         beforeHello,
       });
-      let subscriptionSettled = false;
-      void subscription.then(() => {
-        subscriptionSettled = true;
-      });
-      await replyReady.promise;
-      await vi.advanceTimersByTimeAsync(0);
-      if (!hidden) {
-        expect(h.state.chatMessages).toEqual([]);
-        if (transition === "current") {
-          expect(chatHistoryRequests(h.state).initialHistory).toBeUndefined();
-        }
-        vi.advanceTimersToNextFrame();
-        expect(h.state.chatMessages).toEqual([]);
-        await vi.advanceTimersByTimeAsync(1);
+      if (beforeHello) {
+        expect(h.request).not.toHaveBeenCalled();
+        expect(h.state.chatMessages).toEqual(stored.messages);
       }
-      expect(subscriptionSettled).toBe(true);
+      dispatch.resolve(true);
       await subscription;
-      expect(rowsAtDispatch).toEqual([]);
-      expect(snapshotAtDispatch).toBeNull();
+      expect(rowsAtDispatch).toEqual(stored.messages);
+      expect(snapshotAtDispatch).toMatchObject({ ...stored, historyState });
+      expect(chatHistoryRequests(h.state).acceptedHistory).toBeUndefined();
       expect(h.request).toHaveBeenCalledExactlyOnceWith(
         "sessions.messages.subscribe",
         expect.objectContaining({
@@ -857,12 +849,14 @@ describe("first chat startup snapshot ordering", () => {
         expect.anything(),
       );
       await h.start();
-      expect(h.request).toHaveBeenCalledTimes(transition === "current" ? 1 : 2);
-      expect(h.state.chatMessages).toEqual(
-        transition === "current" ? stored.messages : liveMessages,
-      );
-      display.resolve(true);
-      await vi.advanceTimersByTimeAsync(0);
+      const scopeChanged = transition === "scope";
+      expect(h.request).toHaveBeenCalledTimes(scopeChanged ? 2 : 1);
+      expect(h.state.chatMessages).toEqual(scopeChanged ? liveMessages : stored.messages);
+      expect(chatHistoryRequests(h.state).acceptedHistory).toMatchObject({
+        client: h.client,
+        connectionEpoch: h.state.connectionEpoch,
+        sessionKey,
+      });
     },
   );
 

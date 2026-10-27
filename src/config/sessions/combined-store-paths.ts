@@ -148,15 +148,18 @@ export function gatewayDiscoveryReadOptions(
   discovery?: GatewaySessionStoreDiscovery,
 ) {
   const excluded = createGatewayRetainedStoreMatcher(cfg, discovery);
+  const unavailable = discovery?.recoveryExclusions;
   return {
     ...discoveryReadOptions(discovery),
-    excludeTarget: (target: SessionStoreTarget) =>
-      Boolean(
-        excluded(
-          resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path,
-          target.agentId,
-        ),
-      ),
+    excludeTarget: (target: SessionStoreTarget) => {
+      const databasePath = resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path;
+      return (
+        unavailable?.agentIds.includes(target.agentId) === true ||
+        unavailable?.storePaths.includes(target.storePath) === true ||
+        unavailable?.databasePaths.includes(databasePath) === true ||
+        Boolean(excluded(databasePath, target.agentId))
+      );
+    },
   };
 }
 

@@ -11,7 +11,6 @@ const mocks = vi.hoisted(() => ({
   currentConfig: vi.fn(() => ({})),
   record: vi.fn(),
   connectIrcClient: vi.fn(),
-  stripMarkdown: vi.fn((text: string) => text),
   buildIrcConnectOptions: vi.fn(),
 }));
 // mock-isolation: outbound tests use an owned transport instead of connecting to IRC.
@@ -21,10 +20,6 @@ vi.mock("./connect-options.js", () => ({ buildIrcConnectOptions: mocks.buildIrcC
 vi.mock("node:crypto", async (original) => ({
   ...(await original<typeof import("node:crypto")>()),
   randomUUID: () => "irc-msg-1",
-}));
-vi.mock("openclaw/plugin-sdk/text-chunking", async (original) => ({
-  ...(await original<typeof import("openclaw/plugin-sdk/text-chunking")>()),
-  stripMarkdown: mocks.stripMarkdown,
 }));
 
 import { ircPlugin } from "./channel.js";
@@ -41,12 +36,7 @@ const longText = Array.from({ length: 80 }, (_, index) => `word-${index}`).join(
 const id = "irc-msg-1";
 
 afterAll(() => {
-  for (const path of [
-    "./client.js",
-    "./connect-options.js",
-    "node:crypto",
-    "openclaw/plugin-sdk/text-chunking",
-  ]) {
+  for (const path of ["./client.js", "./connect-options.js", "node:crypto"]) {
     vi.doUnmock(path);
   }
   vi.resetModules();
@@ -80,7 +70,6 @@ describe("IRC outbound and probing", () => {
     for (const mock of Object.values(mocks)) {
       mock.mockReset();
     }
-    mocks.stripMarkdown.mockImplementation((text: string) => text);
     mocks.buildIrcConnectOptions.mockReturnValue({});
     client = createClient();
     ircRuntime.setIrcRuntime(
@@ -145,7 +134,6 @@ describe("IRC outbound and probing", () => {
   });
 
   it("rejects stripped-empty replies before adding reply metadata", async () => {
-    mocks.stripMarkdown.mockReturnValue("");
     await expect(send({ replyTo: "irc-parent-1" }, "#")).rejects.toThrow(
       "Message must be non-empty for IRC sends",
     );

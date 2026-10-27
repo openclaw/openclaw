@@ -38,7 +38,7 @@ play-services-wearable = "20.0.1"
 barcode-scanning = "17.3.0"
 robolectric = "4.17"
 room = "3.0.3"
-serialization-json = "1.11.0"
+serialization-json = "1.12.0"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activity" }

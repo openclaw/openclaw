@@ -8,13 +8,15 @@ import type { AgentMessage } from "../runtime/index.js";
 
 export { estimateToolResultTextChars };
 
-const getToolResultContentBudget = memoizeFrozenPlainDataProjection((content: unknown[]) =>
-  content.reduce<number>(
-    (total, block) =>
-      total + (isToolResultTextBlock(block) ? estimateToolResultTextChars(block.text) : 0),
-    0,
-  ),
-);
+const getToolResultContentBudget = memoizeFrozenPlainDataProjection((content: unknown[]) => {
+  let chars = 0;
+  for (const block of content) {
+    if (isToolResultTextBlock(block)) {
+      chars += prepareToolResultTextChars(block, block.text, 1);
+    }
+  }
+  return chars;
+});
 
 export function getToolResultTextBudget(msg: AgentMessage): number {
   if (!msg || msg.role !== "toolResult") {
@@ -36,34 +38,24 @@ export function getToolResultHistoryTextBudget(messages: AgentMessage[]) {
   return { textLengths, totalChars, largestChars };
 }
 
-// Reuse scans across guard passes; the block owns the lifetime and text is its revision.
-const toolResultTextEstimates = new WeakMap<
-  object,
-  { text: string; minimumRawWeight: number; chars: number }
->();
-
-export function readPreparedToolResultTextChars(
-  block: object,
-  text: string,
-  minimumRawWeight: number,
-): number | undefined {
-  const cached = toolResultTextEstimates.get(block);
-  return cached?.text === text && cached.minimumRawWeight === minimumRawWeight
-    ? cached.chars
-    : undefined;
-}
+type ToolResultTextEstimate = { text: string; minimumRawWeight: number; chars: number };
+// Initial model history is writable. Text is the revision; weak block keys own its lifetime.
+// Keep history's default weight separate from the guard's floor without retaining every floor.
+const defaultTextEstimates = new WeakMap<object, ToolResultTextEstimate>();
+const weightedTextEstimates = new WeakMap<object, ToolResultTextEstimate>();
 
 export function prepareToolResultTextChars(
   block: object,
   text: string,
   minimumRawWeight: number,
 ): number {
-  const cached = readPreparedToolResultTextChars(block, text, minimumRawWeight);
-  if (cached !== undefined) {
-    return cached;
+  const estimates = minimumRawWeight === 1 ? defaultTextEstimates : weightedTextEstimates;
+  const cached = estimates.get(block);
+  if (cached?.text === text && cached.minimumRawWeight === minimumRawWeight) {
+    return cached.chars;
   }
   const chars = estimateToolResultTextChars(text, { minimumRawWeight });
-  toolResultTextEstimates.set(block, { text, minimumRawWeight, chars });
+  estimates.set(block, { text, minimumRawWeight, chars });
   return chars;
 }
 

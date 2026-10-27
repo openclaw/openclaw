@@ -74,12 +74,12 @@ function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]
 function queueRun(
   wait: (() => Promise<RunExit>) | undefined,
   output = "",
-  overrides: Partial<ManagedRun> = {},
+  overrides: Partial<ManagedRun> | ((input: SpawnInput) => Partial<ManagedRun>) = {},
 ) {
   supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
     ...runtimeManagedRun(input, output),
     ...(wait ? { wait } : {}),
-    ...overrides,
+    ...(typeof overrides === "function" ? overrides(input) : overrides),
   }));
 }
 
@@ -174,20 +174,15 @@ it.each([
     const otherSandbox = makeSandbox("independent");
     let guestInput: SpawnInput | undefined;
     const cancelOther = vi.fn();
-    supervisorMock.spawn
-      .mockImplementationOnce(async (input: SpawnInput) => {
+    queueRun(
+      () => guestExit.promise,
+      "",
+      (input) => {
         guestInput = input;
-        return {
-          ...runtimeManagedRun(input),
-          cancel: () => input.onCancel?.("manual-cancel"),
-          wait: () => guestExit.promise,
-        };
-      })
-      .mockImplementationOnce(async (input: SpawnInput) => ({
-        ...runtimeManagedRun(input),
-        cancel: cancelOther,
-        wait: () => otherExit.promise,
-      }));
+        return { cancel: () => input.onCancel?.("manual-cancel") };
+      },
+    );
+    queueRun(() => otherExit.promise, "", { cancel: cancelOther });
     const requestIdentity = {
       runId: "sandbox-request-stop",
       sessionKey: "agent:main:targeted-cleanup",

@@ -30,7 +30,7 @@ const loadRuntimeArtifact = createLazyRuntimeModule(
 const loadRuntimeArtifactConnection = createLazyRuntimeModule(
   () => import("./src/app-server/runtime-artifact-connection.js"),
 );
-const loadConfig = createLazyRuntimeModule(() => import("./src/app-server/config.js"));
+const loadAppServerConfig = createLazyRuntimeModule(() => import("./src/app-server/config.js"));
 const loadUsage = createLazyRuntimeModule(() => import("./src/app-server/usage.js"));
 const loadModelCatalog = createLazyRuntimeModule(() => import("./src/app-server/model-catalog.js"));
 const loadEffectiveMcpCatalog = createLazyRuntimeModule(
@@ -258,7 +258,8 @@ export function createCodexAppServerAgentHarness(
         if (!isCodexConfiguredConnectionArtifact(binding.id)) {
           return validateCodexAppServerRuntimeArtifact(binding);
         }
-        const { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } = await loadConfig();
+        const { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } =
+          await loadAppServerConfig();
         return validateCodexAppServerRuntimeArtifact(
           binding,
           undefined,
@@ -417,7 +418,7 @@ export function createCodexAppServerAgentHarness(
       const workspace = { agentId: params.agentId, authProfileId: params.authProfileId };
       const result = await runAttemptOnModel(attemptModel);
       const refusal = readCodexCyberAttemptVerdict(result);
-      if (!refusal.cyberRefused) {
+      if (!refusal.cyberRefused || params.cyberAccessProgram !== undefined) {
         return result;
       }
       const plan = planCodexCyberEscalation({

@@ -24,6 +24,7 @@ import type {
 } from "./openclaw-agent-db-contract.js";
 import type { AgentDatabaseExecutionOpen } from "./openclaw-agent-execution-contract.js";
 import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
+import { expectCalls } from "./openclaw-state-db-fixtures.test-support.js";
 import { hydrateOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 
 type AdmissionModule = typeof import("../infra/sqlite-worker-operation-admission.js");
@@ -167,6 +168,10 @@ const receipt: OpenClawAgentDatabaseRegistrationCommit = {
   stateDatabasePath: input.stateDatabasePath,
   stateDatabaseIdentity: "file:state",
 };
+const stateContext = { environment: input.environment };
+const throwError = (error: Error) => () => {
+  throw error;
+};
 const replies = new Map<number, Deferred<SqliteWorkerReply>>();
 let receive: (request: SqliteWorkerRequest) => void;
 let nextId = 0;
@@ -229,8 +234,7 @@ async function retiredFailure(
     admissionFailure,
   );
   try {
-    expect(reject).not.toHaveBeenCalled();
-    expect(settleNative).not.toHaveBeenCalled();
+    expectCalls(0, reject, settleNative);
   } finally {
     retired.resolve();
   }
@@ -361,9 +365,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   expect((await send({ id: ++nextId, actor, type: "close" })).ok).toBe(true);
-  expect(edge.releaseShared).toHaveBeenCalledTimes(actorCloseAttempts);
-  expect(edge.nativeClose).toHaveBeenCalledTimes(nativeOpened ? actorCloseAttempts : 0);
-  expect(edge.releaseAgent).toHaveBeenCalledTimes(nativeOpened ? actorCloseAttempts : 0);
+  expectCalls(actorCloseAttempts, edge.releaseShared);
+  expectCalls(nativeOpened ? actorCloseAttempts : 0, edge.nativeClose, edge.releaseAgent);
   expect(replies.size).toBe(0);
   expect(edge.forbidden).not.toHaveBeenCalled();
 });
@@ -375,8 +378,7 @@ it("settles eager native factory creation synchronously", async () => {
   expect(backend).not.toBeInstanceOf(Promise);
   await backend.close();
   expect(edge.database.db.isOpen).toBe(false);
-  expect(edge.releaseAgent).toHaveBeenCalledOnce();
-  expect(edge.releaseShared).toHaveBeenCalledOnce();
+  expectCalls(1, edge.releaseAgent, edge.releaseShared);
 });
 
 it.each([
@@ -431,14 +433,12 @@ it.each([
       return edge.database;
     });
     if (outcome === "cleanup failure") {
-      edge.releaseShared.mockImplementationOnce(() => {
-        throw cleanupError;
-      });
+      edge.releaseShared.mockImplementationOnce(throwError(cleanupError));
     }
     const request = opening({
       actor: actor + 1_000_000,
       operationAdmission: admission.port,
-      stateContext: { environment: input.environment },
+      stateContext,
     });
     try {
       const reply = await sendFailed(request);
@@ -487,10 +487,8 @@ it("retains a typed quarantine opening failure after native retirement", async (
   });
   const openingError = new Error("synthetic quarantine refusal", { cause: cleanup });
   openingError.name = "SqliteIntegrityError";
-  edge.open.mockImplementation(() => {
-    throw openingError;
-  });
-  const request = prepareRequest({ stateContext: { environment: input.environment } });
+  edge.open.mockImplementation(throwError(openingError));
+  const request = prepareRequest({ stateContext });
   const reply = await sendFailed(request);
   expect(reply.retire).toBe(true);
   expect(reply.error.sharedState?.nodes.every((node) => !("quarantine" in node))).toBe(true);
@@ -519,15 +517,13 @@ it.each(["native", "shared"] as const)(
     expect(await send(prepareRequest())).toMatchObject({ ok: true });
     const cleanupFailure = new Error(`Synthetic ${failureAt} cleanup failure`);
     const failingCleanup = failureAt === "native" ? edge.nativeClose : edge.releaseShared;
-    failingCleanup.mockImplementationOnce(() => {
-      throw cleanupFailure;
-    });
+    failingCleanup.mockImplementationOnce(throwError(cleanupFailure));
     const request: SqliteWorkerRequest = {
       id: ++nextId,
       actor,
       type: "close",
       stateDatabasePath: input.stateDatabasePath,
-      stateContext: { environment: input.environment },
+      stateContext,
     };
     const reply = await sendFailed(request);
     expect(reply).toMatchObject({
@@ -535,9 +531,7 @@ it.each(["native", "shared"] as const)(
       retire: true,
       error: { message: cleanupFailure.message },
     });
-    for (const cleanup of [edge.nativeClose, edge.releaseAgent, edge.releaseShared]) {
-      expect(cleanup).toHaveBeenCalledOnce();
-    }
+    expectCalls(1, edge.nativeClose, edge.releaseAgent, edge.releaseShared);
     expect(edge.nativeClose).toHaveBeenCalledBefore(edge.releaseAgent);
     expect(edge.releaseAgent).toHaveBeenCalledBefore(edge.releaseShared);
 
@@ -592,11 +586,7 @@ it("recognizes a separately evaluated backend's inner open refusal before comple
   }));
   const refused = new Error("Authority revoked after preflight and before native agent open");
   edge.request.mockReset();
-  edge.request
-    .mockImplementationOnce(() => {})
-    .mockImplementation(() => {
-      throw refused;
-    });
+  edge.request.mockImplementationOnce(() => {}).mockImplementation(throwError(refused));
   const request = opening({
     actor: actor + 1_000_000,
     existingIdentity: "file:fixture",

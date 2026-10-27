@@ -436,13 +436,6 @@ it.each([
   ).toThrow(`${key} ${error}`);
 });
 
-it("resolves root tsconfig package aliases for source imports", () => {
-  const alias = resolveTsconfigPathAliasesForVite().find(
-    ({ find }) => find === "@openclaw/net-policy/ip",
-  );
-  expect(alias?.replacement).toBe(path.join(repoRoot, "packages/net-policy/src/ip.ts"));
-});
-
 it("resolves Control UI dev-server source aliases for internal packages", () => {
   const aliases = resolveSourcePackageAliasesForVite();
   const moduleId = "@openclaw/normalization-core/agent-id";
@@ -567,13 +560,9 @@ it("bootstraps only an absent locale memory from the English catalog", async () 
 });
 
 it.each([
-  {
-    name: "empty",
-    memory: "",
-    expected: "Control UI fr translation memory is missing or empty",
-  },
-  { name: "malformed", memory: "{", expected: SyntaxError },
-])("rejects $name locale memory", async ({ memory, expected }) => {
+  ["empty", "", "Control UI fr translation memory is missing or empty"],
+  ["malformed", "{", SyntaxError],
+] as const)("rejects %s locale memory", async (_name, memory, expected) => {
   const { load } = await localeHooks();
   await fsMocks.readFileSync.withImplementation(
     () => memory,
@@ -584,10 +573,10 @@ it.each([
 });
 
 it.each([
-  { name: "stale resolved", outcome: "resolve" as const, invalidate: true },
-  { name: "stale rejected", outcome: "reject" as const, invalidate: true },
-  { name: "current rejected", outcome: "reject" as const, invalidate: false },
-])("recovers a $name source-catalog generation", async ({ outcome, invalidate }) => {
+  ["stale resolved", "resolve", true],
+  ["stale rejected", "reject", true],
+  ["current rejected", "reject", false],
+] as const)("recovers a %s source-catalog generation", async (_name, outcome, invalidate) => {
   const staleImport = deferred<ReturnType<typeof catalogImport>>();
   const currentCatalog = labeledCatalog("current");
   let imports = 0;

@@ -1,7 +1,7 @@
+import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
@@ -98,16 +98,32 @@ it.each([false, true])(
         database.db.exec("ANALYZE");
       }
       const prepare = database.db.prepare.bind(database.db);
-      const statements: string[] = [];
-      const spy = observeMainThreadSql({
-        onStatement: (query) => {
-          if (
-            query.includes('"transcript_event_identities"') &&
-            query.includes('"navigation_valid"')
-          ) {
-            statements.push(query);
+      const statements = new Map<StatementSync, string>();
+      const spy = vi.spyOn(database.db, "prepare").mockImplementation((query) => {
+        const statement = prepare(query);
+        if (
+          query.includes('"transcript_event_identities"') &&
+          statement.columns().some(({ name }) => name === "navigation_valid")
+        ) {
+          statements.set(statement, statement.expandedSQL);
+          const observe = <Method extends "all" | "get" | "iterate">(
+            observed: Pick<StatementSync, Method | "expandedSQL">,
+            method: Method,
+          ) => {
+            observed[method] = new Proxy(observed[method], {
+              apply(invoke, receiver: StatementSync, args) {
+                const result = Reflect.apply(invoke, receiver, args);
+                // Capture bindings before the executor releases the statement.
+                statements.set(statement, observed.expandedSQL);
+                return result;
+              },
+            });
+          };
+          for (const method of ["all", "get", "iterate"] as const) {
+            observe(statement, method);
           }
-        },
+        }
+        return statement;
       });
       try {
         const anchor = messages.at(-1)!;
@@ -115,14 +131,14 @@ it.each([false, true])(
           anchorIds: [anchor.id],
           entries: [marker],
         });
-        expect(statements).toHaveLength(1);
-        const plan = prepare(`EXPLAIN QUERY PLAN ${statements[0]!}`).all();
+        expect(statements.size).toBe(1);
+        const plan = prepare(`EXPLAIN QUERY PLAN ${statements.values().next().value!}`).all();
         const drivingSearch = plan.find(
           ({ detail }) => typeof detail === "string" && detail.startsWith("SEARCH "),
         )?.detail;
         expect(drivingSearch).toMatch(/\(session_id=\? AND event_type=\?/u);
       } finally {
-        spy.restore();
+        spy.mockRestore();
       }
     });
   },

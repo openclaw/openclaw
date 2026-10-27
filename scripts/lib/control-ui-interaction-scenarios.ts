@@ -63,6 +63,7 @@ const progressClockSessions = Array.from(
 const progressClocks =
   'openclaw-session-progress-widget [data-progress-card-placement="board"] time';
 const initialProgressClocks = new WeakMap<Page, { count: number; labels: string[] }>();
+const graphStreamingRuns = new WeakMap<Page, string>();
 
 const nativeBoardSessions = Array.from(
   { length: 6 },
@@ -124,7 +125,10 @@ export type InteractionScenario = {
   explicitOnly?: boolean;
   fixture?: InteractionFixtureOptions;
   /** Large-data campaigns replace only their domain's synthetic Gateway responses. */
-  fixtureOverrides?: (sandbox?: InteractionSandbox) => InteractionFixtureOverrides;
+  fixtureOverrides?: (
+    sandbox: InteractionSandbox | undefined,
+    base: ReturnType<typeof createInteractionFixture>,
+  ) => InteractionFixtureOverrides;
   createRequestHandlers?: (
     defaults: Readonly<Record<string, (params: unknown) => unknown>>,
   ) => Record<string, (params: unknown) => unknown>;
@@ -150,7 +154,7 @@ export function createScenarioFixture(
   sandbox?: InteractionSandbox,
 ): ControlUiMockGatewayScenario & { sessions: InteractionSession[] } {
   const base = createInteractionFixture(buildId, version, scenario.fixture, sandbox);
-  const overrides = scenario.fixtureOverrides?.(sandbox);
+  const overrides = scenario.fixtureOverrides?.(sandbox, base);
   return {
     ...base,
     ...overrides,
@@ -1327,7 +1331,13 @@ async function settleSidebarCapture(page: Page) {
   await page.evaluate(
     () =>
       new Promise<void>((resolve) => {
-        setTimeout(() => requestIdleCallback(() => resolve(), { timeout: 1000 }), 500);
+        setTimeout(() => {
+          if (typeof requestIdleCallback === "function") {
+            requestIdleCallback(() => resolve(), { timeout: 1000 });
+          } else {
+            setTimeout(resolve, 0);
+          }
+        }, 500);
       }),
   );
 }
@@ -1364,6 +1374,8 @@ export function installInteractionNavigationPreloadObserver() {
 export async function settleInteractionNavigationPreloads(
   page: Page,
 ): Promise<InteractionNavigationPreloads> {
+  // Headless Chromium can strand the shell's idle callback until another frame runs.
+  await frames(page);
   const expected = await page.evaluate(async () => {
     const descriptor = document
       .getElementById("openclaw-navigation-preloads")
@@ -2513,6 +2525,115 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     run: refreshSessions,
   },
   {
+    id: "graph-stream-100-deltas",
+    route: controlUiSessionPath(sessionKeys[0]),
+    explicitOnly: true,
+    expected:
+      "One hundred separately flushed chat deltas render the complete reply, which remains visible after finalization.",
+    prepare: async (page, gateway) => {
+      await prepareChat(page);
+      const after = (await gateway.getRequests("chat.send")).length;
+      await page
+        .locator(`${activePane} .agent-chat__composer-combobox textarea`)
+        .fill("Produce the synthetic graph measurement reply.");
+      await page.locator(`${activePane} .chat-send-btn--send`).click();
+      const request = await gateway.waitForRequest("chat.send", { after });
+      if (!isRecord(request.params) || typeof request.params.idempotencyKey !== "string") {
+        throw new Error("Graph streaming fixture did not start a chat run");
+      }
+      graphStreamingRuns.set(page, request.params.idempotencyKey);
+      await page.locator(`${activePane} .chat-send-btn--stop`).waitFor();
+      await frames(page);
+    },
+    run: async (page, gateway) => {
+      const runId = graphStreamingRuns.get(page);
+      if (!runId) {
+        throw new Error("Graph streaming fixture has no prepared run");
+      }
+      const text = await page.evaluate(
+        async ({ sessionKey, runId: targetRunId }) => {
+          const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
+          let reply = "";
+          for (let index = 1; index <= 100; index++) {
+            reply += `Graph streaming checkpoint ${index}.\n\n`;
+            mock.emit("chat", {
+              sessionKey,
+              runId: targetRunId,
+              seq: index,
+              state: "delta",
+              message: { role: "assistant", content: [{ type: "text", text: reply }] },
+            });
+            // Give every event its own reactive flush and native presentation turn.
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            });
+          }
+          return reply;
+        },
+        { sessionKey: sessionKeys[0], runId },
+      );
+      const liveReply = page.locator(`${activePane} .chat-bubble.streaming`);
+      await liveReply.getByText("Graph streaming checkpoint 100.", { exact: true }).waitFor();
+      await liveReply.getByText("Graph streaming checkpoint 1.", { exact: true }).waitFor();
+      await gateway.emitChatFinal({ sessionKey: sessionKeys[0], runId, text });
+      const reply = page.locator(`${activePane} .chat-bubble:not(.streaming)`);
+      await reply.getByText("Graph streaming checkpoint 100.", { exact: true }).waitFor();
+      await reply.getByText("Graph streaming checkpoint 1.", { exact: true }).waitFor();
+      const rendered =
+        (await reply.filter({ hasText: "Graph streaming checkpoint 100." }).textContent()) ?? "";
+      if (
+        text
+          .trim()
+          .split("\n\n")
+          .some((checkpoint) => !rendered.includes(checkpoint))
+      ) {
+        throw new Error("Graph streaming lost content during finalization");
+      }
+      await page.locator(`${activePane} .chat-send-btn--send`).waitFor();
+      return { deltas: 100, finalized: true };
+    },
+  },
+  {
+    id: "graph-sidebar-live-update",
+    route: controlUiSessionPath(sessionKeys[0]),
+    explicitOnly: true,
+    expected:
+      "An existing sidebar session adopts its live title while the selected transcript stays visible.",
+    prepare: async (page) => {
+      await prepareChat(page);
+      await navigation(page, "sessions");
+      await page
+        .locator(`.sidebar-recent-session[data-session-key="${sessionKeys[1]}"]`)
+        .getByText("Interaction 0001", { exact: true })
+        .waitFor();
+      await settleSidebarBackgroundWork(page);
+    },
+    run: async (page, gateway) => {
+      const row = await gateway.getSessionRow(sessionKeys[1]);
+      const updatedAt = Math.max(Date.now(), (row.updatedAt ?? 0) + 1);
+      const label = "Graph sidebar live update witness";
+      await gateway.emitGatewayEvent("sessions.changed", {
+        sessionKey: row.key,
+        sessionId: row.sessionId,
+        agentId: "main",
+        reason: "patch",
+        ts: updatedAt,
+        session: { ...row, label, displayName: label, updatedAt, snapshotAt: updatedAt },
+        ancestorSessions: [],
+      });
+      await page
+        .locator(`.sidebar-recent-session[data-session-key="${sessionKeys[1]}"]`)
+        .getByText(label, { exact: true })
+        .waitFor();
+      await page
+        .locator(activePane)
+        .getByText("Transcript 0 message 399.", { exact: false })
+        .waitFor();
+      await frames(page);
+      return { updatedRows: 1 };
+    },
+  },
+  {
     id: "chat-typing",
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "Typing preserves the composer draft without sending a chat request.",
@@ -2548,8 +2669,14 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     prepare: prepareChat,
     run: async (page) => {
       const thread = page.locator(`${activePane} .chat-thread`);
-      await thread.hover();
-      await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
+      if (page.viewportSize()!.width < 768) {
+        // Playwright's mobile WebKit driver has no wheel input. Use the same
+        // native scrollport jump in both mobile engines (not a wheel-latency sample).
+        await thread.evaluate((element) => element.scrollTo({ top: 0, behavior: "instant" }));
+      } else {
+        await thread.hover();
+        await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
+      }
       await thread.getByText("Transcript 0 message 0.", { exact: false }).waitFor();
       await page.waitForFunction(
         (selector) => document.querySelector(selector)?.scrollTop === 0,

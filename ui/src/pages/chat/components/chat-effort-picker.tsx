@@ -154,7 +154,6 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                 "chat-controls__inline-select-trigger chat-controls__effort-trigger",
                 {
                   "chat-controls__effort-trigger--ultrafast": view().ultrafast,
-                  "chat-controls__inline-select-trigger--disabled": props.disabled,
                 },
               ]}
               data-chat-thinking-select="true"
@@ -167,6 +166,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                   : view().triggerTitle
               }
               aria-disabled={props.disabled ? "true" : "false"}
+              aria-description={props.disabledReason}
               title={props.disabledReason ?? view().triggerTitle}
             >
               {view().showReasoning ? (

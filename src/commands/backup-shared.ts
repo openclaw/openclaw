@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { readExistingWorktreePaths } from "../agents/worktrees/registry-read.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
@@ -95,7 +95,7 @@ export async function recordBackupOutcomeBestEffort(
   } catch (error) {
     const label = params.kind === "git" ? "Git backup" : "backup";
     runtime.error(
-      `Warning: the ${label} outcome could not be recorded: ${sanitizeTerminalText(formatErrorMessage(error))}`,
+      terminalText`Warning: the ${label} outcome could not be recorded: ${formatErrorMessage(error)}`,
     );
   }
 }

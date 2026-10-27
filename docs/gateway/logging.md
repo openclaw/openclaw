@@ -442,6 +442,7 @@ These records do not contain message text or session identifiers. Nested phases
 can overlap; their sum is not the request duration. The
 [Prometheus exporter](/gateway/prometheus) records the same fixed phases for fast
 and slow sends when diagnostics are enabled.
+Message formatting is deferred until the one-second threshold is reached.
 
 Catalog lists additionally expose fixed request-stage observations through the
 existing diagnostic event stream and [Prometheus exporter](/gateway/prometheus#catalog-list-stages).

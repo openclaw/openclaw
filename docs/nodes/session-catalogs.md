@@ -274,6 +274,14 @@ Terminal resume uses the stored session working directory and the same
 allowlisted duplex PTY relay as Codex and Claude. It does not expose arbitrary
 node command execution.
 
+## Activity probe failures
+
+For adopted Claude or Pi sessions on the Gateway, an unreadable transcript produces
+a `plugins/session-catalog` warning with the path and recovery guidance. Check that
+the Gateway can read the file. Probing retries automatically while preserving the
+session link and activity marker; an access failure does not mean the transcript
+was deleted.
+
 ## OpenClaw sessions and transcripts
 
 The bundled [Session Share plugin](/plugins/session-share) publishes selected

@@ -369,8 +369,7 @@
 .chat-pane__header,
 .side-panel__header,
 .sidebar-region__panels-toggle {
-  --icon-interactive: color-mix(in srgb, var(--text) 65%, transparent);
-  --rail-header-action-color: var(--icon-interactive);
+  --icon-interactive: var(--rail-header-action-color);
 }
 
 .chat-pane__header {
@@ -387,6 +386,12 @@
      window drag the macOS app starts from this row. */
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* Desktop chat and panel chrome reveal one continuous shell canvas. Mobile
+   keeps its own reading surface. */
+.sidebar-region--desktop .chat-pane__header {
+  background: transparent;
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-leading,

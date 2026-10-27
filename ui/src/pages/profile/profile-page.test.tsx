@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -64,11 +64,14 @@ function stubProfileAvatarProcessing(decode = vi.fn<() => Promise<void>>(async (
   });
 }
 
-function selectProfileAvatar(page: ParentNode) {
+function selectProfileAvatar(
+  page: ParentNode,
+  file = new File(["avatar"], "avatar.png", { type: "image/png" }),
+) {
   const avatarInput = page.querySelector<HTMLInputElement>('input[type="file"]')!;
   Object.defineProperty(avatarInput, "files", {
     configurable: true,
-    value: [new File(["avatar"], "avatar.png", { type: "image/png" })],
+    value: [file],
   });
   avatarInput.dispatchEvent(new Event("change", { bubbles: true }));
 }
@@ -203,6 +206,31 @@ it("offers identity connection setup without profile RPCs or secret inputs for u
     .find((button) => button.textContent?.trim() === "Connection settings")
     ?.click();
   expect(harness.context.navigate).toHaveBeenCalledWith("connection");
+});
+
+it("falls back to initials when no profile avatar route can be built", async () => {
+  setAvatarGatewayOrigin(null);
+  const profile = {
+    ...modelAccountProfile,
+    displayName: "Ada Lovelace",
+    emails: ["profile-preview@example.test"],
+    hasAvatar: false,
+  };
+  const request = mockRpc({
+    "users.prefs.get": () => ({ status: "ok", entries: {} }),
+    "users.self": () => ({ profile }),
+    "users.listModelAccounts": () => ({ profileId: profile.id, accounts: [], links: [] }),
+  });
+  const { context } = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    name: profile.displayName,
+  });
+  context.gateway.connection.gatewayUrl = "file:///profile-preview";
+  const page = mountProfilePage(context);
+  await waitForFast(() =>
+    expect(page.querySelector("openclaw-viewer-avatar")?.textContent?.trim()).toBe("AL"),
+  );
+  expect(page.querySelector("openclaw-viewer-avatar img")).toBeNull();
 });
 
 it("falls back to the text avatar when the hero image fails to load", async () => {
@@ -461,6 +489,8 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     ...modelAccountProfile,
     emails: ["ada@example.test", "ada@work.test"],
   };
+  const nameSave = createDeferred<{ profile: UserProfile }>();
+  onTestFinished(() => nameSave.resolve({ profile }));
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "users.prefs.get") {
       return { status: "ok", entries: {} };
@@ -474,7 +504,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     if (method === "users.setDisplayName") {
       expect(params).toEqual({ profileId: "profile-1", displayName: "Augusta Ada" });
       profile = { ...profile, displayName: "Augusta Ada", updatedAt: 3 };
-      return { profile };
+      return nameSave.promise;
     }
     if (method === "users.setAvatar") {
       profile = {
@@ -523,6 +553,13 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   await waitForFast(() =>
     expect(request.mock.calls.some(([method]) => method === "users.setDisplayName")).toBe(true),
   );
+  await waitForFast(() => {
+    expect(page.querySelector<HTMLInputElement>('input[type="file"]')?.disabled).toBe(true);
+    expect(page.querySelector<HTMLButtonElement>(".identity-avatar-control .btn")?.disabled).toBe(
+      true,
+    );
+  });
+  nameSave.resolve({ profile });
   await waitForFast(() =>
     expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(2),
   );
@@ -541,7 +578,17 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   expect(accountContext?.textContent).toContain("Augusta Ada");
   expect(accountContext?.textContent).not.toContain("Unsaved draft");
   stubProfileAvatarProcessing();
-  selectProfileAvatar(page);
+  const processAvatar = vi.spyOn(avatarProcessing, "processProfileAvatar");
+  const picker = page.querySelector<HTMLInputElement>('input[type="file"]')!;
+  const chooser = page.querySelector<HTMLButtonElement>(".identity-avatar-control .btn")!;
+  const clickInput = vi.spyOn(picker, "click");
+  chooser.click();
+  expect(chooser.type).toBe("button");
+  expect(clickInput).toHaveBeenCalledOnce();
+  const avatarFile = new File(["avatar"], "avatar.webp", { type: "image/webp" });
+  selectProfileAvatar(page, avatarFile);
+  expect(processAvatar).toHaveBeenCalledWith(avatarFile);
+  expect(picker).toMatchObject({ accept: "image/png,image/jpeg,image/webp", value: "" });
   await waitForFast(() =>
     expect(request.mock.calls.some(([method]) => method === "users.setAvatar")).toBe(true),
   );
@@ -692,10 +739,14 @@ it("keeps model-account actions usable when identity refresh overlaps ChatGPT co
 });
 
 it("rechecks avatar upload policy after processing and rerenders on config updates", async () => {
-  const profile = { ...modelAccountProfile };
+  let profile = { ...modelAccountProfile };
   const request = mockRpc({
     "users.prefs.get": () => ({ status: "ok", entries: {} }),
     "users.self": () => ({ profile }),
+    "users.setDisplayName": () => {
+      profile = { ...profile, displayName: "Edited with uploads disabled" };
+      return { profile };
+    },
     "users.listModelAccounts": () => ({ profileId: profile.id, accounts: [], links: [] }),
   });
   const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
@@ -726,6 +777,20 @@ it("rechecks avatar upload policy after processing and rerenders on config updat
   );
   expect(rpcCalls(request, "users.setAvatar")).toHaveLength(0);
   expect(profileName(page)?.disabled).toBe(false);
+  expect(page.querySelector("openclaw-viewer-avatar")).not.toBeNull();
+  expect(page.querySelector(".identity-avatar-control .btn")).toBeNull();
+  profileName(page)!.value = "Edited with uploads disabled";
+  profileName(page)!.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  page
+    .querySelector<HTMLFormElement>(".identity-name-control")!
+    .dispatchEvent(new SubmitEvent("submit", { cancelable: true }));
+  await waitForFast(() =>
+    expect(request).toHaveBeenCalledWith("users.setDisplayName", {
+      profileId: profile.id,
+      displayName: "Edited with uploads disabled",
+    }),
+  );
 });
 
 it("replaces a retired profile read when the same ID gains profile qualification", async () => {

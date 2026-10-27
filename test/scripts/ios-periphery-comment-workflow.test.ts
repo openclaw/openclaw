@@ -9,7 +9,6 @@ import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import type { WorkflowStep } from "./ci-workflow.test-support.js";
 
 const WORKFLOW_PATH = ".github/workflows/ios-periphery-comment.yml";
-const PRODUCER_WORKFLOW_PATH = ".github/workflows/ios-periphery.yml";
 const MACOS_PRODUCER_WORKFLOW_PATH = ".github/workflows/macos-periphery.yml";
 const ARTIFACT_NAME = "ios-periphery-dead-code-12345-2";
 
@@ -67,11 +66,10 @@ const previousComments = (
 ];
 
 function producerRunMetadata(
-  platform: "iOS" | "macOS",
+  _platform: "iOS" | "macOS",
   source: ProducerEvent = sourceEvents.report,
 ) {
-  const file = platform === "iOS" ? PRODUCER_WORKFLOW_PATH : MACOS_PRODUCER_WORKFLOW_PATH;
-  const workflow = readWorkflow(file);
+  const workflow = readWorkflow(MACOS_PRODUCER_WORKFLOW_PATH);
   const github = {
     workflow: workflow.name,
     event_name: source.eventName,
@@ -123,6 +121,9 @@ async function runCommenter(
     liveRepositoryAfter?: string;
     existingComments?: ExistingComment[];
     commentErrorStatus?: number;
+    commentErrorPlatform?: "iOS" | "macOS";
+    downloadErrorArtifactId?: number;
+    captureError?: boolean;
     liveHeadSha?: string;
     liveHeadShaAfter?: string;
     scanJobConclusion?: string;
@@ -132,6 +133,7 @@ async function runCommenter(
     previousAttempts?: number[];
     scopeJobConclusion?: string;
     workflowRuns?: Partial<WorkflowRun>[];
+    otherReport?: { artifact: Artifact; archiveData: Buffer; producerAttempt?: number };
   } = {},
 ) {
   const platform = options.platform ?? "iOS";
@@ -153,23 +155,36 @@ async function runCommenter(
     conclusion,
     status: "completed",
   });
+  const legacyIos = run.name === "iOS Periphery Dead Code";
+  const scopeJobName = legacyIos ? "Detect iOS scan scope" : "Detect macOS scan scope";
   const producerJobs = (attempt: number, conclusion = "success") =>
-    platform === "macOS" ? [job("Build macOS Periphery reports", attempt, conclusion)] : [];
+    legacyIos ? [] : [job(`Build ${platform} Periphery reports`, attempt, conclusion)];
+  const otherPlatform = platform === "iOS" ? "macOS" : "iOS";
   const core = {
     infos: [] as string[],
     warnings: [] as string[],
+    errors: [] as string[],
     info(message: string) {
       this.infos.push(message);
     },
     warning(message: string) {
       this.warnings.push(message);
     },
+    error(message: string) {
+      this.errors.push(message);
+    },
   };
   let pullGetCount = 0;
   const createdBodies: string[] = [];
   const updatedBodies: string[] = [];
   function writeComment(method: string, bodies: string[], body: string) {
-    if (options.commentErrorStatus) {
+    if (
+      options.commentErrorStatus &&
+      (!options.commentErrorPlatform ||
+        body.includes(
+          `<!-- openclaw-${options.commentErrorPlatform.toLowerCase()}-periphery-dead-code -->`,
+        ))
+    ) {
       throw Object.assign(new Error("comment write failed"), {
         status: options.commentErrorStatus,
       });
@@ -186,17 +201,27 @@ async function runCommenter(
           return [
             ...(options.previousAttempts ?? []).flatMap((run_attempt) =>
               [
-                job(`Detect ${platform} scan scope`, run_attempt),
+                job(scopeJobName, run_attempt),
                 job(`Scan ${platform} dead code`, run_attempt, "skipped"),
               ].concat(producerJobs(run_attempt)),
             ),
-            job(`Detect ${platform} scan scope`, run.run_attempt, options.scopeJobConclusion),
+            job(scopeJobName, run.run_attempt, options.scopeJobConclusion),
             job(
               `Scan ${platform} dead code`,
               options.scanAttempt ?? options.producerAttempt ?? run.run_attempt,
               options.scanJobConclusion,
             ),
             ...producerJobs(options.producerAttempt ?? run.run_attempt, options.producerConclusion),
+            job(
+              `Scan ${otherPlatform} dead code`,
+              run.run_attempt,
+              options.otherReport ? "success" : "skipped",
+            ),
+            job(
+              `Build ${otherPlatform} Periphery reports`,
+              options.otherReport?.producerAttempt ?? run.run_attempt,
+              options.otherReport ? "success" : "skipped",
+            ),
           ];
         },
         listWorkflowRunArtifacts(this: void, params: Record<string, unknown>) {
@@ -209,6 +234,7 @@ async function runCommenter(
                 artifact.name ||
                 `${platform.toLowerCase()}-periphery-dead-code-${run.id}-${run.run_attempt}`,
             },
+            ...(options.otherReport ? [options.otherReport.artifact] : []),
           ];
         },
         listWorkflowRuns(this: void, params: Record<string, unknown>) {
@@ -220,9 +246,17 @@ async function runCommenter(
           });
           return options.workflowRuns?.map((candidate) => ({ ...run, ...candidate })) ?? [run];
         },
-        async downloadArtifact() {
+        async downloadArtifact(params: { artifact_id: number }) {
           apiCalls.push("downloadArtifact");
-          return { data: archiveData };
+          if (params.artifact_id === options.downloadErrorArtifactId) {
+            throw new Error("artifact download failed");
+          }
+          return {
+            data:
+              params.artifact_id === options.otherReport?.artifact.id
+                ? options.otherReport.archiveData
+                : archiveData,
+          };
         },
       },
       issues: {
@@ -289,9 +323,18 @@ async function runCommenter(
   };
   const context = { payload: { workflow_run: run }, repo: { owner: "openclaw", repo: "openclaw" } };
 
-  await executeCommenter(createRequire(import.meta.url), context, core, github);
+  let error: unknown;
+  try {
+    await executeCommenter(createRequire(import.meta.url), context, core, github);
+  } catch (caught) {
+    if (!options.captureError) {
+      throw caught;
+    }
+    error = caught;
+  }
 
   return {
+    error,
     apiCalls,
     artifactListCount: apiCalls.filter((call) => call === "listArtifacts").length,
     core,
@@ -371,9 +414,9 @@ const findingArchive = reportZip(
 
 describe("iOS Periphery comment workflow", () => {
   it("scopes the report artifact to the workflow attempt", () => {
-    const workflow = readWorkflow(PRODUCER_WORKFLOW_PATH);
-    const upload = workflow.jobs?.scan?.steps?.find(
-      (step) => step.name === "Upload Periphery report",
+    const workflow = readWorkflow(MACOS_PRODUCER_WORKFLOW_PATH);
+    const upload = workflow.jobs?.["ios-index"]?.steps?.find(
+      (step) => step.name === "Upload iOS app report",
     );
 
     expect(upload?.with?.name).toContain("${{ github.run_id }}-${{ github.run_attempt }}");
@@ -452,42 +495,51 @@ describe("iOS Periphery comment workflow", () => {
     ["iOS", 2],
     ["macOS", 2],
     ["macOS", 3],
-  ] as const)("reads %s producer attempt %s after a rerun", async (platform, producerAttempt) => {
-    const result = await runReport(
-      findingArchive,
-      {
-        platform,
-        run: { run_attempt: 3 },
-        scanAttempt: platform === "macOS" ? 3 : 2,
-        producerAttempt,
-        previousAttempts: producerAttempt === 3 ? [1, 2] : undefined,
-      },
-      { name: `${platform.toLowerCase()}-periphery-dead-code-12345-${producerAttempt}` },
-    );
-    expect(result.downloadCount).toBe(1);
-    expect(result.createdBodies[0]).toContain("unusedSyntheticFunction");
-    expect(result.core.warnings).toEqual([]);
-  });
-
-  it.each(["failure", "cancelled"])(
-    "does not fall back to an old report after a %s macOS producer rerun",
-    async (producerConclusion) => {
+  ] as const)(
+    "reads %s producer attempt %s when its sibling failed",
+    async (platform, producerAttempt) => {
       const result = await runReport(
         findingArchive,
         {
-          platform: "macOS",
+          platform,
+          run: { run_attempt: 3 },
+          scanAttempt: platform === "macOS" ? 3 : 2,
+          producerAttempt,
+          producerConclusion: "failure",
+          previousAttempts: producerAttempt === 3 ? [1, 2] : undefined,
+        },
+        { name: `${platform.toLowerCase()}-periphery-dead-code-12345-${producerAttempt}` },
+      );
+      expect(result.downloadCount).toBe(1);
+      expect(result.createdBodies[0]).toContain("unusedSyntheticFunction");
+      expect(result.core.warnings).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["iOS", "failure"],
+    ["iOS", "cancelled"],
+    ["macOS", "failure"],
+    ["macOS", "cancelled"],
+  ] as const)(
+    "does not fall back to an old %s report after a %s producer rerun",
+    async (platform, producerConclusion) => {
+      const result = await runReport(
+        findingArchive,
+        {
+          platform,
           producerAttempt: 3,
           producerConclusion,
           previousAttempts: [1, 2],
           scanJobConclusion: producerConclusion === "cancelled" ? "skipped" : "failure",
           run: { run_attempt: 3 },
         },
-        { name: "macos-periphery-dead-code-12345-2" },
+        { name: `${platform.toLowerCase()}-periphery-dead-code-12345-2` },
       );
       expect(result.downloadCount).toBe(0);
       expectUnavailableComment(result.createdBodies);
       expect(result.core.warnings).toEqual([
-        "No macos-periphery-dead-code-12345-3 artifact found.",
+        `No ${platform.toLowerCase()}-periphery-dead-code-12345-3 artifact found.`,
       ]);
     },
   );
@@ -541,7 +593,7 @@ describe("iOS Periphery comment workflow", () => {
 
 describe("Periphery publication admission", () => {
   const platform = "iOS";
-  const name = `${platform} Periphery Dead Code`;
+  const name = readWorkflow(MACOS_PRODUCER_WORKFLOW_PATH).name;
   const report = producerRunMetadata(platform);
   const passive = producerRunMetadata(platform, sourceEvents.passive);
   const draft = producerRunMetadata(platform, sourceEvents.draft);
@@ -559,7 +611,7 @@ describe("Periphery publication admission", () => {
       async (intent) => {
         const sourceEvent: ProducerEvent = sourceEvents[intent];
         const metadata = producerRunMetadata(producerPlatform, sourceEvent);
-        expect(metadata.display_title).toBe(`${producerPlatform} Periphery Dead Code [${intent}]`);
+        expect(metadata.display_title).toBe(`${name} [${intent}]`);
         const result = await publish({
           platform: producerPlatform,
           sourceEvent,
@@ -724,7 +776,132 @@ describe("Periphery publication admission", () => {
         scopeJobConclusion,
         scanJobConclusion,
       });
-      expectUnavailableComment(result.createdBodies);
+      if (scopeJobConclusion === "failure") {
+        expect(result.createdBodies).toHaveLength(2);
+        for (const body of result.createdBodies) {
+          expect(body).toContain("Periphery did not complete");
+        }
+      } else {
+        expectUnavailableComment(result.createdBodies);
+      }
     },
   );
 });
+
+it("publishes the iOS report even when the first app report is successful without an existing comment", async () => {
+  const iosArchive = await findingArchive;
+  const result = await runReport(
+    reportZip(),
+    {
+      platform: "macOS",
+      otherReport: {
+        artifact: makeArtifact({ id: 78, size_in_bytes: iosArchive.length }),
+        archiveData: iosArchive,
+      },
+    },
+    { name: "macos-periphery-dead-code-12345-2" },
+  );
+  expect(result.createdBodies).toHaveLength(1);
+  expect(result.createdBodies[0]).toContain("<!-- openclaw-ios-periphery-dead-code -->");
+  expect(result.createdBodies[0]).toContain("unusedSyntheticFunction");
+  expect(result.downloadCount).toBe(2);
+});
+
+it("keeps a failed app report independent of the other producer's retained successful attempt", async () => {
+  const iosArchive = await findingArchive;
+  const result = await runReport(
+    Buffer.alloc(0),
+    {
+      platform: "macOS",
+      run: { run_attempt: 3 },
+      producerAttempt: 3,
+      otherReport: {
+        artifact: makeArtifact({
+          id: 78,
+          name: "ios-periphery-dead-code-12345-2",
+          size_in_bytes: iosArchive.length,
+        }),
+        archiveData: iosArchive,
+        producerAttempt: 2,
+      },
+    },
+    { name: "macos-periphery-dead-code-12345-2" },
+  );
+  expect(result.createdBodies).toHaveLength(2);
+  expect(result.createdBodies[0]).toContain("Periphery did not complete");
+  expect(result.createdBodies[1]).toContain("unusedSyntheticFunction");
+  expect(result.core.warnings).toEqual(["No macos-periphery-dead-code-12345-3 artifact found."]);
+});
+
+it("reads an in-flight iOS report from the previous automatic producer", async () => {
+  const result = await runReport(findingArchive, {
+    run: { name: "iOS Periphery Dead Code", display_title: "iOS Periphery Dead Code [report]" },
+  });
+  expect(result.createdBodies).toHaveLength(1);
+  expect(result.createdBodies[0]).toContain("unusedSyntheticFunction");
+  expect(result.downloadCount).toBe(1);
+  expect(result.core.warnings).toEqual([]);
+});
+
+it.each(["macOS", "iOS"] as const)(
+  "attempts both app reports before surfacing a rejected %s artifact download",
+  async (failedPlatform) => {
+    const archive = await findingArchive;
+    const result = await runReport(
+      archive,
+      {
+        platform: "macOS",
+        otherReport: {
+          artifact: makeArtifact({ id: 78, size_in_bytes: archive.length }),
+          archiveData: archive,
+        },
+        downloadErrorArtifactId: failedPlatform === "macOS" ? artifactFixture.id : 78,
+        captureError: true,
+      },
+      { name: "macos-periphery-dead-code-12345-2" },
+    );
+    expect(result.downloadCount).toBe(2);
+    expect(result.createdBodies).toHaveLength(1);
+    expect(result.createdBodies[0]).toContain(
+      failedPlatform === "macOS"
+        ? "<!-- openclaw-ios-periphery-dead-code -->"
+        : "<!-- openclaw-macos-periphery-dead-code -->",
+    );
+    expect(result.error).toBeInstanceOf(AggregateError);
+    expect(result.core.errors).toEqual([
+      `Could not publish ${failedPlatform.toLowerCase()}-periphery-dead-code report.`,
+    ]);
+  },
+);
+
+it.each(["macOS", "iOS"] as const)(
+  "attempts both app reports before surfacing a rejected %s comment write",
+  async (failedPlatform) => {
+    const archive = await findingArchive;
+    const result = await runReport(
+      archive,
+      {
+        platform: "macOS",
+        otherReport: {
+          artifact: makeArtifact({ id: 78, size_in_bytes: archive.length }),
+          archiveData: archive,
+        },
+        commentErrorStatus: 500,
+        commentErrorPlatform: failedPlatform,
+        captureError: true,
+      },
+      { name: "macos-periphery-dead-code-12345-2" },
+    );
+    expect(result.downloadCount).toBe(2);
+    expect(result.createdBodies).toHaveLength(1);
+    expect(result.createdBodies[0]).toContain(
+      failedPlatform === "macOS"
+        ? "<!-- openclaw-ios-periphery-dead-code -->"
+        : "<!-- openclaw-macos-periphery-dead-code -->",
+    );
+    expect(result.error).toBeInstanceOf(AggregateError);
+    expect(result.core.errors).toEqual([
+      `Could not publish ${failedPlatform.toLowerCase()}-periphery-dead-code report.`,
+    ]);
+  },
+);

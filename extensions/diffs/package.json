@@ -11,7 +11,7 @@
     "@pierre/diffs": "1.5.2",
     "@shikijs/langs": "4.5.0",
     "playwright-core": "1.64.1",
-    "typebox": "1.4.1",
+    "typebox": "1.4.2",
     "zod": "4.6.7"
   },
   "devDependencies": {

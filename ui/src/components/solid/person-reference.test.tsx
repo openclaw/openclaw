@@ -376,11 +376,15 @@ const guestRoster = {
 async function mountPersonContext(options: {
   guest: boolean;
   handler: Parameters<typeof createSessionOwnerMenuHarness>[0];
+  /** Guests may start sessions unless a test removes that access. */
+  methods?: string[];
 }) {
   const harness = createSessionOwnerMenuHarness(options.handler);
   if (options.guest) {
     harness.publish({
-      hello: gatewayHelloForMethods(["users.mentionable"], ["operator.sessions.write"]),
+      hello: gatewayHelloForMethods(options.methods ?? ["users.mentionable", "sessions.create"], [
+        "operator.sessions.write",
+      ]),
       selfUser: {
         id: "profile-sam",
         identity: { type: "profile", id: "profile-sam" },
@@ -395,7 +399,9 @@ async function mountPersonContext(options: {
   });
   const session = document.createElement("section");
   session.dataset.chatSessionKey = welcomeKey;
-  provider.append(session);
+  // Inbox, side panels and pending creates render chips without an owning session key.
+  const outside = document.createElement("section");
+  provider.append(session, outside);
   document.body.append(provider);
   onTestFinished(async () => {
     provider.remove();
@@ -404,7 +410,11 @@ async function mountPersonContext(options: {
   });
   const calls = (method: string) =>
     harness.request.mock.calls.filter(([name]) => name === method).map(([, params]) => params);
-  return { ...harness, session, calls };
+  const roster = (query: string, placement: "session" | "outside") =>
+    placement === "session"
+      ? { sessionKey: welcomeKey, query }
+      : { agentId: context.agentSelection.state.selectedId, query };
+  return { ...harness, session, outside, calls, roster };
 }
 
 it("resolves a guest's mention through the session roster by exact profile id", async () => {
@@ -431,11 +441,52 @@ it("resolves a guest's mention through the session roster by exact profile id", 
   expect(calls("users.mentionable")).toHaveLength(1);
 });
 
-it.each(["self", "missing", "refused"] as const)(
-  "shows the mention label quietly when a guest's %s mention has no roster match",
-  async (outcome) => {
-    const { session, calls } = await mountPersonContext({
+it("resolves a guest's mention outside a session through the selected agent's roster", async () => {
+  const { session, outside, calls, context } = await mountPersonContext({
+    guest: true,
+    handler: (method) =>
+      method === "users.mentionable" ? guestRoster : sessionOwnerProfiles("Ada"),
+  });
+  const agentId = context.agentSelection.state.selectedId;
+  expect(agentId).toBeTruthy();
+  const host = await createReference("profile-josh", "@josh", outside);
+  const { card } = openReference(host);
+  await waitForSolid(() =>
+    expect(queries(card).getByRole("heading", { name: "Josh" })).toBeTruthy(),
+  );
+  expect(card.textContent).not.toContain("Could not load people");
+  expect(card.querySelector("img")?.getAttribute("src")).toBe("/api/users/profile-josh/avatar?v=4");
+  expect(calls("users.list")).toEqual([]);
+  expect(calls("users.mentionable")).toEqual([{ agentId, query: "josh" }]);
+
+  // The agent and session forms of one label keep separate cache entries.
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  openReference(host);
+  const inSession = await createReference("profile-josh", "@josh", session);
+  const sessionCard = openReference(inSession);
+  await waitForSolid(() =>
+    expect(queries(sessionCard.card).getByRole("heading", { name: "Josh" })).toBeTruthy(),
+  );
+  expect(calls("users.mentionable")).toEqual([
+    { agentId, query: "josh" },
+    { sessionKey: welcomeKey, query: "josh" },
+  ]);
+});
+
+it.each([
+  ["session", "self"],
+  ["session", "missing"],
+  ["session", "refused"],
+  ["outside", "self"],
+  ["outside", "missing"],
+  ["outside", "refused"],
+  ["outside", "no new sessions"],
+] as const)(
+  "shows the mention label quietly when a guest's %s %s mention has no roster match",
+  async (placement, outcome) => {
+    const fixture = await mountPersonContext({
       guest: true,
+      methods: outcome === "no new sessions" ? ["users.mentionable"] : undefined,
       handler: (method) =>
         method !== "users.mentionable"
           ? sessionOwnerProfiles("Ada")
@@ -445,74 +496,87 @@ it.each(["self", "missing", "refused"] as const)(
     });
     const [id, label] =
       outcome === "self" ? ["profile-sam", "@Sam"] : ["profile-renamed", "@Old Name"];
-    const host = await createReference(id, label, session);
+    const host = await createReference(id, label, fixture[placement]);
     const { card } = openReference(host);
     const name = label.slice(1);
     await waitForSolid(() => expect(queries(card).getByRole("heading", { name })).toBeTruthy());
     expect(card.textContent).not.toContain("Could not load people");
     expect(card.querySelector("img")).toBeNull();
-    expect(calls("users.list")).toEqual([]);
-    expect(calls("users.mentionable")).toEqual(
-      outcome === "self" ? [] : [{ sessionKey: welcomeKey, query: name }],
+    expect(fixture.calls("users.list")).toEqual([]);
+    expect(fixture.calls("users.mentionable")).toEqual(
+      outcome === "self" || outcome === "no new sessions" ? [] : [fixture.roster(name, placement)],
     );
   },
 );
 
-it("keeps staff on the people directory without consulting the session roster", async () => {
-  const { session, calls } = await mountPersonContext({
+it.each(["session", "outside"] as const)(
+  "keeps staff %s on the people directory without consulting a roster",
+  async (placement) => {
+    const fixture = await mountPersonContext({
+      guest: false,
+      handler: (method) =>
+        method === "users.mentionable" ? guestRoster : sessionOwnerProfiles("Ada", "Josh"),
+    });
+    const known = await createReference("profile-josh", "@josh", fixture[placement]);
+    const first = openReference(known);
+    await waitForSolid(() =>
+      expect(queries(first.card).getByRole("heading", { name: "Josh" })).toBeTruthy(),
+    );
+    const missing = await createReference("profile-renamed", "@Old Name", fixture[placement]);
+    const second = openReference(missing);
+    await waitForSolid(() =>
+      expect(queries(second.card).getByRole("status").textContent).toBe(
+        "Could not load people. Try again.",
+      ),
+    );
+    expect(fixture.calls("users.list").length).toBeGreaterThan(0);
+    expect(fixture.calls("users.mentionable")).toEqual([]);
+  },
+);
+
+it("keeps a failed staff directory outside a session on its retry status", async () => {
+  const { outside, calls } = await mountPersonContext({
     guest: false,
     handler: (method) =>
-      method === "users.mentionable" ? guestRoster : sessionOwnerProfiles("Ada", "Josh"),
+      method === "users.list" ? Promise.reject(new Error("unavailable")) : guestRoster,
   });
-  const known = await createReference("profile-josh", "@josh", session);
-  const first = openReference(known);
+  const host = await createReference("profile-josh", "@josh", outside);
+  const { card } = openReference(host);
   await waitForSolid(() =>
-    expect(queries(first.card).getByRole("heading", { name: "Josh" })).toBeTruthy(),
-  );
-  const missing = await createReference("profile-renamed", "@Old Name", session);
-  const second = openReference(missing);
-  await waitForSolid(() =>
-    expect(queries(second.card).getByRole("status").textContent).toBe(
-      "Could not load people. Try again.",
-    ),
+    expect(queries(card).getByRole("status").textContent).toBe("Could not load people. Try again."),
   );
   expect(calls("users.list").length).toBeGreaterThan(0);
   expect(calls("users.mentionable")).toEqual([]);
 });
 
-it("keeps a guest outside a session on the unresolved status", async () => {
-  const { calls } = await mountPersonContext({ guest: true, handler: () => guestRoster });
-  const host = await createReference("profile-josh", "@josh", document.body);
-  const { card } = openReference(host);
-  await waitForSolid(() =>
-    expect(queries(card).getByRole("status").textContent).toBe("Could not load people. Try again."),
-  );
-  expect(calls("users.mentionable")).toEqual([]);
-});
+it.each(["session", "outside"] as const)(
+  "retires a guest's %s roster read across reconnects without reviving its card",
+  async (placement) => {
+    let pending = Promise.withResolvers<typeof guestRoster>();
+    const fixture = await mountPersonContext({
+      guest: true,
+      handler: (method) =>
+        method === "users.mentionable" ? pending.promise : sessionOwnerProfiles("Ada"),
+    });
+    const { calls, publish, context } = fixture;
+    const host = await createReference("profile-josh", "@josh", fixture[placement]);
+    const { card } = openReference(host);
+    await waitForSolid(() => expect(calls("users.mentionable")).toHaveLength(1));
+    const { hello } = context.gateway.snapshot;
+    publish({ phase: "reconnecting" });
+    pending.resolve(guestRoster);
+    await settle();
+    expect(card.isConnected).toBe(false);
+    expect(dialog()).toBeNull();
 
-it("retires a guest roster read across reconnects without reviving its card", async () => {
-  let pending = Promise.withResolvers<typeof guestRoster>();
-  const { session, calls, publish, context } = await mountPersonContext({
-    guest: true,
-    handler: (method) =>
-      method === "users.mentionable" ? pending.promise : sessionOwnerProfiles("Ada"),
-  });
-  const host = await createReference("profile-josh", "@josh", session);
-  const { card } = openReference(host);
-  await waitForSolid(() => expect(calls("users.mentionable")).toHaveLength(1));
-  const { hello } = context.gateway.snapshot;
-  publish({ phase: "reconnecting" });
-  pending.resolve(guestRoster);
-  await settle();
-  expect(card.isConnected).toBe(false);
-  expect(dialog()).toBeNull();
-
-  pending = Promise.withResolvers<typeof guestRoster>();
-  publish({ phase: "connected", hello: { ...hello! } });
-  const reopened = openReference(host);
-  await waitForSolid(() => expect(calls("users.mentionable")).toHaveLength(2));
-  pending.resolve(guestRoster);
-  await waitForSolid(() =>
-    expect(queries(reopened.card).getByRole("heading", { name: "Josh" })).toBeTruthy(),
-  );
-});
+    pending = Promise.withResolvers<typeof guestRoster>();
+    publish({ phase: "connected", hello: { ...hello! } });
+    const reopened = openReference(host);
+    await waitForSolid(() => expect(calls("users.mentionable")).toHaveLength(2));
+    expect(calls("users.mentionable")[1]).toEqual(fixture.roster("josh", placement));
+    pending.resolve(guestRoster);
+    await waitForSolid(() =>
+      expect(queries(reopened.card).getByRole("heading", { name: "Josh" })).toBeTruthy(),
+    );
+  },
+);

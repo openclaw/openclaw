@@ -264,106 +264,6 @@ export function createSystems(context: ApplicationContext) {
     }
   }
 
-  function select(id: string): void {
-    if (!current() || !id.trim()) {
-      return;
-    }
-    telemetryRequest?.abort();
-    telemetryRequest = undefined;
-    if (id !== state.selectedId) {
-      resetDesktopSetup();
-    }
-    state.selectedId = id;
-    notify();
-  }
-
-  function updatePresentation(
-    patch: Partial<
-      Pick<SystemsState, "query" | "sortMode" | "statusFilter" | "showStats" | "showDetails">
-    >,
-  ): void {
-    Object.assign(state, patch);
-    notify();
-  }
-
-  /** A sidebar subscription only redraws; it never starts a second inventory reader. */
-  function setPresented(presented: boolean): void {
-    if (active === presented) {
-      return;
-    }
-    active = presented;
-    if (!presented) {
-      subscriptions.splice(0).forEach((unsubscribe) => unsubscribe());
-      cancelRefresh();
-      cancelBackups();
-      resetDesktopSetup();
-      return;
-    }
-    let location = context.router.getState().location;
-    subscriptions = [
-      context.router.subscribe((next) => {
-        if (next.location !== location) {
-          location = next.location;
-          // Navigation must release the action before Solid can commit page parking.
-          desktopSetupRequest?.resolve();
-        }
-      }),
-      // Gateway receipts cancel stale inventory, backup, and desktop work before connection or access changes settle.
-      context.gateway.subscribe((snapshot) => {
-        const changed = lifecycle.transition(snapshot);
-        if (!current()) {
-          clear();
-        } else if (changed) {
-          cancelRefresh();
-          clearBackups();
-          resetDesktopSetup();
-          telemetry.clear();
-          if (snapshot.phase === "connected") {
-            void refresh();
-          }
-        }
-        if (!hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
-          clearBackups(t("systems.backups.readAccessRequired"));
-        }
-        notify();
-      }),
-      context.gateway.subscribeEvents((event) => {
-        if (event.event === "config.changed") {
-          cancelBackups();
-          storageProbes.clear();
-        }
-        if (
-          event.event === "presence" ||
-          event.event === "node.pair.resolved" ||
-          event.event === "node.runnerInventory.changed" ||
-          event.event === "config.changed"
-        ) {
-          void refresh();
-        } else if (
-          event.event === "node.hostStats" &&
-          isRecord(event.payload) &&
-          typeof event.payload.nodeId === "string" &&
-          state.selectedId === `node:${event.payload.nodeId}`
-        ) {
-          void refreshTelemetry();
-        }
-      }),
-      // Rebuild session-to-machine bindings synchronously for selection, telemetry, and shared inventory readers.
-      context.sessions.subscribe(() => {
-        projectRows();
-        notify();
-      }),
-    ];
-    if (lifecycle.transition(context.gateway.snapshot)) {
-      telemetry.clear();
-    }
-    if (!current()) {
-      clear();
-    } else {
-      void refresh();
-    }
-  }
-
   function cancelRefresh(): void {
     inventoryRequest.cancel();
     telemetryRequest?.abort();
@@ -535,9 +435,103 @@ export function createSystems(context: ApplicationContext) {
     desktopSetupBusy,
     canEnableHostDesktop,
     telemetryHistory,
-    select,
-    updatePresentation,
-    setPresented,
+    select(id: string): void {
+      if (!current() || !id.trim()) {
+        return;
+      }
+      telemetryRequest?.abort();
+      telemetryRequest = undefined;
+      if (id !== state.selectedId) {
+        resetDesktopSetup();
+      }
+      state.selectedId = id;
+      notify();
+    },
+    updatePresentation(
+      patch: Partial<
+        Pick<SystemsState, "query" | "sortMode" | "statusFilter" | "showStats" | "showDetails">
+      >,
+    ): void {
+      Object.assign(state, patch);
+      notify();
+    },
+    /** A sidebar subscription only redraws; it never starts a second inventory reader. */
+    setPresented(presented: boolean): void {
+      if (active === presented) {
+        return;
+      }
+      active = presented;
+      if (!presented) {
+        subscriptions.splice(0).forEach((unsubscribe) => unsubscribe());
+        cancelRefresh();
+        cancelBackups();
+        resetDesktopSetup();
+        return;
+      }
+      let location = context.router.getState().location;
+      subscriptions = [
+        context.router.subscribe((next) => {
+          if (next.location !== location) {
+            location = next.location;
+            // Navigation must release the action before Solid can commit page parking.
+            desktopSetupRequest?.resolve();
+          }
+        }),
+        // Gateway receipts cancel stale inventory, backup, and desktop work before connection or access changes settle.
+        context.gateway.subscribe((snapshot) => {
+          const changed = lifecycle.transition(snapshot);
+          if (!current()) {
+            clear();
+          } else if (changed) {
+            cancelRefresh();
+            clearBackups();
+            resetDesktopSetup();
+            telemetry.clear();
+            if (snapshot.phase === "connected") {
+              void refresh();
+            }
+          }
+          if (!hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
+            clearBackups(t("systems.backups.readAccessRequired"));
+          }
+          notify();
+        }),
+        context.gateway.subscribeEvents((event) => {
+          if (event.event === "config.changed") {
+            cancelBackups();
+            storageProbes.clear();
+          }
+          if (
+            event.event === "presence" ||
+            event.event === "node.pair.resolved" ||
+            event.event === "node.runnerInventory.changed" ||
+            event.event === "config.changed"
+          ) {
+            void refresh();
+          } else if (
+            event.event === "node.hostStats" &&
+            isRecord(event.payload) &&
+            typeof event.payload.nodeId === "string" &&
+            state.selectedId === `node:${event.payload.nodeId}`
+          ) {
+            void refreshTelemetry();
+          }
+        }),
+        // Rebuild session-to-machine bindings synchronously for selection, telemetry, and shared inventory readers.
+        context.sessions.subscribe(() => {
+          projectRows();
+          notify();
+        }),
+      ];
+      if (lifecycle.transition(context.gateway.snapshot)) {
+        telemetry.clear();
+      }
+      if (!current()) {
+        clear();
+      } else {
+        void refresh();
+      }
+    },
     refresh,
     refreshTelemetry,
     enableHostDesktop,

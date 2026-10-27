@@ -474,6 +474,42 @@ sendReceipt(${JSON.stringify(ready)}, "ready"); setInterval(() => {}, 1000);`,
     },
   );
 
+  it.each([
+    ["zombie reaped between probes", "zombie", 1],
+    ["reaped process", "gone", 1],
+    ["live process without procfs", "live", 0],
+  ] as const)("reports is_running for a %s (fixture state %s)", (_name, initial, expected) => {
+    const f = fixture();
+    const probe = readFileSync(owner, "utf8").match(/is_running\(\) \{[\s\S]*?\n\}/)?.[0];
+    expect(probe).toBeDefined();
+    const pidFile = join(f.home, "pid");
+    writeFileSync(pidFile, "4242\n");
+    // The container reaper may retire an exited supervisor right after the first probe.
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          probe!,
+          'pid_file=$1; state=$2; zombie_stat=$3; reap() { [ "$state" != zombie ] || state=gone; }',
+          'kill() { local alive=0; [ "$1" = -0 ] && [ "$state" != gone ] || alive=1; reap; return $alive; }',
+          'cat() { if [ "$1" != /proc/4242/stat ]; then command cat "$@"; return; fi',
+          '  local found=1; [ "$state" != zombie ] || { printf "%s\\n" "$zombie_stat"; found=0; }',
+          "  reap; return $found; }",
+          "status=0; is_running || status=$?; printf '%s' $status",
+        ].join("\n"),
+        "fixture",
+        pidFile,
+        initial,
+        `4242 (node) Z${" 0".repeat(49)}`,
+      ],
+      { encoding: "utf8" },
+    );
+    expectStatus(result);
+    expect(result.stdout).toBe(String(expected));
+  });
+
   it.each([true, false])(
     "keeps outer policy lookup failure nonzero with supervisor active=%s",
     (active) => {

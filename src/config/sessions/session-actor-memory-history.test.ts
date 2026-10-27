@@ -318,28 +318,6 @@ describe("memory actor history", () => {
     }
   });
 
-  it("retains historical sessionId windows across rotation and removes them with the logical session", async () => {
-    const { acquire, reset } = await fixture([message("old", null, "user", "Preserved history")]);
-    await reset({ sessionId: "window-two", incognito: true, updatedAt: 2 });
-    const next = await acquire();
-    assert(next.storage, "Expected memory storage");
-    const old = await readMemory(next.storage, "session.history.hydrate", { sessionId });
-    expect(ids(old.snapshot.events)).toEqual([sessionId, "old"]);
-    expect((await readMemory(next.storage, "session.history.hydrate", {})).snapshot.events).toEqual(
-      [],
-    );
-    expect((await mutateMemory(next.storage, "session.lifecycle.delete", {})).kind).toBe(
-      "committed",
-    );
-    const fresh = await acquire();
-    await expect(
-      readMemory(fresh.storage!, "session.history.hydrate", { sessionId }),
-    ).resolves.toMatchObject({
-      kind: "full",
-      snapshot: { events: [], eventJson: [], eventSeqs: [] },
-    });
-  });
-
   it("keeps full hydration exact while model context excludes obsolete payloads and private fields", async () => {
     const events = [
       message("old", null, "user", "old-body-".repeat(4000)),
@@ -603,7 +581,7 @@ describe("memory actor history facts", () => {
       await read("maintenance", { request: { operation: "identity", eventId: "opaque" } }),
     ).toEqual({ kind: "transcript-maintenance", seq: 2 });
   });
-  it("checks current permission and writer authority before returning replay anchors", async () => {
+  it("checks replay authority and clears retired history on deletion", async () => {
     const { storage, acquire, read, reset } = await fixture(
       [message("user", null, "user", "Question")],
       {
@@ -687,6 +665,21 @@ describe("memory actor history facts", () => {
     expect(await current.storage!.read(retiredWindow, authority)).toMatchObject({
       anchors: [],
       contextAuthority: { entry: { sessionId: "next-window" } },
+    });
+    const historical = await readMemory(current.storage!, "session.history.hydrate", { sessionId });
+    expect(ids(historical.snapshot.events)).toEqual([sessionId, "user"]);
+    expect(
+      (await readMemory(current.storage!, "session.history.hydrate", {})).snapshot.events,
+    ).toEqual([]);
+    expect((await mutateMemory(current.storage!, "session.lifecycle.delete", {})).kind).toBe(
+      "committed",
+    );
+    const fresh = await acquire();
+    await expect(
+      readMemory(fresh.storage!, "session.history.hydrate", { sessionId }),
+    ).resolves.toMatchObject({
+      kind: "full",
+      snapshot: { events: [], eventJson: [], eventSeqs: [] },
     });
   });
 

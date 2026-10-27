@@ -76,14 +76,12 @@ function mentionOverflow(
   };
 }
 
-type SelectedHumanMentionsProps = {
+export function SelectedHumanMentions(props: {
   text: string;
   mentions: readonly HumanMention[] | undefined;
   onRemove: () => void;
   avatarUrls?: ReadonlyMap<string, string>;
-};
-
-export function SelectedHumanMentions(props: SelectedHumanMentionsProps) {
+}) {
   const personElements = new Map<string, HTMLElement>();
   let more!: HTMLSpanElement;
   const people = createMemo(

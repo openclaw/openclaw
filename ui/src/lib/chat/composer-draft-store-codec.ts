@@ -8,6 +8,7 @@ import type {
 import { isChatGoalDraftMode } from "./goal-draft.ts";
 import { readHumanMentions } from "./human-mentions.ts";
 import { isChatReplyTarget } from "./reply-target.ts";
+import { readChatSelectionAnnotation } from "./selection-annotation.ts";
 
 export type StoredDurableComposerDraft = DurableComposerDraft &
   DurableComposerDraftScope & {
@@ -79,7 +80,12 @@ export function parseStoredDraft(value: unknown): StoredDurableComposerDraft | n
     !Array.isArray(record.attachments) ||
     !record.attachments.every(isStoredAttachment) ||
     (record.questionDrafts !== undefined &&
-      (!Array.isArray(record.questionDrafts) || !record.questionDrafts.every(isQuestionDraft)))
+      (!Array.isArray(record.questionDrafts) || !record.questionDrafts.every(isQuestionDraft))) ||
+    (record.selectionAnnotations !== undefined &&
+      (!Array.isArray(record.selectionAnnotations) ||
+        !record.selectionAnnotations.every((annotation) =>
+          readChatSelectionAnnotation(annotation),
+        )))
   ) {
     return null;
   }

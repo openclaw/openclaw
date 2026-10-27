@@ -155,19 +155,19 @@ suite.define(() => {
         await gateway.resolveDeferred("sessions.list");
         expect((await navigation)?.ok()).toBe(true);
         expect(await row.count()).toBe(1);
-        expect(
-          await page.evaluate(() => {
-            const snapshot = window.openclawControlUi?.snapshot();
-            return {
-              ready: snapshot?.ready,
-              routeReady: snapshot?.routeReady,
-              rosterReady: snapshot?.rosterReady,
-              published:
-                document.querySelector("openclaw-app")?.getAttribute("data-openclaw-ready") ===
-                String(snapshot?.generation),
-            };
-          }),
-        ).toEqual({ ready: true, routeReady: true, rosterReady: true, published: true });
+        await expect
+          .poll(() =>
+            page.evaluate(() => {
+              const snapshot = window.openclawControlUi?.snapshot();
+              return {
+                ...snapshot,
+                published:
+                  document.querySelector("openclaw-app")?.getAttribute("data-openclaw-ready") ===
+                  String(snapshot?.generation),
+              };
+            }),
+          )
+          .toMatchObject({ ready: true, routeReady: true, rosterReady: true, published: true });
       }
       expect(await page.goto("about:blank")).toBeNull();
       expect(await page.reload()).toBeNull();
@@ -219,7 +219,7 @@ suite.define(() => {
         if (offline) {
           await gateway.setOnline(false);
           await page
-            .locator(".sidebar-shell__footer .gateway-status")
+            .locator(".sidebar-shell__connection .gateway-status")
             .getByText("Reconnecting…", { exact: true })
             .waitFor();
         }

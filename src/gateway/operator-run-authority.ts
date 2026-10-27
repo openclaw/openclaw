@@ -142,6 +142,7 @@ function prepareRunRolePolicy(
         sessionAccessCap: role.sessions.others,
         sandboxRequired: role.sandbox === "required",
         agents: role.agents,
+        accessPrograms: role.accessPrograms,
       }
     : undefined;
 }

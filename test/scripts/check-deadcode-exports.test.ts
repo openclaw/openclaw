@@ -42,6 +42,13 @@ const isEntry = (entries: readonly string[], file: string) =>
 afterEach(() => vi.restoreAllMocks());
 
 describe("check-deadcode-exports", () => {
+  it("models the renderer and path-selected native compiler as executable roots", () => {
+    expect(knipConfig.workspaces).toHaveProperty(
+      "packages/mermaid-renderer.entry",
+      expect.arrayContaining(["src/renderer.ts!", "src/native.ts!", "src/pele.min.ts!"]),
+    );
+  });
+
   it("models the PostgreSQL broker fixture only when both consumers exist", () => {
     const compile = knipConfig.compilers.mjs;
     const filePath = "config/knip-dynamic-consumers.mjs";
@@ -270,8 +277,9 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
   });
 
   it("models only Vite runner members consumed by the build", () => {
-    const source = `const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(
-  path.join(here, "src/app-route-paths.ts"), options);
+    const source = `const { module: routes, dependencies: routeDependencies } = await runnerImport<
+  typeof import("./src/app-route-paths.ts")
+>(routePath, options);
 const offlineShell = { routes: routes.APP_ROUTE_PATHS };`;
     const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
     expect(knipConfig.workspaces["."].project).toContain("config/knip-vite-consumers.mjs!");
@@ -499,6 +507,88 @@ const unrelatedArgs = [
     expect(withoutConsumers).not.toContain("fetchWithSsrFGuard");
     expect(withoutConsumers).not.toContain("addDoctorLegacyIssues");
     expect(withoutConsumers).not.toContain("recordTrajectoryFlush");
+  });
+
+  it("models Codex lazy runtime members only from their live loaders and consumers", () => {
+    const consumerPaths = {
+      plugin: path.resolve("extensions/codex/src/native-plugin-tool.ts"),
+      thread: path.resolve("extensions/codex/src/native-thread-tool.ts"),
+      adoption: path.resolve("extensions/codex/src/session-catalog-list-operation.ts"),
+      control: path.resolve("extensions/codex/src/session-catalog-control.ts"),
+    };
+    const sources = new Map(
+      Object.values(consumerPaths).map((consumerPath) => [
+        consumerPath,
+        fs.readFileSync(consumerPath, "utf8"),
+      ]),
+    );
+    const compile = knipConfig.compilers.mjs;
+    const readFileSync = fs.readFileSync.bind(fs);
+    const readFile = vi.spyOn(fs, "readFileSync");
+    const compileWithSources = (overrides = new Map<string, string>()) => {
+      readFile.mockImplementation((file, options) => {
+        const override = overrides.get(path.resolve(String(file)));
+        return override ?? readFileSync(file, options);
+      });
+      return compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    };
+
+    const compiled = compileWithSources();
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\bcodexBindingConnectionSelection as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/extensions\/codex\/src\/app-server\/binding-connection\.js";/u,
+    );
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\blistNodeAdoptedSessionEntries as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/extensions\/codex\/src\/session-catalog-node-adoption\.js";/u,
+    );
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\bclearSharedCodexAppServerClientAndWait as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/extensions\/codex\/src\/app-server\/shared-client\.js";/u,
+    );
+
+    const bindingWithoutPluginConsumer = replaceFixture(
+      sources.get(consumerPaths.plugin) ?? "",
+      "const { codexBindingConnectionSelection, resolveCodexBindingAppServerConnection } =",
+      "const { resolveCodexBindingAppServerConnection } =",
+    );
+    const pluginRemoved = compileWithSources(
+      new Map([[consumerPaths.plugin, bindingWithoutPluginConsumer]]),
+    );
+    expect(pluginRemoved).toContain("codexBindingConnectionSelection as");
+
+    const bindingWithoutThreadConsumer = replaceFixture(
+      sources.get(consumerPaths.thread) ?? "",
+      "const { codexBindingConnectionSelection, resolveCodexBindingAppServerConnection } =",
+      "const { resolveCodexBindingAppServerConnection } =",
+    );
+    const bothBindingConsumersRemoved = compileWithSources(
+      new Map([
+        [consumerPaths.plugin, bindingWithoutPluginConsumer],
+        [consumerPaths.thread, bindingWithoutThreadConsumer],
+      ]),
+    );
+    expect(bothBindingConsumersRemoved).not.toContain("codexBindingConnectionSelection as");
+
+    const adoptionWithoutLoader = replaceFixture(
+      sources.get(consumerPaths.adoption) ?? "",
+      `const loadNodeAdoption = createLazyRuntimeModule(
+  () => import("./session-catalog-node-adoption.js"),
+);`,
+      `const loadNodeAdoption = async () => import("./session-catalog-node-adoption.js");`,
+    );
+    expect(
+      compileWithSources(new Map([[consumerPaths.adoption, adoptionWithoutLoader]])),
+    ).not.toContain("listNodeAdoptedSessionEntries as");
+
+    const controlWithoutMember = replaceFixture(
+      sources.get(consumerPaths.control) ?? "",
+      `        const { clearSharedCodexAppServerClientAndWait } = await loadSharedClient();
+        await clearSharedCodexAppServerClientAndWait();`,
+      `        await loadSharedClient();`,
+    );
+    const withoutControlMember = compileWithSources(
+      new Map([[consumerPaths.control, controlWithoutMember]]),
+    );
+    expect(withoutControlMember).not.toContain("clearSharedCodexAppServerClientAndWait as");
+    expect(withoutControlMember).toContain("runtimeProcessDeployManifest");
   });
 
   it("models a computed checkout module member only while its binding and call exist", () => {

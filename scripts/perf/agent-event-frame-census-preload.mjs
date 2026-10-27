@@ -315,4 +315,5 @@ if (isMainThread) {
       save(true);
     }
   });
+  process.channel?.unref();
 }
