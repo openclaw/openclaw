@@ -24,7 +24,6 @@ import {
   mockRequests,
   answerWizard,
   requestParameters,
-  running,
 } from "./model-setup-first-run.test-support.ts";
 import {
   createContext,
@@ -50,10 +49,6 @@ function mountSettings(
   result: Partial<SystemAgentSetupDetectResult> = {},
 ) {
   return mountDetection(context, client, { ...detection, ...result }, false);
-}
-
-function query<E extends Element = HTMLElement>(root: ParentNode, selector: string): E {
-  return root.querySelector<E>(selector)!;
 }
 
 describe("ModelSetupPage catalog icons", () => {
@@ -121,9 +116,11 @@ describe("ModelSetupPage catalog icons", () => {
     });
 
     await waitForFast(() => {
-      expect(query(page, ".model-setup__recommendation img").getAttribute("src")).toBe(
-        "blob:acme-icon",
-      );
+      expect(
+        page
+          .querySelector<HTMLImageElement>(".model-setup__recommendation img")
+          ?.getAttribute("src"),
+      ).toBe("blob:acme-icon");
     });
     expect(fetchMock).toHaveBeenCalledWith(
       `/openclaw/__openclaw__/catalog-icon/${encodeURIComponent(customIconUrl)}`,
@@ -142,7 +139,7 @@ describe("ModelSetupPage catalog icons", () => {
     const { context, client, request } = createContext();
     request.mockImplementation(async (method: string) => {
       if (method === "openclaw.setup.prepare.start") {
-        return { sessionId: "prepare-session", ...running };
+        return { sessionId: "prepare-session", done: false, status: "running" };
       }
       if (method === "wizard.next") {
         return { done: true, status: "done" };
@@ -163,7 +160,11 @@ describe("ModelSetupPage catalog icons", () => {
     });
     expect(page.textContent).not.toContain("llama-cpp/persisted-before-verification");
     expect(page.textContent).not.toContain("Connection verified");
-    expect(callsFor(request, "openclaw.setup.activate.start")).toHaveLength(0);
+    expect(request).not.toHaveBeenCalledWith(
+      "openclaw.setup.activate.start",
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it("config.set flushes a pending config draft before activation review and refreshes afterward", async () => {
@@ -228,7 +229,11 @@ describe("ModelSetupPage catalog icons", () => {
     configSet.resolve({ hash: "hash-2" });
 
     await waitForText(page, "Model setup request failed.");
-    expect(callsFor(request, "openclaw.setup.auth.start")).toHaveLength(0);
+    expect(request).not.toHaveBeenCalledWith(
+      "openclaw.setup.auth.start",
+      expect.anything(),
+      expect.anything(),
+    );
     runtimeConfig.dispose();
   });
 
@@ -244,7 +249,7 @@ describe("ModelSetupPage catalog icons", () => {
       }
       order.push(method);
       if (method === "openclaw.setup.auth.start") {
-        return { sessionId: "wizard-session", ...running };
+        return { sessionId: "wizard-session", done: false, status: "running" };
       }
       if (method === "wizard.next" && nextCount++ === 0) {
         return runningStep({
@@ -308,7 +313,7 @@ describe("ModelSetupPage catalog icons", () => {
       "openclaw.setup.auth.start": async () => {
         startEntered.resolve();
         await releaseStart.promise;
-        return { sessionId: "wizard-session", ...running };
+        return { sessionId: "wizard-session", done: false, status: "running" };
       },
       "wizard.next": (params) => ({
         ...runningStep(step),
@@ -322,14 +327,19 @@ describe("ModelSetupPage catalog icons", () => {
     });
     authButton(page, "provider-auth")!.click();
     await startEntered.promise;
-    const dialog = () => query<HTMLDialogElement>(page, "openclaw-modal-dialog dialog");
-    await waitForFast(() => expect(dialog().open).toBe(true));
+    await waitForFast(() =>
+      expect(page.querySelector<HTMLDialogElement>("openclaw-modal-dialog dialog")?.open).toBe(
+        true,
+      ),
+    );
     releaseStart.resolve();
     await waitForText(page, "Provider key");
-    const input = query<HTMLInputElement>(page, "#model-setup-wizard-text-input");
+    const input = page.querySelector<HTMLInputElement>("#model-setup-wizard-text-input")!;
     await waitForFast(() => {
       expect(input.disabled).toBe(true);
-      expect(dialog().open).toBe(true);
+      expect(page.querySelector<HTMLDialogElement>("openclaw-modal-dialog dialog")?.open).toBe(
+        true,
+      );
     });
     initialRefresh.resolve();
     await waitForFast(() => expect(input.disabled).toBe(false));
@@ -339,9 +349,9 @@ describe("ModelSetupPage catalog icons", () => {
     expect(page.querySelector("#model-setup-wizard-text-input")).toBe(input);
     expect(input.value).toBe("draft-key");
     expect(input.disabled).toBe(true);
-    query(page, "openclaw-modal-dialog form").dispatchEvent(
-      new Event("submit", { bubbles: true, cancelable: true }),
-    );
+    page
+      .querySelector<HTMLFormElement>("openclaw-modal-dialog form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     expect(callsFor(request, "wizard.next")).toHaveLength(2);
     answerRefresh.resolve();
     await waitForFast(() => expect(input.disabled).toBe(false));
@@ -390,7 +400,11 @@ describe("ModelSetupPage catalog icons", () => {
       gatewayRestartRequired: true as const,
     };
     mockRequests(request, {
-      "openclaw.setup.auth.start": () => ({ sessionId: "warning-auth", ...running }),
+      "openclaw.setup.auth.start": () => ({
+        sessionId: "warning-auth",
+        done: false,
+        status: "running",
+      }),
       "wizard.next": () => activated(modelActivation.modelRef, modelActivation),
     });
     const { page } = await mountSettings(context, client, {
@@ -404,7 +418,9 @@ describe("ModelSetupPage catalog icons", () => {
         expect(warning).toContain(expected);
       }
       expect(page.textContent).not.toContain("You can start chatting now.");
-      expect(query(page, ".model-setup-success .btn.primary").textContent?.trim()).toBe("Chat");
+      expect(page.querySelector(".model-setup-success .btn.primary")?.textContent?.trim()).toBe(
+        "Chat",
+      );
     });
   });
 });
@@ -447,9 +463,10 @@ describe("Model setup account connections", () => {
     operation === "connect" ? "models.authLogin" : "openclaw.setup.auth.start";
   const labelFor = (operation: "connect" | "setup") =>
     operation === "connect" ? "Radius account" : "Setup-only account";
+  const modalTitle = (page: ParentNode) => page.querySelector("h2")?.textContent?.trim();
   const waitForSignIn = (page: ParentNode, operation: "connect" | "setup") =>
     waitForFast(() =>
-      expect(query(page, '.wizard-sign-in [role="status"]').textContent).toBe(
+      expect(page.querySelector('.wizard-sign-in [role="status"]')?.textContent).toBe(
         "Waiting for " + labelFor(operation) + "…",
       ),
     );
@@ -461,7 +478,7 @@ describe("Model setup account connections", () => {
     }
     pageButton(page, "[data-models-connect]")!.click();
     await waitForFast(() =>
-      expect(query(page, "openclaw-modal-dialog").textContent).toContain("Radius account"),
+      expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain("Radius account"),
     );
     pageButton(page, '[data-models-login-provider="meta"]')!.click();
     await page.updateComplete;
@@ -517,7 +534,7 @@ describe("Model setup account connections", () => {
             }
           });
         }
-        return running;
+        return { done: false, status: "running" };
       },
       "wizard.next": async (params) => {
         if (!failed) {
@@ -564,14 +581,14 @@ describe("Model setup account connections", () => {
       const setupButton = authButton(page, "setup-only")!;
       await startSignIn(page, operation);
       await waitForSignIn(page, operation);
-      const modal = query(page, "openclaw-modal-dialog");
+      const modal = page.querySelector("openclaw-modal-dialog")!;
       expect(modal.querySelector(".wizard-sign-in__lead")?.textContent).toContain(
         labelFor(operation) + " is open in a new tab.",
       );
       expect(
-        query(modal, ".wizard-sign-in__badge [data-provider-icon]").getAttribute(
-          "data-provider-icon",
-        ),
+        modal
+          .querySelector(".wizard-sign-in__badge [data-provider-icon]")
+          ?.getAttribute("data-provider-icon"),
       ).toBe("meta");
       if (failed) {
         expect(modal.textContent).not.toContain(guidance);
@@ -583,14 +600,16 @@ describe("Model setup account connections", () => {
       if (failed) {
         const expectedError = [diagnostic, guidance, authorization].join("\n\n");
         await waitForFast(() =>
-          expect(query(modal, ".model-setup-wizard__error-text").textContent).toBe(expectedError),
+          expect(modal.querySelector(".model-setup-wizard__error-text")?.textContent).toBe(
+            expectedError,
+          ),
         );
-        expect(query(modal, "h2").textContent?.trim()).toBe(labelFor(operation));
+        expect(modalTitle(modal)).toBe(labelFor(operation));
         expect(modal.querySelector(".wizard-sign-in")).toBeNull();
         const alert = modal.querySelector("[role=alert]")!;
         expect(alert.textContent).toContain(guidance);
         expect(alert.textContent).toContain(url);
-        expect(alert.querySelector('button[aria-label="Copy"]')).not.toBeNull();
+        expect(alert.querySelector<HTMLButtonElement>('button[aria-label="Copy"]')).not.toBeNull();
         expect(modal.querySelector("details")).toBeNull();
         expect(reads).toBe(4);
       } else {
@@ -633,7 +652,9 @@ describe("Model setup account connections", () => {
       try {
         const { page } = await mountDetection(context, client, setup, false);
         pageButton(page, "[data-models-connect]")!.click();
-        await waitForFast(() => expect(callsFor(request, "models.authStatus")).not.toHaveLength(0));
+        await waitForFast(() =>
+          expect(request.mock.calls.some(([method]) => method === "models.authStatus")).toBe(true),
+        );
         if (change === "agent") {
           context.settingsAgentSelection.state.selectedId = "other";
         }
@@ -650,7 +671,7 @@ describe("Model setup account connections", () => {
         await inventory.promise;
         await page.updateComplete;
         expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
-        expect(callsFor(request, "models.authLogin")).toHaveLength(0);
+        expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
       } finally {
         inventory.resolve(authStatus);
       }
