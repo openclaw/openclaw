@@ -398,6 +398,13 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         },
       },
       approvalCapability: matrixApprovalCapability,
+      lifecycle: {
+        // A removed account must not hand its cached login to a later account with the same id.
+        onAccountRemoved: async ({ accountId }) => {
+          const { clearMatrixCredentials } = await import("./matrix/credentials.js");
+          await clearMatrixCredentials(process.env, accountId);
+        },
+      },
       groups: {
         resolveRequireMention: (params) =>
           resolveScopeRequireMention(resolveMatrixGroupScope(params)),
