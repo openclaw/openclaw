@@ -15,8 +15,10 @@ import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import type { ModelFallbackStepFields } from "./model-fallback-observation.js";
-import type { ModelFallbackAvailability } from "./model-fallback.types.js";
-import type { ModelFallbackAttemptProvenance } from "./model-fallback.types.js";
+import type {
+  ModelFallbackAvailability,
+  ModelFallbackAttemptProvenance,
+} from "./model-fallback.types.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,

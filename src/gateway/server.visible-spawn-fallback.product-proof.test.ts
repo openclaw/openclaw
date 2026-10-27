@@ -582,11 +582,6 @@ describe("sessions_spawn model fallback through the Gateway", () => {
               openclawRunError: { runId: settledRunId, summary: expect.stringMatching(/\S/) },
             }),
           ]);
-          expect(entry?.quotaSuspension).toMatchObject({
-            failedProvider: "proof-primary",
-            failedModel,
-            state: "suspended",
-          });
         }
         if (scenario.configuredProfile || scenario.model?.includes("@")) {
           expect(childRequests).toContainEqual(

@@ -568,7 +568,7 @@ vi.mock("./model-selection-config.js", async (importOriginal) => ({
 vi.mock("./agent-scope.js", async () => {
   const actual = await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
   const { createTestAgentScope } = await import("./agent-command.live-model-switch.test-mocks.js");
-  return createTestAgentScope(state, actual);
+  return { ...actual, ...createTestAgentScope(state, actual) };
 });
 
 vi.mock("./auth-profiles.js", async () => ({
@@ -4045,4 +4045,3 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
