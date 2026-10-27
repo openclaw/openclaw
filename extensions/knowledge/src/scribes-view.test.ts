@@ -20,6 +20,7 @@ const reviewJob = {
 function fixture(world: {
   sessions?: Record<string, { key: string; label: string; archived?: boolean }>;
   jobs?: unknown[];
+  history?: Record<string, unknown[]>;
   canWrite?: boolean;
 }) {
   // HTMLDialogElement is incomplete in jsdom.
@@ -45,7 +46,12 @@ function fixture(world: {
         return { sessions: [], count: 1, totalCount: params?.archived ? 1204 : 148 };
       }
       case "chat.history":
-        return { messages: [] };
+        return {
+          messages:
+            typeof params?.sessionKey === "string"
+              ? (world.history?.[params.sessionKey] ?? [])
+              : [],
+        };
       case "cron.runs":
         return {
           entries: [
@@ -147,10 +153,38 @@ it("starts a conversations scribe: creates its labelled conversation and sends t
     message: setupMessage(
       scribeSetup("conversations", "once", { scope: "all", since: "90d" }, "main", timezone),
     ),
-    idempotencyKey: "knowledge:scribe:conversations:agent:main:dock:new",
+    idempotencyKey: expect.stringMatching(
+      /^knowledge:scribe:conversations:agent:main:dock:new:[0-9a-f-]{36}$/,
+    ),
   });
   expect(ui.s.scribe).toBe("conversations");
   expect(page.querySelector("dialog")).toBeNull();
+});
+
+it("restarts a turned-off scribe in its existing conversation with a fresh attempt key", async () => {
+  const label = "Scribe · Learn from conversations";
+  const { render, create, calls, page } = fixture({
+    sessions: { [label]: { key: "s-conv", label } },
+    history: {
+      "s-conv": [
+        {
+          role: "assistant",
+          content:
+            'SCRIBE_RESULT {"scribe":"conversations","state":"on","jobId":"j1","summary":"On"}',
+        },
+      ],
+    },
+  });
+  const view = await render();
+  buttonNamed(view, "Set up…").click();
+  buttonNamed(page.querySelector("dialog")!, "Start").click();
+  await vi.waitFor(() => expect(calls.some(([method]) => method === "chat.send")).toBe(true));
+  expect(create).not.toHaveBeenCalled();
+  const send = calls.find(([method]) => method === "chat.send")![1]!;
+  expect(send.sessionKey).toBe("s-conv");
+  expect(String(send.idempotencyKey)).toMatch(
+    /^knowledge:scribe:conversations:s-conv:[0-9a-f-]{36}$/,
+  );
 });
 
 it("keeps the start dialog open with the error when the Gateway rejects the start", async () => {

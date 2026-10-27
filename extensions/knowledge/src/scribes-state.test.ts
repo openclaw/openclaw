@@ -51,8 +51,8 @@ describe("scribes catalog", () => {
         "knowledge-ingest",
       ],
     ]);
-    expect(setupIdempotencyKey("memory", "agent:main:dock:1")).toBe(
-      "knowledge:scribe:memory:agent:main:dock:1",
+    expect(setupIdempotencyKey("memory", "agent:main:dock:1", "a1")).toBe(
+      "knowledge:scribe:memory:agent:main:dock:1:a1",
     );
   });
 
@@ -168,7 +168,7 @@ describe("scribes state", () => {
       session,
       messages: [user(setupMessage(setup)), assistant("ok")],
     });
-    expect(snapshot.setup).toEqual(JSON.parse(JSON.stringify(setup)));
+    expect(snapshot.setup).toEqual(setup);
     const edited = await conversationsScribe({
       session,
       messages: [user("Knowledge scribe setup: nope\nx\n```json\n{}\n```")],

@@ -94,9 +94,13 @@ export const scribeById = (id: string) => SCRIBES.find((scribe) => scribe.id ===
 export const scribeLabel = (scribe: ScribeDefinition) => `Scribe · ${scribe.title}`;
 /** declarationKey of the one automation an ongoing scribe creates. */
 export const scribeDeclarationKey = (id: ScribeId) => `knowledge:scribe:${id}`;
-/** chat.send idempotency key for the setup message to one session. */
-export const setupIdempotencyKey = (id: ScribeId, sessionKey: string) =>
-  `knowledge:scribe:${id}:${sessionKey}`;
+/**
+ * chat.send idempotency key for one start attempt in one session. A scribe reuses its
+ * conversation across starts, so each attempt (one dialog) gets its own key; retries within
+ * the attempt stay deduplicated.
+ */
+export const setupIdempotencyKey = (id: ScribeId, sessionKey: string, attempt: string) =>
+  `knowledge:scribe:${id}:${sessionKey}:${attempt}`;
 
 /** Default dialog choices: conservative (active conversations, last 30 days). */
 export function defaultOptions<Id extends ScribeId>(id: Id): ScribeOptions[Id] {

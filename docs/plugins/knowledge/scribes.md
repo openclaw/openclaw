@@ -80,7 +80,8 @@ alert, and recent runs.
 | Repair            | Restores an archived conversation, or creates one, and asks it to re-check and recreate its automation. |
 
 Controls need write access. Pause, resume, and turn off are rejected if the
-automation changed since the page read it; the page reloads instead.
+automation changed since the page read it; the page shows the error, and
+reopening the scribe shows its current state.
 
 ## Limits
 

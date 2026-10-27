@@ -207,6 +207,7 @@ function pageNames(ui: Page) {
 function start(ui: Page, snapshot: ScribeSnapshot, detection: ScribeDetection) {
   const { agentId, agentName, storeName } = pageNames(ui);
   const host = ui.s.context.host;
+  const attempt = crypto.randomUUID();
   openStartDialog({
     scribe: snapshot.scribe,
     agentId,
@@ -215,7 +216,7 @@ function start(ui: Page, snapshot: ScribeSnapshot, detection: ScribeDetection) {
     detection,
     canWrite: host.connection.canWrite,
     start: async (setup) => {
-      await startScribe(host, snapshot, setup);
+      await startScribe(host, snapshot, setup, attempt);
       ui.announce(`Started ${scribeLabel(snapshot.scribe)}.`);
       openScribe(ui, snapshot.scribe.id);
     },

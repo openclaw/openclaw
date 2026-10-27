@@ -37,14 +37,22 @@ async function conversation(host: ScribeHost, snapshot: ScribeSnapshot, agentId:
   return key;
 }
 
-/** Start a scribe: find or create its conversation, then send the fixed setup message. */
-export async function startScribe(host: ScribeHost, snapshot: ScribeSnapshot, setup: ScribeSetup) {
+/**
+ * Start a scribe: find or create its conversation, then send the fixed setup message.
+ * `attempt` identifies one start attempt so a retried send is not delivered twice.
+ */
+export async function startScribe(
+  host: ScribeHost,
+  snapshot: ScribeSnapshot,
+  setup: ScribeSetup,
+  attempt: string,
+) {
   const sessionKey = await conversation(host, snapshot, setup.agentId);
   await host.request("chat.send", {
     sessionKey,
     agentId: setup.agentId,
     message: setupMessage(setup),
-    idempotencyKey: setupIdempotencyKey(setup.scribe, sessionKey),
+    idempotencyKey: setupIdempotencyKey(setup.scribe, sessionKey, attempt),
   });
   return sessionKey;
 }
