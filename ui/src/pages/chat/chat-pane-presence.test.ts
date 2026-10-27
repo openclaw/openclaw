@@ -154,7 +154,7 @@ it("refreshes fallback identity, retains it through reconnect, and follows autho
   expect(pane.chatProps?.userName).not.toBe("Blair");
   const owner = pane as unknown as TestChatPane;
   const accepted = withSelf(person("Blair"));
-  context.gateway.readPresence = () => accepted;
+  owner.context = { ...context, gateway: { ...context.gateway, readPresence: () => accepted } };
   owner.connectedClient = null;
   owner.applyGatewaySnapshot(context.gateway.snapshot);
   expect(pane.presence.snapshot).toEqual({ presence: accepted });
