@@ -1,4 +1,5 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentOperationAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { throwExpectedCliError } from "../cli/failure-output.js";
@@ -66,7 +67,8 @@ export async function agentsBindingsCommand(opts: { agent?: string; json?: boole
     [
       "Routing bindings:",
       ...filtered.map(
-        (binding) => `- ${normalizeAgentId(binding.agentId)} <- ${describeBinding(binding)}`,
+        (binding) =>
+          `- ${normalizeAgentId(binding.agentId)} <- ${sanitizeTerminalText(describeBinding(binding))}`,
       ),
     ].join("\n"),
   );
@@ -187,7 +189,7 @@ export async function agentsUpdateBindingsCommand(
     if (descriptions.length > 0) {
       runtime.log(heading);
       for (const description of descriptions) {
-        runtime.log(`- ${description}`);
+        runtime.log(`- ${sanitizeTerminalText(description)}`);
       }
     }
   }
@@ -198,7 +200,7 @@ export async function agentsUpdateBindingsCommand(
         : "Bindings are owned by another agent:",
     );
     for (const conflict of payload.conflicts) {
-      runtime.error(`- ${conflict}`);
+      runtime.error(`- ${sanitizeTerminalText(conflict)}`);
     }
     runtime.exit(1);
   }
