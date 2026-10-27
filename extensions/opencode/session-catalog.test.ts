@@ -5,6 +5,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { SessionTranscriptWriteContext } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSessionCatalogContinuationStore } from "../test-support/session-catalog-continuation.test-support.js";
 
@@ -977,7 +978,7 @@ describe("OpenCode session catalog", () => {
     );
   });
 
-  it("fans out paired-node listing instead of blocking later hosts", async () => {
+  it("fans out paired-node listing instead of blocking later hosts", async (context) => {
     const { promise: slow, resolve: releaseSlow } = Promise.withResolvers<unknown>();
     const page = (threadId: string) => pairedNodeSessionPage(pairedNodeSession({ threadId }));
     const invoke = vi.fn(({ nodeId }: { nodeId: string }) =>
@@ -993,9 +994,13 @@ describe("OpenCode session catalog", () => {
     const listing = provider!.list({ hostIds: ["node:node-a", "node:node-b"] });
     const settledListing = Promise.allSettled([listing]);
     try {
-      await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+      await withinTest(
+        vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2)),
+        context.signal,
+      );
     } finally {
-      releaseSlow?.(page("session-a"));
+      // The held mock ignores cancellation; release it and join both node tasks before teardown.
+      releaseSlow(page("session-a"));
       await settledListing;
     }
     await expect(listing).resolves.toEqual([
