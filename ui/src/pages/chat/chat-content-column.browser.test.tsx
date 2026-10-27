@@ -285,8 +285,11 @@ it.each(["light", "dark"])(
     onTestFinished(() => {
       root.remove();
       for (const [name, value] of previousAttributes) {
-        if (value === null) documentRoot.removeAttribute(name);
-        else documentRoot.setAttribute(name, value);
+        if (value === null) {
+          documentRoot.removeAttribute(name);
+        } else {
+          documentRoot.setAttribute(name, value);
+        }
       }
       syncControlUiSystemChrome(true);
     });
@@ -361,7 +364,9 @@ it.each(["light", "dark"])(
     ).toBeGreaterThanOrEqual(4.5);
     const unchanged = colors("alice");
     for (const hover of [false, true]) {
-      if (hover) await page.elementLocator(link).hover();
+      if (hover) {
+        await page.elementLocator(link).hover();
+      }
       const token = hover ? "--link-hover" : "--link";
       style.setProperty(token, "#888888");
       syncControlUiSystemChrome(true);
