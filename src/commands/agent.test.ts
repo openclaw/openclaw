@@ -30,7 +30,6 @@ import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
 import type * as AgentWorkspaceModule from "../agents/workspace.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import {
   readAgentRunTerminalError,
@@ -86,6 +85,7 @@ import {
   writeSessionStoreSeed,
 } from "./agent-session.test-support.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
+import { registerAgentManagedWorktreeTests } from "./agent.managed-worktree.test-support.js";
 import { registerAgentReplyPolicyTests } from "./agent.reply-policy.test-support.js";
 import { registerAgentStoredOverrideTests } from "./agent.stored-override.test-support.js";
 import { registerAgentThinkingTests } from "./agent.thinking.test-support.js";
@@ -793,44 +793,7 @@ describe("agentCommand", () => {
     expect(() => git(repository, "add", "-A")).not.toThrow();
   });
 
-  it("uses the recorded canonical workspace for a managed-worktree skill snapshot", async ({
-    home,
-    store,
-  }) => {
-    const sessionKey = "agent:main:dashboard:managed-worktree";
-    const canonicalWorkspace = path.join(home, "project");
-    fs.mkdirSync(canonicalWorkspace, { recursive: true });
-    git(canonicalWorkspace, "init", "-b", "main");
-    git(canonicalWorkspace, "config", "user.name", "OpenClaw Test");
-    git(canonicalWorkspace, "config", "user.email", "openclaw-test@example.invalid");
-    fs.writeFileSync(path.join(canonicalWorkspace, "README.md"), "base\n");
-    git(canonicalWorkspace, "add", "README.md");
-    git(canonicalWorkspace, "commit", "-m", "initial");
-    mockConfig(home, store);
-    const worktree = await managedWorktrees.create({
-      repoRoot: canonicalWorkspace,
-      baseRef: "HEAD",
-      name: "managed",
-      ownerKind: "session",
-      ownerId: sessionKey,
-    });
-    await seedSession(store, sessionKey, {
-      sessionId: "managed-worktree-session",
-      spawnedCwd: worktree.path,
-      worktree: {
-        id: worktree.id,
-        branch: worktree.branch,
-        repoRoot: worktree.repoRoot,
-        canonicalWorkspaceDir: canonicalWorkspace,
-      },
-    });
-
-    await runIngress({ message: "inspect this repo", sessionKey, workspaceDir: worktree.path });
-
-    const skillRoots = vi.mocked(resolveReusableWorkspaceSkillSnapshot).mock.calls.at(-1)?.[0];
-    expect(skillRoots?.workspaceDir).toBe(path.join(home, "openclaw"));
-    expect(skillRoots?.executionWorkspaceDir).toBe(canonicalWorkspace);
-  });
+  registerAgentManagedWorktreeTests({ withTempHome, mockConfig, runIngress, seedSession });
 
   it("renders a Claude bundle command template on Gateway ingress", async ({ home, cfg }) => {
     const pluginRoot = path.join(home, "openclaw", ".openclaw", "extensions", "test-bundle");

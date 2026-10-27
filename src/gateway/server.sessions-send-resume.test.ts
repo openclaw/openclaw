@@ -365,7 +365,7 @@ it("fences a cancelled successor after adoption before queued input consumption"
     );
     // Custody remains unconsumed while cancellation records an ordinary failed send.
     await proof.expectInputs("cancelled");
-    await proof.expectReceipts([{ state: "pending" }]);
+    await proof.expectReceipts([{ state: "pending", cancelled: true }]);
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();
   } finally {

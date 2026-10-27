@@ -240,6 +240,7 @@ export function useRepositoryWorkspaceResultFixture() {
       reconcileEnvironment: vi.fn(async () => {}),
       reconcileOnce: vi.fn(async () => {}),
       supportsProviderExecutionMode: () => true,
+      fenceWorkerTurnForRecovery: vi.fn(),
     };
     const resolveWorkspace = async () => ({
       kind: "repository" as const,

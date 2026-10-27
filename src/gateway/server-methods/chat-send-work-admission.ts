@@ -1,10 +1,9 @@
-import { isDeepStrictEqual } from "node:util";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
-import type { SessionTranscriptTurnMutation } from "../../config/sessions/goals-operations.types.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import type { QualifiedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
 import {
   getSessionActorStorageBinding,
@@ -12,8 +11,10 @@ import {
 } from "../../config/sessions/session-actor-storage-binding.js";
 import { acquireSessionInputActor } from "../../config/sessions/session-input-actor.js";
 import { withSessionPendingInputAuthorityGuard } from "../../config/sessions/session-pending-input-authority.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import { withSessionTranscriptSourcePublication } from "../../config/sessions/transcript-write-context.js";
+import {
+  withOwnedSessionTranscriptWrites,
+  withSessionTranscriptSourcePublication,
+} from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
@@ -26,10 +27,10 @@ import {
   isRpcSourceRegistered,
   type RpcSourceRef,
 } from "../../sessions/session-controller.rpc-sources.js";
+import { recordGatewaySessionRunFailure } from "../../sessions/session-run-error.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import type { registerChatAbortController } from "../chat-abort.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
-import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import { formatForLog } from "../ws-log.js";
@@ -288,21 +289,25 @@ export function createChatSendWorkAdmission(params: {
     target: QualifiedSessionEntryAccessTarget;
     storePath: string;
     sourceRef: RpcSourceRef;
+    lifecycleRevision?: string;
     isActive: () => boolean;
   };
 }) {
+  const terminal = params.terminal;
   const storage =
-    params.terminal &&
+    terminal &&
     getSessionActorStorageBinding({
-      agentId: params.terminal.target.agentId,
-      sessionKey: params.terminal.target.canonicalKey,
-      storePath: params.terminal.storePath,
+      agentId: terminal.target.agentId,
+      sessionKey: terminal.target.canonicalKey,
+      storePath: terminal.storePath,
     });
   const inStorage = <T>(run: () => T): T =>
     storage ? runWithSessionActorStorage(storage, run) : run();
   let references = 1;
   const cleanup: Array<() => void> = [];
-  let admittedSource = params.terminal?.target.readSource;
+  let admittedSource = terminal?.target.readSource;
+  let lifecycleRevision = terminal?.lifecycleRevision;
+  let isCommittedDestinationCurrent: (() => boolean) | undefined;
   let finishPendingInput: (() => void | Promise<void>) | undefined;
   let inputActor: ReturnType<typeof acquireSessionInputActor> | undefined;
   let actorLifetimeActive = true;
@@ -390,7 +395,6 @@ export function createChatSendWorkAdmission(params: {
   return {
     acquireInputActor() {
       if (!inputActor) {
-        const terminal = params.terminal;
         if (!terminal || references === 0) {
           throw new Error("Chat input actor has no live admission");
         }
@@ -425,6 +429,65 @@ export function createChatSendWorkAdmission(params: {
     },
     addCleanup: (dispose: () => void) => cleanup.push(dispose),
     isActive: () => references > 0,
+    assertCommittedDestinationCurrent(this: void) {
+      if (
+        isCommittedDestinationCurrent &&
+        (references === 0 || !terminal?.isActive() || !isCommittedDestinationCurrent())
+      ) {
+        throw new Error("Committed chat input session changed");
+      }
+    },
+    recordFailureNotice(
+      this: void,
+      failure: Pick<
+        Parameters<typeof recordGatewaySessionRunFailure>[0],
+        "runId" | "error" | "errorKind"
+      >,
+    ) {
+      if (!terminal) {
+        throw new Error("Failed input notice requires its original admission target");
+      }
+      const expectedLifecycleRevision = lifecycleRevision;
+      const target = {
+        agentId: terminal.target.agentId,
+        storePath: terminal.target.storePath,
+        sessionKey: terminal.target.storeKey,
+        sessionId: getRpcSourceIdentity(terminal.sourceRef).sessionId,
+        expectedOwner: { lifecycleRevision: expectedLifecycleRevision },
+      };
+      const assertCommitAllowed = () => {
+        if (references === 0 || !terminal.isActive()) {
+          throw new Error("Failed input notice admission ended");
+        }
+      };
+      // Failure bookkeeping keeps accepted source custody after sender revocation,
+      // without claiming or terminating the session's running writer.
+      return inStorage(() =>
+        withOwnedSessionTranscriptWrites(
+          { sessionTarget: target, assertCommitAllowed, withTranscriptWrite: trackAsyncWork },
+          () =>
+            recordGatewaySessionRunFailure({
+              ...failure,
+              target,
+              assertCommitAllowed,
+              sessionEntryCurrent: admittedSource
+                ? {
+                    source: { ...admittedSource, sessionKey: target.sessionKey },
+                    assertCurrent(facts) {
+                      assertCommitAllowed();
+                      if (
+                        facts?.sessionId !== target.sessionId ||
+                        facts.lifecycleRevision !== expectedLifecycleRevision
+                      ) {
+                        throw new Error("Failed input notice session changed");
+                      }
+                    },
+                  }
+                : undefined,
+            }),
+        ),
+      );
+    },
     release: hold(),
     retain,
     withInputCommitPublication<T>(
@@ -432,7 +495,6 @@ export function createChatSendWorkAdmission(params: {
       run: () => Promise<T>,
       onCommitted?: Parameters<typeof withSessionTranscriptSourcePublication>[1],
     ): Promise<T> {
-      const terminal = params.terminal;
       if (!terminal) {
         throw new Error("Chat input publication requires its original admission target");
       }
@@ -455,6 +517,37 @@ export function createChatSendWorkAdmission(params: {
               throw new Error("Committed chat input changed its admitted physical source");
             }
             admittedSource ??= source;
+            if (!isCommittedDestinationCurrent) {
+              const { sessionId, lifecycleRevision: committedRevision } = committedEntry;
+              const matches = (current: SessionEntry | undefined) =>
+                current !== undefined &&
+                current.archivedAt === undefined &&
+                current.lifecycleRevision === committedRevision &&
+                (committedRevision !== undefined || current.sessionId === sessionId);
+              // Compaction can rotate a revision-bound transcript; legacy rows still bind its id.
+              if (storage) {
+                isCommittedDestinationCurrent = () =>
+                  matches(
+                    storage.actor.storage.readCurrent(
+                      {
+                        type: "session.entry.read",
+                        input: { sessionKey: terminal.target.storeKey },
+                      },
+                      storage.authority,
+                    ),
+                  );
+              } else {
+                const retained = retainPreparedSessionEntryPredicate({
+                  databaseIdentity: `file:${source.databaseIdentity}`,
+                  sessionKey: terminal.target.storeKey,
+                  entry: committedEntry,
+                  matches: (_before, current) => matches(current),
+                });
+                cleanup.push(retained.release);
+                isCommittedDestinationCurrent = retained.isCurrent;
+              }
+            }
+            lifecycleRevision = committedEntry.lifecycleRevision;
             onCommitted?.(source, committedEntry);
           },
           run,
@@ -553,88 +646,4 @@ export function createChatSendPendingInputAdmission({
     },
     assertAdmittedCurrent,
   };
-}
-
-/** Goal and initial-session policy are revalidated in the same input writer barrier. */
-export function createChatSendGoalCommitGuard(
-  params: Pick<
-    GatewayRequestHandlerOptions,
-    "client" | "context" | "sessionMutationAuthorization" | "sessionMutationCommitGuard"
-  > & {
-    admission: {
-      initialSessionEntry?: SessionEntry;
-      workerGoalAdmission?: boolean;
-      assertInitialSkillSelection?: () => void;
-      activeRunAbort: Pick<ReturnType<typeof registerChatAbortController>, "controller">;
-      lifecycleGeneration: ReturnType<typeof getAgentEventLifecycleGeneration>;
-    };
-    session: Pick<
-      PreparedChatSendSession,
-      | "agentId"
-      | "sessionLoadKey"
-      | "sessionLoadOptions"
-      | "sessionKey"
-      | "storePath"
-      | "sessionRoutingChanged"
-    >;
-  },
-): Pick<SessionTranscriptTurnMutation, "assertCurrent" | "routingPredicate"> & {
-  assertCurrent: () => void;
-} {
-  const {
-    admission,
-    session,
-    client,
-    context,
-    sessionMutationAuthorization,
-    sessionMutationCommitGuard,
-  } = params;
-  const routingPredicate = admission.initialSessionEntry
-    ? {
-        config: structuredClone(context.getRuntimeConfig()),
-        key: session.sessionLoadKey,
-        agentId: session.sessionLoadOptions.agentId,
-        storePath: session.storePath,
-        canonicalKey: session.sessionKey,
-      }
-    : undefined;
-  const check = (assertSource: () => void) => {
-    assertSource();
-    const currentConfig = context.getRuntimeConfig();
-    const initialEntry = admission.initialSessionEntry;
-    if (initialEntry) {
-      admission.assertInitialSkillSelection?.();
-      // The executor checks rows; live configuration and creator authority remain host-owned.
-      if (!isDeepStrictEqual(currentConfig, routingPredicate?.config)) {
-        throw new Error("Session routing changed before Goal admission; refresh and retry.");
-      }
-      const creationError = authorizeGatewaySessionCreation({
-        cfg: currentConfig,
-        client,
-        agentId: session.agentId,
-      });
-      if (creationError) {
-        throw new SessionMutationAuthorizationChangedError(creationError);
-      }
-      const creation = resolveOperatorSessionCreation(client);
-      if (
-        creation.actor?.id !== initialEntry.createdActor?.id ||
-        resolveCreatorSandbox(currentConfig, creation) !== initialEntry.sandbox
-      ) {
-        throw new Error("Session creation policy changed before Goal admission; retry.");
-      }
-    }
-    if (
-      admission.activeRunAbort.controller.signal.aborted ||
-      admission.lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
-      session.sessionRoutingChanged(currentConfig)
-    ) {
-      throw new Error("Goal admission changed before commit; refresh and retry.");
-    }
-  };
-  const sources = [sessionMutationCommitGuard, sessionMutationAuthorization?.assertCurrent];
-  const assertCurrent = admission.workerGoalAdmission
-    ? composeSessionSourceAssertion(sources, check)
-    : () => check(() => sources.forEach((source) => source?.()));
-  return { assertCurrent, routingPredicate };
 }

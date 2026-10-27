@@ -5,8 +5,14 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 /** Session effects stay with the admitted child incarnation and current cancellation owner. */
 export function shouldSuppressSubagentSessionEffects(entry: SubagentRunRecord): boolean {
+  return (
+    subagentRuns.isCompletionAuthorityRetired(entry) || shouldSuppressSubagentSessionCleanup(entry)
+  );
+}
+
+/** Recorded cleanup survives completion retirement, with the original child identity fenced at deletion. */
+export function shouldSuppressSubagentSessionCleanup(entry: SubagentRunRecord): boolean {
   if (
-    subagentRuns.isCompletionAuthorityRetired(entry) ||
     resolveSubagentChildAuthority(entry).status !== "verified" ||
     entry.execution.suppressSessionEffects === true
   ) {

@@ -8,6 +8,7 @@ import { readPreRegisteredRun, writePreRegisteredChatAbort } from "./chat-abort-
 import type { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
+import { chatSendRequestConflictError } from "./chat-send-retry-comparison.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -123,6 +124,10 @@ export function inspectGoalChatSendRetry({
     }
     if (receipt) {
       return { kind: "replay", receipt } as const;
+    }
+    if (prepared?.comparison?.submitted) {
+      respond(false, undefined, chatSendRequestConflictError());
+      return { kind: "settled" } as const;
     }
     const pending = readPreRegisteredRun({
       key: pendingChatSendKey,

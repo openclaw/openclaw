@@ -22,6 +22,7 @@ export async function abortControlledSubagents(params: {
   sessionKey: string;
   agentId?: string;
   requesterTurnRunId?: string;
+  yieldedRequesterRunId?: string;
   sessionId?: string;
   lifecycleRevision?: string;
   execCancellation?: ReturnType<typeof captureExecRequestCancellation>;
@@ -140,16 +141,20 @@ export async function abortControlledSubagents(params: {
       accepted = true;
       const sessionId = params.sessionId ?? sessionOrigin?.target.sessionId;
       yieldedRequesters = sessionId
-        ? requestSelection.runs.flatMap((entry) =>
-            selected.ownsRoot(entry) &&
-            entry.requesterSessionKey === controller.controllerSessionKey &&
-            (entry.requesterAgentId ?? controller.controllerAgentId) ===
-              controller.controllerAgentId &&
-            entry.requesterTurnYielded &&
-            entry.requesterTurnRunId &&
-            (entry.execution.status !== "terminal" ||
-              entry.pauseReason === "sessions_yield" ||
-              entry.requesterSettleWake)
+        ? requestSelection.runs.flatMap((entry) => {
+            // A settled yielded cohort releases its spawning turn links. Stop
+            // captures the parent's current lifecycle owner instead of reviving them.
+            const requesterTurnRunId =
+              params.yieldedRequesterRunId ??
+              (entry.requesterTurnYielded ? entry.requesterTurnRunId : undefined);
+            return selected.ownsRoot(entry) &&
+              entry.requesterSessionKey === controller.controllerSessionKey &&
+              (entry.requesterAgentId ?? controller.controllerAgentId) ===
+                controller.controllerAgentId &&
+              requesterTurnRunId &&
+              (entry.execution.status !== "terminal" ||
+                entry.pauseReason === "sessions_yield" ||
+                entry.requesterSettleWake)
               ? [
                   {
                     entry,
@@ -161,12 +166,12 @@ export async function abortControlledSubagents(params: {
                         params.lifecycleRevision ??
                         sessionOrigin?.target.lifecycleRevision ??
                         undefined,
-                      requesterTurnRunId: entry.requesterTurnRunId,
+                      requesterTurnRunId,
                     },
                   },
                 ]
-              : [],
-          )
+              : [];
+          })
         : [];
       native = Promise.allSettled([cancelNative()]).then(([result]) => result);
       try {

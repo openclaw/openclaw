@@ -314,7 +314,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
 
         expect(warn).not.toHaveBeenCalled();
         expect(loadSessionEntry(target)).toMatchObject({
-          status: restartFailure ? "interrupted" : "failed",
+          status: restartFailure ? "killed" : "failed",
           lastRunId: runId,
         });
         const messages = (await loadTranscriptEvents(target)).filter(
@@ -791,6 +791,11 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       expect(persistLifecycleEvent).toHaveBeenCalledWith({
         sessionKey: "global",
         agentId: "ops",
+        expectedWriter: {
+          runId: clientRunId,
+          sessionId: "sess-ops",
+          lifecycleRevision: undefined,
+        },
         event: expect.objectContaining({
           runId: clientRunId,
           sessionId: "sess-ops",

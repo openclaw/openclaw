@@ -599,27 +599,31 @@ async function agentCommandFromIngressInternal(
         ingressRuntime,
         runtimeContext,
       );
-      const preparedAgentDir = prepared.agentDir;
-      const run = async () =>
-        await agentCommandInternal(
-          prepared,
-          { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
-          ingressRuntime,
-          deps,
-          true,
-        );
-      const result = generation
-        ? await run()
-        : await withAgentPluginRegistry({
-            config: prepared.cfg,
-            workspaceDir: prepared.workspaceDir,
-            run,
-          });
+      try {
+        const preparedAgentDir = prepared.agentDir;
+        const run = async () =>
+          await agentCommandInternal(
+            prepared,
+            { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
+            ingressRuntime,
+            deps,
+            true,
+          );
+        const result = generation
+          ? await run()
+          : await withAgentPluginRegistry({
+              config: prepared.cfg,
+              workspaceDir: prepared.workspaceDir,
+              run,
+            });
 
-      if (result && preparedAgentDir) {
-        emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
+        if (result && preparedAgentDir) {
+          emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
+        }
+        return result;
+      } finally {
+        await prepared.runLease?.release();
       }
-      return result;
     });
   return generation && runtimeContext
     ? await withPluginRuntimeGenerationScope(

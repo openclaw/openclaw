@@ -35,16 +35,17 @@ import { readChatSendDiagnostics, startChatSendDiagnostics } from "./chat-send-d
 import { handleChatSendSetupError } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import { acknowledgeWorkerGoal } from "./chat-send-goal-ack.js";
+import {
+  createChatSendGoalCommitGuard,
+  requiresRuntimeApprovedChatInput,
+} from "./chat-send-goal-admission.js";
 import { createChatSendMessageInjectionStarter } from "./chat-send-message-injection.js";
 import type { ChatSendInternalOptions } from "./chat-send-options.js";
 import { readChatSendRetryComparison } from "./chat-send-retry-comparison.js";
 import { createChatSendSessionInitialization } from "./chat-send-session-binding.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
-import {
-  createChatSendGoalCommitGuard,
-  createChatSendPendingInputAdmission,
-} from "./chat-send-work-admission.js";
+import { createChatSendPendingInputAdmission } from "./chat-send-work-admission.js";
 import { prepareChatSendAckTiming } from "./chat-server-timing.js";
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
@@ -220,6 +221,7 @@ export async function handleChatSendWithStorage(
       onMessagePersisted: workerGoalCommitted?.resolve,
       ...setup,
       client,
+      commitInitialInput,
       transcript: options?.transcript,
       startedAt: admissionStartedAt,
       warn: (message) => context.logGateway.warn(message),
@@ -258,6 +260,7 @@ export async function handleChatSendWithStorage(
         if (options?.stageCreatedInput) {
           assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
         }
+        admission.bindAcceptedInputAuthority(pendingAdmission.assertAdmittedCurrent);
       });
     const persistGatewayUserTurnTranscript = (
       ...args: Parameters<typeof persistUserTurnTranscript>
@@ -281,12 +284,14 @@ export async function handleChatSendWithStorage(
     });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
     const commitFreshInput =
-      commitInitialInput ||
+      (commitInitialInput && !requiresRuntimeApprovedChatInput(client)) ||
       (admission.localInputAdmission &&
+        request.p.queueMode !== "steer" &&
         !messageInjectionTarget &&
         !isInternalTextSlashCommandTurn &&
-        (userTurn.baseInput.display !== false || admission.localGoalAdmission) &&
-        (!systemInputProvenance || systemInputProvenance.kind === "external_user"));
+        (admission.localGoalAdmission ||
+          (userTurn.baseInput.display !== false &&
+            (!systemInputProvenance || systemInputProvenance.kind === "external_user"))));
     admission.setPendingInputCleanup(async () => {
       try {
         const pending =
@@ -369,6 +374,7 @@ export async function handleChatSendWithStorage(
         assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
         options.onInputCommitted?.();
       }
+      admission.bindAcceptedInputAuthority(pendingAdmission.assertAdmittedCurrent);
       approvedInput = userTurnRecorder.getPendingInputMessage?.();
       emitSessionsChanged(
         context,
@@ -424,6 +430,9 @@ export async function handleChatSendWithStorage(
           actor: gatewayClientSessionCreator(client),
           summary: `goal ${goalOperation.action}`,
         });
+      }
+      if (!persistedUserTurn) {
+        throw new Error("Chat input was not durably admitted; refresh and retry.");
       }
       if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
         if (activeRunAbort.entry) {

@@ -176,7 +176,7 @@ describe("server-runtime-services", () => {
             { queueContext: runtime.queueContext },
           );
         }
-        expect(observed).toBe(gatewayContext);
+        await waitForFast(() => expect(observed).toBe(gatewayContext));
         expect(observedClient).toBeUndefined();
         expect(observedBroker).toBe(broker);
         expect(hasGatewayContextOwner(admittedOwner, resolveGatewayContext)).toBe(true);

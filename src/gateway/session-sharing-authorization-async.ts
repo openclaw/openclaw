@@ -306,6 +306,7 @@ export async function resolveSessionMutationAuthorizationAsync(
         agentId: input.agentId,
         allowMissing: true,
         followLifecycle: params.method === "chat.send",
+        followTranscript: params.method === "chat.send",
       });
       reads.push(retained);
       const initialFacts = retained.readCurrent(cfg);
@@ -423,6 +424,7 @@ export async function resolveSessionMutationAuthorizationAsync(
             databaseIdentity: identity.key,
             sessionKey: created.sessionKey,
             followLifecycle: params.method === "chat.send",
+            followTranscript: params.method === "chat.send",
             entry: projectSessionSharingEntry(created.entry),
             membership: new Set(),
           });

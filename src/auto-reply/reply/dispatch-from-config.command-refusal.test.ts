@@ -235,8 +235,10 @@ it.each([false, true])(
     const resetTarget = loadSessionEntry(target);
     expect(restoredSource?.sessionId).toBe("archived-command-source");
     expect(restoredSource?.archivedAt).toBeUndefined();
-    expect(resetTarget?.sessionId).toEqual(expect.any(String));
-    expect(resetTarget?.sessionId).not.toBe("active-target");
+    expect(resetTarget?.sessionId).toBe("active-target");
+    expect(resetTarget?.lifecycleRevision, JSON.stringify({ result, texts })).toEqual(
+      expect.any(String),
+    );
     expect(texts).toEqual(sendDenied ? [] : [expect.stringMatching(/New session started/u)]);
     expect(result.sendPolicyDenied).toBe(sendDenied ? true : undefined);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();

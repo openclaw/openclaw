@@ -572,6 +572,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       ),
       {
         ...(!requestedRunId ? { cascadeDescendants: true as const } : {}),
+        yieldedRequesterRunId: nativeYieldedCandidate?.runId,
         hookContext: stopHookContext,
         onDescendantsCancelled: (result) => {
           if (

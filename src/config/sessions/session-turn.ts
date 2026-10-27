@@ -43,6 +43,7 @@ import { prepareSessionInputFromReplica } from "./session-input-preparation.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import {
   acceptSessionSourceValidation,
+  admitPublishedSessionSource,
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
   type PreparedSessionSourceAuthority,
@@ -373,8 +374,38 @@ export async function appendSessionTurnInWorker(
           const hooks = append.workerPreparation;
           const facts = preparation?.messages[index];
           if (!facts?.pending && !facts?.existing && hooks?.beforeFreshMessageCommit) {
-            const source = await prepareSessionSourceAuthority(hooks.beforeFreshMessageCommit);
+            let source = await prepareSessionSourceAuthority(hooks.beforeFreshMessageCommit);
             sources[index] = source;
+            const foreign = source.checks.filter(
+              (check) => check.predicate.source.path !== database.path,
+            );
+            if (
+              actor &&
+              !memory &&
+              !source.nativeSource &&
+              !source.opaqueCommitGuard &&
+              !source.hasOpaqueCheck &&
+              foreign.length
+            ) {
+              const prepared = source;
+              source = {
+                ...prepared,
+                checks: prepared.checks.filter(
+                  (check) => check.predicate.source.path === database.path,
+                ),
+                assertCurrent() {
+                  prepared.assertCurrent();
+                  for (const check of foreign) {
+                    if (!admitPublishedSessionSource(check.predicate)) {
+                      throw new Error("Session source publication is unavailable");
+                    }
+                  }
+                },
+              };
+              // The foreign owner stays live; only local predicates enter this actor's writer.
+              source.assertCurrent();
+              sources[index] = source;
+            }
             if (
               (!actor && source.nativeSource) ||
               (memory && source.hasOpaqueCheck) ||

@@ -1,3 +1,4 @@
+import { addAbortListener } from "node:events";
 import { isDeepStrictEqual } from "node:util";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { captureRuntimeWorkerGenerationContext } from "../../infra/runtime-worker-generation.js";
@@ -167,25 +168,23 @@ export function kickSessionEntryMaintenanceAfterWrite(
   if (identity && !identity.key.startsWith("file:")) {
     return;
   }
-  const captureExecution = () =>
-    supportsOpenClawAgentDatabaseExecution(options) && identity
-      ? captureOpenClawAgentDatabaseExecution(options, {
-          expectedIdentity: {
-            kind: "file",
-            physicalIdentity: identity.key.slice(5),
-            birthtime: identity.birthtime,
-            nativeLocation: identity.canonicalPath,
-          },
-        })
-      : undefined;
   const created: SessionEntryMaintenanceOwner = {
     ...params,
     scope,
     activeSessionKeys: new Set([params.activeSessionKey]),
     ageChanges: new Map(),
-    captureExecution,
+    captureExecution: () =>
+      supportsOpenClawAgentDatabaseExecution(options) && identity
+        ? captureOpenClawAgentDatabaseExecution(options, {
+            expectedIdentity: {
+              kind: "file",
+              physicalIdentity: identity.key.slice(5),
+              birthtime: identity.birthtime,
+              nativeLocation: identity.canonicalPath,
+            },
+          })
+        : undefined,
     runInRuntimeGeneration: captureRuntimeWorkerGenerationContext(),
-    execution: captureExecution(),
     assertCurrent: () => {
       assertAdmitted();
       created.execution?.assertCurrent();
@@ -202,6 +201,10 @@ export function kickSessionEntryMaintenanceAfterWrite(
   const unregister: Array<() => void> = [];
   created.unregisterClose = () => unregister.forEach((release) => release());
   try {
+    const drainListener = addAbortListener(getGatewayRestartDrainSignal(), () =>
+      retireMaintenanceOwner(databasePath, created),
+    );
+    unregister.push(() => drainListener[Symbol.dispose]());
     unregister.push(
       observeSessionControllerProtectionReleases(created.storePath, () => {
         if (
@@ -714,8 +717,7 @@ async function runPendingMaintenance(
   }
   // Writes during finalization also coalesce behind the next quiet window.
   if (!isCurrent()) {
-    retireMaintenanceOwner(databasePath, owner);
-    return;
+    return retireMaintenanceOwner(databasePath, owner);
   }
   const fact = owner.ageFact;
   if (fact && hasCurrentNoCandidates()) {

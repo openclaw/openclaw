@@ -154,7 +154,7 @@ test("chat.send keeps duplicate attachment sends retryable until input is admitt
       {
         id: "first",
         ok: true,
-        payload: { runId: "idem-attachment-race", status: "started" },
+        payload: { runId: "idem-attachment-race", status: "started", messageSeq: 1 },
         error: undefined,
       },
     ]);

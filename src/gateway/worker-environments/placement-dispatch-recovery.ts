@@ -83,8 +83,8 @@ export function createPlacementRecoveryActions(
       }
     };
     const claimId = `reclaim-${randomUUID()}`;
-    // A stopped placement still owns files. This claim grants only result settlement,
-    // never permission to resume the old execution or call its tools.
+    // A stopped placement still owns files. Fence its settlement claim before publication
+    // so custody never grants permission to resume old execution or call its tools.
     const claim =
       projectPlacementTurnClaim(placement) ??
       (await placements.claimReclaimWorkspaceResult(
@@ -96,7 +96,7 @@ export function createPlacementRecoveryActions(
           runId: claimId,
           owner: placementTurnOwner(placement),
         },
-        undefined,
+        (cleanupClaim) => environments.fenceWorkerTurnForRecovery(cleanupClaim),
         assertCurrent,
       ));
     await placements.retainInterruptedTurnWorkspace(claim, assertCurrent);

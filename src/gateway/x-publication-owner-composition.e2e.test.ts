@@ -786,7 +786,14 @@ describe("X publication production-owner composition", () => {
           }
         }
         // Check the durable effect before delivery, so a reply failure cannot hide a grant.
-        expect(rows(), kind).toHaveLength(1);
+        expect(
+          rows(),
+          JSON.stringify({
+            kind,
+            outcome: outcomes.get(kind),
+            spawnError: spawnErrors.has(kind) ? String(spawnErrors.get(kind)) : undefined,
+          }),
+        ).toHaveLength(1);
         expect(
           rows().filter(({ entry }) => resolveSessionPublicShare(entry)),
           kind,

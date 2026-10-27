@@ -26,7 +26,6 @@ import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEventsSync,
-  listSessionPendingInputs,
 } from "../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
@@ -37,9 +36,6 @@ import {
   type AgentEventStream,
 } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticEventPayload } from "../infra/diagnostic-events.js";
-import { readPersistedMediaFacts } from "../media/media-facts.js";
-import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
-import { getMediaDir } from "../media/store.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import {
   captureSessionControllerSettlement,
@@ -76,6 +72,7 @@ import type {
 } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { registerChatAdmissionRetryTests } from "./server.chat-admission-retry.test-support.js";
+import { registerChatAdmittedMediaTests } from "./server.chat-admitted-media.test-support.js";
 import {
   callDirectChatHandler,
   callDirectChat,
@@ -1337,70 +1334,10 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.send retains durably admitted media when later setup throws before the ACK", async () => {
-    await withDirectChatSession(async (_sessionDir, storePath) => {
-      await writeStoredMainSession({ modelProvider: "test-provider", model: "vision-model" });
-      const context = createDirectChatContext({
-        // addChatRun runs after durable input admission but before the ACK.
-        addChatRun: vi.fn(() => {
-          throw new Error("setup exploded before ack");
-        }),
-      });
-      const inboundDir = path.join(getMediaDir(), "inbound");
-      const inboundBaseline = new Set(await fs.readdir(inboundDir).catch(() => []));
-      const responses = await requestChat(
-        "chat.send",
-        context,
-        makeChatSendParams({
-          message: "setup error with media",
-          idempotencyKey: "idem-setup-error-media",
-          attachments: [
-            {
-              type: "file",
-              mimeType: "text/plain",
-              fileName: "notes.txt",
-              content: Buffer.from("offloaded inbound media").toString("base64"),
-            },
-          ],
-        }),
-        {
-          client: {
-            connId: "conn-owner",
-            connect: {
-              client: {
-                id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-                mode: GATEWAY_CLIENT_MODES.BACKEND,
-                version: "1.0.0",
-                platform: "node",
-              },
-              device: { id: "dev-owner" },
-              scopes: ["operator.write"],
-            },
-          } as never,
-        },
-      );
-      expect(responses).toEqual([
-        chatResponse(false, expect.objectContaining({ status: "error" }), expect.anything()),
-      ]);
-      await getDirectChatSessionWorkRelease();
-      const pending = await listSessionPendingInputs(makeMainSessionScope(storePath));
-      expect(pending).toMatchObject({
-        total: 1,
-        items: [{ state: "cancelled", runId: "idem-setup-error-media" }],
-      });
-      const media = readPersistedMediaFacts(
-        expectDefined(pending.items[0]?.message, "Expected the retained pending input"),
-      );
-      expect(media).toHaveLength(1);
-      const retainedUrl = expectDefined(media?.[0]?.url, "Expected the pending attachment URL");
-      expect(retainedUrl).toMatch(/^media:\/\/inbound\//);
-      const retainedPath = await resolveMediaReferenceLocalPath(retainedUrl);
-      await expect(fs.readFile(retainedPath, "utf8")).resolves.toBe("offloaded inbound media");
-      const remaining = await fs.readdir(inboundDir);
-      expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([
-        path.basename(retainedPath),
-      ]);
-    });
+  registerChatAdmittedMediaTests({
+    withChatSession: (run) =>
+      withDirectChatSession(async (_sessionDir, storePath) => run(makeMainSessionScope(storePath))),
+    settle: getDirectChatSessionWorkRelease,
   });
 
   test("chat.abort cancels chat.send while lifecycle admission waits", async () => {
@@ -1940,7 +1877,10 @@ describe("gateway server chat", () => {
         chatResponse(
           false,
           undefined,
-          expect.objectContaining({ code: "INVALID_REQUEST", retryable: false }),
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            message: 'Session "agent:main:main" is archived. Restore it before starting new work.',
+          }),
         ),
       ]);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
@@ -2196,11 +2136,12 @@ describe("gateway server chat", () => {
             respond: replayRespond,
             context,
           });
-          expect(replayRespond).toHaveBeenCalledWith(false, undefined, {
-            code: "UNAVAILABLE",
-            message: "Chat input is being admitted; retry the same request.",
-            retryable: true,
-          });
+          expect(replayRespond).toHaveBeenCalledWith(
+            true,
+            { runId, status: "in_flight" },
+            undefined,
+            { cached: true, runId },
+          );
           expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
 
           if (settlement === "dropped") {

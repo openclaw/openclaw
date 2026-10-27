@@ -38,13 +38,13 @@ import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-proj
 import { captureWorkerTurnInputSource } from "../worker-environments/worker-turn-transcript-target.js";
 import { formatForLog } from "../ws-log.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
+import type { createChatSendGoalCommitGuard } from "./chat-send-goal-admission.js";
 import {
   resolveChatSendReplyContext,
   type ChatSendReplyContextFields,
 } from "./chat-send-reply-context.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
-import type { createChatSendGoalCommitGuard } from "./chat-send-work-admission.js";
 import { gatewayClientSenderFields } from "./gateway-client-identity.js";
 import type { GatewayClient } from "./shared-types.js";
 
@@ -72,6 +72,7 @@ type GatewayChatUserTurnController = {
 
 export function createGatewayChatUserTurnController(params: {
   admission: AdmittedChatSend;
+  commitInitialInput?: boolean;
   isDirectExternalUser?: boolean;
   client: GatewayClient | null;
   request: NormalizedChatSendRequest;
@@ -243,7 +244,7 @@ export function createGatewayChatUserTurnController(params: {
         config: session.cfg,
       };
     },
-    ...(admission.localInputAdmission
+    ...(admission.localInputAdmission || params.commitInitialInput
       ? {
           sessionLifecyclePatch: {
             ...deriveGatewaySessionLifecycleSnapshot({

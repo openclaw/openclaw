@@ -360,6 +360,7 @@ export async function createHarness(
     readMachineShape: () => undefined,
     recordError: vi.fn((record) => record),
     supportsProviderExecutionMode: vi.fn(() => true),
+    fenceWorkerTurnForRecovery: vi.fn(),
     assertPreparedIntentCurrent: vi.fn(),
     prepareProjectIntent: vi.fn(async (_profileId, request) => {
       const {

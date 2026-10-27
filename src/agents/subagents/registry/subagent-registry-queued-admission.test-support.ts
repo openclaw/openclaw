@@ -85,7 +85,7 @@ export function registerQueuedRegistrationAdmissionCases() {
           closed = true;
         });
         await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
-        expect(state()).toMatchObject({ aborted: true, closed: false, phase: "accepting" });
+        expect(state()).toMatchObject({ aborted: false, closed: false, phase: "accepting" });
         disposal.resolve();
         await closing;
         expect(state()).toMatchObject({ closed: true, phase: "accepting" });

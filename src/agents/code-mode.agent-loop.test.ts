@@ -16,6 +16,7 @@ import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.j
 import { getSession, waitForExecSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { nodeCommand } from "./bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { createCodeModePermissionChangeReason } from "./code-mode-permission-change.js";
 import { controlledTool } from "./code-mode.controlled-tool.test-support.js";
@@ -313,8 +314,14 @@ describe("Code Mode agent-loop error recovery", () => {
   });
 
   it("recovers a wrong shell wait without relaunching", async ({ onTestFinished, signal }) => {
-    const { scopeKey, shell } = await nativeExecFixture("wrong-wait-recovery", onTestFinished);
-    const command = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdin.once('data', () => process.stdout.write('same-process-recovered', () => process.stdin.destroy()))"`;
+    const { state, scopeKey, shell } = await nativeExecFixture("wrong-wait-recovery", onTestFinished);
+    // Noninteractive exec closes stdin; a parent-owned file releases this same child.
+    const releasePath = join(state.workspaceDir, "release-held-process");
+    const command = nodeCommand(
+      `const fs = require("node:fs"); const release = ${JSON.stringify(releasePath)};
+       const finish = () => { if (fs.existsSync(release)) { watcher.close(); process.stdout.write("same-process-recovered"); } };
+       const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, finish); finish();`,
+    );
     const process = createProcessTool({ scopeKey });
     vi.spyOn(shell, "execute");
     vi.spyOn(process, "execute");
@@ -338,10 +345,10 @@ describe("Code Mode agent-loop error recovery", () => {
           expect(failure).toMatchObject({ role: "toolResult", toolName: "wait", isError: true });
           expect(JSON.stringify(failure)).toContain("poll that same session with process");
           const session = sessionId ? getSession(sessionId) : undefined;
-          if (!session?.stdin) {
+          if (!session) {
             throw new Error("Expected the original held shell session");
           }
-          session.stdin.write("finish\n");
+          await writeFile(releasePath, "finish");
           await withinTest(waitForExecSession(session), signal);
           return `return await process({ action: "poll", sessionId: ${JSON.stringify(sessionId)}, timeout: 0 });`;
         },

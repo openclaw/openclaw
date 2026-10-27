@@ -230,8 +230,13 @@ export function derivePersistedSessionLifecyclePatch(params: {
   lastRunError?: string;
 }): Partial<PersistedLifecycleSessionShape> {
   const phase = resolveLifecyclePhase(params.event);
-  // Queued request settlement cannot end the turn that owns this session.
-  if ((phase === "end" || phase === "error") && params.event.data?.executionStarted === false) {
+  const runId = normalizeLifecycleRunId(params.event.runId);
+  // An admitted input can stop before execution; a queued sibling cannot end its owner.
+  if (
+    (phase === "end" || phase === "error") &&
+    params.event.data?.executionStarted === false &&
+    (!runId || params.entry?.lifecycleRunId !== runId)
+  ) {
     return {};
   }
   const snapshot = deriveSessionLifecycleSnapshot({
@@ -239,7 +244,6 @@ export function derivePersistedSessionLifecyclePatch(params: {
     event: params.event,
     lastRunError: params.lastRunError,
   });
-  const runId = normalizeLifecycleRunId(params.event.runId);
   const clientRunId = normalizeLifecycleRunId(params.event.clientRunId) ?? runId;
   // Execution ownership survives yielded outcomes until the continuation settles.
   return {

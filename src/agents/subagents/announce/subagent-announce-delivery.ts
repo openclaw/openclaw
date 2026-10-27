@@ -26,6 +26,7 @@ import { hasGeneratedMediaCompletionEvent } from "../../internal-event-contract.
 import {
   buildAgentInternalEventContext,
   collectAgentInternalEventMedia,
+  formatGeneratedMediaDeliveredForPrompt,
   type AgentInternalEvent,
 } from "../../internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
@@ -98,6 +99,7 @@ async function deliverSubagentAnnouncementBound(
     return sourceOwnerChangedResult();
   }
   const expectedMedia = collectExpectedMediaFromInternalEvents(params.internalEvents);
+  let internalEvents = params.internalEvents;
   const durableGeneratedMediaHandoff =
     expectedMedia.expectedMediaUrls.length > 0 &&
     params.expectsCompletionMessage &&
@@ -187,6 +189,14 @@ async function deliverSubagentAnnouncementBound(
       // admits the ordinary completion input; startup delivery never starts inference.
       if (queued.status !== "completed") {
         durableQueue = { id: queued.id, claimed: queued.claimed, context: queueContext };
+      } else {
+        const deliveredMediaContext = formatGeneratedMediaDeliveredForPrompt(
+          expectedMedia.expectedMediaUrls,
+        );
+        internalEvents = params.internalEvents?.map((event) => ({
+          ...event,
+          replyInstruction: `${event.replyInstruction}\n\n${deliveredMediaContext}`,
+        }));
       }
     } catch (error) {
       if (error instanceof SessionDeliveryDeadLetteredError) {
@@ -229,7 +239,7 @@ async function deliverSubagentAnnouncementBound(
     return { delivered: false, path: "queued", disposition: "session_queued" };
   }
 
-  const runtimeContextFragments = buildAgentInternalEventContext(params.internalEvents);
+  const runtimeContextFragments = buildAgentInternalEventContext(internalEvents);
   let createCompletionUserTurnTranscriptRecorder:
     | ((sessionId: string) => UserTurnTranscriptRecorder)
     | undefined;
@@ -286,6 +296,7 @@ async function deliverSubagentAnnouncementBound(
   let directError: unknown;
   const delivery = await sendSubagentAnnounceDirectly({
     ...params,
+    internalEvents,
     createUserTurnTranscriptRecorder: createCompletionUserTurnTranscriptRecorder,
     onDeliveryError: (error) => {
       directError = error;

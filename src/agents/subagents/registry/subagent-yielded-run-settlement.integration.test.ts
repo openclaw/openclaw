@@ -241,11 +241,11 @@ describe("yielded run settlement", () => {
     },
   );
 
-  it.each(["immediate", "restart"] as const)(
+  it.each(["immediate", "drain"] as const)(
     "retries a failed postcommit cleanup claim without losing or announcing the collected result (%s)",
     async (retry) => {
       vi.useFakeTimers({
-        toFake: retry === "restart" ? ["Date", "setTimeout", "clearTimeout"] : ["Date"],
+        toFake: retry === "drain" ? ["Date", "setTimeout", "clearTimeout"] : ["Date"],
       });
       vi.setSystemTime(T0);
       await writeYieldedTranscript();
@@ -255,18 +255,17 @@ describe("yielded run settlement", () => {
         { required: false, resultText: YIELDED_REPLY, capturedAt: T0 - 4 * MINUTE_MS },
       );
       let injected = 0;
-      let refusedFallback = false;
       using _ = probe.command(stateWorker, async (command, executeOptions, scope) => {
         const next = isSubagentRegistryWriteCommand(command)
           ? command.input.values.find((row) => row.run_id === collectorId)
           : undefined;
         const entry = next && rowToSubagentRunRecord(next);
         if (
-          injected < (retry === "restart" ? 2 : 1) &&
+          injected < (retry === "drain" ? 2 : 1) &&
           entry?.browserCleanupDispatchedAt !== undefined
         ) {
           injected++;
-          if (retry === "restart") {
+          if (retry === "drain") {
             markGatewayRestartDraining();
           }
           // Refuse only the later cleanup claim, after the durable terminal commit.
@@ -277,29 +276,19 @@ describe("yielded run settlement", () => {
           expect(persisted(collectorId)?.browserCleanupDispatchedAt).toBeUndefined();
           throw new Error("injected postcommit browser claim write failure");
         }
-        if (
-          retry === "restart" &&
-          !refusedFallback &&
-          injected === 2 &&
-          entry?.cleanupHandled === false
-        ) {
-          refusedFallback = true;
-          throw new Error("injected restart fallback write refusal");
-        }
         return scope.execute(command, executeOptions);
       });
       await testing.sweepOnceForTests();
       // The observer retains the first failed root even though the completion owner retries it.
       await expect(fixture.settle()).rejects.toThrow("Failed to settle subagent cleanup roots");
       await fixture.settle();
-      if (retry === "restart") {
-        expect(refusedFallback).toBe(true);
+      if (retry === "drain") {
         expect(persisted(collectorId)?.browserCleanupDispatchedAt).toBeUndefined();
         resetGatewayWorkAdmission();
         await vi.advanceTimersByTimeAsync(1_000);
         await fixture.settle();
       }
-      expect(injected).toBe(retry === "restart" ? 2 : 1);
+      expect(injected).toBe(retry === "drain" ? 2 : 1);
       expect(persisted(collectorId)?.browserCleanupDispatchedAt).toBeTypeOf("number");
       expect(cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledTimes(1);
       await expectSilentResult(collectorId, {

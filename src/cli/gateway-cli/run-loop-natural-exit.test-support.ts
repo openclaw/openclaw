@@ -361,9 +361,12 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
         await advanceWithoutCalls(heldMs, runtime.exit);
         phaseGate.reject(failure);
         await vi.advanceTimersByTimeAsync(0);
-        await expect(outcome).resolves.toEqual(
-          phase === "close" ? { code: 1 } : { error: failure },
-        );
+        await expect(outcome).resolves.toEqual({ code: 1 });
+        if (phase === "restart-startup") {
+          expect(f.gatewayLog.error).toHaveBeenCalledWith(
+            "shutdown step failed (startup operations): late owned cleanup failed",
+          );
+        }
         expect(drained).toHaveBeenCalledExactlyOnceWith(phase === "close" ? "retained" : "drained");
       });
     });

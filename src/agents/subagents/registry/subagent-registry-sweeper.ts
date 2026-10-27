@@ -56,7 +56,10 @@ import type {
 } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isYieldedSubagentRun } from "./subagent-run-liveness.js";
-import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
+import {
+  shouldSuppressSubagentSessionCleanup,
+  shouldSuppressSubagentSessionEffects,
+} from "./subagent-session-effects-policy.js";
 export { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 
 type CompletionRuntime = ReturnType<typeof createSubagentRegistryCompletionRuntime>;
@@ -230,7 +233,7 @@ export function createSubagentRegistrySweeper(params: {
         // Suppressed session cleanup still requires the captured member for artifact cleanup.
         cleanupIdentities.set(
           getSubagentRunRuntimeKey(entry),
-          shouldSuppressSubagentSessionEffects(entry) ? undefined : freezeSessionIdentity(entry),
+          shouldSuppressSubagentSessionCleanup(entry) ? undefined : freezeSessionIdentity(entry),
         );
       }
       for (const [runId, snapshot] of runEntries) {
@@ -336,8 +339,8 @@ export function createSubagentRegistrySweeper(params: {
 
         if (entry.collect && entry.collectorCompletion) {
           if (entry.collectorLaunchCleanupPending) {
-            let suppressSessionEffects = shouldSuppressSubagentSessionEffects(entry);
-            if (!suppressSessionEffects) {
+            let suppressSessionCleanup = shouldSuppressSubagentSessionCleanup(entry);
+            if (!suppressSessionCleanup) {
               if (!cleanupIdentities.has(getSubagentRunRuntimeKey(entry))) {
                 continue;
               }
@@ -346,12 +349,12 @@ export function createSubagentRegistrySweeper(params: {
                 continue;
               } else {
                 try {
-                  suppressSessionEffects =
+                  suppressSessionCleanup =
                     (await deleteSession(entry, sessionIdentity)) === "changed";
                   if (!isCleanupCurrent(runs.get(runId), entry)) {
                     continue;
                   }
-                  if (!suppressSessionEffects) {
+                  if (!suppressSessionCleanup) {
                     if (
                       !(await params.cleanupCollectorLaunchResources(entry)) ||
                       !isCleanupCurrent(runs.get(runId), entry)
@@ -382,7 +385,7 @@ export function createSubagentRegistrySweeper(params: {
                 current.collectorCompletion !== undefined &&
                 current.collectorLaunchCleanupPending === true,
               (draft) => {
-                if (suppressSessionEffects) {
+                if (suppressSessionCleanup) {
                   draft.execution.suppressSessionEffects = true;
                 }
                 draft.collectorLaunchCleanupPending = false;
@@ -436,9 +439,9 @@ export function createSubagentRegistrySweeper(params: {
         if (entry.archiveAtMs > now) {
           continue;
         }
-        const suppressSessionEffects = shouldSuppressSubagentSessionEffects(entry);
+        const suppressSessionCleanup = shouldSuppressSubagentSessionCleanup(entry);
         let sessionOwnershipChanged = false;
-        if (!suppressSessionEffects) {
+        if (!suppressSessionCleanup) {
           if (!cleanupIdentities.has(getSubagentRunRuntimeKey(entry))) {
             continue;
           }
@@ -471,7 +474,7 @@ export function createSubagentRegistrySweeper(params: {
         }
         params.clearPendingLifecycleError(runId);
         await safeRemoveAttachmentsDir(entry);
-        if (!suppressSessionEffects && !sessionOwnershipChanged) {
+        if (!shouldSuppressSubagentSessionEffects(entry) && !sessionOwnershipChanged) {
           runCleanupTail(runId, "context-engine cleanup", () =>
             params.notifyContextEngineSubagentEnded(sweptContext(entry)),
           );
@@ -492,7 +495,7 @@ export function createSubagentRegistrySweeper(params: {
               getRecordedSubagentChildAuthority(candidate).status === "mismatch" ||
               !isCollectorArchiveReady(candidate, now) ||
               !cleanupIdentities.has(getSubagentRunRuntimeKey(candidate)) ||
-              (!shouldSuppressSubagentSessionEffects(candidate) &&
+              (!shouldSuppressSubagentSessionCleanup(candidate) &&
                 !cleanupIdentities.get(getSubagentRunRuntimeKey(candidate))) ||
               !isCleanupCurrent(candidate, candidate),
           )
@@ -514,7 +517,7 @@ export function createSubagentRegistrySweeper(params: {
           if (!isCleanupCurrent(current, candidate) || !isCollectorArchiveReady(current, now)) {
             continue collectorGroups;
           }
-          if (!shouldSuppressSubagentSessionEffects(current)) {
+          if (!shouldSuppressSubagentSessionCleanup(current)) {
             const sessionIdentity = cleanupIdentities.get(getSubagentRunRuntimeKey(candidate));
             try {
               const changed =

@@ -78,14 +78,12 @@ it("keeps a cron context prefix readable while an inbound turn waits for actor a
       admitting.resolve();
       await admitUserTurn(pending);
     });
-    const cron = withSessionTurn(target, () =>
-      SessionManager.readSessionContextAsync(target, async (messages) => {
-        const snapshot = [...messages];
-        reading.resolve();
-        await releaseRead.promise;
-        return snapshot;
-      }),
-    );
+    const cron = SessionManager.readSessionContextAsync(target, async (messages) => {
+      const snapshot = [...messages];
+      reading.resolve();
+      await releaseRead.promise;
+      return snapshot;
+    });
     await awaitGateBeforeSettlement(reading.promise, cron, "cron did not start reading context");
     const adopted = vi.fn();
     const inboundStarted = vi.fn();

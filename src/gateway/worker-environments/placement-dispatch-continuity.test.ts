@@ -70,16 +70,21 @@ describe("worker placement restart continuity", () => {
           ownerEpoch: active.activeOwnerEpoch,
         });
         expect(restarted.placements.current()).toMatchObject({
-          state: "reclaimed",
+          state: "active",
+          environmentId: active.environmentId,
+          activeOwnerEpoch: active.activeOwnerEpoch,
+          remoteWorkspaceDir: active.remoteWorkspaceDir,
           turnClaim: null,
           workspaceBaseManifestRef: restarted.reconciledManifestRef,
         });
+        expect(restarted.log).toContain("workspace:verify-local");
         expect(restarted.log.indexOf("workspace:verify-local")).toBeLessThan(
-          restarted.log.indexOf("teardown:destroy"),
+          restarted.log.indexOf("workspace:resume"),
         );
         expect(restartedStore.validateTurnClaim(claim)).toBe(false);
         expect(restartedStore.isWorkerTurnToolAuthorized(claim, "sessions_send")).toBe(false);
-        expect(restarted.environments.destroy).toHaveBeenCalledWith(active.environmentId);
+        expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual([]);
+        expect(restarted.environments.destroy).not.toHaveBeenCalled();
         return;
       }
       expect(restarted.environments.stopTunnel).toHaveBeenCalledWith(

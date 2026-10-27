@@ -6,6 +6,7 @@ import {
   type SessionTranscriptTargetBinding,
 } from "../../config/sessions/transcript-target-binding.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { SessionDeliveryRequesterBinding } from "../../infra/session-delivery-queue.records.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -28,6 +29,7 @@ export type MediaGenerationTaskHandle = {
   requesterOrigin?: DeliveryContext;
   detach: boolean;
   requesterTranscript?: SessionTranscriptTargetBinding & { lifecycleRevision: string | null };
+  resolveGatewayContext?: GatewayContextResolver;
   taskLabel: string;
 };
 
@@ -200,6 +202,7 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     requesterAgentId: handle.requesterAgentId,
     targetRequesterSessionKey: target.sessionKey,
     preparedRequester: { binding: requesterBinding, entry: requesterEntry },
+    resolveGatewayContext: handle.resolveGatewayContext,
     completionRequesterSessionId: target.sessionId,
     completionRequesterLifecycleRevision: target.lifecycleRevision ?? undefined,
     triggerMessage,

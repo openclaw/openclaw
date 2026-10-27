@@ -9,7 +9,6 @@ import { setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "../../../config/sessions/session-entry-current-check.js";
 import { callGateway } from "../../../gateway/call.js";
-import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { runSessionMutation } from "../../../sessions/session-controller.lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
@@ -347,30 +346,15 @@ describe("subagent registry persistence", () => {
       pending: [],
     });
 
-    let deletionGateway: unknown;
     vi.mocked(callGateway).mockClear();
-    vi.mocked(callGateway).mockImplementationOnce(async () => {
-      deletionGateway = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.();
-      return { ok: true };
-    });
     const clock = vi.spyOn(Date, "now").mockReturnValue(completedAt + 60_001);
     try {
       await testing.sweepOnceForTests();
     } finally {
       clock.mockRestore();
     }
-    expect(deletionGateway).toBe(gateway);
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "sessions.delete",
-        params: expect.objectContaining({
-          key: run.childSessionKey,
-          agentId: "worker",
-          expectedSessionId: "session-swarm-restart",
-          expectedLifecycleRevision: "revision-swarm-restart",
-        }),
-      }),
-    );
+    // Hydrated results carry no child authority; normal session retention owns the transcript.
+    expect(callGateway).not.toHaveBeenCalled();
     expect(listSubagentRunsForRequester("agent:main:main")).toEqual([]);
     expect(readPersistedRun(run.runId)).toBeUndefined();
   });

@@ -390,7 +390,8 @@ export async function runIndependentCreationInputCase(
       const replacementScope = { ...scope, sessionId: replacement.sessionId };
       const originalTranscript = sessionAccessor.loadTranscriptEventsSync(scope);
       const replacementTranscript = sessionAccessor.loadTranscriptEventsSync(replacementScope);
-      await expect(Promise.resolve().then(persist)).rejects.toThrow();
+      // Reading the original committed receipt does not write into the replacement.
+      await expect(persist()).resolves.toMatchObject({ admission: committedReceipt });
       expect(recorder.getAdmissionReceipt()).toEqual(committedReceipt);
       expect((await loadSessionEntryAsync(receipt.sessionKey)).entry?.sessionId).toBe(
         replacement.sessionId,

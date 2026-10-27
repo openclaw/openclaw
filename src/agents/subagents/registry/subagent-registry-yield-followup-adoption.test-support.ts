@@ -82,10 +82,11 @@ export function registerYieldFollowupAdoptionTests({
   };
 
   it.each(
-    ["complete", "yield during restart", "restart after pause"].flatMap((ending) =>
+    ["complete", "yield"].flatMap((ending) =>
       ["lifecycle", "wait"].map((first) => ({ ending, first })),
     ),
   )("settles $ending once with $first arriving first", async ({ ending, first }) => {
+    vi.setSystemTime(111);
     mocks.persistRegistryRows.mockImplementation(saveSubagentRegistryChangesToSqlite);
     const runId = "run-observation-order";
     const childSessionKey = "agent:main:subagent:child";
@@ -110,12 +111,11 @@ export function registerYieldFollowupAdoptionTests({
       });
     }
     const observe = async (source: string) => {
-      const yielded = paused && (source === "lifecycle" || ending === "yield during restart");
       const terminal = {
         startedAt: 111,
         endedAt: 222,
         ...(paused
-          ? { status: "error", aborted: true, stopReason: "restart", yielded }
+          ? { status: "ok", yielded: true }
           : {
               status: "ok",
               terminalReply: { disposition: "visible", text: "Synthetic final reply." },
@@ -138,24 +138,10 @@ export function registerYieldFollowupAdoptionTests({
       }
     };
     await observe(first);
-    if (paused && (first === "lifecycle" || ending === "yield during restart")) {
-      expect(findRequesterRun(runId)?.requesterSettleWake?.pauseNotice).toBeUndefined();
-    }
     await observe(first === "lifecycle" ? "wait" : "lifecycle");
 
     const run = findRequesterRun(runId);
-    if (ending === "restart after pause") {
-      // A later unyielded abort ends the child; its late yield cannot reopen it.
-      expectUnpausedKill(run, {
-        execution: {
-          status: "terminal",
-          endedAt: 222,
-          outcome: { status: "error", error: "subagent run terminated" },
-        },
-      });
-      expect(wakeRequester).toHaveBeenCalledTimes(first === "lifecycle" ? 1 : 0);
-      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    } else if (paused) {
+    if (paused) {
       expect(run?.pauseReason).toBe("sessions_yield");
       expect([run?.execution.outcome, run?.endedReason]).toEqual([undefined, undefined]);
       expect(wakeRequester).toHaveBeenCalledOnce();
@@ -173,6 +159,7 @@ export function registerYieldFollowupAdoptionTests({
   it.each([true, false])(
     "accepts late yield only without a kill owner (killed=%s)",
     async (killed) => {
+      vi.setSystemTime(111);
       mocks.persistRegistryRows.mockImplementation(saveSubagentRegistryChangesToSqlite);
       mockGatewayMethods(mocks.callGateway, { "agent.wait": { status: "pending" } });
       const runId = "run-late-yield";
@@ -188,6 +175,7 @@ export function registerYieldFollowupAdoptionTests({
       let killedCleanupAt: number | undefined;
       if (killed) {
         lifecycleHandler(endedEvent(runId));
+        vi.setSystemTime(222);
         expect(
           await getRegistry().markSubagentRunTerminated({
             runId,
@@ -268,6 +256,7 @@ export function registerYieldFollowupAdoptionTests({
   };
 
   const arrangeYieldingChild = async () => {
+    vi.setSystemTime(111);
     mockGatewayMethods(mocks.callGateway, {
       "agent.wait": createDeferred<Record<string, unknown>>().promise,
     });

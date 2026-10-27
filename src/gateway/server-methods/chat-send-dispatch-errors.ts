@@ -148,7 +148,7 @@ type ChatSendJobAdmission = Pick<
   AdmittedChatSend,
   "activeRunAbort" | "cleanupAdmittedRun" | "lifecycleGeneration"
 > &
-  Partial<Pick<AdmittedChatSend, "initialSessionEntry">>;
+  Partial<Pick<AdmittedChatSend, "initialSessionEntry" | "recordFailureNotice">>;
 
 export async function handleChatSendSetupError(params: {
   cacheResult?: boolean;
@@ -543,6 +543,13 @@ export function createChatSendDispatchErrorLifecycle(params: {
             },
           },
         });
+        if (!hidden && !dispatchError.terminationFields.aborted) {
+          await admission.recordFailureNotice?.({
+            runId: clientRunId,
+            error: dispatchError.error,
+            errorKind: dispatchError.errorKind,
+          });
+        }
         emitSessionsChanged(context, {
           sessionKey,
           ...(agentId ? { agentId } : {}),

@@ -32,6 +32,7 @@ import { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
 import { inspectGoalChatSendRetry, readChatSendDedupeResponse } from "./chat-send-reservation.js";
 import {
+  chatSendRequestConflictError,
   compareChatSendSubmittedInput,
   readChatSendRetryComparison,
   type ChatSendRetryComparison,
@@ -73,21 +74,13 @@ export function resolveChatSendRequestConflict(
     context.dedupe.get(`chat:${session.clientRunId}`),
     context.dedupe.get(session.pendingChatSendKey),
   ];
-  const conflict = (unverifiable = false) =>
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      unverifiable
-        ? "The previous mention selections cannot be verified. Check the conversation history and use a new message ID to send again."
-        : "This message ID was already used for different input. Check the conversation history and use a new message ID to send again.",
-      { details: { reason: "chat-request-conflict" } },
-    );
   if (
     entries.some(
       (entry) =>
         entry?.requestIdentity !== undefined && entry.requestIdentity !== request.requestIdentity,
     )
   ) {
-    return conflict();
+    return chatSendRequestConflictError();
   }
   const ownPendingAttempt =
     ownPendingAttemptId !== undefined &&
@@ -113,7 +106,7 @@ export function resolveChatSendRequestConflict(
     return undefined;
   }
   const mismatch = compareChatSendSubmittedInput(request, session, comparison);
-  return mismatch ? conflict(mismatch === "unverifiable") : undefined;
+  return mismatch ? chatSendRequestConflictError(mismatch === "unverifiable") : undefined;
 }
 
 export function prepareChatSendRetryComparison(

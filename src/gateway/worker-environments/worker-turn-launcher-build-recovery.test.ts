@@ -190,6 +190,7 @@ async function createBuildRecoveryHarness(
       throw new Error("unexpected provisioning interruption");
     }),
     supportsProviderExecutionMode: vi.fn(() => true),
+    fenceWorkerTurnForRecovery: gate.fenceWorkerTurnForRecovery,
     get: () => environment,
     acquireTurnCredential: async (claim) => {
       if (options.pendingResult) {
@@ -316,6 +317,10 @@ async function createBuildRecoveryHarness(
     onAdmitted,
     originalClaimIds,
     runLocal,
+    reconnect: async () => {
+      connected = true;
+      await dispatch.reconcileActive(worker.ENVIRONMENT_ID);
+    },
     reclaim: () =>
       dispatch.reclaim({
         sessionId: worker.SESSION_ID,
@@ -346,17 +351,25 @@ afterEach(() => {
 });
 
 it("waits for reconnect and settles the exact interrupted claim before the next turn", async () => {
-  const wait = nodeWait();
   const harness = await createBuildRecoveryHarness({
     rejection: "interrupted",
-    waitForAdmissionNode: wait.waitForAdmissionNode,
   });
-  const execution = harness.execute();
+  const waiting = createDeferred();
+  const waitForClaimRelease = worker.placements.waitForTurnClaimRelease.bind(worker.placements);
+  const waitForRelease = vi
+    .spyOn(worker.placements, "waitForTurnClaimRelease")
+    .mockImplementation((sessionId, options) => {
+      waiting.resolve();
+      return waitForClaimRelease(sessionId, options);
+    });
+  const controller = new AbortController();
+  const execution = harness.execute(controller.signal);
   try {
-    await Promise.race([wait.waiting, execution]);
+    await Promise.race([waiting.promise, execution]);
     expect(worker.placements.get(worker.SESSION_ID)?.turnClaim?.claimId).toBe("interrupted-claim");
     expect(harness.launchTurn).not.toHaveBeenCalled();
-    wait.reconnect.resolve();
+    // File custody settles independently of the next turn's admission on reconnect.
+    await harness.reconnect();
     await expect(execution).resolves.toMatchObject({
       payloads: [{ text: replacementReply }],
     });
@@ -364,8 +377,9 @@ it("waits for reconnect and settles the exact interrupted claim before the next 
     expectCalls(0, harness.redispatchPlacement, harness.runLocal);
     await expectSinglePersistedInput();
   } finally {
-    wait.reconnect.resolve();
+    controller.abort();
     await execution.catch(() => {});
+    waitForRelease.mockRestore();
   }
 });
 

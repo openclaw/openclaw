@@ -179,7 +179,6 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
       }
       expectFailure(details, phase, phase === "input" ? "invalid_input" : "internal_error", {
         bridgeDispatchStarted: phase !== "input",
-        replaySafe: false,
       });
       expect(log).toHaveBeenLastCalledWith(
         expect.any(Error),

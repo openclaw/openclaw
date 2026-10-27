@@ -1,6 +1,10 @@
 // Announce loop-guard tests prove deferred delivery retries through its time
 // window, then gives up instead of looping forever after repeated failures.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import { createMockGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime.test-support.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -201,6 +205,7 @@ describe("announce loop guard (#18264)", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    setRuntimeConfigSnapshot(mocks.getRuntimeConfig());
     mocks.loadSubagentRegistryFromSqlite.mockReset();
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map());
     mocks.onAgentEvent.mockReset();
@@ -227,6 +232,7 @@ describe("announce loop guard (#18264)", () => {
       adoptedInputs.length = 0;
       await registry.resetSubagentRegistryForTests({ persist: false });
       resetSessionControllerStateForTest();
+      clearRuntimeConfigSnapshot();
       vi.useRealTimers();
       vi.restoreAllMocks();
       vi.clearAllMocks();

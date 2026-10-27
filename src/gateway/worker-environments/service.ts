@@ -34,6 +34,7 @@ import {
 } from "./inference-control-internal.js";
 import { createWorkerInferenceManager, executeWorkerInference } from "./inference.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
+import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
@@ -667,6 +668,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     launchDesktopApp: environmentAccess.launchDesktopApp,
     reconcileDesktopPolicy: environmentAccess.reconcileDesktopPolicy,
     ...turnRpc,
+    fenceWorkerTurnForRecovery: (claim: WorkerSessionTurnClaim) => {
+      if (!options.placementStore) {
+        throw serviceError("invalid_state", "Worker result cleanup requires its placement gate");
+      }
+      options.placementStore.fenceWorkerTurnForRecovery(claim);
+    },
     createGatewayTools: options.createGatewayTools,
     prepareComputer: options.prepareComputer,
     resolveSshIdentity: environmentAccess.resolveSshIdentity,

@@ -446,7 +446,11 @@ it.each(
       }
       if (mayRecover) {
         expect(loadSessionEntry(target)?.pendingFinalDelivery?.deliveries).toEqual([
-          { id: expect.any(String), state: "delivered" },
+          {
+            id: expect.any(String),
+            state: "delivered",
+            receipt: { platformMessageId: "delivered-final-2", resultCount: 2 },
+          },
         ]);
       }
       // Re-enter recovery after settlement; neither success nor revocation may replay.
