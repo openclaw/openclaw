@@ -52,13 +52,12 @@ function fixture(inheritPath = false) {
     expect((await evaluate(command, allowlist)).allowlistSatisfied, command).toBe(allowed);
   const reject = async (command: string, allowlist: Allowlist) =>
     expectApprovalRequired(await evaluate(command, allowlist));
-  const persist = async (command: string, strictInlineEval?: boolean) => {
+  const persist = async (command: string) => {
     const analysis = await evaluate(command, []);
     const decision = resolveAllowAlwaysPersistenceDecision({
       segments: analysis.segments,
       commandText: command,
       ...context(),
-      strictInlineEval,
       authorizationPlan: analysis.authorizationPlan,
     });
     const entries = decision.kind === "patterns" ? decision.patterns : [];
