@@ -25,6 +25,12 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../../config/sessions/session-accessor.sqlite-read.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../../config/sessions/session-transcript-reconcile.js";
+import { getCurrentSessionControllerClaim } from "../../../sessions/session-controller.lifecycle.js";
+import {
+  getRpcSourceForGateway,
+  requestRpcSourceCancellation,
+  type RpcSourceRef,
+} from "../../../sessions/session-controller.rpc-sources.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -735,5 +741,86 @@ describe("native Talk action ownership through public plugin registration", () =
       expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
       expectHealthySocket(task);
     });
+  });
+});
+
+describe("native Talk scope handoff investigation", () => {
+  installNativePluginTestHooks();
+  it("public GPT Live handoff does not duplicate its source when callback and captured Gateway scopes differ", async () => {
+    const callbackScope = () => undefined;
+    const release = createDeferredCore();
+    let claimedInput: unknown;
+    upstream.runEmbeddedAgent.mockImplementationOnce(async (params) =>
+      withRegisteredNativeEmbeddedRun(params, async () => {
+        claimedInput = getCurrentSessionControllerClaim()?.inputs[0];
+        await release.promise;
+        return nativeResult("The selected conversation was checked.");
+      }),
+    );
+    await withNativePlugin(
+      async (fixture) => {
+        const { socket, result } = await connectNativeSession(fixture);
+        let source: RpcSourceRef | undefined;
+        try {
+          await flushNativeTranscript(result, () =>
+            socket.serverEvent({
+              type: "turn.done",
+              turn: { role: "user", transcript: "Check the selected conversation." },
+            }),
+          );
+          socket.serverEvent(nativeDelegation("scope-handoff", "Check the selected conversation."));
+          await vi.waitFor(
+            () => {
+              source = [...fixture.rpcSourceTesting.values()][0];
+              expect(source).toBeDefined();
+            },
+            { timeout: 5_000 },
+          );
+          if (!source?.input.protocolRunId) {
+            throw new Error("Expected registered handoff source");
+          }
+          await vi.waitFor(
+            () =>
+              expect(
+                source!.input.mailbox.entries.length > 1 ||
+                  upstream.runEmbeddedAgent.mock.calls.length > 0 ||
+                  source!.input.retirementRequested,
+              ).toBe(true),
+            { timeout: 5_000 },
+          );
+          const mailbox = source.input.mailbox;
+          if (mailbox.entries.length > 1) {
+            expect(upstream.runEmbeddedAgent).not.toHaveBeenCalled();
+            expect(mailbox.owner.active).toBeUndefined();
+            expect(mailbox.claim).toBeUndefined();
+            expect(mailbox.entries[0]).toBe(source.input);
+            expect(source.input.task).toBeUndefined();
+            expect(mailbox.entries[1]?.task).toBeTypeOf("function");
+            expect(mailbox.entries.filter((input) => input.injection)).toHaveLength(0);
+            expect(mailbox.entries.map((input) => input.withdrawalHolds)).toEqual([0, 0]);
+          }
+          expect(
+            mailbox.entries.length,
+            "one registered provider request must never create a second mailbox input",
+          ).toBeLessThanOrEqual(1);
+          // The callback scope is not the captured Gateway owner of this fixture.
+          expect(getRpcSourceForGateway(source.input.protocolRunId, callbackScope)).toBeUndefined();
+          expect(getRpcSourceForGateway(source.input.protocolRunId, undefined)).toBe(source);
+          expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
+          expect(claimedInput).toBe(source.input);
+        } finally {
+          release.resolve();
+          if (source) {
+            requestRpcSourceCancellation(source, new Error("synthetic test cleanup"));
+          }
+          await closeTalkClientGatewayControlSession({
+            voiceSessionId: requireString(result, "voiceSessionId"),
+            sessionKey: SESSION_KEY,
+            connId: CONNECTION_ID,
+          });
+        }
+      },
+      { consultScope: callbackScope },
+    );
   });
 });

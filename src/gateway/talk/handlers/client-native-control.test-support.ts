@@ -27,6 +27,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../../plugins/runtime.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -38,6 +39,7 @@ import { createResponse } from "../../server-http.test-harness.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import type {
   GatewayClient,
+  GatewayContextResolver,
   GatewayRequestContext,
   RespondFn,
 } from "../../server-methods/types.js";
@@ -168,6 +170,7 @@ export async function withNativePlugin(
     nativeEffects?: boolean;
     operatorScopes?: string[];
     onConsult?: () => void;
+    consultScope?: GatewayContextResolver;
     configure?: (config: OpenClawConfig) => void;
   } = {},
 ): Promise<void> {
@@ -247,14 +250,18 @@ export async function withNativePlugin(
                 () => capabilityCatalogContext,
               );
               const createBrowserSession = provider.createBrowserSession;
-              if (createBrowserSession && options.onConsult) {
+              if (createBrowserSession && (options.onConsult || options.consultScope)) {
                 provider.createBrowserSession = (request) => {
                   const original = request.runAgentConsult;
                   if (original) {
                     request.runAgentConsult = Object.assign(
                       (...args: Parameters<typeof original>) => {
                         options.onConsult?.();
-                        return original(...args);
+                        return options.consultScope
+                          ? withPluginRuntimeGatewayContextResolver(options.consultScope, () =>
+                              original(...args),
+                            )
+                          : original(...args);
                       },
                       original,
                     );
