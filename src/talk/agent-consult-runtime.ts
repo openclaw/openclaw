@@ -177,6 +177,101 @@ function assertRealtimeVoiceConsultNotInterrupted(
   }
 }
 
+/**
+ * Voice turns honor the configured session reset like typed turns: a stale session rolls over
+ * in place (same session id, reset boundary in its transcript) instead of replaying old context.
+ */
+async function rollOverStaleConsultSession(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  storePath: string;
+  cwd: string;
+  entry: SessionEntry | undefined;
+  logger: Pick<RuntimeLogger, "warn">;
+  abortSignal?: AbortSignal;
+}): Promise<void> {
+  const { cfg, agentId, sessionKey, storePath, entry } = params;
+  if (!entry?.sessionId?.trim() || isModelSelectionLocked(entry)) {
+    return;
+  }
+  const [
+    { resolveSessionEntryResetFreshnessAsync },
+    { resolveChannelResetConfig, resolveSessionResetType },
+    { resetSessionEntryLifecycle },
+    { createSessionWorkStartChangedError, resolveSessionWorkStartError },
+    { normalizeStoreSessionKey },
+    { clearRotatedSessionMetadata },
+    { clearCommittedSessionResetRuntimeState },
+  ] = await Promise.all([
+    import("../config/sessions/entry-freshness.js"),
+    import("../config/sessions/reset.js"),
+    import("../config/sessions/session-accessor.lifecycle.js"),
+    import("../config/sessions/lifecycle.js"),
+    import("../config/sessions/store-entry.js"),
+    import("../agents/session-reset-metadata.js"),
+    import("../auto-reply/reply/session-reset-cleanup.js"),
+  ]);
+  // Blocked sessions (archived, recovery tombstone, provider review) keep their state; the
+  // consult's admission rejects them with the specific reason.
+  if (resolveSessionWorkStartError(sessionKey, entry)) {
+    return;
+  }
+  const resolved = await resolveSessionEntryResetFreshnessAsync({
+    agentId,
+    sessionKey,
+    storePath,
+    sessionCfg: cfg.session,
+    resetType: resolveSessionResetType({ sessionKey }),
+    resetOverride: resolveChannelResetConfig({
+      sessionCfg: cfg.session,
+      channel: deliveryContextFromSession(entry)?.channel,
+    }),
+  });
+  if (resolved.state !== "stale") {
+    return;
+  }
+  const now = Date.now();
+  await resetSessionEntryLifecycle({
+    agentId,
+    storePath,
+    target: { canonicalKey: normalizeStoreSessionKey(sessionKey), storeKeys: [sessionKey] },
+    // A consult cancelled while preparing must not reset the session it never runs in.
+    commitGuard: () => params.abortSignal?.throwIfAborted(),
+    resetBoundary: {
+      context: "preserve-tail",
+      reason: resolved.freshness.staleReason ?? "reset",
+      cwd: params.cwd,
+    },
+    buildNextEntry: ({ currentEntry }) => {
+      if (
+        !currentEntry ||
+        currentEntry.sessionId !== entry.sessionId ||
+        currentEntry.lifecycleRevision !== entry.lifecycleRevision ||
+        resolveSessionWorkStartError(sessionKey, currentEntry)
+      ) {
+        throw createSessionWorkStartChangedError(sessionKey);
+      }
+      return {
+        ...clearRotatedSessionMetadata(currentEntry),
+        lifecycleRevision: randomUUID(),
+        agentHarnessId: undefined,
+        sessionStartedAt: now,
+        lastInteractionAt: now,
+        updatedAt: now,
+      };
+    },
+  });
+  clearCommittedSessionResetRuntimeState({
+    previousSessionEntry: entry,
+    agentId,
+    sessionKey,
+    storePath,
+    onError: (error) =>
+      params.logger.warn(`[talk] failed to clear session reset runtime state: ${String(error)}`),
+  });
+}
+
 export async function consultRealtimeVoiceAgent(params: {
   cfg: OpenClawConfig;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
@@ -323,6 +418,18 @@ export async function consultRealtimeVoiceAgent(params: {
     storePath,
   };
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
+  // Reset before admission: rollover cleanup interrupts work bound to the old incarnation.
+  await rollOverStaleConsultSession({
+    cfg: params.cfg,
+    agentId,
+    sessionKey: params.sessionKey,
+    storePath,
+    cwd: cwd ?? workspaceDir,
+    entry: initialSessionEntry,
+    logger: params.logger,
+    abortSignal: params.abortSignal,
+  });
+  params.abortSignal?.throwIfAborted();
   const lifecycleAbortController = new AbortController();
   const lifecycleInterruption = new Error(
     "Realtime voice agent consult interrupted by a session lifecycle change.",
@@ -430,7 +537,7 @@ export async function consultRealtimeVoiceAgent(params: {
             },
             entryPatch: {
               skipExisting: true,
-              skipped: { ...deliveryFields, updatedAt: now },
+              skipped: { ...deliveryFields, updatedAt: now, lastInteractionAt: now },
               forked: { ...deliveryFields, ...spawnLineage, updatedAt: now },
             },
           });
@@ -464,7 +571,8 @@ export async function consultRealtimeVoiceAgent(params: {
           },
           prepare: (entry) => {
             if (entry.sessionId?.trim()) {
-              return { ...deliveryFields, updatedAt: now };
+              // A spoken request is user interaction for idle reset, whichever voice surface sent it.
+              return { ...deliveryFields, updatedAt: now, lastInteractionAt: now };
             }
             return {
               ...deliveryFields,
