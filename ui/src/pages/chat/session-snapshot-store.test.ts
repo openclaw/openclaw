@@ -34,6 +34,7 @@ import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 /* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
 const snapshotHost = {
   settings: { gatewayUrl: "wss://cache.example" },
@@ -95,7 +96,7 @@ function cacheSnapshot(memory: ChatMessageCache, cacheKey: string, value = snaps
   cacheChatSessionSnapshot(memory, snapshotHost, { sessionKey: rawKey(cacheKey) }, value);
 }
 async function persist(store: SessionSnapshotStore, cacheKey: string, value: ChatSessionSnapshot) {
-  store.write(cacheKey, value);
+  writeSnapshotFixture(store, cacheKey, value);
   await store.flush();
 }
 const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion = 5) => ({
@@ -239,7 +240,7 @@ describe("persistent chat session snapshots", () => {
       const retired = store.captureReadScope(target);
       const unrelated = store.captureReadScope(key("agent:main:unrelated"));
       if (operation === "write") {
-        store.write(target, snapshot());
+        writeSnapshotFixture(store, target, snapshot());
       } else if (operation === "forget") {
         store.forget(target);
       } else if (operation === "prefix") {
@@ -272,12 +273,12 @@ describe("persistent chat session snapshots", () => {
       const opening = vi
         .spyOn(snapshotDatabase, "openSessionSnapshotDatabase")
         .mockReturnValueOnce(held.promise);
-      writer.write(key("agent:main:blocker"), snapshot("blocker"));
+      writeSnapshotFixture(writer, key("agent:main:blocker"), snapshot("blocker"));
       const blocker = writer.flush();
       await vi.waitFor(() => expect(opening).toHaveBeenCalledOnce());
       const target = key("agent:main:queued");
       const value = snapshot("queued");
-      writer.write(target, value);
+      writeSnapshotFixture(writer, target, value);
       const queued = writer.flush();
       if (forgotten) {
         writer.forget(target);
@@ -561,7 +562,7 @@ describe("persistent chat session snapshots", () => {
     scope.dispose();
     await reader.flush();
     expect((await readRawRecord(sessionKey))?.savedAt).toBe(1);
-    reader.write(sessionKey, previousHydration);
+    writeSnapshotFixture(reader, sessionKey, previousHydration);
     await reader.flush();
     expect((await readRawRecord(sessionKey))?.savedAt).toBe(2);
   });
@@ -651,7 +652,7 @@ describe("persistent chat session snapshots", () => {
       const value = snapshot("important transcript");
       writer.connect();
       connected.add(writer);
-      writer.write(sessionKey, value);
+      writeSnapshotFixture(writer, sessionKey, value);
       await Promise.all([
         writer.flush(),
         scope === "all"
@@ -757,7 +758,7 @@ describe("persistent chat session snapshots", () => {
   it("keeps every operation non-fatal when IndexedDB is unavailable or throws", async () => {
     vi.stubGlobal("indexedDB", undefined);
     const unavailable = new SessionSnapshotStore();
-    unavailable.write(key("agent:main:none"), snapshot("none"));
+    writeSnapshotFixture(unavailable, key("agent:main:none"), snapshot("none"));
     await expect(unavailable.flush()).resolves.toBeUndefined();
     await expect(unavailable.read(key("agent:main:none"))).resolves.toBeNull();
     await expect(unavailable.delete(key("agent:main:none"))).resolves.toBeUndefined();
@@ -770,7 +771,7 @@ describe("persistent chat session snapshots", () => {
       },
     });
     const denied = new SessionSnapshotStore();
-    denied.write(key("agent:main:denied"), snapshot("denied"));
+    writeSnapshotFixture(denied, key("agent:main:denied"), snapshot("denied"));
     await expect(denied.flush()).resolves.toBeUndefined();
     await expect(denied.read(key("agent:main:denied"))).resolves.toBeNull();
     await expect(clearStoredChatSnapshots()).resolves.toBeUndefined();

@@ -12,6 +12,7 @@ import {
 import * as snapshotDatabase from "./session-snapshot-database.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 /* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
 const sessionKey = 'scope:["wss://cache.example","account-a"]\u0000agent:main:escaped-"\\🦞';
 function snapshot(): ChatSessionSnapshot {
@@ -80,7 +81,7 @@ describe("snapshot write serialization and scheduling", () => {
       openclawResponsesInputReplay: { text: "Server replay only" },
     }));
     const value = { ...snapshot(), messages, pagination, deltaCursor: "latest-cursor" };
-    store.write(sessionKey, value);
+    writeSnapshotFixture(store, sessionKey, value);
     await store.flush();
     const restored = await store.read(sessionKey);
     expect(restored?.messages).toEqual(
@@ -102,7 +103,7 @@ describe("snapshot write serialization and scheduling", () => {
       content: `Message ${index}`,
       __openclaw: { id: `message-${index}`, seq: Math.floor(index / 3) + 1 },
     }));
-    store.write(sessionKey, {
+    writeSnapshotFixture(store, sessionKey, {
       ...snapshot(),
       messages,
       pagination: { hasMore: false, totalMessages: 34 },
@@ -120,7 +121,7 @@ describe("snapshot write serialization and scheduling", () => {
       __openclaw: { id: `reply-${index}`, seq: index + 1 },
     }));
     const summaries = [{ emoji: "👍", count: 1, identities: [{ id: "peer", label: "Peer" }] }];
-    store.write(sessionKey, {
+    writeSnapshotFixture(store, sessionKey, {
       ...snapshot(),
       messages,
       pagination: { hasMore: false, totalMessages: 100 },
@@ -150,7 +151,7 @@ describe("snapshot write serialization and scheduling", () => {
         messages,
         pagination: { hasMore: true as const, nextOffset: 120, totalMessages: 200 },
       };
-      store.write(sessionKey, value);
+      writeSnapshotFixture(store, sessionKey, value);
       await store.flush();
       expect(await store.read(sessionKey)).toEqual({
         ...value,
@@ -177,7 +178,7 @@ describe("snapshot write serialization and scheduling", () => {
       messages: [{ role: "assistant", content, openclawDisplayContent: content }],
     };
 
-    store.write(sessionKey, value);
+    writeSnapshotFixture(store, sessionKey, value);
     await store.flush();
 
     const storedContent = [
@@ -285,7 +286,7 @@ describe("snapshot write serialization and scheduling", () => {
         Math.max(0, sanitized.messages.length - 1) +
         JSON.stringify({ ...sanitized, messages: [] }).length +
         JSON.stringify(envelope).length;
-      store.write(sessionKey, value);
+      writeSnapshotFixture(store, sessionKey, value);
       const stringify = vi.spyOn(JSON, "stringify");
       await store.flush();
       // One transcript serialization plus its small record envelope; no per-message remeasurement.
@@ -383,7 +384,7 @@ describe("snapshot write serialization and scheduling", () => {
     const idle = idleScheduler();
     const value = snapshot();
     const stringify = vi.spyOn(JSON, "stringify");
-    store.write(sessionKey, value);
+    writeSnapshotFixture(store, sessionKey, value);
     vi.advanceTimersByTime(500);
     expect(stringify).not.toHaveBeenCalled();
     expect(idle.request).toHaveBeenCalledOnce();
@@ -405,12 +406,12 @@ describe("snapshot write serialization and scheduling", () => {
         vi.stubGlobal("requestIdleCallback", undefined);
       }
       let latest = snapshot();
-      store.write(sessionKey, latest);
+      writeSnapshotFixture(store, sessionKey, latest);
       const deadline = idle ? 1500 : 500;
       for (let elapsed = 100; elapsed < deadline; elapsed += 100) {
         vi.advanceTimersByTime(100);
         latest = { ...snapshot(), messages: [`revision-${elapsed}`] };
-        store.write(sessionKey, latest);
+        writeSnapshotFixture(store, sessionKey, latest);
       }
       vi.advanceTimersByTime(100);
       await store.whenIdle();
@@ -424,7 +425,7 @@ describe("snapshot write serialization and scheduling", () => {
     const opening = vi
       .spyOn(snapshotDatabase, "openSessionSnapshotDatabase")
       .mockReturnValueOnce(held.promise);
-    store.write(sessionKey, snapshot());
+    writeSnapshotFixture(store, sessionKey, snapshot());
     const first = store.flush();
     await vi.waitFor(() => expect(opening).toHaveBeenCalledOnce());
     const values = Array.from({ length: 60 }, (_, index) => ({
@@ -433,7 +434,7 @@ describe("snapshot write serialization and scheduling", () => {
     }));
     const stringify = vi.spyOn(JSON, "stringify");
     const flushes = values.map((value) => {
-      store.write(sessionKey, value);
+      writeSnapshotFixture(store, sessionKey, value);
       return store.flush();
     });
     try {
@@ -457,7 +458,7 @@ describe("snapshot write serialization and scheduling", () => {
       .spyOn(snapshotDatabase, "openSessionSnapshotDatabase")
       .mockReturnValueOnce(firstOpening.promise)
       .mockReturnValueOnce(nextOpening.promise);
-    store.write(sessionKey, snapshot());
+    writeSnapshotFixture(store, sessionKey, snapshot());
     const first = store.flush();
     await vi.waitFor(() => expect(opening).toHaveBeenCalledOnce());
     let idleSettled = false;
@@ -465,7 +466,7 @@ describe("snapshot write serialization and scheduling", () => {
       idleSettled = true;
     });
     const latest = { ...snapshot(), messages: ["successor"] };
-    store.write(sessionKey, latest);
+    writeSnapshotFixture(store, sessionKey, latest);
     const next = store.flush();
     try {
       firstOpening.resolve(firstDatabase);
@@ -483,7 +484,7 @@ describe("snapshot write serialization and scheduling", () => {
 
   it("uses the debounce timer when idle callbacks are unavailable", async () => {
     vi.stubGlobal("requestIdleCallback", undefined);
-    store.write(sessionKey, snapshot());
+    writeSnapshotFixture(store, sessionKey, snapshot());
     vi.advanceTimersByTime(500);
     await store.whenIdle();
     expect(await store.read(sessionKey)).toEqual(snapshot());
@@ -494,7 +495,7 @@ describe("snapshot write serialization and scheduling", () => {
     async (event) => {
       const idle = idleScheduler();
       const value = snapshot();
-      store.write(sessionKey, value);
+      writeSnapshotFixture(store, sessionKey, value);
       vi.advanceTimersByTime(500);
       const stringify = vi.spyOn(JSON, "stringify");
       if (event === "visibilitychange") {
@@ -515,7 +516,7 @@ describe("snapshot write serialization and scheduling", () => {
 
   it("cancels idle work when the cache is cleared", async () => {
     const idle = idleScheduler();
-    store.write(sessionKey, snapshot());
+    writeSnapshotFixture(store, sessionKey, snapshot());
     vi.advanceTimersByTime(500);
     store.clearMemory();
     expect(idle.cancel).toHaveBeenCalledOnce();
