@@ -49,7 +49,14 @@ type Body = {
 };
 type Step = { step: number; plugin: string; generation: number; atMs: number };
 type Plugin = { id: string; turnHandover: boolean; contextEngine?: boolean };
-type Scenario = { name: string; plugins: Plugin[]; handsOver: boolean };
+// `bundled` runs a shipped plugin from extensions/ in the memory slot and steps through
+// one of its tools; it reports no generation, so only reload timing proves handover.
+type Scenario = {
+  name: string;
+  plugins: Plugin[];
+  handsOver: boolean;
+  bundled?: { id: string; tool: string };
+};
 type EngineEvent = { event: string; generation: number; atMs: number; toolResults?: number };
 
 function writeToolCall(response: ServerResponse, name: string, id: string) {
@@ -140,16 +147,24 @@ const scenarios: Scenario[] = [
     plugins: [{ id: "engine-proof", turnHandover: true, contextEngine: true }],
     handsOver: true,
   },
+  {
+    name: "bundled Knowledge",
+    plugins: [],
+    handsOver: true,
+    bundled: { id: "knowledge", tool: "knowledge_status" },
+  },
 ];
 
 it.for(scenarios)(
   "plugin reload during a running turn: $name",
   { timeout: 180_000 },
-  async ({ name, plugins, handsOver }, { signal, onTestFinished }) => {
+  async ({ name, plugins, handsOver, bundled }, { signal, onTestFinished }) => {
     const home = tempDirs.make("openclaw-turn-handover-");
     const stateDir = path.join(home, ".openclaw");
     const workspaceDir = path.join(home, "workspace");
-    const bundledPluginsDir = path.join(home, "empty-bundled");
+    const bundledPluginsDir = bundled
+      ? path.resolve("extensions")
+      : path.join(home, "empty-bundled");
     const configPath = path.join(stateDir, "openclaw.json");
     const counts = path.join(home, "hooks.log");
     const events = path.join(home, "engine.log");
@@ -157,9 +172,9 @@ it.for(scenarios)(
     await Promise.all(
       [stateDir, workspaceDir, bundledPluginsDir].map((dir) => fs.mkdir(dir, { recursive: true })),
     );
-    const written = await Promise.all(
-      plugins.map((plugin) => writePlugin(home, plugin, counts, events)),
-    );
+    const written = bundled
+      ? [{ ...bundled, root: "" }]
+      : await Promise.all(plugins.map((plugin) => writePlugin(home, plugin, counts, events)));
     const sessionKey = "agent:main:dashboard:" + randomUUID();
     const token = randomUUID();
     const failure = createDeferred<Error>();
@@ -181,6 +196,7 @@ it.for(scenarios)(
       OPENCLAW_GATEWAY_TOKEN: token,
       OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
       OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: bundled ? undefined : "1",
       NO_PROXY: "127.0.0.1,localhost",
       no_proxy: "127.0.0.1,localhost",
     };
@@ -207,8 +223,16 @@ it.for(scenarios)(
                 steps.push({
                   step: steps.length + 1,
                   atMs: Date.now() - startedAt,
-                  ...(JSON.parse(output.output ?? "{}") as Pick<Step, "plugin" | "generation">),
+                  ...(bundled
+                    ? { plugin: bundled.id, generation: 0 }
+                    : (JSON.parse(output.output ?? "{}") as Pick<Step, "plugin" | "generation">)),
                 });
+                if (bundled) {
+                  // The bundled tool is fast; keep steps slow enough for the reload to land mid-turn.
+                  await new Promise((resolve) => {
+                    setTimeout(resolve, STEP_MS);
+                  });
+                }
               }
               if (steps.length === RELOAD_AFTER_STEP && !reload) {
                 reloadStartedAt = Date.now();
@@ -252,32 +276,41 @@ it.for(scenarios)(
           },
         };
         cfg.agents!.entries = { main: {} };
-        cfg.plugins = {
-          enabled: true,
-          allow: written.map(({ id }) => id),
-          load: { paths: written.map(({ root }) => root) },
-          slots: { memory: "none", ...(engineId ? { contextEngine: engineId } : {}) },
-          // External plugins need explicit consent to observe agent_end.
-          entries: Object.fromEntries(
-            written.map(({ id }) => [
-              id,
-              { enabled: true, hooks: { allowConversationAccess: true } },
-            ]),
-          ),
-        };
+        cfg.plugins = bundled
+          ? {
+              enabled: true,
+              allow: [bundled.id],
+              slots: { memory: bundled.id },
+              entries: { [bundled.id]: { enabled: true } },
+            }
+          : {
+              enabled: true,
+              allow: written.map(({ id }) => id),
+              load: { paths: written.map(({ root }) => root) },
+              slots: { memory: "none", ...(engineId ? { contextEngine: engineId } : {}) },
+              // External plugins need explicit consent to observe agent_end.
+              entries: Object.fromEntries(
+                written.map(({ id }) => [
+                  id,
+                  { enabled: true, hooks: { allowConversationAccess: true } },
+                ]),
+              ),
+            };
         cfg.tools = { allow: written.map(({ tool }) => tool), codeMode: false, toolSearch: false };
         cfg.gateway = { auth: { mode: "token", token } };
         await fs.writeFile(configPath, JSON.stringify(cfg));
+        // External fixtures need an install record and capability consent; bundled ones ship trusted.
+        const external = bundled ? [] : written;
         await seedInstalledPluginIndex(
           Object.fromEntries(
-            written.map(({ id, root }) => [
+            external.map(({ id, root }) => [
               id,
               { source: "path", sourcePath: root, installPath: root },
             ]),
           ),
           { env: process.env, config: cfg },
         );
-        for (const { id, root } of written) {
+        for (const { id, root } of external) {
           await resolvePluginCapabilityConsent({
             config: cfg,
             pluginId: id,
@@ -330,11 +363,12 @@ it.for(scenarios)(
         assert(reload, "the turn never reached the reload step");
         await reload;
         // agent_end side effects settle after the reply; wait for every plugin, then for strays.
+        const expectedAgentEnds = bundled ? 0 : written.length;
         const agentEnds = async () =>
           (await fs.readFile(counts, "utf8").catch(() => "")).split("\n").filter(Boolean).length;
         for (
           let waited = 0;
-          (await agentEnds()) < written.length && waited < 15_000;
+          (await agentEnds()) < expectedAgentEnds && waited < 15_000;
           waited += 100
         ) {
           await new Promise((resolve) => {
@@ -367,7 +401,7 @@ it.for(scenarios)(
 
         // One logical turn: every step ran exactly once, and agent_end fired once per plugin.
         expect(steps, proof).toHaveLength(STEPS);
-        expect(summary.agentEnds, proof).toBe(written.length);
+        expect(summary.agentEnds, proof).toBe(expectedAgentEnds);
         const firstGeneration = new Map<string, number>();
         for (const { plugin, generation } of steps.slice(0, RELOAD_AFTER_STEP)) {
           firstGeneration.set(plugin, firstGeneration.get(plugin) ?? generation);
@@ -376,12 +410,14 @@ it.for(scenarios)(
         if (handsOver) {
           // The reload finished mid-turn and later steps ran on the new generation.
           expect(summary.reloadSettledBeforeReply, proof).toBe(true);
-          expect(
-            later.every(
-              ({ plugin, generation }) => generation > (firstGeneration.get(plugin) ?? 0),
-            ),
-            proof,
-          ).toBe(true);
+          if (!bundled) {
+            expect(
+              later.every(
+                ({ plugin, generation }) => generation > (firstGeneration.get(plugin) ?? 0),
+              ),
+              proof,
+            ).toBe(true);
+          }
         } else {
           // The reload waited for the whole turn, which stayed on its first generation.
           expect(summary.reloadSettledBeforeReply, proof).toBe(false);
