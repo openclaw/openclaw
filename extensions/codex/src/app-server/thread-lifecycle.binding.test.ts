@@ -41,7 +41,6 @@ import {
   tempDir,
   threadStartResult,
 } from "./run-attempt-test-harness.js";
-import type { PluginAppPolicyContext } from "./session-binding-record-codec.js";
 import {
   createCodexTestBindingStore,
   readCodexAppServerBinding,
@@ -249,6 +248,21 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
   registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
   return writeRawCodexAppServerBinding(sessionFile, {
     webSearchThreadConfigFingerprint: DEFAULT_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+    ...binding,
+  });
+}
+
+function writeEmptyToolsBinding(
+  sessionFile: string,
+  cwd: string,
+  binding: Partial<Parameters<typeof writeCodexAppServerBinding>[1]> = {},
+) {
+  return writeCodexAppServerBinding(sessionFile, {
+    threadId: "thread-existing",
+    cwd,
+    model: "gpt-5.4-codex",
+    modelProvider: "openai",
+    dynamicToolsFingerprint: "[]",
     ...binding,
   });
 }
@@ -1022,43 +1036,39 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
   });
 
-  it.each([
-    {
-      label: "cold native thread with no stored tools",
-      options: { cold: true, omitCatalog: true, receipt: "none" as const },
-    },
-  ])(
-    "configures the actual manual-resume binding without replacing its native thread: $label",
-    async ({ options }) => {
-      const fixture = await createManualResumeFixture(options);
-      try {
-        const resumed = await fixture.start();
-        expect(resumed).toMatchObject({
-          threadId: fixture.threadId,
-          clientId: fixture.client.getInstanceId(),
-          lifecycle: { action: "resumed" },
-        });
-        expect(
-          (await readCodexAppServerBinding(fixture.sessionFile))?.pendingResumeConfiguration,
-        ).toBeUndefined();
-        expect(
-          fixture.request.mock.calls
-            .map(([method]) => method)
-            .filter((method) => method !== "skills/list"),
-        ).toEqual([
-          "thread/read",
-          "thread/resume",
-          ...PREFLIGHT_METHODS,
-          "thread/read",
-          "thread/unsubscribe",
-          "thread/resume",
-          "thread/inject_items",
-        ]);
-      } finally {
-        fixture.close();
-      }
-    },
-  );
+  it("configures the actual manual-resume binding without replacing a cold native thread with no stored tools", async () => {
+    const fixture = await createManualResumeFixture({
+      cold: true,
+      omitCatalog: true,
+      receipt: "none",
+    });
+    try {
+      const resumed = await fixture.start();
+      expect(resumed).toMatchObject({
+        threadId: fixture.threadId,
+        clientId: fixture.client.getInstanceId(),
+        lifecycle: { action: "resumed" },
+      });
+      expect(
+        (await readCodexAppServerBinding(fixture.sessionFile))?.pendingResumeConfiguration,
+      ).toBeUndefined();
+      expect(
+        fixture.request.mock.calls
+          .map(([method]) => method)
+          .filter((method) => method !== "skills/list"),
+      ).toEqual([
+        "thread/read",
+        "thread/resume",
+        ...PREFLIGHT_METHODS,
+        "thread/read",
+        "thread/unsubscribe",
+        "thread/resume",
+        "thread/inject_items",
+      ]);
+    } finally {
+      fixture.close();
+    }
+  });
 
   it.each([
     { options: { receipt: "unrelated" as const }, error: "did not confirm unloading" },
@@ -1961,12 +1971,8 @@ describe("Codex app-server thread lifecycle bindings", () => {
   it("isolates transient message-only completion threads without replacing the parent binding", async () => {
     const sessionFile = path.join(tempDir, "message-only-session.jsonl");
     const workspaceDir = path.join(tempDir, "message-only-workspace");
-    await writeCodexAppServerBinding(sessionFile, {
+    await writeEmptyToolsBinding(sessionFile, workspaceDir, {
       threadId: "thread-parent",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
     });
     const params = createParams(sessionFile, workspaceDir);
     params.toolsAllow = ["message"];
@@ -2392,77 +2398,55 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual([...PREFLIGHT_METHODS]);
   });
 
-  it.each([
-    {
-      name: "a malformed inventory",
-      ephemeral: true,
-      attestation: { data: "invalid" },
-      failure: "returned an invalid restricted-tool-surface attestation",
-    },
-  ])(
-    "discards the fresh thread after MCP attestation finds $name, ephemeral=$ephemeral",
-    async ({ attestation, failure, ephemeral }) => {
-      const { sessionFile, workspaceDir } = createPaths();
-      await writeCodexAppServerBinding(sessionFile, {
-        threadId: "thread-normal",
-        cwd: workspaceDir,
-        model: "gpt-5.4-codex",
-        modelProvider: "openai",
-        dynamicToolsFingerprint: "[]",
-      });
-      const predecessor = await readCodexAppServerBinding(sessionFile);
-      const params = createParams(sessionFile, workspaceDir);
-      params.toolsAllow = ["openclaw"];
-      if (ephemeral) {
-        params.sessionKey = "agent:main:internal-session-effects:incognito-mcp-attestation";
+  it("discards the fresh ephemeral thread after MCP attestation finds a malformed inventory", async () => {
+    const { sessionFile, workspaceDir } = createPaths();
+    await writeEmptyToolsBinding(sessionFile, workspaceDir, {
+      threadId: "thread-normal",
+    });
+    const predecessor = await readCodexAppServerBinding(sessionFile);
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["openclaw"];
+    params.sessionKey = "agent:main:internal-session-effects:incognito-mcp-attestation";
+    const abandonClient = vi.fn(async () => {});
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
       }
-      const abandonClient = vi.fn(async () => {});
-      const request = vi.fn(async (method: string) => {
-        if (method === "config/read") {
-          return { config: {}, layers: [] };
-        }
-        if (method === "configRequirements/read") {
-          return { requirements: null };
-        }
-        if (method === "thread/start") {
-          return threadStartResult("thread-ring-zero");
-        }
-        if (method === "thread/delete") {
-          return {};
-        }
-        if (method === "thread/unsubscribe") {
-          return { status: "unsubscribed" };
-        }
-        if (method === "mcpServerStatus/list") {
-          if (attestation instanceof Error) {
-            throw attestation;
-          }
-          return attestation;
-        }
-        throw new Error(`unexpected method: ${method}`);
-      });
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-ring-zero");
+      }
+      if (method === "thread/unsubscribe") {
+        return { status: "unsubscribed" };
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: "invalid" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
 
-      await expect(
-        startOrResumeThread({
-          client: { request } as never,
-          abandonClient,
-          params,
-          dynamicTools: [createNamedDynamicTool("openclaw")],
-          nativeCodeModeEnabled: false,
-          userMcpServersEnabled: false,
-          hostSystemAgentActive: true,
-        }),
-      ).rejects.toThrow(failure);
-      expect(abandonClient).not.toHaveBeenCalled();
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        ...PREFLIGHT_METHODS,
-        "thread/start",
-        "mcpServerStatus/list",
-        ephemeral ? "thread/unsubscribe" : "thread/delete",
-      ]);
-      expect(await readCodexAppServerBinding(sessionFile)).toEqual(predecessor);
-    },
-  );
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        abandonClient,
+        params,
+        dynamicTools: [createNamedDynamicTool("openclaw")],
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        hostSystemAgentActive: true,
+      }),
+    ).rejects.toThrow("returned an invalid restricted-tool-surface attestation");
+    expect(abandonClient).not.toHaveBeenCalled();
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      ...PREFLIGHT_METHODS,
+      "thread/start",
+      "mcpServerStatus/list",
+      "thread/unsubscribe",
+    ]);
+    expect(await readCodexAppServerBinding(sessionFile)).toEqual(predecessor);
+  });
 
   it.each(["thread-start", "binding-commit"])(
     "discards a fresh thread when abort arrives during %s",
@@ -2732,13 +2716,9 @@ describe("Codex app-server thread lifecycle bindings", () => {
       throw new Error(`unexpected method: ${request.method}`);
     });
     try {
-      await writeCodexAppServerBinding(sessionFile, {
+      await writeEmptyToolsBinding(sessionFile, workspaceDir, {
         threadId: "thread-overloaded",
         clientId: wire.client.getInstanceId(),
-        cwd: workspaceDir,
-        model: "gpt-5.4-codex",
-        modelProvider: "openai",
-        dynamicToolsFingerprint: "[]",
       });
       const originalBinding = await readCodexAppServerBinding(sessionFile);
       await expect(wire.start(sessionFile, workspaceDir)).rejects.toMatchObject({
@@ -3107,12 +3087,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       policyFingerprint:
         '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
     };
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
+    await writeEmptyToolsBinding(sessionFile, workspaceDir, {
       contextEngine,
     });
     const params = createParams(sessionFile, workspaceDir);
@@ -3143,12 +3118,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
   it("starts a fresh Codex thread when context-engine sidecar metadata is no longer active", async () => {
     const { sessionFile, workspaceDir } = createPaths();
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
+    await writeEmptyToolsBinding(sessionFile, workspaceDir, {
       contextEngine: {
         schemaVersion: 1,
         engineId: "lossless-claw",
@@ -3330,13 +3300,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
   it("preserves the binding when the app-server closes during thread resume", async () => {
     const { sessionFile, workspaceDir } = createPaths();
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
-    });
+    await writeEmptyToolsBinding(sessionFile, workspaceDir);
 
     const respond = createLifecycleRequest(async (method: string) => {
       if (method === "thread/resume") {
@@ -3370,13 +3334,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
   it("starts a new thread when the network proxy config is not active on the binding", async () => {
     const { sessionFile, workspaceDir } = createPaths();
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
-    });
+    await writeEmptyToolsBinding(sessionFile, workspaceDir);
     const appServer = createNetworkProxyThreadLifecycleAppServerOptions();
     const request = createFixedThreadRequest("thread-network-proxy", ["thread/start"]);
 
@@ -3497,35 +3455,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
   });
 
-  it.each<{
-    name: string;
-    previousFingerprint: string;
-    previousPolicyContext: PluginAppPolicyContext;
-    configPatch: JsonObject;
-    fingerprint: string;
-    policyContext: PluginAppPolicyContext;
-    enabledPluginConfigKeys: string[];
-  }>([
-    {
-      name: "app inventory recovers for an empty binding",
-      previousFingerprint: "plugin-apps-empty",
-      previousPolicyContext: { fingerprint: "plugin-policy-empty", apps: {}, pluginAppIds: {} },
-      configPatch: createPluginAppConfigPatch(),
-      fingerprint: "plugin-apps-config-1",
-      policyContext: createPluginAppPolicyContext(),
-      enabledPluginConfigKeys: [],
-    },
-  ])("resumes with complete current plugin policy when $name", async (scenario) => {
+  it("resumes with complete current plugin policy when app inventory recovers for an empty binding", async () => {
     const { sessionFile, workspaceDir } = createPaths();
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
-      pluginAppsFingerprint: scenario.previousFingerprint,
+    const configPatch = createPluginAppConfigPatch();
+    const policyContext = createPluginAppPolicyContext();
+    await writeEmptyToolsBinding(sessionFile, workspaceDir, {
+      pluginAppsFingerprint: "plugin-apps-empty",
       pluginAppsInputFingerprint: "plugin-apps-input-1",
-      pluginAppPolicyContext: scenario.previousPolicyContext,
+      pluginAppPolicyContext: { fingerprint: "plugin-policy-empty", apps: {}, pluginAppIds: {} },
     });
 
     const respond = createLifecycleRequest(async (method: string, _requestParams?: unknown) => {
@@ -3545,10 +3482,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const { client, request } = fixture;
     const buildPluginThreadConfig = vi.fn(async () => ({
       enabled: true,
-      configPatch: scenario.configPatch,
-      fingerprint: scenario.fingerprint,
+      configPatch,
+      fingerprint: "plugin-apps-config-1",
       inputFingerprint: "plugin-apps-input-1",
-      policyContext: scenario.policyContext,
+      policyContext,
       diagnostics: [],
     }));
 
@@ -3557,7 +3494,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       pluginThreadConfig: {
         enabled: true,
         inputFingerprint: "plugin-apps-input-1",
-        enabledPluginConfigKeys: scenario.enabledPluginConfigKeys,
+        enabledPluginConfigKeys: [],
         build: buildPluginThreadConfig,
       },
     });
@@ -3565,25 +3502,19 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual(COLD_RESUME_METHODS);
     expect(request.mock.calls.find(([method]) => method === "thread/resume")?.[1]).toEqual(
       expect.objectContaining({
-        config: { ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG, ...scenario.configPatch },
+        config: { ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG, ...configPatch },
       }),
     );
     expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
       threadId: "thread-existing",
-      pluginAppsFingerprint: scenario.fingerprint,
-      pluginAppPolicyContext: scenario.policyContext,
+      pluginAppsFingerprint: "plugin-apps-config-1",
+      pluginAppPolicyContext: policyContext,
     });
   });
 
   it("starts a new configured thread for legacy bindings missing plugin app metadata", async () => {
     const { sessionFile, workspaceDir } = createPaths();
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
-    });
+    await writeEmptyToolsBinding(sessionFile, workspaceDir);
 
     const request = createFixedThreadRequest("thread-plugins", ["thread/start"]);
     const pluginAppPolicyContext = createPluginAppPolicyContext();

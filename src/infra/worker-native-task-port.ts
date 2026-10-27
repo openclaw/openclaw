@@ -1,5 +1,6 @@
 import { receiveMessageOnPort, type MessagePort, type Transferable } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { materializeErrorStack } from "./error-graph-internal.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { observeWorkerMessage, workerMessagePayloadBytes } from "./worker-message-metrics.js";
 import { nativePortIsOpen } from "./worker-native-port.js";
@@ -51,6 +52,7 @@ export class NativeWorkerTaskPort {
     if (this.disposed || this.failure) {
       return;
     }
+    materializeErrorStack(error);
     this.failure = error;
     this.callbacks.unavailable();
   }

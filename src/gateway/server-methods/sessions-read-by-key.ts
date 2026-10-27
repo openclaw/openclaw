@@ -81,7 +81,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       if (
         !record ||
         (hasOperatorBoundary(client, read.state.policyConfig) &&
-          presentation.sharing.entryFilter?.(record.key, record.entry) === false)
+          !presentation.sharing.canReadTarget(presentation.target(query)!))
       ) {
         respond(true, { session: null });
         return undefined;
@@ -179,7 +179,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
             current.entry.sessionId !== selected.entry.sessionId ||
             current.entry.lifecycleRevision !== selected.entry.lifecycleRevision ||
             (hasOperatorBoundary(client, read.state.policyConfig) &&
-              presentation.sharing.entryFilter?.(current.key, current.entry) === false)
+              !presentation.sharing.canReadTarget(presentation.target(query)!))
           ) {
             respond(true, { session: null });
             return;
@@ -237,7 +237,11 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       const record = read.describe({ key, agentId: requested.agentId });
       const policyConfig = read.state.policyConfig;
       const boundaryFilter = hasOperatorBoundary(client, policyConfig)
-        ? createSessionListEntryFilter({ client, cfg: policyConfig })
+        ? createSessionListEntryFilter({
+            client,
+            cfg: policyConfig,
+            membership: record?.membership,
+          })
         : undefined;
       if (!record?.entry.sessionId || boundaryFilter?.(record.key, record.entry) === false) {
         respond(true, { messages: [] }, undefined);
@@ -277,7 +281,11 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
         : undefined;
       const policyConfig = read.state.policyConfig;
       const boundaryFilter = hasOperatorBoundary(client, policyConfig)
-        ? createSessionListEntryFilter({ client, cfg: policyConfig })
+        ? createSessionListEntryFilter({
+            client,
+            cfg: policyConfig,
+            membership: current?.membership,
+          })
         : undefined;
       if (
         !current ||
