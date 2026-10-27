@@ -10,7 +10,11 @@ import {
   type FetchLike,
   type Transport,
   type JSONRPCMessage,
+  isInitializeRequest,
 } from "@modelcontextprotocol/client";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { sleepWithAbort } from "../infra/backoff.js";
+import { parseRetryAfterHeaderSeconds } from "../infra/retry-after.js";
 
 const STREAM_RETRY_EXHAUSTED_RE = /^Maximum reconnection attempts \(\d+\) exceeded\.$/;
 const SESSION_TERMINATION_TIMEOUT_MS = 5_000;
@@ -414,7 +418,38 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
       if (this.closed) {
         throw new Error("MCP Streamable HTTP transport is closed");
       }
-      const response = limitMcpHttpResponse(await this.cleanupFetch(input, init));
+      let response = limitMcpHttpResponse(await this.cleanupFetch(input, init));
+      if (
+        response.status === 429 &&
+        init?.method === "POST" &&
+        typeof init.body === "string" &&
+        isInitializeRequest(JSON.parse(init.body))
+      ) {
+        // Retry only the handshake, before the SDK closes on an HTTP error.
+        // A failed handshake that allocated a session still needs normal disposal.
+        for (let retry = 0; retry < 2 && response.status === 429; retry += 1) {
+          if (response.headers.has("mcp-session-id")) {
+            break;
+          }
+          const retryAfterSeconds = parseRetryAfterHeaderSeconds(
+            response.headers.get("retry-after"),
+          );
+          let remainingMs = Math.ceil((retryAfterSeconds ?? 2 ** retry) * 1_000);
+          void response.body?.cancel().catch(() => undefined);
+          // Keep the server's delay intact; the existing connection deadline or
+          // transport close aborts the wait. Native timers cannot hold long hints.
+          while (remainingMs > 0) {
+            const delayMs = Math.min(remainingMs, MAX_TIMER_TIMEOUT_MS);
+            await sleepWithAbort(delayMs, init.signal ?? undefined);
+            remainingMs -= delayMs;
+          }
+          init.signal?.throwIfAborted();
+          if (this.closed) {
+            throw new Error("MCP Streamable HTTP transport is closed");
+          }
+          response = limitMcpHttpResponse(await this.cleanupFetch(input, init));
+        }
+      }
       if (init?.method === "GET" && !response.ok) {
         // Notification GETs have no error-body contract. Do not let a body that stays open block recovery.
         void response.body?.cancel().catch(() => undefined);

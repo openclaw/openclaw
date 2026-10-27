@@ -1,63 +1,22 @@
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { Client, SdkErrorCode } from "@modelcontextprotocol/client";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { settlesWithin } from "../shared/settle-within.js";
-import { disposeMcpClient, isMcpHttpSessionExpired } from "./mcp-client-lifecycle.js";
+import {
+  connectMcpClient,
+  disposeMcpClient,
+  isMcpHttpSessionExpired,
+} from "./mcp-client-lifecycle.js";
 import { redactMcpDiagnosticError } from "./mcp-error.js";
 import {
   McpSseSessionExpiredError,
   OpenClawSSEClientTransport,
   OpenClawStreamableHTTPClientTransport,
 } from "./mcp-http-transport.js";
-
-function jsonResponse(value: unknown, init?: ResponseInit): Response {
-  const headers = new Headers(init?.headers);
-  headers.set("content-type", "application/json");
-  return new Response(JSON.stringify(value), {
-    ...init,
-    headers,
-  });
-}
-
-function initializedFetch(params: {
-  onGet: () => Promise<Response> | Response;
-  onDelete?: (init: RequestInit) => Response | void;
-  onPost?: (message: { id?: string | number; method?: string }) => Promise<Response> | Response;
-}) {
-  return vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-    if (init?.method === "DELETE") {
-      return params.onDelete?.(init) ?? new Response(null, { status: 204 });
-    }
-    if (init?.method === "GET") {
-      return await params.onGet();
-    }
-    if (typeof init?.body !== "string") {
-      throw new Error("expected serialized JSON-RPC request body");
-    }
-    const message = JSON.parse(init.body) as { id?: number; method?: string };
-    if (message.method === "initialize") {
-      return jsonResponse(
-        {
-          jsonrpc: "2.0",
-          id: message.id,
-          result: {
-            protocolVersion: "2025-06-18",
-            capabilities: { tools: { listChanged: true } },
-            serverInfo: { name: "fixture", version: "1" },
-          },
-        },
-        { headers: { "mcp-session-id": "session-1" } },
-      );
-    }
-    if (params.onPost) {
-      return await params.onPost(message);
-    }
-    return new Response(null, { status: 202 });
-  });
-}
+import { initializedFetch, jsonResponse } from "./mcp-http-transport.test-support.js";
 
 const MCP_HTTP_MAX_PARSE_BYTES = 10 * 1024 * 1024;
 const OVERSIZED_MCP_TEXT = "x".repeat(MCP_HTTP_MAX_PARSE_BYTES + 1024);
@@ -140,6 +99,176 @@ async function expectSseSessionReplaced(fixture: SseReconnectFixture): Promise<v
 }
 
 describe("OpenClaw MCP HTTP lifecycle adapters", () => {
+  describe("Streamable HTTP initialization rate limits", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it.each(["seconds", "HTTP-date"])(
+      "waits for Retry-After %s before recovering the tool catalog",
+      async (format) => {
+        const started = Date.now();
+        const initializes: number[] = [];
+        const fetchMock = initializedFetch({
+          onGet: () => new Response(null, { status: 405 }),
+          onInitialize: () => {
+            initializes.push(Date.now() - started);
+            return initializes.length === 1
+              ? new Response("rate limited", {
+                  status: 429,
+                  headers: {
+                    "retry-after":
+                      format === "seconds" ? "2" : new Date(started + 2_000).toUTCString(),
+                  },
+                })
+              : undefined;
+          },
+          onPost: (message) =>
+            message.method === "tools/list"
+              ? mcpResultResponse(message.id, {
+                  tools: [{ name: "recovered", inputSchema: { type: "object" } }],
+                })
+              : new Response(null, { status: 202 }),
+        });
+        const transport = new OpenClawStreamableHTTPClientTransport(
+          new URL("http://mcp.invalid/mcp"),
+          { fetch: fetchMock },
+        );
+        const client = new Client({ name: "test", version: "1" });
+        const connecting = client.connect(transport).catch((error: unknown) => error);
+
+        try {
+          await vi.advanceTimersByTimeAsync(1_999);
+          expect(initializes).toEqual([0]);
+          await vi.advanceTimersByTimeAsync(1);
+          expect(await connecting).toBeUndefined();
+          expect(initializes).toEqual([0, 2_000]);
+          await expect(client.listTools()).resolves.toEqual({
+            tools: [{ name: "recovered", inputSchema: { type: "object" } }],
+          });
+        } finally {
+          await disposeMcpClient({ client, transport, transportType: "streamable-http" });
+        }
+      },
+    );
+
+    it("stops after three initialize attempts with bounded fallback delays", async () => {
+      const started = Date.now();
+      const initializes: number[] = [];
+      const fetchMock = initializedFetch({
+        onGet: () => new Response(null, { status: 405 }),
+        onInitialize: () => {
+          initializes.push(Date.now() - started);
+          return new Response("rate limited", { status: 429 });
+        },
+      });
+      const transport = new OpenClawStreamableHTTPClientTransport(
+        new URL("http://mcp.invalid/mcp"),
+        { fetch: fetchMock },
+      );
+      const client = new Client({ name: "test", version: "1" });
+      const connecting = client.connect(transport).catch((error: unknown) => error);
+
+      try {
+        await vi.advanceTimersByTimeAsync(999);
+        expect(initializes).toEqual([0]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(initializes).toEqual([0, 1_000]);
+        await vi.advanceTimersByTimeAsync(1_999);
+        expect(initializes).toEqual([0, 1_000]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await connecting).toMatchObject({ status: 429 });
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(initializes).toEqual([0, 1_000, 3_000]);
+      } finally {
+        await disposeMcpClient({ client, transport, transportType: "streamable-http" });
+      }
+    });
+
+    it.each(["deadline", "caller abort", "transport close"])(
+      "does not POST again after %s interrupts a rate-limit wait",
+      async (stop) => {
+        const onInitialize = vi.fn(
+          () => new Response("rate limited", { status: 429, headers: { "retry-after": "10" } }),
+        );
+        const transport = new OpenClawStreamableHTTPClientTransport(
+          new URL("http://mcp.invalid/mcp"),
+          {
+            fetch: initializedFetch({
+              onGet: () => new Response(null, { status: 405 }),
+              onInitialize,
+            }),
+          },
+        );
+        const client = new Client({ name: "test", version: "1" });
+        const controller = new AbortController();
+        const connecting = connectMcpClient({
+          client,
+          transport,
+          timeoutMs: stop === "deadline" ? 500 : 30_000,
+          signal: controller.signal,
+        }).catch((error: unknown) => error);
+
+        try {
+          await vi.advanceTimersByTimeAsync(500);
+          expect(onInitialize).toHaveBeenCalledOnce();
+          if (stop === "caller abort") {
+            controller.abort(new Error("caller cancelled"));
+          } else if (stop === "transport close") {
+            await transport.close();
+          }
+          expect(await connecting).toBeInstanceOf(Error);
+          await vi.advanceTimersByTimeAsync(10_000);
+          expect(onInitialize).toHaveBeenCalledOnce();
+        } finally {
+          await disposeMcpClient({ client, transport, transportType: "streamable-http" });
+        }
+      },
+    );
+
+    it("does not replay a stateless tool call that returns HTTP 429", async () => {
+      let toolCalls = 0;
+      const transport = new OpenClawStreamableHTTPClientTransport(
+        new URL("http://mcp.invalid/mcp"),
+        {
+          fetch: initializedFetch({
+            sessionId: null,
+            onGet: () => new Response(null, { status: 405 }),
+            onPost: (message) => {
+              if (message.method !== "tools/call") {
+                return new Response(null, { status: 202 });
+              }
+              toolCalls += 1;
+              return new Response("rate limited", {
+                status: 429,
+                headers: { "retry-after": "1" },
+              });
+            },
+          }),
+        },
+      );
+      const client = new Client({ name: "test", version: "1" });
+
+      try {
+        await client.connect(transport);
+        expect(transport.sessionId).toBeUndefined();
+        const calling = client
+          .callTool({ name: "mutate", arguments: {} })
+          .catch((error: unknown) => error);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(await calling).toMatchObject({ status: 429 });
+        expect(toolCalls).toBe(1);
+      } finally {
+        await disposeMcpClient({ client, transport, transportType: "streamable-http" });
+      }
+    });
+  });
+
   it.each([
     "Streamable HTTP error: Error POSTing to endpoint: bearer=body-secret",
     "Error POSTing to endpoint (HTTP 500): bearer=body-secret",
@@ -652,9 +781,13 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
     }
   });
 
-  it.each(["pending", "rejecting"])(
-    "finishes termination with %s DELETE body cancellation",
-    async (cancellation) => {
+  it.each([
+    { cancellation: "pending", initializeStatus: 429 },
+    { cancellation: "rejecting", initializeStatus: 500 },
+  ])(
+    "cleans up HTTP $initializeStatus with $cancellation DELETE body cancellation",
+    async ({ cancellation, initializeStatus }) => {
+      let initializeCount = 0;
       let deleteCount = 0;
       const sockets = new Set<Socket>();
       const server = createServer((request, response) => {
@@ -668,7 +801,11 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
           response.writeHead(405).end();
           return;
         }
-        response.writeHead(500, { "mcp-session-id": "hang-cancel-session" });
+        initializeCount += 1;
+        response.writeHead(initializeStatus, {
+          "mcp-session-id": "hang-cancel-session",
+          "retry-after": "0",
+        });
         response.end("initialize failed");
       });
       try {
@@ -714,6 +851,7 @@ describe("OpenClaw MCP HTTP lifecycle adapters", () => {
         const client = new Client({ name: "test", version: "1" });
 
         await expect(client.connect(transport)).rejects.toThrow("initialize failed");
+        expect(initializeCount).toBe(1);
         expect(transport.sessionId).toBe("hang-cancel-session");
 
         await expect(settlesWithin(transport.terminateSession(), 1_000)).resolves.toBe(true);
