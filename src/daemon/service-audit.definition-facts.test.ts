@@ -539,7 +539,7 @@ it.each([
   ["opaque launcher", "/old/bin:/usr/bin:/bin", "/new/bin:/usr/bin:/bin", "/old/bin/launcher"],
 ])(
   "refuses a macOS runtime refresh with %s",
-  (_name, currentPath, nextPath, executable = undefined) => {
+  (_name, currentPath, nextPath, executable?: string) => {
     const findings: ServiceDefinitionDrift[] = [];
     auditGatewayInstallPreservation(
       {
