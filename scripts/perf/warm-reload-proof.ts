@@ -641,6 +641,7 @@ try {
             origin: admission.origin,
             gatewayAuth: admission.gatewayAuth,
             viewerEmail: admission.viewerEmail,
+            peerSessions: admission.peerSessions,
           },
         }
       : {}),
@@ -715,6 +716,24 @@ try {
   const launched = await launchWarmReloadBrowser();
   browser = launched.browser;
   browserConfiguration = launched.configuration;
+  if (admission) {
+    // Pause peer JavaScript without hiding the pages, which would clear their viewer declarations.
+    for (const peer of admission.peerSessions) {
+      for (const routePath of [fixture.chatPath, fixture.dashboardPath]) {
+        const context = await browser.newContext({ viewport, colorScheme: "dark" });
+        await context.addCookies([peer.cookie]);
+        const page = await context.newPage();
+        await page.goto(baseUrl);
+        await waitForControlUiGatewayReady(page, 60000);
+        await page.goto(`${baseUrl}${routePath}`);
+        await waitForControlUiGatewayReady(page, 60000);
+        await page.locator(".chat-pane__header").first().waitFor({ state: "visible" });
+        const cdp = await context.newCDPSession(page);
+        await cdp.send("Debugger.enable");
+        await cdp.send("Debugger.pause");
+      }
+    }
+  }
   paintHoldingCalibration = await calibrateWarmReloadPaintHolding(browser, {
     port: await freePort(gatewayPorts),
     directory: path.join(directory, "paint-holding-calibration"),
@@ -855,6 +874,12 @@ try {
               }),
           );
           await delay(2000);
+          if (admission) {
+            await page
+              .locator('.chat-pane__presence .viewer-facepile[data-viewer-count="3"]')
+              .first()
+              .waitFor({ state: "visible" });
+          }
           const target = fixture.fixtureSummary.targets[route === "chat" ? 0 : 1]!;
           const cache = await readWarmCache(page, target.key);
           results.at(-1)!.warmCache = cache;

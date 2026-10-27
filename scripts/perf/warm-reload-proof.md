@@ -131,6 +131,13 @@ through the real Gateway RPC owner for the dashboard session. All names, text,
 identities, media, and links are synthetic. `warm-reload-fixture.json` records the
 exact shape; the rig does not claim to reproduce production traffic or authority.
 
+Signed-in proof also seeds three other profiles with distinct synthetic avatars.
+Each signs in through its own HttpOnly proxy cookie and opens both routes through
+the real UI. Peer JavaScript is paused without hiding its pages before measurement,
+preserving live viewer declarations without competing renderer work. Both measured
+arms must finish warming with exactly three other viewers in the header; an empty
+facepile cannot qualify a header-presence comparison.
+
 ## Capture and metric definitions
 
 The viewport is **1720 × 1180 CSS pixels**, device scale factor one, dark theme,
