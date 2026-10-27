@@ -14,6 +14,7 @@ const streamFns = vi.hoisted(() => {
   };
 });
 
+// mock-isolation: count lazy imports without SDK/state-worker initialization; real lifecycle is tested separately.
 vi.mock("./transport-stream.js", () => {
   streamFns.moduleLoads++;
   return {
