@@ -9,7 +9,8 @@ import type {
 import { ChatSessionCompanionThreads } from "./chat-session-companion.ts";
 
 const storage = vi.hoisted(() => ({ read: vi.fn(), write: vi.fn() }));
-vi.mock("../../lib/chat/composer-draft-store.runtime.ts", () => ({
+vi.mock("../../lib/chat/composer-draft-store.runtime.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/chat/composer-draft-store.runtime.ts")>()),
   readDurableComposerDraft: storage.read,
   writeDurableComposerDraft: storage.write,
 }));
