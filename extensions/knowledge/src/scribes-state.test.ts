@@ -102,7 +102,7 @@ describe("scribes catalog", () => {
 describe("scribes state", () => {
   // One conversations scribe loaded through fake Gateway reads.
   async function conversationsScribe(world: {
-    session?: { key: string; label: string; archived?: boolean };
+    session?: { key: string; displayName: string; archived?: boolean };
     job?: ScribeJob;
     messages?: unknown[];
   }) {
@@ -116,14 +116,14 @@ describe("scribes state", () => {
         };
       }
       if (method === "sessions.list") {
-        return { sessions: params?.label === label && world.session ? [world.session] : [] };
+        return { sessions: params?.search === label && world.session ? [world.session] : [] };
       }
       return { messages: world.messages ?? [] };
     });
     const snapshots = await loadScribes({ request } as never, "main");
     return snapshots.find((snapshot) => snapshot.scribe.id === "conversations")!;
   }
-  const session = { key: "agent:main:dock:1", label: "Scribe · Learn from conversations" };
+  const session = { key: "agent:main:dock:1", displayName: "Scribe · Learn from conversations" };
   const result = (state: string) =>
     assistant(
       `SCRIBE_RESULT {"scribe":"conversations","state":"${state}","jobId":null,"summary":"x"}`,
@@ -211,7 +211,7 @@ describe("scribes state", () => {
     }
   });
 
-  it("finds sessions by label and jobs by declarationKey through Gateway reads", async () => {
+  it("finds sessions by display name and jobs by declarationKey through Gateway reads", async () => {
     const review = scribeById("unlinked-review")!,
       memory = scribeById("memory")!;
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
@@ -224,13 +224,13 @@ describe("scribes state", () => {
       }
       if (method === "sessions.list") {
         const rows: Record<string, unknown[]> = {
-          [scribeLabel(review)]: [{ key: "s-review", label: scribeLabel(review) }],
+          [scribeLabel(review)]: [{ key: "s-review", displayName: scribeLabel(review) }],
           [scribeLabel(memory)]: [
-            { key: "s-memory-old", label: scribeLabel(memory), archived: true },
-            { key: "s-memory", label: scribeLabel(memory) },
+            { key: "s-memory-old", displayName: scribeLabel(memory), archived: true },
+            { key: "s-memory", displayName: scribeLabel(memory) },
           ],
         };
-        return { sessions: typeof params?.label === "string" ? (rows[params.label] ?? []) : [] };
+        return { sessions: typeof params?.search === "string" ? (rows[params.search] ?? []) : [] };
       }
       if (method === "chat.history") {
         return params?.sessionKey === "s-memory"
@@ -259,9 +259,9 @@ describe("scribes state", () => {
     expect(snapshots[2]!.setup?.options).toEqual({ sources: ["memory-md"] });
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
-      label: "Scribe · Review unlinked claims",
+      search: "Scribe · Review unlinked claims",
       archived: "all",
-      limit: 5,
+      limit: 20,
     });
     expect(request).toHaveBeenCalledWith("cron.list", {
       agentId: "main",
@@ -291,13 +291,48 @@ describe("scribes state", () => {
         };
       }
       if (method === "sessions.list") {
-        return { sessions: params?.label === label ? [{ key: "s-conv", label }] : [] };
+        return {
+          sessions: params?.search === label ? [{ key: "s-conv", displayName: label }] : [],
+        };
       }
       return { messages: [] };
     });
     const snapshots = await loadScribes({ request } as never, "main");
     const conversations = snapshots.find((snapshot) => snapshot.scribe.id === "conversations")!;
     expect([conversations.job?.id, conversations.status]).toEqual(["mine", "on"]);
+  });
+
+  it("uses the conversation the automation targets over a newer one with the same title", async () => {
+    const label = "Scribe · Learn from conversations";
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "cron.list") {
+        return {
+          jobs: [
+            {
+              ...job({ id: "mine" }),
+              declarationKey: "knowledge:scribe:conversations",
+              sessionTarget: "session:s-owner",
+            },
+          ],
+        };
+      }
+      if (method === "sessions.list") {
+        return {
+          sessions:
+            params?.search === label
+              ? [
+                  { key: "s-newer", displayName: label },
+                  { key: "s-owner", displayName: label },
+                  { key: "s-other", displayName: "Something else" },
+                ]
+              : [],
+        };
+      }
+      return { messages: [] };
+    });
+    const snapshots = await loadScribes({ request } as never, "main");
+    const conversations = snapshots.find((snapshot) => snapshot.scribe.id === "conversations")!;
+    expect([conversations.session?.key, conversations.job?.id]).toEqual(["s-owner", "mine"]);
   });
 
   it("detects conversation counts and MEMORY.md, omitting what it cannot read", async () => {

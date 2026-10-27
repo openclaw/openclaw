@@ -18,7 +18,10 @@ const reviewJob = {
 
 // A fake page host: Gateway reads answer from `world`; writes are recorded.
 function fixture(world: {
-  sessions?: Record<string, { key: string; sessionId?: string; label: string; archived?: boolean }>;
+  sessions?: Record<
+    string,
+    { key: string; sessionId?: string; displayName: string; archived?: boolean }
+  >;
   jobs?: unknown[];
   history?: Record<string, unknown[]>;
   runs?: unknown[];
@@ -40,8 +43,8 @@ function fixture(world: {
       case "cron.list":
         return { jobs: world.jobs ?? [], hasMore: false, nextOffset: null };
       case "sessions.list": {
-        if (typeof params?.label === "string") {
-          const row = world.sessions?.[params.label];
+        if (typeof params?.search === "string") {
+          const row = world.sessions?.[params.search];
           return { sessions: row ? [row] : [] };
         }
         return { sessions: [], count: 1, totalCount: params?.archived ? 1204 : 148 };
@@ -112,7 +115,7 @@ it("lists On and Available scribes with honest detection and a tab count", async
     sessions: {
       "Scribe · Review unlinked claims": {
         key: "s-review",
-        label: "Scribe · Review unlinked claims",
+        displayName: "Scribe · Review unlinked claims",
       },
     },
     jobs: [reviewJob],
@@ -128,7 +131,7 @@ it("lists On and Available scribes with honest detection and a tab count", async
   expect(scribesTab.textContent).toBe("Scribes1");
 });
 
-it("starts a conversations scribe: creates its labelled conversation and sends the setup message", async () => {
+it("starts a conversations scribe: creates its titled conversation and sends the setup message", async () => {
   const { render, create, calls, ui, load, page } = fixture({});
   const view = await render();
   buttonNamed(view, "Set up…").click();
@@ -144,7 +147,7 @@ it("starts a conversations scribe: creates its labelled conversation and sends t
   await vi.waitFor(() => expect(load).toHaveBeenCalled());
   expect(create).toHaveBeenCalledWith({
     agentId: "main",
-    label: "Scribe · Learn from conversations",
+    displayName: "Scribe · Learn from conversations",
     surface: "plugin-dock",
   });
   const send = calls.find(([method]) => method === "chat.send")![1]!;
@@ -166,7 +169,7 @@ it("starts a conversations scribe: creates its labelled conversation and sends t
 it("restarts a turned-off scribe in its existing conversation with a fresh attempt key", async () => {
   const label = "Scribe · Learn from conversations";
   const { render, create, calls, page } = fixture({
-    sessions: { [label]: { key: "s-conv", label } },
+    sessions: { [label]: { key: "s-conv", displayName: label } },
     history: {
       "s-conv": [
         {
@@ -269,7 +272,7 @@ it("runs, pauses, turns off and opens an On scribe from its detail", async () =>
     sessions: {
       "Scribe · Review unlinked claims": {
         key: "s-review",
-        label: "Scribe · Review unlinked claims",
+        displayName: "Scribe · Review unlinked claims",
       },
     },
     jobs: [reviewJob],
@@ -308,7 +311,7 @@ it("reports a skipped run that could not complete as failed", async () => {
     sessions: {
       "Scribe · Review unlinked claims": {
         key: "s-review",
-        label: "Scribe · Review unlinked claims",
+        displayName: "Scribe · Review unlinked claims",
       },
     },
     jobs: [reviewJob],
@@ -336,7 +339,7 @@ it("repairs a scribe whose conversation was archived", async () => {
       "Scribe · Review unlinked claims": {
         key: "s-review",
         sessionId: "sid-review",
-        label: "Scribe · Review unlinked claims",
+        displayName: "Scribe · Review unlinked claims",
         archived: true,
       },
     },
@@ -380,7 +383,7 @@ it("forces an ongoing scribe's first run once after its setup turn reports on", 
     state: { nextRunAtMs: 1_793_090_000_000 },
   };
   const { render, ui, calls } = fixture({
-    sessions: { [label]: { key: "s-conv", label } },
+    sessions: { [label]: { key: "s-conv", displayName: label } },
     jobs: [job],
     history: {
       "s-conv": [
@@ -404,7 +407,7 @@ it("does not force a run after a repair, or for a job that already ran", async (
   const setup = scribeSetup("unlinked-review", "ongoing", {}, "main", "America/Los_Angeles");
   const fresh = { ...reviewJob, id: "job-repaired", state: {} };
   const { render, calls } = fixture({
-    sessions: { [label]: { key: "s-review", label } },
+    sessions: { [label]: { key: "s-review", displayName: label } },
     jobs: [fresh],
     history: {
       "s-review": [
@@ -416,7 +419,7 @@ it("does not force a run after a repair, or for a job that already ran", async (
   await render();
   expect(calls.some(([method]) => method === "cron.run")).toBe(false);
   const ran = fixture({
-    sessions: { [label]: { key: "s-review", label } },
+    sessions: { [label]: { key: "s-review", displayName: label } },
     jobs: [reviewJob],
     history: {
       "s-review": [
@@ -439,7 +442,7 @@ it("retries a failed one-time scribe by sending its setup again with a new attem
     "America/Los_Angeles",
   );
   const { render, ui, calls, create } = fixture({
-    sessions: { [label]: { key: "s-mem", label } },
+    sessions: { [label]: { key: "s-mem", displayName: label } },
     history: {
       "s-mem": [
         userText(setupMessage(setup)),

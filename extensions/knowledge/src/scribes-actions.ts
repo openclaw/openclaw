@@ -15,8 +15,8 @@ type ScribeHost = Pick<ControlUiHost, "request" | "sessions">;
 
 /**
  * The scribe's conversation, ready for a message: its existing session (restored from the
- * archive if needed), or a new one claiming the scribe's label, recorded on the snapshot. Labels stay claimed by archived
- * sessions, so a scribe always reuses the conversation it already has.
+ * archive if needed), or a new one titled with the scribe's name, recorded on the snapshot. A
+ * scribe keeps one conversation, so its automation and history stay in one place.
  */
 async function conversation(host: ScribeHost, snapshot: ScribeSnapshot, agentId: string) {
   const existing = snapshot.session;
@@ -34,14 +34,14 @@ async function conversation(host: ScribeHost, snapshot: ScribeSnapshot, agentId:
   }
   const key = await host.sessions.create({
     agentId,
-    label: scribeLabel(snapshot.scribe),
+    displayName: scribeLabel(snapshot.scribe),
     surface: "plugin-dock",
   });
   if (!key) {
     throw new Error("The scribe’s conversation could not be created.");
   }
-  // A retry after a failed send reuses this conversation instead of claiming the label again.
-  snapshot.session = { key, label: scribeLabel(snapshot.scribe) };
+  // A retry after a failed send reuses this conversation instead of creating another.
+  snapshot.session = { key, displayName: scribeLabel(snapshot.scribe) };
   return key;
 }
 

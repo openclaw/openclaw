@@ -40,8 +40,9 @@ that are set up are listed under **On**; the rest are under **Available**.
 Select **Set up…**, **Import…**, or **Turn on…**, choose options, and start.
 Starting needs a connection with write access (`operator.write`).
 
-1. Knowledge creates a conversation labelled `Scribe · <title>` for the viewed
-   agent, or reuses the one that already has that label.
+1. Knowledge creates a conversation titled `Scribe · <title>` for the viewed
+   agent, or reuses the scribe's existing conversation (restoring it if it was
+   archived).
 2. It sends that conversation a fixed setup message: the skill to follow and the
    options you chose as JSON. No vault content is included.
 3. An ongoing scribe creates one automation for itself and reports `on`. The
@@ -93,8 +94,10 @@ reopening the scribe shows its current state.
   the Gateway cannot provide is left out rather than estimated.
 - Repair and Retry reuse the options of the latest setup message the page can still read
   in the conversation (its last 100 messages); otherwise it uses the defaults.
-- A scribe conversation's label stays claimed while the conversation is archived,
-  so starting or repairing a scribe reuses that conversation.
+- The page finds a scribe's conversation by its `Scribe · <title>` name and, for an
+  ongoing scribe, picks the one its automation targets. Renaming the conversation
+  hides it from the tab: a once scribe starts a new conversation next time, and an
+  ongoing one shows Needs reauthorization.
 
 ## Related
 

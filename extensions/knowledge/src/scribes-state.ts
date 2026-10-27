@@ -23,7 +23,7 @@ export type ScribeStatus =
 type ScribeSession = {
   key: string;
   sessionId?: string;
-  label?: string;
+  displayName?: string;
   agentId?: string;
   archived?: boolean;
   createdAt?: number;
@@ -247,20 +247,35 @@ function deriveStatus(input: {
   return result.state === "done" ? "done" : result.state === "failed" ? "failing" : "available";
 }
 
-/** The newest session holding this scribe's label, preferring one that is not archived. */
-async function findSession(host: ScribeReader, agentId: string, scribe: ScribeDefinition) {
-  const label = scribeLabel(scribe);
+/** Sessions shown as this scribe's conversation (by display name), archived ones included. */
+async function findSessions(host: ScribeReader, agentId: string, scribe: ScribeDefinition) {
+  const title = scribeLabel(scribe);
   const result = await host.request<{ sessions?: unknown[] }>("sessions.list", {
     agentId,
-    label,
+    search: title,
     archived: "all",
-    limit: 5,
+    limit: 20,
   });
-  const rows = (result?.sessions ?? []).filter(
+  return (result?.sessions ?? []).filter(
     (row): row is ScribeSession =>
-      isRecord(row) && typeof row.key === "string" && row.label === label,
+      isRecord(row) && typeof row.key === "string" && row.displayName === title,
   );
-  return rows.find((row) => !row.archived) ?? rows[0];
+}
+
+/**
+ * Pair a scribe with its conversation and automation. An ongoing scribe's conversation is the
+ * one its job targets; otherwise the newest unarchived session with the scribe's title. The job
+ * is the one targeting that conversation, or any job with the key (shown as needing repair).
+ */
+function pairScribe(sessions: ScribeSession[], keyed: ScribeJob[]) {
+  const targets = new Set(keyed.map((job) => job.sessionTarget));
+  const session =
+    sessions.find((row) => targets.has(`session:${row.key}`)) ??
+    sessions.find((row) => !row.archived) ??
+    sessions[0];
+  const job =
+    keyed.find((entry) => session && entry.sessionTarget === `session:${session.key}`) ?? keyed[0];
+  return { session, job };
 }
 
 /** All of this agent's scribe automations, grouped by declarationKey. */
@@ -302,17 +317,14 @@ async function readMessages(host: ScribeReader, session: ScribeSession, agentId:
 export async function loadScribes(host: ScribeReader, agentId: string): Promise<ScribeSnapshot[]> {
   const [jobs, sessions] = await Promise.all([
     findJobs(host, agentId),
-    Promise.all(SCRIBES.map((scribe) => findSession(host, agentId, scribe))),
+    Promise.all(SCRIBES.map((scribe) => findSessions(host, agentId, scribe))),
   ]);
   return Promise.all(
     SCRIBES.map(async (scribe, i) => {
-      const session = sessions[i];
-      // The key is unique per owner conversation: prefer the job that targets this scribe's own
-      // conversation; another one with the key still marks the scribe as set up somewhere.
-      const keyed = jobs.get(scribeDeclarationKey(scribe.id)) ?? [];
-      const job =
-        keyed.find((entry) => session && entry.sessionTarget === `session:${session.key}`) ??
-        keyed[0];
+      const { session, job } = pairScribe(
+        sessions[i]!,
+        jobs.get(scribeDeclarationKey(scribe.id)) ?? [],
+      );
       const messages = session ? await readMessages(host, session, agentId) : [];
       const { result, index: resultIndex } = parseScribeResult(messages);
       const { setup, kind, index: setupIndex } = parseSetup(messages);

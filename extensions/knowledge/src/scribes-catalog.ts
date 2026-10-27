@@ -90,7 +90,7 @@ export const SCRIBES: readonly ScribeDefinition[] = [
 
 /** Catalog entry for `id`, or undefined for an unknown id. */
 export const scribeById = (id: string) => SCRIBES.find((scribe) => scribe.id === id);
-/** Session label a scribe's conversation claims; the page finds the session by it. */
+/** Display name of a scribe's conversation; the page finds the session by it. */
 export const scribeLabel = (scribe: ScribeDefinition) => `Scribe · ${scribe.title}`;
 /** declarationKey of the one automation an ongoing scribe creates. */
 export const scribeDeclarationKey = (id: ScribeId) => `knowledge:scribe:${id}`;
