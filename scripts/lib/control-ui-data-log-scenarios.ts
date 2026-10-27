@@ -2,6 +2,7 @@ import type { LogsTailResult } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { pathForRoute } from "../../ui/src/app-route-paths.ts";
 import type { MockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
+import { openNavigationDrawer } from "./control-ui-interaction-navigation.ts";
 import type {
   InteractionFixtureOverrides,
   InteractionScenario,
@@ -86,6 +87,9 @@ export const dataLogScenarios: readonly InteractionScenario[] = [
       await page.locator('.settings-sidebar__item[href="/logs"]').waitFor();
     },
     run: async (page, gateway) => {
+      if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+        await openNavigationDrawer(page);
+      }
       await page.locator('.settings-sidebar__item[href="/logs"]').click();
       await gateway.waitForRequest("logs.tail");
       await waitForLine(page, tailSize - 1);

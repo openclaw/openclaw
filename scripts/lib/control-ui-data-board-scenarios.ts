@@ -335,7 +335,8 @@ function workspaceInitialScenario(roundTripMs: 0 | 100): InteractionScenario {
     id: `data-workspace-first-render${roundTripMs ? "-100ms" : ""}`,
     dataPage: "workspace",
     route: controlUiSessionPath(sessionKey),
-    expected: "Opening Files reads one root listing with 20 folders and 100 touched files.",
+    expected:
+      "Opening Files reads one root listing; desktop shows its 20 folders and mobile shows touched files.",
     fixtureOverrides: createWorkspaceFixture,
     rowSelector: ".workspace-desktop__row",
     createRequestHandlers: roundTripMs
@@ -363,7 +364,16 @@ function workspaceInitialScenario(roundTripMs: 0 | 100): InteractionScenario {
       }
     },
     run: async (page, gateway) => {
-      await prepareWorkspace(page);
+      const mobile = await page.locator(".agent-chat__header--mobile").isVisible();
+      if (mobile) {
+        await openChatSidePanelType(page, "Files");
+        await page
+          .locator(".chat-workspace-mobile")
+          .getByRole("button", { name: "package-00/module-000.ts", exact: true })
+          .waitFor();
+      } else {
+        await prepareWorkspace(page);
+      }
       const requests = await gateway.getRequests("sessions.files.list", { sessionKey });
       const first = requests[0];
       if (
@@ -375,27 +385,29 @@ function workspaceInitialScenario(roundTripMs: 0 | 100): InteractionScenario {
       ) {
         throw new Error("Workspace initial load did not use exactly one root listing");
       }
-      await page.waitForFunction(
-        ({ selector, count }) => {
-          const folders = [
-            ...document.querySelectorAll(
-              `${selector} .workspace-desktop__project-scroll .workspace-desktop__row[aria-expanded]`,
-            ),
-          ];
-          return (
-            folders.length === count &&
-            folders.every(
-              (folder, index) =>
-                folder.getAttribute("aria-label") === `package-${String(index).padStart(2, "0")}`,
-            )
-          );
-        },
-        { selector: workspaceHost, count: directoryCount },
-      );
+      if (!mobile) {
+        await page.waitForFunction(
+          ({ selector, count }) => {
+            const folders = [
+              ...document.querySelectorAll(
+                `${selector} .workspace-desktop__project-scroll .workspace-desktop__row[aria-expanded]`,
+              ),
+            ];
+            return (
+              folders.length === count &&
+              folders.every(
+                (folder, index) =>
+                  folder.getAttribute("aria-label") === `package-${String(index).padStart(2, "0")}`,
+              )
+            );
+          },
+          { selector: workspaceHost, count: directoryCount },
+        );
+      }
       return {
         rootListingRequests: requests.length,
         rootListingRoundTripMs: roundTripMs,
-        initialFolders: directoryCount,
+        initialFolders: mobile ? 0 : directoryCount,
         rootResponseTouchedFiles: directoryCount * 5,
         descendantListingRequests: 0,
       };
