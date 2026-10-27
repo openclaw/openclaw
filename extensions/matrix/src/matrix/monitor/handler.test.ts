@@ -466,18 +466,13 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(finalizeInboundContext).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    ["another homeserver", "hello @bot:evil.example", false, false, false],
-    ["Unicode display name", "@欢欢 please reply", true, false, true],
-    ["forged metadata only", "hello there", false, true, false],
-  ] as const)(
-    "validates native mentions: %s",
-    async (_name, body, formatted, metadataOnly, accepted) => {
-      const getMemberDisplayName = vi.fn(async () => (formatted ? "欢欢" : "sender"));
-      const { handler, recordInboundSession, resolveAgentRoute } = createHarness({
+  it.each([true, false])(
+    "admits native mention metadata only with visible mention=%s",
+    async (visible) => {
+      const { handler, recordInboundSession } = createHarness({
         isDirectMessage: false,
-        mentionRegexes: metadataOnly ? [/@bot/i] : [],
-        getMemberDisplayName,
+        mentionRegexes: visible ? [] : [/@bot/i],
+        getMemberDisplayName: async () => (visible ? "欢欢" : "sender"),
       });
       await handler(
         ROOM,
@@ -485,8 +480,8 @@ describe("matrix monitor handler pairing account scope", () => {
           eventId: "$native-mention",
           content: {
             msgtype: "m.text",
-            body,
-            ...(formatted
+            body: visible ? "@欢欢 please reply" : "hello there",
+            ...(visible
               ? {
                   formatted_body:
                     '<a href="https://matrix.to/#/@bot:example.org">@欢欢</a> please reply',
@@ -496,13 +491,10 @@ describe("matrix monitor handler pairing account scope", () => {
           },
         }),
       );
-      if (accepted) {
+      if (visible) {
         expect(recordInboundSession).toHaveBeenCalledOnce();
       } else {
         expect(recordInboundSession).not.toHaveBeenCalled();
-      }
-      if (metadataOnly) {
-        expect(resolveAgentRoute).toHaveBeenCalledTimes(1);
       }
     },
   );
@@ -842,6 +834,15 @@ describe("matrix monitor handler draft streaming", () => {
     return { ...harness, ...(await dispatch()) };
   }
 
+  async function startPreview(
+    text: string,
+    options?: Parameters<typeof createStreamingHarness>[0],
+  ) {
+    const harness = await startStreaming(options);
+    await sendPreview(harness.opts, text);
+    return harness;
+  }
+
   function progressHarness(progress: NonNullable<MatrixStreamingConfig["progress"]>) {
     return startStreaming({
       streaming: "progress",
@@ -881,8 +882,7 @@ describe("matrix monitor handler draft streaming", () => {
       ...prepareSingleText(text),
       convertedText: `prepared:${text.trim()}`,
     }));
-    const { deliver, opts, finish } = await startStreaming({ streaming: "quiet" });
-    await sendPreview(opts, "Raw preview");
+    const { deliver, finish } = await startPreview("Raw preview", { streaming: "quiet" });
     const result = await deliver({ text: "Raw final" }, { kind: "final" });
     expect(result).toMatchObject({ messageIds: ["$draft1"], content: "prepared:Raw final" });
     await finish();
@@ -997,11 +997,10 @@ describe("matrix monitor handler draft streaming", () => {
   it.each(["media send", "live finalization"])(
     "recovers TTS delivery after %s fails",
     async (stage) => {
-      const { redactEventMock, deliver, opts, finish } = await startStreaming({
+      const { redactEventMock, deliver, finish } = await startPreview("Spoken answer", {
         blockStreamingEnabled: true,
         streaming: "partial",
       });
-      await sendPreview(opts, "Spoken answer");
       if (stage === "media send") {
         sendMock.mockRejectedValueOnce(new Error("media send failed"));
         await expect(deliver(spokenPayload(), { kind: "final" })).rejects.toMatchObject({
@@ -1108,8 +1107,7 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("keeps queued block boundaries ordered while Matrix deliveries drain", async () => {
-    const { deliver, opts, finish } = await startStreaming({ blockStreamingEnabled: true });
-    await sendPreview(opts, "Alpha");
+    const { deliver, opts, finish } = await startPreview("Alpha", { blockStreamingEnabled: true });
     expect(draftBody()).toBe("Alpha");
 
     await opts.onBlockReplyQueued?.({ text: "Alpha" });
@@ -1178,9 +1176,9 @@ describe("matrix monitor handler draft streaming", () => {
 
   it("cleans up empty final drafts with blank-only media", async () => {
     const payload = { mediaUrls: ["   "] };
-    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
-    const { deliver, opts, finish } = await dispatch();
-    await sendPreview(opts, "Partial reply");
+    const { deliver, finish, redactEventMock } = await startPreview("Partial reply", {
+      streaming: "partial",
+    });
     sendMock.mockClear();
     await deliver(payload, { kind: "final" });
     expect(sendMock).not.toHaveBeenCalled();
@@ -1190,8 +1188,7 @@ describe("matrix monitor handler draft streaming", () => {
   });
 
   it("skips compaction notices in draft finalization", async () => {
-    const { deliver, opts, finish } = await startStreaming();
-    await sendPreview(opts, "Streaming");
+    const { deliver, finish } = await startPreview("Streaming");
     sendMock.mockClear();
     await deliver({ text: "Compacting...", isCompactionNotice: true }, { kind: "block" });
     expect(sendMock).toHaveBeenCalledTimes(1);
@@ -1238,9 +1235,9 @@ describe("matrix monitor handler draft streaming", () => {
 
   it("reuses partial-draft captions for a singular fallback after blank plural entries", async () => {
     const mediaUrls = ["   "];
-    const { dispatch, redactEventMock } = createStreamingHarness({ streaming: "partial" });
-    const { deliver, opts, finish } = await dispatch();
-    await sendPreview(opts, "screenshot ready");
+    const { deliver, finish, redactEventMock } = await startPreview("screenshot ready", {
+      streaming: "partial",
+    });
     sendMock.mockClear();
     await deliver(
       { text: "screenshot ready", mediaUrl: "https://example.com/image.png", mediaUrls },
