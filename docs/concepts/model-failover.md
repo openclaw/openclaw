@@ -619,6 +619,14 @@ When a later check succeeds and the session returns to the selected primary, Ope
 
 These notices are operational messages, not assistant content. They deliver once per state change outside group and channel conversations, including side-effect-only turns when feasible, but repeated turn-local fallback transitions do not repeat them. Group and channel conversations suppress the visible notices while retaining the same fallback state and lifecycle events. Delivery bypasses normal source-reply suppression, does not consume the first assistant reply slot for threaded channels, and is excluded from text-to-speech.
 
+To keep generic fallback and recovery banners out of customer-facing direct chats, set:
+
+```json5
+{ messages: { modelFallbackNotices: false } }
+```
+
+The default is `true`, preserving the direct-chat behavior above. This setting applies globally to generic reply notices. It leaves fallback state, logs, lifecycle events, `/status`, Control UI transcript dividers, terminal errors, and successful provider-policy retry notices unchanged.
+
 Persisted notice state prevents repeated notices when consecutive turns use the same selected/active pair, while model selection itself remains unchanged.
 
 When a fallback or recovery transcript event was recorded for the active model, the Control UI uses its divider instead of an additional assistant status message. When unavailable profiles skip the selected model before runtime admission, a successful fallback records the transition after it obtains the same admitted writer authority. If no matching event can be persisted, the ordinary status notice is not suppressed. Channel and native-client status delivery remains unchanged. The Control UI records attempted fallback switches using the same presentation as compaction events. It shows the previous model, the fallback being tried, and the reason for the switch while that candidate is still working. The event remains in history after reload and does not claim the fallback succeeded. When a later turn successfully returns to the selected model, a matching **Returned to selected model** divider records the fallback and selected model. Starting a new attempt or failing on the selected model does not record a successful return.
