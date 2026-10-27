@@ -42,7 +42,9 @@ try {
     const accounts = Object.fromEntries(
       ids.map((id, i) => {
         const token = `${i + 100}:synthetic-benchmark-token`;
-        if (values.credentials === "config") return [id, { botToken: token }];
+        if (values.credentials === "config") {
+          return [id, { botToken: token }];
+        }
         const tokenFile = join(root, id);
         writeFileSync(tokenFile, token);
         return [id, { tokenFile }];
@@ -55,8 +57,9 @@ try {
     let configured = 0;
     function run(count) {
       for (let i = 0; i < count; i++) {
-        if (inspectTelegramAccount({ cfg, accountId: ids[i % ids.length] }).configured)
+        if (inspectTelegramAccount({ cfg, accountId: ids[i % ids.length] }).configured) {
           configured++;
+        }
       }
     }
     run(1000);
