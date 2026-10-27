@@ -2,19 +2,31 @@ import assert from "node:assert/strict";
 import { validateDecisionResultV2, type DecisionBatchV2 } from "openclaw/plugin-sdk/decisions";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
 import plugin from "../index.js";
 
-it.runIf(process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.TYPESAFE_API_KEY))(
-  "evaluates a mixed synthetic batch through the registered TypeSafe endpoint",
-  async () => {
+it
+  .runIf(process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.TYPESAFE_API_KEY))
+  .each(["text", "image"])(
+  "evaluates a synthetic %s batch through the registered TypeSafe endpoint",
+  async (kind) => {
     const apiKey = process.env.TYPESAFE_API_KEY;
     assert(apiKey);
     // Supply an isolated prepared provider snapshot; never open the operator's secret store.
     const config = {
       models: {
         providers: {
-          typesafe: { baseUrl: "https://api.typesafe.ai/v1", apiKey, models: [] },
+          typesafe: {
+            baseUrl: "https://api.typesafe.ai/v1",
+            apiKey,
+            models: [],
+            // Configured provider routes do not inherit ambient proxies implicitly.
+            // Opt into the supported consumer for process-scoped protected-key egress.
+            ...(process.env.HTTPS_PROXY || process.env.https_proxy
+              ? { request: { proxy: { mode: "env-proxy" as const } } }
+              : {}),
+          },
         },
       },
     };
@@ -29,18 +41,26 @@ it.runIf(process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.TYPESAFE_
     const provider = registerDecisionProvider.mock.calls[0]?.[0];
     assert(provider?.contractVersion === 2);
     const batch: DecisionBatchV2 = {
-      state: { type: "text", text: "The object is a red cube." },
+      state:
+        kind === "image"
+          ? {
+              type: "image",
+              // TypeSafe requires both dimensions >= 280px. No private image or caption answer.
+              dataUri: `data:image/png;base64,${createSolidPngBuffer(320, 320, { r: 255, g: 0, b: 0 }).toString("base64")}`,
+              text: "Inspect the image.",
+            }
+          : { type: "text", text: "The square is entirely red." },
       questions: {
-        red: { type: "boolean", instructions: "Is the object red?" },
+        red: { type: "boolean", instructions: "Is the square red?" },
         color: {
           type: "choice",
-          instructions: "What color is the object?",
+          instructions: "What is the dominant color?",
           criteria: { red: "Red", blue: "Blue" },
         },
-        count: {
+        coverage: {
           type: "score",
-          instructions: "How many objects?",
-          criteria: ["None", "One", "Two"],
+          instructions: "How much of the square is red?",
+          criteria: ["None", "About half", "All"],
         },
       },
     };
@@ -61,9 +81,13 @@ it.runIf(process.env.OPENCLAW_LIVE_TEST === "1" && Boolean(process.env.TYPESAFE_
       throw new Error("TypeSafe live evaluation unavailable: " + outcome.reason);
     }
     expect(validateDecisionResultV2(batch, outcome.result)).toBe(true);
-    expect(outcome.result.answers.red?.type).toBe("boolean");
-    expect(outcome.result.answers.color?.type).toBe("choice");
-    expect(outcome.result.answers.count?.type).toBe("score");
+    const { answers, usage, model } = outcome.result;
+    expect(answers.color).toMatchObject({ type: "choice", choice: "red" });
+    assert(answers.red?.type === "boolean" && answers.coverage?.type === "score");
+    expect(answers.red.probabilityTrue).toBeGreaterThan(0.5);
+    expect(answers.coverage.score).toBeGreaterThan(1);
+    // Only synthetic answers and usage, never request headers or credential-bearing config.
+    console.log(JSON.stringify({ kind, model, answers, usage }));
     expect(outcome.result.usage).toMatchObject({
       inputTokens: expect.any(Number),
       outputTokens: expect.any(Number),

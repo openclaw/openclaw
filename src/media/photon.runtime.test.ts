@@ -10,13 +10,13 @@ it("keeps encoded BMP pixels intact after Photon cleanup and later conversions",
     "hex",
   );
   const png = convertBmpToPngWithPhoton(bmp);
-  const saved = Buffer.from(png);
+  const saved = Uint8Array.from(png);
 
   bmp.fill(0, 54);
   const later = convertBmpToPngWithPhoton(bmp);
   expect(later).not.toEqual(png);
   expect(png).toEqual(saved);
-  expect(png.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+  expect(Buffer.from(png.subarray(0, 8)).toString("hex")).toBe("89504e470d0a1a0a");
 
   const decoded = photon.PhotonImage.new_from_byteslice(png);
   try {

@@ -502,7 +502,6 @@ export class DraftSubmissionFlow {
           message: input.message,
           mentions: input.mentions,
           displayName: preparedTitle,
-          ...(preparedTitle ? { displayNameGenerated: true } : {}),
           visibility:
             this.visibilityValue === "draft" &&
             !this.capabilities.canStartAsDraft(this.read().context)
@@ -631,8 +630,8 @@ export class DraftSubmissionFlow {
           onAccepted: () => this.callbacks.onAccepted?.({ ...result, agentId: input.agentId }),
           navigate: () =>
             this.startedSession.navigate(context, {
+              ...result,
               client: input.client,
-              key: result.key,
               agentId: input.agentId,
             }),
         });

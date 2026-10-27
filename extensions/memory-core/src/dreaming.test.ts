@@ -889,4 +889,40 @@ describe("dreaming service reconciliation", () => {
     await expect(fs.access(path.join(workspaceDir, "memory"))).rejects.toThrow();
     await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toThrow();
   });
+
+  it("keeps stopped managed dreaming jobs stopped while repairing their schedule", async () => {
+    vi.useFakeTimers();
+    const { api, harness } = createDreamingTestContext();
+    await startDreaming(api, harness);
+    const created = expectDefined(harness.jobs[0], "created dreaming job");
+    created.enabled = false;
+    const failureState = {
+      consecutiveErrors: 10,
+      autoDisabled: true,
+      lastErrorReason: "timeout",
+    };
+    Object.assign(created, { state: failureState });
+
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+
+    const autoDisabled = expectDefined(harness.jobs[0], "auto-disabled dreaming job");
+    expect(autoDisabled.enabled).toBe(false);
+    expect(autoDisabled).toMatchObject({ state: failureState });
+    expect(harness.updateCalls).toEqual([]);
+
+    autoDisabled.schedule = { kind: "cron", expr: "0 3 * * *", tz: "UTC" };
+    Object.assign(autoDisabled, { state: { consecutiveErrors: 2 } });
+    await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+
+    const paused = expectDefined(harness.jobs[0], "paused dreaming job");
+    expect(paused.enabled).toBe(false);
+    expect(paused.schedule).toEqual({ kind: "cron", expr: "15 4 * * *", tz: "UTC" });
+    expect(paused).toMatchObject({ state: { consecutiveErrors: 2 } });
+    expect(harness.updateCalls).toEqual([
+      {
+        id: paused.id,
+        patch: { schedule: { kind: "cron", expr: "15 4 * * *", tz: "UTC" } },
+      },
+    ]);
+  });
 });

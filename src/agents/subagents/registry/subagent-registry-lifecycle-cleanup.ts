@@ -29,7 +29,11 @@ import type {
 } from "./subagent-registry-lifecycle-context.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.js";
-import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
+import {
+  getCurrentSubagentRunOwner,
+  getSubagentSweepRuns,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
   SubagentRegistryWriteError,
@@ -123,33 +127,29 @@ export function isSubagentCompletionDeliveryAllowed(
 }
 
 export function suspendReplacedStoreNotifications(
-  options: SubagentLifecycleOptions,
+  options: Pick<SubagentLifecycleOptions, "runs" | "resumedRuns">,
 ): Promise<void> {
   // Capture retirement before yielding: restoring the old selector cannot revive these notifications.
   const pending = new Set<Promise<void>>();
-  const entries = [...options.runs.values()]
-    .filter((entry) => {
-      const work = pendingStoreRetirements.get(getSubagentRunRuntimeKey(entry));
-      if (!work) {
-        return true;
-      }
+  const entries = [...getSubagentSweepRuns(options.runs, Date.now())].filter((entry) => {
+    const work = pendingStoreRetirements.get(getSubagentRunRuntimeKey(entry));
+    if (work) {
       pending.add(work);
       return false;
-    })
-    .filter((entry) => {
-      const { delivery, requesterSessionKey, requesterStorePath, requesterAgentId } = entry;
-      return (
-        delivery &&
-        ["pending", "in_progress"].includes(delivery.status) &&
-        delivery.deliveredAt === undefined &&
-        delivery.announcedAt === undefined &&
-        entry.execution.status === "terminal" &&
-        entry.execution.outcome !== undefined &&
-        entry.pauseReason !== "sessions_yield" &&
-        entry.expectsCompletionMessage === true &&
-        !isSystemEventStoreCurrent(requesterSessionKey, requesterStorePath, requesterAgentId)
-      );
-    });
+    }
+    const { delivery, requesterSessionKey, requesterStorePath, requesterAgentId } = entry;
+    return (
+      delivery &&
+      ["pending", "in_progress"].includes(delivery.status) &&
+      delivery.deliveredAt === undefined &&
+      delivery.announcedAt === undefined &&
+      entry.execution.status === "terminal" &&
+      entry.execution.outcome !== undefined &&
+      entry.pauseReason !== "sessions_yield" &&
+      entry.expectsCompletionMessage === true &&
+      !isSystemEventStoreCurrent(requesterSessionKey, requesterStorePath, requesterAgentId)
+    );
+  });
   if (!entries.length) {
     return Promise.all(pending).then(() => {});
   }

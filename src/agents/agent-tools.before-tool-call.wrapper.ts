@@ -1,3 +1,7 @@
+import {
+  appendToolLoopWarning,
+  attachInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
 /**
  * Owns tool preparation/finalization, adjusted-param replay state, terminal
  * results, diagnostics around execution, and wrapper metadata.
@@ -79,10 +83,6 @@ import {
 } from "./code-mode-control-tools.js";
 import { createGatewayToolPolicyAssertion } from "./gateway-tool-policy.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
-import {
-  appendToolLoopWarning,
-  attachInternalToolExecutionPreparer,
-} from "./runtime/internal-hooks.js";
 import { markToolExecutionRefused } from "./tool-effect-receipt.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";

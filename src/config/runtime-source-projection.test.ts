@@ -1,11 +1,13 @@
 import { afterEach, expect, it } from "vitest";
 import { resolvePluginActivationSourceConfig } from "../plugins/activation-source-config.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   retainLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
 } from "./legacy.default-agent-owner.js";
 import {
   createConfigResolutionFacts,
+  getConfigResolutionFacts,
   getResolvedConfigEnvSecretRef,
   setConfigResolutionFacts,
 } from "./resolution-facts.js";
@@ -24,6 +26,34 @@ afterEach(() => resetConfigRuntimeState());
 
 const tokenPath = "gateway.auth.token";
 const tokenRef = new Map([[tokenPath, "GATEWAY_TOKEN"]]);
+
+it("reuses a frozen source capture while preserving edits before freezing and provenance changes", () => {
+  const source = Object.freeze({ gateway: { port: 19001 } });
+  setSnapshot({ ...source, tools: {} }, source);
+  const first = capture(source);
+  expect(capture(source)).not.toBe(first);
+  source.gateway.port = 19002;
+  freezeJsonSnapshot(source);
+  const frozen = capture(source);
+  expect(frozen.gateway?.port).toBe(19002);
+  expect(first.gateway?.port).toBe(19001);
+  expect(frozen).not.toBe(source);
+  expect(capture(source)).toBe(frozen);
+  expect(projectSource(frozen)).toBe(frozen);
+
+  const facts = createConfigResolutionFacts([]);
+  setConfigResolutionFacts(source, facts);
+  const rebound = capture(source);
+  expect(rebound).not.toBe(frozen);
+  expect(getConfigResolutionFacts(rebound)).toBe(facts);
+  expect(getConfigResolutionFacts(frozen)).toBeNull();
+  setConfigResolutionFacts(rebound, null);
+  const repaired = capture(source);
+  expect(repaired).not.toBe(rebound);
+  expect(getConfigResolutionFacts(repaired)).toBe(facts);
+  expect(capture(source)).toBe(repaired);
+});
+
 function expectIsolatedCopy(copy: OpenClawConfig, original: OpenClawConfig) {
   expect(copy).toEqual(original);
   expect(copy).not.toBe(original);

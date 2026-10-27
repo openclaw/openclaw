@@ -3,8 +3,9 @@
  * node --import ./scripts/tsx.mjs scripts/perf/ws-compression-measure.ts \
  *   --clients 60 --profiles 1 --batches 3000 --size 16384 --port 41649
  * Repeat at 1/10/60 clients, alternating base/candidate order. --codec loads an
- * alternate codec module; --allocations runs a separate sampled-allocation pass
- * including collected objects. Timing/GC gates use untraced passes only.
+ * alternate codec module; --transport loads an alternate transport module.
+ * --allocations runs a separate sampled-allocation pass including collected
+ * objects. Timing/GC gates use untraced passes only.
  * Accept reduced allocation/send CPU per broadcast with identical wire bytes;
  * unique profiles (--profiles 60) bound the no-whole-frame-sharing overhead.
  */
@@ -49,12 +50,16 @@ const { values } = parseArgs({
     "warm-start-at": { type: "string" },
     "ready-file": { type: "string" },
     codec: { type: "string" },
+    transport: { type: "string" },
     allocations: { type: "boolean", default: false },
   },
 });
 const installCodec: typeof installGatewayDeflateCodec = values.codec
   ? (await import(pathToFileURL(values.codec).href)).installGatewayDeflateCodec
   : installGatewayDeflateCodec;
+const createTransport: typeof createGatewayWebSocketTransport = values.transport
+  ? (await import(pathToFileURL(values.transport).href)).createGatewayWebSocketTransport
+  : createGatewayWebSocketTransport;
 function integer(
   label: Exclude<keyof typeof values, "allocations">,
   fallback: number,
@@ -187,7 +192,7 @@ try {
     clients.add({
       connId: `synthetic-${index}`,
       preparedRecipientProfileId: `profile-${index % profiles}`,
-      socket: createGatewayWebSocketTransport(socket, request.socket, installCodec(socket)),
+      socket: createTransport(socket, request.socket, installCodec(socket)),
       usesSharedGatewayAuth: false,
       connect: {
         minProtocol: 3,

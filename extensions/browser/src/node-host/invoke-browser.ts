@@ -332,7 +332,7 @@ export async function runBrowserProxyCommand(
   assertCurrent();
 
   const timeoutMs = resolveBrowserProxyTimeoutMs(params.timeoutMs);
-  const deadlineAt = Date.now() + timeoutMs;
+  const deadlineAt = performance.now() + timeoutMs;
   const timeoutDetails = {
     method,
     path,
@@ -410,7 +410,7 @@ export async function runBrowserProxyCommand(
     await discardStagedBrowserProxyUpload(stagedUpload);
     throw error;
   }
-  const remainingTimeoutMs = deadlineAt - Date.now();
+  const remainingTimeoutMs = deadlineAt - performance.now();
   if (remainingTimeoutMs <= 0) {
     await discardStagedBrowserProxyUpload(stagedUpload);
     throw new Error(formatBrowserProxyTimeoutMessage({ ...timeoutDetails, status: null }));

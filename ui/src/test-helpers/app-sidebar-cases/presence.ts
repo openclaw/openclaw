@@ -264,7 +264,7 @@ describe("AppSidebar viewer presence", () => {
     expect(aliceRow.getAttribute("href")).toBe("/activity/alice");
     expect(aliceRow.closest(".sidebar-online__row")?.querySelectorAll("a")).toHaveLength(1);
     expect(
-      aliceRow.closest(".sidebar-online__row")?.querySelector('button[aria-label="Pin"]'),
+      aliceRow.closest(".sidebar-online__row")?.querySelector('button[aria-haspopup="menu"]'),
     ).not.toBeNull();
     expect(document.querySelector(".person-activity-hovercard")).toBeNull();
 

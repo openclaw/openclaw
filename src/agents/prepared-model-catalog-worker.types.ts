@@ -30,6 +30,7 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
     "configuredModelRefs" | "configuredRuntimeModels"
   >;
   preferBuiltPluginArtifacts: boolean;
+  installedIndexFingerprint: string;
   pluginMetadataSnapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">;
 }>;
 

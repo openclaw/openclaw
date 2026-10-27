@@ -115,80 +115,8 @@
               "decision": {
                 "protocol": "typesafe-systemone",
                 "input": [
-                  "text"
-                ],
-                "questions": {
-                  "boolean": {
-                    "probabilities": "boolean",
-                    "abstention": false
-                  },
-                  "choice": {
-                    "probabilities": "provider-defined",
-                    "abstention": false,
-                    "minOptions": 2,
-                    "maxOptions": 255
-                  },
-                  "score": {
-                    "probabilities": "provider-defined",
-                    "abstention": false,
-                    "minOptions": 2,
-                    "maxOptions": 10
-                  }
-                },
-                "reasoning": {
-                  "modes": ["auto"]
-                },
-                "confidence": "provider-specific"
-              }
-            }
-          },
-          {
-            "id": "jev-preview",
-            "name": "Jev Preview",
-            "baseUrl": "https://api.typesafe.ai/v1",
-            "status": "preview",
-            "inference": {
-              "chat": false,
-              "decision": {
-                "protocol": "typesafe-systemone",
-                "input": [
-                  "text"
-                ],
-                "questions": {
-                  "boolean": {
-                    "probabilities": "boolean",
-                    "abstention": false
-                  },
-                  "choice": {
-                    "probabilities": "provider-defined",
-                    "abstention": false,
-                    "minOptions": 2,
-                    "maxOptions": 255
-                  },
-                  "score": {
-                    "probabilities": "provider-defined",
-                    "abstention": false,
-                    "minOptions": 2,
-                    "maxOptions": 10
-                  }
-                },
-                "reasoning": {
-                  "modes": ["auto"]
-                },
-                "confidence": "provider-specific"
-              }
-            }
-          },
-          {
-            "id": "jev-1.13.0",
-            "name": "Jev 1.13.0",
-            "baseUrl": "https://api.typesafe.ai/v1",
-            "inference": {
-              "chat": false,
-              "decision": {
-                "protocol": "typesafe-systemone",
-                "input": [
-                  "text"
+                  "text",
+                  "image"
                 ],
                 "questions": {
                   "boolean": {
@@ -213,6 +141,100 @@
                 },
                 "confidence": "provider-specific",
                 "limits": {
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": ["image/png", "image/jpeg"],
+                    "remoteUrls": false
+                  }
+                }
+              }
+            }
+          },
+          {
+            "id": "jev-preview",
+            "name": "Jev Preview",
+            "baseUrl": "https://api.typesafe.ai/v1",
+            "status": "preview",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "typesafe-systemone",
+                "input": [
+                  "text",
+                  "image"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "provider-defined",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "provider-defined",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "reasoning": {
+                  "modes": ["auto"]
+                },
+                "confidence": "provider-specific",
+                "limits": {
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": ["image/png", "image/jpeg"],
+                    "remoteUrls": false
+                  }
+                }
+              }
+            }
+          },
+          {
+            "id": "jev-1.13.0",
+            "name": "Jev 1.13.0",
+            "baseUrl": "https://api.typesafe.ai/v1",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "typesafe-systemone",
+                "input": [
+                  "text",
+                  "image"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "provider-defined",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "provider-defined",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "reasoning": {
+                  "modes": ["auto"]
+                },
+                "confidence": "provider-specific",
+                "limits": {
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": ["image/png", "image/jpeg"],
+                    "remoteUrls": false
+                  },
                   "maxRequestTokens": 64000,
                   "maxStateAndQuestionTokens": 32000
                 },

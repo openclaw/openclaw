@@ -17,7 +17,8 @@
 }
 
 .session-hovercard__section--metadata,
-.session-hovercard__section--prs {
+.session-hovercard__section--prs,
+.session-hovercard__error {
   padding-block: 0 11px;
 }
 

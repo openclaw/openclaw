@@ -29,6 +29,7 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 import * as computerUse from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import * as models from "./app-server/models.js";
+import type { JsonValue } from "./app-server/protocol.js";
 import type { CodexAppServerThreadBinding } from "./app-server/session-binding.js";
 import {
   buildCodexSupervisionTestConnectionFingerprint,
@@ -45,6 +46,35 @@ import { createCodexCommandHost } from "./command-host.test-support.js";
 import * as commandRpc from "./command-rpc.js";
 import * as conversationBindingData from "./conversation-binding-data.js";
 import * as conversationControl from "./conversation-control.js";
+
+export function skillEntry(name: string, cwd = "/repo-a", enabled = true, description = "") {
+  return {
+    name,
+    enabled,
+    description,
+    path: `${cwd}/.codex/skills/${name}/SKILL.md`,
+    scope: "repo" as const,
+  };
+}
+
+export function modelEntry(id: string) {
+  return {
+    id,
+    model: id,
+    inputModalities: ["text" as const],
+    supportedReasoningEfforts: ["medium" as const],
+  };
+}
+
+export const skillGroup = <S extends JsonValue, E extends JsonValue = never>(
+  cwd: string,
+  skills: S[],
+  errors: E[] = [],
+) => ({
+  cwd,
+  skills,
+  errors,
+});
 
 async function cleanupCodexState(restoreMocks = false) {
   await closeOpenClawAgentDatabasesAsync();

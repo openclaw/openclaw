@@ -25,6 +25,7 @@
  * uses its prepared encoder when present. This excludes transport/authorization;
  * session-event-field-order.ts separately compares complete real-broadcaster frames.
  * --fields-owner <saved-source.ts> replaces only the field fingerprint owner.
+ * Both saved and current projection owners use the same native TypeScript loader.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -108,25 +109,22 @@ mock.module(new URL("../../src/gateway/gateway-access-revision.ts", import.meta.
   namedExports: { readGatewayAccessRevision: () => 0 },
 });
 const ownerUrl = new URL("../../src/gateway/session-event-projection.ts", import.meta.url).href;
-const loadedOwnerUrl = pathToFileURL(owner).href === ownerUrl ? ownerUrl : `${ownerUrl}?baseline`;
-const ownerHook =
-  loadedOwnerUrl === ownerUrl
-    ? undefined
-    : registerHooks({
-        load(url, context, nextLoad) {
-          return url === loadedOwnerUrl
-            ? {
-                format: "module-typescript",
-                source: readFileSync(owner, "utf8"),
-                shortCircuit: true,
-              }
-            : nextLoad(url, context);
-        },
-      });
+const loadedOwnerUrl = `${ownerUrl}?measured-owner`;
+const ownerHook = registerHooks({
+  load(url, context, nextLoad) {
+    return url === loadedOwnerUrl
+      ? {
+          format: "module-typescript",
+          source: readFileSync(owner, "utf8"),
+          shortCircuit: true,
+        }
+      : nextLoad(url, context);
+  },
+});
 const {
   prepareSessionEventProjection,
 }: typeof import("../../src/gateway/session-event-projection.js") = await import(loadedOwnerUrl);
-ownerHook?.deregister();
+ownerHook.deregister();
 const deliveryOwner = path.resolve(values["delivery-owner"]);
 const { ConnectionSessionRows }: typeof import("../../src/gateway/session-ancestor-references.js") =
   await import(pathToFileURL(deliveryOwner).href);

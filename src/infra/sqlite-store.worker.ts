@@ -15,7 +15,7 @@ import {
   installDatabaseEngineSelection,
 } from "./database-engine/context.js";
 import { captureSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
-import { bindPostgresPool, postgresPoolWorkerFailure } from "./postgres-sync/pool.js";
+import { bindPostgresPool, postgresPoolWorkerFailure } from "./postgres-sync/pool-state.js";
 import {
   installSqliteDatabaseAdmissions,
   withSqliteDatabaseAdmissionExchange,

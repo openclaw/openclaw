@@ -31,7 +31,6 @@ export type PluginSourceCacheRecord = {
 
 export type PluginRootArtifactCache = {
   publicSurfaceBoundary?: { boundaryLabel: string; rejectHardlinks: boolean };
-  artifactLoadsInProgress: Set<string>;
   /** Immutable artifact facts acquired by one plugin cache generation. */
   artifacts: Map<string, { modulePath: string; boundaryRoot: string } | null>;
   runtimeArtifacts: Map<string, { source: string; rootDir: string }>;

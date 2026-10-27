@@ -215,14 +215,14 @@ const test = it.extend<{ usage: ReturnType<typeof makeRefreshFixture> }>({
   usage: async ({ task: _task }, use) => withRefreshFixture(use),
 });
 
-test("refreshes dirty sessions after their own quiet gaps without flushing unrelated reads", async ({
+test("keeps per-session quiet gaps across wall-clock rollback and unrelated reads", async ({
   signal,
   usage: { files, refresh, dirty, read },
 }) => {
   refresh.mockResolvedValue("refreshed");
   dirty(files[0]);
   await withinTest(read(files[1]), signal);
-  expect(refresh).not.toHaveBeenCalled();
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() - 120_000);
   await vi.advanceTimersByTimeAsync(20_000);
   dirty(files[0]);
   dirty(files[1]);

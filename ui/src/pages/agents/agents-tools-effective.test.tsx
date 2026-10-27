@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { flush, resolve } from "solid-js";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -13,6 +14,7 @@ import {
   agentsList,
   agentsRouteData,
   createAgentsPage,
+  emitGatewayEvent,
   emitGatewaySnapshot,
   gateway,
   ownedAgentsContext,
@@ -124,6 +126,15 @@ async function mountEffective(
         notify();
       }
     },
+    emit(event: string, payload: unknown) {
+      emitGatewayEvent(currentGateway, { type: "event", event, payload });
+    },
+    async settleEffective() {
+      flush();
+      const result = await resolve(() => page.read().tools.readEffective());
+      flush();
+      return result;
+    },
   };
 }
 
@@ -177,7 +188,11 @@ describe("Agents effective-tools read", () => {
     group.open = true;
     card.open = true;
     toggle.focus();
-    view.publishSessions();
+    view.emit("sessions.changed", {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      reason: "patch",
+    });
     await waitForSolid(() => expect(view.calls()).toHaveLength(2));
     expect(view.container.textContent).toContain("Loading…");
     expect(view.container.querySelector("#agent-tool-read")).toBe(card);
@@ -323,5 +338,155 @@ describe("Agents effective-tools read", () => {
     );
     next.resolve(effective("Current model preview"));
     await waitForSolid(() => expect(preview(view.container)).toContain("Current model preview"));
+  });
+
+  it("ignores unrelated session publications while refreshing its session, owner and local model changes", async () => {
+    let revision = 1;
+    const view = await mountEffective(async () => effective(`Inventory ${revision++}`));
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(1);
+    for (const payload of [
+      { sessionKey: "agent:main:other", agentId: "main", reason: "patch" },
+      { sessionKey: "main", agentId: "other", reason: "patch" },
+    ]) {
+      view.emit("sessions.changed", payload);
+      view.publishSessions();
+      await view.settleEffective();
+      expect(view.calls()).toHaveLength(1);
+    }
+    view.emit("sessions.changed", {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      reason: "patch",
+      session: {
+        key: "agent:main:main",
+        agentId: "main",
+        owner: { actor: { type: "human", id: "fixture-owner" } },
+        toolOverrides: { webSearch: false },
+      },
+    });
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 2" }] }],
+    });
+    expect(view.calls()).toHaveLength(2);
+    view.modelOverrides.main = "openai/gpt-5-mini";
+    view.publishSessions();
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 3" }] }],
+    });
+    expect(view.calls()).toHaveLength(3);
+    view.emit("sessions.changed", {
+      sessionKey: "agent:main:child",
+      agentId: "main",
+      reason: "patch",
+      ancestorSessions: [{ key: "agent:main:main", agentId: "main" }],
+    });
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 4" }] }],
+    });
+    expect(view.calls()).toHaveLength(4);
+    view.emit("sessions.changed", { reason: "profile-identity" });
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 5" }] }],
+    });
+    expect(view.calls()).toHaveLength(5);
+  });
+
+  it("refreshes for scoped catalog replacements without reading picker observations", async () => {
+    let revision = 1;
+    const view = await mountEffective(async () => effective(`Inventory ${revision++}`));
+    await view.settleEffective();
+    view.emit("chat.metadata.changed", {
+      agentId: "other",
+      modelCatalogChanged: true,
+      authChanged: true,
+      commandsChanged: false,
+    });
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(1);
+    view.emit("config.changed", {});
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 2" }] }],
+    });
+    for (let index = 0; index < 60; index += 1) {
+      view.emit("chat.metadata.changed", {
+        agentId: "main",
+        modelCatalogChanged: true,
+        authChanged: false,
+        commandsChanged: false,
+      });
+      await view.settleEffective();
+    }
+    view.emit("chat.metadata.changed", {
+      agentId: "main",
+      modelCatalogChanged: false,
+      modelCatalogStatusChanged: true,
+      authChanged: false,
+      commandsChanged: false,
+    });
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(2);
+    view.emit("chat.metadata.changed", {
+      agentId: "main",
+      modelCatalogChanged: true,
+      authChanged: true,
+      commandsChanged: false,
+    });
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 3" }] }],
+    });
+    expect(view.calls()).toHaveLength(3);
+    view.emit("chat.metadata.changed", {
+      agentId: "main",
+      modelSelectionChanged: true,
+      authChanged: false,
+      commandsChanged: false,
+    });
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 4" }] }],
+    });
+    view.emit("chat.metadata.changed", { agentId: "main", modelCatalogChanged: true });
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 5" }] }],
+    });
+    expect(view.calls()).toHaveLength(5);
+  });
+
+  it("defers hidden inventory invalidations and catches up once when visible", async () => {
+    let revision = 1;
+    let visibility: DocumentVisibilityState = "visible";
+    const visible = vi
+      .spyOn(document, "visibilityState", "get")
+      .mockImplementation(() => visibility);
+    onTestFinished(() => visible.mockRestore());
+    const view = await mountEffective(async () => effective(`Inventory ${revision++}`));
+    await view.settleEffective();
+    visibility = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    for (let index = 0; index < 60; index += 1) {
+      view.emit("chat.metadata.changed", { agentId: "main", modelCatalogChanged: true });
+    }
+    view.emit("config.changed", {});
+    view.emit("sessions.changed", { sessionKey: "agent:main:main", agentId: "main" });
+    view.publishSessions();
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(1);
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(await view.settleEffective()).toMatchObject({
+      groups: [{ tools: [{ label: "Inventory 2" }] }],
+    });
+    expect(view.calls()).toHaveLength(2);
+    window.dispatchEvent(new Event("focus"));
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(2);
+    visibility = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    view.emit("sessions.changed", { sessionKey: "agent:main:other", agentId: "main" });
+    view.publishSessions();
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await view.settleEffective();
+    expect(view.calls()).toHaveLength(2);
   });
 });

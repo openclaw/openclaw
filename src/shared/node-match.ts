@@ -45,30 +45,6 @@ function formatNodeCandidateLabel(node: NodeMatchCandidate): string {
   return `${label} [${details.join(", ")}]`;
 }
 
-function resolveMatchScore(
-  node: NodeMatchCandidate,
-  query: string,
-  queryNormalized: string,
-  queryCompact: string | undefined,
-): number {
-  const name = typeof node.displayName === "string" ? node.displayName : "";
-  const nameNormalized = name ? normalizeNodeKey(name) : "";
-  if (nameNormalized && nameNormalized === queryNormalized) {
-    return 2_000;
-  }
-  if (
-    queryCompact !== undefined &&
-    nameNormalized &&
-    nameNormalized.replace(/-/g, "") === queryCompact
-  ) {
-    return 1_900;
-  }
-  if (query.length >= 6 && node.nodeId.startsWith(query)) {
-    return 1_000;
-  }
-  return 0;
-}
-
 export function resolveNodeIdFromCandidates(
   nodes: NodeMatchCandidate[],
   query: string,
@@ -89,7 +65,20 @@ export function resolveNodeIdFromCandidates(
     const compact = allowCompactDisplayName ? normalized.replace(/-/g, "") : undefined;
     let topMatchScore = 0;
     nodes.forEach((node) => {
-      const score = resolveMatchScore(node, q, normalized, compact);
+      const name = typeof node.displayName === "string" ? node.displayName : "";
+      const nameNormalized = name ? normalizeNodeKey(name) : "";
+      let score = 0;
+      if (nameNormalized && nameNormalized === normalized) {
+        score = 2_000;
+      } else if (
+        compact !== undefined &&
+        nameNormalized &&
+        nameNormalized.replace(/-/g, "") === compact
+      ) {
+        score = 1_900;
+      } else if (q.length >= 6 && node.nodeId.startsWith(q)) {
+        score = 1_000;
+      }
       if (score > topMatchScore) {
         topMatchScore = score;
         strongestMatches.length = 0;

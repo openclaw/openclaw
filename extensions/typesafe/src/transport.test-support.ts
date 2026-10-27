@@ -102,7 +102,7 @@ export const mixedFixture = {
     },
   },
 };
-export function registeredDecisionProvider(
+export function registeredPreparedDecisionProvider(
   current: () => ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>,
 ) {
   const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
@@ -111,5 +111,16 @@ export function registeredDecisionProvider(
     registerDecisionProvider,
   } as unknown as OpenClawPluginApi);
   const provider = registerDecisionProvider.mock.calls[0]![0];
-  return legacyWireFixture(provider, () => resolveRuntimeConfig(current()));
+  if (provider.contractVersion !== 2) {
+    throw new Error("Expected the prepared TypeSafe provider");
+  }
+  return provider;
+}
+
+export function registeredDecisionProvider(
+  current: () => ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>,
+) {
+  return legacyWireFixture(registeredPreparedDecisionProvider(current), () =>
+    resolveRuntimeConfig(current()),
+  );
 }

@@ -4,7 +4,11 @@ import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
+import {
+  extractToolCardsCached,
+  projectToolCardActivityOutcome,
+  resolveToolCardOutcome,
+} from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -60,7 +64,6 @@ function prepareWorkGroupSummary(item: WorkGroupSummaryItem) {
   );
   const activity = prepared.flatMap((entry) => entry.activity);
   for (const [index, card] of fallback.entries()) {
-    const outcome = resolveToolCardOutcome(card, false);
     const display = resolveToolDisplayIdentity(unwrapToolCallForDisplay(card).name);
     activity.push({
       itemId: `work-summary-raw:${index}`,
@@ -69,7 +72,7 @@ function prepareWorkGroupSummary(item: WorkGroupSummaryItem) {
       phase: "end",
       title: display.name,
       name: display.name,
-      status: outcome === "succeeded" ? "completed" : outcome === "unknown" ? undefined : outcome,
+      ...projectToolCardActivityOutcome(resolveToolCardOutcome(card, false)),
     });
   }
   const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");

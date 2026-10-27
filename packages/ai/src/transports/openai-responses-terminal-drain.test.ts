@@ -1,3 +1,4 @@
+import { createHook } from "node:async_hooks";
 import type { Model } from "@openclaw/llm-core";
 import OpenAI from "openai";
 import { Stream } from "openai/core/streaming";
@@ -91,11 +92,50 @@ describe("Responses SSE decoding", () => {
     }
     const decode = vi.spyOn(TextDecoder.prototype, "decode");
     const { stream } = await openFixtureStream(chunks);
+    // Count temporary delimiter match arrays, independently of decoded event contents.
+    // oxlint-disable-next-line typescript/unbound-method -- Call the native method with its original receiver.
+    const exec = RegExp.prototype.exec;
+    let delimiterMatches = 0;
+    const scan = vi.spyOn(RegExp.prototype, "exec").mockImplementation(function (
+      this: RegExp,
+      input,
+    ) {
+      const match = exec.call(this, input);
+      if (
+        match &&
+        match[0].length > 0 &&
+        match[0].split("").every((char) => char === "\r" || char === "\n")
+      ) {
+        delimiterMatches++;
+      }
+      return match;
+    });
+    let promises = 0;
+    const hook = createHook({
+      init(_id, type) {
+        if (type === "PROMISE") {
+          promises++;
+        }
+      },
+    });
     const events = [];
-    for await (const event of stream) {
-      events.push(event);
+    hook.enable();
+    try {
+      for await (const event of stream) {
+        events.push(event);
+      }
+    } finally {
+      hook.disable();
+      scan.mockRestore();
+    }
+    if (!process.versions.bun) {
+      expect(promises).toBeGreaterThan(expected.length);
+      // The HTTP source, recovery owner and consumer need about ten promises/event.
+      // An extra asynchronous framing iterator adds another four.
+      expect(promises).toBeLessThan(expected.length * 11);
     }
     expect(events).toEqual(expected);
+    expect(delimiterMatches).toBe(0);
     expect(decode.mock.calls.length).toBeLessThanOrEqual(chunks.length + 1);
   });
 
@@ -140,6 +180,19 @@ describe("Responses SSE decoding", () => {
     // oxlint-disable-next-line typescript/unbound-method -- Preserve native exec; each call restores its RegExp receiver.
     const exec = RegExp.prototype.exec;
     let scannedChars = 0;
+    // oxlint-disable-next-line typescript/unbound-method -- Preserve the native receiver.
+    const indexOf = String.prototype.indexOf;
+    const search = vi.spyOn(String.prototype, "indexOf").mockImplementation(function (
+      this: string,
+      value,
+      from = 0,
+    ) {
+      const found = indexOf.call(this, value, from);
+      if (value === "\r" || value === "\n") {
+        scannedChars += (found < 0 ? this.length : found + 1) - from;
+      }
+      return found;
+    });
     const scan = vi.spyOn(RegExp.prototype, "exec").mockImplementation(function (
       this: RegExp,
       input,
@@ -154,9 +207,11 @@ describe("Responses SSE decoding", () => {
       }
     } finally {
       scan.mockRestore();
+      search.mockRestore();
     }
     expect(events).toEqual([expected]);
-    expect(scannedChars).toBeLessThanOrEqual(wire.length * 3);
+    expect(scannedChars).toBeGreaterThan(wire.length);
+    expect(scannedChars).toBeLessThanOrEqual(wire.length * 5);
   });
 
   it.each([

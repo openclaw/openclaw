@@ -439,9 +439,7 @@ describe("sessions view", () => {
 
     const keyCell = query(".session-key-cell");
     expect(text(".session-key-cell__primary", keyCell)).toBe("📊 Data Expert (dingtalk)");
-    expect((keyCell?.parentElement as (HTMLElement & { content: string }) | null)?.content).toBe(
-      "📊 Data Expert (dingtalk)",
-    );
+    expect(keyCell?.getAttribute("data-tooltip")).toBe("📊 Data Expert (dingtalk)");
   });
 
   it("opens session details from row activation", async () => {

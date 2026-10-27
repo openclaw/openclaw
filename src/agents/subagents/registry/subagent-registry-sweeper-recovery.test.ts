@@ -20,6 +20,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
+  getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
@@ -530,6 +531,50 @@ describe("subagent registry recovery scheduling", () => {
 
     expect(recoverRow).toHaveBeenCalledOnce();
   });
+
+  it.each([false, true])(
+    "finishes admitted cleanup and defers the remaining sweep during shutdown (collector=%s)",
+    async (collector) => {
+      const retained = collector
+        ? { collect: true, groupId: "group", collectorCompletion: { status: "done" as const } }
+        : {};
+      const { entry, runs, callGateway, sweeper } = createHarness({}, archivedRun(retained));
+      const sibling = archivedRun({
+        ...retained,
+        runId: "sibling-run",
+        childSessionKey: "agent:main:subagent:sibling",
+      });
+      runs.set(sibling.runId, sibling);
+      const deletion = createEnteredGate();
+      callGateway.mockImplementationOnce(deletion.wait);
+      let settled = false;
+      const sweep = sweeper.runTick().then(() => {
+        settled = true;
+      });
+      try {
+        await deletion.entered;
+        markGatewayRestartDraining("stop (SIGTERM)");
+        expect(settled).toBe(false);
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+      } finally {
+        deletion.release();
+        await sweep;
+      }
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect([...runs.keys()]).toEqual(collector ? [entry.runId, sibling.runId] : [sibling.runId]);
+
+      resetGatewayWorkAdmission();
+      await sweeper.runTick();
+      expect(runs.size).toBe(0);
+      expect(callGateway).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          params: expect.objectContaining({ key: sibling.childSessionKey }),
+        }),
+      );
+    },
+  );
 
   it("reports an admitted registry sweep failure even when restart drain has started", async () => {
     recoverRow.mockImplementationOnce(async () => {

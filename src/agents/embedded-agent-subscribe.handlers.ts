@@ -79,7 +79,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       bindAgentAssistantSource(evt.message, assistantSource);
     }
     // Model facts advance before persistence, independently of queued reply delivery.
-    ctx.captureModelEvent(evt);
+    const assistantReasoning = ctx.captureModelEvent(evt);
     // Capture tool facts before reply delivery can delay their lifecycle handlers.
     const readResult =
       evt.type === "tool_execution_end" ? prepareToolResult(evt.result) : undefined;
@@ -92,7 +92,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         void scheduleEvent(evt, () => handleMessageUpdate(ctx, evt));
         return;
       case "message_end":
-        void scheduleEvent(evt, () => handleMessageEnd(ctx, evt));
+        void scheduleEvent(evt, () => handleMessageEnd(ctx, evt, assistantReasoning));
         return;
       case "turn_start":
         // Async tool fragments share one provider turn; only a new model call starts a batch.

@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   chatMessage,
+  captureUiProof,
   newChatPage,
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -274,6 +275,7 @@ suite.define(() => {
           controlsLeft: actions.getBoundingClientRect().left,
         };
       });
+      await captureUiProof(suite, page, "sidebar-presentation", `${direction}-title.png`);
       expect(geometry.right).toBeLessThanOrEqual(geometry.controlsLeft + 1);
       // At the endpoint, even the final glyph is inside the opaque part of the mask.
       await expect
@@ -451,6 +453,7 @@ suite.define(() => {
     expect(badgeBox.y).toBeGreaterThanOrEqual(layout.name.bottom - 1);
     expect(layout.name.right).toBeGreaterThan(badgeBox.x);
     expect(badgeBox.y + badgeBox.height / 2).toBeCloseTo(subtitleBox.y + subtitleBox.height / 2, 1);
+    await captureUiProof(suite, page, "sidebar-presentation", "unread-layout.png");
     expectUnreadLayout(layout, plain.nameLeft);
     expect(await busyRow.locator(".session-row-state").count()).toBe(0);
     expect(layout.atoms).toHaveLength(1);

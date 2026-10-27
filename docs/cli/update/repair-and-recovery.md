@@ -449,16 +449,9 @@ can also clear the older updater's first-hop block without replacing packages.
 Other unfinished recovery still requires its original owner.
 
 For a package update stranded by an older updater's launcher ownership checks,
-use the manual installation hop, then repair from the new CLI at the same root:
-
-```bash
-npm install -g openclaw@latest
-openclaw doctor --fix
-openclaw update repair
-```
-
-Follow the [manual update precautions](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
-including a verified backup and stopping the managed Gateway during replacement.
+follow the [manual update procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+and run `openclaw update repair` from the new CLI at the same root right after
+`openclaw doctor --fix`, before refreshing and starting the Gateway service.
 When the installed package directory matches neither recorded generation, repair
 closes the previous package operation as `superseded-by-manual-install`, warns with
 its operation ID, and preserves any remaining staged files and helper beside the installation.
@@ -985,10 +978,13 @@ exclusive offline ownership, or asks the running Gateway to perform retirement
 under its own live ownership. It does not stop or restart the Gateway for cleanup.
 This also applies to the macOS app's CLI updates and `--no-restart`; that flag does
 not bypass state ownership. Gateway-owned restart completion performs the same
-retirement after it records success.
+retirement after it records success. A failed update that never reached repair or
+activation attempts the same retirement after its failure is recorded, including
+its own capture.
 
 Eligibility and identity checks are unchanged: the just-finished update's capture
-stays until a **later successful update** supersedes it. Unfinished runs, pending
+stays until a **later successful update** supersedes it, unless that update failed
+before repair or activation. Unfinished runs, pending
 recovery, unresolved failed or rolled-back captures, orphaned/unmanifested copies,
 and blocked artifacts remain. Standalone Doctor captures keep their existing
 newest-three/30-day policy, always retaining the newest sealed capture. Historical
@@ -1110,7 +1106,9 @@ or snapshots. They do not make immutable releases eligible for `update cleanup`;
 Doctor's `<database>.pre-startup-migration-<id>.bak` groups, including their
 `.scoped.bak` members, become eligible only
 after Doctor verifies migration completion and update history records a successful
-update that started later. Until then they appear as protected. Changed backups remain blocked; unrecorded backups remain protected unless
+update that started later. Until then they appear as protected. An external
+supervisor's native update counts once the supervisor accepts it with `update finish`.
+Releases it swaps without `update migrate` are not recorded. Changed backups remain blocked; unrecorded backups remain protected unless
 explicitly selected as described below; cleanup never infers permission
 to delete from their filenames. Keep these files with your pre-upgrade backups
 while you still need to restore the matching database generation.
@@ -1134,9 +1132,13 @@ captures through their sealed manifests; it never reads the captured payload:
   successful update, or of any update that finished after it.
 - `protected` / `unfinished-update-run` or `pending-update-recovery`: the update is
   still running, or its recorded rollback has not settled.
+- `candidate` / `never-activated-update-capture`: a capture from a failed update
+  that stopped before repair or activation, so neither the installation nor its
+  state changed. The failed update retires it automatically when it finishes;
+  cleanup retires any that remain without waiting for a later successful update.
 - `protected` / `unresolved-failed-update`: a sealed capture from a failed update
-  that is neither restored nor repaired forward. It remains that update's manual
-  recovery source.
+  that reached repair or activation and is neither restored nor repaired forward.
+  It remains that update's manual recovery source.
 - `candidate` / `superseded-doctor-capture`: a sealed standalone `doctor-<id>`
   capture outside the newest three or older than 30 days. The newest sealed copy
   is always retained.

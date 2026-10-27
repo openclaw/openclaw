@@ -11,9 +11,12 @@ sidebarTitle: "Control UI"
 The Knowledge page and chat panel. Part of the
 [Knowledge plugin](/plugins/knowledge) guide.
 
-The Knowledge UI is a read-only inspector, even when agent writes are enabled.
-Change requests are handed to chat with the exact observed record ID, revision,
-and hash; nothing is sent automatically. Native UI from an enabled bundled plugin
+The Knowledge UI is a read-only inspector of vault records, even when agent
+writes are enabled. The Scribes tab is the exception: it starts and controls
+scribe conversations and their automations, never vault records directly.
+**Ask** starts a new chat with the selected agent and sends your request as its
+first message, with the exact observed record ID, revision, and hash attached.
+The dialog shows only the editable request. Native UI from an enabled bundled plugin
 does not need the **Custom plugin UI** Labs setting.
 
 ## Knowledge page
@@ -21,6 +24,7 @@ does not need the **Custom plugin UI** Labs setting.
 Open **Knowledge** from the Control UI sidebar.
 
 - **Recent** and **Browse** list records; **Search** runs keyword retrieval.
+- **Scribes** lists, starts, and controls [scribes](/plugins/knowledge/scribes).
 - Entity pages show linked claims with evidence, typed connections, references
   and backlinks, retained originals under **File details**, and revision history.
 - **Activity & issues** shows validation findings and local Git checkpoint state.
@@ -54,13 +58,14 @@ The page stores its navigation in Control UI `p.*` query parameters:
   store identity. Neither grants access. If the agent now uses a different store,
   the page explains the mismatch instead of opening a record there.
 - `p.record` is the stable record ID, so renames do not change the address.
+- `p.scribe` (with `p.view=scribes`) opens one scribe's detail.
 - `p.view`, `p.section`, `p.kind`, `p.type`, `p.q`, `p.filter`, `p.history`,
   `p.origin`, `p.offset`, `p.upper`, `p.before`, and `p.back` keep the view,
   search, filters, settings section, and pagination. Invalid values reset to safe
   defaults.
 
 Refresh and browser back/forward restore the addressed view. Expansion state,
-scroll position, and unsent chat handoffs are not part of the address.
+scroll position, and unsent Ask requests are not part of the address.
 
 ## Links in chat
 

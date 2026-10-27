@@ -44,6 +44,7 @@ import {
   registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
   rejectPendingPreparedModelRuntimeReplacement,
+  retirePreparedModelRuntimeAgent,
   type PreparedModelRuntimeLease,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
@@ -328,6 +329,8 @@ describe("prepared reply dispatch runtime", () => {
         acquire(runtime, published.pluginGeneration, "static"),
       ),
     );
+    const loadsBeforeExecutionWorkspaces =
+      mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
     for (const [index, runtime] of [...registries.keys()].entries()) {
       const lease = leases[index]!;
       expect(lease.snapshot.pluginRegistry === registries.get(runtime)).toBe(true);
@@ -347,6 +350,35 @@ describe("prepared reply dispatch runtime", () => {
           const nested = await acquire(runtime, lease.pluginGeneration);
           expect(nested.snapshot === lease.snapshot).toBe(true);
           await nested[Symbol.asyncDispose]();
+          const executionWorkspaceDir = fixture.state.path(`execution-${runtime}`);
+          const executionWorkspace = await acquireAgentRunPreparedModelRuntime(
+            {
+              ...input(runtime),
+              workspaceDir: executionWorkspaceDir,
+            },
+            { catalogMode: "static", pluginGeneration: lease.pluginGeneration },
+          );
+          expect(executionWorkspace.pluginGeneration).toBe(lease.pluginGeneration);
+          expect(executionWorkspace.snapshot.workspaceDir).toBe(executionWorkspaceDir);
+          await executionWorkspace[Symbol.asyncDispose]();
+          const mismatchedWorkspaceDir = fixture.state.path(`mismatch-${runtime}`);
+          const scopeMismatches: Array<readonly [string, Partial<RunInput>]> = [
+            ["config", { config: { agents: { defaults: { model: "other/model" } } } }],
+            ["inherited auth", { inheritedAuthDir: fixture.state.path("other-auth") }],
+            ["environment", { env: { OPENCLAW_PREPARED_RUNTIME_TEST_SCOPE: "different" } }],
+            ["agent", { agentId: "other" }],
+            ["agent directory", { agentDir: fixture.state.agentDir("other") }],
+            ["missing selection", { runtimePluginSelections: undefined }],
+          ];
+          for (const [scope, overrides] of scopeMismatches) {
+            await expect(
+              acquireAgentRunPreparedModelRuntime(
+                { ...input(runtime), workspaceDir: mismatchedWorkspaceDir, ...overrides },
+                { catalogMode: "static", pluginGeneration: lease.pluginGeneration },
+              ),
+              scope,
+            ).rejects.toThrow("plugin generation was superseded");
+          }
           const otherRuntime = [...registries.keys()].find((candidate) => candidate !== runtime)!;
           await expect(acquire(otherRuntime, lease.pluginGeneration)).rejects.toThrow(
             "plugin generation was superseded",
@@ -364,7 +396,36 @@ describe("prepared reply dispatch runtime", () => {
       (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })) === published,
     ).toBe(true);
     expect(published.pluginGeneration.pluginRegistry?.agentHarnesses).toEqual([]);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(4);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(
+      loadsBeforeExecutionWorkspaces + registries.size,
+    );
+    const retirementRuntime = [...registries.keys()][0]!;
+    const retirementLease = await acquire(retirementRuntime, published.pluginGeneration, "static");
+    let retirementLeaseActive = true;
+    try {
+      await withPreparedModelRuntimePluginGenerationScope(
+        retirementLease.pluginGeneration,
+        async () => {
+          await retirePreparedModelRuntimeAgent({
+            agentId: "default",
+            agentDirs: [published.agentDir],
+          });
+          await expect(
+            acquireAgentRunPreparedModelRuntime(
+              {
+                ...input(retirementRuntime),
+                workspaceDir: fixture.state.path("workspace-after-agent-retirement"),
+              },
+              { catalogMode: "static", pluginGeneration: retirementLease.pluginGeneration },
+            ),
+          ).rejects.toThrow("plugin generation was superseded");
+        },
+        () => (retirementLeaseActive ? retirementLease.snapshot : undefined),
+      );
+    } finally {
+      retirementLeaseActive = false;
+      await retirementLease[Symbol.asyncDispose]();
+    }
   });
 
   it.each(["disabled", "error", "not-imported"] as const)(
@@ -799,7 +860,10 @@ describe("catalog-worker replacement demand", () => {
     async (outcome) => {
       const { input, failure } = await failReplacement();
       mocks.resolveAmbientCredentials.mockClear();
-      await expect(prepareModelRuntimeSnapshot(input)).rejects.toBe(failure);
+      await expect(prepareModelRuntimeSnapshot(input)).rejects.toMatchObject({
+        message: failure.message,
+        stack: failure.stack,
+      });
       expect(mocks.resolveAmbientCredentials).not.toHaveBeenCalled();
       const started = createDeferred();
       const finish = createDeferred();

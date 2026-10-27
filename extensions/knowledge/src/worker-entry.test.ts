@@ -5,9 +5,20 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { build } from "esbuild";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+
+// mock-isolation: loading the real lifecycle module is the regression this boundary rejects.
+vi.mock("openclaw/plugin-sdk/database-engine-worker-runtime", () => {
+  throw new Error("Knowledge's SQLite worker must not load host database engine lifecycle");
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("loads storage operations without host database engine lifecycle", async () => {
+  const { operations } = await import("./storage-host.js");
+  expect(operations.sourceCheck).toBeTypeOf("function");
+  expect(operations.history).toBeTypeOf("function");
+});
 
 it.each(["registry", "storage"])(
   "starts the %s worker with its host-selected SDK",

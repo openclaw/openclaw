@@ -6,12 +6,16 @@ import type { CronConfig } from "../../config/types.cron.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../../infra/gateway-scheduler.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateReadContext,
+  captureOpenClawStateWorkerContext,
+} from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronAgentAvailability } from "../agent-availability.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
+import type { resolveCronListSnapshotRows } from "../list-snapshot-revision.js";
 import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
@@ -365,6 +369,8 @@ export type CronJobPolicyContext = {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
+  /** Detached rows and their content digests survive unchanged store publications. */
+  listSnapshotRows?: ReturnType<typeof resolveCronListSnapshotRows>;
   /** Worker publications replace the source rows or advance the store revision. */
   readSnapshot?: {
     storeRevision: number;
@@ -374,11 +380,10 @@ export type CronServiceState = {
       filteredJobs: CronJob[];
       sortBy: CronJobsSortBy;
       sortDir: CronSortDir;
+      /** Frozen rows captured with this exact list revision. */
       jobs: CronJob[];
       snapshotRevision: string;
     }[];
-    /** Requested rows are detached and frozen once for this list generation. */
-    readJobs: WeakMap<CronJob, CronJob>;
     searchText: WeakMap<CronJob, string>;
   };
   /** Last known durable wake for each persisted job. Map presence distinguishes
@@ -481,14 +486,16 @@ const preparedStoreSelections = new WeakMap<
 
 /** Resolve once per admission; warm callers enter their operation queue without yielding. */
 export function prepareCronServiceStore(state: CronServiceState): Promise<void> | undefined {
-  const context = captureOpenClawStateWorkerContext();
+  const { admission } = captureOpenClawStateReadContext();
   const previous = preparedStoreSelections.get(state);
-  if (previous?.admission === context.admission) {
+  if (previous?.admission === admission) {
     return previous.ready ? undefined : previous.promise;
   }
+  const context = captureOpenClawStateWorkerContext();
   if (previous) {
     state.store = null;
     state.readSnapshot = undefined;
+    state.listSnapshotRows = undefined;
   }
   const promise = (async () => {
     const env = state.deps.env;

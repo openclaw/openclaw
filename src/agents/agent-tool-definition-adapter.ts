@@ -1,3 +1,8 @@
+import {
+  attachInternalToolExecutionPreparer,
+  copyInternalToolResultState,
+  getInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
 /**
  * Owns hook execution, client-tool delegation, result coercion, and safe
  * logging for failed tool calls.
@@ -35,11 +40,6 @@ import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js
 import { readNodePermissionError } from "./node-permission-error.js";
 import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
-import {
-  attachInternalToolExecutionPreparer,
-  copyInternalToolResultState,
-  getInternalToolExecutionPreparer,
-} from "./runtime/internal-hooks.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { readToolOperatorHint } from "./tool-operator-hint.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";

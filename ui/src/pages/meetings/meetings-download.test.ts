@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { meetingEntry } from "../../test-helpers/transcripts.test-support.ts";
@@ -42,8 +42,13 @@ function captureDownloads() {
   return downloads;
 }
 
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
 afterEach(() => {
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });

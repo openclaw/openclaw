@@ -124,7 +124,7 @@ describe("native overlay presentation", () => {
         [trigger("people-group").querySelector(".oc-menu-item__submenu-icon")!, "color", "muted"],
         [item("Delete"), "color", "danger"],
         [details("Delete"), "color", "danger"],
-        [trigger("people-group"), "backgroundColor", "bg-hover"],
+        [trigger("people-group"), "backgroundColor", "surface-selected"],
       ];
       for (const [element, property, token] of colors) {
         expect(getComputedStyle(element)[property], theme).toBe(color(`var(--${token})`));

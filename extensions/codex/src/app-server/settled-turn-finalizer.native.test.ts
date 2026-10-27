@@ -265,6 +265,7 @@ type SummaryScenario = {
   hidden?: boolean;
   promptSuppressed?: boolean;
   continuation?: boolean;
+  terminalReasoning?: boolean;
   live?: boolean;
 };
 
@@ -306,6 +307,35 @@ async function createRunFixture(
   };
   return { params, shared, run: (attempt = params) => runCodexAppServerAttempt(attempt, options) };
 }
+
+it.skipIf(process.platform === "win32")(
+  "rejects a native patch before accessing the finalizer filesystem",
+  { timeout: 60_000 },
+  nativeCase(async (fixture) => {
+    await fs.writeFile(fixture.marker, "completed-once\n");
+    fixture.setPhase("patch");
+    await expect(
+      runBoundedCodexAppServerTurn({
+        ...boundedParams(fixture, fixture.pluginConfig),
+        taskLabel: "settled-turn finalization",
+        developerInstructions: "Summarize completed work without using tools.",
+        input: textInput("Summarize the completed action."),
+        isolation: "private-stdio",
+      }),
+    ).resolves.toMatchObject({ text: "Ready." });
+    expect(fixture.requests).toHaveLength(2);
+    expect(fixture.requests[1]?.body.input).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "custom_tool_call_output",
+          call_id: "denied-patch",
+          output: expect.stringContaining("No usable execution environment is available"),
+        }),
+      ]),
+    );
+    await expectActionOnce(fixture);
+  }),
+);
 
 it.skipIf(process.platform === "win32")(
   "refuses supervised finalization even when different host credentials and model work",
@@ -436,6 +466,7 @@ it.skipIf(process.platform === "win32")(
 it.skipIf(process.platform === "win32").for<SummaryScenario>([
   { label: "preserveNativeModel-only host profile", preserveNativeModel: true, prepared: false },
   { label: "ordinary user-home private host profile", homeScope: "user", prepared: false },
+  { label: "checkpointed work before terminal aggregate reasoning", terminalReasoning: true },
   { label: "unfinished prior turn", unfinishedPrior: "ordinary" },
   { label: "unfinished oversized prior turn", unfinishedPrior: "oversized" },
   { label: "hidden background notification", hidden: true },
@@ -474,6 +505,7 @@ async function runSummary(
     hidden = false,
     promptSuppressed = false,
     continuation = false,
+    terminalReasoning = false,
   }: SummaryScenario,
 ) {
   const pluginConfig = {
@@ -552,7 +584,7 @@ async function runSummary(
       });
     }
   }
-  fixture.setPhase("action");
+  fixture.setPhase(terminalReasoning ? "action-reasoning" : "action");
   params.runId = "run-settled-action";
   if (hidden || promptSuppressed || continuation) {
     params.prompt =
@@ -610,6 +642,16 @@ async function runSummary(
   cleanups.push(async () => closeHost());
   const settledAttempt = await run();
   expect(settledAttempt.terminal).toEqual({ kind: "ok" });
+  if (terminalReasoning) {
+    const persisted = (await readTranscript(params)).map((entry) => entry.message);
+    const reasoning = persisted.findIndex(
+      (message) =>
+        message.role === "assistant" && message.content.some((part) => part.type === "thinking"),
+    );
+    const lastTool = persisted.findLastIndex((message) => message.role === "toolResult");
+    expect(lastTool).toBeGreaterThan(-1);
+    expect(reasoning).toBeGreaterThan(lastTool);
+  }
   const context = settledAttempt.settledTurnFinalizationContext;
   if (!(context instanceof settledContext.CodexSettledTurnContext)) {
     throw new Error("Native turn lost its settled-tool evidence");
@@ -739,9 +781,6 @@ async function runSummary(
   if (live) {
     expect(fixture.injectedEmptyTerminals()).toBe(1);
     expect(new Set(fixture.livePhases)).toEqual(new Set(["probe", "action", "summary"]));
-    for (const { body } of fixture.requests) {
-      expect(body.tools ?? []).toEqual([]);
-    }
   }
   if (nativeAuthBefore !== undefined) {
     expect(await fs.readFile(path.join(sourceHome, "auth.json"), "utf8")).toBe(nativeAuthBefore);

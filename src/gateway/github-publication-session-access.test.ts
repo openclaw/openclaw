@@ -118,12 +118,12 @@ describe("local checkout publication", () => {
         workerSessionPlacementService: f.placements,
         githubPublicationService: f.coordinator,
       };
-      const invoke = async (handoff = true) => {
+      const invoke = async (handoff = true, workspacePath = source.cwd) => {
         const respond = vi.fn();
         const params = {
           sessionKey: SESSION_KEY,
           idempotencyKey: "local-checkout",
-          workspacePath: source.cwd,
+          workspacePath,
         };
         await withGatewayToolCallerIdentity(
           {
@@ -231,7 +231,14 @@ describe("local checkout publication", () => {
       );
       expect(await worktreeState(source)).toEqual(before);
       expect(source.effects).toEqual(["push", "pull_request"]);
-      expect(await invoke()).toEqual(result);
+      expect(await invoke(true, prepared.spawnedCwd)).toEqual(result);
+      // The original source is not the adopted checkout, even though it supplies skills.
+      expect(await invoke()).toMatchObject([
+        false,
+        undefined,
+        { message: expect.stringContaining("current managed worktree") },
+      ]);
+      expect(await worktreeState(source)).toEqual(before);
       expect(source.effects).toEqual(["push", "pull_request"]);
     },
   );

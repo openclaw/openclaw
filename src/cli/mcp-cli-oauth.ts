@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Command } from "commander";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import type { McpOAuthLoginLifecycle } from "../agents/mcp-oauth-provider.js";
 import { completeMcpOAuthAuthorization, startMcpOAuthAuthorization } from "../agents/mcp-oauth.js";
@@ -13,14 +14,33 @@ import { formatCliCommand } from "./command-format.js";
 
 const MCP_OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
 
-export async function loginMcpServer(params: {
-  name: string;
-  server: Record<string, unknown>;
-  code?: string;
-  owner: Pick<McpOAuthLoginLifecycle, "signal" | "assertCurrent">;
-  fail: (message: string) => never;
-}): Promise<void> {
-  const { name, server, code, owner, fail } = params;
+export type McpLoginOptions = { code?: string; issuer?: string };
+
+export function registerMcpLoginCommand(
+  mcp: Command,
+  action: (name: string, options: McpLoginOptions) => Promise<void>,
+): void {
+  mcp
+    .command("login")
+    .description("Authorize an OAuth MCP server")
+    .argument("<name>", "MCP server name")
+    .option("--code <code>", "Authorization code from the OAuth redirect")
+    .option("--issuer <iss>", "Exact iss value from the same OAuth redirect (with --code)")
+    .action(action);
+}
+
+export async function loginMcpServer(
+  params: McpLoginOptions & {
+    name: string;
+    server: Record<string, unknown>;
+    owner: Pick<McpOAuthLoginLifecycle, "signal" | "assertCurrent">;
+    fail: (message: string) => never;
+  },
+): Promise<void> {
+  const { name, server, code, issuer, owner, fail } = params;
+  if (issuer !== undefined && !code) {
+    return fail("--issuer requires --code from the same OAuth callback.");
+  }
   if (asRecord(server.oauth)?.identity === "per-requester") {
     return fail(
       `MCP server "${name}" uses per-requester OAuth. Senders connect from the channel via the MCP connect flow.`,
@@ -41,6 +61,7 @@ export async function loginMcpServer(params: {
     owner.assertCurrent();
     await completeMcpOAuthAuthorization(identity, resolved, {
       code,
+      ...(issuer === undefined ? {} : { iss: issuer }),
     });
     defaultRuntime.log(`MCP OAuth credentials saved for "${name}".`);
     return;
@@ -80,6 +101,9 @@ export async function loginMcpServer(params: {
     } else {
       defaultRuntime.log(`After approval, run ${manualCommand}.`);
     }
+    defaultRuntime.log(
+      "If the callback URL includes iss, pass its exact value with --issuer <iss> when completing login manually.",
+    );
     if (!callbackServer) {
       return;
     }
@@ -93,9 +117,14 @@ export async function loginMcpServer(params: {
     if (callback.type === "oauth_error") {
       return fail(`OAuth authorization did not complete. Retry login or use ${manualCommand}.`);
     }
+    if (callback.parameters.getAll("iss").length > 1) {
+      return fail("OAuth callback includes multiple issuer values. Retry login.");
+    }
+    const iss = callback.parameters.get("iss");
     owner.assertCurrent();
     await completeMcpOAuthAuthorization(identity, resolved, {
       code: callback.code,
+      ...(iss === null ? {} : { iss }),
     });
     defaultRuntime.log(`MCP OAuth credentials saved for "${name}".`);
   } finally {

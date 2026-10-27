@@ -426,7 +426,9 @@ describe("detectAndLoadPromptImages", () => {
 
     expect(result.detectedRefs).toHaveLength(1);
     expect(result).toMatchObject({ loadedCount: 0, skippedCount: 1, images: [] });
-    expect(warn.mock.calls).toEqual([["Native image: sandbox validation failed"]]);
+    expect(warn.mock.calls).toEqual([
+      ["Native image: sandbox validation failed (reason=outside-workspace, pathClass=absolute)"],
+    ]);
     expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-private-image");
   });
 

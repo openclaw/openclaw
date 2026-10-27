@@ -12,7 +12,7 @@
     "@microsoft/teams.api": "2.1.1",
     "@microsoft/teams.apps": "2.1.1",
     "express": "5.3.0",
-    "typebox": "1.4.1",
+    "typebox": "1.4.2",
     "zod": "4.6.7"
   },
   "devDependencies": {

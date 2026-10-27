@@ -1,10 +1,10 @@
 import path from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import * as agentScope from "../../agents/agent-scope.js";
 import { saveAuthProfileStore } from "../../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
+import * as modelSelectionConfig from "../../agents/model-selection-config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
@@ -189,16 +189,18 @@ describe("executeAgentTurn: CLI credential selection", () => {
       const fallbackOptions = vi
         .spyOn(agentRunnerUtils, "resolveModelFallbackOptions")
         .mockImplementation(resolveModelFallbackOptions);
-      const actualAgentScope = await vi.importActual<typeof agentScope>(
-        "../../agents/agent-scope.js",
+      const actualModelSelectionConfig = await vi.importActual<typeof modelSelectionConfig>(
+        "../../agents/model-selection-config.js",
       );
-      const resolveFallbackAvailability = actualAgentScope.resolveModelFallbackAvailability;
-      const projectFallbackOverride = actualAgentScope.modelFallbackOverrideFromAvailability;
+      const resolveFallbackAvailability =
+        actualModelSelectionConfig.resolveModelFallbackAvailability;
+      const projectFallbackOverride =
+        actualModelSelectionConfig.modelFallbackOverrideFromAvailability;
       const availability = vi
-        .spyOn(agentScope, "resolveModelFallbackAvailability")
+        .spyOn(modelSelectionConfig, "resolveModelFallbackAvailability")
         .mockImplementation(resolveFallbackAvailability);
       const fallbackOverride = vi
-        .spyOn(agentScope, "modelFallbackOverrideFromAvailability")
+        .spyOn(modelSelectionConfig, "modelFallbackOverrideFromAvailability")
         .mockImplementation(projectFallbackOverride);
       onTestFinished(() => {
         availability.mockRestore();

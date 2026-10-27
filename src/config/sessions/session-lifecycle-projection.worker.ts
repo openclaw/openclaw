@@ -1,4 +1,5 @@
 import type { EngineConnection } from "../../infra/sql-connection.js";
+import { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
@@ -120,6 +121,7 @@ export function commitSessionLifecycleProjection(
 
 type LifecycleProjectionPreparation = {
   store: Record<string, SessionEntry>;
+  reuseEntry?: boolean;
   selected: ReturnType<typeof selectProjectedLifecycleRemovals>;
   archiveRecovery?: ProjectedLifecycleMutation["archiveRecovery"];
 };
@@ -128,6 +130,10 @@ export type SessionLifecyclePlanningOperations = {
   prepare: {
     input: LifecycleRemovalProjectionInput & {
       upserts: readonly Pick<SessionEntryLifecycleUpsert, "sessionKey" | "relatedSessionKeys">[];
+      retainedEntry?: {
+        writeToken: string;
+        writeScopes: Parameters<typeof readSqliteDatabaseScopedWriteToken>[1];
+      };
     };
     output: LifecycleProjectionPreparation;
   };
@@ -159,23 +165,30 @@ export function bindSqliteWorkerBackend(
         if (command.type === "prepare") {
           const input = command.input;
           const upsert = input.upserts[0];
+          const reuseEntry =
+            input.retainedEntry !== undefined &&
+            input.retainedEntry.writeToken ===
+              readSqliteDatabaseScopedWriteToken(database.db, input.retainedEntry.writeScopes);
           const retained =
+            !reuseEntry &&
             !input.allowCanonicalRepair &&
             input.removals.length === 0 &&
             input.upserts.length === 1 &&
             upsert &&
-            !upsert.relatedSessionKeys?.length
+            !upsert.relatedSessionKeys?.some((key) => key !== upsert.sessionKey.trim())
               ? prepareSessionActorEntryPatch(database, upsert.sessionKey.trim())?.snapshot()
               : undefined;
           // Related-parent builders still require their complete multi-entry projection.
-          const store =
-            retained &&
-            (upsert?.relatedSessionKeys === undefined || !retained.entry.parentSessionKey)
+          const store = reuseEntry
+            ? {}
+            : retained &&
+                (upsert?.relatedSessionKeys === undefined || !retained.entry.parentSessionKey)
               ? { [retained.sessionKey]: retained.entry }
               : readProjectedLifecycleStore(database, input);
           const identity = readOpenClawAgentDatabaseIdentity(database).identity;
           return {
             store,
+            ...(reuseEntry ? { reuseEntry: true } : {}),
             selected: selectProjectedLifecycleRemovals(database, store, input.removals),
             archiveRecovery:
               typeof identity === "string"

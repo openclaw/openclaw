@@ -1,3 +1,4 @@
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
@@ -102,7 +103,7 @@ export type DeleteSessionEntryLifecycleParams = {
    * Revalidate caller and external lifecycle owners at each synchronous deletion boundary.
    * Must not write the deleting agent database: its Worker may hold the transaction lock.
    */
-  commitGuard?: () => void;
+  commitGuard?: (operation?: RetainedWorkerTransactionAdmission) => void;
   /** Agent owner used to resolve backend transcript artifacts. */
   agentId?: string;
   /** Whether transcript artifacts should be archived/deleted with the entry. */

@@ -22,12 +22,22 @@ const row = (decision: Decision, id = pinned.id) => ({
 });
 const facts: Decision = {
   protocol: "typesafe-systemone",
-  input: ["text"],
-  limits: { maxRequestTokens: 64000, maxStateAndQuestionTokens: 32000 },
+  input: ["text", "image"],
+  limits: {
+    maxRequestTokens: 64000,
+    maxStateAndQuestionTokens: 32000,
+    image: { maxBytes: 4194304, mimeTypes: ["image/png", "image/jpeg"], remoteUrls: false },
+  },
   billing: { unit: "tokens", source: "provider-docs", usdPerMillion: { input: 0.042, output: 0 } },
 };
-const { limits: _limits, ...unlimited } = facts;
-const { billing: _billing, ...unbound } = unlimited;
+const {
+  maxRequestTokens: _request,
+  maxStateAndQuestionTokens: _question,
+  ...imageLimits
+} = facts.limits!;
+const unlimited = { ...facts, limits: imageLimits };
+const { billing: _billing, limits: _limits, ...customFacts } = facts;
+const unbound = { ...customFacts, input: ["text" as const] };
 const runtime = (overrides: Partial<ProviderConfig> = {}): RuntimeConfig => ({
   ...config,
   providerConfig: { baseUrl: hosted, models: [], ...overrides },
@@ -91,6 +101,6 @@ it("preserves native catalog rows, enriches V1, and unbinds only hosted facts", 
   expect(result?.[2]?.inference?.decision?.protocol).toBe("typesafe-systemone");
   expect(result?.[0]?.inference).toEqual({
     chat: false,
-    decision: { ...decision, limits: { maxQuestions: 12 } },
+    decision: { ...decision, input: ["text"], limits: { maxQuestions: 12 } },
   });
 });

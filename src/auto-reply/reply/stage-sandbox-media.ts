@@ -202,7 +202,8 @@ export async function stageSandboxMedia(params: {
     let downloadedMediaUri: string | undefined;
     const stageSource = async (sourcePath: string) => {
       if (!destination.bridge) {
-        // Validate before publishing the privacy marker; copyIn rechecks while streaming.
+        // Validate before publishing the privacy marker; copyIn rechecks while copying.
+        let clone: "auto" | "never";
         {
           await using opened = await openLocalFileSafely({ filePath: sourcePath });
           if (opened.stat.size > stagingMaxBytes) {
@@ -211,9 +212,12 @@ export async function stageSandboxMedia(params: {
               `file exceeds limit of ${stagingMaxBytes} bytes (got ${opened.stat.size})`,
             );
           }
+          // Small inputs cost less to copy; reserve clone setup for bulk transfers.
+          clone = opened.stat.size >= 32 * 1024 * 1024 ? "auto" : "never";
         }
         await prepareDestination();
         await destination.root.copyIn(relativeDest, sourcePath, {
+          clone,
           maxBytes: stagingMaxBytes,
           mkdir: false,
           overwrite: false,
