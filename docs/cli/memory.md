@@ -155,6 +155,10 @@ Historical transcripts without a recognizable helper identity remain eligible.
 Full rebuilds wait for temporary database cleanup before reporting completion.
 Searches remain available against the published index while a rebuild finishes.
 File removal runs asynchronously so cleanup does not block the Gateway event loop.
+On `SIGINT` or `SIGTERM`, the CLI reports the signal and waits for admitted work
+and cleanup before exiting (130 or 143 respectively). An admitted rebuild can
+finish during shutdown; an incomplete or failed rebuild never replaces the
+published index.
 SQLite background rebuilds retain completed work when foreground activity interrupts
 indexing. The next sync resumes the rebuild, incorporating source changes before
 publishing the complete index. Closing the memory owner or restarting the Gateway
