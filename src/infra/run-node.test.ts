@@ -621,6 +621,41 @@ describe("run-node script", () => {
   );
 
   it.for([false, true])(
+    "reuses a dirty build for a co-located source launcher unless inputs changed (changed: %s)",
+    async (changed, { tmp }) => {
+      await setupStampedProject(tmp, { trackConfig: true });
+      const { deps } = await trackProjectWithGit(tmp);
+      const env = { ...process.env, OPENCLAW_DEV_SOURCE_ROOT: tmp };
+      await fs.writeFile(resolvePath(tmp, ROOT_SRC), "export const value = 2;\n");
+      // The first launcher's build signed these dirty inputs.
+      writeBuildStamp({ cwd: tmp, inputSignature: resolveRunNodeInputSignature(deps, "build") });
+      writeRuntimePostBuildStamp({
+        cwd: tmp,
+        env,
+        inputSignature: resolveRunNodeInputSignature({ ...deps, env }, "runtime"),
+      });
+      if (changed) {
+        await fs.writeFile(resolvePath(tmp, ROOT_SRC), "export const value = 3;\n");
+      }
+      const { spawnCalls, spawn } = createSpawnRecorder();
+
+      expect(
+        await runNodeCommand(tmp, {
+          args: ["node", "run"],
+          env,
+          spawn,
+          spawnSync: realSpawnSync,
+          runRuntimePostBuild: skipRuntimePostBuild,
+        }),
+      ).toBe(0);
+      expect(spawnCalls).toEqual([
+        ...(changed ? [expectedBuildSpawn()] : []),
+        [process.execPath, "openclaw.mjs", "node", "run"],
+      ]);
+    },
+  );
+
+  it.for([false, true])(
     "keeps legacy client stamps subject to required output checks (missing: %s)",
     async (missing, { tmp }) => {
       await setupStampedProject(tmp, {
