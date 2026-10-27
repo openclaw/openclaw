@@ -17,13 +17,13 @@ import {
 } from "../../process/exec-result.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import { startWorktreeWait, type WorktreeWaitBudget } from "./allocation.js";
+import { startWorktreeWait } from "./allocation.js";
 import { estimateWorktreeGitBytes } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
 import { timeWorktreePreparationPhase } from "./preparation-timing.js";
-import type { CreateManagedWorktreeParams } from "./types.js";
+import type { CreateManagedWorktreeParams, WorktreeWaitBudget } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 

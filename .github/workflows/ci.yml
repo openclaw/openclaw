@@ -2013,6 +2013,7 @@ jobs:
         env:
           FROZEN_TARGET: &frozen_target ${{ needs.preflight.outputs.frozen_target }}
           OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
+          OPENCLAW_VITEST_WORKER_CACHE: "1"
           OPENCLAW_VITEST_MAX_WORKERS: "1"
         run: |
           set -euo pipefail
@@ -2726,6 +2727,7 @@ jobs:
           node-version: "24.22.1"
           install-bun: "false"
           dependency-cache: *trusted_first_attempt_dependency_cache
+          build-all-cache-scope: full
 
       - *install_playwright_chromium
 

@@ -491,7 +491,7 @@ without downloading pnpm again. These archives do not replace the frozen-lockfil
 dependency install.
 
 With `install-bun: "true"`, `setup-node-env` can also reuse the original pinned
-Bun 1.4.3 ZIPs from `/opt/crabbox/toolchain-archives` on Linux glibc x64.
+Bun 1.4.4 ZIPs from `/opt/crabbox/toolchain-archives` on Linux glibc x64.
 It authenticates a private copy before extracting a fresh job-private `bun`
 and `bunx`, then publishes their directory after the Node PATH entry.
 The baseline archive is the default; the optimized x64 archive requires AVX

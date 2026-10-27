@@ -10,9 +10,9 @@ import {
   type MockAudioProcessor,
   type MockAudioSink,
 } from "./input.test-support.ts";
+import { createGatewayRelaySession } from "./session.test-support.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-  type RealtimeTalkGatewayRelaySessionResult,
   type RealtimeTalkTransportContext,
 } from "./shared.ts";
 
@@ -59,20 +59,6 @@ export class MockAudioContext extends createPcmAudioContext(
   get currentTime(): number {
     return audioClock.currentTime;
   }
-}
-
-export function createSession(): RealtimeTalkGatewayRelaySessionResult {
-  return {
-    provider: "openai",
-    transport: "gateway-relay",
-    relaySessionId: "relay-1",
-    audio: {
-      inputEncoding: "pcm16",
-      inputSampleRateHz: 24000,
-      outputEncoding: "pcm16",
-      outputSampleRateHz: 24000,
-    },
-  };
 }
 
 export function defaultRelayResponse(method: string, supportsBargeIn?: boolean) {
@@ -124,11 +110,14 @@ export function createAudioAppendClient(client = createClient()) {
   };
 }
 
-export async function createTransport(overrides: Partial<RealtimeTalkTransportContext> = {}) {
-  return new GatewayRelayRealtimeTalkTransport(createSession(), {
+export async function createTransport(
+  overrides: Partial<RealtimeTalkTransportContext> = {},
+  session = createGatewayRelaySession(),
+) {
+  return new GatewayRelayRealtimeTalkTransport(session, {
     input: await prepareRealtimeTalkTestInput(),
     callbacks: {},
-    client: createClient(),
+    client: overrides.client ?? createClient(),
     sessionKey: "main",
     ...overrides,
   });

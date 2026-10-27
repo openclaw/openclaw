@@ -780,19 +780,6 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(requestsBeforeDeletion);
-      await expect
-        .poll(
-          async () => {
-            const count = (await gateway.getRequests("sessions.list", rosterMatch)).length;
-            await new Promise((resolve) => {
-              setTimeout(resolve, 350);
-            });
-            return (await gateway.getRequests("sessions.list", rosterMatch)).length - count;
-          },
-          { timeout: 5_000 },
-        )
-        .toBe(0);
-
       const settledRequestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await expectRequestCountStable(
         gateway,

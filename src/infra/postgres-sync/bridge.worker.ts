@@ -5,7 +5,8 @@ import {
   inspectPostgresGeneration,
   lockPostgresGeneration,
 } from "../../snapshot/postgres-generation.js";
-import type { PostgresPoolEndpoint, PostgresPoolSetup, PostgresPoolWorkerData } from "./pool.js";
+import type { PostgresPoolEndpoint } from "./pool-state.js";
+import type { PostgresPoolSetup, PostgresPoolWorkerData } from "./pool.js";
 import type {
   BridgeReply,
   BridgeRequest,

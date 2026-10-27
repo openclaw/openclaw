@@ -16,6 +16,7 @@ const entries = {
   sessions: ["pages/sessions/sessions-page.tsx"],
   systems: ["pages/systems/systems-route-view.tsx"],
   activity: ["pages/activity/activity-route.tsx"],
+  "activity-next": ["components/image-lightbox-content.tsx"],
   meetings: ["pages/meetings/meetings-page.tsx"],
   plugins: ["pages/plugins/plugins-page.tsx"],
   apps: ["pages/apps/apps-page.tsx"],

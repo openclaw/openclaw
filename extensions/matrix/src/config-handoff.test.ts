@@ -100,6 +100,33 @@ it.each([false, true])("updates the profile with explicit config=%s", async (exp
   expect(mocks.release).toHaveBeenCalledWith({ mode: "persist" });
 });
 
+it("updates the configured default account profile when no account is given", async () => {
+  const configured: CoreConfig = {
+    channels: { matrix: { defaultAccount: "ops", accounts: { ops: account, alerts: account } } },
+  };
+  mocks.runtime.mockReturnValue({
+    config: { current: () => configured, replaceConfigFile: mocks.replaceConfigFile },
+  });
+
+  const result = await applyMatrixProfileUpdate({ displayName: "Ops Bot" });
+
+  expect(result).toMatchObject({ accountId: "ops", configPath: "channels.matrix.accounts.ops" });
+  expect(mocks.acquire).toHaveBeenCalledWith(expect.objectContaining({ accountId: "ops" }));
+  expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+    expect.objectContaining({
+      nextConfig: expect.objectContaining({
+        channels: {
+          matrix: expect.objectContaining({
+            accounts: expect.objectContaining({
+              ops: expect.objectContaining({ name: "Ops Bot" }),
+            }),
+          }),
+        },
+      }),
+    }),
+  );
+});
+
 it.each([
   ["recovery key", handleVerifyRecoveryKey, { key: "synthetic-recovery-key" }, { success: true }],
   ["bootstrap", handleVerificationBootstrap, {}, { success: true }],

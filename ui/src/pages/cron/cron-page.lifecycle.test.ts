@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, CronJobsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
@@ -311,12 +312,7 @@ it("refreshes model suggestions when team selection changes without changing sco
     gateway,
     {
       state: {
-        agentsList: {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "main" }, { id: "writer" }],
-        },
+        agentsList: makeBootRoster({ agents: [{ id: "main" }, { id: "writer" }] }),
       },
       subscribe: () => () => undefined,
     },
@@ -435,7 +431,7 @@ it("coalesces a cron event burst into one trailing refresh of the current page",
   );
   const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
   const channels = createChannelCapability(gateway);
-  const context = { ...createContext(gateway), channels };
+  const context = { ...createContext(gateway), acquireChannels: () => channels };
   const page = createPage(context);
   cleanups.push(() => channels.dispose());
   await page.settle();
@@ -775,14 +771,14 @@ it("defers a hidden mount and reconnect, then catches up once with the current s
   emitEvent(gateway, "cron", {}, 20);
   await settle();
   expect(request.mock.calls.filter(([method]) => refreshMethods.includes(method))).toEqual([]);
-  expect(context.channels.refresh).not.toHaveBeenCalled();
+  expect(context.acquireChannels(createChannelCapability).refresh).not.toHaveBeenCalled();
   visibility("visible");
   globalThis.dispatchEvent(new Event("focus"));
   await waitForCronPage(() => expect(page.cron.cronStatus).not.toBeNull());
   await settle();
   expectCalls(request, refreshMethods, 1);
   expect(request).toHaveBeenCalledWith("cron.list", expect.objectContaining({ agentId: "writer" }));
-  expect(context.channels.refresh).toHaveBeenCalledTimes(1);
+  expect(context.acquireChannels(createChannelCapability).refresh).toHaveBeenCalledTimes(1);
   page.remove();
   request.mockClear();
   visibility("hidden");

@@ -9,12 +9,14 @@ import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-s
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { hasSidebarListFilter } from "./session-data-events.ts";
+import { sidebarSessionBadgeFacts } from "./session-row-badge-presentation.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import { resolveSidebarOnline, sidebarOnlineOrder } from "./sidebar-online-state.ts";
 import {
   parseSidebarSnapshot,
   snapshotSections,
   snapshotSessions,
+  snapshotIssuesCount,
   type SidebarSnapshotModel,
 } from "./sidebar-snapshot-model.ts";
 
@@ -119,9 +121,15 @@ export function captureSidebarSnapshotModel(
   }
   const presentation = (row: SidebarRecentSession) => ({
     childrenDisplayMode: host.sessionProjection.children.capture(row.key),
-    snapshotSubtitle: resolveSidebarSessionRowSubtitle(host, row),
+    snapshotSubtitle: row.snapshot
+      ? row.snapshotSubtitle
+      : resolveSidebarSessionRowSubtitle(host, row),
+    state: sidebarSessionBadgeFacts(
+      host.sessionPullRequests,
+      row,
+      host.sidebarAgentsMode === "roster",
+    ),
   });
-  const sessions = snapshotSessions(rows, presentation);
   return parseSidebarSnapshot({
     routingDefaults: {
       mainKey: agents.mainKey,
@@ -149,7 +157,7 @@ export function captureSidebarSnapshotModel(
       const entry = parseSidebarEntry(value);
       return entry?.type !== "session" || !isIncognitoSessionKey(entry.key);
     }),
-    sessions,
+    issuesCount: snapshotIssuesCount(context.sidebarAttention.entries),
     ...snapshotSections(sections, host.collapsedSessionSections, presentation),
     cards: roster.cards,
     collapsedAgentIds:

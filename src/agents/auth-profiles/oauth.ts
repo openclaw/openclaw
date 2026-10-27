@@ -116,6 +116,8 @@ type ResolveApiKeyForProfileParams = {
   signal?: AbortSignal;
   /** Reject an OAuth credential before the resolver persists, adopts, or returns it. */
   validateOAuthCredential?: (credential: OAuthCredential) => void;
+  /** Admission only: an already claimed refresh retains independent settlement. */
+  assertRefreshAdmission?: () => void;
 };
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
@@ -155,6 +157,7 @@ async function resolveOAuthProfileAccess(
     cfg: params.cfg,
     forceRefresh: params.forceRefresh,
     validateCredential: params.validateOAuthCredential,
+    assertRefreshAdmission: params.assertRefreshAdmission,
     signal: params.signal,
   });
   return resolved
@@ -431,6 +434,7 @@ async function resolveApiKeyForProfileOwned(
           agentDir: params.agentDir,
           forceRefresh: params.forceRefresh,
           validateOAuthCredential: params.validateOAuthCredential,
+          assertRefreshAdmission: params.assertRefreshAdmission,
           signal: params.signal,
         });
         params.signal?.throwIfAborted();

@@ -30,6 +30,8 @@ test("preserves cumulative session-row totals across restarts, isolated by provi
         sessionRowSelections: {
           selections: [{ kind: "parent", task: "control-ui-pr", calls, rows: calls * 3 }],
           resets,
+          partitions: [],
+          partitionRevisions: [],
           materialization: {
             created: 0,
             reused: 0,

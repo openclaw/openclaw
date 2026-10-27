@@ -9,9 +9,11 @@
 // --state-dir reuses an existing
 // synthetic fixture after a setup failure; --output must always be new. Phase timings exclude
 // provider delay. Fresh bursts are separated by 31s to expire the base-refresh TTL. p95 at 40 samples is descriptive, not a regression gate. All state is synthetic.
+// --sandbox-image openclaw-sandbox:bookworm-slim exercises Docker workspace projection,
+// 40 synthetic skills with companion files, and real /workspace read/exec tool calls.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -27,6 +29,7 @@ const { values } = parseArgs({
     "cpu-profile": { type: "boolean", default: false },
     "git-trace": { type: "boolean", default: false },
     "unchanged-origin": { type: "boolean", default: false },
+    "sandbox-image": { type: "string" },
     "cold-rounds": { type: "string", default: "10" },
     "warm-rounds": { type: "string", default: "10" },
   },
@@ -69,10 +72,21 @@ const identity = {
     advanceOrigin: !values["unchanged-origin"],
     cpuProfile: values["cpu-profile"],
     gitTrace: values["git-trace"] || values["cpu-profile"],
+    sandboxImage: values["sandbox-image"],
   },
   stateDir,
   entry,
   entrySha256: createHash("sha256").update(readFileSync(entry)).digest("hex"),
+  sandboxRuntime: Object.fromEntries(
+    readdirSync(path.dirname(entry))
+      .filter((name) => name.startsWith("docker-") && name.endsWith(".mjs"))
+      .map((name) => [
+        name,
+        createHash("sha256")
+          .update(readFileSync(path.join(path.dirname(entry), name)))
+          .digest("hex"),
+      ]),
+  ),
   worktreeRuntime: Object.fromEntries(
     readdirSync(path.dirname(entry))
       .filter(
@@ -112,7 +126,66 @@ if (!values["state-dir"]) {
     worktreeLocalOrigin: true,
   });
 }
+if (values["sandbox-image"]) {
+  const skillsDir = path.join(stateDir, "synthetic-skills");
+  for (let index = 0; index < 40; index++) {
+    const name = `synthetic-skill-${index}`;
+    const directory = path.join(skillsDir, name);
+    mkdirSync(path.join(directory, "references"), { recursive: true });
+    writeFileSync(
+      path.join(directory, "SKILL.md"),
+      `---\nname: ${name}\ndescription: Synthetic sandbox setup fixture ${index}.\n---\nRead references/example.txt for the synthetic procedure.\n`,
+    );
+    writeFileSync(
+      path.join(directory, "references/example.txt"),
+      "Synthetic reference.\n".repeat(64),
+    );
+  }
+  const configPath = path.join(stateDir, "openclaw.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.skills = { load: { watch: false, extraDirs: [skillsDir] } };
+  writeFileSync(configPath, JSON.stringify(config));
+}
 const previousProbeDirs = new Set(readdirSync(stateDir));
+function removeFixtureSandboxes() {
+  const docker = (...args: string[]) => {
+    const result = spawnSync("docker", args, { encoding: "utf8" });
+    if (result.status !== 0) {
+      throw new Error(`Sandbox cleanup failed: ${result.stderr || result.error}`);
+    }
+    return result.stdout.trim();
+  };
+  const prefix = `bench-turn-${port}-`;
+  const ids = docker("ps", "-aq", "--no-trunc", "--filter", `name=^/${prefix}`)
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!ids.length) {
+    return;
+  }
+  const containers: Array<{
+    Id: string;
+    Name: string;
+    Config: { Labels?: Record<string, string> };
+    Mounts: Array<{ Type: string; Source: string; Destination: string }>;
+  }> = JSON.parse(docker("inspect", ...ids));
+  const fixtureRoot = `${realpathSync(stateDir)}${path.sep}`;
+  const ownedIds = containers
+    .filter(
+      (container) =>
+        container.Name.startsWith(`/${prefix}`) &&
+        container.Config.Labels?.["openclaw.sandbox"] === "1" &&
+        container.Mounts.some(
+          (mount) =>
+            mount.Type === "bind" &&
+            mount.Destination === "/workspace" &&
+            mount.Source.startsWith(fixtureRoot),
+        ),
+    )
+    .map((container) => container.Id);
+  if (ownedIds.length) {
+    docker("rm", "--force", ...ownedIds);
+  }
+}
 const result = spawnSync(
   process.execPath,
   [
@@ -130,6 +203,7 @@ const result = spawnSync(
     ...(values["cpu-profile"] ? ["--cpu-profile"] : []),
     ...(values["git-trace"] || values["cpu-profile"] ? ["--git-trace"] : []),
     ...(values["start-file"] ? ["--start-file", path.resolve(values["start-file"])] : []),
+    ...(values["sandbox-image"] ? ["--sandbox-image", values["sandbox-image"]] : []),
     ...(values["unchanged-origin"] ? [] : ["--turn-start-advance-origin"]),
     "--scenario",
     "chat.send",
@@ -174,6 +248,10 @@ const result = spawnSync(
     env: { ...process.env, DEVELOPER_DIR: "/Applications/Xcode.app/Contents/Developer" },
   },
 );
+// The child has drained its Gateway; exact immutable IDs and fixture mounts bind teardown.
+if (values["sandbox-image"]) {
+  removeFixtureSandboxes();
+}
 if (result.status !== 0) {
   throw new Error(`Gateway probe failed: ${result.status ?? result.error}`);
 }

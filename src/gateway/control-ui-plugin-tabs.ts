@@ -20,6 +20,7 @@ import {
   type OperatorScope,
 } from "./method-scopes.js";
 import type { GatewayMethodRegistryView } from "./methods/descriptor.js";
+import { SESSION_READ_SCOPE } from "./operator-scopes.js";
 import { resolvePluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import {
   findMatchingPluginHttpRoutes,
@@ -191,7 +192,7 @@ export function listControlUiPluginWidgetKinds(
       .filter((plugin) => plugin.controlUi && !isControlUiPluginAllowed(plugin))
       .map((plugin) => plugin.id),
   );
-  const coreEntries = authorizeOperatorScopesForRequiredScope(READ_SCOPE, scopes).allowed
+  const coreEntries = authorizeOperatorScopesForRequiredScope(SESSION_READ_SCOPE, scopes).allowed
     ? CORE_CONTROL_UI_WIDGET_KINDS
     : [];
   const pluginEntries = visibleDescriptors(entries, scopes).flatMap((entry) => {
