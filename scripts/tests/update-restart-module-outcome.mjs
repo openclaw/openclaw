@@ -227,6 +227,8 @@ async function fixture({
     // real owner/filesystem coverage in update-automatic-cleanup.test.ts; these
     // cases prove the separate package transaction's retirement authorization.
     automaticallyCleanUpdateRecovery: async () => undefined,
+    // Every case here fails after the swap, so none retires its own capture.
+    failedBeforeActivation: () => false,
     prepareResult: async (value) => () => printed.push(value),
     printResult: (value) => printed.push(value),
     writeControlPlaneUpdateRestartSentinel: async () => {},
