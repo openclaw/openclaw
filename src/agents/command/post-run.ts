@@ -105,41 +105,6 @@ export async function clearCommandRecoveryClaim(params: {
   }
 }
 
-export function createCompactionSessionIdReporter(
-  sessionId: string,
-  onSessionIdChanged: AgentCommandOpts["onSessionIdChanged"],
-) {
-  let notifiedSessionId = sessionId;
-  let pendingCompactionSessionId: string | undefined;
-  const notifySessionIdChanged = (nextSessionId: string) => {
-    notifiedSessionId = nextSessionId;
-    pendingCompactionSessionId = undefined;
-    onSessionIdChanged?.(nextSessionId);
-  };
-  return {
-    onSessionIdChanged: notifySessionIdChanged,
-    onCompactionCommitted: (nextSessionId: string | undefined) => {
-      if (nextSessionId !== undefined) {
-        pendingCompactionSessionId = nextSessionId;
-      }
-    },
-    reportCommitted: () => {
-      // Compaction can commit before abort or maintenance fails. The command's
-      // finally reports it outside commit bookkeeping so cleanup targets its row.
-      if (
-        pendingCompactionSessionId !== undefined &&
-        pendingCompactionSessionId !== notifiedSessionId
-      ) {
-        try {
-          notifySessionIdChanged(pendingCompactionSessionId);
-        } catch (error) {
-          log.warn(`failed to report settled session identity: ${coerceErrorMessage(error)}`);
-        }
-      }
-    },
-  };
-}
-
 export async function finalizeEmbeddedAgentCommand(params: {
   prepared: PreparedAgentCommandExecution;
   opts: AgentCommandOpts;

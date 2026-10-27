@@ -12,29 +12,14 @@ import { tempDir, threadStartResult } from "./run-attempt-test-harness.js";
 import {
   readCodexAppServerBinding,
   testCodexAppServerBindingStore,
-  type writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import { getCurrentSharedClientEntry } from "./shared-client-lifecycle.js";
 import {
   releaseLeasedSharedCodexAppServerClient,
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
-import type { createClientHarness } from "./test-support.js";
 import { registerThreadOrphanRecoveryTests } from "./thread-lifecycle-orphan-recovery.test-support.js";
-import type { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
-import type { CodexAttemptThreadInput as StartParams } from "./thread-lifecycle.test-fixtures.js";
-
-export type PolicyRefreshFixtures = {
-  createParams: (sessionFile: string, workspaceDir: string) => StartParams["params"];
-  createThreadLifecycleAppServerOptions: () => StartParams["appServer"];
-  createLeasedLifecycleWireClient: (
-    agentDir: string,
-    respond: (request: RpcRequest) => unknown,
-    transport: "stdio" | "websocket" | "unix" | "proxy",
-  ) => Promise<ReturnType<typeof createClientHarness>>;
-  startOrResumeThread: (params: StartParams) => ReturnType<typeof startOrResumeThreadImpl>;
-  writeCodexAppServerBinding: typeof writeRawCodexAppServerBinding;
-};
+import type { PolicyRefreshFixtures } from "./thread-lifecycle.test-fixtures.js";
 
 /** Keep cold recovery and policy refresh under the binding suite's existing lifecycle custody. */
 export function registerThreadPolicyRefreshTests(fixtures: PolicyRefreshFixtures) {

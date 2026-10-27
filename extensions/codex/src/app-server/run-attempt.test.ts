@@ -123,11 +123,11 @@ import {
   readTranscriptMessagesByIdentity,
 } from "./sqlite-session.test-helpers.js";
 import { createCodexTestModel, createCodexTestOAuthProfile } from "./test-support.js";
+import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import {
   buildDeveloperInstructions,
   buildThreadStartParams,
   buildTurnStartParams,
-  codexDynamicToolsFingerprint,
 } from "./thread-lifecycle.js";
 import {
   startOrResumeAttemptThread as startOrResumeThread,

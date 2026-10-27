@@ -1,7 +1,15 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeAppToolApprovalMode,
+  type CodexAppToolApprovalMode,
+} from "./app-tool-approval-mode.js";
 import type { CodexAppPolicyContextEntry } from "./plugin-thread-config.js";
 
-export type CodexAppToolApprovalMode = "auto" | "prompt" | "writes" | "approve";
+export {
+  normalizeAppToolApprovalMode,
+  type CodexAppToolApprovalMode,
+} from "./app-tool-approval-mode.js";
+
 export type CodexScheduledAppTool = {
   title?: string;
   linkId?: string;
@@ -10,12 +18,6 @@ export type CodexScheduledAppTool = {
   destructiveHint?: boolean;
   openWorldHint?: boolean;
 };
-
-export function normalizeAppToolApprovalMode(value: unknown): CodexAppToolApprovalMode | undefined {
-  return value === "auto" || value === "prompt" || value === "writes" || value === "approve"
-    ? value
-    : undefined;
-}
 
 export function readCurrentToolPolicy(
   config: Record<string, unknown>,

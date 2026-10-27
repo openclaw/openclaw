@@ -22,7 +22,7 @@ import {
   isCodexAppServerStartSelectionChangedError,
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
-import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle.js";
+import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
 import { getCodexAppServerTurnRouter, type CodexThreadRouteReservation } from "./turn-router.js";
 
 export const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;

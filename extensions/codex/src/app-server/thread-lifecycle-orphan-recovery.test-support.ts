@@ -13,7 +13,7 @@ import {
   readCodexAppServerBinding,
   clearCodexAppServerBindingForThread,
 } from "./session-binding.test-helpers.js";
-import type { PolicyRefreshFixtures } from "./thread-lifecycle-policy-refresh.test-support.js";
+import type { PolicyRefreshFixtures } from "./thread-lifecycle.test-fixtures.js";
 import {
   attachCodexMirrorAttestation,
   fingerprintCodexMirrorSourceMessage,
