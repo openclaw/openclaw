@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { gatewayServiceCommandUsesRoot } from "../cli/update-cli/update-command-service-plan.js";
 import { summarizeGatewayServiceLayout } from "./service-layout.js";
+import { standaloneManifestFixture } from "./standalone-manifest.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -15,14 +16,7 @@ describe("summarizeGatewayServiceLayout", () => {
     await fs.writeFile(executable, "");
     await fs.writeFile(
       path.join(root, "manifest.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        mode: "aot",
-        executable: { path: "bun" },
-        runtime: { path: "runtime" },
-        openclaw: { version: "2026.10.25" },
-        bun: { version: "1.4.4" },
-      }),
+      JSON.stringify(standaloneManifestFixture("aot", "bun", "2026.10.25", "1.4.4")),
     );
     await expect(
       summarizeGatewayServiceLayout({

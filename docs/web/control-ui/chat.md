@@ -44,17 +44,29 @@ answer that was never saved.
 
 Tool activity shows a tool-specific icon beside its purpose or details instead of
 repeating the tool name. When no distinct purpose or detail is available, the row
-shows the tool label instead of leaving the text blank. Hover the icon to see the
-exact tool name; screen readers retain that identity. Expanding an activity group keeps the individual tool details
+shows the tool label instead of leaving the text blank. Activity summaries stay
+dimmed until hover or keyboard focus brightens their text, without an icon tooltip;
+screen readers retain the exact tool identity. Expanding an activity group keeps the individual tool details
 and outcomes available. Completed group summaries retain their operation counts.
 Tool Search calls use the called tool's name, icon, and input details in tool rows
 and activity summaries. Built-in tools use semantic icons, including an envelope
 for messages, a calendar clock for scheduled jobs, and an image for image generation.
-Unknown tools use a puzzle icon unless their plugin supplies an activity icon.
+Shared tools keep their semantic icons regardless of the provider. Tools owned by
+installed third-party plugins may show the plugin logo when the Gateway has
+confirmed a non-OpenClaw ClawHub publisher. Bundled and OpenClaw-published plugins
+keep their monochrome activity icons. Missing or unreadable logos fall back to
+the plugin activity icon, then the normal tool glyph; unknown tools use a puzzle
+icon. Unknown publisher metadata does not enable branding.
 
 A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
-the row shows **Outcome unknown**. Partial output alone does not finish a tool.
+the row keeps the tool's known purpose and shows **Outcome unknown** separately.
+Reloading history preserves the recorded purpose. A saved call without a loaded
+result shows **No result available** rather than counting as an unknown outcome.
+Live execution facts and the active run’s replay snapshot establish **Running**;
+the run being active alone does not. Refreshing the same session retains those
+facts until history records an outcome. Partial output alone does not finish a
+tool.
 
 While a turn is still working and has subagents running, its working indicator
 ends with their count, such as **3 subagents running**, and counts down as they
@@ -269,9 +281,9 @@ Side chat cancels a question after 60 seconds. Once the canceled model run has f
 
 The Control UI keeps the latest 24 Side chat turns, including failed questions. Sending a follow-up keeps earlier failures in order; **Retry** resends that question in place. Failed questions stay in the current pane through a reconnect, but are not persisted across a page reload.
 
-The question box wraps and grows like the main composer. On desktop, Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. On mobile, Return adds a line and the Ask button sends. Its toolbar matches the main composer where the control applies to a read-only question: **+** attaches images, `:shortcode:` suggests emoji, the microphone dictates, and the model and effort pickers choose the model, reasoning level, and speed for Side chat's own answers. **Default** is the agent's utility model with its fallbacks; a chosen model answers alone, must be allowed for the agent and your operator role, and never changes the main session's model. Side chat choices apply to that agent's sessions for as long as the page stays open. Slash commands, permissions, and Talk stay in the main composer. Highlighting text in a chat message offers **Ask in side chat**. Add an optional comment in the selection editor, then save it to stage an editable comment in Side chat. An empty question box starts with a short quote; an existing Side chat draft and the main composer stay unchanged. The full selection and comment accompany that question as bounded, temporary context. After the answer, the restored thread keeps the question text, including its quote, but not the attached context. Reselect the passage for a later question.
+The question box wraps and grows like the main composer. On desktop, Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. On mobile, Return adds a line and the Ask button sends. Its toolbar matches the main composer where the control applies to a read-only question: **+** attaches images, `:shortcode:` suggests emoji, the microphone dictates, and the model and effort pickers choose the model, reasoning level, and speed for Side chat's own answers. **Default** is the agent's utility model with its fallbacks; a chosen model answers alone, must be allowed for the agent and your operator role, and never changes the main session's model. Side chat choices apply to that agent's sessions for as long as the page stays open. Slash commands, permissions, and Talk stay in the main composer. Highlighting text in a chat message offers **Ask in side chat**. Add an optional comment in the selection editor, then save it to stage an editable comment in Side chat. The question box and main composer stay unchanged. You can send the saved selection and comment on their own, or add a question. The full selection and comment accompany that question as bounded, temporary context. After the answer, the restored thread keeps the question text, but not the attached context. Reselect the passage for a later question.
 
-If the selection alone exceeds the context limit, Side chat opens without adding the selection and shows a notification. An empty question box still gets a short quote; an existing draft stays intact. If a comment or the combined selections exceed the limit, the editor stays open so you can shorten the comment or adjust the pending selections.
+If the selection alone exceeds the context limit, the editor stays open so you can shorten the selection. An existing draft stays intact. If a comment or the combined selections exceed the limit, the editor stays open so you can shorten the comment or adjust the pending selections.
 
 Drop an image onto Side chat or paste one into its question box. You can send it
 with a written question or on its own. Side chat accepts image attachments, not
@@ -400,17 +412,17 @@ model configuration, provider credentials, and session access rules still apply.
 Select **+** beside the chat composer to open attachments and session capabilities in one menu:
 
 - **Skills** enables or disables individual skills for this session.
-- **Plugins** enables or disables configured MCP servers for this session. A **session** tag marks values that differ from the inherited configuration.
+- **Plugins** enables or disables configured MCP servers for this session.
 - **Web search** enables or disables managed web search plus native OpenAI and Codex search for this session.
-- **Manage plugins** opens the Plugins page.
+- **Plugins → Manage plugins** opens the Plugins page.
 
-These controls are sparse session overrides, like the model and thinking settings in the chat header. A capability with no override inherits the current agent or global configuration, and OpenClaw applies the resolved values when the next run materializes its tools and skills. When overrides are set, open **+** and select **1 override** or **N overrides** at the bottom of the menu to clear all capability overrides for this session and return to inherited settings.
+These controls are sparse session overrides, like the model and thinking settings in the chat header. A capability with no override inherits the current agent or global configuration, and OpenClaw applies the resolved values when the next run materializes its tools and skills. When overrides are set, open **+** and select **Reset** at the bottom of the menu to clear all capability overrides for this session and return to inherited settings.
 
 When `tools.web.search.enabled` is `false`, **Web search** stays off in Chat and New Session. The disabled control explains the global setting. If a session has an older enable override, selecting the control clears that override while search stays off. An explicit session disable remains saved.
 
-Choose **Photos & videos** in Chat or New Session to select existing images and videos together where the browser supports mixed selection. Image-only composers keep their existing image-only picker and reject video attachments; on iPhone and iPad Safari its label remains **Attach…** rather than **Photo**. Selecting media stages it in the draft; it does not send the message.
+Choose **Media** in Chat or New Session to select existing images and videos together where the browser supports mixed selection. Image-only composers keep their existing image-only picker and reject video attachments; on iPhone and iPad Safari its label remains **Attach…** rather than **Photo**. Selecting media stages it in the draft; it does not send the message.
 
-Camera and general-file behavior are unchanged: Android Chrome, Edge, Firefox, and Samsung Internet send **Take photo** straight to the device capture input, without opening a web-camera preview first. Desktop browsers keep the preview, capture, and retake flow; iPhone and iPad Safari show **Photos & videos** beside the existing **Attach…** action, which retains native capture and general file access. Embedded native hosts keep their existing capture behavior. Canceling capture leaves the message draft unchanged.
+Camera and general-file behavior are unchanged: Android Chrome, Edge, Firefox, and Samsung Internet send **Camera** straight to the device capture input, without opening a web-camera preview first. Desktop browsers keep the preview, capture, and retake flow; iPhone and iPad Safari show **Media** beside the existing **Attach…** action, which retains native capture and general file access. Embedded native hosts keep their existing capture behavior. Canceling capture leaves the message draft unchanged.
 
 Video files selected in Chat or New Session show a small local frame preview with a play badge beside the filename. The slot keeps its size while loading. If the browser cannot decode the video promptly, the play icon remains. Removing the attachment releases its preview; generating the preview does not upload the video.
 
@@ -430,11 +442,11 @@ file, or try another browser if preparation still fails. See
 [Video preparation compatibility](/web/control-ui/chat#video-preparation-compatibility) for output
 formats, evidence, and remaining gaps.
 
-In **Plugins**, administrators can select **Add MCP server…** and choose a scope. **This session** saves the server definition globally but disabled by default, then enables it only for the current session. **Everywhere** saves the definition enabled globally. Transport, authentication, and other server-definition fields are always global. Session policy can override server enablement and deny individual tools through **Tool access**.
+In **Plugins**, administrators can select **Add MCP server** and choose a scope. **This session** saves the server definition globally but disabled by default, then enables it only for the current session. **Everywhere** saves the definition enabled globally. Transport, authentication, and other server-definition fields are always global. Session policy can override server enablement and deny individual tools.
 
-**Tool access** lists an MCP server's tools once a run has discovered them. Before that, it explains why the list is empty rather than reporting zero tools: a newly added server has not connected yet, a connected server has not finished listing its tools, or the runtime catalog predates a config change. Sessions that run on the Codex harness keep their MCP connections inside Codex, so their tools do not appear here.
+Select an MCP server's row to expand its tools inline; its switch enables or disables the server. Toggle individual tools in the expanded list once a run has discovered them. Before that, the list explains why it is empty rather than reporting zero tools: a newly added server has not connected yet, a connected server has not finished listing its tools, or the runtime catalog predates a config change. Sessions that run on the Codex harness keep their MCP connections inside Codex, so their tools do not appear here.
 
-If **Tool access** is already open, it refreshes when the current session's run finishes; you do not need to close and reopen it to see newly discovered tools.
+If a server's tools are already expanded, the list refreshes when the current session's run finishes; you do not need to collapse and expand it to see newly discovered tools.
 
 Capability toggles stay disabled until the Gateway, session, and runtime config are loaded, and read-only operators cannot change them. Adding a server requires administrator access. See [Connect MCP servers](/tools/mcp) for the Settings, CLI, and config paths.
 
@@ -720,6 +732,12 @@ Panes share outbox recovery for the same conversation. Activity in another
 conversation does not restart that recovery; reconnecting checks every saved outbox.
 Memory-only messages retained after a storage failure share that conversation queue
 and remain available when you leave and reopen the conversation in the same tab.
+They also hold automatic update reloads until sent, saved, or discarded. If Refresh
+is blocked, choose **Review pending input** to copy its text or download its
+attachments, even while the chat is locked for an update. **Keep in this tab**
+leaves the message protected. **Discard local copy and refresh** removes only
+the reviewed copy; other pending input still blocks refreshing. Manually closing or reloading the browser tab can still lose memory-only
+messages.
 
 Files remain in the composer while a submitted message waits for attachment
 storage. If you begin another draft during that wait, saving the first message
@@ -791,7 +809,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
     - Long tool output uses 2,000-character text previews in history. Complete structured results keep their existing display limit so source cards and embedded views remain available. Choose **Show full output** to load the captured result on demand; copying or downloading from that view uses the full result. User and assistant text keep their separate display limits.
     - When a visible assistant message was truncated in `chat.history`, the Control UI automatically fetches the full display-normalized transcript entry through `chat.message.get` by `sessionKey`, active `agentId` when needed, and transcript `messageId`. The preview remains visible while the entry loads; recovered text replaces it inline.
-    - Image previews reserve their space while loading. New uploaded images retain their pixel dimensions in saved messages; older images without dimensions fit inside a stable 3:2 preview instead of shifting the surrounding conversation when they load. Open an image to view its full size.
+    - Image previews reserve their space while loading. New uploaded images retain their pixel dimensions in saved messages. Previews without dimensions use a temporary 3:2 placeholder, then adopt the decoded image’s aspect ratio without letterboxing; uploaded dimensions also update an already-visible preview. Single images retain that ratio when returning from Settings or reloading the conversation. Open an image to view its full size.
     - Assistant/generated images are persisted as managed media references. New clients resolve their stable artifact ids through authenticated `artifacts.download` and receive short-lived, exact-resource media URLs, so reloads do not depend on raw base64 payloads or reusable credentials in image URLs. The chat uses bounded thumbnails for still images. GIF attachments load their original bytes inline so they animate without opening the image viewer. Opening uses a screen-sized rendition; Download and Copy explicitly request the full image. These actions share the browser's bounded in-memory image cache, avoiding repeated downloads while a rendition remains cached.
     - The Gateway prepares `chat.history` for display, stripping inline directive tags (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated blocks), and leaked ASCII/full-width model control tokens. Stored assistant visibility honors display, phase, and final-source facts first, then omits raw assistant text that trims to uppercase `NO_REPLY`; lowercase and wrapped forms remain visible. User text is never classified as silence. Heartbeat acknowledgments retain their separate display rules. The Control UI renders prepared history and live output without parsing silence tokens.
     - When a native tool call follows an unphased text group containing only an unfinished tool marker (such as `<` or `<tool_`), live chat and history hide that group. A marker fragment without a following native call remains a terminal literal. Prose and inline or fenced examples keep their existing rendering. Stored message text and tool arguments do not change.

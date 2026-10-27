@@ -130,6 +130,14 @@ recovery, and forks, accept `operator.sessions.write` where their parameters
 do not require administrator access. Session ownership, current authority,
 agent access, and runtime and sandbox requirements still apply.
 
+Session readers can read visible dashboards and receive their updates and focus
+commands. Session writers can arrange tabs and put widgets on their own
+dashboards without general Gateway read or write access. Core report, progress,
+and website widgets are discoverable with session-read access; plugin-specific
+scopes and widget approvals remain unchanged. Canvas imports require a saved widget
+receipt in the dashboard conversation, with source access retained through the write.
+Broad readers keep their existing document-ID-only access.
+
 Session readers can also use `artifacts.list`, `artifacts.get`, and
 `artifacts.download` for artifacts in a conversation they can currently read.
 Both session-key and run-ID queries retain the selected session's visibility,
@@ -336,13 +344,18 @@ inbound media preprocessing, and host-owned execution approval keep their
 existing service authority. Omitting `modelPolicy` preserves the role's existing
 model access, and shared-secret System access is unchanged.
 
-Activity recaps are shared Gateway metadata under the owning agent's utility
-route, including recaps of operator-created sessions. They do not inherit the
-operator's model policy, so recap calls can continue after a role model-policy
-revocation is acknowledged. Requesting a recap refresh still requires session
-write access; that permission queues the same service-owned work rather than
-delegating the caller's model authority. Disable the owning agent's utility
-routing to stop recap generation. See [Activity tab](/web/control-ui/settings#activity-tab).
+Activity recaps use the owning agent's utility route under the session's assigned
+human owner's model policy, or its authenticated profile creator's policy when
+there is no assigned human owner. Historical profile aliases resolve to the current
+canonical profile before policy is bound. The Gateway checks committed policy before provider
+requests, including retries and fallbacks; denied or revoked work is skipped with
+a logged reason and retains the previous recap. Requesting a refresh still requires
+session write access and never substitutes the viewer's model permissions for the
+session owner's. Assigning a task to an agent or the system does not remove its
+authenticated creator's policy. Sessions without an assigned human owner or
+authenticated profile creator retain Gateway service authority. Cron, subagent,
+and incognito sessions do not generate recaps. Disabling the owning agent's utility
+routing stops all its recap generation. See [Activity tab](/web/control-ui/settings#activity-tab).
 
 Native Codex staff work without a model policy has a limited attribution case
 when qualified native hooks are disabled or unavailable: previously accepted

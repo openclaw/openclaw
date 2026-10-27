@@ -119,8 +119,11 @@ vi.mock("./container-engine.js", () => ({
           ? result("", 125, "engine connection refused")
           : result(fixture.inspect(container, fixture.terminalState === "paused"));
       }
-      if (args[2] === "{{.Id}} {{.HostConfig.ReadonlyRootfs}}") {
-        return result(`${container.id} true`);
+      if (
+        args[2] ===
+        '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}'
+      ) {
+        return result(`${container.id}\n${container.running}\ntrue\n${container.hash}`);
       }
       return result(
         args[2] === "{{.Id}}"

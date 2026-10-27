@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
@@ -33,22 +34,138 @@ import {
   ExpectedProfileMismatchError,
   prepareGatewayRecipientProfile,
 } from "./expected-profile.js";
+import { serializeGatewayFrame } from "./serialized-json.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
+import { captureSessionRowGeneration } from "./session-row-identity.js";
+import * as preparedRead from "./session-row-prepared-read.js";
+import {
+  prepareProjectedSessionPresentation,
+  prepareSessionRowPublication,
+  shareSidebarSessionRows,
+} from "./session-row-presentation.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import {
   createTestProjection,
   holdSubagentExecution,
   seedRow,
 } from "./session-row-projection.read-fixture.test-support.js";
+import { serializeSessionRow, sessionRowEncodingBytes } from "./session-row-serialization.js";
+import * as sharingPolicy from "./session-sharing-policy.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
 import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("encodes only the wire representation of retained sidebar rows", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const keys = ["agent:main:encoding-a", "agent:main:encoding-b"];
+    for (const key of keys) {
+      seedRow(key, { sessionId: key, updatedAt: 1, label: "Shared sidebar label" });
+    }
+    using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    const presenter = prepareSessionRowPublication(projection, Date.now())().getPresentation();
+    const rows = keys.map(
+      (key) => presenter.snapshot({ agentId: "main", key }, { rowMode: "sidebar" }).row!,
+    );
+    const shared = shareSidebarSessionRows(rows);
+    expect(shared.sharedFacts?.length).toBeGreaterThan(0);
+    expect(rows.map(sessionRowEncodingBytes)).toEqual([0, 0]);
+    expect(shared.sessions.map(sessionRowEncodingBytes).every((bytes) => bytes > 0)).toBe(true);
+    const generation = captureSessionRowGeneration(rows);
+    seedRow(keys[0]!, { sessionId: keys[0]!, updatedAt: 2, label: "Changed sidebar label" });
+    await projection.ensureMaterialized();
+    const nextPresenter = prepareSessionRowPublication(projection, Date.now())().getPresentation();
+    const nextRows = keys.map(
+      (key) => nextPresenter.snapshot({ agentId: "main", key }, { rowMode: "sidebar" }).row!,
+    );
+    using deltaStringify = vi.spyOn(JSON, "stringify");
+    const readDelta = () =>
+      shareSidebarSessionRows(nextRows, `${SESSION_ROWS_DELTA_PREFIX}${generation.revision}`, [
+        generation,
+      ]);
+    const delta = readDelta();
+    for (let viewer = 1; viewer < 66; viewer++) {
+      readDelta();
+    }
+    expect(deltaStringify.mock.calls.filter(([row]) => row === nextRows[0])).toHaveLength(1);
+    deltaStringify.mockRestore();
+    expect(delta.sessions).toHaveLength(1);
+    expect(delta.sessions[0]?.label).toBe("Changed sidebar label");
+    expect(sessionRowEncodingBytes(nextRows[0]!)).toBe(JSON.stringify(nextRows[0]).length * 2);
+    expect(sessionRowEncodingBytes(nextRows[1]!)).toBe(0);
+    for (const payload of [shared, delta]) {
+      const frame = { type: "res", id: "rows", ok: true, payload };
+      expect(serializeGatewayFrame(frame).toString()).toBe(JSON.stringify(frame));
+    }
+    // A later single-row event still prepares byte-identical JSON once and reuses it.
+    const expected = JSON.stringify(rows[0]);
+    using stringify = vi.spyOn(JSON, "stringify");
+    expect(serializeSessionRow(rows[0]!)).toBe(expected);
+    expect(serializeSessionRow(rows[0]!)).toBe(expected);
+    expect(stringify).toHaveBeenCalledTimes(1);
+  });
+});
+
+it("does not derive discarded send diagnostics while interleaving row modes and viewers", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    const owner = ensureProfileForEmail("owner@row-mode.test");
+    const guest = ensureProfileForEmail("guest@row-mode.test");
+    const clients = [owner, guest].map((profile) => sharingPolicyClient({ user: profile.id }));
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    for (const client of clients) {
+      prepareGatewayRecipientProfile(client);
+    }
+    for (const visibility of ["shared", "draft"] as const) {
+      seedRow(`agent:main:${visibility}`, {
+        sessionId: visibility,
+        updatedAt: 1,
+        visibility,
+        createdActor: { type: "human", source: "profile", id: owner.id },
+      });
+    }
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    const diagnostics = vi.spyOn(sharingPolicy, "authorizeSessionAgentRun");
+    for (const rowMode of ["sidebar", "compact", "dashboard", undefined, "sidebar"] as const) {
+      for (const [index, client] of clients.entries()) {
+        diagnostics.mockClear();
+        const result = await listProjectedSessions({
+          projection,
+          client,
+          opts: { rowMode },
+          acceptsSerializedJson: true,
+        });
+        expect(result.count).toBe(index === 0 ? 2 : 1);
+        const row = result.sessions.find((candidate) => candidate.key === "agent:main:shared")!;
+        if (rowMode === "sidebar" || rowMode === "dashboard") {
+          expect(diagnostics).not.toHaveBeenCalled();
+          expect(row.sendDisabledReason).toBeUndefined();
+        } else {
+          expect(diagnostics).toHaveBeenCalled();
+          expect(row.sendDisabledReason).toBe(
+            index === 0 ? null : "session is shared for this connection",
+          );
+        }
+      }
+    }
+    setUserProfileRole(guest.id, "none");
+    prepareGatewayRecipientProfile(clients[1]!);
+    expect(
+      (
+        await listProjectedSessions({
+          projection,
+          client: clients[1],
+          opts: { rowMode: "sidebar" },
+        })
+      ).sessions,
+    ).toEqual([]);
+  });
+});
 
 it("separates promoted navigation activity from live controller activity", async () => {
   using clock = vi.spyOn(Date, "now");
@@ -702,7 +819,7 @@ it("preserves selected account across role changes but rejects a changed merge i
   });
 });
 
-it("reuses follow-up run progress across presentations until the run index changes", async () => {
+it("reuses unchanged run presentation and refreshes follow-up activity and row replacements", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const key = "agent:main:subagent:progress-fact";
     seedRow(key, {
@@ -719,8 +836,12 @@ it("reuses follow-up run progress across presentations until the run index chang
     const index = projection.state.rowContext.projectedAgentRuns!;
     using keys = vi.spyOn(index.sessionKeys, "get");
     using ids = vi.spyOn(index.sessionIds, "get");
+    using states = vi.spyOn(preparedRead, "projectPreparedSessionRunState");
     await list();
+    const initialState = states.mock.results.at(-1)?.value;
     await list();
+    expect(initialState).toBeDefined();
+    expect(states.mock.results.at(-1)?.value).toBe(initialState);
     expect(keys).not.toHaveBeenCalled();
     expect(ids).not.toHaveBeenCalled();
 
@@ -733,6 +854,11 @@ it("reuses follow-up run progress across presentations until the run index chang
       expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).toBe(
         true,
       );
+      const activeState = states.mock.results.at(-1)?.value;
+      expect(activeState).not.toBe(initialState);
+      expect(initialState.fields.hasActiveSubagentRun).not.toBe(true);
+      await list();
+      expect(states.mock.results.at(-1)?.value).toBe(activeState);
       seedRow(key, {
         sessionId: "replacement-session",
         updatedAt: 2,
@@ -748,5 +874,62 @@ it("reuses follow-up run progress across presentations until the run index chang
     expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).not.toBe(
       true,
     );
+  });
+});
+
+it("refreshes live elapsed time but retains completed run presentation across clocks", async () => {
+  using clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const key = "agent:main:subagent:elapsed-presentation";
+    const runId = "elapsed-presentation";
+    const startedAt = Date.now() - 1_000;
+    seedRow(key, { sessionId: "elapsed-presentation", updatedAt: startedAt });
+    const running = createSubagentRunRecord({
+      runId,
+      childSessionKey: key,
+      requesterSessionKey: "agent:main:parent",
+      requesterDisplayKey: "parent",
+      createdAt: startedAt,
+      startedAt,
+    });
+    subagentRuns.set(runId, running);
+    subagentRuns.commitOwnership(running);
+    const execution = holdSubagentExecution(runId, key);
+    publishSubagentRunChanges([runId]);
+    try {
+      using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
+      using states = vi.spyOn(preparedRead, "projectPreparedSessionRunState");
+      const list = () => listProjectedSessions({ projection, opts: { limit: 10 } });
+      expect((await list()).sessions[0]?.runtimeMs).toBe(1_000);
+      const first = states.mock.results.at(-1)?.value;
+      clock.mockReturnValue(startedAt + 2_000);
+      expect((await list()).sessions[0]?.runtimeMs).toBe(2_000);
+      expect(states.mock.results.at(-1)?.value).not.toBe(first);
+      expect(first.fields.runtimeMs).toBe(1_000);
+
+      execution[Symbol.dispose]();
+      const completed = createSubagentRunRecord({
+        runId,
+        childSessionKey: key,
+        requesterSessionKey: "agent:main:parent",
+        requesterDisplayKey: "parent",
+        createdAt: startedAt,
+        startedAt,
+        endedAt: Date.now(),
+        outcome: { status: "ok" },
+      });
+      subagentRuns.set(runId, completed);
+      subagentRuns.commitOwnership(completed);
+      publishSubagentRunChanges([runId]);
+      expect((await list()).sessions[0]?.runtimeMs).toBe(2_000);
+      const finished = states.mock.results.at(-1)?.value;
+      clock.mockReturnValue(startedAt + 3_000);
+      expect((await list()).sessions[0]?.runtimeMs).toBe(2_000);
+      expect(states.mock.results.at(-1)?.value).toBe(finished);
+    } finally {
+      execution[Symbol.dispose]();
+      subagentRuns.delete(runId);
+      publishSubagentRunChanges([runId]);
+    }
   });
 });

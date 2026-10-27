@@ -47,6 +47,23 @@ it("admits display content once before sanitizing a history page", () => {
   }
 });
 
+it("preserves model-change labels without exposing other custom-message details", () => {
+  const message = {
+    role: "custom",
+    customType: "session-model-change",
+    display: true,
+    content: "Model changed from Demo model A to Demo model B.",
+    details: { from: "Demo model A", to: "Demo model B", diagnostic: "PRIVATE_DETAIL" },
+  };
+  expect(projectStable([message])).toEqual([
+    { ...message, details: { from: "Demo model A", to: "Demo model B" } },
+  ]);
+  for (const details of [{ from: "Demo model A" }, { from: 1, to: "Demo model B" }]) {
+    const projected = projectStable([{ ...message, details }]);
+    expect(projected[0]).not.toHaveProperty("details");
+  }
+});
+
 it("preserves catalog text that resembles an OpenClaw reply-control token", () => {
   expect(
     projectChatDisplayMessages([

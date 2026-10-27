@@ -37,12 +37,21 @@
 // Stream custom syntax with --answer-chunk $'```json\n{"ok":true}\n```\nprose\n'.
 // Add --final-answer-phase to exercise the visible projection during each delta.
 // Add --list-filter-churn to --scenario memory-soak --mixed-rpc to rotate sidebar/search filters.
+// --operator-access-policy --operator-access-policies 40 enables one identified operator
+// and 40 policy plugins (one applicable retained grant). Combine memory-soak with
+// --stress-tools --stress-subagents for native child authority. A separate counting
+// pass can use --gateway-preload scripts/perf/plugin-access-authority-census.mjs.
 // --gateway-preload <file> imports benchmark instrumentation after tsx for source or dist entries;
 // result.json records its resolved path and SHA-256. Use the same instrumentation on both arms.
+// --chat-active-after-tool with --chat-active-hold-ms waits for the first text delta
+// after a committed tool result before sending queued/steering inputs. Requires --runs 1;
+// the stream continues during admission and holds completion for the requested interval.
 // Add --worktree-tool-churn to memory-soak --stress-tools --mixed-rpc to give each
 // foreground session its own managed worktree, read/grep its README, and cycle list searches.
 // This mode keeps a fixed viewer set instead of adding reconnect churn.
 // --stress-tool-search adds a verified catalog search before each --stress-tools execution.
+// --stress-network-tool adds a verified loopback HTTP tool inside each Code Mode cell.
+// Fixed N/2N retention usage: transcript-broadcast-run-retention.md.
 // --poll-between-rounds keeps list/mixed-RPC polling active between memory-soak cohorts.
 // On a fresh team-shape fixture, exercise sidebar/search and usage refresh with:
 // node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
@@ -167,7 +176,9 @@ const { values } = parseArgs({
     "stress-tools": { type: "boolean", default: false },
     "worktree-tool-churn": { type: "boolean", default: false },
     "stress-tool-search": { type: "boolean", default: false },
+    "stress-network-tool": { type: "boolean", default: false },
     "attempt-setup-image": { type: "string" },
+    "sandbox-image": { type: "string" },
     "cold-session-rounds": { type: "string", default: "0" },
     "turn-start-phases": { type: "boolean", default: false },
     "turn-start-advance-origin": { type: "boolean", default: false },
@@ -176,6 +187,7 @@ const { values } = parseArgs({
     "stress-session-store": { type: "boolean", default: false },
     "transcript-hydration-counts": { type: "boolean", default: false },
     "operator-access-policy": { type: "boolean", default: false },
+    "operator-access-policies": { type: "string", default: "1" },
     "session-event-wake": { type: "boolean", default: false },
     "cron-operator-turn": { type: "boolean", default: false },
     "authority-counts": { type: "boolean", default: false },
@@ -192,6 +204,7 @@ const { values } = parseArgs({
     "team-stress-churn-ms": { type: "string", default: "1000" },
     "team-stress-list-weight": { type: "string", default: "2" },
     "team-stress-allocation-sampling": { type: "boolean", default: false },
+    "team-stress-retention-sampling": { type: "boolean", default: false },
     "dashboard-rpc": { type: "boolean", default: false },
     "github-options-connected": { type: "boolean", default: false },
     "github-options-observe": { type: "boolean", default: false },
@@ -249,6 +262,7 @@ const { values } = parseArgs({
     "prompt-kib": { type: "string", default: "128" },
     "chat-attachment-kib": { type: "string", default: "0" },
     "chat-active-hold-ms": { type: "string", default: "0" },
+    "chat-active-after-tool": { type: "boolean", default: false },
     "heap-snapshot": { type: "boolean", default: false },
     "session-census": { type: "boolean", default: false },
     "fingerprint-retention": { type: "boolean", default: false },
@@ -306,6 +320,13 @@ if (values["dashboard-rpc"] && mockPort === port + 1) {
 }
 const scenario = values.scenario;
 const pluginCount = integer(values.plugins, "--plugins", 0);
+const operatorAccessPolicyCount = integer(
+  values["operator-access-policies"],
+  "--operator-access-policies",
+);
+if (operatorAccessPolicyCount !== 1 && !values["operator-access-policy"]) {
+  throw new Error("--operator-access-policies requires --operator-access-policy");
+}
 if (values["team-stress"] && (pluginCount < 4 || pluginCount > TEAM_STRESS_PLUGIN_IDS.length)) {
   throw new Error(
     `--team-stress requires --plugins between 4 and ${TEAM_STRESS_PLUGIN_IDS.length}`,
@@ -433,6 +454,9 @@ if (
 const toolScenario = scenario === "chat.send" || reasoningScenario;
 if (values["stress-tool-search"] && !values["stress-tools"]) {
   throw new Error("--stress-tool-search requires --stress-tools");
+}
+if (values["stress-network-tool"] && !values["stress-tools"]) {
+  throw new Error("--stress-network-tool requires --stress-tools");
 }
 const chatActiveHoldMs = integer(values["chat-active-hold-ms"], "--chat-active-hold-ms", 0);
 if (
@@ -576,6 +600,9 @@ if (
   );
 }
 const runCount = integer(values.runs ?? (scenario === "chat.send" ? "1" : "20"), "--runs");
+if (values["chat-active-after-tool"] && (!chatActiveHoldMs || runCount !== 1)) {
+  throw new Error("--chat-active-after-tool requires --chat-active-hold-ms and --runs 1");
+}
 const sessionCount = idleScenario ? integer(values.sessions, "--sessions") : runCount;
 const historyBytesPerTurn = 16 * 1024;
 const historyReasoningBytes = 4 * 1024;
@@ -697,10 +724,12 @@ if (
 }
 if (
   values["operator-access-policy"] &&
-  (scenario !== "chat.send" || !values["stress-tools"] || runCount !== 1 || listIntervalMs !== 0)
+  ((scenario !== "chat.send" && !soakScenario) ||
+    !values["stress-tools"] ||
+    (!soakScenario && (runCount !== 1 || listIntervalMs !== 0)))
 ) {
   throw new Error(
-    "--operator-access-policy requires --scenario chat.send --stress-tools --runs 1 and no polling",
+    "--operator-access-policy requires --stress-tools and either memory-soak or chat.send with --runs 1 and no polling",
   );
 }
 if (values["session-event-wake"] && !values["operator-access-policy"]) {
@@ -809,6 +838,9 @@ if (teamStressListWeight > 64) {
 }
 if (values["team-stress"] && (!soakScenario || !values["mixed-rpc"])) {
   throw new Error("--team-stress requires memory-soak and --mixed-rpc");
+}
+if (values["team-stress-retention-sampling"] && !values["team-stress-allocation-sampling"]) {
+  throw new Error("--team-stress-retention-sampling requires --team-stress-allocation-sampling");
 }
 if (
   values["team-stress-allocation-sampling"] &&
@@ -1047,7 +1079,7 @@ async function workerHeapCommand(worker: WorkerHeapEvidence, operation: string) 
   }
 }
 const targetWorkerScript = (script: string) =>
-  /^(sqlite-store|prepared-model-catalog)\.worker\.[cm]?[jt]s$/.test(script);
+  /^(sqlite-store|prepared-model-catalog|git-operation)\.worker\.[cm]?[jt]s$/.test(script);
 const project = Array.isArray(fixture.projectWorktrees) ? fixture.projectWorktrees[0] : undefined;
 const coldBaseRefs =
   isRecord(project) && Array.isArray(project.coldBaseRefs)
@@ -1290,6 +1322,27 @@ cfg.tools = {
   codeMode: values["stress-tools"],
   ...(values["stress-tools"] ? { exec: { host: "gateway", mode: "full" } } : {}),
 };
+if (values["sandbox-image"]) {
+  if (!values["turn-start-phases"] || values["attempt-setup-image"]) {
+    throw new Error("--sandbox-image requires --turn-start-phases without --attempt-setup-image");
+  }
+  cfg.tools.exec = { host: "sandbox", mode: "full" };
+  cfg.tools.sandbox = { tools: { allow: ["*"] } };
+  cfg.agents.defaults.sandbox = {
+    mode: "all",
+    backend: "docker",
+    scope: "session",
+    workspaceAccess: "rw",
+    workspaceRoot: path.join(root, "sandboxes"),
+    docker: {
+      image: values["sandbox-image"],
+      containerPrefix: `bench-turn-${port}-`,
+      network: "none",
+      cpus: 1,
+      memory: "512m",
+    },
+  };
+}
 if (values["cron-operator-turn"]) {
   cfg.cron = { ...cfg.cron, enabled: true };
 }
@@ -1479,7 +1532,12 @@ let reloadPluginId: string | undefined;
 let scopePluginId: string | undefined;
 let updateReloadPlugin: (() => number) | undefined;
 const pluginUpdateLatenciesMs: number[] = [];
-if (scenario === "plugins.reload" || scenario === "plugin.scope" || syntheticPluginCount > 0) {
+if (
+  scenario === "plugins.reload" ||
+  scenario === "plugin.scope" ||
+  syntheticPluginCount > 0 ||
+  values["stress-network-tool"]
+) {
   const plugin = writePluginFixtures(output, {
     count: Math.max(1, syntheticPluginCount),
     activationOnStartup: true,
@@ -1528,6 +1586,28 @@ module.exports = { id, register(api) {
   }, { scope: "operator.read" });
 } };\n`,
     );
+  } else if (values["stress-network-tool"]) {
+    const id = plugin.pluginIds[0]!;
+    const pluginDir = path.join(plugin.pluginsDir, id);
+    writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `module.exports = { id: ${JSON.stringify(id)}, register(api) {
+  api.registerTool(() => ({ name: "benchmark_network", label: "Synthetic HTTP probe",
+    description: "Fetch a synthetic note from the isolated benchmark server.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    execute: async (_id, _params, signal) => {
+      const response = await fetch(${JSON.stringify(`http://127.0.0.1:${mockPort}/network-tool`)}, { signal });
+      if (!response.ok) throw new Error("Synthetic HTTP probe failed");
+      const text = await response.text();
+      return { content: [{ type: "text", text }], details: { text } };
+    }
+  }), { name: "benchmark_network" });
+} };\n`,
+    );
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.contracts = { tools: ["benchmark_network"] };
+    writeFileSync(manifestPath, JSON.stringify(manifest));
   }
   cfg.plugins = {
     ...cfg.plugins,
@@ -1716,7 +1796,9 @@ if (values["operator-access-policy"]) {
 module.exports = { id: ${JSON.stringify(id)}, register(api) {
   const channel = ${JSON.stringify(authorityChannel)};
   let active = false, profileId, unsubscribe;
-  const counts = { authorize: 0, resume: 0, assert: 0, tools: 0, transcriptUpdates: 0, messageAppends: 0 };
+  const census = globalThis[Symbol.for("openclaw.benchmark.accessPolicyFixture")] = { active: false, policies: new Set(),
+    counts: { authorize: 0, resume: 0, assert: 0, tools: 0, transcriptUpdates: 0, messageAppends: 0 } };
+  const counts = census.counts;
   const messages = new Set();
   const controller = new AbortController();
   const grant = { grantId: "00000000-0000-4000-8000-000000000001", signal: controller.signal,
@@ -1728,7 +1810,8 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     profileId = context.profile.profileId;
   }
   api.registerGatewayAccessPolicy({
-    authorize(context) { checkProfile(context); if (active) counts.authorize++; return grant; },
+    authorize(context) { checkProfile(context); census.policies.add(${JSON.stringify(id)});
+      if (active) counts.authorize++; return grant; },
     resume(context) { checkProfile(context); if (active) counts.resume++;
       if (context.grantId !== grant.grantId) throw new Error("Synthetic grant mismatch"); return grant; }
   });
@@ -1736,12 +1819,15 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   function control(message) {
     if (message?.channel !== channel || typeof message.id !== "string" ||
         !["start", "stop"].includes(message.action)) return;
-    active = message.action === "start";
+    if (census.policies.size !== ${operatorAccessPolicyCount})
+      throw new Error("Synthetic access policy inventory was not fully authorized");
+    active = census.active = message.action === "start";
     if (active) { for (const key of Object.keys(counts)) counts[key] = 0; messages.clear(); }
     const host = globalThis[Symbol.for("openclaw.benchmark.authorityCounts")];
     if (host) { host.active = active; if (active) { host.counts = {}; host.callers = {}; host.firstAuthPolicyStacks = []; } }
     process.send?.({ channel, id: message.id, counts: { ...counts }, profileId,
       sourceOverlay: globalThis[Symbol.for("openclaw.benchmark.sourceOverlay")],
+      scopeCounts: globalThis[Symbol.for("openclaw.benchmark.accessAuthorityCensus")]?.snapshot(),
       ...(host ? { hostCounts: host.counts, hostCallers: host.callers, installed: host.installed, firstAuthPolicyStacks: host.firstAuthPolicyStacks } : {}) });
   }
   api.registerService({ id: "synthetic-authority-counters",
@@ -1769,6 +1855,39 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     cfg.plugins.allow.push(id);
   }
   cfg.plugins.entries[id] = { enabled: true };
+  // Only one grant is applicable: persisted child recovery records one original grant.
+  for (let index = 1; index < operatorAccessPolicyCount; index++) {
+    const otherId = `${id}-${index}`;
+    const otherDir = path.join(output, otherId);
+    mkdirSync(otherDir);
+    writeFileSync(
+      path.join(otherDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: otherId,
+        activation: { onStartup: true },
+        configSchema: { type: "object", additionalProperties: false },
+      }),
+    );
+    writeFileSync(
+      path.join(otherDir, "index.cjs"),
+      `
+module.exports = { id: ${JSON.stringify(otherId)}, register(api) {
+  api.registerGatewayAccessPolicy({ authorize(context) {
+    const census = globalThis[Symbol.for("openclaw.benchmark.accessPolicyFixture")];
+    if (!census) throw new Error("Synthetic access policy census is unavailable");
+    census.policies.add(${JSON.stringify(otherId)});
+    if (census.active) census.counts.authorize++;
+    if (context.requiredByRole) throw new Error("Unselected synthetic policy was required");
+    return undefined;
+  } });
+} };\n`,
+    );
+    cfg.plugins.load.paths.push(otherDir);
+    if (cfg.plugins.allow?.length) {
+      cfg.plugins.allow.push(otherId);
+    }
+    cfg.plugins.entries[otherId] = { enabled: true };
+  }
 }
 if (trustedProxyScenario) {
   cfg.gateway = {
@@ -1810,7 +1929,7 @@ if (trustedProxyScenario) {
   };
 }
 const toolPaths = Array.from({ length: retentionScenario ? 3 : 1 }, (_, index) => {
-  if (values["attempt-setup-image"]) {
+  if (values["attempt-setup-image"] || values["sandbox-image"]) {
     return "README.md";
   }
   const file = path.join(root, "workspace", `synthetic-tool-input-${index}.txt`);
@@ -2034,6 +2153,7 @@ let activePrimaryStreams = 0;
 let peakPrimaryStreams = 0;
 let toolCalls = 0;
 let toolResults = 0;
+let networkToolRequests = 0;
 let outputLimitResponses = 0;
 let recoveredResponses = 0;
 let imageRequests = 0;
@@ -2120,6 +2240,8 @@ let cohort:
       incompleteReasoningSignatures: Map<string, string>;
       phases: StreamStartPhases;
       beforeRelease?: () => Promise<void>;
+      afterToolStreamStart?: () => Promise<void>;
+      activeInputAdmission?: Promise<void>;
       ready: Promise<void>;
       release: () => void;
       reject: (error: Error) => void;
@@ -2147,6 +2269,11 @@ const expectedHistoricalReasoning =
     : [];
 const attemptSetupCatalog = new Set<string>();
 const mock = createServer((req, res) => {
+  if (values["stress-network-tool"] && req.url === "/network-tool") {
+    networkToolRequests++;
+    res.end("synthetic-network-tool-verified");
+    return;
+  }
   if (req.url === "/health") {
     res.end("ok");
     return;
@@ -2334,6 +2461,7 @@ const mock = createServer((req, res) => {
             typeof toolResult.output !== "string" ||
             !toolResult.output.includes(
               values["attempt-setup-image"] ||
+                values["sandbox-image"] ||
                 values["worktree-tool-churn"] ||
                 values["stress-worktree-fanout"]
                 ? "# Synthetic project "
@@ -2441,8 +2569,9 @@ const mock = createServer((req, res) => {
       let reasoningReplayKey = toolOutput?.call_id;
       if (primary && toolScenario && cohort) {
         const currentCohort = cohort;
-        const toolWorktree =
-          values["worktree-tool-churn"] || values["stress-worktree-fanout"]
+        const toolWorktree = values["sandbox-image"]
+          ? "/workspace"
+          : values["worktree-tool-churn"] || values["stress-worktree-fanout"]
             ? worktreeToolRoots.get(index)
             : stressWorktree;
         if ((values["worktree-tool-churn"] || values["stress-worktree-fanout"]) && !toolWorktree) {
@@ -2474,6 +2603,9 @@ const mock = createServer((req, res) => {
                       storeCode +
                       (values["stress-tool-search"]
                         ? 'if (!(await catalog.search("read file content", { limit: 5 })).some(tool => tool.name === "read")) throw new Error("Synthetic tool search omitted read");\n'
+                        : "") +
+                      (values["stress-network-tool"]
+                        ? 'const network = await benchmark_network({}); if (network.text !== "synthetic-network-tool-verified") throw new Error("Synthetic network tool result mismatch");\n'
                         : "") +
                       `json(await read({ path: ${JSON.stringify((values["worktree-tool-churn"] || values["stress-worktree-fanout"]) && toolWorktree ? path.join(toolWorktree, "README.md") : toolPath)} }));\n` +
                       `const shell = await exec({ command: ${JSON.stringify(stressShellCommand)}, workdir: ${JSON.stringify(toolWorktree)} });\n` +
@@ -2548,6 +2680,9 @@ const mock = createServer((req, res) => {
         if (res.destroyed) {
           break;
         }
+        if (continuation && event.type === "response.completed") {
+          await cohort?.activeInputAdmission;
+        }
         if (primary && cohort) {
           cohort.phases.firstPrimarySseWrittenAtEpochMs ??= epochNow();
         }
@@ -2593,6 +2728,16 @@ const mock = createServer((req, res) => {
           );
         } else {
           res.write(`data: ${JSON.stringify(event)}\n\n`);
+        }
+        if (
+          continuation &&
+          event.type === "response.output_text.delta" &&
+          cohort?.afterToolStreamStart
+        ) {
+          const beginActiveInputs = cohort.afterToolStreamStart;
+          cohort.afterToolStreamStart = undefined;
+          cohort.activeInputAdmission = beginActiveInputs();
+          void cohort.activeInputAdmission.catch(cohort.reject);
         }
         if ((primary || continuation) && event.type === "response.output_text.delta") {
           await delay(chunkIntervalMs);
@@ -3425,6 +3570,7 @@ async function controlAuthorityCounters(child: ChildProcess, action: "start" | "
           }
         : {}),
       sourceOverlay: isRecord(message.sourceOverlay) ? message.sourceOverlay : undefined,
+      scopeCounts: isRecord(message.scopeCounts) ? message.scopeCounts : undefined,
       profileId: message.profileId,
       authorize: count("authorize"),
       resume: count("resume"),
@@ -3468,7 +3614,7 @@ async function controlTeamStressTelemetry(child: ChildProcess, action: "start" |
     const onExit = () => finish(new Error(`Gateway exited during Team stress telemetry ${action}`));
     const timeout = setTimeout(
       () => finish(new Error(`Team stress telemetry ${action} timed out`)),
-      60_000,
+      action === "stop" && values["team-stress-retention-sampling"] ? 600_000 : 60_000,
     );
     child.on("message", onMessage);
     child.once("exit", onExit);
@@ -3479,6 +3625,7 @@ async function controlTeamStressTelemetry(child: ChildProcess, action: "start" |
         action,
         output,
         allocations: values["team-stress-allocation-sampling"],
+        retention: values["team-stress-retention-sampling"],
       },
       (error) => {
         if (error) {
@@ -4044,11 +4191,11 @@ async function runRound(
   };
   const activeAckLatenciesMs: number[] = [];
   let activeAcksBeforeRelease = 0;
+  let activeHoldEnded = false;
   let activeInputWork: Promise<void>[] = [];
   if (chatActiveHoldMs) {
     const beforeRelease = current.beforeRelease;
-    current.beforeRelease = async () => {
-      await beforeRelease?.();
+    const admitActiveInputs = async () => {
       // An older queued input must own custody before later steering attempts arrive.
       await Promise.all(
         roundKeys.map(async (sessionKey) => {
@@ -4066,7 +4213,19 @@ async function runRound(
               queueMode: "followup",
               deliver: false,
             });
-            await Promise.race([queued.promise, current.ready]);
+            if (values["chat-active-after-tool"]) {
+              const queuedTimeout = setTimeout(
+                () => queued.reject(new Error("active predecessor was not queued within 170s")),
+                170_000,
+              );
+              try {
+                await queued.promise;
+              } finally {
+                clearTimeout(queuedTimeout);
+              }
+            } else {
+              await Promise.race([queued.promise, current.ready]);
+            }
           } finally {
             queuedChatInputs.delete(input.runId);
           }
@@ -4087,7 +4246,7 @@ async function runRound(
             deliver: false,
           });
           activeAckLatenciesMs.push(performance.now() - started);
-          if (current.phases.streamsReleasedAtEpochMs === undefined) {
+          if (!activeHoldEnded) {
             activeAcksBeforeRelease++;
           }
         }),
@@ -4097,7 +4256,16 @@ async function runRound(
       }
       // Release independently of ACKs: a blocked baseline reports the held-turn delay.
       await delay(chatActiveHoldMs);
+      activeHoldEnded = true;
     };
+    if (values["chat-active-after-tool"]) {
+      current.afterToolStreamStart = admitActiveInputs;
+    } else {
+      current.beforeRelease = async () => {
+        await beforeRelease?.();
+        await admitActiveInputs();
+      };
+    }
   }
   // Include the first response processing after the mock releases the whole cohort.
   const captureWork =
@@ -4125,7 +4293,9 @@ async function runRound(
         })()
       : undefined;
   const providerTimeoutMs =
-    values["attempt-setup-image"] || values["stress-worktree-fanout"] ? 170_000 : 45_000;
+    values["attempt-setup-image"] || values["sandbox-image"] || values["stress-worktree-fanout"]
+      ? 170_000
+      : 45_000;
   const timeout = setTimeout(
     () =>
       current.reject(
@@ -4281,6 +4451,11 @@ async function runRound(
       : undefined;
     await Promise.all([cohortReady, captureWork, turns, subagentCompletion]);
     if (chatActiveHoldMs) {
+      if (values["chat-active-after-tool"] && activeInputs.length !== roundKeys.length * 3) {
+        throw new Error(
+          "after-tool streaming did not admit the expected queued and steering inputs",
+        );
+      }
       await Promise.all(activeInputWork);
       // agent.wait reports queued custody immediately; wait for each public terminal event first.
       const terminalDeadline = Promise.withResolvers<never>();
@@ -4399,9 +4574,9 @@ async function drainEvents(requireSubscriberQuiet = true) {
     assertGatewayAlive();
     if (
       activeStreams === 0 &&
-      (!requireSubscriberQuiet ||
-        (performance.now() - lastSubscriberEventAt >= 1000 &&
-          !teamStressFanout?.pendingInjections().length))
+      (teamStressFanout
+        ? teamStressFanout.isDrained(requireSubscriberQuiet)
+        : !requireSubscriberQuiet || performance.now() - lastSubscriberEventAt >= 1000)
     ) {
       return;
     }
@@ -4853,7 +5028,7 @@ try {
         ? ["--trace-gc-nvp"]
         : []),
       "--import",
-      teamPluginCatalog
+      teamPluginCatalog || !/\.[cm]?ts$/.test(values.entry)
         ? new URL("./team-shape-stress-loader.mjs", import.meta.url).href
         : "./scripts/tsx.mjs",
       ...(gatewayPreload ? ["--import", gatewayPreload.path] : []),
@@ -5820,9 +5995,10 @@ try {
       startedHeapWorkers.push(worker);
     }
   }
-  const wholeSoakResourcesBefore = soakScenario
-    ? await readGatewayResources(gateway, { includeWorkers: true })
-    : undefined;
+  const wholeSoakResourcesBefore =
+    soakScenario || values["turn-start-phases"]
+      ? await readGatewayResources(gateway, { includeWorkers: true })
+      : undefined;
   const measurementStartedAt = Date.now();
   const wholeSoakCpuBefore = soakScenario ? await readGatewayCpuUsage(gateway) : undefined;
   const measuredGateway = gateway;
@@ -5989,7 +6165,7 @@ try {
       git(atOrigin("read-tree", "HEAD"));
       const blob = git(
         atOrigin("hash-object", "-w", "--stdin"),
-        `# Synthetic base revision ${port}-${round}\n`,
+        `# Synthetic project base revision ${port}-${round}\n`,
       );
       git(atOrigin("update-index", "--add", "--cacheinfo", `100644,${blob},README.md`));
       const tree = git(atOrigin("write-tree"));
@@ -6057,6 +6233,7 @@ try {
     primaryStreamRequests = 0;
     toolCalls = 0;
     toolResults = 0;
+    networkToolRequests = 0;
     outputLimitResponses = 0;
     recoveredResponses = 0;
     imageRequests = 0;
@@ -6493,8 +6670,8 @@ try {
         }
         measuring = true;
         await workload();
-        // Polling has stopped and in-flight RPCs have completed; drain their
-        // remaining events before freezing measured counters.
+        // Polling has stopped and in-flight RPCs have completed. Team receipts
+        // drain their workload while unrelated background metadata stays active.
         if (turnScenario || !values["dashboard-rpc"]) {
           const beforeDrain = perClientCounters.map((counts) => Object.fromEntries(counts));
           const drainStarted = performance.now();
@@ -6628,6 +6805,11 @@ try {
         `incomplete synthetic reasoning replay: ${JSON.stringify({ reasoningResponses, reasoningReplayRequests })}`,
       );
     }
+    if (values["stress-network-tool"] && networkToolRequests !== toolCalls) {
+      throw new Error(
+        `expected one HTTP request per Code Mode cell: ${networkToolRequests}/${toolCalls}`,
+      );
+    }
     if (verifyHistoryReplay && historicalReplayRequests !== sessionCount) {
       throw new Error(
         `Deep history reached only ${historicalReplayRequests}/${sessionCount} foreground turns`,
@@ -6684,6 +6866,7 @@ try {
     const sample = {
       round,
       scenario,
+      ...(values["stress-network-tool"] ? { networkToolRequests } : {}),
       allocation,
       ...(values["config-capture-counts"]
         ? {
@@ -6699,7 +6882,13 @@ try {
               ...authorityCounts,
               scope:
                 "plugin callbacks in the measured turn window; not all host authority invocations",
+              primaryTurns: sessionCount,
+              sourceEvents,
+              policyCount: operatorAccessPolicyCount,
               assertionsPerTurn: authorityCounts.assert / sessionCount,
+              assertionsPerSourceEvent: sourceEvents
+                ? authorityCounts.assert / sourceEvents
+                : undefined,
               assertionsPerToolCompletion: authorityCounts.assert / authorityCounts.tools,
               assertionsPerMessageAppend: authorityCounts.assert / authorityCounts.messageAppends,
               workloadAllocatedBytesPerAssertion: allocation
@@ -6991,9 +7180,10 @@ try {
     // Keep equal work counts without shortening the continuous GC/allocation window.
     await delay(Math.max(0, durationMs - (Date.now() - measurementStartedAt)));
   }
-  const wholeSoakResourcesAfter = soakScenario
-    ? await readGatewayResources(gateway, { includeWorkers: true })
-    : undefined;
+  const wholeSoakResourcesAfter =
+    soakScenario || values["turn-start-phases"]
+      ? await readGatewayResources(gateway, { includeWorkers: true })
+      : undefined;
   const wholeWorkloadDiagnostics = await finishWholeWorkloadDiagnostics?.();
   const wholeSoakCpu = wholeSoakCpuBefore
     ? measureGatewayCpuUsage(wholeSoakCpuBefore, await readGatewayCpuUsage(gateway))
@@ -7182,7 +7372,11 @@ try {
       isRecord(worker.after?.memory) && typeof worker.after.memory.heapUsed === "number"
         ? worker.after.memory.heapUsed
         : -1;
-    for (const script of ["sqlite-store.worker.js", "prepared-model-catalog.worker.js"]) {
+    for (const script of [
+      "sqlite-store.worker.js",
+      "prepared-model-catalog.worker.js",
+      "git-operation.worker.js",
+    ]) {
       const largest = startedHeapWorkers
         .filter((worker) => worker.script === script && worker.after?.ok === true)
         .toSorted((a, b) => heapBytes(b) - heapBytes(a))[0];
@@ -7428,8 +7622,10 @@ try {
       : {}),
     stressSessionStore: values["stress-session-store"],
     stressToolSearch: values["stress-tool-search"],
+    stressNetworkTool: values["stress-network-tool"],
     transcriptHydrationCounts: values["transcript-hydration-counts"],
     operatorAccessPolicy: values["operator-access-policy"],
+    operatorAccessPolicyCount,
     cronOperatorTurn: values["cron-operator-turn"],
     sessionEventWake: values["session-event-wake"],
     authorityCounts: values["authority-counts"],
@@ -7481,6 +7677,9 @@ try {
     ...(wholeChatDiagnosticsEnabled
       ? { wholeChatDiagnostics: wholeWorkloadDiagnostics, wholeChatGc }
       : {}),
+    ...(values["turn-start-phases"]
+      ? { turnStartResources: { before: wholeSoakResourcesBefore, after: wholeSoakResourcesAfter } }
+      : {}),
     initialFullFrame,
     clientCount,
     exactClients,
@@ -7498,6 +7697,7 @@ try {
           ...(chatActiveHoldMs
             ? {
                 chatActiveHoldMs,
+                chatActiveAfterTool: values["chat-active-after-tool"],
                 activeChatSendAck: {
                   ...latencySummary(
                     samples.flatMap(

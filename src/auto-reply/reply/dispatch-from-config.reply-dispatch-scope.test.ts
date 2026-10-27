@@ -13,12 +13,16 @@ import {
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
 import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.test-fixtures.js";
-import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import {
   submitSessionControllerTask,
   releaseSessionControllerClaim,
@@ -302,6 +306,114 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     vi.useRealTimers();
     clearAgentHarnesses();
   });
+
+  it.each(["allow-live", "wait", "database-replaced", "revoked", "cancelled"] as const)(
+    "retains the accepted input and physical owner across independent %s mutation",
+    async (scenario) => {
+      hookMocks.runner.hasHooks.mockReturnValue(false);
+      const entries = await vi.importActual<
+        typeof import("../../config/sessions/session-accessor.sqlite-entry.js")
+      >("../../config/sessions/session-accessor.sqlite-entry.js");
+      const sessionKey = "agent:test:session";
+      const entry = { sessionId: "session-1", updatedAt: 1 };
+      entries.replaceSessionEntrySync({ storePath: mockSessionStorePath, sessionKey }, entry);
+      sessionStoreMocks.currentEntry = entry;
+      const captured = createDeferred();
+      const release = createDeferred();
+      const abort = new AbortController();
+      let authorityCurrent = true;
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "retry-operator",
+        scopes: ["operator.write"],
+        assertCurrent: () => {
+          if (!authorityCurrent) {
+            throw new Error("Original source authority revoked");
+          }
+        },
+      });
+      let paused = false;
+      sessionStoreMocks.databaseEntryLoader = async (...args) => {
+        const current = await entries.loadSessionEntryForAdmission(...args);
+        if (!paused) {
+          paused = true;
+          captured.resolve();
+          await release.promise;
+        }
+        return current;
+      };
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn<InternalGetReplyFromConfig>(async () => ({
+        text: "Accepted prompt completed",
+      }));
+      const pending = dispatch({
+        dispatcher,
+        replyResolver,
+        replyOptions: { operatorAuthority, abortSignal: abort.signal },
+      });
+      let mutation: Promise<unknown> | undefined;
+      try {
+        await awaitGateBeforeSettlement(
+          captured.promise,
+          pending,
+          "Admission did not reach state read",
+        );
+        // Start outside the admission's async context: an independent UI read ACK.
+        mutation = runSessionMutation({
+          scope: mockSessionStorePath,
+          identities: [sessionKey],
+          kind: "read-marker",
+          policy: scenario === "allow-live" || scenario === "revoked" ? "allow-live" : "wait",
+          run: async () => {
+            if (scenario === "revoked") {
+              authorityCurrent = false;
+            }
+            if (scenario === "cancelled") {
+              abort.abort();
+            }
+            if (scenario === "database-replaced") {
+              const { closeOpenClawAgentDatabasesAsync } = await vi.importActual<
+                typeof import("../../state/openclaw-agent-db.js")
+              >("../../state/openclaw-agent-db.js");
+              await closeOpenClawAgentDatabasesAsync();
+              entries.replaceSessionEntrySync(
+                { storePath: mockSessionStorePath, sessionKey },
+                entry,
+              );
+            }
+          },
+        });
+        release.resolve();
+        if (scenario === "database-replaced") {
+          await expect(pending).rejects.toThrow(/Session store.*changed/);
+          expect(replyResolver).not.toHaveBeenCalled();
+        } else if (scenario === "revoked") {
+          await pending.catch((error: unknown) => {
+            expect(error).toBeInstanceOf(Error);
+          });
+          expect(authorityCurrent).toBe(false);
+          expect(replyResolver).not.toHaveBeenCalled();
+        } else if (scenario === "cancelled") {
+          await pending.catch((error: unknown) => {
+            expect(error).toBeInstanceOf(Error);
+          });
+          expect(abort.signal.aborted).toBe(true);
+          expect(replyResolver).not.toHaveBeenCalled();
+        } else {
+          const result = await pending;
+          expect(result.queuedFinal).toBe(true);
+          expect(replyResolver).toHaveBeenCalledOnce();
+          expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({
+            text: "Accepted prompt completed",
+          });
+        }
+        await mutation;
+      } finally {
+        release.resolve();
+        sessionStoreMocks.databaseEntryLoader = undefined;
+        await Promise.allSettled([pending, mutation]);
+      }
+    },
+  );
 
   it("retries a deferred restart event without resolving its retired source", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);

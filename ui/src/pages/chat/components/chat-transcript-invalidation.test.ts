@@ -649,7 +649,9 @@ describe("chat transcript invalidation", () => {
       rerender();
       transcript.start();
       await flushDeferredRowPrune();
-      expect(container.textContent).toContain("Received · waiting for worker setup");
+      await waitForSolid(() =>
+        expect(container.textContent).toContain("Received · waiting for worker setup"),
+      );
       expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
       expect(buildSpy).toHaveBeenCalledOnce();
 

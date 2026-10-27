@@ -202,7 +202,7 @@ export function readShellView(host: ShellViewHost) {
       isClawsAvailable(context.runtimeConfig.state) === true
         ? APP_ROUTE_IDS
         : APP_ROUTE_IDS.filter((routeId) => routeId !== "claws"),
-    sessionKey: host.activeSessionKey,
+    sessionKey: host.routeState.sessionRouteNotice ? "" : host.activeSessionKey,
     connected: gatewayConnected,
     connectionStatus,
     footerControlsOverlap: host.shellLayout.footerControlsOverlap,

@@ -120,7 +120,6 @@ function stageTranscriptArchiveContent(
       rowCount += 1;
     }
     flush();
-    fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }

@@ -8,6 +8,15 @@ import {
   parseGatewayLockPayload,
 } from "./gateway-lock-payload.js";
 
+export type GatewayStateOwnerVerification = {
+  type: "verified";
+  id: number;
+  current: boolean;
+  error?: string;
+};
+
+type HeartbeatCommand = "stop" | [string, string] | { type: "verify"; id: number; paths: string[] };
+
 export type GatewayStateOwnerHeartbeatData = {
   clock?: "epoch";
   locks: Record<string, string>;
@@ -36,18 +45,45 @@ function selectHeartbeatClock(data: GatewayStateOwnerHeartbeatData, seed: bigint
   return seed >= BigInt(createdAt) && seed <= BigInt(epoch) ? "epoch" : undefined;
 }
 
-/** Verify the held inode and exact acquisition bytes before touching it. */
-export function renewGatewayStateOwnerLock(fd: number, lockPath: string, raw: string, stamp: Date) {
+/** Both I/O adapters compare the held descriptor, real leaf, and acquisition bytes. */
+export function isGatewayStateOwnerLockSnapshotCurrent(
+  held: fs.BigIntStats,
+  current: fs.BigIntStats,
+  expected: string,
+  actual: string,
+): boolean {
+  return (
+    current.isFile() &&
+    held.nlink !== 0n &&
+    held.dev === current.dev &&
+    held.ino === current.ino &&
+    actual === expected
+  );
+}
+
+/** The same physical check serves renewal and fresh worker-dispatch admission. */
+function verifyGatewayStateOwnerLock(fd: number, lockPath: string, raw: string): boolean {
   const held = fs.fstatSync(fd, { bigint: true });
-  const current = fs.statSync(lockPath, { bigint: true });
+  const current = fs.lstatSync(lockPath, { bigint: true });
   const bytes = Buffer.alloc(Buffer.byteLength(raw) + 1);
   const length = fs.readSync(fd, bytes, 0, bytes.length, 0);
   if (
-    held.nlink === 0n ||
-    held.dev !== current.dev ||
-    held.ino !== current.ino ||
-    bytes.subarray(0, length).toString("utf8") !== raw
+    !isGatewayStateOwnerLockSnapshotCurrent(
+      held,
+      current,
+      raw,
+      bytes.subarray(0, length).toString("utf8"),
+    )
   ) {
+    return false;
+  }
+  const after = fs.lstatSync(lockPath, { bigint: true });
+  return after.isFile() && held.dev === after.dev && held.ino === after.ino;
+}
+
+/** Verify the held inode and exact acquisition bytes before touching it. */
+export function renewGatewayStateOwnerLock(fd: number, lockPath: string, raw: string, stamp: Date) {
+  if (!verifyGatewayStateOwnerLock(fd, lockPath, raw)) {
     return false;
   }
   // Suspension can only touch this held inode, never its successor.
@@ -156,9 +192,39 @@ export function runGatewayStateOwnerHeartbeat(
     timer = setTimeout(beat, backoff || data.intervalMs);
     timer.unref();
   };
-  parent?.on("message", (message: "stop" | [string, string]) => {
+  parent?.on("message", (message: HeartbeatCommand) => {
     if (message === "stop") {
       stop();
+    } else if (!Array.isArray(message)) {
+      const result: GatewayStateOwnerVerification = {
+        type: "verified",
+        id: message.id,
+        current: !stopped,
+      };
+      try {
+        for (const lockPath of message.paths) {
+          const raw = data.locks[lockPath];
+          if (raw === undefined) {
+            result.current = false;
+            break;
+          }
+          let fd = descriptors.get(lockPath);
+          if (fd === undefined) {
+            fd = fs.openSync(lockPath, "r+");
+            descriptors.set(lockPath, fd);
+          }
+          if (!verifyGatewayStateOwnerLock(fd, lockPath, raw)) {
+            result.current = false;
+            break;
+          }
+        }
+      } catch (error) {
+        result.current = false;
+        if (!hasErrnoCode(error, "ENOENT")) {
+          result.error = coerceErrorMessage(error);
+        }
+      }
+      data.events.postMessage(result, []);
     } else {
       // Raw bytes include fs-safe's acquisition token; new projection custody may reuse a path.
       if (data.locks[message[0]] !== message[1]) {

@@ -166,7 +166,7 @@ describe("update candidate canary", () => {
 
   readiness.registerCanaryReadinessBudgetTests(() => root, mocks);
   registerCanaryMigrationPolicyTests({ mocks, canaryStateOptions, getChildEnv: () => childEnv });
-  registerCanarySnapshotCapacityTests({ canaryStateOptions, getRoot: () => root, mocks });
+  registerCanarySnapshotCapacityTests({ canaryStateOptions, mocks });
 
   it.each(
     ["node", "bun"].filter(

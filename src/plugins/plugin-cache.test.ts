@@ -683,6 +683,29 @@ it("retires a cache released by a borrower captured before package replacement",
   }
 });
 
+it("acquires metadata roots without allocating loader coordination sets", () => {
+  const cache = createPluginCache();
+  let sets = 0;
+  const original = globalThis.Set;
+  withPluginCache(cache, () => {
+    globalThis.Set = new Proxy(original, {
+      construct(target, args, newTarget) {
+        sets++;
+        return Reflect.construct(target, args, newTarget);
+      },
+    });
+    try {
+      for (let index = 0; index < 40; index++) {
+        getPluginCacheRoot(`/synthetic/plugin-${index}`);
+      }
+    } finally {
+      globalThis.Set = original;
+    }
+  });
+  expect(cache.roots.size).toBe(40);
+  expect(sets).toBe(0);
+});
+
 it("retains compact file facts across every metadata acquisition path", () => {
   const { root, file } = fixture(
     {

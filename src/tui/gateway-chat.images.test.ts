@@ -1,8 +1,8 @@
 import { X509Certificate } from "node:crypto";
 import http, { type RequestListener } from "node:http";
 import https from "node:https";
-import { promisify } from "node:util";
 import { afterAll, beforeAll, beforeEach, expect, it, vi, type MockInstance } from "vitest";
+import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
@@ -53,18 +53,8 @@ const requestUrl = (index = 0) => new URL(requests[index]![0]!, "http://localhos
 
 beforeAll(async () => {
   requestSpy = vi.spyOn(GatewayClient.prototype, "request");
-  const listen = async (target: http.Server) => {
-    await new Promise<void>((resolve) => {
-      target.listen(0, "127.0.0.1", resolve);
-    });
-    const address = target.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing test server address");
-    }
-    return `127.0.0.1:${address.port}`;
-  };
-  origin = `ws://${await listen(server)}/gateway`;
-  tlsOrigin = `wss://${await listen(tlsServer)}/gateway`;
+  origin = `${await httpFixtures.listenLoopback(server, "ws")}/gateway`;
+  tlsOrigin = `${await httpFixtures.listenLoopback(tlsServer, "wss")}/gateway`;
   jpeg = await resizeToJpeg({
     buffer: createSolidPngBuffer(640, 320, { r: 24, g: 64, b: 128 }),
     maxSide: 640,
@@ -84,8 +74,7 @@ beforeEach(() => {
 afterAll(async () => {
   requestSpy.mockRestore();
   for (const target of [server, tlsServer]) {
-    target.closeAllConnections();
-    await promisify(target.close.bind(target))();
+    await httpFixtures.closeHttpServer(target);
   }
 });
 

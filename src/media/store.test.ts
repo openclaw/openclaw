@@ -10,7 +10,6 @@ import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { FsSafeError } from "../infra/fs-safe.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
-import { expectSavedOriginalFilenameCase } from "./store-filename.test-support.js";
 
 const binaryMime = "application/octet-stream";
 const streamDir = "stream-inbound";
@@ -261,11 +260,12 @@ describe("media store", () => {
           (subdir) => store.saveMediaBuffer(Buffer.from("media"), "text/plain", subdir),
         ),
       );
-      const past = (Date.now() - 10_000) / 1000;
+      // Keep file ages independent of setup and cleanup latency.
+      const now = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(now);
       for (const [index, saved] of files.entries()) {
-        if (index !== 3) {
-          await fs.utimes(saved.path, past, past);
-        }
+        const time = (now - (index === 3 ? 0 : 10_000)) / 1000;
+        await fs.utimes(saved.path, time, time);
       }
       await store.cleanOldMedia(1_000, options);
       for (const [index, saved] of files.entries()) {
@@ -316,9 +316,23 @@ describe("media store", () => {
       name: "strips controls and neutralizes bidi/zero-width formatting",
       originalFilename: "report\rC\nL\tT\fF\x1bE\x00N\x7fD\u202efd\u200bp\ufeffsafe.exe",
       expectedIdPattern: /^reportCLTFEND_fd_p_safe---[a-f0-9-]{36}\.txt$/,
+      expectUuidOnly: false,
     },
-  ] as const)("saveMediaBuffer: $name", (testCase) =>
-    expectSavedOriginalFilenameCase(store, testCase),
+  ] as const)(
+    "saveMediaBuffer: $name",
+    async ({ originalFilename, expectedIdPattern, expectUuidOnly }) => {
+      const saved = await store.saveMediaBuffer(
+        Buffer.from("test content"),
+        "text/plain",
+        "inbound",
+        5 * 1024 * 1024,
+        originalFilename,
+      );
+      expect(saved.id).toMatch(expectedIdPattern);
+      if (expectUuidOnly) {
+        expect(saved.id).not.toContain("---");
+      }
+    },
   );
   describe("playback cache", () => {
     const clearMedia = async () => {

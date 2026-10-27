@@ -8,9 +8,14 @@ import {
 } from "./vitest-build-prerequisites.mts";
 import { collectVitestFileFilters } from "./vitest-cli-mode.mts";
 
+export const TUI_PTY_BUILT_CLI_CANARY_PATTERN =
+  "launches openclaw chat as local mode through a real PTY";
+
 // These built-CLI proofs still read source owners, but their only compiled
 // declarations belong to the production runtime registry.
 const runtimeOnlyBuiltCliFiles = new Set([
+  "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
+  "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
   "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
   "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
 ]);
@@ -20,6 +25,7 @@ export function shouldUseRuntimeOnlyVitestWorkers(
   config: string,
   args: string[],
   env: NodeJS.ProcessEnv,
+  testNamePattern?: string | RegExp,
 ): boolean {
   const files = collectVitestFileFilters(args).map((file) =>
     file.replaceAll("\\", "/").replace(/^\.\//u, ""),
@@ -30,10 +36,12 @@ export function shouldUseRuntimeOnlyVitestWorkers(
   if (config === "test/vitest/vitest.e2e.config.ts") {
     return files.every((file) => runtimeOnlyBuiltCliFiles.has(file));
   }
-  // Local PTY tests select openclaw.mjs before importing source TUI fixtures.
+  const pattern = typeof testNamePattern === "string" ? testNamePattern : testNamePattern?.source;
+  // Only the built CLI canaries avoid the native-owner fixture graph.
   return (
     config === "test/vitest/vitest.tui-pty.config.ts" &&
     env.OPENCLAW_TUI_PTY_USE_BUILT_CLI === "1" &&
+    pattern === TUI_PTY_BUILT_CLI_CANARY_PATTERN &&
     files.every((file) => file === "src/tui/tui-pty-local.e2e.test.ts")
   );
 }

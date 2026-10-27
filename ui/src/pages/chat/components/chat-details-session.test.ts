@@ -64,6 +64,7 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
   await element.updateComplete;
   const group = element.querySelector<HTMLDetailsElement>('[data-details-group="pull-requests"]')!;
   expect(group.open).toBe(true);
+  expect(group.querySelector("summary")?.textContent).toContain("Pull requests");
   group.open = false;
   group.dispatchEvent(new Event("toggle"));
   flush();
@@ -226,6 +227,7 @@ it("keeps immutable creator, mutable owner and participants distinct without cla
     label: "Projected owner",
     identity: { type: "profile", id: "projected" },
   });
+  await vi.dynamicImportSettled();
   await waitForSolid(() =>
     expect(element.querySelector(".chat-details-people")?.textContent).toContain("Projected owner"),
   );
@@ -274,9 +276,7 @@ it("uses the current PR renderer and preserves CI session identity and branch di
   );
   const link = element.querySelector(".chat-pr__link")!;
   expect(link.getAttribute("href")).toBe("https://github.com/example/project/pull/7");
-  const automation = element.querySelector("openclaw-chat-ci-automation");
-  expect(automation).toHaveProperty("sessionId", "incarnation-7");
-  expect(automation).toHaveProperty("presented", false);
+  expect(element.querySelector("openclaw-chat-ci-automation")).toBeNull();
   element.querySelector<HTMLButtonElement>(".chat-pr__actions button")!.click();
   flush();
   const menu = element.querySelector(".chat-pr__actions")!;
@@ -287,9 +287,18 @@ it("uses the current PR renderer and preserves CI session identity and branch di
     expect(menu.querySelector("button")?.getAttribute("aria-expanded")).toBe("true"),
   );
   menu.querySelector<HTMLButtonElement>('[data-value="monitoring"]')!.click();
-  flush();
-  expect(element.querySelector("openclaw-chat-ci-automation")).toBe(automation);
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
+    expect(
+      element.querySelector('openclaw-chat-ci-automation input[type="checkbox"]'),
+    ).not.toBeNull(),
+  );
+  const automation = element.querySelector("openclaw-chat-ci-automation");
+  expect(automation).toHaveProperty("sessionId", "incarnation-7");
   expect(automation).toHaveProperty("presented", true);
+  menu.querySelector<HTMLButtonElement>("button")!.click();
+  await waitForSolid(() => expect(automation).toHaveProperty("presented", false));
+  expect(element.querySelector("openclaw-chat-ci-automation")).toBe(automation);
   const branch = {
     owner: "example",
     repo: "project",
@@ -320,8 +329,10 @@ it("projects direct active children through the live observer with stable rounde
     subagentSessions: [child],
     subagentSessionsHydrated: true,
   });
-  await waitForSolid(() =>
-    expect(element.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+  // The live activity module is loaded on the first visible child group.
+  await waitForSolid(
+    () => expect(element.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+    { timeout: 5_000 },
   );
   const live = element.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
   await live.updateComplete;
@@ -460,6 +471,7 @@ it("shows live environment facts without duplicating composer context", async ()
       outputTokens: 450,
     },
   });
+  await vi.dynamicImportSettled();
   const environment = element.querySelector('[data-details-group="environment"]')!;
   await waitForSolid(() => expect(environment.textContent).toContain("feature/details"));
   expect(environment.textContent).not.toContain("Design workstation");

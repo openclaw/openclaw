@@ -7,7 +7,7 @@ import {
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { createClientTestIdentity } from "../gateway/client.test-support.js";
 import { ChatLog } from "./components/chat-log.js";
 import { withGatewayChatConnection } from "./gateway-chat.test-support.js";
@@ -665,9 +665,7 @@ describe("GatewayChatClient session description lifetime", () => {
           held.resolve(oldResponse);
         }
         if (transition === "stop") {
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
+          await nextEventLoopTurn();
           await client.stop();
         }
         await settled;

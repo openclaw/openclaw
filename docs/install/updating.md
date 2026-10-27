@@ -53,6 +53,12 @@ are reported by the scheduler without restarting the Gateway.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
+Update inspection and snapshot workers bind plugin metadata discovery to the
+selected installation's state directory, including requests from older installed
+updaters. A different profile's database version must not block that inspection.
+The candidate worker must contain this repair; an older updater inspecting with
+its own worker still needs an updated runtime.
+
 Private Doctor and post-core workers validate command fields before entering maintenance.
 The delegated executor admits its grant data separately and still checks live process and
 installation ownership before effects. Callbacks and live deadline objects stay in the
@@ -72,6 +78,19 @@ identity and committed contents still match and the index contains no write
 evidence. This preserves the installed updater's original fingerprint format.
 Changed committed data or write evidence still refuses migration and automatic
 restoration. The candidate must contain this repair.
+
+Direct updates from extended-stable 2026.9.33 and 2026.9.34 are supported when
+the candidate contains the legacy database-generation adapter. Under maintenance
+custody, candidate Doctor verifies the older updater's entire physical database
+inventory and derives committed-content generations from the same observation.
+Migration attribution and final settlement use those committed generations;
+receipts sent back to the older updater retain its physical fingerprint format.
+Each Doctor interval verifies its input again. Changed data, intervening commits,
+replaced files, and tampered backups still refuse automatic restoration. The
+installed extended-stable updater does not need to contain this repair.
+The private rehearsal also preserves the source's legacy cron partition identity
+before migrating the copied state. An unmatched historical partition still needs
+an explicit Doctor selection.
 
 Within one database-generation observation, update and Doctor workers reuse a
 verified digest while the file's device, inode, size, and nanosecond birth,
@@ -682,7 +701,7 @@ Deployment-owned definitions retain their existing installation owner.
 An owned managed **Bun** Gateway at a different package root uses the existing
 service-root update route: only the Gateway installation advances, and the
 invoking CLI installation stays unchanged. The updater validates the service's
-actual Bun executable against the Bun 1.4.3+ and WAL-safe `node:sqlite` requirements;
+actual Bun executable against the Bun 1.4.4+ and WAL-safe `node:sqlite` requirements;
 Bun's emulated Node version is not checked against `engines.node`. If the updater
 runs on Node, its Node must also satisfy the target package's engine and SQLite
 requirements before package replacement, because finalization uses that runtime.

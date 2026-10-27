@@ -298,10 +298,14 @@ export function streamWithIdleTimeout(
       }
       requestDeadline.accepted = true;
       unsubscribeCreationActivity();
-      clearTimeout(requestDeadline.timer);
       // Acceptance can precede factory resolution and iterator admission.
       if (guardIterationGaps && !iterationWatchdogActive) {
-        requestDeadline.timer = startTimer(timeoutMs, requestDeadline.reject);
+        if (firstEventTimeoutMs === timeoutMs) {
+          requestDeadline.timer.refresh();
+        } else {
+          clearTimeout(requestDeadline.timer);
+          requestDeadline.timer = startTimer(timeoutMs, requestDeadline.reject);
+        }
       } else {
         clearRequestDeadline();
       }

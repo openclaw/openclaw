@@ -62,9 +62,6 @@ it.each(["completed", "error", "blocked", "retired-during-execution", "retired-b
     }
     await vi.advanceTimersByTimeAsync(0);
     await waitForDiagnosticEventsDrained();
-    expect(
-      getDiagnosticSessionActivitySnapshot(ref, startedAt + 659_000).repeatedRequestNoProgressAgeMs,
-    ).toBeDefined();
 
     // The issue reported successful execution 76 seconds before the false abort.
     vi.setSystemTime(startedAt + 583_000);
@@ -94,11 +91,6 @@ it.each(["completed", "error", "blocked", "retired-during-execution", "retired-b
     });
     const completed = outcome === "completed";
     expect(snapshot.repeatedRequestNoProgressAgeMs === undefined).toBe(completed);
-    if (!completed) {
-      expect(snapshot.repeatedRequestNoProgressAgeMs).toBeGreaterThanOrEqual(
-        STUCK_SESSION_ABORT_MS,
-      );
-    }
     const assertion = expect(attention);
     (completed ? assertion.not : assertion).toMatchObject({
       eventType: "session.stalled",

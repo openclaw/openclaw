@@ -368,7 +368,8 @@ first repairs the known malformed
 `idx_skill_workshop_collection_reviews_workspace_time` index during its schema
 prelude. Its final Workshop step then writes every `pending` or `quarantined`
 proposal draft, plus its support files, to
-`<agentDir>/workshop-skills/.archive/.retired-proposals/<proposalId>/SKILL.md`
+`<agentDir>/workshop-skills/.drafts/<proposalId>/SKILL.md` (earlier builds used
+`.archive/.retired-proposals/`; Doctor moves those into `.drafts/`)
 for the recorded owner agent, or the default agent when none was recorded.
 Pre-SQLite bundles under `<state-dir>/skill-workshop/proposals/<id>/` with a
 `proposal.json` are exported the same way. An existing export is never

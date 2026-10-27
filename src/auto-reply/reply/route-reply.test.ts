@@ -312,7 +312,7 @@ describe("routeReply", () => {
     expect(lastDeliveryPayload()).toMatchObject(expected);
   });
 
-  it("preserves delivery and mirror ownership for global", async () => {
+  it("preserves the producing agent and session for global", async () => {
     await routeTestReply(
       { text: "hi" },
       {
@@ -323,16 +323,8 @@ describe("routeReply", () => {
         groupId: "channel:C123",
       },
     );
-    expect(lastDelivery()).toMatchObject({
-      session: { agentId: "finance" },
-      mirror: {
-        agentId: "finance",
-        sessionKey: "global",
-        text: "hi",
-        isGroup: true,
-        groupId: "channel:C123",
-      },
-    });
+    expect(lastDelivery()).toMatchObject({ session: { agentId: "finance", key: "global" } });
+    expect(lastDelivery()).not.toHaveProperty("mirror");
   });
 
   it.each([

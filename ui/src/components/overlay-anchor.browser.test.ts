@@ -83,7 +83,8 @@ async function open(owner: Overlay) {
 }
 const frame = () =>
   new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
+    // Anchor updates can run later in the same animation frame.
+    requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 0)));
   });
 function expectAnchored(surface: HTMLElement, element: Element) {
   const source = element.getBoundingClientRect(),
@@ -123,6 +124,102 @@ it("samples frames only while the active binding crosses roots", () => {
   expect(requestFrame).toHaveBeenCalledTimes(2);
   hideOverlayAnchor(surface);
   expect(cancelFrame).toHaveBeenCalledTimes(2);
+});
+
+it("stops geometry reads while a stationary anchor's ancestor animates decorative paint", async () => {
+  const container = append(document.body, "div");
+  const element = anchor(container);
+  const { surface, owner } = popup(shadow("closed"), element);
+  const animation = container.animate(
+    { opacity: [0.8, 1], color: ["red", "blue"], boxShadow: ["0 0 1px red", "0 0 5px blue"] },
+    { duration: 1_000, iterations: Infinity },
+  );
+  try {
+    await open(owner);
+    await frame();
+    await frame();
+    const read = vi.spyOn(element, "getBoundingClientRect");
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+    expect(read).not.toHaveBeenCalled();
+    read.mockRestore();
+
+    element.style.left = "240.375px";
+    await frame();
+    expectAnchored(surface, element);
+  } finally {
+    animation.cancel();
+  }
+});
+
+it("follows outside layout shifts and a signaled ancestor animation", async () => {
+  const container = append(document.body, "div");
+  container.style.cssText = "position:absolute;left:150px;top:100px";
+  const spacer = append(container, "div");
+  spacer.style.height = "20px";
+  const element = anchor(container);
+  element.style.position = "static";
+  const { surface, owner } = popup(shadow("closed"), element);
+  await open(owner);
+  await frame();
+  spacer.style.height = "80px";
+  await expect
+    .poll(() => {
+      const source = element.getBoundingClientRect();
+      const target = surface.getBoundingClientRect();
+      return Math.abs(target.top - source.bottom - 6);
+    })
+    .toBeLessThan(1);
+
+  container.style.willChange = "transform";
+  const animation = container.animate(
+    [{ transform: "translate(0, 0) scale(1)" }, { transform: "translate(40px, 20px) scale(.9)" }],
+    { duration: 2_000, fill: "forwards" },
+  );
+  try {
+    // Keep frame tracking active without racing the compositor's wall clock.
+    animation.playbackRate = 0;
+    animation.currentTime = 500;
+    await animation.ready;
+    await frame();
+    await frame();
+    const animationReads = vi.spyOn(container, "getAnimations");
+    animation.currentTime = 1_000;
+    await frame();
+    await frame();
+    expect(animationReads).not.toHaveBeenCalled();
+    animationReads.mockRestore();
+    expect(animation.playState).toBe("running");
+    expectAnchored(surface, element);
+    animation.playbackRate = 1;
+    animation.finish();
+    await frame();
+    expectAnchored(surface, element);
+  } finally {
+    animation.cancel();
+  }
+});
+
+it("follows padding shrinkage from a stylesheet without an anchor mutation", async () => {
+  const element = anchor(document.body);
+  element.style.boxSizing = "content-box";
+  element.classList.add("anchor-padding-proof");
+  const style = append(document.head, "style");
+  style.textContent = ".anchor-padding-proof { padding: 20px !important }";
+  const { surface, owner } = popup(shadow("closed"), element);
+  await open(owner);
+  await frame();
+  expectAnchored(surface, element);
+
+  style.textContent = ".anchor-padding-proof { padding: 0 !important }";
+  await expect
+    .poll(() => {
+      const source = element.getBoundingClientRect();
+      const target = surface.getBoundingClientRect();
+      return Math.abs(target.top - source.bottom - 6);
+    })
+    .toBeLessThan(1);
 });
 
 it.each([false, true])("opens an adopted template (same-root=%s)", async (sameRoot) => {
