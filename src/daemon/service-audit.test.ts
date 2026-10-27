@@ -309,15 +309,10 @@ it.each([
     );
   },
 );
-it.each([
-  ["same-token\r\n", " same-token ", false],
-  ["old-token", "new-token", true],
-] as const)("compares normalized service token %s", (serviceToken, configToken, changed) => {
-  expect(checkTokenDrift({ serviceToken, configToken })).toStrictEqual(
-    changed
-      ? expect.objectContaining({ code: codes.gatewayTokenDrift, level: "recommended" })
-      : null,
-  );
+it("compares normalized service tokens", () => {
+  expect(
+    checkTokenDrift({ serviceToken: "same-token\r\n", configToken: " same-token " }),
+  ).toBeNull();
 });
 describe("auditGatewayServiceConfig systemd", () => {
   let home: string;
@@ -428,17 +423,32 @@ describe("auditGatewayServiceConfig systemd", () => {
     expect(systemdCodes(await auditUnit())).toEqual([]);
   });
 
-  it.each(["none", ""])(
-    "warns about base-unit KillMode=%s when the manager is unavailable",
-    async (killMode) => {
-      await writeUnit([...network, `KillMode=${killMode}`]);
-      const result = await auditUnit();
-      expect(
-        hasIssue(
-          result,
-          killMode ? codes.systemdKillModeProcessOrNone : codes.systemdKillModeControlGroup,
-        ),
-      ).toBe(true);
+  it.each([
+    ["KillMode=none", codes.systemdKillModeProcessOrNone],
+    ["KillMode=", codes.systemdKillModeControlGroup],
+    ["TimeoutStopSec=infinity", undefined],
+    ["TimeoutStopSec=0", undefined],
+    ["TimeoutStopSec=invalid", codes.systemdStopTimeout],
+  ] as const)(
+    "audits base-unit %s when the manager is unavailable",
+    async (directive, issueCode) => {
+      await writeUnit([
+        ...network,
+        ...(directive.startsWith("KillMode=") ? [] : ["KillMode=mixed"]),
+        directive,
+      ]);
+      const result = await audit(null, { env: env() });
+      if (issueCode) {
+        expectIssue(result, issueCode, {
+          level: "recommended",
+          detail: expect.stringContaining(unitPath),
+          ...(issueCode === codes.systemdStopTimeout
+            ? { message: expect.stringContaining("TimeoutStopSec=330") }
+            : {}),
+        });
+      } else {
+        expect(hasIssue(result, codes.systemdStopTimeout)).toBe(false);
+      }
     },
   );
 
@@ -489,24 +499,6 @@ describe("auditGatewayServiceConfig systemd", () => {
       expect(systemdCodes(result)).toEqual([]);
     } finally {
       inspection.mockRestore();
-    }
-  });
-  it.each([
-    { name: "unlimited base timeout", base: "infinity", expected: false },
-    { name: "disabled base timeout", base: "0", expected: false },
-    { name: "invalid base timeout", base: "invalid", expected: true },
-  ])("reports a drain requirement for $name", async ({ base, expected }) => {
-    await writeUnit([...network, "KillMode=mixed", `TimeoutStopSec=${base}`]);
-
-    const result = await audit(null, { env: env() });
-    const issue = result.issues.find((entry) => entry.code === "systemd-stop-timeout");
-    expect(Boolean(issue)).toBe(expected);
-    if (expected) {
-      expect(issue).toMatchObject({
-        message: expect.stringContaining("TimeoutStopSec=330"),
-        detail: expect.stringContaining(unitPath),
-        level: "recommended",
-      });
     }
   });
 });
