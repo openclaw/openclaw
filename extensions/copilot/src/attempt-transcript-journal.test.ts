@@ -13,7 +13,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../test-support/message-fixtures.test-support.js";
 import {
-  createFixture,
+  createFixture as createBaseFixture,
   installJournalMessageWriteHook,
   createJournalSession,
   emitReplayGroup,
@@ -37,21 +37,15 @@ function emitAssistant(
   session.emit(event("assistant.message", id, { messageId: id, ...data }));
 }
 
-function emitToolCompletion(
-  session: ReturnType<typeof createJournalSession>["session"],
-  id: string,
-  data: Record<string, unknown>,
-) {
-  session.emit(event("tool.execution_complete", id, data));
-}
-
 function emitToolSuccess(
   session: ReturnType<typeof createJournalSession>["session"],
   id: string,
   toolCallId: string,
   content = "done",
 ) {
-  emitToolCompletion(session, id, { result: { content }, success: true, toolCallId });
+  session.emit(
+    event("tool.execution_complete", id, { result: { content }, success: true, toolCallId }),
+  );
 }
 
 function emitEphemeral(
@@ -106,6 +100,16 @@ async function createInitializedFixture() {
   await fixture.journal.persistInitialUser();
   fixture.session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
   return fixture;
+}
+
+async function createFixture(...args: Parameters<typeof createBaseFixture>) {
+  const fixture = await createBaseFixture(...args);
+  return {
+    ...fixture,
+    emit(type: string, id: string, data: Record<string, unknown>, agentId?: string) {
+      fixture.session.emit(event(type, id, data, agentId));
+    },
+  };
 }
 
 describe("Copilot attempt transcript journal", () => {
@@ -224,7 +228,7 @@ describe("Copilot attempt transcript journal", () => {
   it.each(["unchanged", "sdk-rewrite", "hook-rewrite", "hook-metadata"] as const)(
     "keeps selected steering mentions only on unchanged committed text (%s)",
     async (rewrite) => {
-      const { journal, recorder, session, target } = await createInitializedFixture();
+      const { journal, recorder, emit, target } = await createInitializedFixture();
       const mentions = [{ profileId: "profile-taylor", start: 3, end: 10 }];
       const sourceMessage = {
         role: "user" as const,
@@ -254,11 +258,9 @@ describe("Copilot attempt transcript journal", () => {
       });
 
       await journal.sendSdkUser(async () => "selected-steering", sourceRecorder);
-      session.emit(
-        event("user.message", "selected-steering", {
-          content: rewrite === "sdk-rewrite" ? "Changed @Taylor" : sourceMessage.content,
-        }),
-      );
+      emit("user.message", "selected-steering", {
+        content: rewrite === "sdk-rewrite" ? "Changed @Taylor" : sourceMessage.content,
+      });
       await journal.waitForSdkUserPersisted("selected-steering");
 
       const persisted = (await readRows(target)).at(-1);
@@ -333,14 +335,12 @@ describe("Copilot attempt transcript journal", () => {
   );
 
   it("marks orphaned durable reasoning replay-incomplete at terminal flush", async () => {
-    const { bridge, journal, session, target } = await createFixture();
+    const { bridge, journal, session, emit, target } = await createFixture();
     await journal.persistInitialUser();
-    session.emit(
-      event("assistant.reasoning", "orphaned-reasoning", {
-        content: "durable thinking without a message",
-        reasoningId: "reasoning-1",
-      }),
-    );
+    emit("assistant.reasoning", "orphaned-reasoning", {
+      content: "durable thinking without a message",
+      reasoningId: "reasoning-1",
+    });
     bridge.flushTranscriptProjection();
     emitAssistant(session, "next-assistant", { content: "next turn" });
     await journal.barrier("orphaned reasoning");
@@ -354,112 +354,91 @@ describe("Copilot attempt transcript journal", () => {
     });
   });
 
-  it("keeps replay valid for semantically equal hook payloads with reordered keys", async () => {
-    installMessageHook((message) => {
-      if (message.role !== "assistant") {
-        return undefined;
-      }
-      return {
-        message: {
-          ...message,
-          content: message.content.map((part) =>
-            part.type === "text" ? { type: "text" as const, text: part.text } : part,
-          ),
-        },
-      };
-    });
-    const { journal, session } = await createInitializedFixture();
-    emitAssistant(session, "same-content", { content: "same" });
-    await journal.barrier("same semantic content");
-
-    expect(journal.snapshot().replayInvalid).toBe(false);
-  });
-
   it.each([
+    "same",
     undefined,
     { role: "user", content: "changed role" },
     {
       role: "assistant",
       content: [{ type: "toolCall", id: "injected", name: "read", arguments: {} }],
     },
-  ])("suppresses blocked or structurally destructive singleton hooks (%j)", async (replacement) => {
-    installMessageHook((message) => {
-      if (message.role !== "assistant") {
-        return undefined;
-      }
-      if (!replacement) {
-        return { block: true };
-      }
-      Object.assign(message, replacement);
-      return { message };
-    });
-    const { journal, session, target } = await createInitializedFixture();
-    emitAssistant(session, "rewritten-assistant", { content: "provider-visible response" });
-    await journal.barrier("rewritten assistant");
+  ])(
+    "preserves equivalent payloads and suppresses destructive singleton hooks (%j)",
+    async (replacement) => {
+      installMessageHook((message) => {
+        if (message.role !== "assistant") {
+          return undefined;
+        }
+        if (!replacement) {
+          return { block: true };
+        }
+        if (replacement === "same") {
+          return {
+            message: { ...message, content: [{ type: "text", text: "provider-visible response" }] },
+          };
+        }
+        Object.assign(message, replacement);
+        return { message };
+      });
+      const { journal, session, target } = await createInitializedFixture();
+      emitAssistant(session, "rewritten-assistant", { content: "provider-visible response" });
+      await journal.barrier("rewritten assistant");
 
-    expect(journal.snapshot().replayInvalid).toBe(true);
-    expect((await readRows(target)).map((row) => row.message.role)).toEqual(["user"]);
-  });
+      expect(journal.snapshot().replayInvalid).toBe(replacement !== "same");
+      expect((await readRows(target)).map((row) => row.message.role)).toEqual(
+        replacement === "same" ? ["user", "assistant"] : ["user"],
+      );
+    },
+  );
 
   it("commits a hidden tool turn to SQLite in assistant request order", async () => {
-    const { attempt, bridge, journal, recorder, session, target, tempDir } = await createFixture(
-      "memory",
-      new Map<string, "network">([["read", "network"]]),
-    );
+    const { attempt, bridge, journal, recorder, session, emit, target, tempDir } =
+      await createFixture("memory", new Map<string, "network">([["read", "network"]]));
     const prepareAssistantTranscriptMessage = vi.fn((message: AssistantMessage) => message);
     Object.assign(attempt, { prepareAssistantTranscriptMessage });
     await journal.persistInitialUser();
     expect(recorder.markRuntimePersisted).toHaveBeenCalledOnce();
 
-    session.emit(event("user.message", "sdk-user", { content: "inspect both files" }));
-    session.emit(
-      event("assistant.usage", "prior-usage", {
-        apiCallId: "prior-call",
-        inputTokens: 50,
-        model: "gpt-5",
-        outputTokens: 40,
-      }),
-    );
+    emit("user.message", "sdk-user", { content: "inspect both files" });
+    emit("assistant.usage", "prior-usage", {
+      apiCallId: "prior-call",
+      inputTokens: 50,
+      model: "gpt-5",
+      outputTokens: 40,
+    });
     emitAssistant(session, "assistant-tools", {
       content: "checking",
       toolRequests: [toolRequest("call-a", { path: "a" }), toolRequest("call-b", { path: "b" })],
     });
-    session.emit(
-      event("tool.execution_start", "start-a", { toolCallId: "call-a", toolName: "read" }),
-    );
-    session.emit(
-      event("tool.execution_start", "start-b", { toolCallId: "call-b", toolName: "read" }),
-    );
-    emitToolCompletion(session, "result-b", {
+    for (const id of ["a", "b"]) {
+      emit("tool.execution_start", `start-${id}`, { toolCallId: `call-${id}`, toolName: "read" });
+    }
+    emit("tool.execution_complete", "result-b", {
       result: { content: "B", detailedContent: "details B" },
       success: true,
       toolCallId: "call-b",
     });
-    session.emit(
-      event("user.message", "steering-user", {
-        content: "steer after tools",
-        delivery: "steering",
-        source: "future-steering-source",
-      }),
-    );
-    session.emit(
-      event(
-        "tool.execution_complete",
-        "result-child",
-        {
-          result: { content: "child" },
-          success: true,
-          toolCallId: "child-call",
-        },
-        "child-1",
-      ),
+    emit("user.message", "steering-user", {
+      content: "steer after tools",
+      delivery: "steering",
+      source: "future-steering-source",
+    });
+    emit(
+      "tool.execution_complete",
+      "result-child",
+      {
+        result: { content: "child" },
+        success: true,
+        toolCallId: "child-call",
+      },
+      "child-1",
     );
     emitEphemeral(session, "tool.execution_complete", "ephemeral-result-a", {
       result: { content: "transient" },
       success: true,
       toolCallId: "call-a",
     });
-    emitToolCompletion(session, "result-a", {
+    emit("tool.execution_complete", "result-a", {
       error: { message: "A failed" },
       success: false,
       toolCallId: "call-a",
@@ -471,7 +450,7 @@ describe("Copilot attempt transcript journal", () => {
     });
     session.emit(finalAssistant);
     bridge.recordSendResult(finalAssistant);
-    session.emit(event("session.idle", "idle", {}));
+    emit("session.idle", "idle", {});
     await journal.barrier("test");
 
     const rows = await readRows(target);
@@ -653,15 +632,9 @@ describe("Copilot attempt transcript journal", () => {
   ] satisfies Array<[string, Record<string, unknown>, boolean]>)(
     "marks unprojectable %s replay-incomplete",
     async (name, data, hasAssistant) => {
-      const { journal, session } = await createInitializedFixture();
+      const { journal, session, emit } = await createInitializedFixture();
       emitAssistant(session, "unprojectable", { apiCallId: "api-call", content: "", ...data });
-      session.emit(
-        event("assistant.usage", "usage", {
-          apiCallId: "api-call",
-          model: "gpt-5",
-          outputTokens: 1,
-        }),
-      );
+      emit("assistant.usage", "usage", { apiCallId: "api-call", model: "gpt-5", outputTokens: 1 });
       await journal.barrier(name);
       expect(journal.snapshot()).toMatchObject({
         messagesSnapshot: hasAssistant
@@ -692,15 +665,13 @@ describe("Copilot attempt transcript journal", () => {
   });
 
   it("preserves user-requested identity across an ephemeral completion", async () => {
-    const { journal, session, target } = await createFixture();
+    const { journal, session, emit, target } = await createFixture();
     await journal.persistInitialUser();
-    session.emit(
-      event("tool.user_requested", "user-tool-request", {
-        arguments: { path: "a" },
-        toolCallId: "user-call",
-        toolName: "read",
-      }),
-    );
+    emit("tool.user_requested", "user-tool-request", {
+      arguments: { path: "a" },
+      toolCallId: "user-call",
+      toolName: "read",
+    });
     emitEphemeral(session, "tool.execution_complete", "ephemeral-user-tool-result", {
       result: { content: "partial" },
       success: true,
@@ -719,46 +690,27 @@ describe("Copilot attempt transcript journal", () => {
       delete (replacement as { display?: boolean }).display;
       return { message: replacement };
     });
-    const { journal, session, target } = await createInitializedFixture();
-    session.emit(
-      event("user.message", "autopilot-user", {
-        content: "continue",
-        attachments: [
-          {
-            type: "file",
-            displayName: "notes.txt",
-            mimeType: "text/plain",
-            path: "/tmp/notes.txt",
-          },
-          {
-            type: "blob",
-            data: "c2VjcmV0LWJ5dGVz",
-            displayName: "image.png",
-            mimeType: "image/png",
-          },
-        ],
-        isAutopilotContinuation: true,
-        source: "future-source-kind",
-      }),
-    );
-    emitToolCompletion(session, "user-tool-result", {
+    const { journal, emit, target } = await createInitializedFixture();
+    emit("user.message", "autopilot-user", {
+      content: "continue",
+      attachments: [
+        { type: "file", displayName: "notes.txt", mimeType: "text/plain", path: "/tmp/notes.txt" },
+        { type: "blob", data: "c2VjcmV0LWJ5dGVz", displayName: "image.png", mimeType: "image/png" },
+      ],
+      isAutopilotContinuation: true,
+      source: "future-source-kind",
+    });
+    emit("tool.execution_complete", "user-tool-result", {
       isUserRequested: true,
       result: { content: "user tool result" },
       success: true,
       toolCallId: "user-call",
     });
-    session.emit(
-      event("user.message", "skill-user", {
-        content: "injected skill context",
-        source: "skill-pdf",
-      }),
-    );
-    session.emit(
-      event("user.message", "unknown-user", {
-        content: "unknown source context",
-        source: "future-visible-source",
-      }),
-    );
+    emit("user.message", "skill-user", { content: "injected skill context", source: "skill-pdf" });
+    emit("user.message", "unknown-user", {
+      content: "unknown source context",
+      source: "future-visible-source",
+    });
     await journal.barrier("test");
 
     const rows = await readRows(target);
