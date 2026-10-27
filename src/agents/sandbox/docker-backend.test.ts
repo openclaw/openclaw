@@ -571,13 +571,20 @@ process.stdout.write(JSON.stringify({
 );
 
 it.each([
-  { configLabelKind: "BrowserImage", image: "openclaw-sandbox-browser:trixie-slim" },
-  { configLabelKind: undefined, image: "openclaw-sandbox:trixie-slim" },
-])("matches configured $configLabelKind image", async ({ configLabelKind, image }) => {
-  mocks.execContainer.mockResolvedValueOnce(engineResult(`${image}\n`));
+  { backend: "docker", kind: "BrowserImage", image: "openclaw-sandbox-browser:trixie-slim" },
+  { backend: "docker", kind: undefined, image: "openclaw-sandbox:trixie-slim" },
+  { backend: "podman", kind: "Image", image: "localhost/openclaw-sandbox:trixie-slim" },
+])("matches $backend $kind image identity", async ({ backend, kind, image }) => {
+  mocks.execContainer.mockResolvedValueOnce(
+    engineResult(backend === "podman" ? `${image}\tsha256:abc123\n` : `${image}\n`),
+  );
+  if (backend === "podman") {
+    mocks.execContainer.mockResolvedValueOnce(engineResult("abc123\n"));
+  }
+  const manager = backend === "podman" ? podmanSandboxBackendManager : dockerSandboxBackendManager;
   await expect(
-    dockerSandboxBackendManager.describeRuntime({
-      entry: { ...runtimeEntry(), image: "stale-entry-image", configLabelKind },
+    manager.describeRuntime({
+      entry: { ...runtimeEntry(backend), image: "stale-entry-image", configLabelKind: kind },
       config: createConfig(),
       agentId: "coder",
     }),
@@ -651,22 +658,4 @@ it("rejects browser sandboxing on the explicit Podman backend", async () => {
   );
 
   expect(mocks.ensureSandboxContainer).not.toHaveBeenCalled();
-});
-
-it("matches canonical Podman identity for an expanded image name", async () => {
-  mocks.execContainer
-    .mockResolvedValueOnce(engineResult("localhost/openclaw-sandbox:trixie-slim\tsha256:abc123\n"))
-    .mockResolvedValueOnce(engineResult("abc123\n"));
-
-  await expect(
-    podmanSandboxBackendManager.describeRuntime({
-      entry: { ...runtimeEntry("podman"), configLabelKind: "Image" },
-      config: createConfig(),
-      agentId: "coder",
-    }),
-  ).resolves.toEqual({
-    running: true,
-    actualConfigLabel: "localhost/openclaw-sandbox:trixie-slim",
-    configLabelMatch: true,
-  });
 });

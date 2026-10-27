@@ -15,6 +15,7 @@ import { resolveSandboxConfigForAgent } from "./config.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";
 import {
   maybeRunSandboxRegistryHousekeeping,
+  startSandboxRegistryHousekeeping,
   withSandboxRuntimePrune,
 } from "./registry-lifecycle.js";
 import {
@@ -29,6 +30,7 @@ import {
 } from "./registry.js";
 import { shouldPruneSandboxRegistryEntry, type SandboxRegistryPrune } from "./registry.kernel.js";
 import { resolveSandboxAgentId } from "./shared.js";
+import { captureSandboxStateOwner } from "./state-owner.js";
 
 type PruneableRegistryEntry = Pick<
   SandboxRegistryEntry,
@@ -175,9 +177,20 @@ async function pruneSandboxBrowsers(config: OpenClawConfig, assertCurrent?: () =
 
 /** Coalesced housekeeping belongs to the state owner, not the requesting turn. */
 export function scheduleSandboxPrune(assertHost: () => void): void {
-  void maybePruneSandboxes(undefined, assertHost, assertHost).catch((error: unknown) => {
-    defaultRuntime.error?.(`Sandbox prune failed: ${formatErrorMessage(error)}`);
-  });
+  startSandboxRegistryHousekeeping(
+    async () => {
+      assertHost();
+      // An offline SDK caller may have acquired a foreign Gateway owner since the last pass.
+      const assertLiveHost = await captureSandboxStateOwner();
+      const assertCurrent = () => {
+        assertHost();
+        assertLiveHost();
+      };
+      assertCurrent();
+      await pruneSandboxes(undefined, assertCurrent, assertCurrent);
+    },
+    (error) => defaultRuntime.error?.(`Sandbox prune failed: ${formatErrorMessage(error)}`),
+  );
 }
 
 export async function maybePruneSandboxes(

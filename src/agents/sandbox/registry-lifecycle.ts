@@ -11,6 +11,7 @@ import { withSandboxRegistryPublication } from "./registry-publication.js";
 import type { SandboxRegistryEntry } from "./registry.types.js";
 
 const lifetimes = new Map<string, ReturnType<typeof createLifetime>>();
+const HOUSEKEEPING_INTERVAL_MS = 5 * 60 * 1000;
 
 type RuntimeUseTarget =
   | { scopeKey: string; workspaceDir?: string }
@@ -23,6 +24,29 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
   const slots = new Map<string, RuntimeSlot>();
   let housekeeping: Promise<void> | undefined;
   let lastHousekeepingAtMs = -Infinity;
+  let recurringHousekeeping:
+    | { run: () => Promise<void>; onError: (error: unknown) => void }
+    | undefined;
+  let housekeepingTimer: ReturnType<typeof setInterval> | undefined;
+  const stopHousekeepingTimer = () => {
+    clearInterval(housekeepingTimer);
+    housekeepingTimer = undefined;
+  };
+  const tickHousekeeping = () => {
+    const recurring = recurringHousekeeping;
+    if (!recurring || work.isClosing || housekeeping) {
+      return;
+    }
+    void owner.maybeRunHousekeeping(recurring.run).catch(recurring.onError);
+  };
+  const armHousekeepingTimer = () => {
+    if (recurringHousekeeping && !housekeepingTimer && !work.isClosing) {
+      housekeepingTimer = runInDetachedAsyncContext(() =>
+        setInterval(tickHousekeeping, HOUSEKEEPING_INTERVAL_MS),
+      );
+      housekeepingTimer.unref();
+    }
+  };
   const selectSlots = (target: RuntimeUseTarget) => {
     const keys = target.scopeKey === undefined ? [] : [`scope:${target.scopeKey}`];
     if (target.workspaceDir !== undefined) {
@@ -45,7 +69,23 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
     }
   };
   const owner = {
-    retainGateway: () => work.retainGateway(),
+    retainGateway() {
+      const gateway = work.retainGateway();
+      const beginClose = () => {
+        gateway.beginClose();
+        if (work.isClosing) {
+          stopHousekeepingTimer();
+          recurringHousekeeping = undefined;
+        }
+      };
+      return {
+        beginClose,
+        drain: () => {
+          beginClose();
+          return gateway.drain();
+        },
+      };
+    },
     run<T>(run: () => Promise<T>): Promise<T> {
       if (work.isClosing) {
         return Promise.reject(new Error("Sandbox registry admission is closed"));
@@ -128,7 +168,7 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
         return housekeeping;
       }
       const now = Date.now();
-      if (now - lastHousekeepingAtMs < 5 * 60 * 1000) {
+      if (now - lastHousekeepingAtMs < HOUSEKEEPING_INTERVAL_MS) {
         return Promise.resolve();
       }
       lastHousekeepingAtMs = now;
@@ -137,13 +177,27 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
       });
       return housekeeping;
     },
+    startHousekeeping(run: () => Promise<void>, onError: (error: unknown) => void): void {
+      if (work.isClosing) {
+        throw new Error("Sandbox registry admission is closed");
+      }
+      if (recurringHousekeeping) {
+        return;
+      }
+      recurringHousekeeping = { run, onError };
+      armHousekeepingTimer();
+      tickHousekeeping();
+    },
   };
   const unregister = registerOpenClawStatePathAsyncResource(admission, async () => {
+    stopHousekeepingTimer();
     await work.beginDrainAll();
     if (work.hasGateways) {
       // Read admission may retire while the Gateway still owns the close prelude.
       work.reopen();
+      armHousekeepingTimer();
     } else {
+      recurringHousekeeping = undefined;
       lifetimes.delete(key);
       unregister();
     }
@@ -209,6 +263,16 @@ export function maybeRunSandboxRegistryHousekeeping(
 ): Promise<void> {
   context.admission.assertCurrent();
   return lifetime(context).maybeRunHousekeeping(run);
+}
+
+/** Revisit idle runtimes even when no later turn arrives to request another pass. */
+export function startSandboxRegistryHousekeeping(
+  run: () => Promise<void>,
+  onError: (error: unknown) => void,
+  context = captureOpenClawStateWorkerContext(),
+): void {
+  context.admission.assertCurrent();
+  lifetime(context).startHousekeeping(run, onError);
 }
 
 /** Provider-confirmed removal keeps only exact terminal cleanup authority after read admission closes. */
