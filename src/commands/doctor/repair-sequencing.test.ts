@@ -401,16 +401,24 @@ describe("doctor repair sequencing", () => {
     enableRepairedPlugin("discord");
     mocks.collectChannelDoctorCompatibilityMutations.mockImplementationOnce(
       (cfg: OpenClawConfig) => [
-        mutation(
-          {
+        {
+          config: {
             ...cfg,
             channels: {
-              discord: { dmPolicy: "allowlist", allowFrom: [123], dm: { enabled: true } },
+              ...cfg.channels,
+              discord: {
+                ...cfg.channels?.discord,
+                dmPolicy: "allowlist",
+                allowFrom: [123],
+                dm: { enabled: true },
+              },
             },
           },
-          "Moved channels.discord.dm.policy → channels.discord.dmPolicy.",
-          "Moved channels.discord.dm.allowFrom → channels.discord.allowFrom.",
-        ),
+          changes: [
+            "Moved channels.discord.dm.policy → channels.discord.dmPolicy.",
+            "Moved channels.discord.dm.allowFrom → channels.discord.allowFrom.",
+          ],
+        },
       ],
     );
 
@@ -646,13 +654,19 @@ describe("doctor repair sequencing", () => {
     mocks.maybeRepairStalePluginConfig.mockImplementationOnce(
       (cfg: OpenClawConfig, _env: NodeJS.ProcessEnv | undefined, params: unknown) => {
         expectPreservedPlugins(params, "brave");
-        return mutation(
-          {
+        return {
+          config: {
             ...cfg,
-            plugins: { allow: ["brave"], entries: { brave: cfg.plugins?.entries?.brave } },
+            plugins: {
+              ...cfg.plugins,
+              allow: ["brave"],
+              entries: {
+                brave: cfg.plugins?.entries?.brave,
+              },
+            },
           },
-          "plugins.entries: removed 1 stale plugin entry (old-plugin)",
-        );
+          changes: ["plugins.entries: removed 1 stale plugin entry (old-plugin)"],
+        };
       },
     );
 

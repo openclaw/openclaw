@@ -52,7 +52,7 @@ function mountSettings(
   return mountDetection(context, client, { ...detection, ...result }, false);
 }
 
-function query<E extends Element = HTMLElement>(root: ParentNode, selector: string) {
+function query<E extends Element = HTMLElement>(root: ParentNode, selector: string): E {
   return root.querySelector<E>(selector)!;
 }
 
