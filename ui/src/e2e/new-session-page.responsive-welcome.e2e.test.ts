@@ -362,7 +362,7 @@ suite.define(() => {
     });
     await page.getByRole("option", { name: /Bob/ }).click();
     const preview = page.locator(".new-session-page__composer .chat-reply-preview");
-    await pollText(preview).toContain("Will notify");
+    await pollText(preview).toContain("Notify or invite");
     await pollText(preview.locator(".composer-context-strip__person-name")).toBe("Bob");
     const remove = preview.getByRole("button", { name: "Remove mention" });
 

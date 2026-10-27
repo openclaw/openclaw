@@ -13,6 +13,7 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { resolveGatewayReadRetryDelayMs } from "../lib/gateway-availability.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import { showToast } from "../lib/toast.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 
@@ -238,12 +239,25 @@ export function createMentionsCapability(
   // snapshot and the profile's targeted invalidation stream.
   const stopEvents = gateway.subscribeEvents((event) => {
     const owner = connection;
-    if (event.event !== "mentions.changed" || !owner || !isCurrent(owner)) {
+    if (!owner || !isCurrent(owner)) {
       return;
     }
     const payload = isRecord(event.payload) ? event.payload : undefined;
+    if (payload?.gatewayInstanceId !== owner.gatewayInstanceId) {
+      return;
+    }
+    if (event.event === "mentions.failed") {
+      if (
+        typeof payload.errorMessage === "string" &&
+        payload.errorMessage.length > 0 &&
+        payload.errorMessage.length <= 512
+      ) {
+        showToast({ message: payload.errorMessage, durationMs: 10_000, fifo: true });
+      }
+      return;
+    }
     if (
-      payload?.gatewayInstanceId !== owner.gatewayInstanceId ||
+      event.event !== "mentions.changed" ||
       typeof payload.revision !== "number" ||
       !Number.isSafeInteger(payload.revision) ||
       payload.revision < 0 ||

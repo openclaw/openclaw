@@ -7,6 +7,7 @@ import type {
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { GatewayHelloOk } from "../api/gateway.ts";
+import { showToast } from "../lib/toast.ts";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import { createMentionsCapability, type MentionsCapability } from "./mentions.ts";
 import {
@@ -15,6 +16,11 @@ import {
   flushMicrotasks,
   type RequestFn,
 } from "./overlays-access.test-support.ts";
+
+vi.mock("../lib/toast.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/toast.ts")>()),
+  showToast: vi.fn(),
+}));
 
 const mention: MentionInboxItem = {
   id: "mention-1",
@@ -86,10 +92,55 @@ function createCapability(...args: Parameters<typeof createMentionsCapability>) 
 
 afterEach(() => {
   capabilities.splice(0).forEach((capability) => capability.dispose());
+  vi.mocked(showToast).mockClear();
   vi.useRealTimers();
 });
 
 describe("application mention Inbox", () => {
+  it("reads, refreshes, and dismisses mentions with session-only write scope", async () => {
+    const request = vi
+      .fn<RequestFn>()
+      .mockResolvedValueOnce(result(1))
+      .mockResolvedValue(result(2, []));
+    const harness = gatewayForMentions(request);
+    harness.update({
+      hello: { ...hello(), auth: { role: "operator", scopes: ["operator.sessions.write"] } },
+    });
+    const capability = createCapability(harness.gateway);
+    await capability.refresh();
+    expect(capability.snapshot.items).toEqual([mention]);
+    await capability.dismiss([mention.id]);
+    expect(request).toHaveBeenLastCalledWith("mentions.dismiss", { ids: [mention.id] });
+    harness.changed(3);
+    await capability.refresh();
+    expect(request).toHaveBeenLastCalledWith("mentions.list", {});
+    expect(capability.snapshot.items).toEqual([]);
+  });
+
+  it("shows invitation failures only for the current connected Gateway", async () => {
+    const { harness, capability } = inboxFixture(vi.fn<RequestFn>().mockResolvedValue(result(1)));
+    await capability.refresh();
+    const payload = {
+      gatewayInstanceId: "boot-a",
+      sessionKey: mention.sessionKey,
+      agentId: mention.agentId,
+      messageId: mention.messageId,
+      errorMessage: "Your message was posted, but invitations could not be confirmed.",
+    };
+    harness.emitEvent("mentions.failed", { ...payload, gatewayInstanceId: "boot-old" });
+    expect(showToast).not.toHaveBeenCalled();
+    harness.emitEvent("mentions.failed", payload);
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      message: payload.errorMessage,
+      durationMs: 10_000,
+      fifo: true,
+    });
+    expect(capability.snapshot).toMatchObject({ phase: "ready", items: [mention], error: null });
+    harness.update({ phase: "reconnecting" });
+    harness.emitEvent("mentions.failed", payload);
+    expect(showToast).toHaveBeenCalledTimes(1);
+  });
+
   it("backs off unavailable reads across gateway updates and invalidations, then recovers", async () => {
     vi.useFakeTimers();
     const request = vi.fn<RequestFn>().mockRejectedValue(

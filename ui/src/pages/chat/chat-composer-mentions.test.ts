@@ -83,7 +83,7 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
     expect(view.key("Tab").defaultPrevented).toBe(true);
     view.expectValue("@Alex ", [mention("profile-alex-offline")]);
     expect(view.send).not.toHaveBeenCalled();
-    expect(view.query('[role="status"]')?.textContent).toContain("Will notify");
+    expect(view.query('[role="status"]')?.textContent).toContain("Notify or invite");
     expect(view.query('[role="status"]')?.textContent).not.toContain("@Alex");
     view.key("Enter");
     expect(view.send).toHaveBeenCalledWith(view.value());
@@ -234,14 +234,14 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
         return;
       }
       const status = view.query('[role="status"]')!;
-      expect(status.textContent).toContain("Will notify");
+      expect(status.textContent).toContain("Notify or invite");
       expect(status.textContent).toContain("Peter Steinberger");
-      expect(status.textContent).not.toContain("Will notify:");
+      expect(status.textContent).not.toContain("Notify or invite:");
       expect(status.textContent).not.toContain("@Peter Steinberger");
       expect(status.querySelector('[role="img"][aria-label="Peter Steinberger"]')).not.toBeNull();
       expect(status.querySelector('[title="@Peter Steinberger"]')).not.toBeNull();
       status.querySelector<HTMLButtonElement>('button[aria-label="Remove mention"]')!.click();
-      expect(view.container.textContent).not.toContain("Will notify");
+      expect(view.container.textContent).not.toContain("Notify or invite");
       view.expectValue("@Peter Steinberger ");
       view.key("Enter");
       expect(view.send).toHaveBeenCalledWith(view.value());
@@ -312,7 +312,7 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
       });
       expect(view.value().mentions).toEqual(expected);
       if (expected.length === 0) {
-        expect(view.container.textContent).not.toContain("Will notify");
+        expect(view.container.textContent).not.toContain("Notify or invite");
         view.edit("@Alex", { start: 0, end: 4, inputType: "insertFromPaste" });
         expect(view.request).not.toHaveBeenCalled();
       }
