@@ -213,18 +213,10 @@ function tableText(count: number) {
   );
 }
 
-function textCall(index = 0) {
-  return sendMessageFeishuMock.mock.calls[index]?.[0];
-}
-function mediaCall(index = 0) {
-  return sendMediaFeishuMock.mock.calls[index]?.[0];
-}
-function cardCall() {
-  return sendCardFeishuMock.mock.calls[0]?.[0]?.card;
-}
-function commentCall(index = 0) {
-  return deliverCommentThreadTextMock.mock.calls[index]?.[1];
-}
+const textCall = (index = 0) => sendMessageFeishuMock.mock.calls[index]?.[0];
+const mediaCall = (index = 0) => sendMediaFeishuMock.mock.calls[index]?.[0];
+const cardCall = () => sendCardFeishuMock.mock.calls[0]?.[0]?.card;
+const commentCall = (index = 0) => deliverCommentThreadTextMock.mock.calls[index]?.[1];
 function deliveredText() {
   return sendMessageFeishuMock.mock.calls.map(([params]) => params.text).join("\n");
 }
@@ -702,14 +694,19 @@ describe("Feishu native presentation delivery", () => {
         "text_msg",
       );
       const text = deliveredText();
+      expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
       expect(mediaCall()).toMatchObject({
         mediaUrl: imageUrl,
         replyToMessageId: "om_thread",
         replyInThread: true,
       });
+      expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
       for (const [params] of sendMessageFeishuMock.mock.calls) {
+        expect(params.text.length).toBeLessThanOrEqual(4000);
         expect(params).toMatchObject({ replyToMessageId: "om_thread", replyInThread: true });
       }
+      expect(text).toContain("account-0-");
+      expect(text).toContain("account-399-");
       expect(text).not.toContain(nativeCardText);
       expect(text).toContain("- Unavailable link");
       expect(text).not.toContain("javascript:");

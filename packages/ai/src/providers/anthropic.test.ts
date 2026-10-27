@@ -347,6 +347,58 @@ describe("Anthropic provider", () => {
     expect(result.usage.cost).not.toHaveProperty("totalOrigin");
   });
 
+  it("includes compaction iterations in billed usage while keeping final context usage", async () => {
+    const client = createAnthropicSseClient([
+      messageStart(wireUsage(12, 0, 120_000, null), "claude-sonnet-4-6"),
+      blockStart(0, { type: "text", text: "" }),
+      blockDelta(0, { type: "text_delta", text: "Done." }),
+      blockStop(0),
+      messageDelta(
+        { stop_reason: "end_turn" },
+        {
+          ...wireUsage(12, 15_104, 819_661, 93_130),
+          iterations: [
+            {
+              type: "compaction",
+              input_tokens: 12,
+              output_tokens: 1_000,
+              cache_read_input_tokens: 819_661,
+              cache_creation_input_tokens: 93_130,
+            },
+            {
+              type: "message",
+              input_tokens: 12,
+              output_tokens: 15_104,
+              cache_read_input_tokens: 148_862,
+              cache_creation_input_tokens: 0,
+            },
+          ],
+        },
+      ),
+      { type: "message_stop" },
+    ]);
+
+    const result = await startStream(client, {
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+    }).result();
+
+    expect(result.usage).toMatchObject({
+      input: 24,
+      output: 16_104,
+      cacheRead: 968_523,
+      cacheWrite: 93_130,
+      contextUsage: {
+        state: "available",
+        promptTokens: 148_874,
+        totalTokens: 163_978,
+      },
+      totalTokens: 1_077_781,
+    });
+    expect(result.usage.cost.total).toBeCloseTo(1.469044, 6);
+  });
+
   it("captures streamed Anthropic compaction deltas and replays final opaque metadata", async () => {
     const firstClient = createAnthropicSseClient([
       messageStart({ input_tokens: 50_001, output_tokens: 0 }, "claude-sonnet-4-6"),

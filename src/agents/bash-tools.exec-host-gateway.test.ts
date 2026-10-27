@@ -203,9 +203,8 @@ let processGatewayAllowlist: typeof import("./bash-tools.exec-host-gateway.js").
 type GatewayAllowlistParams = Parameters<typeof processGatewayAllowlist>[0];
 type GatewayResult = Awaited<ReturnType<typeof processGatewayAllowlist>>;
 
-function expectCall(mock: unknown, fields: object) {
+const expectCall = (mock: unknown, fields: object) =>
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
-}
 
 function expectAuthorization(fields: object) {
   expectCall(commitAuthorizationMock, {
@@ -213,9 +212,8 @@ function expectAuthorization(fields: object) {
   });
 }
 
-function expectPending(result: GatewayResult) {
+const expectPending = (result: GatewayResult) =>
   expect(result.pendingResult?.details.status).toBe("approval-pending");
-}
 
 const completedOutcome = (aggregated = "done"): ExecApprovalFollowupOutcome => ({
   status: "completed",
@@ -224,9 +222,8 @@ const completedOutcome = (aggregated = "done"): ExecApprovalFollowupOutcome => (
   aggregated,
 });
 
-function requireSentFollowupText(callIndex = 0): string {
-  return followupMock.mock.calls[callIndex]?.[1] ?? "";
-}
+const requireSentFollowupText = (callIndex = 0): string =>
+  followupMock.mock.calls[callIndex]?.[1] ?? "";
 
 describe("processGatewayAllowlist", () => {
   beforeAll(async () => {
@@ -247,20 +244,17 @@ describe("processGatewayAllowlist", () => {
     durableApprovalMock.mockReset().mockReturnValue(true);
     exactApprovalMock.mockReset().mockReturnValue(false);
     requiresApprovalMock.mockReset().mockReturnValue(false);
-    enforcedCommandMock.mockReset();
-    enforcedCommandMock.mockReturnValue({
+    enforcedCommandMock.mockReset().mockReturnValue({
       ok: false,
       reason: "segment execution plan unavailable",
     });
-    reviewerMock.mockReset();
-    reviewerMock.mockResolvedValue({
+    reviewerMock.mockReset().mockResolvedValue({
       decision: "allow-once",
       risk: "low",
       rationale: "allowed",
     });
     commitAuthorizationMock.mockReset();
-    approvalDecisionMock.mockReset();
-    approvalDecisionMock.mockResolvedValue(undefined);
+    approvalDecisionMock.mockReset().mockResolvedValue(undefined);
     approvalRouteFixture.inline = false;
     gatewayMock.mockClear();
     approvalRouteFixture.id = "";
@@ -271,8 +265,7 @@ describe("processGatewayAllowlist", () => {
     startupCancellationMocks.prepare.mockReset();
     markBackgroundedMock.mockReset();
     followupMock.mockReset();
-    inlineEvalMock.mockReset();
-    inlineEvalMock.mockReturnValue(null);
+    inlineEvalMock.mockReset().mockReturnValue(null);
     pendingResultMock.mockReturnValue({
       details: { status: "approval-pending" },
       content: [],
@@ -309,9 +302,7 @@ describe("processGatewayAllowlist", () => {
   function runGatewayAllowlist(
     overrides: Partial<GatewayAllowlistParams> & Pick<GatewayAllowlistParams, "command">,
   ) {
-    const { command, ...rest } = overrides;
     return processGatewayAllowlist({
-      command,
       workdir: process.cwd(),
       env: process.env as Record<string, string>,
       pty: false,
@@ -324,7 +315,7 @@ describe("processGatewayAllowlist", () => {
       approvalRunningNoticeMs: 0,
       maxOutput: 1000,
       pendingMaxOutput: 1000,
-      ...rest,
+      ...overrides,
     });
   }
 
@@ -371,7 +362,6 @@ describe("processGatewayAllowlist", () => {
 
   async function requireAuthorizationPlan(params: Parameters<typeof planShellAuthorization>[0]) {
     const authorizationPlan = await planShellAuthorization(params);
-    expect(authorizationPlan.ok).toBe(true);
     if (!authorizationPlan.ok) {
       throw new Error(authorizationPlan.reason);
     }
@@ -389,7 +379,6 @@ describe("processGatewayAllowlist", () => {
       mode: "enforced",
       segmentSatisfiedBy: ["allowlist"],
     });
-    expect(enforced.ok).toBe(true);
     if (!enforced.ok) {
       throw new Error(enforced.reason);
     }
@@ -571,7 +560,13 @@ describe("processGatewayAllowlist", () => {
       const warnings: string[] = [];
       const result = await runGatewayAllowlist({ command, autoReview: true, warnings });
 
-      expect(reviewerMock).toHaveBeenCalledOnce();
+      expectCall(reviewerMock, {
+        command,
+        reason: "execution-plan-miss",
+        argv: undefined,
+        resolvedPath: undefined,
+        analysis: expect.objectContaining({ parsed: true, heredoc: false }),
+      });
       expect(result.execCommandOverride).toMatch(
         /^'\/[^']*\/ls' \*\.ts; '\/[^']*\/echo' complete$/,
       );
@@ -819,7 +814,13 @@ describe("processGatewayAllowlist", () => {
       warnings,
     });
 
-    expect(reviewerMock).toHaveBeenCalledOnce();
+    expectCall(reviewerMock, {
+      command,
+      argv: ["python3", "-c", "print(1)"],
+      host: "gateway",
+      reason: "strict-inline-eval",
+      analysis: expect.objectContaining({ inlineEval: true }),
+    });
     expect(approvalRouteMock).not.toHaveBeenCalled();
     expect(warnings[0]).toContain("reviewer or explicit approval");
     expect(result.execCommandOverride).toBe(`'${invocationPath}' -c 'print(1)'`);
@@ -840,7 +841,6 @@ describe("processGatewayAllowlist", () => {
       mode: "enforced",
       segmentSatisfiedBy: ["safeBuiltins"],
     });
-    expect(enforced.ok).toBe(true);
     if (!enforced.ok) {
       throw new Error(enforced.reason);
     }
