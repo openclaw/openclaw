@@ -33,6 +33,8 @@ const streaming: RequestInit = {
   body: '{"stream":true}',
 };
 const localModel = { ...model, provider: "local", baseUrl: "http://127.0.0.1:18000/v1" };
+const privateOrigin = "http://10.0.0.5:1234";
+const nat64Origin = "http://[64:ff9b:1::8.8.8.8]:1234";
 
 function mockResponse(
   response: Response,
@@ -63,13 +65,6 @@ function mockStream(
     refreshTimeout,
   );
   return { ...source, release };
-}
-
-function privateNetworkPolicy(allowPrivateNetwork = false, trustConfiguredBaseUrlOrigin = true) {
-  resolveProviderRequestPolicyConfigMock.mockReturnValue({
-    allowPrivateNetwork,
-    trustConfiguredBaseUrlOrigin,
-  });
 }
 
 function responseStream(
@@ -217,34 +212,35 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it.each([
-    ["configured origin", true, 1234, { allowedOrigins: ["http://10.0.0.5:1234"] }],
-    ["explicit private-network denial", false, 1234, undefined],
-    ["different port", true, 4321, undefined],
-  ] as const)("limits private trust to %s", async (_, trust, port, expected) => {
-    const target = { ...model, baseUrl: "http://10.0.0.5:1234/v1" };
-    resolveProviderRequestPolicyConfigMock.mockReturnValue({
-      allowPrivateNetwork: false,
-      trustConfiguredBaseUrlOrigin: trust,
-      policy: { endpointClass: "custom" },
-    });
-    const response = await buildGuardedModelFetch(target)(`http://10.0.0.5:${port}/v1/responses`);
-    await response.text();
-    expect(latestGuardedFetchParams().policy).toEqual(expected);
-  });
-
-  it.each([
-    "169.254.169.254",
-    "[fd00:ec2::254]",
-    "metadata-server.example",
-    "instance-data.ec2.internal",
-  ])("does not implicitly trust metadata endpoint %s", async (host) => {
-    privateNetworkPolicy();
-    await (await request({}, { ...model, baseUrl: `http://${host}/v1` })).text();
-    expect(latestGuardedFetchParams().policy).toBeUndefined();
-  });
+    ["configured origin", privateOrigin, true, false, { allowedOrigins: [privateOrigin] }],
+    ["explicit denial", privateOrigin, false, false, undefined],
+    ["different port", privateOrigin, true, false, undefined, "http://10.0.0.5:4321"],
+    ["metadata IPv4", "http://169.254.169.254", true, false, undefined],
+    ["metadata IPv6", "http://[fd00:ec2::254]", true, false, undefined],
+    ["metadata DNS", "http://metadata-server.example", true, false, undefined],
+    ["instance DNS", "http://instance-data.ec2.internal", true, false, undefined],
+    ["NAT64 opt-in", nat64Origin, true, true, { allowPrivateNetwork: true }],
+  ] as const)(
+    "limits private trust: %s",
+    async (_, base, trust, allowPrivateNetwork, expected, destination: string = base) => {
+      resolveProviderRequestPolicyConfigMock.mockReturnValue({
+        allowPrivateNetwork,
+        trustConfiguredBaseUrlOrigin: trust,
+        ...(base === privateOrigin ? { policy: { endpointClass: "custom" } } : {}),
+      });
+      const response = await buildGuardedModelFetch({ ...model, baseUrl: `${base}/v1` })(
+        `${destination}/v1/responses`,
+      );
+      await response.text();
+      expect(latestGuardedFetchParams().policy).toEqual(expected);
+    },
+  );
 
   it("rejects implicit NAT64 trust and explains the operator opt-in", async () => {
-    privateNetworkPolicy();
+    resolveProviderRequestPolicyConfigMock.mockReturnValue({
+      allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
+    });
     fetchWithSsrFGuardMock.mockRejectedValue(new SsrFBlockedError("Blocked address"));
     await expect(
       request(
@@ -252,19 +248,13 @@ describe("buildGuardedModelFetch", () => {
         {
           ...model,
           provider: "nat64-lab",
-          baseUrl: "http://[64:ff9b:1::8.8.8.8]:1234/v1",
+          baseUrl: `${nat64Origin}/v1`,
         },
       ),
     ).rejects.toThrow(
       "models.providers.nat64-lab.request.allowPrivateNetwork=true only for an operator-controlled endpoint",
     );
     expect(latestGuardedFetchParams().policy).toBeUndefined();
-  });
-
-  it("uses only explicit private-network opt-in for NAT64 literals", async () => {
-    privateNetworkPolicy(true);
-    await (await request({}, { ...model, baseUrl: "http://[64:ff9b:1::8.8.8.8]:1234/v1" })).text();
-    expect(latestGuardedFetchParams().policy).toEqual({ allowPrivateNetwork: true });
   });
 
   it("releases guarded fetch slots when an unsanitized stream is abandoned", async () => {

@@ -550,35 +550,25 @@ describe("resolveRequesterToolPolicies", () => {
     expectCurrentSource(result);
   });
 
-  async function writeNestedLineage() {
-    const requesterSessionKey = requester;
-    const parentChildSessionKey = "agent:main:subagent:parent-child";
-    const leafSessionKey = "agent:main:subagent:leaf";
-    await writeChild(parentChildSessionKey, {
-      spawnedBy: requesterSessionKey,
-      inheritedToolDeny: ["exec"],
-    });
-    await writeChild(leafSessionKey, {
-      spawnedBy: parentChildSessionKey,
+  it.each([
+    ["requester", ["exec"]],
+    ["parent-child resume envelope", ["exec", "read"]],
+  ] as const)("restores the nested completion projection for %s", async (target, deny) => {
+    const parent = "agent:main:subagent:parent-child";
+    const leaf = "agent:main:subagent:leaf";
+    await writeChild(parent, { inheritedToolDeny: ["exec"] });
+    await writeChild(leaf, {
+      spawnedBy: parent,
       spawnDepth: 2,
       subagentRole: "leaf",
       subagentControlScope: "none",
       inheritedToolDeny: ["exec", "read"],
     });
-    return { requesterSessionKey, parentChildSessionKey, leafSessionKey };
-  }
-
-  it.each([
-    ["requester", ["exec"]],
-    ["parent-child resume envelope", ["exec", "read"]],
-  ] as const)("restores the nested completion projection for %s", async (target, deny) => {
-    const { requesterSessionKey, parentChildSessionKey, leafSessionKey } =
-      await writeNestedLineage();
-    const sessionKey = target === "requester" ? requesterSessionKey : parentChildSessionKey;
+    const sessionKey = target === "requester" ? requester : parent;
     const result = await resolvePolicy({
       sessionKey,
-      ...(target === "requester" ? {} : { subagentSessionKey: parentChildSessionKey }),
-      ...completionHandoffFacts(leafSessionKey, sessionKey),
+      ...(target === "requester" ? {} : { subagentSessionKey: parent }),
+      ...completionHandoffFacts(leaf, sessionKey),
     });
     expectInherited(result, "completion-handoff", { deny: [...deny] });
   });

@@ -164,12 +164,6 @@ function mockFollowup(decision: string, handlers: GatewayHandlers = {}) {
   return followup.promise;
 }
 
-function prepareOnly(params: unknown) {
-  return requireRecord(params, "node invoke").command === "system.run.prepare"
-    ? buildPreparedSystemRunPayload(params)
-    : { ok: true };
-}
-
 function nodeFixture(stdout = "ok") {
   const runs: Record<string, unknown>[] = [];
   return {
@@ -196,17 +190,6 @@ const allowlistDefaults = { security: "allowlist", ask: "on-miss", askFallback: 
 const alwaysFullDefaults = { security: "full", ask: "always", askFallback: "full" } as const;
 const allowlistTool = (ask: "on-miss" | "off" = "on-miss", overrides: ToolOptions = {}) =>
   createExecTool({ host: "gateway", security: "allowlist", ask, ...overrides });
-
-async function executable(name: string, content = "") {
-  const binDir = path.join(tempDir, "bin");
-  await fs.mkdir(binDir);
-  const file = path.join(binDir, name);
-  await fs.writeFile(file, content);
-  if (process.platform !== "win32") {
-    await fs.chmod(file, 0o755);
-  }
-  return file;
-}
 
 function externalRoute(channel: string) {
   return {
@@ -468,7 +451,10 @@ it("runs a direct skill wrapper command without prompting when the wrapper is al
   if (process.platform === "win32") {
     return;
   }
-  const wrapperPath = await executable("gog-wrapper", "#!/bin/sh\necho '{\"events\":[]}'\n");
+  await fs.mkdir(path.join(tempDir, "bin"));
+  const wrapperPath = path.join(tempDir, "bin", "gog-wrapper");
+  await fs.writeFile(wrapperPath, "#!/bin/sh\necho '{\"events\":[]}'\n");
+  await fs.chmod(wrapperPath, 0o755);
   saveExecApprovals(
     policy({ ...allowlistDefaults, ask: "off" }, [{ pattern: await fs.realpath(wrapperPath) }]),
   );
@@ -517,34 +503,35 @@ it("fails fast when approval registration fails", async () => {
   );
 });
 
-it("resolves cron no-route approvals inline when askFallback permits trusted automation", async () => {
-  saveExecApprovals(policy(alwaysFullDefaults));
-  const calls = mockNoRoute();
-  const tool = approvalTool({ security: "full", trigger: "cron" });
-  const result = await tool.execute("cron", { command: "echo cron-ok" });
-  expectCompleted(result, "cron-ok");
-  const request = vi
-    .mocked(callGatewayTool)
-    .mock.calls.find(([method]) => method === requestApproval);
-  expect(requireRecord(request?.[3], "request options").expectFinal).toBe(false);
-  expectCronDelivery("gateway");
-  expect(calls).not.toContain(waitDecision);
-});
-
-it.each(["gateway", "node"] as const)(
-  "denies %s cron no-route approvals when askFallback is deny",
-  async (host) => {
-    saveExecApprovals(policy({ security: "full", ask: "always", askFallback: "deny" }));
-    mockNoRoute(host === "node" ? { "node.invoke": prepareOnly } : {});
-    const tool = createExecTool({ host, ask: "always", security: "full", trigger: "cron" });
-    await expect(
-      tool.execute(`call-cron-${host}-denied`, { command: `echo cron-${host}-denied` }),
-    ).rejects.toThrow("Automation runs cannot wait for interactive exec approval");
+it.each([
+  { host: "gateway", askFallback: "full" },
+  { host: "gateway", askFallback: "deny" },
+  { host: "node", askFallback: "deny" },
+] as const)(
+  "resolves cron $host no-route approvals with fallback=$askFallback",
+  async ({ host, askFallback }) => {
+    saveExecApprovals(policy({ security: "full", ask: "always", askFallback }));
+    const node = nodeFixture();
+    const calls = mockNoRoute(host === "node" ? { "node.invoke": node.handle } : {});
+    const tool = approvalTool({ host, security: "full", trigger: "cron" });
+    const execution = tool.execute("cron", {
+      command: askFallback === "full" ? "echo cron-ok" : `echo cron-${host}-denied`,
+    });
+    if (askFallback === "full") {
+      expectCompleted(await execution, "cron-ok");
+      const request = vi
+        .mocked(callGatewayTool)
+        .mock.calls.find(([name]) => name === requestApproval);
+      expect(requireRecord(request?.[3], "request options").expectFinal).toBe(false);
+      expect(calls).not.toContain(waitDecision);
+    } else {
+      await expect(execution).rejects.toThrow(
+        "Automation runs cannot wait for interactive exec approval",
+      );
+    }
     expectCronDelivery(host);
     if (host === "node") {
-      expect(gatewayParams("node.invoke").some((invoke) => invoke.command === "system.run")).toBe(
-        false,
-      );
+      expect(node.runs).toEqual([]);
     }
   },
 );
