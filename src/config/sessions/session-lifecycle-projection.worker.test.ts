@@ -34,7 +34,8 @@ import {
 } from "./session-mutation-conflict-error.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 
-vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
+vi.mock("./session-accessor.sqlite-maintenance-kick.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-accessor.sqlite-maintenance-kick.js")>()),
   kickSessionEntryMaintenanceAfterWrite() {},
 }));
 vi.mock("./session-history-eviction.js", async (importOriginal) => ({
