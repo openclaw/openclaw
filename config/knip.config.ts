@@ -653,6 +653,7 @@ const repositoryScriptEntries = [
   "scripts/perf/board-grid-measure.ts!",
   "scripts/perf/bootstrap-import-preload.mjs!",
   "scripts/perf/branch-summary-identity-measure.ts!",
+  "scripts/perf/session-branches-cache-measure.ts!",
   "scripts/perf/catalog-static-preparation-measure.ts!",
   "scripts/perf/channel-presence-suppression.ts!",
   "scripts/perf/config-guard-startup-measure.ts!",
