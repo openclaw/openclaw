@@ -768,15 +768,18 @@
 .chat-divider__model {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
   max-width: 100%;
   vertical-align: middle;
-  letter-spacing: normal;
-  text-transform: none;
 }
 
 .chat-divider__model .chat-divider__icon {
   flex-shrink: 0;
+  margin-inline-end: 4px;
+}
+
+.chat-divider__model-affix {
+  flex-shrink: 0;
+  white-space: pre;
 }
 
 .chat-divider__model bdi {
@@ -832,6 +835,23 @@
 .chat-notice .chat-divider__title {
   min-width: 0;
   max-width: 100%;
+}
+
+.chat-notice--model-change {
+  margin-block-end: 14px;
+}
+
+.chat-notice--model-change .chat-divider__label {
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.chat-notice--model-change .chat-divider__title {
+  text-wrap: balance;
+}
+
+.chat-notice--model-change .provider-brand-icon {
+  color: inherit;
 }
 
 .chat-notice .chat-text {

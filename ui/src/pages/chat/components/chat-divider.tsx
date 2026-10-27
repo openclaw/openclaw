@@ -145,7 +145,12 @@ function InlineNotice(props: ChatNoticeProps) {
   );
 }
 
-function NoticeModel(props: { value: string; catalog?: ModelCatalogEntry[] }) {
+function NoticeModel(props: {
+  value: string;
+  prefix?: string;
+  suffix?: string;
+  catalog?: ModelCatalogEntry[];
+}) {
   const reference = createMemo(() => parseProviderModelRef(props.value));
   const provider = () => normalizeChatModelProviderId(reference()?.provider ?? "");
   const name = createMemo(() => {
@@ -165,10 +170,16 @@ function NoticeModel(props: { value: string; catalog?: ModelCatalogEntry[] }) {
   });
   return (
     <span class="chat-divider__model" title={props.value}>
+      <Show when={props.prefix}>
+        <span class="chat-divider__model-affix">{props.prefix}</span>
+      </Show>
       <Show when={provider()}>
         <ProviderBrandIcon provider={provider()} class="chat-divider__icon" />
       </Show>
       <bdi>{name()}</bdi>
+      <Show when={props.suffix}>
+        <span class="chat-divider__model-affix">{props.suffix}</span>
+      </Show>
     </span>
   );
 }
@@ -177,19 +188,23 @@ function ModelChangeLabel(props: {
   change: NonNullable<ChatNoticeProps["item"]["modelChange"]>;
   catalog?: ModelCatalogEntry[];
 }) {
+  const parts = createMemo(() => t("chat.systemNotice.modelChanged").split(/(\{from\}|\{to\})/u));
   return (
-    <For each={t("chat.systemNotice.modelChanged").split(/(\{from\}|\{to\})/u)}>
-      {(part) =>
-        part === "{from}" || part === "{to}" ? (
-          <NoticeModel
-            value={part === "{from}" ? props.change.from : props.change.to}
-            catalog={props.catalog}
-          />
-        ) : (
-          part
-        )
-      }
-    </For>
+    <>
+      {parts()[0]}
+      <For each={parts()}>
+        {(part, index) =>
+          part === "{from}" || part === "{to}" ? (
+            <NoticeModel
+              value={part === "{from}" ? props.change.from : props.change.to}
+              prefix={index() > 1 ? parts()[index() - 1] : undefined}
+              suffix={index() === parts().length - 2 ? parts()[index() + 1] : undefined}
+              catalog={props.catalog}
+            />
+          ) : null
+        }
+      </For>
+    </>
   );
 }
 
@@ -198,6 +213,7 @@ function OrdinaryNotice(props: ChatNoticeProps) {
     <div
       class={[
         "chat-notice",
+        { "chat-notice--model-change": Boolean(props.item.modelChange) },
         props.item.tone === "danger" ? "chat-notice--danger callout danger" : "",
       ]}
       data-chat-row-key={props.item.key}
@@ -206,7 +222,7 @@ function OrdinaryNotice(props: ChatNoticeProps) {
     >
       <Show when={props.item.label}>
         <SystemLine
-          icon={props.item.icon}
+          icon={props.item.modelChange ? undefined : props.item.icon}
           label={props.item.label!}
           metric={props.item.showTimestamp ? formatTimeMs(props.item.timestamp) : undefined}
         >
