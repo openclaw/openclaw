@@ -350,7 +350,7 @@ describe("checkGatewayHealth", () => {
       for (const [kind, title] of [
         ["channel", "Channel warnings"],
         ["exporter", "Telemetry exporters"],
-      ]) {
+      ] as const) {
         noteContains(
           `Gateway answered status in 7s; ${kind} diagnostics did not finish within 21s`,
           title,

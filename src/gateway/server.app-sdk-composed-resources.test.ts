@@ -18,7 +18,10 @@ import {
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
 import { collectUntil } from "../../packages/sdk/src/client.test-support.js";
 import { GatewayClientTransport, OpenClaw } from "../../packages/sdk/src/index.js";
-import { createSdkWebSocketServer } from "../../packages/sdk/src/transport.websocket.test-support.js";
+import {
+  createSdkWebSocketServer,
+  replySdkRequest,
+} from "../../packages/sdk/src/transport.websocket.test-support.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.entry.js";
@@ -102,7 +105,7 @@ async function proveWorkerCreation(): Promise<void> {
           if (ok) {
             assertSchema(EnvironmentsCreateResultSchema, payload, "environments.create result");
           }
-          gateway.reply(socket, frame.id, ok ? payload : error, ok);
+          replySdkRequest(socket, frame.id, ok ? payload : error, ok);
         };
         await environmentsHandlers["environments.create"]!({
           req: { type: "req", ...frame },
@@ -113,7 +116,7 @@ async function proveWorkerCreation(): Promise<void> {
           context,
         });
       })().catch((error: unknown) =>
-        gateway.reply(
+        replySdkRequest(
           socket,
           frame.id,
           {
