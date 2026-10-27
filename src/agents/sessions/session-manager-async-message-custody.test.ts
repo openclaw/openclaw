@@ -1,7 +1,9 @@
 import { syncBuiltinESMExports } from "node:module";
 import v8 from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import {
   bindSessionPendingInputSources,
@@ -9,22 +11,19 @@ import {
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
-import { captureDurableSessionActor } from "../../config/sessions/session-actor-durable.js";
-import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { assistantText, withSessionState } from "./session-manager-fixtures.test-support.js";
+import { withSelectedTranscriptReader } from "./session-manager-reader.test-support.js";
 import { SessionManager } from "./session-manager.js";
 
 const user = (key: string) => ({
   role: "user" as const,
-  content: `Synthetic input ${key}`,
+  content: `Synthetic input ${key}`.repeat(4096),
   timestamp: 1,
   idempotencyKey: `${key}:user`,
 });
 
 it.each([false, true])(
-  "preserves pending custody and closed committed replay (collected: %s)",
+  "preserves pending custody, slim actor appends, and closed replay (collected: %s)",
   (collected) =>
     withSessionState(`pending-messages-${collected}`, async ({ scope: target, state }) => {
       const manager = await SessionManager.openAsync(target, state.workspaceDir);
@@ -38,10 +37,7 @@ it.each([false, true])(
           "Expected pending input custody",
         );
       const firstSource = await stage("first");
-      const sources = [firstSource];
-      if (collected) {
-        sources.push(await stage("second"));
-      }
+      const sources = collected ? [firstSource, await stage("second")] : [firstSource];
       const receipt = collected
         ? expectDefined(
             bindSessionPendingInputSources(sources, user("aggregate")),
@@ -94,6 +90,45 @@ it.each([false, true])(
         ).resolves.toMatchObject({ entryId: receipt.inputId, appended: false });
         expect(beforeFreshMessageCommit).not.toHaveBeenCalled();
         expect(await loadTranscriptEvents(target)).toEqual(events);
+        if (collected) {
+          const requestBytes: number[] = [];
+          const serialize = v8.serialize;
+          // Native worker clients bypass Vite mocks; observe their actual serialization too.
+          v8.serialize = (value: unknown) => {
+            const bytes = serialize(value);
+            if (
+              isRecord(value) &&
+              (value.type === "session.actor.appendTranscriptEvent" ||
+                value.type === "session.actor.appendToolResult")
+            ) {
+              requestBytes.push(bytes.byteLength);
+            }
+            return bytes;
+          };
+          syncBuiltinESMExports();
+          onTestFinished(() => {
+            v8.serialize = serialize;
+            syncBuiltinESMExports();
+          });
+
+          const fresh = vi.fn();
+          const appendReplies = async () => {
+            for (const message of [
+              assistantText("Synthetic answer"),
+              makeTextToolResult("synthetic-tool", "lookup", "Synthetic result", false, 2),
+            ]) {
+              await manager.appendMessageWithTranscriptAnchorAsync(message, {
+                beforeFreshMessageCommit: fresh,
+              });
+            }
+          };
+          const appendOwned = () => withSessionPendingInputPersistence(receipt, appendReplies);
+          await withSelectedTranscriptReader(target, appendOwned, true);
+          expect(requestBytes).toHaveLength(2);
+          expect(Math.max(...requestBytes)).toBeLessThan(8192);
+          expect(fresh).toHaveBeenCalledTimes(2);
+        }
+        expect(await loadTranscriptEvents(target)).toEqual(manager.getPersistedEntries());
       } finally {
         receipt.finish("interrupted");
         for (const source of sources) {
@@ -102,93 +137,3 @@ it.each([false, true])(
       }
     }),
 );
-
-it("does not resend pending user content with assistant and tool-result appends", () =>
-  withSessionState("pending-payload", async ({ scope, state }) => {
-    const requestBytes = new Map<string, number[]>();
-    const serialize = v8.serialize;
-    // Native worker clients bypass Vite mocks; observe their actual serialization too.
-    v8.serialize = (value: unknown) => {
-      const bytes = serialize(value);
-      if (value && typeof value === "object" && "type" in value && typeof value.type === "string") {
-        const sizes = requestBytes.get(value.type) ?? [];
-        sizes.push(bytes.byteLength);
-        requestBytes.set(value.type, sizes);
-      }
-      return bytes;
-    };
-    syncBuiltinESMExports();
-    onTestFinished(() => {
-      v8.serialize = serialize;
-      syncBuiltinESMExports();
-    });
-    const manager = await SessionManager.openAsync(scope, state.workspaceDir);
-    const message = { ...user("large"), content: "Synthetic pending input. ".repeat(4096) };
-    const pending = expectDefined(
-      await stageSessionPendingInput(scope, { runId: "large", message, assertCurrent() {} }),
-      "Expected pending input custody",
-    );
-    const database = { agentId: scope.agentId, path: scope.storePath };
-    const identity = readOpenClawAgentDatabaseIdentity(openOpenClawAgentDatabase(database));
-    const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
-    const actor = captureDurableSessionActor({
-      database,
-      target: {
-        sessionKey: scope.sessionKey,
-        database: {
-          kind: "file",
-          physicalIdentity: identity.identity,
-          birthtime: identity.birthtime,
-          nativeLocation: identity.canonicalPath,
-        },
-      },
-      lifetime: authority,
-    });
-    const fresh = vi.fn();
-    try {
-      await actor.read(authority);
-      await withOwnedSessionTranscriptWrites(
-        {
-          sessionTarget: scope,
-          sessionActor: { actor, database },
-          withTranscriptWrite: async (write) => write(),
-        },
-        () =>
-          pending.run(async () => {
-            await manager.appendMessageAsync(pending.message);
-            requestBytes.clear();
-            await manager.appendMessageWithTranscriptAnchorAsync(
-              assistantText("Synthetic answer"),
-              {
-                beforeFreshMessageCommit: fresh,
-              },
-            );
-            await manager.appendMessageWithTranscriptAnchorAsync(
-              {
-                role: "toolResult",
-                toolCallId: "synthetic-tool",
-                toolName: "lookup",
-                content: [{ type: "text", text: "Synthetic result" }],
-                isError: false,
-                timestamp: 2,
-              },
-              { beforeFreshMessageCommit: fresh },
-            );
-          }),
-      );
-      for (const type of [
-        "session.actor.appendTranscriptEvent",
-        "session.actor.appendToolResult",
-      ]) {
-        const sizes = requestBytes.get(type);
-        expect(sizes).toHaveLength(1);
-        expect(sizes![0]).toBeLessThan(8192);
-      }
-      expect(fresh).toHaveBeenCalled();
-      expect(pending.state).toBe("consumed");
-      expect(await loadTranscriptEvents(scope)).toEqual(manager.getPersistedEntries());
-    } finally {
-      pending.finish("interrupted");
-      await actor.release();
-    }
-  }));
