@@ -1,7 +1,12 @@
 /** Rewrites transcript entries by branching and re-appending the active suffix. */
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import {
+  collectErrorGraphCandidates,
+  readErrorCauses,
+} from "@openclaw/normalization-core/error-coercion";
 import { withSessionPendingInputRelocation } from "../../config/sessions/session-accessor.js";
+import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import type {
   TranscriptRewriteReplacement,
   TranscriptRewriteResult,
@@ -10,7 +15,6 @@ import type { AgentMessage } from "../runtime/index.js";
 import { getRawSessionAppendMessageAsync } from "../session-raw-append-message.js";
 import type { SessionManager } from "../sessions/session-manager.js";
 import { log } from "./logger.js";
-import { isTranscriptRewriteConflict } from "./transcript-conflict.js";
 
 type SessionBranchEntry = ReturnType<SessionManager["getBranch"]>[number];
 type RewriteMessageAppender = (
@@ -278,4 +282,19 @@ function isAppendOnlyAdvance(
       .slice(previous.length)
       .every((entry) => entry.type !== "reset" && entry.type !== "compaction")
   );
+}
+
+const REWRITE_CONFLICT_MESSAGES = new Set([
+  "Session transcript changed before rewrite preparation",
+  "Session transcript changed before rewrite publication",
+]);
+
+/** True when a rewrite preparation or publication lost its transcript revision. */
+function isTranscriptRewriteConflict(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, readErrorCauses).some((candidate) => {
+    if (candidate instanceof SqliteTranscriptMutationConflictError) {
+      return true;
+    }
+    return candidate instanceof Error && REWRITE_CONFLICT_MESSAGES.has(candidate.message);
+  });
 }

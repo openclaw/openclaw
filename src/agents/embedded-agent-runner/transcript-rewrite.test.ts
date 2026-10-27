@@ -555,74 +555,51 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     },
   );
 
-  it("re-plans once when another writer appends before the rewrite commits", async () => {
-    const { directory, target } = await persistedTarget("concurrent-append-rewrite");
-    const manager = SessionManager.open(target, directory);
-    const entryIds = appendMessages(manager, [
-      makeUserMessage("first", 1),
-      toolResult("exec", "before rewrite", 2),
-      assistant("tail", 3),
-    ]);
-    await waitForSessionTranscriptProjection(target);
-    const sibling = SessionManager.open(target, directory);
-    const prepare = manager.prepareTranscriptRewriteAsync.bind(manager);
-    let appended = false;
-    vi.spyOn(manager, "prepareTranscriptRewriteAsync").mockImplementation(async () => {
-      const prepared = await prepare();
-      if (!appended) {
-        appended = true;
-        await sibling.appendMessageAsync(makeUserMessage("in-flight input", 4));
-      }
-      return prepared;
-    });
+  it.each(["prepares", "publishes"] as const)(
+    "re-plans once when another writer appends before the rewrite %s",
+    async (stage) => {
+      const { directory, target } = await persistedTarget(`concurrent-append-${stage}`);
+      const manager = SessionManager.open(target, directory);
+      const entryIds = appendMessages(manager, [
+        makeUserMessage("first", 1),
+        toolResult("exec", "before rewrite", 2),
+        assistant("tail", 3),
+      ]);
+      await waitForSessionTranscriptProjection(target);
+      const sibling = SessionManager.open(target, directory);
+      const prepare = manager.prepareTranscriptRewriteAsync.bind(manager);
+      let appended = false;
+      const appendAcceptedInput = async () => {
+        if (!appended) {
+          appended = true;
+          await sibling.appendMessageAsync(makeUserMessage("in-flight input", 4));
+        }
+      };
+      vi.spyOn(manager, "prepareTranscriptRewriteAsync").mockImplementation(async () => {
+        if (stage === "prepares") {
+          await appendAcceptedInput();
+        }
+        const prepared = await prepare();
+        if (stage === "publishes") {
+          await appendAcceptedInput();
+        }
+        return prepared;
+      });
 
-    await rewrite(
-      manager,
-      expectDefined(entryIds[1], "tool result entry id"),
-      toolResult("exec", "after rewrite", 2),
-    );
+      await rewrite(
+        manager,
+        expectDefined(entryIds[1], "tool result entry id"),
+        toolResult("exec", "after rewrite", 2),
+      );
 
-    expect(getBranchMessages(SessionManager.open(target, directory))).toEqual([
-      makeUserMessage("first", 1),
-      toolResult("exec", "after rewrite", 2),
-      assistant("tail", 3),
-      makeUserMessage("in-flight input", 4),
-    ]);
-  });
-
-  it("re-plans once when another writer appends before the rewrite prepares", async () => {
-    const { directory, target } = await persistedTarget("concurrent-prepare-rewrite");
-    const manager = SessionManager.open(target, directory);
-    const entryIds = appendMessages(manager, [
-      makeUserMessage("first", 1),
-      toolResult("exec", "before rewrite", 2),
-      assistant("tail", 3),
-    ]);
-    await waitForSessionTranscriptProjection(target);
-    const sibling = SessionManager.open(target, directory);
-    const prepare = manager.prepareTranscriptRewriteAsync.bind(manager);
-    let appended = false;
-    vi.spyOn(manager, "prepareTranscriptRewriteAsync").mockImplementation(async () => {
-      if (!appended) {
-        appended = true;
-        await sibling.appendMessageAsync(makeUserMessage("in-flight input", 4));
-      }
-      return await prepare();
-    });
-
-    await rewrite(
-      manager,
-      expectDefined(entryIds[1], "tool result entry id"),
-      toolResult("exec", "after rewrite", 2),
-    );
-
-    expect(getBranchMessages(SessionManager.open(target, directory))).toEqual([
-      makeUserMessage("first", 1),
-      toolResult("exec", "after rewrite", 2),
-      assistant("tail", 3),
-      makeUserMessage("in-flight input", 4),
-    ]);
-  });
+      expect(getBranchMessages(SessionManager.open(target, directory))).toEqual([
+        makeUserMessage("first", 1),
+        toolResult("exec", "after rewrite", 2),
+        assistant("tail", 3),
+        makeUserMessage("in-flight input", 4),
+      ]);
+    },
+  );
 
   it("keeps the rewrite guard when another writer resets the transcript", async () => {
     const { directory, target } = await persistedTarget("concurrent-reset-rewrite");
