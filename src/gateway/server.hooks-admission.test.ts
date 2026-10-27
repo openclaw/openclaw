@@ -411,7 +411,7 @@ function withRevokedHook(
 }
 
 describe("gateway hook admission", () => {
-  test.each(["initial config reconcile", "same-value provider-auth refresh"] as const)(
+  test.for(["initial config reconcile", "same-value provider-auth refresh"] as const)(
     "keeps hook admission current through %s",
     async (boundary, { signal }) => {
       const entered = createDeferred();
