@@ -60,9 +60,14 @@ suite.define(() => {
         await list.getByRole("button", { name: "Edit comment 1", exact: true }).click();
         await input.fill("Confirm the revised checklist owner.");
         await input.press("Enter");
-        // Editing can dismiss the hover preview; reopen it before inspecting the saved text.
-        await page.mouse.move(0, 0);
-        await list.waitFor({ state: "hidden" });
+        // Saving restores focus without reopening the preview.
+        await expect
+          .poll(() =>
+            chip
+              .locator(".chat-selection-annotations__trigger")
+              .evaluate((element) => document.activeElement === element),
+          )
+          .toBe(true);
         await chip.click();
         await list.getByText("Confirm the revised checklist owner.", { exact: true }).waitFor();
         await reloadAfterCommentSave(page);

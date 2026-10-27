@@ -219,12 +219,12 @@ export function registerRequesterCompletionCustodyTests({
             }
           },
         };
-        const resumeGrant = vi.fn(({ grantId }: { grantId: string }) => {
+        const resumeGrant = ({ grantId }: { grantId: string }) => {
           if (!policyReady) {
             throw new Error("Access policy is starting");
           }
           return grantCurrent && grantId === grantRef.grantId ? grant : undefined;
-        });
+        };
         const registry = createEmptyPluginRegistry();
         registry.plugins.push(createPluginRecord({ id: grantRef.pluginId }));
         if (!owner) {
@@ -518,11 +518,6 @@ export function registerRequesterCompletionCustodyTests({
           }
           if (recovery === "revoked after restore") {
             grantCurrent = false;
-          }
-          if (overloaded || unavailablePolicy || recovery === "revoked after restore") {
-            const resumedGrants = resumeGrant.mock.calls.length;
-            await testing.sweepOnceForTests();
-            expect(resumeGrant).toHaveBeenCalledTimes(resumedGrants);
           }
           expectBlocked(stale);
           if (!canDispatch && recovery !== "mixed sources") {

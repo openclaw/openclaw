@@ -2143,7 +2143,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   color: var(--text-strong);
 }
 
-.chat-controls__inline-select-trigger--disabled,
 .chat-controls__speed-toggle:disabled,
 .chat-controls__reasoning-option:disabled {
   cursor: not-allowed;

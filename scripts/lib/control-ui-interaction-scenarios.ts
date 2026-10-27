@@ -1371,6 +1371,8 @@ export function installInteractionNavigationPreloadObserver() {
 export async function settleInteractionNavigationPreloads(
   page: Page,
 ): Promise<InteractionNavigationPreloads> {
+  // Headless Chromium can strand the shell's idle callback until another frame runs.
+  await frames(page);
   const expected = await page.evaluate(async () => {
     const descriptor = document
       .getElementById("openclaw-navigation-preloads")

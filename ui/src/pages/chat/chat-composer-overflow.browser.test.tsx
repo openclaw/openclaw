@@ -330,6 +330,19 @@ it.each([
 
   const emptyHeight = textarea.clientHeight;
   await expectStableSize("A short editable draft.");
+  const textWidth = () => {
+    const style = getComputedStyle(textarea);
+    return (
+      textarea.clientWidth -
+      Number.parseFloat(style.paddingLeft) -
+      Number.parseFloat(style.paddingRight)
+    );
+  };
+  const shortTextWidth = textWidth();
+  const hasClassicScrollbar = CSS.supports("selector(::-webkit-scrollbar)");
+  if (hasClassicScrollbar) {
+    expect(getComputedStyle(textarea).scrollbarGutter).toBe("auto");
+  }
   const draft =
     "A typed line that wraps within the available composer width. ".repeat(12) +
     "\nA second editable line.";
@@ -344,6 +357,10 @@ it.each([
     0,
   );
   expect(textarea.scrollWidth).toBeLessThanOrEqual(textarea.clientWidth + 1);
+  expect(textWidth()).toBeCloseTo(shortTextWidth, 0);
+  if (hasClassicScrollbar) {
+    expect(getComputedStyle(textarea).scrollbarGutter).toBe("stable");
+  }
   await expectStableSize(`${draft}\nAnother line in the capped draft.`);
 
   await control.fill("");
@@ -351,6 +368,10 @@ it.each([
   expect(document.activeElement).toBe(textarea);
   expect(placeholder.checkVisibility()).toBe(true);
   expect(textarea.clientHeight).toBe(emptyHeight);
+  expect(textWidth()).toBeCloseTo(shortTextWidth, 0);
+  if (hasClassicScrollbar) {
+    expect(getComputedStyle(textarea).scrollbarGutter).toBe("auto");
+  }
 });
 
 it.each([
