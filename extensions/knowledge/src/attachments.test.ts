@@ -93,7 +93,9 @@ async function upload(f: any, bytes: any, metadata = {}) {
 
 it("large Unicode source survives chunking, bounded preview, restart, search and byte-exact download", async () => {
   const f = await fixture(),
-    bytes = Buffer.from("Original 🌱 evidence with Unicode\n".repeat(6000));
+    bytes = Buffer.from(
+      `${"x".repeat(3999)}😀tail\n${"Original 🌱 evidence with Unicode\n".repeat(6000)}`,
+    );
   const evidence = await upload(f, bytes);
   expect(await readFile(path.join(f.root, "private", evidence.path))).toStrictEqual(bytes);
   const receipt = await f.service.save_page(draft([evidence]), f.owner);
@@ -101,7 +103,7 @@ it("large Unicode source survives chunking, bounded preview, restart, search and
     read = await service.record({ includeEvidence: true, id: receipt.id }, f.owner);
   expect(read.record!.valid).toBeTruthy();
   expect(read.evidence![0]!.verified).toBe(true);
-  expect(read.evidence![0]!.excerpt.length).toBe(4000);
+  expect(read.evidence![0]!.excerpt).toBe("x".repeat(3999));
   expect(read.evidence![0]!.excerptTruncated).toBe(true);
   expect(Check(contract.operations.record.output, read)).toBeTruthy();
   const chunks = [];

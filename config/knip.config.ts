@@ -303,6 +303,9 @@ const repositoryScriptEntries = [
   "scripts/perf/cron-delivery-gateway-entry.ts!",
   "scripts/perf/plugin-policy-read-measure.mjs!",
   "scripts/perf/prompt-cache-observation-measure.ts!",
+  // Invoked directly with Node as documented in their headers.
+  "scripts/perf/prompt-cache-drops-measure.ts!",
+  "scripts/perf/prompt-cache-request-cost.ts!",
   "scripts/perf/live-history-observation-measure.ts!",
   "scripts/perf/reconnect-read-wave-measure.ts!",
   "scripts/perf/session-actor-receipt-measure.ts!",
@@ -613,6 +616,7 @@ const repositoryScriptEntries = [
   "scripts/perf/placement-identity-recovery-bench.ts!",
   "scripts/perf/provider-tool-normalization-measure.ts!",
   "scripts/perf/session-entry-patch-prepare-measure.ts!",
+  "scripts/perf/session-internal-patch-measure.ts!",
   "scripts/perf/session-lifecycle-prepare-measure.ts!",
   "scripts/perf/session-replacement-write-measure.ts!",
   "scripts/perf/session-patch-label-owner-measure.ts!",
@@ -716,6 +720,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-skill-snapshot-intern.ts!",
   "scripts/perf/session-skill-snapshot-intern.preload.mjs!",
   "scripts/perf/git-read-sharing-measure.ts!",
+  "scripts/perf/worktree-git-config-measure.ts!",
   // Live proof and test owners spawn or preload these children through computed paths.
   "scripts/perf/bench-ingress-bridge.mjs!",
   "scripts/perf/child-memory-fixture.cjs!",

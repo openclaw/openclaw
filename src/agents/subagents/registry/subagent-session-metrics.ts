@@ -78,6 +78,15 @@ export function resolveSubagentSessionStatus(
   return "done";
 }
 
+/** A yielded run waiting for a continuation: a message or its children's results. */
+export function isSubagentRunPausedForContinuation(entry: SubagentSessionStatusRecord): boolean {
+  if (entry.pauseReason !== "sessions_yield") {
+    return false;
+  }
+  const status = resolveSubagentSessionStatus(entry);
+  return status !== "killed" && status !== "failed" && status !== "timeout";
+}
+
 /** Formats the authoritative run status while preserving unfinished descendants. */
 export function resolveSubagentDisplayStatus(
   entry: SubagentSessionStatusRecord,
@@ -86,12 +95,7 @@ export function resolveSubagentDisplayStatus(
   const status = resolveSubagentSessionStatus(entry) ?? "done";
   const pending = Math.max(0, pendingDescendants);
   const waiting = `waiting on ${pending} ${pending === 1 ? "child" : "children"}`;
-  if (
-    entry.pauseReason === "sessions_yield" &&
-    status !== "killed" &&
-    status !== "failed" &&
-    status !== "timeout"
-  ) {
+  if (isSubagentRunPausedForContinuation(entry)) {
     return pending > 0 ? waiting : "waiting for external continuation";
   }
   if (pending > 0) {

@@ -83,6 +83,29 @@ it.each([
 });
 
 it.each(["bun-all", "dual-all"] as const)(
+  "runs Bun only in sibling projects owning a remaining file under %s",
+  async (policy) => {
+    const heapFile = "src/gateway/server-methods/diagnostics.heap-snapshot.test.ts";
+    const isolatedConfig = "test/vitest/vitest.gateway-methods-isolated.config.ts";
+    const configs = ["test/vitest/vitest.gateway-methods.config.ts", isolatedConfig];
+    const includePatterns = [
+      heapFile,
+      "src/gateway/server-methods/sessions.send-yield-resume.test.ts",
+    ];
+    const { calls } = await recordRun(
+      { kind: "group", name: "gateway-methods", plan: { configs, includePatterns } },
+      { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
+    );
+    expect(calls.map(({ runtime, includes }) => ({ runtime, includes }))).toEqual(
+      ["node", "bun"].map((runtime) => ({ runtime, includes: includePatterns })),
+    );
+    expect(calls[0]!.args.slice(0, 2)).toEqual(configs);
+    // The methods project excludes its isolated sibling, leaving no Bun file.
+    expect(calls[1]!.args).toEqual([isolatedConfig, "--", `--exclude=${path.resolve(heapFile)}`]);
+  },
+);
+
+it.each(["bun-all", "dual-all"] as const)(
   "partitions process discovery and retains failures under %s",
   async (policy) => {
     const { calls, exitCode } = await recordRun(

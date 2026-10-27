@@ -416,6 +416,20 @@ function resolveAllRuntimeSelections(
     }
   }
 
+  // Changed rows can join sibling projects. Removing Node-only files can leave a
+  // project with no members, so Bun runs only projects owning a remaining file.
+  const bunIncludes = includes?.map(relativePath).filter((file) => !exceptions.includes(file));
+  const bunInventories =
+    bunIncludes?.length && configs.length > 1
+      ? configs.map((config) => listNodeTestConfigFiles(config))
+      : undefined;
+  const bunConfigs =
+    bunInventories?.every(Boolean) &&
+    bunIncludes!.every((file) => bunInventories.some((inventory) => inventory!.includes(file)))
+      ? configs.filter((_, index) =>
+          bunIncludes!.some((file) => bunInventories[index]!.includes(file)),
+        )
+      : undefined;
   return [
     ...(policy === "dual-all"
       ? [node]
@@ -431,6 +445,7 @@ function resolveAllRuntimeSelections(
         : []),
     {
       runtime: "bun",
+      ...(bunConfigs && bunConfigs.length < configs.length ? { configs: bunConfigs } : {}),
       ...(ui ? { env: BUN_UI_TEST_ENV } : {}),
       // Uncertain configs/argv use Bun; only named Node contracts are excluded.
       // Absolute globs work with both repository-root and scoped Vitest dirs.

@@ -4,6 +4,7 @@ import { personActivityLink } from "../../../components/person-activity-link.ts"
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
+import { participantPalette } from "../../../lib/reactive/participant-palette.ts";
 import { createMediaQuerySource } from "../../../lib/reactive/platform.ts";
 import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
 import { readHandoffDisplay } from "../chat-sessions-yield.ts";
@@ -488,7 +489,11 @@ function FramedMessageGroup(props: {
     <div
       ref={(element) => (replyElements.group = element)}
       class={frame().className}
-      style={frame().style}
+      style={
+        frame().normalizedRole === "user" || frame().isForwarded
+          ? participantPalette.read()?.style(frame().senderHue)
+          : undefined
+      }
       data-chat-row-key={props.group.key}
       data-chat-streaming={props.group.isStreaming ? "true" : undefined}
       data-file-session-key={frame().sessionKey}

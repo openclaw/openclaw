@@ -114,6 +114,11 @@ Configured instructions outside the marked conversation section remain in the
 system prompt. Skill, tool, memory, and configuration refreshes retain their
 existing update behavior.
 
+Returned `sessions_send` results carry their success, truncation, and failure
+guidance beside the receiving turn, including recovered deliveries. These
+instructions keep their wording without changing the earlier system prefix.
+Unrelated caller-supplied system instructions retain their existing placement.
+
 ## Keep replayed tool results stable
 
 OpenClaw applies the same tool-result text cap before the first model request

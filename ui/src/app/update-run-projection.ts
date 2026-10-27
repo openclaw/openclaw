@@ -1,6 +1,10 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import {
+  projectUpdateRunHistory,
+  type UpdateRunServingIdentity,
+} from "../../../src/infra/update-run-history-projection.ts";
+import {
   isAcknowledgedAbandonedUpdateRun,
   type UpdateRunRecord,
   type UpdateRunStep,
@@ -19,10 +23,17 @@ export function updateRunStepOwner(step: string): string {
   return step.replace(/^(?:diagnostic|warning):(.+?)(?::\d+)?$/u, "$1");
 }
 
-export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
+export function projectUpdateRun(
+  run: UpdateRunRecord,
+  connected = true,
+  serving?: UpdateRunServingIdentity,
+) {
   const terminal = run.status !== "running";
   const managedByOcm = run.target.installationMethod === "ocm";
-  const report = renderUpdateRunReport(run);
+  const historical = connected ? projectUpdateRunHistory(run, serving) : null;
+  const report = historical
+    ? { headline: historical, lines: [], markdown: historical }
+    : renderUpdateRunReport(run);
   const currentIndex = UPDATE_RUN_PHASES.indexOf(run.phase);
   const phases = UPDATE_RUN_PHASES.flatMap((phase, index) => {
     const recorded = run.steps.find((step) => step.step === phase);
