@@ -122,11 +122,12 @@ the page topbar while the drawer is closed. Opening the drawer moves that action
 back to the rail, without a second header button. In team mode, creation opens the
 same agent picker as the rail. Native apps keep their native creation controls.
 
-Standalone session activity and unread indicators stay at the far-right edge
-in grouped, ungrouped, pinned, and child rows, including when hover or keyboard
-focus reveals pin and archive actions. Owner avatars, session artwork, and their
-activity rings keep their leading attribution slot; team mode keeps its compact
-status layout.
+When an owner filter already identifies a row's owner, standalone activity and
+unread indicators stay at the far-right edge in grouped, ungrouped, pinned, and
+child rows, including when hover or keyboard focus reveals pin and archive
+actions. Other rows keep their leading indicator slot. Owner avatars, session
+artwork, and their activity rings keep their leading attribution slot; team mode
+keeps its compact status layout.
 
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
@@ -368,7 +369,10 @@ enablement and sizing.
 The **Filter & sort** popover keeps **Filters** and **Display** in one panel.
 **Filters** controls status, automation, and system sessions. **Display**
 controls grouping, sorting, message previews, and empty groups. Choices take
-effect immediately. The filter button shows a dot only when **Status** differs from **Active**. **Reset** appears at the right of the Filters header
+effect immediately. The filter button names the current **Status**, including the
+default **Active**. Choose **All** under **Status** to include archived and snoozed
+conversations without clearing the current owner or agent selection. The button
+also shows a dot when Status differs from Active. **Reset** appears at the right of the Filters header
 whenever any visible Filters or Display setting differs from its default. It restores
 all visible panel settings: Active status, automation and system sessions off,
 Custom groups, Created sort, When filtering for empty groups, and message previews off.

@@ -199,11 +199,19 @@ committed session-store projection.
 
 The projection is initialized lazily at the first store operation and shares
 the admitted catalog/result-store lifetime. For a persisted session, core uses
-the existing off-thread `SessionManager.openAsync` API to read the full branch
+the off-thread transcript maintenance reader to select store entries on the branch
 ending at the live session's current leaf. This includes custom entries older
 than the live manager's bounded hydration window. An unmatched leaf fails the
 operation rather than exposing a different branch. Subsequent operations use
 the projection, applying this run's own commits without rescanning the branch.
+
+Across admitted runs, core reuses a validated projection only when a fresh read
+matches the physical session identity, transcript rewrite generation, and ordered
+store-entry IDs. The cache retains at most 16 sessions and 8 MiB of accounted
+JSON and metadata; histories above 4,096 entries or 1,024 live keys are not cached.
+Session removal and database shutdown discard retained projections. Store writes,
+branch changes, and rewrites select a new projection through the same replay and
+budget checks. Loaded values remain detached copies, and persisted bytes do not change.
 
 Only a cell that settles `completed` commits its non-empty write set. Core
 appends one `custom` entry with type `openclaw.code-mode-store` through

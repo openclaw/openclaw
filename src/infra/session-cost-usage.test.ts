@@ -166,6 +166,59 @@ const writeMessages = async (...entries: unknown[]) => {
   return file;
 };
 
+it("counts a stored request the provider never ran as zero usage, not a lower bound", async () => {
+  const failed = (timestamp: string, content: unknown[], extra: Record<string, unknown> = {}) =>
+    assistant(
+      timestamp,
+      {
+        input: 0,
+        output: 0,
+        totalTokens: 0,
+        cost: { total: 0 },
+        usageReport: { state: "unavailable" },
+      },
+      {
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.5",
+        content,
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        ...extra,
+      },
+    );
+  // Written before transports recorded unbilled failures as zero usage.
+  const sessionFile = await writeMessages(
+    modelMessage("2026-02-05T12:00:00.000Z", 10),
+    failed("2026-02-05T12:01:00.000Z", []),
+  );
+  const summary = await readSummary({ sessionFile });
+  expect(summary).toMatchObject({
+    totalTokens: 10,
+    missingCostEntries: 0,
+    messageCounts: { assistant: 2, errors: 1 },
+  });
+  expect(summary?.usageReport).toBeUndefined();
+  // Accepted then dropped, failed after output, or tool calls dropped by transport cleanup.
+  for (const [sessionId, entry] of [
+    ["dropped-after-acceptance", failed("2026-02-05T12:02:00.000Z", [], { responseId: "resp_1" })],
+    ["failed-after-output", failed("2026-02-05T12:03:00.000Z", [textBlock("partial answer")])],
+    [
+      "tool-call-dropped",
+      failed("2026-02-05T12:04:00.000Z", [], {
+        api: "anthropic-messages",
+        responseId: "msg_1",
+        errorBody: { type: "overloaded_error" },
+      }),
+    ],
+  ] as const) {
+    const file = await writeTranscript(sessionId, entry);
+    expect((await readSummary({ sessionFile: file }))?.usageReport).toEqual({
+      state: "unavailable",
+    });
+  }
+});
+
 it("prices and aggregates usage with each row's agent-local registry", async () => {
   const provider = "demo-agent-scope";
   const model = "demo-model";

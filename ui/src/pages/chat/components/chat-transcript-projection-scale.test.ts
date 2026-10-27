@@ -26,6 +26,7 @@ import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interact
 import { ChatThread } from "./chat-thread-view.tsx";
 import * as transcriptIndex from "./chat-transcript-message-index.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
+import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -536,6 +537,40 @@ describe("transcript projection", () => {
     props.runActive = false;
     view.draw();
     expect(liveLabels()).toEqual([]);
+  });
+
+  it("does not adopt conversation footprints for a matching search row", () => {
+    const props = threadProps("search-footprint", "agent:main:search-footprint", [
+      msg("assistant", "needle", 1_000, { __openclaw: { id: "matching-row" } }),
+    ]);
+    props.chatBubbleMode = true;
+    const read = vi.fn(() => 700);
+    props.widgetLayout = {
+      read,
+      write: vi.fn(),
+      writeRows: vi.fn(),
+      invalidateRow: vi.fn(),
+    };
+    const session = new ChatSessionVirtualizerHost(() => {});
+    cleanups.push(() => session.dispose());
+    session.layout.rowWidth = 768;
+    session.layout.paneWidth = 1100;
+    session.layout.rowGutter = 166;
+    const project = () => projectChatTranscript(props, session).renderRows();
+    project();
+    const row = session.layout.rows[0];
+    expect(session.layout.rowMinimum(0)).toBe(700);
+    const search = getTranscriptState(props.paneId).search;
+    search.toggle();
+    search.setQuery("needle");
+    read.mockClear();
+    project();
+    expect(session.layout.rows[0]).toMatchObject({ key: row?.key, revision: row?.revision });
+    expect(session.layout.rowMinimum(0)).toBe(0);
+    expect(read).not.toHaveBeenCalled();
+    search.close();
+    project();
+    expect(session.layout.rowMinimum(0)).toBe(700);
   });
 
   it("keeps search and gallery caches warm while refreshing streamed and replaced messages", () => {

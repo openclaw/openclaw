@@ -57,6 +57,7 @@ it(${JSON.stringify(synthetic)}, async () => {
       cwd: repoRoot,
       env: preparedCli.env({
         ...testRunnerFixtureEnv(),
+        OPENCLAW_VITEST_RUNTIME: "node",
         OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: diagnostics,
         OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "module-cache"),
       }),
@@ -128,6 +129,7 @@ it("synthetic ${kind} failure", async ({ annotate }) => {
     HOME: root,
     USERPROFILE: root,
     OPENCLAW_STATE_DIR: path.join(root, "state"),
+    OPENCLAW_VITEST_RUNTIME: "node",
     OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "module-cache"),
     GITHUB_ACTIONS: "true",
     GITHUB_STEP_SUMMARY: path.join(root, "summary.md"),

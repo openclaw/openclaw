@@ -575,6 +575,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/bash-tools.process.finished-retention.test.ts",
   "src/agents/bash-tools.test.ts",
   "src/agents/code-mode.agent-loop.test.ts",
+  "src/agents/code-mode-session-store.test.ts",
   "src/agents/code-mode.bridge.host-denial.test.ts",
   "src/agents/code-mode.bridge.lifecycle.test.ts",
   "src/agents/code-mode.source-reply.loop.test.ts",

@@ -261,6 +261,7 @@ const BUILT_ARTIFACT_TEST_INPUTS = new Set([
   "extensions/browser/chrome-extension/relay-key.test-support.ts",
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
   "extensions/browser/src/browser/extension-install.test-support.ts",
+  "scripts/test-built-source-verifiers.mts",
 ]);
 
 /**

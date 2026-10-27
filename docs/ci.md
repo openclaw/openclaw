@@ -154,6 +154,17 @@ use the runtime-only compiled-worker registry. The local TUI file does the same
 when its existing built-CLI mode is enabled; source TUI and broad, mixed, or
 custom selections retain the full registry.
 
+When the artifact producer selects both channels and core support checks with
+matching compiler heap options, they share one full compiled-worker generation.
+Both test commands still run concurrently with their original configurations,
+worker limits, and separate transform caches. The generation remains owned until
+both commands finish; either failure fails the producer without canceling its
+sibling. Single selections, differing compiler heap options, and older targets
+without the shared runner retain their independent commands. Changes to the shared
+runner select both checks in the artifact producer on current targets, while the
+changed Node plan defers its boundary coverage to that producer. This opt-in does
+not enable unrelated proof-tier checks.
+
 Real-Gateway UI shards have a 30-minute whole-job budget on the normal Blacksmith
 path. Successful 16-class jobs reached 19:04, leaving too little margin under the
 former 20-minute limit. Hosted and retry paths retain their 40-minute budget;
@@ -191,6 +202,8 @@ Current iOS Debug builds log CPU count, memory, machine model, booted simulators
 Shared OpenClawKit Periphery scans restore the same verified Watch RTC libraries published by trusted main CI, without saving caches. Both Apple consumers build their complete index in a separate timed step with streamed output retained as `build.log` in the consumer artifact. iOS uses a fresh run-owned index; Periphery analyzes that exact index without rebuilding. Scan scope and the shared dead-code intersection stay unchanged. Cache misses retain the locked Cargo build.
 
 iOS screenshot shards, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
+
+Release qualification disables Spotlight indexing on the disposable runner's Data volume before checkout. After Simulator boot, it requires ten seconds of at least 30% idle host CPU within five minutes before issuing the pairing credential. This keeps first-launch background work out of the Gateway and XCTest deadlines. Local qualification uses the same CPU readiness check and leaves host indexing settings to the operator.
 
 Android screenshot-input PRs and ordinary full manual CI run the existing phone
 and Wear store capture script in one hosted Ubuntu job. The final CI gate requires

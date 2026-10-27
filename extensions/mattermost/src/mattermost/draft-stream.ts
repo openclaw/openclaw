@@ -18,17 +18,6 @@ type MattermostDraftPublishedPart = {
   content: string;
 };
 
-type MattermostFinalTextResolution =
-  | {
-      kind: "full" | "remaining";
-      text: string;
-      publishedParts: readonly MattermostDraftPublishedPart[];
-    }
-  | {
-      kind: "already-delivered";
-      publishedParts: readonly MattermostDraftPublishedPart[];
-    };
-
 export function createMattermostDraftStream(params: {
   client: MattermostClient;
   channelId: string;
@@ -304,34 +293,36 @@ export function createMattermostDraftStream(params: {
     await currentGeneration.ready;
     assertNoAcceptedDeliveryFailure();
   };
-  const resolveFinalText = (text: string): MattermostFinalTextResolution => {
-    const publishedParts = [...publishedAssistantParts.values()];
+  const resolveFinalText = (text: string) => {
+    const publishedParts: readonly MattermostDraftPublishedPart[] = [
+      ...publishedAssistantParts.values(),
+    ];
     if (sealedAssistantTexts.length === 0) {
-      return { kind: "full", text, publishedParts };
+      return { kind: "full" as const, text, publishedParts };
     }
 
     let remainingText = text.trim();
     for (const sealedText of sealedAssistantTexts) {
       const completed = sealedText.text;
       if (!remainingText.startsWith(completed)) {
-        return { kind: "full", text, publishedParts };
+        return { kind: "full" as const, text, publishedParts };
       }
       const suffix = remainingText.slice(completed.length);
       // Canonical assistant block aggregation uses newline separators. A plain-space
       // suffix can be a block-local final that merely shares the prior block's prefix.
       if (sealedText.requiresBlockBoundary && suffix && !/^\r?\n/.test(suffix)) {
-        return { kind: "full", text, publishedParts };
+        return { kind: "full" as const, text, publishedParts };
       }
       remainingText = suffix.replace(sealedText.requiresBlockBoundary ? /^(?:\r?\n)+/ : /^\s+/, "");
     }
     const currentText = currentGeneration.latestAssistantText?.trim() ?? "";
     const remaining = remainingText.trim();
     if (currentText && !remaining.startsWith(currentText)) {
-      return { kind: "full", text, publishedParts };
+      return { kind: "full" as const, text, publishedParts };
     }
     return remaining
-      ? { kind: "remaining", text: remaining, publishedParts }
-      : { kind: "already-delivered", publishedParts };
+      ? { kind: "remaining" as const, text: remaining, publishedParts }
+      : { kind: "already-delivered" as const, publishedParts };
   };
 
   params.log?.(
