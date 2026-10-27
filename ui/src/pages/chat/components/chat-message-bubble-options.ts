@@ -22,6 +22,8 @@ export type ActivityOperationProps = {
 };
 
 export type MessageRenderOptions = {
+  /** Links a handoff's child sessions; absent where this pane cannot open sessions. */
+  handoffSessionLinks?: import("../chat-subagent-wait.ts").HandoffSessionLinks;
   onOpenReply?: (replyToId: string) => void;
   replyNavigationId?: string | null;
   sessionKey?: string;

@@ -9,7 +9,7 @@ import {
 } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
-import { resolvePluginRootPublicSurfacePath } from "./public-surface-runtime.js";
+import { resolvePluginRootPublicSurfaceLocation } from "./public-surface-runtime.js";
 
 /** Explicit executor selection activates only its admitted manifest owner. */
 export function resolvePluginCodeModeExecutor(
@@ -39,20 +39,19 @@ export function resolvePluginCodeModeExecutor(
         : `Code Mode executor "${executorId}" has multiple plugin owners: ${owners.map((candidate) => candidate.id).join(", ")}. Enable only one owner.`,
     );
   }
-  const modulePath = resolvePluginRootPublicSurfacePath({
+  const location = resolvePluginRootPublicSurfaceLocation({
     pluginRoot: owner.rootDir,
     pluginId: owner.id,
     entrySource: owner.source,
     artifactBasename: "code-mode-executor-api.js",
   });
-  if (!modulePath) {
+  if (!location) {
     throw new Error(
       `Code Mode executor "${executorId}" plugin "${owner.id}" is missing its runtime artifact.`,
     );
   }
   const module = loadValidatedPublicSurfaceModule({
-    modulePath,
-    boundaryRoot: owner.rootDir,
+    ...location,
     surfaceLabel: "Code Mode executor",
     origin: owner.origin,
     pluginId: owner.id,

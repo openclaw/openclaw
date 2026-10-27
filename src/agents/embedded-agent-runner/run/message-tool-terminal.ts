@@ -1,5 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  getInternalToolTurnCompletion,
+  setInternalToolTurnCompletion,
+} from "../../../../packages/agent-core/src/internal-hooks.js";
+import {
   getAgentToolInputScope,
   resolveAgentAssistantTurnId,
 } from "../../../../packages/agent-core/src/tool-execution-context.js";
@@ -16,10 +20,6 @@ import {
 import type { MessagingToolSourceReplyPayload } from "../../embedded-agent-messaging.types.js";
 import { captureToolAuthoredSourceReply } from "../../embedded-agent-tool-authored-source-reply.js";
 import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
-import {
-  getInternalToolTurnCompletion,
-  setInternalToolTurnCompletion,
-} from "../../runtime/internal-hooks.js";
 import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import { isToolResultError, readToolResultDetails } from "../../tool-result-error.js";
 import { createSourceReplyBatchCompletion } from "../../tool-source-reply-completion.js";

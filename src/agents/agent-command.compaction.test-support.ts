@@ -109,11 +109,15 @@ vi.mock("./agent-scope.js", async () => {
     resolveAgentConfig: () => undefined,
     resolveAgentDir: () => compactionTestState.agentDir ?? "/tmp/openclaw-agent",
     resolveDefaultAgentId: () => "main",
-    resolveEffectiveModelFallbacks: () => undefined,
     resolveSessionAgentId: () => "main",
     resolveAgentWorkspaceDir: () => compactionTestState.workspaceDir ?? "/tmp/openclaw-workspace",
   };
 });
+
+vi.mock("./model-selection-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-selection-config.js")>()),
+  resolveEffectiveModelFallbacks: () => undefined,
+}));
 
 vi.mock("./model-catalog.js", async () => {
   const { buildPreparedModelCatalogSnapshot } =

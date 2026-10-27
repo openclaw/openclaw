@@ -73,6 +73,30 @@ function observeReads<T extends object>(target: T, reads: AuthorityRead[]): T {
 }
 
 describe("host-prepared embedded tool authority", () => {
+  it("enters the admitted owner without materializing unrelated internal run payload", async () => {
+    await withOperation(async ({ admittedRunContext, operation }) => {
+      const readContinuation = vi.fn(() => ({ prompt: "synthetic continuation" }));
+      const internal = {
+        admittedRunContext,
+        replyOperation: operation,
+        get continuation() {
+          return readContinuation();
+        },
+      };
+      const params: Parameters<typeof withPreparedEmbeddedRunToolAuthority>[1] = Object.freeze({
+        ...attempt,
+        abortSignal: undefined,
+      });
+      await withPreparedEmbeddedRunToolAuthority(internal, params, undefined, async (prepared) => {
+        expect(prepared.replyOperation).toBe(operation);
+        expect(prepared.abortSignal).toBe(operation.abortSignal);
+        expect(prepared.abortSignal?.aborted).toBe(false);
+        expect(params.abortSignal).toBeUndefined();
+      });
+      expect(readContinuation).not.toHaveBeenCalled();
+    });
+  });
+
   it.each([false, true])(
     "preserves requester capture reads with inherited requester=%s",
     async (inherited) => {

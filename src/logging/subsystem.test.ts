@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import util from "node:util";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
 import {
@@ -76,6 +77,7 @@ afterEach(async () => {
 afterAll(() => logPathTracker.cleanup());
 
 it("formats host runtime arguments before routing them to the subsystem logger", () => {
+  setLoggerOverride({ level: "silent", consoleLevel: "info" });
   const logger = createSubsystemLogger("runtime-arguments");
   const info = vi.spyOn(logger, "info").mockImplementation(() => {});
   const error = vi.spyOn(logger, "error").mockImplementation(() => {});
@@ -84,6 +86,28 @@ it("formats host runtime arguments before routing them to the subsystem logger",
   runtime.error("failed", { retryable: false });
   expect(info).toHaveBeenCalledExactlyOnceWith("ready { active: true } 17");
   expect(error).toHaveBeenCalledExactlyOnceWith("failed { retryable: false }");
+});
+
+it("does not inspect or serialize disabled runtime output as sink levels change", () => {
+  const inspect = vi.fn(() => "fixture inspected");
+  const toJSON = vi.fn(() => ({ fixture: true }));
+  const value = { [util.inspect.custom]: inspect, toJSON };
+  const runtime = runtimeForLogger(createSubsystemLogger("runtime-levels"));
+  const sink = vi.fn();
+  loggingState.rawConsole = { log: sink, info: sink, warn: sink, error: sink };
+
+  for (const consoleLevel of ["silent", "info", "silent"] as const) {
+    setLoggerOverride({ level: "silent", consoleLevel });
+    inspect.mockClear();
+    toJSON.mockClear();
+    sink.mockClear();
+    runtime.log("ready", value);
+    runtime.error("failed", value);
+    runtime.writeJson(value);
+    expect(inspect).toHaveBeenCalledTimes(consoleLevel === "info" ? 2 : 0);
+    expect(toJSON).toHaveBeenCalledTimes(consoleLevel === "info" ? 1 : 0);
+    expect(sink).toHaveBeenCalledTimes(consoleLevel === "info" ? 3 : 0);
+  }
 });
 
 it.each(["pretty", "compact", "json"] as const)(

@@ -14,7 +14,11 @@ import {
   readFooterGeometry,
   sampleMetadataReveal,
 } from "./chat-attributed-identity.test-support.ts";
-import { requireRecord, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import {
+  requireRecord,
+  scrollChatThreadToTop,
+  waitForChatScrollIdle,
+} from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -318,6 +322,11 @@ suite.define(() => {
                 Date.now(),
               ),
             });
+            // Fixture delivery does not wait for the new row's presentation.
+            await expect(
+              transcript.getByText("Riley joined this conversation."),
+              label,
+            ).toBeVisible();
             if (profiled) {
               const peer = pane.locator(".chat-group--peer", {
                 hasText: "Riley joined this conversation.",
@@ -329,11 +338,7 @@ suite.define(() => {
             if (height === 430) {
               // The first message can leave the virtual window after new turns.
               // Return to it before checking its attributed identity.
-              await waitForChatScrollIdle(page);
-              await thread.focus();
-              await thread.press("Home");
-              // Chromium drops a keyboard scroll that lands in the tail of the
-              // previous smooth one, so End must wait for Home to settle.
+              await scrollChatThreadToTop(page);
               await waitForChatScrollIdle(page);
               expect(await thread.evaluate((element) => element.scrollTop), label).toBe(0);
             }
@@ -725,12 +730,13 @@ suite.define(() => {
         "Keep my identity stable when delivery fails.",
       );
       const firstRunId = String((request.params as { idempotencyKey?: unknown }).idempotencyKey);
-      await expect(group).toHaveClass(/\bchat-group--sender-tint\b/u);
+      await expect(group).toHaveCSS("flex-direction", "row-reverse");
       const background = () =>
         group
           .locator(".chat-bubble")
           .evaluate((element) => getComputedStyle(element).backgroundColor);
       const sendingBackground = await background();
+      expect(sendingBackground).not.toBe("rgba(0, 0, 0, 0)");
 
       await rejectDelivery(gateway);
       await expect
@@ -762,10 +768,8 @@ suite.define(() => {
 
       await gateway.deferNext("chat.send");
       await group.getByRole("button", { name: "Retry queued message" }).click();
-      await expect(group.locator(".chat-send-status")).toHaveAttribute(
-        "data-send-state",
-        "sending",
-      );
+      await expect(group.locator(".chat-send-status")).toHaveCount(0);
+      await expect(group.locator("time.chat-group-timestamp")).toHaveCount(1);
       await expect(group.getByRole("button", { name: "Retry queued message" })).toHaveCount(0);
       await expect(group).toBeVisible();
       await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(2);
@@ -776,6 +780,7 @@ suite.define(() => {
       expect(retryRunId).not.toBe(firstRunId);
       await gateway.resolveDeferred("chat.send", { runId: retryRunId, status: "started" });
       await expect(group.locator(".chat-send-status")).toHaveCount(0);
+      expect(await background()).toBe(sendingBackground);
     });
   });
 

@@ -144,7 +144,7 @@ export function createKnowledgeService(
     async start(ctx) {
       stores.start();
       if (ctx?.scheduler) {
-        await maintenance.start(ctx.scheduler, ctx.getCron);
+        await maintenance.start(ctx.scheduler);
       }
     },
     // A maintenance pass writes through the registry, so the registry closes only

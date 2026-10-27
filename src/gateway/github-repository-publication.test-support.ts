@@ -39,6 +39,7 @@ export async function createRepositoryPublicationFixture(
   requestedRef?: string | { kind: "commit" },
   session = { sessionId: SESSION_ID, sessionKey: SESSION_KEY },
   baseFiles: Record<string, string> = {},
+  initialCheckpoint = true,
 ) {
   // Only the mock GitHub service accesses this object store. The broker still
   // rejects every Git command and receives only the normalized checkpoint.
@@ -126,6 +127,7 @@ export async function createRepositoryPublicationFixture(
     content: string | null,
     suffix: string,
     changes: Record<string, string | null> = {},
+    accept = true,
   ) => {
     const bytes = Buffer.from(content ?? "");
     const sha = git(["hash-object", "-w", "--stdin"], bytes);
@@ -149,16 +151,18 @@ export async function createRepositoryPublicationFixture(
     const publicationDigest = "sha256:" + createHash("sha256").update(raw).digest("hex");
     const ref = "refs/openclaw/worker-results/" + suffix;
     payloads.set(ref, { publicationStagingRoot, publicationDigest });
-    workspace = await store.acceptCheckpoint({
-      workspaceId: workspace.workspaceId,
-      expectedRevision: workspace.revision,
-      checkpointRef: ref,
-      manifestHash: "sha256:" + createHash("sha256").update(suffix).digest("hex"),
-      assertCurrent: () => {},
-    });
+    if (accept) {
+      workspace = await store.acceptCheckpoint({
+        workspaceId: workspace.workspaceId,
+        expectedRevision: workspace.revision,
+        checkpointRef: ref,
+        manifestHash: "sha256:" + createHash("sha256").update(suffix).digest("hex"),
+        assertCurrent: () => {},
+      });
+    }
     return { ref, sha, workspaceTree };
   };
-  const first = await capture("accepted first\n", "first");
+  const first = await capture("accepted first\n", "first", {}, initialCheckpoint);
   checkpoint.mockReset();
   checkpoint.mockImplementation(
     async (

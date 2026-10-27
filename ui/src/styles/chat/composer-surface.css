@@ -36,12 +36,7 @@
 }
 
 .agent-chat__composer-notices:not(
-  :has(
-    > :not(openclaw-chat-child-attention, .chat-composer-lit-content),
-    > openclaw-chat-child-attention > *,
-    > .chat-composer-lit-content > :not(openclaw-chat-child-attention),
-    > .chat-composer-lit-content > openclaw-chat-child-attention > *
-  )
+  :has(> :not(.chat-composer-lit-content), > .chat-composer-lit-content > *)
 ) {
   display: none;
 }
@@ -78,16 +73,8 @@
       openclaw-plugin-contributions,
       openclaw-chat-outbox-recovery
     ),
-    > .agent-chat__composer-notices
-      > :not(openclaw-chat-child-attention, .chat-composer-lit-content),
-    > .agent-chat__composer-notices > openclaw-chat-child-attention > *,
-    > .agent-chat__composer-notices
-      > .chat-composer-lit-content
-      > :not(openclaw-chat-child-attention),
-    > .agent-chat__composer-notices
-      > .chat-composer-lit-content
-      > openclaw-chat-child-attention
-      > *,
+    > .agent-chat__composer-notices > :not(.chat-composer-lit-content),
+    > .agent-chat__composer-notices > .chat-composer-lit-content > *,
     > .chat-composer-lit-content
       > :not(openclaw-plugin-contributions, openclaw-chat-outbox-recovery),
     > .chat-composer-lit-content > openclaw-plugin-contributions > *,
@@ -115,11 +102,12 @@
 }
 
 :root[data-theme-mode="light"]
-  .session-progress-card--composer:not(.session-progress-card--details) {
+  .session-progress-card--composer:not(.session-progress-card--details),
+:root[data-theme-mode="light"] .chat-queue {
   border-color: var(--chat-composer-light-outline);
 }
 
-:root[data-theme-mode="light"] :is(.chat-queue, .agent-chat__goal--active) {
+:root[data-theme-mode="light"] .agent-chat__goal--active {
   border-color: transparent;
   box-shadow: inset 0 0 0 1px var(--chat-composer-light-outline);
 }
@@ -178,7 +166,6 @@
   );
   --chat-composer-hover: var(--surface-hover);
   --chat-composer-group-hover: var(--surface-hover);
-  --chat-composer-popover-background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
   --chat-composer-popover-border: var(--overlay-border);
   --chat-composer-popover-radius: calc(14px * var(--openclaw-corner-radius-scale));
   /* Footer control box. Smaller than the editor's own line box on purpose: the
@@ -253,17 +240,10 @@
   min-height: var(--chat-composer-min-height, 112px);
   margin: 0;
   padding: 0;
-  /* The app owns the artwork; keep one translucent writing surface, not a
-     second texture. Foreground/menu tokens retain their opaque surface color. */
-  background: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
-
-  :where(.shell[data-background-managed]) & {
-    /* Personal artwork never changes the writing surface's readability. */
-    --chat-composer-fill: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
-    background:
-      linear-gradient(var(--chat-composer-fill), var(--chat-composer-fill)),
-      var(--bg-content, var(--bg));
-  }
+  /* The app owns the artwork; the writing surface stays opaque above it. */
+  background:
+    linear-gradient(var(--chat-composer-surface), var(--chat-composer-surface)),
+    var(--bg-content, var(--bg));
   border: 1px solid var(--chat-composer-hairline);
   /* Deliberately lighter than --shadow-sm: with the border and the luminance
      step already doing the separating, a heavier drop reads as a second frame. */
@@ -356,7 +336,7 @@
   z-index: 1;
 }
 
-.agent-chat__input--disabled {
+.agent-chat__input--disabled > * {
   opacity: 0.6;
 }
 
@@ -439,11 +419,17 @@
     --scrollbar-size: 8px;
     --scrollbar-thumb-inset: 1px;
 
-    /* Count the native gutter inside the text inset, including before overflow. */
-    padding-inline-end: calc(var(--chat-composer-editor-inset-inline) - var(--scrollbar-size));
-    scrollbar-gutter: stable;
+    /* Short drafts use padding: reserving a native gutter makes every edit relayout slower. */
+    padding-inline-end: var(--chat-composer-editor-inset-inline);
+    scrollbar-gutter: auto;
     scrollbar-width: auto;
     scrollbar-color: auto;
+  }
+
+  .agent-chat__composer-combobox > textarea:where([data-composer-scrollable]) {
+    /* Exchange the same inset for a real gutter without changing the text width. */
+    padding-inline-end: calc(var(--chat-composer-editor-inset-inline) - var(--scrollbar-size));
+    scrollbar-gutter: stable;
   }
 
   .agent-chat__composer-combobox > textarea::-webkit-scrollbar-track {
@@ -796,6 +782,14 @@
 .agent-chat__input .agent-chat__input-btn--attach {
   position: relative;
   color: color-mix(in srgb, var(--icon-interactive, var(--chat-composer-secondary)) 90%, white);
+}
+
+:where(:root[data-theme-mode="light"]) .agent-chat__input .agent-chat__input-btn--attach {
+  color: color-mix(
+    in srgb,
+    var(--icon-interactive, var(--chat-composer-secondary)) 90%,
+    var(--text-strong)
+  );
 }
 
 .agent-chat__input .agent-chat__attach-menu .agent-chat__input-btn.agent-chat__input-btn--attach {

@@ -11,13 +11,6 @@ import { resolveSlackMessageText } from "../block-text.js";
 import type { SlackMediaResult } from "../media-types.js";
 import type { SlackThreadStarter } from "../thread.js";
 
-type SlackResolvedMessageContent = {
-  rawBody: string;
-  effectiveDirectMedia: SlackMediaResult[] | null;
-  commandSourceText: string;
-  mentionStripPatterns: string[];
-};
-
 const SLACK_MENTION_RESOLUTION_CONCURRENCY = 4;
 const SLACK_MENTION_RESOLUTION_MAX_LOOKUPS_PER_MESSAGE = 20;
 const SLACK_USER_MENTION_RE = /<@([A-Z0-9]+)(?:\|[^>]+)?>/gi;
@@ -89,7 +82,7 @@ export async function resolveSlackMessageContent(params: {
   mediaMaxBytes: number;
   resolveUserName?: (userId: string) => Promise<{ name?: string }>;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
-}): Promise<SlackResolvedMessageContent | null> {
+}) {
   let ownFiles = params.message.files;
   const { isThreadReply, threadStarter } = params;
   if (isThreadReply && ownFiles?.length && threadStarter?.files?.length) {

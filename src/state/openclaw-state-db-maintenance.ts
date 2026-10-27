@@ -2,8 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { CLIENT_CREDENTIAL_SOURCE_TABLES } from "../infra/client-credential-schema.js";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
-import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import {
@@ -69,6 +68,10 @@ import {
   stateLocalWorkspaceManifestMigration,
   withLegacyLocalWorkspaceManifests,
 } from "./openclaw-state-db-schema-v31-workspace-manifests.js";
+import {
+  stateLocalWorkspaceCasMigration,
+  withLegacyLocalWorkspaceCas,
+} from "./openclaw-state-db-schema-v35-workspace-cas.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -549,6 +552,7 @@ export const versionedStateMigrations = [
   statePublicationDraftMigration,
   stateLocalWorkspaceManifestMigration,
   cronIdentity.stateCronIdentityMigration,
+  stateLocalWorkspaceCasMigration,
 ] as const;
 
 /** Recent version migrations own only their tables; Doctor owns unrelated historical repair. */
@@ -571,6 +575,7 @@ export function migrateBoundedStateSchema(
     stateLocalWorkspaceManifestMigration,
     ...stateIndexOrderingMigrations,
     cronIdentity.stateCronIdentityMigration,
+    stateLocalWorkspaceCasMigration,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.
@@ -584,10 +589,9 @@ export function migrateBoundedStateSchema(
   const indexes = getCanonicalSqliteNamedIndexContracts(OPENCLAW_STATE_SCHEMA_SQL).filter((index) =>
     tables.has(index.tableName),
   );
+  const casSourceSchema = withLegacyLocalWorkspaceCas(OPENCLAW_STATE_SCHEMA_SQL);
   const manifestSourceSchema =
-    previousVersion < 31
-      ? withLegacyLocalWorkspaceManifests(OPENCLAW_STATE_SCHEMA_SQL)
-      : OPENCLAW_STATE_SCHEMA_SQL;
+    previousVersion < 31 ? withLegacyLocalWorkspaceManifests(casSourceSchema) : casSourceSchema;
   const indexSourceSchema =
     previousVersion < 27 ? withLegacyStateWriteIndexes(manifestSourceSchema) : manifestSourceSchema;
   const sourceSchema =

@@ -25,6 +25,7 @@ import {
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { preserveDocumentStyle } from "../../test-helpers/preserve-document-style.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -181,6 +182,7 @@ async function loadProfile(configObject: object, entries: Record<string, string>
 }
 
 beforeEach(() => {
+  preserveDocumentStyle();
   window.history.replaceState({}, "", "/");
   vi.spyOn(realtimeTalk, "switchActiveRealtimeTalkCameras").mockImplementation(
     switchActiveRealtimeTalkCameras,

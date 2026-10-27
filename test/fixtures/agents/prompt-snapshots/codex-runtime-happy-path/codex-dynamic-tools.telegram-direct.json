@@ -1758,11 +1758,11 @@
     "name": "openclaw_direct",
     "tools": [
       {
-        "description": "End this turn to await pending child completions, not submit a final result. Return completed work normally. Does not message other sessions; use sessions_send. Omit waitFor when yielding for your own children; their completions resume this session. Set waitFor:\"message\" only when a subagent has no pending children and waits for its requester to send it a continuation. For background tools, follow their continuation instructions. Collector runs require agents_wait instead.",
+        "description": "End this turn to await pending child completions, not submit a final result. Return completed work normally. Does not message other sessions. Omit waitFor when yielding for your own children; their completions resume this session. Set waitFor:\"message\" only when a subagent has no pending children and waits for its requester to send it a continuation. For background tools, follow their continuation instructions. Automation turns end here; the scheduler delivers child output under the job delivery policy. Collector runs require explicit collection instead.",
         "inputSchema": {
           "properties": {
             "acknowledgment": {
-              "description": "Optional waiting reply in this session; with waitFor, text for an eligible task pause notice. Not an inter-session message.",
+              "description": "Optional brief waiting status shown to the user as your message; put answers in normal assistant text. With waitFor, also the task pause notice. Not an inter-session message.",
               "type": "string"
             },
             "message": {

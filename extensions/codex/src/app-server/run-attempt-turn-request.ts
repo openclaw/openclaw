@@ -197,7 +197,10 @@ export async function prepareCodexAttemptTurnRequest(
         (tool) => tool.name === "session_status",
       ),
     });
-    if (turnStartParams.cyberAccessProgram !== undefined) {
+    if (
+      turnStartParams.cyberAccessProgram !== undefined &&
+      turnStartParams.cyberAccessProgram !== "standard"
+    ) {
       // The managed Codex runtime supports explicit programs for both native
       // OpenAI account types; entitlement still comes from this client's catalog.
       const account = await turnClient.request<CodexGetAccountResponse>(
@@ -208,29 +211,27 @@ export async function prepareCodexAttemptTurnRequest(
       assertTurnCurrent();
       if (account.account?.type !== "chatgpt" && account.account?.type !== "apiKey") {
         throw new CodexAccessProgramUnavailableError(
-          "Explicit Daybreak access in the Codex runtime requires an authenticated OpenAI account. Sign in or reset Access to the model default.",
+          "Explicit Daybreak access in the Codex runtime requires an authenticated OpenAI account. Sign in or select Standard Access.",
         );
       }
-      if (turnStartParams.cyberAccessProgram !== "standard") {
-        const accountRevision = turnClient.getModelCatalogRevision();
-        accessProgramIsCurrent = () => turnClient.getModelCatalogRevision() === accountRevision;
-        const catalog = await listAllCodexAppServerModels({
-          request: <T>({ method, requestParams }: Parameters<CodexAppServerScopedRequest>[0]) =>
-            turnClient.request<T>(method, requestParams, { assertCurrent: assertTurnCurrent }),
-          includeHidden: true,
-        });
-        assertTurnCurrent();
-        const selectedModel = turnStartParams.model ?? model;
-        const advertised = catalog.models.find(
-          (entry) => entry.model === selectedModel || entry.id === selectedModel,
-        )?.availableAccessPrograms?.cyber;
-        const program =
-          turnStartParams.cyberAccessProgram === "daybreakBlue" ? "daybreak_blue" : "daybreak_red";
-        if (!advertised?.includes(program)) {
-          throw new CodexAccessProgramUnavailableError(
-            "This Daybreak program is not advertised for the current account and model. Reset Access to the model default or refresh account capabilities.",
-          );
-        }
+      const accountRevision = turnClient.getModelCatalogRevision();
+      accessProgramIsCurrent = () => turnClient.getModelCatalogRevision() === accountRevision;
+      const catalog = await listAllCodexAppServerModels({
+        request: <T>({ method, requestParams }: Parameters<CodexAppServerScopedRequest>[0]) =>
+          turnClient.request<T>(method, requestParams, { assertCurrent: assertTurnCurrent }),
+        includeHidden: true,
+      });
+      assertTurnCurrent();
+      const selectedModel = turnStartParams.model ?? model;
+      const advertised = catalog.models.find(
+        (entry) => entry.model === selectedModel || entry.id === selectedModel,
+      )?.availableAccessPrograms?.cyber;
+      const program =
+        turnStartParams.cyberAccessProgram === "daybreakBlue" ? "daybreak_blue" : "daybreak_red";
+      if (!advertised?.includes(program)) {
+        throw new CodexAccessProgramUnavailableError(
+          "This Daybreak program is not advertised for the current account and model. Select Standard Access or refresh account capabilities.",
+        );
       }
     }
     const serviceTier =
@@ -250,7 +251,17 @@ export async function prepareCodexAttemptTurnRequest(
               model: turnStartParams.model,
             }
           : undefined;
-    connection.bindModelExecution(authorizedModel);
+    connection.bindModelExecution(
+      authorizedModel && {
+        ...authorizedModel,
+        cyberAccessProgram:
+          turnStartParams.cyberAccessProgram === "daybreakBlue"
+            ? "daybreak_blue"
+            : turnStartParams.cyberAccessProgram === "daybreakRed"
+              ? "daybreak_red"
+              : "standard",
+      },
+    );
     const nativeRequestModel = turnStartParams.model ?? model;
     const modelMapping =
       authorizedModel && nativeRequestModel

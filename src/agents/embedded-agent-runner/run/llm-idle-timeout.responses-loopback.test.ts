@@ -10,10 +10,13 @@ import {
   createDeferred,
   withinTest,
 } from "../../../../test/helpers/promise.js";
+import { createSessionControllerWatchdog } from "../../../sessions/session-controller.watchdog.js";
 import { reserveTestPortListener } from "../../../test-utils/port-claims.js";
 import "../../../llm/ai-transport-host.js";
+import { resolveFailoverReasonFromError } from "../../failover-error.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { completionModel } from "../../simple-completion.test-support.js";
+import { createRetryController } from "./failover-retry-controller.test-support.js";
 import { streamWithIdleTimeout } from "./llm-idle-timeout.js";
 
 const reasoning = { id: "rs_synthetic", type: "reasoning", summary: [] };
@@ -118,21 +121,7 @@ describe("Responses watchdog through the loopback transport", () => {
       const base = createOpenAIResponsesTransportStreamFn();
       const onTimeout = vi.fn();
       const stepMs = 30_000;
-      const streamFn = streamWithIdleTimeout(base, idleMs, onTimeout);
-      const consume = async () => {
-        const stream = await streamFn(model, { messages: [] }, {
-          apiKey: "synthetic-test-key",
-          signal: runAbort.signal,
-          transport: "sse",
-          firstEventTimeoutMs: 5_000,
-        } as Parameters<StreamFn>[2]);
-        for await (const event of stream) {
-          if (event.type === "error") {
-            throw new Error(event.error.errorMessage);
-          }
-        }
-        return stream.result();
-      };
+      let watchdog: ReturnType<typeof createSessionControllerWatchdog> | undefined;
       let settleStream: (() => Promise<void>) | undefined;
       const within = <T>(promise: Promise<T>) => withinTest(promise, signal);
       try {
@@ -148,12 +137,61 @@ describe("Responses watchdog through the loopback transport", () => {
           ),
         );
         expect((await within(warmup.result())).stopReason).toBe("stop");
+        received = "";
         exercising = true;
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        const stop = vi.fn(() => {
+          runAbort.abort(activeWatchdog.describeStop().error);
+          return "settled" as const;
+        });
+        const activeWatchdog = createSessionControllerWatchdog({
+          startedAtMs: Date.now(),
+          isCurrent: () => !runAbort.signal.aborted,
+          readPhase: () => "active",
+          requestStop: stop,
+          expireCleanup: stop,
+        });
+        watchdog = activeWatchdog;
+        const watchdogAttempt = activeWatchdog.attachAttempt({ assertCurrent() {} });
+        const streamFn = streamWithIdleTimeout(base, idleMs, onTimeout, { watchdogAttempt });
+        const consume = async () => {
+          const stream = await streamFn(model, { messages: [] }, {
+            apiKey: "synthetic-test-key",
+            signal: runAbort.signal,
+            transport: "sse",
+            firstEventTimeoutMs: 5_000,
+          } as Parameters<StreamFn>[2]);
+          for await (const event of stream) {
+            if (event.type === "error") {
+              throw new Error(event.error.errorMessage);
+            }
+          }
+          return stream.result();
+        };
+        activeWatchdog.start();
+        const retryScheduled = createDeferred();
+        const retryController = createRetryController({
+          runParams: { abortSignal: runAbort.signal },
+          runtime: { modelId: model.id },
+        });
         const consuming = consume();
+        const recovered = consuming.catch(async (error: unknown) => {
+          expect(resolveFailoverReasonFromError(error, "openai")).toBe("timeout");
+          if (
+            await retryController.maybeRetryTransient({
+              reason: "timeout",
+              onRetry: () => retryScheduled.resolve(),
+            })
+          ) {
+            return consume();
+          }
+          throw error;
+        });
+        void recovered.catch(() => {});
         const settled = consuming.catch(() => undefined);
         settleStream = async () => {
           await settled;
+          await recovered.catch(() => undefined);
         };
         const waitForReceipt = async (marker: string) => {
           const gate = createDeferred();
@@ -188,6 +226,7 @@ describe("Responses watchdog through the loopback transport", () => {
           send(response, { ...payload, sequence_number: frame });
           await waitForReceipt(`"sequence_number":${frame}}`);
         }
+        expect(stop).not.toHaveBeenCalled();
         expect(onTimeout).not.toHaveBeenCalled();
         if (!completes) {
           const remainingMs = activity === "network silence" ? idleMs : stepMs;
@@ -199,23 +238,40 @@ describe("Responses watchdog through the loopback transport", () => {
             activity === "network silence" ? /no response from model/ : /no model progress/,
           );
           expect(response.writableEnded).toBe(false);
+          await within(
+            awaitGateBeforeSettlement(
+              retryScheduled.promise,
+              recovered,
+              "stream settled before retry admission",
+            ),
+          );
+          await vi.advanceTimersByTimeAsync(2_000);
+          expect(retryController.transientRetryCount).toBe(1);
         }
-        // The scripted watchdog proof is over. Drain its cooperative-yield
-        // callbacks before restoring real timers for ordinary HTTP completion.
-        await vi.advanceTimersByTimeAsync(0);
+        // The controlled deadline and retry admission are proven. Restore real
+        // scheduling for ordinary HTTP completion and SDK cooperative yields.
+        activeWatchdog.close();
+        await vi.advanceTimersByTimeAsync(1);
         vi.useRealTimers();
         if (completes) {
           complete(response, true);
           expect((await within(consuming)).stopReason).toBe("stop");
           expect(onTimeout).not.toHaveBeenCalled();
         }
-        expect((await within(consume())).content).toContainEqual(
+        const recovery = completes ? consume() : recovered;
+        expect((await within(recovery)).content).toContainEqual(
           expect.objectContaining({ type: "text", text: "RECOVERED" }),
         );
         expect(requests).toBe(2);
+        expect(stop).not.toHaveBeenCalled();
       } finally {
         runAbort.abort();
+        watchdog?.close();
         cleanupSessionResources();
+        if (vi.isFakeTimers()) {
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        vi.useRealTimers();
         bodyChunks.unsubscribe(onBodyChunk);
         server.closeAllConnections();
         await settleStream?.();

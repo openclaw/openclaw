@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import {
   resetDiagnosticSessionStateForTest,
   type SessionState,
@@ -18,7 +19,6 @@ import {
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import {
   detectToolCallLoop,
   recordToolCall,
@@ -247,7 +247,7 @@ test("a waiting poll cannot adopt a same-id successor after removal", async () =
   await tick();
   const original = await pending;
   check(original, { status: "failed" });
-  expect(text(original)).toBe(`No session found for ${session.id}`);
+  expect(text(original)).toContain(`Process ${session.id} is no longer tracked`);
   expect(remove).not.toHaveBeenCalled();
   const result = await poll();
   expect(result.details).toMatchObject({ status: "completed", aggregated: "successor output\n" });
@@ -415,11 +415,11 @@ test("removes a retained completed session and its logs", async () => {
   expect((await call("remove")).details).toMatchObject({ status: "completed" });
   expect((await call("log")).details).toMatchObject({
     status: "failed",
-    error: `No session found for ${session.id}`,
+    error: expect.stringContaining(`Process ${session.id} is no longer tracked`),
   });
   expect((await call("kill")).details).toMatchObject({
     status: "failed",
-    error: `No active session found for ${session.id}`,
+    error: expect.stringContaining(`Process ${session.id} is no longer tracked`),
   });
 });
 

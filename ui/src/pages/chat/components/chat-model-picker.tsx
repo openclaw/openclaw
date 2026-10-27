@@ -176,7 +176,6 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
             "chat-controls__inline-select-trigger chat-controls__model-trigger",
             {
               "chat-controls__model-trigger--loading": params.triggerLoading,
-              "chat-controls__inline-select-trigger--disabled": params.disabled,
             },
           ]}
           data-chat-model-select="true"
@@ -186,6 +185,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
           aria-label={`${t("chat.selectors.model")}: ${state().triggerTitle}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`}
           aria-busy={params.triggerLoading ? "true" : "false"}
           aria-disabled={params.disabled ? "true" : "false"}
+          aria-description={params.disabledReason}
           title={params.disabledReason?.trim() || undefined}
         >
           {state().modelToolsUnavailable ? (

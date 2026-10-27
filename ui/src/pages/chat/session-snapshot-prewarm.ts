@@ -4,6 +4,7 @@ import {
   type BootRecord,
 } from "../../app/boot-record.ts";
 import type { SidebarSnapshotModel } from "../../components/sidebar-snapshot-data.ts";
+import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
 import {
   sidebarSnapshotInvalidationMatches,
   snapshotStoreGeneration,
@@ -63,8 +64,7 @@ export async function prewarmChatSnapshot(cacheKey: string): Promise<void> {
   const entry: PrewarmedSnapshot = {
     cacheKey,
     cancelled: false,
-    promise: import("./session-snapshot-database.ts")
-      .then(({ readStoredChatSnapshotRecord }) => readStoredChatSnapshotRecord(cacheKey))
+    promise: readStoredChatSnapshotRecord(cacheKey)
       .then((record) =>
         entry.cancelled || generation !== snapshotStoreGeneration ? undefined : record,
       )

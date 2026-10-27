@@ -173,6 +173,7 @@ it.each(
       sessionKey: scope.sessionKey,
       question: "Why?",
       connId: "conn-1",
+      ownerId: "shared",
     };
     try {
       if (warm) {

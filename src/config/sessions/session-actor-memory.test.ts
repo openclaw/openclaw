@@ -64,15 +64,20 @@ async function fixture() {
   return { actor };
 }
 
-function activity(actor: SessionActor, updatedAt: number) {
-  return actor.patch(
-    {
-      commandId: `activity-${updatedAt}`,
-      phaseId: "turn",
-      reducers: [{ kind: "activity", updatedAt }],
-    },
-    authority,
-  );
+const activityCommand = (updatedAt: number) => ({
+  commandId: `activity-${updatedAt}`,
+  phaseId: "turn",
+  reducers: [{ kind: "activity" as const, updatedAt }],
+});
+
+function turnCommand(actor: SessionActor, commandId: string, options: SessionTurnPlan["options"]) {
+  return {
+    commandId,
+    phaseId: "turn",
+    lifecycle: {},
+    expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
+    turn: { agentId: "main", sessionKey: actor.target.sessionKey, options },
+  };
 }
 
 describe("memory session actor", () => {
@@ -86,19 +91,12 @@ describe("memory session actor", () => {
     async ({ change, accepted }) => {
       const { actor } = await fixture();
       const request = (commandId: string, eventId: string, message: unknown) => ({
-        commandId,
+        ...turnCommand(actor, commandId, {
+          expectedSessionId: "session-1",
+          sessionFile: "/synthetic/transcript",
+          messages: [{ eventId, message, now: 2 }],
+        }),
         phaseId: "recovery",
-        lifecycle: {},
-        expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
-        turn: {
-          agentId: "main",
-          sessionKey,
-          options: {
-            expectedSessionId: "session-1",
-            sessionFile: "/synthetic/transcript",
-            messages: [{ eventId, message, now: 2 }],
-          },
-        },
       });
       const source = await actor.adoptRun(
         {
@@ -196,7 +194,7 @@ describe("memory session actor", () => {
   it("detaches committed receipts and rejects a stale command version", async () => {
     const { actor } = await fixture();
     const old = actor.snapshot(authority)!;
-    const result = await activity(actor, 10);
+    const result = await actor.patch(activityCommand(10), authority);
     if (result.kind !== "committed") {
       throw new Error("Expected a committed receipt");
     }
@@ -207,10 +205,8 @@ describe("memory session actor", () => {
     expect(
       await actor.patch(
         {
-          commandId: "stale",
-          phaseId: "turn",
+          ...activityCommand(99),
           expected: old.version,
-          reducers: [{ kind: "activity", updatedAt: 99 }],
         },
         authority,
       ),
@@ -226,28 +222,21 @@ describe("memory session actor", () => {
     async (refusedStage) => {
       const { actor } = await fixture();
       const before = actor.snapshot(authority)!;
-      const refused = await actor.patch(
-        { commandId: "refused", phaseId: "turn", reducers: [{ kind: "activity", updatedAt: 50 }] },
-        {
-          assertCurrent() {},
-          authorize(stage) {
-            if (stage === refusedStage) {
-              throw new Error("revoked");
-            }
-          },
+      const refused = await actor.patch(activityCommand(50), {
+        assertCurrent() {},
+        authorize(stage) {
+          if (stage === refusedStage) {
+            throw new Error("revoked");
+          }
         },
-      );
+      });
       expect(refused).toMatchObject({ kind: "rolled-back", error: { message: "revoked" } });
       expect(actor.snapshot(authority)).toEqual(before);
-      const committed = await actor.patch(
-        { commandId: "observed", phaseId: "turn", reducers: [{ kind: "activity", updatedAt: 51 }] },
-        authority,
-        {
-          committed() {
-            throw new Error("observer failed");
-          },
+      const committed = await actor.patch(activityCommand(51), authority, {
+        committed() {
+          throw new Error("observer failed");
         },
-      );
+      });
       expect(committed).toMatchObject({
         kind: "committed",
         failure: { message: "observer failed" },
@@ -279,23 +268,13 @@ async function initialize(
   options: Partial<SessionTurnPlan["options"]> = {},
 ) {
   const result = await actor.acceptInput(
-    {
-      commandId,
-      phaseId: "turn",
-      expectedState: buildRestartRecoveryExpectedState({ sessionId: "session-1", updatedAt: 1 }),
-      lifecycle: {},
-      turn: {
-        agentId: "main",
-        sessionKey: actor.target.sessionKey,
-        options: {
-          expectedSessionId: "session-1",
-          sessionFile: sessionKey,
-          initialSessionEntry: { sessionId: "session-1", updatedAt: 1, incognito: true },
-          messages: [{ message: { role: "user", content: "Hello" }, eventId: "user-1", now: 1 }],
-          ...options,
-        },
-      },
-    },
+    turnCommand(actor, commandId, {
+      expectedSessionId: "session-1",
+      sessionFile: sessionKey,
+      initialSessionEntry: { sessionId: "session-1", updatedAt: 1, incognito: true },
+      messages: [{ message: { role: "user", content: "Hello" }, eventId: "user-1", now: 1 }],
+      ...options,
+    }),
     authority,
   );
   expect(result.kind).toBe("committed");
@@ -313,10 +292,7 @@ describe("memory actor owner registry", () => {
     const owner = memorySessionActorOwners.read(database)!;
     const owned = await owner.acquire(actor.target, lifetime);
     actors.push(owned);
-    await owned.patch(
-      { commandId: "activity", phaseId: "turn", reducers: [{ kind: "activity", updatedAt: 10 }] },
-      authority,
-    );
+    await owned.patch(activityCommand(10), authority);
     expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(10);
     expect(same.snapshot(authority)?.entry?.updatedAt).toBe(10);
   });

@@ -201,6 +201,7 @@ export function renderSidebarUpdateSurface(params: {
       updateRun={snapshot().updateRun}
       updateRunAcknowledged={snapshot().updateRunAcknowledged}
       connected={gateway().phase === "connected"}
+      serving={gateway().hello?.server}
       onAcknowledge={() => context.overlays.acknowledgeUpdateRun()}
       prepareRetry={prepareRetry}
       canStartNativeUpdate={() =>

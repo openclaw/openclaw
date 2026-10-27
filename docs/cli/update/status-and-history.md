@@ -17,6 +17,15 @@ While an update is active, the table shows its phase instead of advertising anot
 update, and the final line points to `openclaw update status`. JSON still includes
 registry/Git `availability` separately from `activeRun`.
 
+A failed or interrupted attempt becomes history only when its saved observation
+of a running Gateway differs in version or build ID from the live serving
+Gateway. Text status then shows a past-failure note without recovery advice.
+`openclaw status` and the Control UI use the same comparison; a manual tag
+checkout, build, and restart can leave the old failure behind. The installed
+package's starting identity alone is insufficient. Missing observations, unknown
+identities, and observations that still match the live Gateway keep the failure
+actionable. The saved record and JSON history retain the original outcome.
+
 Status inspection has a 30-second overall limit, extended when `--timeout <seconds>`
 requests a longer check. Shorter check timeouts do not shorten local history inspection.
 If an inspection stalls or fails, status returns the facts already available
@@ -163,7 +172,10 @@ keep a skipped or failed record with their reason. A fresh-profile dry-run leave
 the database absent and records no run. CLI invocations rejected before admission
 leave state untouched. The same ID follows
 the detached updater and the restarted Gateway, so reconnecting does not lose
-the outcome. Post-core finalization children report back to their parent without
+the outcome. An external supervisor's native update keeps the run ID from its
+`update migrate` receipt. It is recorded as a succeeded CLI run, starting at
+migration, when the supervisor accepts the release and runs `update finish`.
+Retrying `update finish` keeps that one record. Post-core finalization children report back to their parent without
 creating a separate update run, including when an older updater cannot forward
 a run ID.
 

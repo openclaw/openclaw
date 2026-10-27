@@ -6,7 +6,7 @@ import {
   legacyCatalogEnvelope,
 } from "./official-external-catalog-signing.test-support.js";
 import { verifyOfficialExternalPluginCatalogSignedEnvelope } from "./official-external-plugin-catalog-envelope.js";
-import type { OfficialExternalPluginCatalogFeed } from "./official-external-plugin-catalog.js";
+import type { OfficialExternalPluginCatalogFeed } from "./official-external-plugin-catalog.types.js";
 
 type SigningKey = ReturnType<typeof createSigningKey>;
 

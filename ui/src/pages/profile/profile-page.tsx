@@ -81,11 +81,9 @@ function accessSummary(scopes: readonly string[] | null) {
 
 export function ProfilePage() {
   const context = useApplication();
-  const upgrade = projectOwner(context.scopeUpgrade, (source) => source.state);
-  const visibleUpgrade = () => {
-    const current = upgrade.read();
-    return current.phase === "hidden" ? null : current;
-  };
+  const upgrade = projectOwner(context.scopeUpgrade, (source) =>
+    source.state.phase === "hidden" ? null : source.state,
+  );
   onSettled(() => context.scopeUpgrade.activate(ScopeUpgradeOwner));
   const agents = projectOwner(context.agents, (source) => source.state.agentsList);
   const identities = projectOwner(context.agentIdentity, (source) => source);
@@ -523,7 +521,7 @@ export function ProfilePage() {
                     </button>
                   }
                 />
-                <Show when={visibleUpgrade()}>
+                <Show when={upgrade.read()}>
                   {(current) => (
                     <SettingsRow
                       title={t("profilePage.access.adminRequest")}

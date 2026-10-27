@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, vi, type Mock } from "vitest";
+import { expect, type Mock } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agents/agent-command-restart-recovery.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
@@ -87,12 +87,6 @@ export async function runPublicSettleRecoveryCase(
     reply === "child visible final" ||
     privateChild ||
     channelRequester;
-  const missingReply = {
-    delivered: false,
-    path: "direct",
-    reason: "visible_reply_missing",
-    error: "completion agent did not produce a visible reply",
-  };
   const requesterOrigin = {
     sessionKey: requesterSessionKey,
     messageProvider: "telegram",
@@ -107,7 +101,7 @@ export async function runPublicSettleRecoveryCase(
   };
   const batchRunIds = [child.runId, sibling.runId].toSorted();
   for (const entry of [child, sibling]) {
-    // Missing-answer recovery still owes a reply while a child result is undelivered.
+    // Exercise silent settlement from an undelivered child result.
     if (reply === "progress only") {
       entry.delivery = { status: "pending" };
     }
@@ -598,35 +592,21 @@ export async function runPublicSettleRecoveryCase(
     expect(child.requesterSettleWake?.nextAttemptAt).toBeUndefined();
     // Restart removed the old Gateway's dedupe cache. The already-admitted
     // settle batch must recognize its completed successor instead of rerunning.
-    const reconciliationAt = Date.now();
     const completedReplay = wake(sibling);
-    expect(await completedReplay.result).toBe(visibleFinal);
+    expect(await completedReplay.result).toBe(true);
     expect(agentCommandMock).toHaveBeenCalledTimes(2);
     const pendingWake = readWake();
+    expect(pendingWake).toBeUndefined();
+    expect(completedReplay.completeBatch).toHaveBeenCalledOnce();
+    expect(completedReplay.completeBatch.mock.calls[0]?.[2]).toMatchObject({
+      delivered: true,
+    });
+    expect(completedReplay.completeBatch.mock.calls[0]?.[2]?.requesterVisibleFinalDelivered).toBe(
+      visibleFinal && reply !== "child visible final" && !privateChild ? true : undefined,
+    );
     if (visibleFinal) {
-      expect(pendingWake).toBeUndefined();
-      expect(completedReplay.completeBatch).toHaveBeenCalledOnce();
-      expect(completedReplay.completeBatch.mock.calls[0]?.[2]).toMatchObject({
-        delivered: true,
-      });
-      expect(completedReplay.completeBatch.mock.calls[0]?.[2]?.requesterVisibleFinalDelivered).toBe(
-        reply === "child visible final" || privateChild ? undefined : true,
-      );
       return;
     }
-    expect(completedReplay.completeBatch).not.toHaveBeenCalled();
-    expect(pendingWake).toMatchObject({
-      status: "pending",
-      attemptCount: 1,
-      batchRunIds,
-      lastError: missingReply.error,
-    });
-    const nextAttemptAt = pendingWake?.nextAttemptAt;
-    expect(nextAttemptAt).toBeGreaterThanOrEqual(reconciliationAt + 30_000);
-    expect(nextAttemptAt).toBeLessThanOrEqual(Date.now() + 30_000);
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(expectDefined(nextAttemptAt, "Public retry deadline") - 1);
-    await assertNoReplay();
     expect(
       loadSessionEntryReadOnly(scope)?.restartRecoveryTerminalDeliveryEvidence?.find(
         (evidence) => evidence.runId === runId,
@@ -637,58 +617,9 @@ export async function runPublicSettleRecoveryCase(
       payloads: [{ visible: false }],
       transcriptRunId: recoveryRunId,
     });
-    const retryRunIds: string[] = [];
-    let terminalRetry: ReturnType<typeof wake> | undefined;
-    for (const attempt of [2, 3]) {
-      const retryAt = expectDefined(readWake()?.nextAttemptAt, "Public retry deadline");
-      vi.setSystemTime(retryAt);
-      agentCommandMock.mockImplementationOnce(async (input) => {
-        const command = input as AgentCommandOpts;
-        expect(command.runId).not.toBe(runId);
-        expect(command.runId).not.toBe(recoveryRunId);
-        expect(retryRunIds).not.toContain(command.runId);
-        retryRunIds.push(expectDefined(command.runId, "Public retry run"));
-        expect(command.message).toContain("provide the missing result");
-        await context.prepareVisibleRequesterCommand(command);
-        await command.userTurnTranscriptRecorder!.persistApproved();
-        await context.markCommandExecutionStarted(command);
-        const result = { payloads: [], meta: { durationMs: 1 } };
-        await publishTerminal(command, { payloads: result.payloads });
-        return result;
-      });
-      const retry = wake(sibling);
-      expect(await retry.result).toBe(false);
-      expect(agentCommandMock).toHaveBeenCalledTimes(attempt + 1);
-      const next = readWake();
-      if (attempt === 2) {
-        expect(retry.completeBatch).not.toHaveBeenCalled();
-        expect(next).toMatchObject({
-          status: "pending",
-          attemptCount: 2,
-          nextAttemptAt: retryAt + 120_000,
-        });
-      } else {
-        expect(next).toBeUndefined();
-        terminalRetry = retry;
-      }
-    }
-    expect(terminalRetry?.completeBatch).toHaveBeenCalledOnce();
-    expect(terminalRetry?.completeBatch.mock.calls[0]?.[2]).toEqual({
-      ...missingReply,
-      disposition: "retryable",
-      phases: [
-        {
-          ...missingReply,
-          phase: "direct-primary",
-          deliveredAt: undefined,
-          enqueuedAt: undefined,
-        },
-      ],
-    });
     expect(await wake(sibling).result).toBe(false);
-    expect(agentCommandMock).toHaveBeenCalledTimes(4);
+    expect(agentCommandMock).toHaveBeenCalledTimes(2);
   } finally {
-    vi.useRealTimers();
     release();
     await Promise.allSettled([original, recovery]);
     signal.removeEventListener("abort", release);

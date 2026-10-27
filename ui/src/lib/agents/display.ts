@@ -135,15 +135,7 @@ export function resolveAgentSkillsFilter(config: Record<string, unknown> | null,
   return Array.isArray(skills) ? normalizeStringEntries(skills) : undefined;
 }
 
-export type AgentContext = {
-  workspace: string;
-  model: string;
-  runtime: string;
-  identityName: string;
-  identityAvatar: string;
-  skillsLabel: string;
-  isDefault: boolean;
-};
+export type AgentContext = ReturnType<typeof buildAgentContext>;
 
 export function buildAgentContext(
   agent: AgentsListResult["agents"][number],
@@ -151,7 +143,7 @@ export function buildAgentContext(
   agentFilesList: AgentsFilesListResult | null,
   defaultId: string | null,
   agentIdentity?: AgentIdentityResult | null,
-): AgentContext {
+) {
   const config = resolveAgentConfig(configForm, agent.id);
   const workspaceFromFiles =
     agentFilesList && agentFilesList.agentId === agent.id ? agentFilesList.workspace : null;

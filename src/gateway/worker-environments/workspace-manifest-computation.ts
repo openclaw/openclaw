@@ -1,3 +1,4 @@
+import type { LocalWorkspaceManifestValue } from "./local-workspace-store.types.js";
 import type {
   readActualWorkspaceManifestImpl,
   readWorkspaceFileSnapshotWithLimit,
@@ -121,6 +122,10 @@ export type WorkspaceManifestComputationOperations = {
     output: WorkspaceManifestValueOutputs[Type];
   };
 } & {
+  "workspace.manifest.local": {
+    input: { snapshot: Uint8Array<ArrayBuffer> };
+    output: LocalWorkspaceManifestValue;
+  };
   "workspace.manifest.base-refresh": {
     input: {
       beforeRoot: string;

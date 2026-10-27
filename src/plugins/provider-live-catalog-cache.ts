@@ -3,7 +3,9 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { DiagnosticWorkerRetainedData } from "../infra/diagnostic-process-types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { estimateRetainedDataSize } from "../infra/retained-data-size.js";
-import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import {
   consumeLiveCatalogRefresh,
   getProviderCatalogDiscoveryBudget,
@@ -14,15 +16,65 @@ type LiveCatalogCacheEntry<T> = {
   expiresAt: number;
   result: { state: "pending"; value: Promise<T> } | { state: "fulfilled"; value: T };
   retained: boolean;
+  now?: () => number;
+};
+
+type LiveCatalogCache = {
+  entries: Map<string, LiveCatalogCacheEntry<unknown>>;
+  expiry?: { at: number; cancel: () => void };
 };
 
 const LIVE_CATALOG_CACHE_MAX_ENTRIES = 100;
 // Preserve the TTL cache across restarts and registry replacement, but release
 // its payloads when the final runtime closes.
-const liveCatalogCache = resolveGlobalMap<string, LiveCatalogCacheEntry<unknown>>(
+const cache = resolveGlobalSingleton<LiveCatalogCache>(
   Symbol.for("openclaw.providerLiveCatalogCache"),
+  () => ({ entries: new Map() }),
+  clearLiveCatalogCache,
   "close-only",
 );
+const liveCatalogCache = cache.entries;
+
+function clearLiveCatalogCache(owner: LiveCatalogCache): void {
+  owner.entries.clear();
+  owner.expiry?.cancel();
+  owner.expiry = undefined;
+}
+
+function armLiveCatalogExpiry(delayMs: number): void {
+  const at = Date.now() + Math.max(1, delayMs);
+  if (cache.expiry && cache.expiry.at <= at) {
+    return;
+  }
+  cache.expiry?.cancel();
+  // One owner wake must not retain the request context that first populated the cache.
+  cache.expiry = {
+    at,
+    cancel: runInDetachedAsyncContext(() =>
+      scheduleAbsoluteDeadline(at, expireLiveCatalogs, undefined, { unref: true }),
+    ),
+  };
+}
+
+function expireLiveCatalogs(): void {
+  cache.expiry = undefined;
+  const now = Date.now();
+  let next = Infinity;
+  for (const [key, entry] of liveCatalogCache) {
+    if (entry.result.state !== "fulfilled") {
+      continue;
+    }
+    const remaining = entry.expiresAt - (entry.now?.() ?? now);
+    if (remaining <= 0) {
+      liveCatalogCache.delete(key);
+    } else {
+      next = Math.min(next, remaining);
+    }
+  }
+  if (next !== Infinity) {
+    armLiveCatalogExpiry(next);
+  }
+}
 
 async function consumeLiveCatalog<T>(entry: LiveCatalogCacheEntry<T>, signal?: AbortSignal) {
   const result = entry.result;
@@ -86,6 +138,7 @@ export async function getCachedLiveCatalogValue<T>(params: {
     expiresAt: rawNow + ttlMs,
     retained: false,
     result: pending,
+    now: params.now,
   };
   let completed: { state: "fulfilled"; value: T } | undefined;
   pending.value = pending.value
@@ -110,6 +163,8 @@ export async function getCachedLiveCatalogValue<T>(params: {
       // cannot replace a newer generation's globally reusable result.
       if (liveCatalogCache.get(key) === entry && (!entry.retained || !ownsPending)) {
         liveCatalogCache.delete(key);
+      } else if (liveCatalogCache.get(key) === entry) {
+        armLiveCatalogExpiry(ttlMs);
       }
     });
   // Auth-scoped catalogs vary by token. Bound retained entries without rejecting
@@ -124,7 +179,7 @@ export async function getCachedLiveCatalogValue<T>(params: {
  * Clears the process-local live catalog cache for tests and isolated plugin probes.
  */
 export function clearLiveCatalogCacheForTests(): void {
-  liveCatalogCache.clear();
+  clearLiveCatalogCache(cache);
 }
 
 /** Count owner-held payloads without exposing cache keys or inspecting pending work. */

@@ -83,7 +83,6 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     | "subagentSessions"
     | "subagentParentKey"
     | "subagentSessionsHydrated"
-    | "subagentSessionsRead"
     | "onOpenSubagent"
     | "onOpenSubagents"
     | "personActivity"

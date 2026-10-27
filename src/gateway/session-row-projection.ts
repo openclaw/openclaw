@@ -360,9 +360,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
           if (change.scope === "transcript" || change.factsInvalidated === true) {
             backfill.remove(records.identity(row));
           }
-          revisions.withChangeScope(change.scope ?? "session-entry", () =>
-            markStoredRow(row, change, prepared),
-          );
+          revisions.withChangeScope(change.scope, () => markStoredRow(row, change, prepared));
         },
       });
     }
@@ -657,7 +655,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       projection: (): Parameters<typeof readPreparedSessionRows>[0] => projection,
     }),
     setArchivePageSize: archive.setPageSize,
-    modelFacts: rowReads.createSessionRowModelFactsReader({
+    ...rowReads.createSessionRowModelFactsReader({
+      rows: () => rows.values(),
+      onFactsChange: revisions.onFactsChange,
       lookup,
       dirty,
       readSourceEntry,

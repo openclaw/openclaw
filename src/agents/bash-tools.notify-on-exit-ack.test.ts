@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { enqueueSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-handoff.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -21,7 +22,6 @@ import {
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { startDeferredNotifyRun } from "./bash-tools.notify-on-exit-ack.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 
 const supervisorSpawnMock = vi.hoisted(() => vi.fn());
 vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => {
@@ -124,14 +124,16 @@ it("isolates identical completions across exact full-slug reuse", async () => {
   enqueueSystemEventEntry("unrelated", { sessionKey: QUEUE_KEY, contextKey: "marker" });
   const second = await startNotifyRun();
 
-  expect(contexts()).toEqual(["exec:amber-atlas", "marker", "exec:amber-atlas"]);
+  expect(second.id).toBe(first.id);
+  const context = `exec:${first.id}`;
+  expect(contexts()).toEqual([context, "marker", context]);
   const queued = peekSystemEventEntries(QUEUE_KEY);
   expect(queued[0]?.id).not.toBe(queued[2]?.id);
 
   await pollAndAcknowledge(second.id, queued);
-  expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
+  expect(contexts()).toEqual([context, "marker"]);
   acknowledgeInternalToolResult(await execute("poll", second.id));
-  expect(contexts()).toEqual(["exec:amber-atlas", "marker"]);
+  expect(contexts()).toEqual([context, "marker"]);
 });
 
 it("keeps an identical successor queued when an earlier consumer settles", async () => {

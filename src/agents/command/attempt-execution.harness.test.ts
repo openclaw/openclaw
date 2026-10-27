@@ -145,7 +145,7 @@ describe("embedded attempt harness pinning", () => {
       const sessionKey = "agent:main:access-cli";
       const sessionEntry = makeSessionEntry(
         "access-cli",
-        source === "saved" ? { cyberAccessProgram: "standard" } : {},
+        source === "saved" ? { cyberAccessProgram: "daybreak_blue" } : {},
       );
       const storePath = path.join(tmpDir, "sessions.json");
       await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
@@ -160,10 +160,22 @@ describe("embedded attempt harness pinning", () => {
           },
           sessionKey,
         ),
-      ).rejects.toThrow("Explicit access programs are unsupported by this CLI runtime");
+      ).rejects.toThrow("Daybreak access is unsupported by this CLI runtime");
       expect(runCliAgentMock).not.toHaveBeenCalled();
     },
   );
+
+  it("allows explicit Standard Access on a CLI runtime", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+    await runHarnessAttempt({
+      providerOverride: "claude-cli",
+      modelOverride: "opus",
+      sessionEntry: makeSessionEntry("standard-cli", { cyberAccessProgram: "standard" }),
+    });
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+  });
 
   it.each(["openclaw", "codex"] as const)(
     "forwards persisted Access choices to %s command turns",
@@ -198,6 +210,9 @@ describe("embedded attempt harness pinning", () => {
     const sessionEntry = makeSessionEntry("mixed-provider-session", {
       agentHarnessId: "codex",
       modelSelectionLocked: true,
+      permissionMode: "guarded",
+      sessionRoot: tmpDir,
+      blindPrompt: true,
       pluginExtensions: {
         codex: {
           supervision: {
@@ -225,6 +240,9 @@ describe("embedded attempt harness pinning", () => {
       agentHarnessId: "codex",
       agentHarnessRuntimeOverride: "codex",
       modelSelectionLocked: true,
+      permissionMode: "guarded",
+      sessionRoot: tmpDir,
+      blindPrompt: true,
       toolsAllow: ["read", "web_search"],
       codeModeOverride: false,
     });

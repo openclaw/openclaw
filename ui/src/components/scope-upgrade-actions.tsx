@@ -54,11 +54,7 @@ export function ScopeUpgradeActions(props: {
           type="button"
           class={primaryClass()}
           disabled={props.state.phase === "requesting"}
-          onClick={() => {
-            if (props.state.phase === "available") {
-              props.onRequest();
-            }
-          }}
+          onClick={() => props.onRequest()}
         >
           {t(
             props.state.phase === "available"

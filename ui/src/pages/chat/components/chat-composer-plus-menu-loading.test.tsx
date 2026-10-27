@@ -4,7 +4,7 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
+import { makeMenu } from "./chat-composer-menu.test-support.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import type { ChatComposerPlusMenuProps } from "./chat-composer-plus-menu.types.ts";
 
@@ -26,17 +26,12 @@ function mountMenu() {
   const onChange = vi.fn();
   let setMenu!: Setter<ChatComposerPlusMenuProps>;
   const view = mountSolid(() => {
-    const [menu, update] = createSignal<ChatComposerPlusMenuProps>({
-      attachments: {},
-      inputHandle: createChatAttachmentInputHandle(),
-      disabled: false,
-      open: false,
-      view: "root",
-      toolOverrides: null,
-      rootToggles: [toggle("Original toggle", onChange)],
-      onOpenChange: (open) => update((current) => ({ ...current, open })),
-      onViewChange: vi.fn(),
-    });
+    const [menu, update] = createSignal<ChatComposerPlusMenuProps>(
+      makeMenu({
+        rootToggles: [toggle("Original toggle", onChange)],
+        onOpenChange: (open) => update((current) => ({ ...current, open })),
+      }),
+    );
     setMenu = update;
     return (
       <>
@@ -95,6 +90,7 @@ it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as con
     const external = view.getByRole("textbox", { name: "Other field" });
     if (mode === "external") {
       external.focus();
+      await waitForSolid(() => expect(view.panel.matches(":popover-open")).toBe(false));
     } else if (mode === "closed" || mode === "reopened") {
       view.setMenu((current) => ({ ...current, open: false }));
       await view.expectOpen(false);
@@ -103,15 +99,36 @@ it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as con
         await view.expectOpen();
       }
     }
+    const readCapabilities = vi.fn(() => undefined);
+    const initializeCapabilities = vi.fn();
+    if (mode === "closed" || mode === "external") {
+      view.setMenu((current) => ({
+        ...current,
+        capabilityMenu: { read: readCapabilities, initialize: initializeCapabilities },
+      }));
+      flush();
+    }
     ready.resolve();
     await imported.promise;
-    await waitForSolid(() => expect(view.item("Updated toggle")).toBeTruthy());
+    await import("./chat-composer-plus-menu-content.tsx");
+    flush();
     view.expectTrigger();
-    if (mode === "closed") {
-      expect(view.panel.matches(":popover-open")).toBe(false);
-    } else if (mode === "external") {
-      expect(document.activeElement).toBe(external);
-    } else if (mode === "pointer") {
+    if (mode === "closed" || mode === "external") {
+      await view.expectOpen(false);
+      expect(
+        view.queryByRole("menuitemcheckbox", { name: "Updated toggle", hidden: true }),
+      ).toBeNull();
+      expect(readCapabilities).not.toHaveBeenCalled();
+      expect(initializeCapabilities).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(mode === "external" ? external : view.trigger);
+      view.setMenu((current) => ({ ...current, capabilityMenu: undefined }));
+      view.trigger.click();
+      await waitForSolid(() => expect(view.item("Updated toggle")).toBeTruthy());
+      await view.expectOpen();
+      return;
+    }
+    await waitForSolid(() => expect(view.item("Updated toggle")).toBeTruthy());
+    if (mode === "pointer") {
       expect(document.activeElement).toBe(view.trigger);
     } else {
       await waitForSolid(() =>

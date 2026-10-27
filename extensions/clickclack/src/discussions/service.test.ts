@@ -29,6 +29,10 @@ import {
 import { ClickClackDiscussionService } from "./service.js";
 
 type Harness = ReturnType<typeof createHarness>;
+const nameConflict =
+  'duplicate key value violates unique constraint "channels_workspace_id_name_key"';
+const httpError = (status: number, message: string) =>
+  new ClickClackHttpError(status, message, new Headers());
 async function interruptCreate(h: Harness) {
   const general = (await h.channels())[0]!;
   h.channels
@@ -44,11 +48,6 @@ function managedRoom(fields: Partial<ClickClackChannel>) {
     archived: false,
     ...fields,
   });
-}
-function recoveredRoom(h: Harness, id: string, route: string, name: string, externalRef?: string) {
-  const room = managedRoom({ id, route_id: route, name, external_ref: externalRef });
-  h.channels.mockResolvedValue([room]);
-  return room;
 }
 function legacyPatchResponse(h: Harness, fields: Partial<ClickClackChannel>, patchArchive = false) {
   h.updateChannel.mockImplementationOnce(async (channelId, patch) => {
@@ -245,6 +244,8 @@ describe("ClickClack discussion service", () => {
   it("renames a fallback discussion when displayName arrives", async () => {
     h.setSessionEntry({ category: "Projects" });
     await h.service.open(sessionKey);
+    const other = createHarness({ label: "Independent" });
+    await other.service.open(sessionKey);
     expectCreated(h, { name: fallbackDiscussionLabel(sessionKey, "main"), display_title: "" });
     h.setSessionEntry({ displayName: "Generated Session Title" });
     await h.service.reconcile(sessionKey);
@@ -254,6 +255,7 @@ describe("ClickClack discussion service", () => {
       sidebar_section: "Sessions",
     });
     expect(h.store.lookup(sessionKey)).toMatchObject({ label: "Generated Session Title" });
+    expect(other.updateChannel).not.toHaveBeenCalled();
   });
 
   it.each([1, 2])("rechecks a reset during session read %s", async (changedRead) => {
@@ -297,11 +299,7 @@ describe("ClickClack discussion service", () => {
 
   it.each([
     ["create", 400, "UNIQUE constraint failed: channels.workspace_id, channels.name"],
-    [
-      "rename",
-      409,
-      'duplicate key value violates unique constraint "channels_workspace_id_name_key"',
-    ],
+    ["rename", 409, nameConflict],
   ] as const)("retries a name claimed concurrently during %s", async (operation, code, message) => {
     h.setSessionEntry({ label: "Original" });
     if (operation === "rename") {
@@ -316,7 +314,7 @@ describe("ClickClack discussion service", () => {
         { ...general, id: "chn_human", route_id: "human-route", name: "renamed" },
       ]);
     const mutation = operation === "create" ? h.createChannel : h.updateChannel;
-    mutation.mockRejectedValueOnce(new ClickClackHttpError(code, message, new Headers()));
+    mutation.mockRejectedValueOnce(httpError(code, message));
     if (operation === "create") {
       await h.service.open(sessionKey);
     } else {
@@ -361,22 +359,26 @@ describe("ClickClack discussion service", () => {
       const error =
         failure === "transport"
           ? new Error("connection reset")
-          : new ClickClackHttpError(failure, "create failed", new Headers());
+          : httpError(failure, "create failed");
       h.createChannel.mockRejectedValueOnce(error);
       await expect(h.service.open(sessionKey)).rejects.toThrow(error.message);
       if (failure === 403) {
         expect(h.generationStore.lookup(sessionKey)).toBeUndefined();
       } else {
         expect(h.generationStore.lookup(sessionKey)).toMatchObject({
-          pending: expect.objectContaining({ sessionId: "session-id" }),
+          pending: { sessionId: "session-id" },
         });
       }
     },
   );
 
-  it.each(["recovered", "forbidden", "conflict"] as const)(
+  it.each([
+    ["recovered", new Error("patch unavailable"), "connection reset"],
+    ["forbidden", httpError(403, "forbidden"), "ClickClack 403: forbidden"],
+    ["conflict", httpError(409, nameConflict), "relist unavailable"],
+  ] as const)(
     "retains an adoption reservation after $0 failure",
-    async (failure) => {
+    async (failure, error, expectedError) => {
       let externalRef: string | undefined;
       if (failure === "recovered") {
         await recoverLostResponse(h, { name: "title" }, "connection reset");
@@ -391,32 +393,14 @@ describe("ClickClack discussion service", () => {
           h.channels.mockResolvedValue([room]);
         }
       }
-      const error =
-        failure === "recovered"
-          ? new Error("patch unavailable")
-          : new ClickClackHttpError(
-              failure === "forbidden" ? 403 : 409,
-              failure === "forbidden"
-                ? "forbidden"
-                : 'duplicate key value violates unique constraint "channels_workspace_id_name_key"',
-              new Headers(),
-            );
       if (failure === "forbidden") {
         h.updateChannel.mockRejectedValue(error);
       } else {
         h.updateChannel.mockRejectedValueOnce(error);
       }
-      await expect(h.service.open(sessionKey)).rejects.toThrow(
-        failure === "recovered"
-          ? "connection reset"
-          : failure === "forbidden"
-            ? "ClickClack 403: forbidden"
-            : "relist unavailable",
-      );
+      await expect(h.service.open(sessionKey)).rejects.toThrow(expectedError);
       expect(h.generationStore.lookup(sessionKey)).toMatchObject({
-        pending: expect.objectContaining(
-          externalRef ? { externalRef } : { sessionId: "session-id" },
-        ),
+        pending: externalRef ? { externalRef } : { sessionId: "session-id" },
       });
       expect(h.revokedStore.entries()).toHaveLength(1);
     },
@@ -429,7 +413,13 @@ describe("ClickClack discussion service", () => {
       await interruptCreate(h);
       await expect(h.service.open(sessionKey)).rejects.toThrow("connection lost");
       const externalRef = h.createChannel.mock.calls[0]?.[1].external_ref;
-      const room = recoveredRoom(h, "chn_recovered", "recovered-route", "ambiguous", externalRef);
+      const room = managedRoom({
+        id: "chn_recovered",
+        route_id: "recovered-route",
+        name: "ambiguous",
+        external_ref: externalRef,
+      });
+      h.channels.mockResolvedValue([room]);
       h.setSessionEntry({
         sessionId: "new-session",
         label: "Ambiguous",
@@ -499,16 +489,15 @@ function createGatewayEventsHarness() {
   const handlers = new Set<(event: OpenClawPluginSessionsChangedEvent) => void>();
   const unsubscribe = vi.fn();
   const gatewayEvents = {
-    emit: vi.fn(),
-    onSessionsChanged: vi.fn((handler) => {
+    onSessionsChanged(handler) {
       handlers.add(handler);
       return () => {
         if (handlers.delete(handler)) {
           unsubscribe();
         }
       };
-    }),
-  } satisfies OpenClawPluginGatewayEvents;
+    },
+  } satisfies Pick<OpenClawPluginGatewayEvents, "onSessionsChanged">;
   return {
     gatewayEvents,
     unsubscribe,
@@ -522,13 +511,8 @@ function createGatewayEventsHarness() {
 
 describe("ClickClack discussion session events", () => {
   it("coalesces event bursts at the earliest deadline and reconciles the renamed session", async () => {
-    const gateway = createGatewayEventsHarness();
-    const h = fixture(
-      { label: "Old", category: "Projects" },
-      { gatewayEvents: gateway.gatewayEvents },
-    );
-    const sessionKey = "agent:main:event-rename";
-    await h.service.open(sessionKey);
+    const h = await eventFixture("Old", "Projects");
+    const { gateway, sessionKey } = h;
     const reconcile = vi.spyOn(h.service, "reconcile");
     const reconcileAll = vi.spyOn(h.service, "reconcileAll");
     h.updateChannel.mockClear();
@@ -561,9 +545,9 @@ describe("ClickClack discussion session events", () => {
     services.push(h.service);
     return h;
   }
-  async function eventFixture(label: string) {
+  async function eventFixture(label: string, category?: string) {
     const gateway = createGatewayEventsHarness();
-    const h = fixture({ label }, { gatewayEvents: gateway.gatewayEvents });
+    const h = fixture({ label, category }, { gatewayEvents: gateway.gatewayEvents });
     const sessionKey = `agent:main:event-${label.toLowerCase()}`;
     await h.service.open(sessionKey);
     return { ...h, gateway, sessionKey };

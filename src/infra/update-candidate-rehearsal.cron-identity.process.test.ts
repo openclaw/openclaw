@@ -6,7 +6,11 @@ import { runCommandBuffered } from "../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
-import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
+import {
+  materializeUpdateCandidateStateWorker,
+  runUpdateCandidateSnapshotWorker,
+} from "./update-candidate-state.test-support.js";
+import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -125,4 +129,29 @@ it("does not bind an unmatched original identity to a retained sibling", async (
   } finally {
     await cleanupFixture(fixture);
   }
+});
+
+it("leaves selector-less published requests unresolved through first private admission", async () => {
+  const root = tempDirs.make("rehearsal-missing-selector-");
+  const stateDir = path.join(root, "source-state");
+  const source = await prepareSource(root, [
+    path.join(stateDir, "cron", "jobs.json"),
+    path.join(root, "external-config", "cron", "jobs.json"),
+  ]);
+  const sourceBytes = await fs.readFile(source.databasePath);
+  const targetStateDir = path.join(root, "private");
+  await runUpdateCandidateSnapshotWorker({
+    stateDir,
+    targetStateDir,
+    candidateRoot: root,
+    config: {},
+    // Published drivers sent neither selector, even for an external config.
+    env: { HOME: root },
+  });
+  const result = await runFirstPrivateAdmission({
+    ...process.env,
+    ...buildUpdateRehearsalPathEnv(targetStateDir),
+  });
+  expect(result.boundStoreKey).toBeUndefined();
+  expect(await fs.readFile(source.databasePath)).toEqual(sourceBytes);
 });

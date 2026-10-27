@@ -96,11 +96,18 @@ suite.define(() => {
             await captureFrame(suite.artifactDir, "sidebar.png", sidebar, [owner]);
           }
           const toolbarBox = await page.locator(".sidebar-session-toolbar").boundingBox();
-          const sessionListBox = await page.locator(".sidebar-sessions").boundingBox();
+          const groupsBox = await page
+            .locator(".sidebar-sessions > .personal-session-groups")
+            .boundingBox();
+          const firstRowBox = await page
+            .locator(".sidebar-sessions .sidebar-recent-session")
+            .first()
+            .boundingBox();
           expect(toolbarBox).not.toBeNull();
-          expect(sessionListBox).not.toBeNull();
-          // Personal-group headings precede rows; the list frame still owns the toolbar inset.
-          expect(sessionListBox!.y - toolbarBox!.y - toolbarBox!.height).toBe(4);
+          expect(groupsBox).not.toBeNull();
+          expect(firstRowBox).not.toBeNull();
+          expect(groupsBox!.y - toolbarBox!.y - toolbarBox!.height).toBe(4);
+          expect(firstRowBox!.y - groupsBox!.y - groupsBox!.height).toBe(8);
         },
       );
     },

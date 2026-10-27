@@ -9,6 +9,7 @@ import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ChatFastModePresentation } from "../../lib/chat/model-select-state.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { ChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
 import { createTranscriptMemo } from "./components/chat-transcript-memo.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
@@ -20,7 +21,7 @@ export { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
 // JSON code-unit weight bounds retained payloads without allocating another
 // UTF-8 buffer on the route-switch path.
-const MAX_CACHED_CHAT_SNAPSHOT_WEIGHT = 12 * 1024 * 1024;
+export const MAX_CACHED_CHAT_SNAPSHOT_WEIGHT = 12 * 1024 * 1024;
 export const MAX_CACHED_CHAT_WEIGHT = 24 * 1024 * 1024;
 // History reconciliation replaces changed messages and retains unchanged
 // objects, so serialization weight can follow the same immutable identity.
@@ -67,6 +68,7 @@ export type ChatComposerSnapshot = Pick<
   };
 
 export type ChatSessionSnapshot = {
+  sessionState?: ChatSessionStateSnapshot;
   composer?: ChatComposerSnapshot | null;
   // The board provider validates cached payloads before they can reach a view.
   board?: { snapshot: unknown; receivedAtMs: number } | null;
@@ -84,10 +86,15 @@ export type ChatSessionSnapshot = {
 
 export type ChatWidgetLayout = {
   read: (key: string) => number | undefined;
+  readRows: () => Readonly<Record<string, number>> | undefined;
   write: (key: string, size: number | null, row?: string, settled?: boolean) => number | undefined;
   writeRows: (heights: Record<string, number>) => void;
   invalidateRow: (rowKey: string | undefined) => void;
 };
+
+function captureWidgetLayoutReservation(snapshot: ChatSessionSnapshot | undefined) {
+  return snapshot && { sessionId: snapshot.sessionId, widgetHeights: snapshot.widgetHeights };
+}
 
 export function createChatWidgetLayout() {
   const layouts = createTranscriptMemo<ChatWidgetLayout>();
@@ -99,14 +106,14 @@ export function createChatWidgetLayout() {
     layouts(cache, [resolveChatSnapshotKey(host, target), host.currentSessionId], () => {
       const [rowRevision, setRowRevision] = createSignal(0);
       const cacheKey = resolveChatSnapshotKey(host, target);
-      // Reserve the admitted snapshot; new measurements belong to the next reload.
-      let admitted = cache.get(cacheKey)?.snapshot;
+      // Reserve admitted geometry until reload without retaining replaceable message bodies.
+      let admitted = captureWidgetLayoutReservation(cache.get(cacheKey)?.snapshot);
       const current = () => {
         const snapshot =
           resolveChatSnapshotKey(host, target) === cacheKey
             ? cache.get(cacheKey)?.snapshot
             : undefined;
-        admitted ??= snapshot;
+        admitted ??= captureWidgetLayoutReservation(snapshot);
         return snapshot?.sessionId === admitted?.sessionId ? snapshot : undefined;
       };
       const writeHeights = (heights: Record<string, number>) => {
@@ -138,7 +145,7 @@ export function createChatWidgetLayout() {
         }
         const prune = (heights: typeof snapshot.widgetHeights) =>
           Object.fromEntries(Object.entries(heights ?? {}).filter(retain));
-        admitted = { ...snapshot, widgetHeights: prune(admitted?.widgetHeights) };
+        admitted = { sessionId: snapshot.sessionId, widgetHeights: prune(admitted?.widgetHeights) };
         const widgetHeights = widgetKey ? prune(snapshot.widgetHeights) : snapshot.widgetHeights;
         cacheChatSessionSnapshot(cache, host, target, { ...snapshot, widgetHeights });
         setRowRevision((revision) => revision + 1);
@@ -149,6 +156,10 @@ export function createChatWidgetLayout() {
           const snapshot = current();
           const heights = (key.startsWith("row:v1:") ? admitted : snapshot)?.widgetHeights;
           return snapshot && (heights?.[key] ?? admitted?.widgetHeights?.[key]);
+        },
+        readRows: () => {
+          rowRevision();
+          return current() ? admitted?.widgetHeights : undefined;
         },
         write: (key, measuredHeight, rowKey, settled = false) => {
           const snapshot = current();
@@ -195,7 +206,7 @@ export function retireCachedPairingQr(cache: ChatMessageCache | undefined): void
 
 export type ChatCacheObserver = {
   delete: (sessionKey: string, reason?: SessionSnapshotInvalidationReason) => void | Promise<void>;
-  write: (sessionKey: string, snapshot: ChatSessionSnapshot) => void;
+  write: (sessionKey: string, snapshot: ChatSessionSnapshot, weight: number) => void;
 };
 
 const chatCacheObservers = new WeakMap<ChatMessageCache, ChatCacheObserver>();
@@ -341,7 +352,7 @@ export function appendChatMessageToCache(
     weight,
   });
   trimChatSessionSnapshotCache(cache);
-  chatCacheObservers.get(cache)?.write(cacheKey, snapshot);
+  chatCacheObservers.get(cache)?.write(cacheKey, snapshot, weight);
 }
 
 export function readChatMessagesFromCache(
@@ -390,12 +401,20 @@ export function cacheChatSessionSnapshot(
     withWidgetHeights.board === undefined && existing?.snapshot.board !== undefined
       ? { ...withWidgetHeights, board: existing.snapshot.board }
       : withWidgetHeights;
-  const snapshot =
+  const withComposer =
     withBoard.composer === undefined &&
     existing?.snapshot.composer !== undefined &&
     existing.snapshot.sessionId === incoming.sessionId
       ? { ...withBoard, composer: existing.snapshot.composer }
       : withBoard;
+  const snapshot =
+    withComposer.sessionState === undefined &&
+    existing?.snapshot.sessionState !== undefined &&
+    existing.snapshot.sessionId === incoming.sessionId
+      ? { ...withComposer, sessionState: existing.snapshot.sessionState }
+      : withComposer;
+  const previousState = existing?.snapshot.sessionState;
+  const sessionState = snapshot.sessionState;
   if (
     existing?.snapshot.messages === snapshot.messages &&
     existing.snapshot.deltaCursor === snapshot.deltaCursor &&
@@ -408,6 +427,12 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.widgetHeights === snapshot.widgetHeights &&
     existing.snapshot.board === snapshot.board &&
     existing.snapshot.composer === snapshot.composer &&
+    (previousState === sessionState ||
+      (previousState?.archived === sessionState?.archived &&
+        previousState?.visibility === sessionState?.visibility &&
+        previousState?.sharingRole === sessionState?.sharingRole &&
+        previousState?.unarchiveAllowed === sessionState?.unarchiveAllowed &&
+        previousState?.parentSession === sessionState?.parentSession)) &&
     samePagination(existing.snapshot.pagination, snapshot.pagination)
   ) {
     return;
@@ -431,7 +456,7 @@ export function cacheChatSessionSnapshot(
   }
   setSessionCacheValue(cache, cacheKey, bounded);
   trimChatSessionSnapshotCache(cache);
-  chatCacheObservers.get(cache)?.write(cacheKey, bounded.snapshot);
+  chatCacheObservers.get(cache)?.write(cacheKey, bounded.snapshot, bounded.weight);
 }
 
 export function readChatSessionSnapshot(
