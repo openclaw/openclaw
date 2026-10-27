@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -200,15 +201,15 @@ async function createBrowserConsult(publicOnly = false) {
   await fixture.create({ model: "gpt-live-test" });
   expectBrowserResponse(fixture.respond);
   ownedVoiceSessionId = fixture.respond.mock.calls[0]?.[1].voiceSessionId as string;
-  const consult = fixture.createBrowserSession.mock.calls[0]?.[0].runAgentConsult;
-  if (!consult) {
-    throw new Error("Expected a Gateway-owned browser consult callback");
-  }
+  const consult = expectDefined(
+    fixture.createBrowserSession.mock.calls[0]?.[0].runAgentConsult,
+    "Expected a Gateway-owned browser consult callback",
+  );
   return { ...fixture, consult };
 }
 
 function expectErrorResponse(respond: ReturnType<typeof vi.fn>, message: unknown) {
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ message }));
+  expect(respond).toHaveBeenLastCalledWith(false, undefined, expect.objectContaining({ message }));
 }
 
 function expectBrowserResponse(
@@ -295,13 +296,11 @@ function toolBrowser(dynamicVoice = false) {
     }
     return ownedVoiceSessionId;
   };
-  const control = (index = 0) => {
-    const value = createBrowserSession.mock.calls[index]?.[0].gatewayControl;
-    if (!value) {
-      throw new Error("Expected Gateway-owned function-tool control");
-    }
-    return value;
-  };
+  const control = (index = 0) =>
+    expectDefined(
+      createBrowserSession.mock.calls[index]?.[0].gatewayControl,
+      "Expected Gateway-owned function-tool control",
+    );
   return { ...fixture, createBrowserSession, create, attempt, control };
 }
 
@@ -630,11 +629,7 @@ it("keeps the active selection when a pending same-id browser candidate fails", 
   const control = createBrowserSession.mock.calls[0]?.[0].gatewayControl;
   expect(Boolean(control)).toBe(true);
   await create({ voiceSessionId });
-  expect(respond).toHaveBeenLastCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ message: expect.stringContaining("Candidate rejected") }),
-  );
+  expectErrorResponse(respond, expect.stringContaining("Candidate rejected"));
   expect(resolveVoice(client.connId, voiceSessionId)).toBe(original);
   expect(() => control?.bindControl?.({ sendUserMessage: vi.fn() })).not.toThrow();
 });

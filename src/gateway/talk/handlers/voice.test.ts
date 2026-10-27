@@ -70,6 +70,12 @@ describe("Talk voice RPC ownership", () => {
   const pending: Promise<void>[] = [];
   const broadcast = vi.fn<GatewayRequestContext["broadcastToConnIds"]>();
 
+  const readyParams = (changeId: string, voiceSessionId: string) => ({
+    changeId,
+    voiceSessionId,
+    outcome: "ready",
+  });
+
   function client(connId: string) {
     connections.add(connId);
     return voiceClient(connId);
@@ -322,7 +328,7 @@ describe("Talk voice RPC ownership", () => {
     const replacementId = await replace(changeId);
     markTalkVoiceSessionReady(replacementId, browser.connId, sessionTarget.agentId);
     expect(changing.respond).not.toHaveBeenCalled();
-    const completion = { changeId, voiceSessionId: replacementId, outcome: "ready" };
+    const completion = readyParams(changeId, replacementId);
     for (const caller of [client("other-browser"), runtime.client]) {
       const rejected = await invoke("talk.voice.complete", completion, caller);
       expectFailure(rejected);
@@ -346,11 +352,7 @@ describe("Talk voice RPC ownership", () => {
     const { changeId } = changing;
     const replacementId = await replace(changeId, false);
     markTalkVoiceSessionReady(replacementId, browser.connId, sessionTarget.agentId);
-    const ready = start("talk.voice.complete", {
-      changeId,
-      voiceSessionId: replacementId,
-      outcome: "ready",
-    });
+    const ready = start("talk.voice.complete", readyParams(changeId, replacementId));
     await Promise.resolve();
     expect(changing.respond).not.toHaveBeenCalled();
     expect(ready.respond).not.toHaveBeenCalled();
@@ -405,11 +407,7 @@ describe("Talk voice RPC ownership", () => {
       await changing.completed;
       expectFailure(changing.respond);
       markTalkVoiceSessionReady(replacementId, browser.connId, sessionTarget.agentId);
-      const late = await invoke("talk.voice.complete", {
-        changeId,
-        voiceSessionId: replacementId,
-        outcome: "ready",
-      });
+      const late = await invoke("talk.voice.complete", readyParams(changeId, replacementId));
       expectFailure(late);
       expect(changing.respond).toHaveBeenCalledOnce();
     },
