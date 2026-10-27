@@ -36,6 +36,7 @@ import {
 import {
   observeAcknowledgedUpdate,
   prepareLocalWorkspaceArchiveFixture,
+  prepareSandboxCheckpointFixture,
   proveAbsentProjectionCheckpoints,
   proveHostAdmittedBuildInputs,
   proveInterruptedWorkspaceCheckpoint,
@@ -528,52 +529,31 @@ it.each([
 it.for([false, true])(
   "waits for checkpoint resume before guest command preparation and cleanup (stopped: %s)",
   async (stopped, { signal }) => {
-    const [
-      projectionOwner,
-      { prepareLocalSandboxWorkspace, bindLocalSandboxWorkspace },
-      { createSandboxTestContext },
-      { createSandboxFsBridge },
-      { resolveSandboxConfigForAgent },
-      registry,
-      engine,
-      docker,
-      { createDockerSandboxBackend },
-    ] = await Promise.all([
-      import("./local-workspace-projection.js"),
-      import("../../agents/sandbox/local-workspace.js"),
-      import("../../agents/sandbox/test-fixtures.js"),
-      import("../../agents/sandbox/fs-bridge.js"),
-      import("../../agents/sandbox/config.js"),
-      import("../../agents/sandbox/registry.js"),
-      import("../../agents/sandbox/container-engine.js"),
-      import("../../agents/sandbox/docker.js"),
-      import("../../agents/sandbox/docker-backend.js"),
-    ]);
+    const { bindLocalSandboxWorkspace } = await import("../../agents/sandbox/local-workspace.js");
+    const { createSandboxTestContext } = await import("../../agents/sandbox/test-fixtures.js");
+    const { createSandboxFsBridge } = await import("../../agents/sandbox/fs-bridge.js");
+    const { resolveSandboxConfigForAgent } = await import("../../agents/sandbox/config.js");
+    const registry = await import("../../agents/sandbox/registry.js");
+    const engine = await import("../../agents/sandbox/container-engine.js");
+    const docker = await import("../../agents/sandbox/docker.js");
+    const { createDockerSandboxBackend } = await import("../../agents/sandbox/docker-backend.js");
     let ownerActive = true;
     const execution = new AbortController();
-    vi.spyOn(projectionOwner, "resolveLocalWorkspaceOwner").mockResolvedValue({
-      ...owner,
-      assertCurrent: () => {
-        owner.assertCurrent();
-        if (!ownerActive) {
-          throw new Error("Workspace owner released before cleanup");
-        }
+    using projection = await prepareSandboxCheckpointFixture(
+      {
+        ...owner,
+        assertCurrent: () => {
+          owner.assertCurrent();
+          if (!ownerActive) {
+            throw new Error("Workspace owner released before cleanup");
+          }
+        },
+        [Symbol.dispose]() {
+          ownerActive = false;
+        },
       },
-      [Symbol.dispose]() {
-        ownerActive = false;
-      },
-    });
-    using projection = await prepareLocalSandboxWorkspace({
-      cfg: { worktreeAcceleration: false },
-      agentId: owner.agentId,
-      sessionKey: owner.sessionKey,
-      workspaceDir: canonical,
-      sandbox: resolveSandboxConfigForAgent({}, owner.agentId),
-      assertCurrent: () => execution.signal.throwIfAborted(),
-    });
-    if (!projection) {
-      throw new Error("Expected managed projection");
-    }
+      () => execution.signal.throwIfAborted(),
+    );
     const paused = createDeferred();
     const settle = createDeferred();
     vi.stubEnv("DOCKER_HOST", "unix:///synthetic/checkpoint-docker.sock");
@@ -590,36 +570,33 @@ it.for([false, true])(
       image: "fixture",
     };
     await registry.updateRegistry(entry);
+    const execResult = (stdout = "") => ({ code: 0, stdout, stderr: "" });
     vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
       if (args[0] === "info") {
-        return { code: 0, stdout: "checkpoint-daemon", stderr: "" };
+        return execResult("checkpoint-daemon");
       }
       if (args[0] === "inspect") {
         if (args.some((arg) => arg.includes("{{json .Mounts}}"))) {
-          return { code: 0, stdout: JSON.stringify({ Mounts: [], Tmpfs: {} }), stderr: "" };
+          return execResult(JSON.stringify({ Mounts: [], Tmpfs: {} }));
         }
         if (args.includes("{{json .State}}")) {
-          return {
-            code: 0,
-            stdout: JSON.stringify({
+          return execResult(
+            JSON.stringify({
               Running: true,
               Paused: runtimePaused,
               Pid: 1,
               StartedAt: "2026-01-01T00:00:00.000Z",
             }),
-            stderr: "",
-          };
+          );
         }
-        return {
-          code: 0,
-          stderr: "",
-          stdout: args.includes("{{.State.Paused}}")
+        return execResult(
+          args.includes("{{.State.Paused}}")
             ? String(runtimePaused)
             : `${"a".repeat(64)} true ${runtimePaused}`,
-        };
+        );
       }
       if (args[0] === "exec") {
-        return { code: 0, stdout: "1 0 0:1 / / rw - overlay overlay rw\n", stderr: "" };
+        return execResult("1 0 0:1 / / rw - overlay overlay rw\n");
       }
       if (args[0] === "pause") {
         runtimePaused = true;
@@ -630,7 +607,7 @@ it.for([false, true])(
         runtimePaused = false;
         events.push("resumed");
       }
-      return { code: 0, stdout: "", stderr: "" };
+      return execResult();
     });
     const dispatch = (kind: string) => {
       if (runtimePaused) {
@@ -696,14 +673,14 @@ it.for([false, true])(
       usePty: false,
     });
     events.length = 0;
-    const checkpoint = stopped
-      ? backend.finalizeExec!({
-          status: "completed",
-          exitCode: 0,
-          timedOut: false,
-          token: accepted.finalizeToken,
-        })
-      : projection.checkpoint();
+    const finalize = (spec: typeof accepted) =>
+      backend.finalizeExec!({
+        status: "completed",
+        exitCode: 0,
+        timedOut: false,
+        token: spec.finalizeToken,
+      });
+    const checkpoint = stopped ? finalize(accepted) : projection.checkpoint();
     let commands: Promise<unknown>[] = [];
     let pendingExec: ReturnType<typeof backend.buildExecSpec> | undefined;
     const acceptedFinalization = stopped ? checkpoint : undefined;
@@ -755,25 +732,11 @@ it.for([false, true])(
     } finally {
       settle.resolve();
       await Promise.allSettled([checkpoint, ...commands]);
-      if (acceptedFinalization) {
-        await acceptedFinalization;
-      } else {
-        await backend.finalizeExec!({
-          status: "completed",
-          exitCode: 0,
-          timedOut: false,
-          token: accepted.finalizeToken,
-        });
-      }
+      await (acceptedFinalization ?? finalize(accepted));
       if (pendingExec) {
         const [result] = await Promise.allSettled([pendingExec]);
         if (result.status === "fulfilled") {
-          await backend.finalizeExec!({
-            status: "completed",
-            exitCode: 0,
-            timedOut: false,
-            token: result.value.finalizeToken,
-          });
+          await finalize(result.value);
         }
       }
       await registry.removeRegistryEntry(entry.containerName);
