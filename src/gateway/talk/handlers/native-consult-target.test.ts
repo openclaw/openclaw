@@ -903,128 +903,110 @@ it.for(["status", "cancelled", "successor"] as const)(
   },
 );
 
-it.each(["browser", "relay"] as const)(
-  "uses the created custom-main session in the native %s provider callback",
-  async (transport) => {
-    const canonicalKey = "agent:voice:home";
-    config.session = { mainKey: "home", scope: "per-sender" };
+it.each([
+  { transport: "browser", changeAt: "unchanged" },
+  { transport: "relay", changeAt: "unchanged" },
+  { transport: "browser", changeAt: "before admission" },
+  { transport: "browser", changeAt: "during preparation" },
+] as const)(
+  "keeps native $transport consult routing current (store change: $changeAt)",
+  async ({ transport, changeAt }) => {
+    const changesStore = changeAt !== "unchanged";
+    const canonicalKey = changesStore ? "agent:voice:main" : "agent:voice:home";
+    config.session = changesStore
+      ? { store: state.statePath("route-a.sqlite") }
+      : { mainKey: "home", scope: "per-sender" };
     config.talk = { ...config.talk, realtime: { instructions: "Keep native answers brief." } };
-    const target = await prepareTalkSessionTarget(config, "main");
-    const result = await createNativeTalkCall(dispatch, transport === "browser");
-    expect(providerInstructions).toBe(
-      `Keep native answers brief.\n\n${REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS}`,
-    );
-    const storage = { agentId: "voice", sessionKey: canonicalKey, storePath: target.storePath };
-    const created = loadSessionEntry(storage);
-    expect(created?.sessionId).toBeTruthy();
-    await expect(callback!({ prompt: "Continue this conversation" })).resolves.toEqual({
-      text: "Synthetic consult answer",
-    });
-    expect(mocks.runEmbeddedAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "voice",
-        sessionKey: canonicalKey,
-        sessionId: created!.sessionId,
-        sessionTarget: { ...storage, sessionId: created!.sessionId },
-      }),
-    );
-    expect(
-      listSessionEntriesReadOnly({ agentId: "voice", storePath: target.storePath }).map(
-        (entry) => entry.sessionKey,
-      ),
-    ).toEqual([canonicalKey]);
-    expect(
-      clientVoiceSessionTesting.readRecord("voice", result.voiceSessionId ?? result.sessionId!)
-        ?.sessionKey,
-    ).toBe("main");
-  },
-);
-
-it.each(["before admission", "during preparation"] as const)(
-  "rejects native consult storage changes %s",
-  async (changeAt) => {
-    config = { ...config, session: { store: state.statePath("route-a.sqlite") } };
     setRuntimeConfigSnapshot(config);
-    const { voiceSessionId } = await createNativeTalkCall(dispatch, true);
-    const voiceId = expectDefined(voiceSessionId, "created browser call");
+    const result = await createNativeTalkCall(dispatch, transport === "browser");
+    const voiceId = expectDefined(result.voiceSessionId ?? result.sessionId, "created native call");
     const providerConsult = expectDefined(callback, "provider-owned consult callback");
-    providerConsult.adoptCompletionClaims?.();
     const retained = resolveTalkVoiceSession({
       kind: "client",
       connId: client.connId,
       voiceSessionId: voiceId,
     }).sessionTarget;
+    const storage = { agentId: "voice", sessionKey: canonicalKey, storePath: retained.storePath };
+    const created = expectDefined(loadSessionEntry(storage), "created native session");
     const readVoice = () =>
       dispatch("talk.voice.get", { voiceSessionId: voiceId }, talkVoiceHandlers);
-    const oldScope = sessionScope(retained);
+    expect(providerInstructions).toBe(
+      `Keep native answers brief.\n\n${REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS}`,
+    );
+    expect(created.sessionId).toBeTruthy();
     expectOk(await readVoice());
-    await expect(providerConsult({ prompt: "Before the store change" })).resolves.toEqual({
+    if (changesStore) {
+      providerConsult.adoptCompletionClaims?.();
+    }
+    await expect(providerConsult({ prompt: "Continue this conversation" })).resolves.toEqual({
       text: "Synthetic consult answer",
     });
-    providerConsult.claimAppend?.();
-    expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
-    const before = expectDefined(loadSessionEntry(oldScope), "ordinary consult session persisted");
-    await replaceSessionEntry(oldScope, { ...before, updatedAt: 1 });
-
-    const preparing = createDeferredCore();
-    const resume = createDeferredCore();
-    if (changeAt === "during preparation") {
-      const ensureWorkspace = workspace.ensureAgentWorkspace;
-      const preparation = vi
-        .spyOn(workspace, "ensureAgentWorkspace")
-        .mockImplementationOnce(async (...args) => {
-          const result = await ensureWorkspace(...args);
-          preparing.resolve();
-          await resume.promise;
-          return result;
-        });
-      onTestFinished(() => preparation.mockRestore());
+    if (changesStore) {
+      providerConsult.claimAppend?.();
     }
-    const consult = () =>
-      providerConsult({ prompt: "A new consultation" }).then(
-        () => {
-          providerConsult.claimAppend?.();
-        },
-        (error: unknown) => {
-          providerConsult.claimFailureAppend?.();
-          return error;
-        },
-      );
-    const pending = changeAt === "during preparation" ? consult() : undefined;
-    try {
-      if (pending) {
-        await awaitGateBeforeSettlement(
-          preparing.promise,
-          pending,
-          "Consult must reach preparation",
-        );
-      }
+    expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(mocks.runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "voice",
+        sessionKey: canonicalKey,
+        sessionId: created.sessionId,
+        sessionTarget: { ...storage, sessionId: created.sessionId },
+      }),
+    );
+    expect(
+      listSessionEntriesReadOnly({ agentId: "voice", storePath: retained.storePath }).map(
+        (entry) => entry.sessionKey,
+      ),
+    ).toEqual([canonicalKey]);
+    expect(clientVoiceSessionTesting.readRecord("voice", voiceId)?.sessionKey).toBe("main");
+    if (!changesStore) {
+      return;
+    }
+
+    const before = expectDefined(loadSessionEntry(storage), "ordinary consult session persisted");
+    await replaceSessionEntry(storage, { ...before, updatedAt: 1 });
+    const changeStore = () => {
       config = {
         ...config,
         session: { ...config.session, store: state.statePath("route-b.sqlite") },
       };
       setRuntimeConfigSnapshot(config);
-      const fresh = await prepareTalkSessionTarget(config, retained.sessionKey);
-      expect(fresh.storePath).not.toBe(retained.storePath);
-      fresh.assertCurrent(config);
-      const changed = "Talk session storage target changed; retry the request";
-      expect(() => retained.assertCurrent(config)).toThrow(changed);
-      expectDenied(await readVoice(), {
-        code: "UNAVAILABLE",
-        message: expect.stringContaining(changed),
-      });
-      resume.resolve();
-      expect(await (pending ?? consult())).toEqual(new Error(changed));
-      expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
-      expect(loadSessionEntry(oldScope)).toMatchObject({
-        sessionId: before.sessionId,
-        updatedAt: 1,
-      });
-      expect(loadSessionEntry(sessionScope(fresh))).toBeUndefined();
-    } finally {
-      resume.resolve();
-      await pending;
+    };
+    if (changeAt === "during preparation") {
+      const ensureWorkspace = workspace.ensureAgentWorkspace;
+      const preparation = vi
+        .spyOn(workspace, "ensureAgentWorkspace")
+        .mockImplementationOnce(async (...args) => {
+          const prepared = await ensureWorkspace(...args);
+          changeStore();
+          return prepared;
+        });
+      onTestFinished(() => preparation.mockRestore());
+    } else {
+      changeStore();
     }
+    const outcome = await providerConsult({ prompt: "A new consultation" }).then(
+      () => {
+        providerConsult.claimAppend?.();
+      },
+      (error: unknown) => {
+        providerConsult.claimFailureAppend?.();
+        return error;
+      },
+    );
+    const fresh = await prepareTalkSessionTarget(config, retained.sessionKey);
+    expect(fresh.storePath).not.toBe(retained.storePath);
+    fresh.assertCurrent(config);
+    const changed = "Talk session storage target changed; retry the request";
+    expect(() => retained.assertCurrent(config)).toThrow(changed);
+    expectDenied(await readVoice(), {
+      code: "UNAVAILABLE",
+      message: expect.stringContaining(changed),
+    });
+    expect(outcome).toEqual(new Error(changed));
+    expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(loadSessionEntry(storage)).toMatchObject({ sessionId: before.sessionId, updatedAt: 1 });
+    expect(loadSessionEntry(sessionScope(fresh))).toBeUndefined();
   },
 );
 
