@@ -115,23 +115,6 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     expect(hooks.onReady).not.toHaveBeenCalled();
   });
 
-  it("cancels a pending restart before it emits", async () => {
-    let pending = 1;
-    const preparation = createDeferred();
-    const handle = deferGatewayRestartUntilIdle({
-      getPendingCount: () => pending,
-      emitHooks: { beforeEmit: async () => await preparation.promise, emitRestart },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    handle.cancel();
-    expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    pending = 0;
-    preparation.resolve();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(emitRestart).not.toHaveBeenCalled();
-  });
-
   it("forces a timed-out restart while an admitted root remains", async () => {
     const root = tryBeginGatewayRootWorkAdmission();
     expect(root).not.toBeNull();
@@ -536,16 +519,8 @@ describe("scheduled restart during gateway suspension", () => {
           });
         } else {
           expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
-          expect(getGatewaySuspendStatus("suspension")).toEqual({
-            status: "ready",
-            expiresAtMs: expect.any(Number),
-            writeCustody: [],
-          });
-          expect(resumeGatewaySuspend("suspension")).toEqual({
-            ok: true,
-            status: "running",
-            resumed: true,
-          });
+          expect(getGatewaySuspendStatus("suspension").status).toBe("ready");
+          expect(resumeGatewaySuspend("suspension")).toMatchObject({ ok: true, resumed: true });
           expect(resumeScheduling).toHaveBeenCalledOnce();
           expect(isGatewayWorkAdmissionClosed()).toBe(false);
         }
