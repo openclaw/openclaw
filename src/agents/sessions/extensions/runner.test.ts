@@ -118,6 +118,30 @@ it("isolates caller messages while chaining replacements through a shared handle
   expect(contexts[0]).toBe(contexts[1]);
 });
 
+it("detaches frozen context containers without serializing their transcript text", async () => {
+  const block = Object.freeze({ type: "text" as const, text: "history".repeat(8192) });
+  const messages: AgentMessage[] = [{ role: "user", content: [block], timestamp: 1 }];
+  Object.freeze(messages[0].content);
+  Object.freeze(messages[0]);
+  Object.freeze(messages);
+  const runner = buildHandlerRunner("context", [async () => undefined]);
+  using nativeClone = vi.spyOn(globalThis, "structuredClone");
+  const projected = await runner.emitContext(messages);
+  expect(projected).toEqual(messages);
+  expect(nativeClone).not.toHaveBeenCalled();
+  const content = projected[0].content;
+  expect(Array.isArray(content)).toBe(true);
+  if (!Array.isArray(content) || content[0].type !== "text") {
+    throw new Error("Expected the projected text block");
+  }
+  content[0].text = "hook edit";
+  content.push({ type: "text", text: "hook addition" });
+  projected.push({ role: "user", content: "next", timestamp: 2 });
+  expect(messages).toHaveLength(1);
+  expect(messages[0].content).toEqual([block]);
+  expect(block.text).toBe("history".repeat(8192));
+});
+
 // Other adapters share dispatchHandlers; retain each distinct stop/continue path here.
 const emitters = {
   tool_call: (runner) => runner.emitToolCall({ type: "tool_call", ...toolCall }),
