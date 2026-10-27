@@ -758,6 +758,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/boards/sqlite-board-store.worker.test.ts",
   "src/canvas/widget-tool.test.ts",
   "src/claws/add-stateless.test.ts",
+  "src/claws/mcp.test.ts",
   "src/claws/gateway-add-apply.plugin-batch.test.ts",
   "src/claws/packages.runtime.test.ts",
   "src/claws/packages.capability-consent.test.ts",

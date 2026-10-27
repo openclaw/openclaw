@@ -67,6 +67,7 @@ const repositoryScriptEntries = [
   // Its header documents the paired operator-role currency-check benchmark.
   "scripts/perf/operator-role-source-policy-measure.mjs!",
   "scripts/perf/access-authority-callback-measure.mjs!",
+  "scripts/perf/plugin-registry-binding-measure.mjs!",
   // Its header documents the config-wide admission metadata benchmark.
   "scripts/perf/config-wide-metadata-measure.ts!",
   // Its header documents the sandbox/workspace ownership assertion benchmark.
@@ -152,6 +153,7 @@ const repositoryScriptEntries = [
   "scripts/perf/pairing-channel-attribution.mts!",
   "scripts/perf/session-actor-residency-snapshot.mjs!",
   "scripts/perf/session-actor-retention-seed.ts!",
+  "scripts/perf/session-cold-selection.ts!",
   "scripts/perf/session-entry-projection-measure.ts!",
   "scripts/perf/session-row-index-measure.ts!",
   "scripts/perf/session-row-materialization-measure.ts!",
@@ -430,6 +432,7 @@ const repositoryScriptEntries = [
   "scripts/perf/cron-history-plan-measure.ts!",
   "scripts/perf/cron-list-projection-measure.mjs!",
   "scripts/perf/cron-list-revision-measure.ts!",
+  "scripts/perf/cron-delivery-context-measure.mjs!",
   "scripts/perf/cron-refresh-measure.ts!",
   "scripts/perf/cron-session-bindings-measure.ts!",
   "scripts/perf/embedded-runner-array-copies.ts!",
@@ -519,6 +522,7 @@ const repositoryScriptEntries = [
   "scripts/perf/reef-device-sign-measure.ts!",
   "scripts/perf/session-actor-admission-measure.ts!",
   "scripts/perf/session-input-custody-measure.ts!",
+  "scripts/perf/chat-send-persist-measure.ts!",
   "scripts/perf/session-pin-policy-measure.ts!",
   "scripts/perf/session-prompt-begin-measure.ts!",
   "scripts/perf/session-store-target-inventory-measure.ts!",
@@ -562,6 +566,7 @@ const repositoryScriptEntries = [
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/sandbox-skills-sync-measure.ts!",
   "scripts/perf/sandbox-start-measure.ts!",
+  "scripts/perf/sandbox-status-measure.ts!",
   "scripts/perf/session-projection-stream-measure.ts!",
   "scripts/perf/session-sharing-key-measure.ts!",
   "scripts/perf/session-store-key-measure.ts!",
@@ -588,6 +593,7 @@ const repositoryScriptEntries = [
   "scripts/perf/knowledge-worker-heap-measure.mjs!",
   // These source headers document standalone measurement commands.
   "scripts/perf/agent-deletion-blocked-measure.ts!",
+  "scripts/perf/agent-list-read-measure.ts!",
   "scripts/perf/chat-history-response-page-measure.mjs!",
   "scripts/perf/chat-metadata-auth-check-measure.ts!",
   "scripts/perf/config-schema-retention-measure.ts!",
@@ -624,6 +630,7 @@ const repositoryScriptEntries = [
   "scripts/perf/codex-catalog-lines.ts!",
   "scripts/perf/codex-request-imports.ts!",
   "scripts/perf/empty-checkout-diff-measure.ts!",
+  "scripts/perf/project-checkout-options-measure.ts!",
   "scripts/perf/main-module-census-report.mjs!",
   "scripts/perf/module-import-measure.mjs!",
   "scripts/perf/plugin-resolve-hooks-measure.ts!",
@@ -832,6 +839,7 @@ const repositoryScriptEntries = [
   "scripts/perf/connect-tail-measure.ts!",
   "scripts/perf/device-token-snapshot-measure.ts!",
   "scripts/perf/paired-row-encoding-measure.ts!",
+  "scripts/perf/session-patch-projection-measure.ts!",
   "scripts/perf/session-actor-writer-append-measure.ts!",
   "scripts/perf/session-cost-usage-cold-read.ts!",
   "scripts/perf/worker-warm-floor-measure.mjs!",

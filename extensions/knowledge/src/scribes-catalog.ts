@@ -148,7 +148,7 @@ const MEMORY_WORDS: Record<MemorySource, string> = {
 };
 
 /** "Runs weekly, Sundays at 3:45 AM UTC (cron `45 3 * * 0`)." for a cron schedule. */
-export function scheduleLine(expr: string, timezone: string) {
+function scheduleLine(expr: string, timezone: string) {
   const words = SCHEDULE_WORDS[expr];
   return words
     ? `Runs ${words} ${timezone} (cron \`${expr}\`).`

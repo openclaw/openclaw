@@ -369,9 +369,8 @@ describe("ChatSessionRailElement", () => {
           draft: "",
         },
       });
-      const phrase = element.querySelector("openclaw-working-phrase")!;
-      await phrase.updateComplete;
-      expect(phrase.textContent?.replace(/\s+/g, " ").trim()).toBe(expected);
+      const text = () => element.querySelector("openclaw-working-phrase")?.textContent;
+      await waitForSolid(() => expect(text()?.replace(/\s+/g, " ").trim()).toBe(expected));
     } finally {
       setCurrentThemeBranding(originalBranding);
     }
