@@ -4,11 +4,13 @@ import {
   reduceSessionProjection,
 } from "@openclaw/gateway-client/browser";
 import type { MessageReactionSummary, ProgressCard } from "@openclaw/gateway-protocol";
+import { createSignal } from "solid-js";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ChatFastModePresentation } from "../../lib/chat/model-select-state.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
+import { createTranscriptMemo } from "./components/chat-transcript-memo.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
@@ -82,46 +84,97 @@ export type ChatSessionSnapshot = {
 
 export type ChatWidgetLayout = {
   read: (key: string) => number | undefined;
-  write: (key: string, height: number) => void;
+  write: (key: string, size: number | null, row?: string, settled?: boolean) => number | undefined;
+  writeRows: (heights: Record<string, number>) => void;
+  invalidateRow: (rowKey: string | undefined) => void;
 };
 
-export function createChatWidgetLayout(
-  cache: ChatMessageCache,
-  host: ChatMessageCacheHost,
-  target: ChatMessageCacheTarget,
-): ChatWidgetLayout {
-  const cacheKey = resolveChatSnapshotKey(host, target);
-  let sessionId = cache.get(cacheKey)?.snapshot.sessionId;
-  const current = () => {
-    const snapshot = cache.get(cacheKey)?.snapshot;
-    // A row can mount before the history owner commits its first cache snapshot.
-    if (sessionId === undefined && snapshot) {
-      sessionId = snapshot.sessionId;
-    }
-    return resolveChatSnapshotKey(host, target) === cacheKey && snapshot?.sessionId === sessionId
-      ? snapshot
-      : undefined;
-  };
-  return {
-    read: (key) => current()?.widgetHeights?.[key],
-    write: (key, height) => {
-      const snapshot = current();
-      if (!snapshot || !Number.isFinite(height) || height < 48 || height > 8000) {
-        return;
-      }
-      if (snapshot.widgetHeights?.[key] === height) {
-        return;
-      }
-      const widgetHeights = { ...snapshot.widgetHeights };
-      delete widgetHeights[key];
-      widgetHeights[key] = height;
-      const keys = Object.keys(widgetHeights);
-      if (keys.length > 100) {
-        delete widgetHeights[keys[0]!];
-      }
-      cacheChatSessionSnapshot(cache, host, target, { ...snapshot, widgetHeights });
-    },
-  };
+export function createChatWidgetLayout() {
+  const layouts = createTranscriptMemo<ChatWidgetLayout>();
+  return (
+    cache: ChatMessageCache,
+    host: ChatMessageCacheHost & { currentSessionId?: string | null },
+    target: ChatMessageCacheTarget,
+  ): ChatWidgetLayout =>
+    layouts(cache, [resolveChatSnapshotKey(host, target), host.currentSessionId], () => {
+      const [rowRevision, setRowRevision] = createSignal(0);
+      const cacheKey = resolveChatSnapshotKey(host, target);
+      // Reserve the admitted snapshot; new measurements belong to the next reload.
+      let admitted = cache.get(cacheKey)?.snapshot;
+      const current = () => {
+        const snapshot =
+          resolveChatSnapshotKey(host, target) === cacheKey
+            ? cache.get(cacheKey)?.snapshot
+            : undefined;
+        admitted ??= snapshot;
+        return snapshot?.sessionId === admitted?.sessionId ? snapshot : undefined;
+      };
+      const writeHeights = (heights: Record<string, number>) => {
+        const snapshot = current();
+        if (
+          !snapshot ||
+          Object.entries(heights).every(([key, size]) => snapshot.widgetHeights?.[key] === size)
+        ) {
+          return;
+        }
+        const widgetHeights = Object.fromEntries(
+          [
+            ...Object.entries(snapshot.widgetHeights ?? {}).filter(([key]) => !(key in heights)),
+            ...Object.entries(heights),
+          ].slice(-100),
+        );
+        cacheChatSessionSnapshot(cache, host, target, { ...snapshot, widgetHeights });
+      };
+      const invalidateRow = (rowKey: string | undefined, widgetKey?: string) => {
+        const snapshot = current();
+        if (!snapshot || (!rowKey && !widgetKey)) {
+          return;
+        }
+        const retain = ([key]: [string, number]) =>
+          key !== widgetKey &&
+          !(key.startsWith("row:v1:") && key.endsWith(`:${JSON.stringify(rowKey)}`));
+        if (!widgetKey && Object.entries(admitted?.widgetHeights ?? {}).every(retain)) {
+          return;
+        }
+        const prune = (heights: typeof snapshot.widgetHeights) =>
+          Object.fromEntries(Object.entries(heights ?? {}).filter(retain));
+        admitted = { ...snapshot, widgetHeights: prune(admitted?.widgetHeights) };
+        const widgetHeights = widgetKey ? prune(snapshot.widgetHeights) : snapshot.widgetHeights;
+        cacheChatSessionSnapshot(cache, host, target, { ...snapshot, widgetHeights });
+        setRowRevision((revision) => revision + 1);
+      };
+      return {
+        read: (key) => {
+          rowRevision();
+          const snapshot = current();
+          const heights = (key.startsWith("row:v1:") ? admitted : snapshot)?.widgetHeights;
+          return snapshot && (heights?.[key] ?? admitted?.widgetHeights?.[key]);
+        },
+        write: (key, measuredHeight, rowKey, settled = false) => {
+          const snapshot = current();
+          if (measuredHeight === null) {
+            invalidateRow(rowKey, key);
+            return undefined;
+          }
+          const row = key.startsWith("row:v1:");
+          const floor = row || (rowKey && !settled) ? admitted?.widgetHeights?.[key] : 0;
+          const height = Math.max(measuredHeight, floor ?? 0);
+          if (!snapshot || !Number.isFinite(height) || height < (row ? 1 : 48) || height > 8000) {
+            return undefined;
+          }
+          writeHeights({ [key]: height });
+          if (settled) {
+            invalidateRow(rowKey);
+            if (admitted?.widgetHeights?.[key] !== undefined) {
+              admitted.widgetHeights[key] = height;
+            }
+          }
+          return height;
+        },
+        writeRows: writeHeights,
+        invalidateRow,
+      };
+    });
 }
 
 type CachedChatSessionSnapshot = {

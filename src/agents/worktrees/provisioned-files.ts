@@ -73,7 +73,10 @@ export async function provisionIncludedFiles(
   options: { signal?: AbortSignal; assertCurrent?: () => void } = {},
 ): Promise<string[]> {
   const inspection = await runGitWorkerOperation(
-    { type: "worktree.provisioning-inspection", input: { sourceRoot: repoRoot } },
+    {
+      type: "worktree.provisioning-inspection",
+      input: { sourceRoot: repoRoot, estimateBytes: false },
+    },
     options,
   );
   const assertCurrent = () => {

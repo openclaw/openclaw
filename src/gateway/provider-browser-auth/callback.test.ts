@@ -68,6 +68,7 @@ it("does not consume a pending login for malformed or unrelated responses", asyn
     "state=login-state&state=other&code=wrong",
     "state=login-state&code=one&code=two",
     "state=login-state&code=one&error=denied",
+    "state=login-state&code=one&iss=https%3A%2F%2Fprovider.example&iss=https%3A%2F%2Fother.example",
   ]) {
     expect(callback(query).res.statusCode).toBeGreaterThanOrEqual(400);
   }
@@ -80,6 +81,19 @@ it("does not consume a pending login for malformed or unrelated responses", asyn
   const retained = login.session.authorize;
   login.session.close();
   await expect(retained(authorization)).rejects.toThrow("closed");
+});
+
+it("preserves the exact issuer from an accepted browser callback", async () => {
+  const login = await startLogin();
+  const response = callback(
+    "state=login-state&code=valid&iss=https%3A%2F%2Fprovider.example%2Ftenant%2F",
+  );
+  expect(response.res.statusCode).toBe(200);
+  await expect(login.result).resolves.toEqual({
+    code: "valid",
+    state: "login-state",
+    iss: "https://provider.example/tenant/",
+  });
 });
 
 it("settles a provider denial without exposing provider-controlled text", async () => {

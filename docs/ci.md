@@ -192,6 +192,8 @@ Shared OpenClawKit Periphery scans restore the same verified Watch RTC libraries
 
 iOS screenshot shards, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
 
+Release qualification disables Spotlight indexing on the disposable runner's Data volume before checkout. After Simulator boot, it requires ten seconds of at least 30% idle host CPU within five minutes before issuing the pairing credential. This keeps first-launch background work out of the Gateway and XCTest deadlines. Local qualification uses the same CPU readiness check and leaves host indexing settings to the operator.
+
 Android screenshot-input PRs and ordinary full manual CI run the existing phone
 and Wear store capture script in one hosted Ubuntu job. The final CI gate requires
 capture to succeed; unit-test-only and documentation changes omit it. See

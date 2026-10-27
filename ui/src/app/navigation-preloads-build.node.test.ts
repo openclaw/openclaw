@@ -12,6 +12,12 @@ it("describes the emitted static JS/CSS graph without importing optional dynamic
     "/page.css": ".claws-page { color: red; }",
     "/shared.js": 'export const shared = "shared";',
     "/dialog.js": "globalThis.dialogLoaded = true;",
+    "/fixture/ui/src/pages/chat/route-entry.ts":
+      'import "/chat.css"; export { render } from "/chat-view.js";',
+    "/chat-view.js":
+      'import { shared } from "/shared.js"; export const render = () => shared; export const dialog = () => import("/chat-dialog.js");',
+    "/chat.css": ".chat-page { color: blue; }",
+    "/chat-dialog.js": "globalThis.chatDialogLoaded = true;",
   };
   const built = await build({
     configFile: false,
@@ -47,12 +53,16 @@ it("describes the emitted static JS/CSS graph without importing optional dynamic
     build: {
       write: false,
       rolldownOptions: {
-        input: { entry: "/entry.js", page: "/fixture/ui/src/pages/claws/page.tsx" },
+        input: {
+          entry: "/entry.js",
+          page: "/fixture/ui/src/pages/claws/page.tsx",
+          chat: "/fixture/ui/src/pages/chat/route-entry.ts",
+        },
         preserveEntrySignatures: "allow-extension",
         output: {
           strictExecutionOrder: true,
           codeSplitting: {
-            groups: [{ name: "shared-page", test: /(?:page\.tsx|shared\.js)$/u }],
+            groups: [{ name: "shared-page", test: /(?:page\.tsx|chat-view\.js|shared\.js)$/u }],
           },
         },
       },
@@ -77,5 +87,22 @@ it("describes the emitted static JS/CSS graph without importing optional dynamic
   expect(manifest.claws?.some((file) => file.endsWith(".css"))).toBe(true);
   expect(manifest.claws).not.toContain(dialog?.fileName);
   expect(manifest.claws).not.toContain("assets/plugin-island.js");
+  expect(manifest["claws-next"]).toEqual(manifest.claws);
+  const chat = built.output.find(
+    (file) =>
+      file.type === "chunk" && file.facadeModuleId === "/fixture/ui/src/pages/chat/route-entry.ts",
+  );
+  const chatView = built.output.find(
+    (file) => file.type === "chunk" && "/chat-view.js" in file.modules,
+  );
+  const chatDialog = built.output.find(
+    (file) => file.type === "chunk" && "/chat-dialog.js" in file.modules,
+  );
+  expect(chat?.fileName).not.toBe(chatView?.fileName);
+  expect(manifest["roster-next"]).toContain(chat?.fileName);
+  expect(manifest["roster-next"]).toContain(chatView?.fileName);
+  expect(manifest["roster-next"]?.some((file) => file.endsWith(".css"))).toBe(true);
+  expect(manifest["roster-next"]).not.toContain(chatDialog?.fileName);
+  expect(manifest["roster-next"]).not.toContain("assets/plugin-island.js");
   expect(descriptor.fileName).toMatch(/^assets\/navigation-preloads-[\w-]+\.json$/u);
 });

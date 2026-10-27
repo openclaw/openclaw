@@ -41,6 +41,8 @@
 // and 40 policy plugins (one applicable retained grant). Combine memory-soak with
 // --stress-tools --stress-subagents for native child authority. A separate counting
 // pass can use --gateway-preload scripts/perf/plugin-access-authority-census.mjs.
+// --auth-availability-storm requires the matching fixture flag; alternate primary HTTP 429/success
+// through a real shared auth profile. Tool continuations stay successful. Writes mock counts even on failure.
 // --gateway-preload <file> imports benchmark instrumentation after tsx for source or dist entries;
 // result.json records its resolved path and SHA-256. Use the same instrumentation on both arms.
 // --chat-active-after-tool with --chat-active-hold-ms waits for the first text delta
@@ -200,6 +202,7 @@ const { values } = parseArgs({
     "usage-rpc": { type: "boolean", default: false },
     "node-policy-churn": { type: "boolean", default: false },
     "team-stress": { type: "boolean", default: false },
+    "auth-availability-storm": { type: "boolean", default: false },
     "operator-model-policy": { type: "boolean", default: false },
     "team-stress-churn-ms": { type: "string", default: "1000" },
     "team-stress-list-weight": { type: "string", default: "2" },
@@ -1278,6 +1281,9 @@ applyMockOpenAiModelConfig(cfg, {
   modelRef: "openai/gpt-4.1",
   ...(scenario === "sessions.patch" ? { utilityModelRef: "openai/gpt-4.1-mini" } : {}),
 });
+if (values["auth-availability-storm"]) {
+  cfg.models.providers.openai.apiKey = "openai:auth-availability-storm";
+}
 if (verifyHistoryReplay) {
   for (const model of cfg.models.providers.openai.models) {
     // The synthetic provider must fit the seed plus turns accumulated across restarts.
@@ -2268,6 +2274,9 @@ const expectedHistoricalReasoning =
       )
     : [];
 const attemptSetupCatalog = new Set<string>();
+const authAvailabilityMock = { requests: 0, rateLimits: 0, successes: 0 };
+const authAvailabilityStartedAt = Date.now();
+const authAvailabilityMinutes = new Map<number, typeof authAvailabilityMock>();
 const mock = createServer((req, res) => {
   if (values["stress-network-tool"] && req.url === "/network-tool") {
     networkToolRequests++;
@@ -2405,6 +2414,31 @@ const mock = createServer((req, res) => {
               .split("\n")
               .some((line) => stripInboundMetadata(line).trim() === primaryMessage)
           : stripInboundMetadata(lastUser).trim().split("\n")[0] === primaryMessage);
+    if (primary && values["auth-availability-storm"]) {
+      const minute = Math.floor((Date.now() - authAvailabilityStartedAt) / 60_000);
+      let counts = authAvailabilityMinutes.get(minute);
+      if (!counts) {
+        counts = { requests: 0, rateLimits: 0, successes: 0 };
+        authAvailabilityMinutes.set(minute, counts);
+      }
+      counts.requests++;
+      if (++authAvailabilityMock.requests % 2 === 1) {
+        counts.rateLimits++;
+        authAvailabilityMock.rateLimits++;
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
+        res.end(
+          JSON.stringify({
+            error: {
+              type: "rate_limit_error",
+              message: "Synthetic capacity rate limit; retry shortly.",
+            },
+          }),
+        );
+        return;
+      }
+      counts.successes++;
+      authAvailabilityMock.successes++;
+    }
     if (primary && values["attempt-setup-image"]) {
       const tools = isRecord(body) && Array.isArray(body.tools) ? body.tools : [];
       const names = new Set(
@@ -7907,5 +7941,24 @@ try {
   }
   throw error;
 } finally {
+  if (values["auth-availability-storm"]) {
+    writeFileSync(
+      path.join(output, "auth-availability-mock.json"),
+      JSON.stringify(
+        {
+          ...authAvailabilityMock,
+          startedAt: authAvailabilityStartedAt,
+          minutes: [...authAvailabilityMinutes].map(([minute, counts]) => ({
+            minute,
+            requests: counts.requests,
+            rateLimits: counts.rateLimits,
+            successes: counts.successes,
+          })),
+        },
+        null,
+        2,
+      ),
+    );
+  }
   await cleanup();
 }

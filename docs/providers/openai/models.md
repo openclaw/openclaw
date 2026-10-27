@@ -118,7 +118,10 @@ unverified entitlement metadata hides the control.
 
 The session override is saved independently of speed, survives a session reset,
 and is inherited by a fork unless replaced. Changing the selection affects the next
-admitted turn, not an already-running model call.
+admitted turn, not an already-running model call. A `sessions_spawn` child on the
+same agent and model keeps the requester's saved Access; pass
+[`cyberAccessProgram`](/tools/subagents/tool-reference#tool-parameters) to choose
+a program for the child explicitly.
 
 The OpenClaw runtime sends the program to its official Responses endpoint. Native
 Codex uses its supported turn-scoped access-program parameter. This OpenClaw

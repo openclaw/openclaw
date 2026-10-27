@@ -176,6 +176,11 @@ export function SessionRailComposer(props: {
       />
       <div class="agent-chat__composer-lede">
         <ComposerDictationStatus readDictation={() => dictation.read().dictation} />
+        <Show when={props.companion.commentsSaving}>
+          <div class="muted chat-session-rail__save-status" role="status">
+            {t("common.saving")}
+          </div>
+        </Show>
       </div>
       <div class="agent-chat__composer-input-row">
         <label class="agent-chat__composer-combobox chat-session-rail__prompt">

@@ -2767,3 +2767,7 @@ src/process/spawn-broker/worker.ts
 src/state/openclaw-agent-schema-inspection.worker.ts
 src/state/openclaw-state-ownership.worker.ts
 src/infra/schema-migration-diagnostics.ts
+src/canvas/wrap.ts
+src/plugin-sdk/widget-html.ts
+src/shared/html-escape.ts
+src/shared/widget-media.ts

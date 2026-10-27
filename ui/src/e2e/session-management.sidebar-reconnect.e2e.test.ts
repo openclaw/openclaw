@@ -70,7 +70,7 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.patch", {
         match: { key: sessionKey, label: "Renamed offline" },
       });
-      await connectionStatus.waitFor({ state: "detached" });
+      await connectionStatus.getByText("Connected", { exact: true }).waitFor();
       await expect.poll(() => row.textContent()).toContain("Renamed offline");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
       expect(await page.locator(".shell > .sr-only[role=status]").textContent()).toBe("Connected");
