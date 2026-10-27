@@ -197,12 +197,13 @@ describe("runtime auth profile snapshots", () => {
           : replaceSnapshots([{ agentDir, store: next }]);
       const catalogRevision = getCatalogRevision(agentDir);
       const metadataRevision = getMetadataRevision(agentDir);
-      for (const usageStats of [
+      const availabilityChanges: AuthProfileStore["usageStats"][] = [
         { [acme]: { cooldownUntil: 30_000, cooldownReason: "rate_limit" as const } },
         { [acme]: { blockedUntil: 40_000, blockedModel: "model", blockedScope: "model" as const } },
         { [acme]: { disabledUntil: 50_000, disabledReason: "billing" as const } },
         {},
-      ]) {
+      ];
+      for (const usageStats of availabilityChanges) {
         publish({ ...store, usageStats });
         expect(listener).toHaveBeenLastCalledWith({
           agentDir,

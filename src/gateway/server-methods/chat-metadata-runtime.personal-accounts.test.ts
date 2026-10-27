@@ -494,10 +494,11 @@ describe("gateway chat metadata auth deadlines", () => {
         true,
       );
       expect(onChanged.mock.calls.every(([change]) => change.authChanged === true)).toBe(true);
-      for (const profiles of [
+      const credentialChanges: AuthProfileStore["profiles"][] = [
         { "acme:primary": { ...original.profiles["acme:primary"]!, key: "replacement-key" } },
         {},
-      ]) {
+      ];
+      for (const profiles of credentialChanges) {
         onChanged.mockClear();
         setRuntimeAuthProfileStoreSnapshot({ ...original, profiles }, prepared.agentDir);
         await harness.runtime.refresh();

@@ -2425,7 +2425,7 @@ const mock = createServer((req, res) => {
       if (++authAvailabilityMock.requests % 2 === 1) {
         counts.rateLimits++;
         authAvailabilityMock.rateLimits++;
-        res.writeHead(429, { "content-type": "application/json", "retry-after": "0" });
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
         res.end(
           JSON.stringify({
             error: {

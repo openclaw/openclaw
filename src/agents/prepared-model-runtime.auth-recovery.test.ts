@@ -687,7 +687,7 @@ describe("prepared model auth publication", () => {
       expect(events).not.toHaveBeenCalled();
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
 
-      for (const profiles of [
+      const credentialChanges: RuntimeAuthProfileStore["profiles"][] = [
         {
           "test:primary": {
             type: "token" as const,
@@ -703,10 +703,12 @@ describe("prepared model auth publication", () => {
             token: "second-synthetic-token",
           },
         },
-      ]) {
+      ];
+      for (const profiles of credentialChanges) {
         const previous = await prepare(input);
-        mocks.preparedAuthStore = { ...store, profiles };
-        snapshots.updateRuntimeAuthProfileStoreSnapshot(mocks.preparedAuthStore, agentDir);
+        const changedStore = { ...store, profiles };
+        mocks.preparedAuthStore = changedStore;
+        snapshots.updateRuntimeAuthProfileStoreSnapshot(changedStore, agentDir);
         expect(previous.isCurrent()).toBe(false);
         const replacement = await prepare(input);
         expect(replacement).not.toBe(previous);
