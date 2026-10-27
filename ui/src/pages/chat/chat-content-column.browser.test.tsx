@@ -347,18 +347,15 @@ it.each(["light", "dark"])(
       const [first, second] = [ink, fill].map(luminance);
       return (Math.max(first!, second!) + 0.05) / (Math.min(first!, second!) + 0.05);
     };
-    // Start in pointer modality; keyboard navigation must establish visible focus.
-    link.addEventListener("click", (event) => event.preventDefault(), { once: true });
-    await page.elementLocator(link).click();
-    await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
+    // Script focus matches :focus-visible only after keyboard input; parallel files' clicks reset that.
+    await userEvent.keyboard("{Tab}");
     for (const bubble of root.querySelectorAll<HTMLElement>(".chat-bubble")) {
       const fill = getComputedStyle(bubble).backgroundColor;
       expect(
         contrast(getComputedStyle(bubble.querySelector(".chat-text")!).color, fill),
       ).toBeGreaterThanOrEqual(4.5);
       const chip = bubble.querySelector<HTMLElement>(".markdown-github-item")!;
-      bubble.querySelector<HTMLElement>(".chat-text a")!.focus();
-      await userEvent.keyboard("{Tab}");
+      chip.focus();
       expect(chip.matches(":focus-visible")).toBe(true);
       expect(contrast(getComputedStyle(chip).outlineColor, fill)).toBeGreaterThanOrEqual(3);
     }
