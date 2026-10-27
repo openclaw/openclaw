@@ -23,6 +23,11 @@ import {
   runAgentHarnessBeforeAgentFinalizeHook,
 } from "../../src/agents/harness/lifecycle-hook-helpers.js";
 import { bindAgentHarnessHookMessages } from "../../src/agents/harness/lifecycle-hook-messages.js";
+import type {
+  PluginHookAgentEndEvent,
+  PluginHookBeforeAgentFinalizeEvent,
+} from "../../src/plugins/hook-types.js";
+import { createHookRunner } from "../../src/plugins/hooks.js";
 
 const { values } = parseArgs({
   options: {
@@ -67,17 +72,19 @@ function makeLoader(index: number) {
 let delivered = 0;
 function start(count: number) {
   const gate = Promise.withResolvers<void>();
-  const dispatch = async (event: { messages: unknown[] }) => {
+  const dispatch = async (
+    event: PluginHookAgentEndEvent | PluginHookBeforeAgentFinalizeEvent,
+  ): Promise<undefined> => {
     assert.equal(event.messages, deliveredMessages);
     delivered++;
     await gate.promise;
   };
-  // Synthetic subscriber implements exactly the callbacks these two owners consume.
   const hookRunner = {
+    ...createHookRunner({ hooks: [], typedHooks: [], plugins: [] }),
     hasHooks: () => true,
     runAgentEnd: dispatch,
     runBeforeAgentFinalize: dispatch,
-  } as NonNullable<Parameters<typeof awaitAgentHarnessAgentEndHook>[0]["hookRunner"]>;
+  };
   const pending: Array<
     | ReturnType<typeof awaitAgentHarnessAgentEndHook>
     | ReturnType<typeof runAgentHarnessBeforeAgentFinalizeHook>
