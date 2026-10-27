@@ -13,6 +13,7 @@ import * as retry from "./retry.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const runRetry = retry.retryAsync;
 const backupPackageRoot = packageFilesystem.backupNpmPackageRoot;
+const activatePackageRoot = packageFilesystem.activateStagedNpmPackageRoot;
 const restorePackageRoot = packageFilesystem.restoreNpmPackageRoot;
 let wait: ReturnType<typeof vi.fn<(ms: number) => Promise<void>>>;
 beforeEach(() => {
@@ -20,6 +21,15 @@ beforeEach(() => {
   vi.spyOn(packageFilesystem, "backupNpmPackageRoot").mockImplementation(
     (source, destination, assertCurrent, warnings) =>
       backupPackageRoot(source, destination, assertCurrent, warnings, "win32"),
+  );
+  vi.spyOn(packageFilesystem, "activateStagedNpmPackageRoot").mockImplementation(
+    (source, destination, assertCurrent, unjournaled) =>
+      activatePackageRoot(
+        source,
+        destination,
+        assertCurrent,
+        unjournaled && { ...unjournaled, platform: "win32" },
+      ),
   );
   wait = vi.fn(async (_ms: number) => {});
   vi.spyOn(retry, "retryAsync").mockImplementation((fn, options) =>
@@ -94,6 +104,51 @@ it.each(["transient", "persistent", "authority", "source", "destination"] as con
     );
     await expect(fs.readFile(launcher, "utf8")).resolves.toBe(
       transient ? "candidate launcher\n" : "old launcher\n",
+    );
+  },
+);
+
+it.each(["transient", "persistent"] as const)(
+  "retries a %s Windows activation denial without copying the staged package",
+  async (scenario) => {
+    const { params, packageRoot, launcher } = await createPackageSwapFixture(
+      dirs.make("swap-activation-"),
+    );
+    const staged = params.stage.packageRoot;
+    const rename = fs.rename.bind(fs);
+    let attempts = 0;
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (String(from) === staged) {
+        attempts++;
+        if (scenario === "persistent" || attempts <= 2) {
+          throw Object.assign(new Error("EPERM: staged package is in use"), { code: "EPERM" });
+        }
+      }
+      return rename(from, to);
+    });
+
+    const result = await swapStagedPackageInstall(params);
+
+    expect(result.step.warnings).toContainEqual(
+      expect.stringContaining("Windows package activation rename"),
+    );
+    if (scenario === "transient") {
+      expect(result.status).toBe("committed");
+      expect(attempts).toBe(3);
+    } else {
+      expect(result).toMatchObject({ status: "failed", packageRollbackVerified: true });
+      expect(result.step.stderrTail).toContain("activation rename failed after 16 attempts");
+      expect(attempts).toBe(16);
+      // The exact staged object stays in place; nothing was copied over the live root.
+      await expect(fs.readFile(path.join(staged, "package.json"), "utf8")).resolves.toContain(
+        `"version":"2.0.0"`,
+      );
+    }
+    await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+      `"version":"${scenario === "transient" ? "2.0.0" : "1.0.0"}"`,
+    );
+    await expect(fs.readFile(launcher, "utf8")).resolves.toBe(
+      scenario === "transient" ? "candidate launcher\n" : "old launcher\n",
     );
   },
 );

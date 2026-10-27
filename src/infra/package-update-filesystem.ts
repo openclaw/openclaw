@@ -66,6 +66,7 @@ export async function activateStagedNpmPackageRoot(
   source: string,
   destination: string,
   assertCurrent?: () => void,
+  unjournaled?: { assertCaller?: () => void; warnings: string[]; platform?: NodeJS.Platform },
 ): Promise<void> {
   if (assertCurrent) {
     // A durable descriptor binds the staged inode. A copied replacement would
@@ -77,6 +78,18 @@ export async function activateStagedNpmPackageRoot(
   }
   const stat = await fs.lstat(source);
   if (!stat.isSymbolicLink()) {
+    if (unjournaled && (unjournaled.platform ?? process.platform) === "win32") {
+      // The stage is a sibling of the live root, so this rename cannot cross
+      // devices. fs-safe's Windows EPERM copy fallback would instead copy the
+      // tree and then fail deleting the still-held stage after publication.
+      await renamePackageRootWithWindowsRetries(
+        source,
+        destination,
+        retainMutationAuthority(unjournaled.assertCaller ?? (() => {})),
+        { operation: "activation", warn: (message) => unjournaled.warnings.push(message) },
+      );
+      return;
+    }
     await movePathWithCopyFallback({
       from: source,
       sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
@@ -120,9 +133,9 @@ export async function backupNpmPackageRoot(
 /**
  * Shared bounded Windows retries for guarded package-root renames: transient
  * AV/indexer denials are retried with authority and path-identity checks while
- * permanent failures stay failures. Package backup and rollback publication/
- * compensation renames share this one implementation; callers keep their own
- * operation-specific diagnostics through `operation` and `warn`.
+ * permanent failures stay failures. Package backup, unjournaled activation, and
+ * rollback publication/compensation renames share this one implementation;
+ * callers keep their own operation-specific diagnostics through `operation` and `warn`.
  */
 async function renamePackageRootWithWindowsRetries(
   source: string,
