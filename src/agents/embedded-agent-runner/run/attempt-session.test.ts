@@ -81,7 +81,7 @@ vi.mock("../../sessions/tools/tool-definition-wrapper.js", () => ({
 vi.mock("../extensions.js", () => ({
   buildEmbeddedExtensionFactories: hoisted.buildEmbeddedExtensionFactories,
 }));
-vi.mock("../logger.js", () => ({ log: { info: vi.fn() } }));
+vi.mock("../logger.js", () => ({ log: { info: vi.fn(), isEnabled: () => false } }));
 vi.mock("../../sessions/resource-loader.js", () => ({
   DefaultResourceLoader: hoisted.DefaultResourceLoader,
 }));
