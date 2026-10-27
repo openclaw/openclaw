@@ -4,7 +4,6 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
-import { captureChatDetailsSnapshot } from "./chat-details-snapshot.ts";
 import { chatGoalPresentation } from "./chat-goals.ts";
 import {
   canLoadChatBranches,
@@ -28,6 +27,7 @@ import {
 } from "./components/chat-session-workspace-state.ts";
 import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
+import { captureChatDetailsSnapshot } from "./session-message-cache.ts";
 import {
   sidebarActivePanel,
   sidebarMainPanel,

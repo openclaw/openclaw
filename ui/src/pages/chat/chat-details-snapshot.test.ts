@@ -2,10 +2,14 @@
 import { expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
-import { captureChatDetailsSnapshot, projectDetailsSubagents } from "./chat-details-snapshot.ts";
+import { projectDetailsSubagents } from "./chat-details-snapshot.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
+import {
+  cacheChatSessionSnapshot,
+  captureChatDetailsSnapshot,
+  readChatSessionSnapshot,
+} from "./session-message-cache.ts";
 
 function cachedPane() {
   const { state } = createTestChatPane({

@@ -390,6 +390,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     (!props.gateway?.snapshot.hello || inventory.readable())
       ? props.cached
       : undefined;
+  const pending = () => (cached() ? inventory.loading() : isPending(inventory.read));
   const jobs = createMemo<DetailsAutomation[]>(() =>
     inventory.loaded()
       ? (props.desktop && !props.desktop.expanded ? [] : inventory.jobs().slice(0, shown())).map(
@@ -549,7 +550,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       </div>
     );
   const content = () => (
-    <div class="chat-summary__automations" aria-busy={inventory.loading() ? "true" : "false"}>
+    <div class="chat-summary__automations" aria-busy={pending() ? "true" : "false"}>
       <For each={jobs()} keyed={(job) => job.id}>
         {(job) => {
           let row: HTMLAnchorElement | undefined;
@@ -632,7 +633,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
         <button
           type="button"
           class="chat-summary__automation-more"
-          disabled={!hasCachedRows() && (inventory.loading() || !inventory.connected())}
+          disabled={!hasCachedRows() && (pending() || !inventory.connected())}
           onClick={(event) => void reveal(event.currentTarget)}
         >
           {t("chat.sessionDetails.automationShowMore")}
