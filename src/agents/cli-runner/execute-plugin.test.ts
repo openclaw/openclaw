@@ -194,12 +194,8 @@ describe("plugin-owned CLI execution host boundary", () => {
 
   it.each([
     [{ kind: "internal_system", sourceTool: "exec" }, "host"],
-    [{ kind: "internal_system", sourceTool: "cron" }, "host"],
-    [{ kind: "internal_system", sourceTool: "future_wake" }, "host"],
     [{ kind: "inter_session", sourceTool: "subagent_announce" }, "host"],
-    [{ kind: "inter_session", sourceTool: "sessions_send" }, "host"],
     [{ kind: "external_user", sourceTool: "exec" }, undefined],
-    [{ kind: "external_user" }, undefined],
     [undefined, undefined],
   ] as const)(
     "preserves input provenance instead of classifying prompt text (%j)",

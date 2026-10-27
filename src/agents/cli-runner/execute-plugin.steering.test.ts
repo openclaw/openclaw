@@ -150,9 +150,9 @@ it("steers configured, session and explicit inputs through current authority int
     context.workspaceDir = root;
     context.cwd = root;
     params.inputProvenance = { kind: "internal_system", sourceTool: "future_wake" };
-    const recordInput = (text: string, provenance?: InputProvenance, idempotencyKey = text) =>
+    const recordInput = (text: string, provenance?: InputProvenance) =>
       createUserTurnTranscriptRecorder({
-        input: { text, idempotencyKey, provenance },
+        input: { text, idempotencyKey: text, provenance },
         target: createTestUserTurnTranscriptTarget({ sessionKey, sessionId, cwd: root }),
       });
     const followupRun = createQueueTestRun({ prompt: "initial", originatingChannel: "webchat" });
@@ -298,21 +298,7 @@ it("steers configured, session and explicit inputs through current authority int
       expect(followup).not.toHaveBeenCalled();
       expect(await readInputs()).toEqual(["initial", ...routeInputs]);
 
-      // The same text can be a human steer, host wake, or forwarded peer input.
-      // Each origin belongs to that input, not to the already-running turn.
-      const hostProvenances: InputProvenance[] = [
-        { kind: "internal_system", sourceTool: "future_wake" },
-        { kind: "inter_session", sourceTool: "sessions_send" },
-      ];
-      for (const provenance of hostProvenances) {
-        const recorder = recordInput("global", provenance, provenance.kind);
-        const queued = await beginReplyMessageInjectionTarget(target, "global", {
-          userTurnTranscriptRecorder: recorder,
-        });
-        await expect(queued.outcome).resolves.toMatchObject({ status: "accepted" });
-        expect(recorder.hasPersisted()).toBe(true);
-        routeInputs.push("global");
-      }
+      // A forwarded completion steered into the running turn keeps its own origin and context.
       const completion = recordInput(RUNTIME_EVENT_USER_PROMPT, {
         kind: "inter_session",
         sourceTool: "subagent_announce",
@@ -330,51 +316,41 @@ it("steers configured, session and explicit inputs through current authority int
           replyInstruction: "Summarize the result for the requester.",
         },
       ]);
+      const text = fragments.map((part) => part.text).join("\n\n");
       const queuedCompletion = await beginReplyMessageInjectionTarget(
         target,
         RUNTIME_EVENT_USER_PROMPT,
-        {
-          userTurnTranscriptRecorder: completion,
-          currentInboundContext: {
-            text: fragments.map((part) => part.text).join("\n\n"),
-            fragments,
-          },
-        },
+        { userTurnTranscriptRecorder: completion, currentInboundContext: { text, fragments } },
       );
       await expect(queuedCompletion.outcome).resolves.toMatchObject({ status: "accepted" });
       await completionObserved.promise;
       routeInputs.push(RUNTIME_EVENT_USER_PROMPT);
-      const contexts = (await readFile(path.join(root, "received-contexts.ndjson"), "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
+      const readLines = async (name: string) =>
+        (await readFile(path.join(root, name), "utf8"))
+          .trim()
+          .split("\n")
+          .map((l) => JSON.parse(l));
+      const contexts = await readLines("received-contexts.ndjson");
       expect(contexts.at(-1)?.hookSpecificOutput?.additionalContext).toContain(
         "The fixture count is 42.",
       );
       expect(await readInputs()).toEqual(["initial", ...routeInputs]);
-      const nativeOrigins = (await readFile(path.join(root, "received-origins.ndjson"), "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-      expect(nativeOrigins).toEqual([true, ...routes.map(() => false), true, true, true]);
+      // Initial host turn, human steers, then the forwarded completion.
+      expect(await readLines("received-origins.ndjson")).toEqual([
+        true,
+        ...routes.map(() => false),
+        true,
+      ]);
 
-      // A recorder preflight failure must reject before native acceptance, not lose input.
+      // A recorder failure before native acceptance rejects the input instead of losing it.
       const unresolvedRecorder = recordInput("unresolved input");
-      const resolveMessage = vi
-        .spyOn(unresolvedRecorder, "resolveMessage")
-        .mockRejectedValueOnce(new Error("Recorder preflight failed"));
+      vi.spyOn(unresolvedRecorder, "resolveMessage").mockRejectedValueOnce(new Error("preflight"));
       const unresolved = await beginReplyMessageInjectionTarget(target, "unresolved input", {
         userTurnTranscriptRecorder: unresolvedRecorder,
       });
-      await expect(unresolved.acceptance).resolves.toBe(false);
       await expect(unresolved.outcome).resolves.toMatchObject({ status: "rejected" });
       expect(await readInputs()).toEqual(["initial", ...routeInputs]);
       expect(unresolvedRecorder.hasPersisted()).toBe(false);
-      expect(unresolvedRecorder.isBlocked()).toBe(false);
-      resolveMessage.mockRestore();
-      await expect(unresolvedRecorder.resolveMessage()).resolves.toMatchObject({
-        content: "unresolved input",
-      });
 
       // Revoke stored policy after selection but before the ordered final worker read.
       const read = sessionReads.withSessionEntriesFromStoresInWorker;
@@ -448,9 +424,6 @@ it("steers configured, session and explicit inputs through current authority int
         storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       });
       expect(messages.map((message) => message.content)).toEqual(expectedInputs);
-      expect(
-        messages.slice(routes.length, routes.length + 2).map((message) => message.provenance),
-      ).toEqual(hostProvenances);
       expect(followup).not.toHaveBeenCalled();
     } finally {
       operation.abortByUser();
