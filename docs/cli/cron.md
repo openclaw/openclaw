@@ -205,7 +205,7 @@ Isolated automation chat delivery is shared between the agent and the runner:
 
 - The agent can send directly using the `message` tool when a chat route is available.
 - `announce` sends the final result unless a verified matching send already did so, then adds confirmed delivery to the destination chat's transcript.
-- `webhook` posts the finished payload to a URL.
+- `webhook` posts the finished payload to a URL. Isolated and current-session agent-turn runs include the untruncated final text as `outputText` beside the bounded `summary`; see [Webhook delivery output](/automation/cron-jobs/payloads#webhook-delivery-output).
 - `none` disables automatic conversation results and external notifications.
 
 Agent, command, and script results belong to the chat or topic that receives them. An explicit different destination gets the result instead of the creating conversation, including for CLI and older jobs without a creating session. With no external route, the creating conversation receives it; WebChat shows the same message live and after reload. Retries do not duplicate results. Resetting an explicitly configured external destination does not stop delivery: the result enters its current session. Implicit agent-turn announcements and routeless WebChat results fail if the creating conversation was deleted or reset; recreate the job or set explicit external delivery coordinates. Command and script announcements retain an already resolved route without a source-generation check, as before. A confirmed external send remains delivered, with a warning if the conversation write fails. See [Automation delivery](/automation/cron-jobs/delivery).

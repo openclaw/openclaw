@@ -202,6 +202,88 @@ async function createScheduledService(deps: Partial<CronServiceDeps> = {}) {
   };
 }
 
+async function createAgentOutputWebhook(
+  runIsolatedAgentJob: CronServiceDeps["runIsolatedAgentJob"],
+) {
+  const requests: string[] = [];
+  const server = createServer((request, response) => {
+    void text(request).then((body) => {
+      requests.push(body);
+      response.writeHead(204);
+      response.end();
+    });
+  });
+  const url = await listenLoopback(server);
+  const service = await createScheduledService({
+    enqueueSystemEvent: vi.fn(),
+    runIsolatedAgentJob,
+    sendCronWebhook: (params) =>
+      sendGatewayCronWebhook({ ...params, ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } }),
+  });
+  const { cron } = service;
+  const job = await cron.add({
+    ...agentJob("isolated output webhook"),
+    delivery: { mode: "webhook", to: `${url}/hook` },
+  });
+  return {
+    ...service,
+    job,
+    requests,
+    run: () => cron.run(job.id, "force"),
+    lastBody: () => JSON.parse(requests.at(-1)!) as Record<string, unknown>,
+    [Symbol.asyncDispose]: async () => {
+      cron.stop();
+      await closeHttpServer(server);
+    },
+  };
+}
+
+describe("isolated agent webhook full output", () => {
+  const fullOutput = `CRON_FULL_OUTPUT_PROOF_${"Automated report line with details. ".repeat(90)}`;
+  const boundedSummary = `${fullOutput.slice(0, 2000)}…`;
+
+  it("sends untruncated outputText while the summary keeps its bounded shape", async () => {
+    await using h = await createAgentOutputWebhook(async () => ({
+      status: "ok",
+      summary: boundedSummary,
+      outputText: fullOutput,
+    }));
+    await h.run();
+    const body = h.lastBody();
+    expect(body.outputText).toBe(fullOutput);
+    expect(body.summary).toBe(boundedSummary);
+    expect(String(body.summary)).toHaveLength(2001);
+    expect(String(body.summary).endsWith("…")).toBe(true);
+    expect(h.requests).toHaveLength(1);
+  });
+
+  it("omits outputText when the run produced no non-empty output text", async () => {
+    const runIsolatedAgentJob = vi
+      .fn<CronServiceDeps["runIsolatedAgentJob"]>()
+      .mockResolvedValueOnce({ status: "ok", summary: "quiet check finished" })
+      .mockResolvedValueOnce({ status: "ok", summary: "whitespace output", outputText: "   " });
+    await using h = await createAgentOutputWebhook(runIsolatedAgentJob);
+    await h.run();
+    expect(h.lastBody()).not.toHaveProperty("outputText");
+    await h.run();
+    expect(h.lastBody()).not.toHaveProperty("outputText");
+  });
+
+  it("keeps failed-run webhooks free of both summary and outputText", async () => {
+    await using h = await createAgentOutputWebhook(async () => ({
+      status: "error",
+      error: "agent run failed",
+      summary: boundedSummary,
+      outputText: fullOutput,
+    }));
+    await h.run();
+    const body = h.lastBody();
+    expect(body).toMatchObject({ status: "error", error: "agent run failed" });
+    expect(body).not.toHaveProperty("summary");
+    expect(body).not.toHaveProperty("outputText");
+  });
+});
+
 describe("CronService persists delivered status", () => {
   it("delivers a command webhook after a forward wall-clock jump", async () => {
     const execution = gate(commandOk);

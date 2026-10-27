@@ -434,7 +434,12 @@ async function executeDetachedCronJob(
   abortSignal: AbortSignal | undefined,
   options?: ExecuteJobCoreOptions,
 ): Promise<
-  CronRunOutcome & CronRunTelemetry & CronRunDeliveryResult & { nextCheck?: CronNextCheckProposal }
+  CronRunOutcome &
+    CronRunTelemetry &
+    CronRunDeliveryResult & {
+      nextCheck?: CronNextCheckProposal;
+      outputText?: string;
+    }
 > {
   const interrupted = () => {
     const error = abortErrorMessage(abortSignal);
@@ -545,6 +550,9 @@ async function executeDetachedCronJob(
     deliveryState: res.deliveryState,
     nextCheck: res.nextCheck,
     summary: res.summary,
+    // outputText rides the run result only into the primary webhook event;
+    // persisted history and announced summaries keep the bounded `summary`.
+    outputText: res.outputText,
     result: res.result,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,

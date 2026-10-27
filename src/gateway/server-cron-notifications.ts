@@ -223,7 +223,9 @@ function buildCronFinishedWebhookPayload(evt: CronEvent) {
   if (evt.status !== "error") {
     return evt;
   }
-  const { summary: _summary, diagnostics: _diagnostics, ...payload } = evt;
+  // Failed-run webhooks keep their text-free contract: no bounded summary,
+  // diagnostics, or untruncated agent output.
+  const { summary: _summary, diagnostics: _diagnostics, outputText: _outputText, ...payload } = evt;
   if (evt.job) {
     const state = { ...evt.job.state };
     delete state.lastDiagnostics;

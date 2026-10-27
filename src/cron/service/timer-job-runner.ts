@@ -168,6 +168,10 @@ async function deliverPrimaryWebhook(
         status: result.status,
         error: result.error,
         summary: result.summary,
+        // Silent runs produce no non-empty output; the key stays absent.
+        ...(typeof result.outputText === "string" && result.outputText.trim()
+          ? { outputText: result.outputText }
+          : {}),
         result: result.result,
         diagnostics: result.diagnostics,
         delivered: true,
