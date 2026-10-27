@@ -487,7 +487,10 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       const fetchMock = vi.fn();
       const images = variants.map(([alt, width, height, sized]) => {
         fetchMock.mockResolvedValueOnce(svgResponse(width, height));
-        return outgoingImage(alt, sized ? width : undefined, sized ? height : undefined);
+        return Object.assign(
+          outgoingImage(alt, sized ? width : undefined, sized ? height : undefined),
+          { alt },
+        );
       });
       vi.stubGlobal("fetch", fetchMock);
       drawImages(container, { images, role: "assistant" });

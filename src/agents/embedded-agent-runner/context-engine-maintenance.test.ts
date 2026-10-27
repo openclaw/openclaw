@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
@@ -259,7 +259,7 @@ describe("runContextEngineMaintenance", () => {
     { name: "accepted restart drain", trigger: () => markGatewayDraining() },
   ])(
     "settles abort-waiting deferred maintenance during $name without rerun",
-    async ({ trigger }) => {
+    async ({ trigger }, { signal: testSignal }) => {
       await withStateDirEnv("openclaw-turn-maintenance-abort-waiting-", async () => {
         const f = backgroundSession("session-abort-waiting");
         const { sessionKey } = f;
@@ -327,11 +327,7 @@ describe("runContextEngineMaintenance", () => {
           expect(secondEngine["dispose"]).toHaveBeenCalledTimes(1);
 
           trigger();
-          await withTestTimeout(
-            waitForSessionMaintenance(sessionKey),
-            500,
-            "maintenance did not settle",
-          );
+          await withinTest(waitForSessionMaintenance(sessionKey), testSignal);
           expect(observedSignal?.aborted).toBe(true);
           expectCalls(1, firstMaintain);
           expectCalls(0, secondMaintain);

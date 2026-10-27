@@ -98,8 +98,7 @@ function drawThread(props: ReturnType<typeof threadProps>) {
   cleanups.push(() => render(null, container));
   return {
     container,
-    query: <T extends Element = HTMLElement>(selector: string) =>
-      container.querySelector<T>(selector),
+    query: (selector: string) => container.querySelector<HTMLElement>(selector),
     settle: async () => {
       await waitForSolid(() => {
         frame();
@@ -592,7 +591,9 @@ describe("transcript projection", () => {
     await view.settle();
 
     expect(state.search.snapshot.open).toBe(false);
-    expect(view.query<HTMLDetailsElement>(".chat-session-activity")?.open).toBe(true);
+    expect(view.container.querySelector<HTMLDetailsElement>(".chat-session-activity")?.open).toBe(
+      true,
+    );
     expect(view.container.textContent).toContain("Hidden original");
   });
 });

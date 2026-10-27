@@ -38,8 +38,7 @@ function threadFixture(props: ReturnType<typeof threadProps>) {
     transcript,
     container,
     view,
-    query: <T extends Element = HTMLElement>(selector: string) =>
-      container.querySelector<T>(selector),
+    query: (selector: string) => container.querySelector<HTMLElement>(selector),
     markers: () => [
       ...container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker"),
     ],

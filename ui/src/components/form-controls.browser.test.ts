@@ -335,6 +335,9 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         const [tile, text, control, message] = Array.from(row.children, (child) =>
           child.getBoundingClientRect(),
         );
+        if (!tile || !text || !control || !message) {
+          throw new Error("Missing settings row fixture child");
+        }
         const style = getComputedStyle(row);
         const contentWidth =
           row.clientWidth -

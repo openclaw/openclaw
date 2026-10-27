@@ -15,10 +15,7 @@ const textSchema = (constraints: Partial<JsonSchema> = {}): JsonSchema => ({
 });
 const digits = textSchema({ minLength: 3, pattern: "^[0-9]+$" });
 const evenNumber: JsonSchema = { type: "integer", minimum: 2, maximum: 8, multipleOf: 2 };
-
-function query<T extends Element = HTMLElement>(root: ParentNode, selector: string): T {
-  return expectElement(root.querySelector<T>(selector), selector);
-}
+const relayUrlSchema = { type: "string", description: "Relay origin.", format: "uri" };
 
 function button(root: ParentNode, label: string) {
   return expectElement(
@@ -49,7 +46,7 @@ describe("config form integrity", () => {
               maxLength: 16,
               pattern: "[a-z-]+",
             }),
-            relayUrl: textSchema({ format: "uri" }),
+            relayUrl: relayUrlSchema,
             explicitEmpty: textSchema({ minLength: 0, pattern: "^$" }),
             glyph: textSchema({ maxLength: 1, pattern: "^.$" }),
             codes: { type: "array", items: digits },
@@ -85,7 +82,10 @@ describe("config form integrity", () => {
       onPatch,
     });
 
-    const endpoint = query<HTMLInputElement>(container, "input[aria-label='Endpoint']");
+    const endpoint = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Endpoint']"),
+      "input[aria-label='Endpoint']",
+    );
     expect(endpoint.getAttribute("minlength")).toBeNull();
     expect(endpoint.getAttribute("maxlength")).toBeNull();
     expect(endpoint.pattern).toBe("");
@@ -122,7 +122,10 @@ describe("config form integrity", () => {
     expect(endpointError.hidden).toBe(true);
     expect(endpointError.textContent).toBe("");
 
-    const relayUrl = query<HTMLInputElement>(container, "input[aria-label='Relay Url']");
+    const relayUrl = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Relay Url']"),
+      "input[aria-label='Relay Url']",
+    );
     typeValue(relayUrl, "relay.example");
     expect(relayUrl.getAttribute("aria-invalid")).toBe("true");
     expect(onPatch).not.toHaveBeenCalledWith(["laboratory", "relayUrl"], "relay.example");
@@ -130,11 +133,17 @@ describe("config form integrity", () => {
     expect(relayUrl.getAttribute("aria-invalid")).toBe("false");
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "relayUrl"], "https://relay.example/");
 
-    const explicitEmpty = query<HTMLInputElement>(container, "input[aria-label='Explicit Empty']");
+    const explicitEmpty = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Explicit Empty']"),
+      "input[aria-label='Explicit Empty']",
+    );
     typeValue(explicitEmpty, "");
     expect(explicitEmpty.getAttribute("aria-invalid")).toBe("false");
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "explicitEmpty"], "");
-    const glyph = query<HTMLInputElement>(container, "input[aria-label='Glyph']");
+    const glyph = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Glyph']"),
+      "input[aria-label='Glyph']",
+    );
     expect(glyph.getAttribute("maxlength")).toBeNull();
     typeValue(glyph, "😀");
     expect(glyph.getAttribute("aria-invalid")).toBe("false");
@@ -148,17 +157,26 @@ describe("config form integrity", () => {
     const addCode = button(codes, "Add");
     expect(addCode.disabled).toBe(false);
     addCode.click();
-    const codeDraftHost = query(codes, "openclaw-config-form-collection-draft");
+    const codeDraftHost = expectElement(
+      codes.querySelector<HTMLElement>("openclaw-config-form-collection-draft"),
+      "openclaw-config-form-collection-draft",
+    );
     flush();
-    const codeDraft = query<HTMLElement>(codes, ".cfg-collection-draft");
+    const codeDraft = expectElement(
+      codes.querySelector<HTMLElement>(".cfg-collection-draft"),
+      ".cfg-collection-draft",
+    );
     expect(onPatch).not.toHaveBeenCalledWith(["laboratory", "codes"], expect.anything());
-    const codeValue = query<HTMLInputElement>(codeDraft, "input[aria-label='Add: Codes']");
+    const codeValue = expectElement(
+      codeDraft.querySelector<HTMLInputElement>("input[aria-label='Add: Codes']"),
+      "input[aria-label='Add: Codes']",
+    );
     const commitCode = button(codeDraft, "Add");
     codeValue.value = "abc";
     commitCode.click();
     flush();
-    const invalidCodeValue = query<HTMLInputElement>(
-      codeDraftHost,
+    const invalidCodeValue = expectElement(
+      codeDraftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
       "[data-collection-draft-value]",
     );
     expect(invalidCodeValue.getAttribute("aria-invalid")).toBe("true");
@@ -177,17 +195,23 @@ describe("config form integrity", () => {
     );
     const addLimited = button(limited, "Add");
     expect(addLimited.disabled).toBe(true);
-    const provider = query<HTMLSelectElement>(container, "select[aria-label='Provider']");
+    const provider = expectElement(
+      container.querySelector<HTMLSelectElement>("select[aria-label='Provider']"),
+      "select[aria-label='Provider']",
+    );
     expect(provider.getAttribute("aria-describedby")).toBe(
       "config-field-s10-006c00610062006f007200610074006f00720079_s8-00700072006f00760069006400650072-description",
     );
 
-    const retryBudget = query<HTMLInputElement>(container, "input[aria-label='Retry Budget']");
+    const retryBudget = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Retry Budget']"),
+      "input[aria-label='Retry Budget']",
+    );
     expect(retryBudget.min).toBe("2");
     expect(retryBudget.max).toBe("8");
     expect(retryBudget.step).toBe("2");
-    const weightInput = query<HTMLInputElement>(
-      container,
+    const weightInput = expectElement(
+      container.querySelector<HTMLInputElement>(".cfg-array input[aria-label='Weights']"),
       ".cfg-array input[aria-label='Weights']",
     );
 
@@ -212,7 +236,10 @@ describe("config form integrity", () => {
     expect(retryBudget.checkValidity()).toBe(true);
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "retryBudget"], 4);
 
-    const increment = query<HTMLButtonElement>(container, "button[aria-label='Retry Budget: +2']");
+    const increment = expectElement(
+      container.querySelector<HTMLButtonElement>("button[aria-label='Retry Budget: +2']"),
+      "button[aria-label='Retry Budget: +2']",
+    );
     increment.click();
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "retryBudget"], 8);
 
@@ -247,28 +274,49 @@ describe("config form integrity", () => {
 
       const addEntry = button(container, "Add Entry");
       addEntry.click();
-      const draftHost = query(container, "openclaw-config-form-collection-draft");
+      const draftHost = expectElement(
+        container.querySelector<HTMLElement>("openclaw-config-form-collection-draft"),
+        "openclaw-config-form-collection-draft",
+      );
       flush();
-      const draft = query<HTMLElement>(container, ".cfg-map .cfg-collection-draft");
-      const key = query<HTMLInputElement>(draft, "[data-collection-draft-key]");
-      const value = query<HTMLInputElement>(draft, "[data-collection-draft-value]");
+      const draft = expectElement(
+        container.querySelector<HTMLElement>(".cfg-map .cfg-collection-draft"),
+        ".cfg-map .cfg-collection-draft",
+      );
+      const key = expectElement(
+        draft.querySelector<HTMLInputElement>("[data-collection-draft-key]"),
+        "[data-collection-draft-key]",
+      );
+      const value = expectElement(
+        draft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
+        "[data-collection-draft-value]",
+      );
       const commit = button(draft, "Add Entry");
       typeValue(key, "fixed");
       typeValue(value, "123");
       flush();
       commit.click();
       flush();
-      const reservedKey = query<HTMLInputElement>(draftHost, "[data-collection-draft-key]");
+      const reservedKey = expectElement(
+        draftHost.querySelector<HTMLInputElement>("[data-collection-draft-key]"),
+        "[data-collection-draft-key]",
+      );
       expect(reservedKey.getAttribute("aria-invalid")).toBe("true");
       expect(onPatch).not.toHaveBeenCalled();
 
       typeValue(reservedKey, entryKey);
-      const invalidValueInput = query<HTMLInputElement>(draftHost, "[data-collection-draft-value]");
+      const invalidValueInput = expectElement(
+        draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
+        "[data-collection-draft-value]",
+      );
       typeValue(invalidValueInput, "abc");
       flush();
       button(draftHost, "Add Entry").click();
       flush();
-      const invalidValue = query<HTMLInputElement>(draftHost, "[data-collection-draft-value]");
+      const invalidValue = expectElement(
+        draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
+        "[data-collection-draft-value]",
+      );
       expect(invalidValue.getAttribute("aria-invalid")).toBe("true");
       expect(onPatch).not.toHaveBeenCalled();
 
@@ -302,14 +350,20 @@ describe("config form integrity", () => {
     };
 
     renderValues(["111", "222"]);
-    const first = query<HTMLInputElement>(container, "input[aria-label='Values']");
+    const first = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
+      "input[aria-label='Values']",
+    );
     typeValue(first, "abc");
     expect(first.getAttribute("aria-invalid")).toBe("true");
     expect(first.validationMessage).not.toBe("");
 
     for (const values of [["111", "333"], ["111", "333", "444"], ["111"]]) {
       renderValues(values);
-      const preserved = query<HTMLInputElement>(container, "input[aria-label='Values']");
+      const preserved = expectElement(
+        container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
+        "input[aria-label='Values']",
+      );
       expect(preserved).toBe(first);
       expect(preserved.value).toBe("abc");
       expect(preserved.getAttribute("aria-invalid")).toBe("true");
@@ -317,7 +371,10 @@ describe("config form integrity", () => {
     }
 
     renderValues(["444"]);
-    const changed = query<HTMLInputElement>(container, "input[aria-label='Values']");
+    const changed = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Values']"),
+      "input[aria-label='Values']",
+    );
     expect(changed.value).toBe("444");
     expect(changed.getAttribute("aria-invalid")).toBe("false");
     expect(changed.validationMessage).toBe("");
@@ -342,14 +399,20 @@ describe("config form integrity", () => {
     };
 
     renderSensitive(true);
-    const input = query<HTMLInputElement>(container, "input[aria-label='Api Key']");
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Api Key']"),
+      "input[aria-label='Api Key']",
+    );
     typeValue(input, "abc");
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(input.validationMessage).not.toBe("");
     expect(onPatch).not.toHaveBeenCalled();
 
     renderSensitive(false);
-    const hidden = query<HTMLInputElement>(container, "input[aria-label='Api Key']");
+    const hidden = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Api Key']"),
+      "input[aria-label='Api Key']",
+    );
     expect(hidden).toBe(input);
     expect(hidden.readOnly).toBe(true);
     expect(hidden.classList.contains("cfg-redacted")).toBe(true);
@@ -358,7 +421,10 @@ describe("config form integrity", () => {
     expect(hidden.validationMessage).toBe("");
 
     renderSensitive(true);
-    const revealed = query<HTMLInputElement>(container, "input[aria-label='Api Key']");
+    const revealed = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Api Key']"),
+      "input[aria-label='Api Key']",
+    );
     expect(revealed).toBe(input);
     expect(revealed.value).toBe("123");
     expect(revealed.getAttribute("aria-invalid")).toBe("false");
@@ -380,7 +446,10 @@ describe("config form integrity", () => {
       onPatch,
     });
 
-    const textarea = query<HTMLTextAreaElement>(container, ".cfg-map textarea");
+    const textarea = expectElement(
+      container.querySelector<HTMLTextAreaElement>(".cfg-map textarea"),
+      ".cfg-map textarea",
+    );
     expect(textarea.getAttribute("aria-label")).toBe("primary: JSON value");
     typeValue(textarea, '{"enabled":');
     textarea.dispatchEvent(new Event("change", { bubbles: true }));
@@ -389,7 +458,7 @@ describe("config form integrity", () => {
     expect(textarea.getAttribute("aria-invalid")).toBe("true");
     const errorId = configFieldId(["accounts", "primary"], "json-error");
     expect(textarea.getAttribute("aria-describedby")?.split(" ")).toContain(errorId);
-    const error = query<HTMLElement>(container, `#${errorId}`);
+    const error = expectElement(container.querySelector<HTMLElement>(`#${errorId}`), `#${errorId}`);
     expect(error.getAttribute("role")).toBe("alert");
     expect(error.hidden).toBe(false);
     expect(error.textContent).toContain("valid JSON");

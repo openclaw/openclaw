@@ -348,7 +348,11 @@ describe("embedded run session prompt state", () => {
             const acceptance = acceptCompactionSuccessor({
               currentTarget: target,
               currentSessionFile: state.sessionFile,
-              expectedEntry,
+              expectedEntry: {
+                sessionId: expectedEntry.sessionId,
+                lifecycleRevision: expectedEntry.lifecycleRevision,
+                activeWriterRunId: expectedEntry.activeWriterRunId,
+              },
               assertActive: assertAdmittedActive,
               result: {
                 ok: true,

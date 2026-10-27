@@ -130,7 +130,7 @@ beforeEach(() => {
 });
 
 describe("runCodexAppServerAttempt context-engine lifecycle", () => {
-  it.each(["summary", "image budget", "no authored cap"] as const)(
+  it.each(["summary", "text budget", "image budget", "no authored cap"] as const)(
     "assembles %s before starting the native turn",
     async (scenario) => {
       const summary = scenario === "summary";
@@ -161,6 +161,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         manager.appendMessage(userMessage("PRIOR_BUDGET_CONTEXT", 10));
         if (scenario !== "no authored cap") {
           params.authoredContextTokenCap = 600_000;
+        }
+        if (scenario === "image budget") {
           params.images = [
             {
               type: "image",

@@ -137,7 +137,11 @@ it("renders video playback, footer actions and live labels", async () => {
   expect(openOriginal.href).toBe(originalSrc);
   const close = button(modal, ".close");
   expect(close.getAttribute("aria-label")).toBe("Close video preview");
-  expectFocusCycle(close, openOriginal, { composed: true });
+  openOriginal.focus();
+  pressKey(openOriginal, "Tab", { composed: true });
+  expect(document.activeElement).toBe(close);
+  pressKey(close, "Tab", { shiftKey: true, composed: true });
+  expect(document.activeElement).toBe(openOriginal);
   modal.imageTitle = "Renamed video";
   await modal.updateComplete;
   expect(video.getAttribute("aria-label")).toBe("Renamed video");

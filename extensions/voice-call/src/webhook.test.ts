@@ -43,7 +43,11 @@ vi.mock("./realtime-transcription.runtime.js", () => ({
 }));
 // mock-isolation: Exercise webhook delivery without running a real agent response.
 vi.mock("./response-generator.js", () => ({ generateVoiceResponse: mocks.generate }));
-beforeEach(() => onTestFinished(() => vi.restoreAllMocks()));
+beforeEach(() =>
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  }),
+);
 
 const provider: VoiceCallProvider = {
   name: "mock",
@@ -161,7 +165,9 @@ function runPipeline(
 }
 function fakeTime() {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
 }
 const media = (server: VoiceCallWebhookServer) =>
   (server.getMediaStreamHandler() as unknown as { config: MediaStreamConfig }).config;

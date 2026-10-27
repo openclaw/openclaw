@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { OAuthCredential } from "./auth-profiles/types.js";
 import { resolveEmbeddedRunModelSetup } from "./embedded-agent-runner/run/model-setup.js";
 import type { AgentHarnessModelCatalogResult } from "./harness/types.js";
 import { harnessRegistry, oauth } from "./model-catalog-fixtures.test-support.js";
@@ -626,7 +627,7 @@ it("renews native observations without retaining harness-only host projections",
   const native = { provider, id: "native", name: "Native", nativeRuntime: "fixture-native" };
   const host = { provider, id: "host-only", name: "Host only" };
   const api = { provider, id: "api", name: "API" };
-  const profile = {
+  const profile: OAuthCredential = {
     ...oauth(provider, 1_900_000_000_000),
     accountId: "fixture-account",
   };
