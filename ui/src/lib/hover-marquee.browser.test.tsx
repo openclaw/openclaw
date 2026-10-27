@@ -11,13 +11,19 @@ let setTitle: (title: string) => void;
 let unmount: () => void;
 const longTitle = "Review navigation accessibility and keyboard focus — final checklist";
 
-function mount() {
+function mount(className = "sidebar-recent-session__name") {
+  let host!: HTMLAnchorElement;
   const [title, updateTitle] = createSignal(longTitle);
   setTitle = updateTitle;
   ({ unmount } = mountSolid(
     () => (
-      <a class="session-row-host" href="#session" style="display:block;width:180px">
-        <HoverMarquee content={title()} class="sidebar-recent-session__name" options={{}} />
+      <a
+        ref={(element) => (host = element)}
+        class="session-row-host"
+        href="#session"
+        style="display:flex;width:180px"
+      >
+        <HoverMarquee content={title()} class={className} options={{ host: () => host }} />
       </a>
     ),
     { container },
@@ -44,48 +50,35 @@ afterEach(() => {
 });
 
 describe("hover marquee lifecycle", () => {
-  it("keeps Automation title fades stable from the first attached layout", async () => {
-    unmount();
-    let host!: HTMLAnchorElement;
-    const [title, updateTitle] = createSignal(longTitle);
-    ({ unmount } = mountSolid(
-      () => (
-        <a ref={(element) => (host = element)} href="#automation" style="display:flex;width:180px">
-          <HoverMarquee
-            content={title()}
-            class="chat-summary__automation-title"
-            options={{ host: () => host }}
-          />
-        </a>
-      ),
-      { container },
-    ));
-    flush();
-    const label = container.querySelector<HTMLElement>(".chat-summary__automation-title")!;
-    const firstMask = getComputedStyle(label).maskImage;
-    expect(firstMask).not.toBe("none");
-    await expect.poll(() => label.classList.contains("hover-marquee--overflowing")).toBe(true);
-    expect(getComputedStyle(label).maskImage).toBe(firstMask);
-    updateTitle("Notes");
-    flush();
-    await expect.poll(() => label.classList.contains("hover-marquee--overflowing")).toBe(false);
-    expect(getComputedStyle(label).maskImage).toBe(firstMask);
-  });
-
-  it("updates the resting fade when its viewport or title changes", async () => {
-    const label = show(longTitle);
-    const mask = () => getComputedStyle(label).maskImage;
-    await expect.poll(mask).not.toBe("none");
-    const host = container.querySelector<HTMLElement>("a")!;
-    host.style.width = "1000px";
-    await expect.poll(mask).toBe("none");
-    host.style.width = "180px";
-    await expect.poll(mask).not.toBe("none");
-    expect(show("Notes")).toBe(label);
-    await expect.poll(mask).toBe("none");
-    show(longTitle);
-    await expect.poll(mask).not.toBe("none");
-  });
+  it.each(["sidebar-recent-session__name", "chat-summary__automation-title"])(
+    "keeps %s fades correct through attachment, resize, and title changes",
+    async (className) => {
+      unmount();
+      mount(className);
+      const label = show(longTitle);
+      const mask = () => getComputedStyle(label).maskImage;
+      const restingMask = className === "chat-summary__automation-title" ? mask() : "none";
+      if (className === "chat-summary__automation-title") {
+        expect(restingMask).not.toBe("none");
+      }
+      await expect.poll(() => label.classList.contains("hover-marquee--overflowing")).toBe(true);
+      await expect.poll(mask).not.toBe("none");
+      if (className === "chat-summary__automation-title") {
+        expect(mask()).toBe(restingMask);
+      }
+      const host = container.querySelector<HTMLElement>("a")!;
+      host.style.width = "1000px";
+      await expect.poll(() => label.classList.contains("hover-marquee--overflowing")).toBe(false);
+      await expect.poll(mask).toBe(restingMask);
+      host.style.width = "180px";
+      await expect.poll(mask).not.toBe("none");
+      expect(show("Notes")).toBe(label);
+      await expect.poll(() => label.classList.contains("hover-marquee--overflowing")).toBe(false);
+      await expect.poll(mask).toBe(restingMask);
+      show(longTitle);
+      await expect.poll(mask).not.toBe("none");
+    },
+  );
 
   it("cancels a pending reveal on disposal and remounts the same title", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

@@ -1,10 +1,13 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
+import { projectDetailsSubagents } from "./chat-details-snapshot.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
   clearChatMessagesFromCache,
+  captureChatDetailsSnapshot,
   createChatWidgetLayout,
   observeChatCache,
   readChatMessagesFromCache,
@@ -17,14 +20,25 @@ function createCacheContext(
   assistantAgentId = "ops",
   agentsList = { defaultId: "ops", mainKey: "home" },
 ) {
-  const host = { assistantAgentId, agentsList };
   const cache: ChatMessageCache = new Map();
+  const host = {
+    assistantAgentId,
+    agentsList,
+    chatMessagesBySession: cache,
+    sessionKey: "home",
+    currentSessionId: "session-1",
+    connected: true,
+    connectionEpoch: 0,
+    settings: { gatewayUrl: "wss://cache.example" },
+    client: { recoveryScope: "account-a", recoveryScopeReady: true },
+  };
   const target = (sessionKey = "home", agentId?: string) => ({ sessionKey, agentId });
   const read = (sessionKey = "home") => readChatSessionSnapshot(cache, host, target(sessionKey));
   const write = (snapshot: ChatSessionSnapshot, sessionKey = "home") =>
     cacheChatSessionSnapshot(cache, host, target(sessionKey), snapshot);
   return {
     cache,
+    host,
     read,
     write,
     messages: (sessionKey: string, agentId?: string) =>
@@ -71,6 +85,14 @@ describe("session message cache", () => {
       headerSharing: "public",
       sessionState: { archived: true, unarchiveAllowed: false },
     },
+    {
+      details: {
+        locale: "en",
+        subagents: { total: 0, rows: [], counts: [] },
+        automations: { rows: [], more: false },
+        outputs: 1,
+      },
+    },
   ] satisfies Partial<ChatSessionSnapshot>[])("retains %j across the same incarnation", (facts) => {
     const { read, write } = createCacheContext();
     write(widgetSnapshot(["cached"], "session-1", facts));
@@ -80,6 +102,68 @@ describe("session message cache", () => {
     for (const field of Object.keys(facts)) {
       expect(read()).not.toHaveProperty(field);
     }
+  });
+
+  it("merges current-locale Details receipts without overwriting row footprints", () => {
+    const { host, read, write, layout } = createCacheContext();
+    write(
+      widgetSnapshot([], "session-1", {
+        details: { locale: "other-locale", automations: { rows: [], more: false } },
+      }),
+    );
+    const receipt = captureChatDetailsSnapshot(host)!;
+    expect(receipt.details).toBeUndefined();
+    receipt.write({ subagents: { total: 0, rows: [], counts: [] } });
+    const widgetHeights = { 'row:v1:768:appearance:revision:"reply"': 200 };
+    layout().writeRows(widgetHeights);
+    receipt.write({ outputs: 2 });
+    expect(read()?.details).toEqual({
+      locale: i18n.getLocale(),
+      subagents: { total: 0, rows: [], counts: [] },
+      outputs: 2,
+    });
+    expect(read()?.widgetHeights).toEqual(widgetHeights);
+  });
+
+  it.each<[string, (host: ReturnType<typeof createCacheContext>["host"]) => void]>([
+    ["connection epoch", (host) => Object.assign(host, { connectionEpoch: 1 })],
+    [
+      "account scope on the same client",
+      (host) => Object.assign(host.client, { recoveryScope: "other" }),
+    ],
+    ["connection client", (host) => Object.assign(host, { client: { ...host.client } })],
+    ["disconnect", (host) => Object.assign(host, { connected: false })],
+    ["session incarnation", (host) => Object.assign(host, { currentSessionId: "replacement" })],
+    ["selected session", (host) => Object.assign(host, { sessionKey: "other" })],
+  ])("rejects a late Details receipt after %s changes", (_, change) => {
+    const { host, read, write } = createCacheContext();
+    write(widgetSnapshot());
+    const receipt = captureChatDetailsSnapshot(host)!;
+    change(host);
+    write(widgetSnapshot());
+    receipt.write({ outputs: 99 });
+    expect(read()?.details).toBeUndefined();
+  });
+
+  it("bounds Subagents to display fields, prioritizing working rows and counting every row", () => {
+    const rows = Array.from({ length: 6 }, (_, index) => ({
+      key: String(index),
+      label: "Worker",
+      status: index === 5 ? ("running" as const) : ("done" as const),
+      transcript: "not display data",
+    }));
+    expect(projectDetailsSubagents(rows)).toEqual({
+      total: 6,
+      rows: [5, 0, 1, 2].map((index) => ({
+        key: String(index),
+        label: "Worker",
+        status: index === 5 ? "running" : "done",
+      })),
+      counts: [
+        { status: "running", count: 1 },
+        { status: "done", count: 5 },
+      ],
+    });
   });
 
   it("publishes a footprint batch once and rejects a retired session's deferred batch", () => {
@@ -266,20 +350,6 @@ describe("session message cache", () => {
     expect(context.layout().read(row)).toBe(80);
   });
 
-  it("retains Details display facts through history replacement but drops them on reset", () => {
-    const { read, write } = createCacheContext();
-    const details = {
-      locale: "en",
-      subagents: { total: 0, rows: [], counts: [] },
-      automations: { rows: [], more: false },
-      outputs: 1,
-    };
-    write(widgetSnapshot([], "session-1", { details }));
-    write(widgetSnapshot(["live"], "session-1"));
-    expect(read()?.details).toEqual(details);
-    write(widgetSnapshot([], "session-2"));
-    expect(read()?.details).toBeUndefined();
-  });
   it("retains a scoped board through transcript replacement and clears it authoritatively", () => {
     const cache: ChatMessageCache = new Map();
     const host = {

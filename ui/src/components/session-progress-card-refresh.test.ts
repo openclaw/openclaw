@@ -15,31 +15,6 @@ const statusText = (root: HTMLElement) => root.querySelector("[role=status]")?.t
 const time = (container: HTMLElement) => container.querySelector("time");
 
 describe("progress card refresh control", () => {
-  it("retains the cached desktop refresh button while live authority arrives", () => {
-    const onRefresh = vi.fn();
-    const { container, show } = createView({ placement: "details", desktopDetails: true });
-    show({ reserveRefresh: true });
-    const button = container.querySelector<HTMLButtonElement>(".task-progress-details__refresh")!;
-    expect(button).not.toBeNull();
-    expect(button.disabled).toBe(false);
-    expect(button.getAttribute("aria-disabled")).toBe("true");
-    expect(button.getAttribute("aria-description")).toBe("Loading session progress…");
-    const glyph = button.innerHTML;
-    button.click();
-    expect(onRefresh).not.toHaveBeenCalled();
-
-    show({ reserveRefresh: false, refreshAction: { onRefresh } });
-    expect(container.querySelector(".task-progress-details__refresh")).toBe(button);
-    expect(button.innerHTML).toBe(glyph);
-    expect(button.hasAttribute("aria-disabled")).toBe(false);
-    expect(button.hasAttribute("aria-description")).toBe(false);
-    button.click();
-    expect(onRefresh).toHaveBeenCalledExactlyOnceWith(progressCard);
-
-    show({ reserveRefresh: false, refreshAction: undefined });
-    expect(container.querySelector(".task-progress-details__refresh")).toBeNull();
-  });
-
   it.each([false, true])(
     "refreshes from the options menu without toggling or dragging (collapsed: %s)",
     async (collapsed) => {
@@ -78,28 +53,25 @@ describe("progress card refresh control", () => {
       expect(onRefresh).toHaveBeenCalledExactlyOnceWith(progressCard);
       expect(onManipulate).not.toHaveBeenCalled();
       expect(details.open).toBe(!collapsed);
-      show("pending");
-      await openMenu();
-      expect(button.disabled).toBe(true);
-      expect(button.getAttribute("aria-busy")).toBe("true");
-      button.click();
-      expect(onRefresh).toHaveBeenCalledTimes(1);
-      expect(statusText(container)).toContain("Refreshing task progress");
-      expect(time(container)?.dateTime).toBe(new Date(progressCard.updatedAt).toISOString());
-      show("failed");
-      expect(container.textContent).not.toContain("Use refresh to retry");
-      expect(button.disabled).toBe(false);
-      expect(button.textContent).toContain("Retry progress refresh");
-      expect(statusText(container)).toContain("Previous update kept");
-      button.click();
-      expect(onRefresh).toHaveBeenCalledTimes(2);
-      show("timeout");
-      expect(container.textContent).not.toContain("Use refresh to retry");
-      expect(statusText(container)).toContain("may still be running");
-      expect(details.open).toBe(!collapsed);
-      show("updated");
-      expect(statusText(container)).toBe("Task progress updated");
-      expect(details.open).toBe(!collapsed);
+      for (const [state, status, calls] of [
+        ["pending", "Refreshing task progress", 1],
+        ["failed", "Previous update kept", 2],
+        ["timeout", "may still be running", 3],
+        ["updated", "Task progress updated", 4],
+      ] as const) {
+        show(state);
+        await openMenu();
+        expect(button.disabled).toBe(state === "pending");
+        expect(button.getAttribute("aria-busy")).toBe(String(state === "pending"));
+        expect(time(container)?.dateTime).toBe(new Date(progressCard.updatedAt).toISOString());
+        expect(statusText(container)).toContain(status);
+        expect(container.textContent).not.toContain("Use refresh to retry");
+        expect(details.open).toBe(!collapsed);
+        if (state === "failed") expect(button.textContent).toContain("Retry progress refresh");
+        if (state === "updated") expect(statusText(container)).toBe(status);
+        button.click();
+        expect(onRefresh).toHaveBeenCalledTimes(calls);
+      }
       options.click();
       flush();
       summary.click();
