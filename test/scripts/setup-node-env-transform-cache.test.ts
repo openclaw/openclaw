@@ -8,7 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("retains transform inputs while excluding only the two database membership inventories", () => {
+it("retains shared transform inputs while excluding membership inventories and the keyed E2E factory", () => {
   const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
   const step = action.runs.steps.find(
     (candidate: { name: string }) => candidate.name === "Resolve Vitest transform cache generation",
@@ -31,6 +31,9 @@ it("retains transform inputs while excluding only the two database membership in
     "scripts/control-ui-retention/vitest.config.ts",
     "test/vitest/vitest.shared.config.ts",
     "test/vitest/vitest.worker-artifacts.ts",
+    "test/vitest/vitest.performance-config.ts",
+    "test/vitest/vitest.ui-e2e-prebuilt.config.ts",
+    "test/vitest/nested/vitest.ui-e2e.config.ts",
     "test/vitest/vitest.ui-e2e.setup.ts",
     "test/vitest/vitest.ui-e2e.bundled.global-setup.ts",
     "test/vitest/vitest.channel-paths.mjs",
@@ -40,6 +43,7 @@ it("retains transform inputs while excluding only the two database membership in
   const excluded = [
     "test/vitest/vitest.database-worker-core-paths.mjs",
     "test/vitest/vitest.extension-database-workers-paths.mjs",
+    "test/vitest/vitest.ui-e2e.config.ts",
     "node_modules/example/package.json",
     ".ci-harness/package.json",
     "docs/example.md",
