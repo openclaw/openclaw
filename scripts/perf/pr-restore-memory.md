@@ -29,7 +29,7 @@ env = dict(os.environ, GIT_INDEX_FILE=str(repo / "benchmark-index"),
 def git(*args, **kwargs):
     return subprocess.check_output(["git", "-C", str(repo), *args], env=env, **kwargs)
 rows = git("diff-tree", "--no-commit-id", "--raw", "--no-abbrev", "--no-renames", "-r", "-z", source, target).split(b"\0")
-selected = [(meta.split(), name) for meta, name in zip(rows[::2], rows[1::2])
+selected = [(meta.removeprefix(b":").split(), name) for meta, name in zip(rows[::2], rows[1::2])
             if name.startswith(b"src/gateway/") and meta.split()[1] in (b"100644", b"100755")][:2048]
 commits = []
 for side in (0, 1):
