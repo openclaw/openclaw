@@ -76,7 +76,11 @@ function registerIdentityProbe(params: {
   bindPluginRuntimeArtifactSelection(record, {
     ...artifact,
     preferBuiltPluginArtifacts: false,
-    runtimeEntry: resolvePluginRuntimeArtifactSelection({ ...artifact, entryKind: "runtime" }),
+    runtimeEntry: resolvePluginRuntimeArtifactSelection({
+      ...artifact,
+      entryKind: "runtime",
+      preferBuiltPluginArtifacts: false,
+    }),
   });
   builder.registry.plugins.push(record);
   const metadataSnapshot = createPluginMetadataSnapshotFixture({
@@ -130,6 +134,8 @@ async function invokeQueuedV2Tool(params: {
   registry: ReturnType<typeof createTestPluginRegistry>["registry"];
 }) {
   const run = params.turnParams.followupRun.run;
+  const runId = params.turnParams.opts?.runId;
+  assert(runId, "expected queued execution run id");
   const execution = await buildEmbeddedRunExecutionParams({
     run,
     replyRoute: params.turnParams.followupRun,
@@ -137,7 +143,7 @@ async function invokeQueuedV2Tool(params: {
     hasRepliedRef: undefined,
     provider: run.provider,
     model: run.model,
-    runId: params.turnParams.replyOperation.runId,
+    runId,
   });
   const toolContext = buildEmbeddedAttemptToolRunContext({
     ...execution,
@@ -188,8 +194,10 @@ async function executeIdentityTurn(params: {
   state.execute.mockImplementationOnce(async (turnParams: AgentTurnParams) => {
     try {
       await params.run(turnParams);
+      const runId = turnParams.opts?.runId;
+      assert(runId, "expected queued execution run id");
       return {
-        runId: turnParams.replyOperation.runId,
+        runId,
         outcome: { kind: "rejected", payload: { text: "done" } },
       };
     } catch (error) {
@@ -208,7 +216,7 @@ async function executeIdentityTurn(params: {
     onCompactionNoticePayload: async () => {},
   });
   if (runError !== undefined) {
-    throw runError;
+    throw runError instanceof Error ? runError : new Error(String(runError));
   }
   return result;
 }
