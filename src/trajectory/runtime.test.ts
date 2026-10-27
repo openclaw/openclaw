@@ -414,7 +414,9 @@ describe("trajectory runtime", () => {
     let copiedKeyLists: number;
     try {
       recorder.recordEvent("prompt.submitted", data);
-      copiedKeyLists = slices.mock.contexts.filter((keys) => keys.includes("imagesCount")).length;
+      copiedKeyLists = slices.mock.contexts.filter(
+        (keys) => Array.isArray(keys) && keys.includes("imagesCount"),
+      ).length;
     } finally {
       slices.mockRestore();
     }
