@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import { StatementSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { collectLegacyCronStoreHealthFindings } from "../commands/doctor/cron/index.js";
+import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { resolveCronJobsStorePath, saveCronQuarantinedJobs } from "./store.js";
@@ -62,20 +63,33 @@ it.each([false, true])(
   },
 );
 
-it("leaves missing databases absent and legacy layouts unmigrated", async () => {
-  await withCronStore("cron-readonly-legacy", async (state) => {
-    const databasePath = state.databasePath;
+it("keeps legacy reads immutable across reader reuse, idle expiry and canonical close", () =>
+  withCronStore("cron-readonly-legacy", async (state) => {
     const empty = await state.read();
     expect(empty.store).toEqual({ version: 1, jobs: [] });
-    await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(state.databasePath)).rejects.toMatchObject({ code: "ENOENT" });
     await state.createDatabase("CREATE TABLE legacy_marker(value TEXT); PRAGMA user_version = 1;");
     const before = await state.bytes();
-    for (const preserve of [true, false]) {
-      expect(await state.read(preserve)).toEqual(empty);
-      expect(await state.bytes()).toEqual(before);
+    expect(await state.read(true)).toEqual(empty);
+    const starts = () =>
+      getTrackedWorkerLifecycleSnapshot()
+        .workerLifecycle.filter(({ script }) => script.includes("read-only.worker"))
+        .reduce((total, worker) => total + worker.started, 0);
+    const initial = starts();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      for (const [index, idle] of [0, 120_001, 300_001, undefined].entries()) {
+        await (idle === undefined ? state.close() : vi.advanceTimersByTimeAsync(idle));
+        for (let read = 0; read < 3; read++) {
+          expect(await state.read()).toEqual(empty);
+        }
+        expect(starts() - initial).toBe(index + 1);
+        expect(await state.bytes()).toEqual(before);
+      }
+    } finally {
+      vi.useRealTimers();
     }
-  });
-});
+  }));
 
 it("preserves native diagnostic errors without repairing an incompatible cron table", async () => {
   await withCronStore("cron-readonly-diagnostic", async (state) => {
