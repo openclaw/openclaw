@@ -7,6 +7,10 @@
  * its base arm matches full changed-entry receipts, candidate uses field deltas.
  * --phase append-changed measures the same activity change during a transcript
  * append; its base arm matches the full changed-entry append receipt protocol.
+ * --phase adoptRun|completeTurn|deliveryPending|deliverySettled measures changed
+ * lifecycle receipts; base matches their full-entry protocol, candidate uses the
+ * existing field-delta protocol. Report bytes/reply by phase; multiply by an
+ * explicitly stated synthetic calls/minute, not an inferred production rate.
  * --fixture <file> replays a V8-serialized synthetic {before, outcome} captured
  * at the actor worker boundary, including its metadata publication receipts.
  * node --import ./scripts/tsx.mjs scripts/perf/session-actor-receipt-measure.ts \
@@ -31,7 +35,11 @@ import { setImmediate } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { deserialize, serialize } from "node:v8";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
-import type { SessionActorHotState } from "../../src/config/sessions/session-actor-contract.js";
+import type {
+  SessionActorHotState,
+  SessionActorPhase,
+  SessionActorPhaseResults,
+} from "../../src/config/sessions/session-actor-contract.js";
 import {
   createSessionActorCommittedOutcome,
   projectSessionActorCommittedOutcome,
@@ -56,7 +64,11 @@ assert(
   phase === "append" ||
     phase === "append-changed" ||
     phase === "patch" ||
-    phase === "patch-changed",
+    phase === "patch-changed" ||
+    phase === "adoptRun" ||
+    phase === "completeTurn" ||
+    phase === "deliveryPending" ||
+    phase === "deliverySettled",
 );
 assert(arm === "base" || arm === "candidate", "Choose --arm base or candidate");
 assert(values.mode === "timing" || values.mode === "allocation");
@@ -113,7 +125,12 @@ const appended: SessionActorHotState = {
   },
 };
 const isAppend = phase === "append" || phase === "append-changed";
-const changed = phase === "patch-changed" || phase === "append-changed";
+const lifecycle =
+  phase === "adoptRun" ||
+  phase === "completeTurn" ||
+  phase === "deliveryPending" ||
+  phase === "deliverySettled";
+const changed = phase === "patch-changed" || phase === "append-changed" || lifecycle;
 const after = isAppend ? appended : { ...appended, transcript: before.transcript };
 if (changed) {
   after.entry = { ...structuredClone(before.entry!), updatedAt: 2 };
@@ -131,17 +148,23 @@ event.firstView[16] = 42;
 const outcome =
   fixture?.outcome ??
   createSessionActorCommittedOutcome({
-    phase: isAppend ? "appendTranscriptEvent" : "patch",
+    phase: isAppend ? "appendTranscriptEvent" : lifecycle ? phase : "patch",
     command: { commandId: "synthetic-append", phaseId: "synthetic-turn" },
     before,
     after,
     payloads: new Map([[1001, { event, serializedBytes: serialize(event).byteLength }]]),
     applied: {
-      value: isAppend ? { projectionNeedsReconcile: false } : undefined,
+      value: isAppend
+        ? { projectionNeedsReconcile: false }
+        : phase === "completeTurn"
+          ? { kind: "bookkeeping" }
+          : phase === "deliverySettled"
+            ? { disposition: "cleared" }
+            : undefined,
       reducers: [],
     },
   });
-type WireOutcome = SessionActorCommittedWireOutcome<unknown>;
+type WireOutcome = SessionActorCommittedWireOutcome<SessionActorPhaseResults[SessionActorPhase]>;
 type BatchComplete = { kind: "batch-complete"; senderCpuMs: number };
 if (!isMainThread) {
   assert(parentPort);

@@ -599,16 +599,16 @@ and only while the entry object remains unchanged. Cold or mismatched revisions
 and replaced entries carry the complete entry. Main resolves references within
 that command; live policy and revocation checks still run at every admission.
 
-Plain transcript append and bookkeeping patch receipts use the same command-local
+Plain transcript append, bookkeeping patch, and lifecycle receipts use the same command-local
 reference when the entry is unchanged and initialization does not also expose it. Main restores the
 entry by reference to its deeply frozen replica preimage, without cloning it.
-Bookkeeping patches and plain appends that change the entry send changed fields and removed keys
+Receipts that change the entry send changed fields and removed keys
 against that same token; the host rebuilds the outer entry while reusing unchanged
 frozen fields. Matching metadata publication postimages reuse that reconstructed
 entry instead of transferring a second copy. Settlement, publication, and commit
 observers only read the result.
-Unavailable preimages and other changed-entry phases still transfer the complete
-entry. A missing or mismatched reference refuses receipt restoration. Stored bytes and write authority are
+Unavailable preimages, turn results, and append initialization still transfer the complete
+entry to preserve their result aliases. A missing or mismatched reference refuses receipt restoration. Stored bytes and write authority are
 unchanged.
 
 Replica lookups resolve configured path spellings through the existing admission
