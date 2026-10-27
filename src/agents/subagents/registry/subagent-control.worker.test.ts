@@ -601,12 +601,8 @@ describe("subagent progress drafts", () => {
     );
   });
 
-  async function adoptCohort(
-    children = ["a", "b"],
-    origin?: Parameters<typeof yieldCohort>[2],
-    completionTarget?: "parent",
-  ) {
-    const spawns = await yieldCohort("parent-turn", children, origin, undefined, completionTarget);
+  async function adoptCohort(children = ["a", "b"], origin?: Parameters<typeof yieldCohort>[2]) {
+    const spawns = await yieldCohort("parent-turn", children, origin);
     const draft = newDraft();
     expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
     return draft;
@@ -644,12 +640,7 @@ describe("subagent progress drafts", () => {
         },
       );
     }
-    // Optional requester silence settles a yielded private cohort; public children still owe a reply.
-    const draft = await adoptCohort(
-      ["a", "b"],
-      requesterOrigin,
-      requesterOrigin ? "parent" : undefined,
-    );
+    const draft = await adoptCohort(["a", "b"], requesterOrigin);
     const wakes = answerWakes(draft, replies);
 
     await endRun("a");
