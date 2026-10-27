@@ -47,13 +47,10 @@ suite.define(() => {
           unresolved
             ? {
                 ...fixture.scenario,
-                presenceUsers: fixture.scenario.presenceUsers!.map((user) => ({
-                  ...user,
-                  self: false,
-                })),
+                presenceUsers: fixture.scenario.presenceUsers!.filter((user) => !user.self),
                 heldMethods: ["users.self"],
               }
-            : fixture.scenario,
+            : { ...fixture.scenario, heldMethods: ["connect"] },
           {
             requestHandlers: {
               "sessions.list": (value) => {
@@ -71,6 +68,8 @@ suite.define(() => {
       await page.goto(
         controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, "chat"),
       );
+      await gateway.waitForRequest("connect");
+      await gateway.resolveDeferred("connect");
       await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
       const peer = await context.newPage();
       const peerGateway = await install(peer, true);
@@ -85,9 +84,6 @@ suite.define(() => {
       });
       // Flush the peer's native pending publication before reloading another route.
       await peer.evaluate(() => window.dispatchEvent(new Event("pagehide")));
-      await page.addInitScript(() => {
-        window.openclawControlUiE2eGateway?.deferNext("connect");
-      });
       for (const face of ["chat", "dashboard"] as const) {
         await page.goto(
           controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, face),

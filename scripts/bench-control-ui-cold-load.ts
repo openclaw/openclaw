@@ -1660,7 +1660,7 @@ try {
   const warmStates: Array<Awaited<ReturnType<typeof persistColdLoadWarmState>>["storage"]> = [];
   async function flushUnresolvedSidebarPeer() {
     if (!values["sidebar-profile-peer"]) {
-      return;
+      return undefined;
     }
     const readBootRecords = () =>
       page.evaluate(() =>
@@ -1676,7 +1676,7 @@ try {
       peer,
       {
         ...prepared.scenario,
-        presenceUsers: prepared.scenario.presenceUsers.map((user) => ({ ...user, self: false })),
+        presenceUsers: prepared.scenario.presenceUsers?.filter((user) => !user.self),
         heldMethods: ["users.self"],
         serverBuildId: buildId,
       },
@@ -1807,7 +1807,12 @@ try {
     }
     snapshotSaves.push(snapshotSave);
     for (let index = 1; index < bundleSlots.length; index++) {
-      await restoreColdLoadWarmState(page, warmStorage, warmStates[index - 1]);
+      // Keep the peer-written fault seed instead of adopting the seeder's exit writes.
+      await restoreColdLoadWarmState(
+        page,
+        warmStorage,
+        values["sidebar-profile-peer"] ? undefined : warmStates[index - 1],
+      );
       const reloadUrl = page.url();
       await selectComparisonBundle(index, page);
       await page.goto(reloadUrl, { waitUntil: "domcontentloaded" });
@@ -1817,12 +1822,12 @@ try {
         await page.locator(".shell--nav-drawer-open").waitFor();
       }
       await expandSidebar();
-      const peerSeed = await flushUnresolvedSidebarPeer();
+      const candidatePeerSeed = await flushUnresolvedSidebarPeer();
       const { storage, ...saved } = await page.evaluate(persistColdLoadWarmState, warmInput);
       warmStates.push(storage);
-      if (peerSeed) {
+      if (candidatePeerSeed) {
         sidebarProfilePeerSeeds.push({
-          ...peerSeed,
+          ...candidatePeerSeed,
           frozen: storage.local.filter(([key]) =>
             key.startsWith("openclaw.control.bootRecord.v1:"),
           ),
@@ -1834,7 +1839,11 @@ try {
         await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
       }
     }
-    await restoreColdLoadWarmState(page, warmStorage, warmStates.at(-1));
+    await restoreColdLoadWarmState(
+      page,
+      warmStorage,
+      values["sidebar-profile-peer"] ? undefined : warmStates.at(-1),
+    );
     if (values["sidebar-presentation-probe"]) {
       for (const [index, storage] of warmStates.entries()) {
         await writeFile(
