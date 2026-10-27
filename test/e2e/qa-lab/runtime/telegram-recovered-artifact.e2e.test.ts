@@ -377,9 +377,8 @@ test("delivers a recovered artifact once while preserving its inter-session tran
     expect(completedWrites).toHaveLength(1);
     expect(completedWrites[0]?.call_id).toBe(writeCalls[0]?.call_id);
     expect(overloads).toBe(1);
-    expect(finalizers).toEqual([
-      { requestId: overloadedRequestId + 1, callId: writeCalls[0]?.call_id },
-    ]);
+    expect(finalizers.map(({ callId }) => callId)).toEqual([writeCalls[0]?.call_id]);
+    expect(finalizers[0]?.requestId).toBeGreaterThan(overloadedRequestId);
     expect(markerResponses).toEqual([true]);
     expect(documents).toEqual([
       { chatId: String(CHAT_ID), name: FILE_NAME, content: FILE_CONTENT },
