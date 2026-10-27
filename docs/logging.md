@@ -480,6 +480,19 @@ must not be summed. Unfinished spans stop at the startup boundary; later model
 and tool latency does not extend them. Structured `chat.send.detail.*` phase
 events use the same durations when diagnostics are enabled.
 
+Before acknowledgement, `detail.persist.stage.*` separates pending-input resolution,
+storage preparation, reads, authority preparation, message preparation, and durable
+commit. `detail.persist.transcript.*` covers target selection, owner authority,
+append, and transcript publication; `detail.persist.turn.*` further separates the
+append's preparation, authority, message hook, commit, and completion waits.
+`detail.session.actor.command.queue` measures the physical writer FIFO wait;
+`execute` includes the command's `commit` and `publication` intervals. Commit
+timing includes worker delivery, transaction admission, and durable settlement;
+it is not an isolated fsync measurement. `detail.persist.resolveInput` identifies
+input/media resolution, and `detail.session.inputActor.acquire` times actor acquisition.
+These nested spans use the same request-owned diagnostics without logging input
+bytes or enabling timeline files.
+
 `detail.attempt.setup.*` checkpoints separate initialization, workspace preparation,
 and finalization. Within `workspace`, `policy` and `policy_finalize` cover session
 policy admission and revalidation; `baseline_wait` records only the time setup

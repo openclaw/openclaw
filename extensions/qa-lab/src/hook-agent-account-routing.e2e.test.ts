@@ -29,6 +29,7 @@ async function startHookAccountFixture() {
   const gateway = await gatewayOwner.start({
     repoRoot,
     useRepoCli: true,
+    initializeCurrentRuntimeState: true,
     providerBaseUrl: `${mock.baseUrl}/v1`,
     providerMode: "mock-openai",
     primaryModel: MODEL,

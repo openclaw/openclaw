@@ -184,7 +184,7 @@ export function WorkspaceRows(props: {
   const mountedRows = new Set<HTMLDivElement>();
   const [focusedKey, setFocusedKey] = createSignal<string>();
   const [window, setWindow] = createSignal<{ items: VirtualItem[]; height: number }>();
-  const active = createMemo(() => props.active);
+  const rowsActive = createMemo(() => props.active);
   // Keep a 250 -> 125 Changed filter windowed; small and mixed lists stay eager.
   const windowed = createMemo(
     () => props.rows.length >= 100 && props.rows.every((row) => !row.directory),
@@ -219,7 +219,7 @@ export function WorkspaceRows(props: {
     );
   });
   const publish = () => {
-    if (!active() || !windowed()) {
+    if (!rowsActive() || !windowed()) {
       return;
     }
     const items = virtualizer.getVirtualItems();
@@ -251,7 +251,7 @@ export function WorkspaceRows(props: {
       rows: props.rows,
       indexes: rowIndexes(),
       pinned: pinned(),
-      active: active(),
+      active: rowsActive(),
       windowed: windowed(),
     }),
     (next) => {
@@ -351,18 +351,127 @@ export function WorkspaceRows(props: {
       >
         <DirectoryBranch
           row={rowProps.row}
-          workspace={props.workspace}
-          childrenByPath={props.childrenByPath}
-          depth={props.depth}
-          viewport={props.viewport}
-          content={props.content}
-          active={props.active}
           position={windowed() ? index() + 1 : undefined}
           setSize={windowed() ? props.rows.length : undefined}
         />
       </div>
     );
   }
+  function DirectoryBranch(childProps: {
+    row: WorkspaceCatalogRow;
+    position?: number;
+    setSize?: number;
+  }) {
+    return (
+      <div class="workspace-desktop__branch">
+        <Show
+          when={childProps.row.directory}
+          fallback={
+            <RailRow
+              file={childProps.row}
+              workspace={props.workspace}
+              depth={props.depth}
+              position={childProps.position}
+              setSize={childProps.setSize}
+            />
+          }
+        >
+          {(isDirectory) => {
+            const path = () => childProps.row.workspacePath ?? childProps.row.path;
+            const expanded = createMemo(
+              () => props.workspace.navigation?.expandedPaths.includes(path()) ?? false,
+            );
+            const active = createMemo(
+              () =>
+                props.workspace.navigation?.treeVisible !== false &&
+                !props.workspace.navigation?.searchOpen,
+            );
+            const [instant, setInstant] = createSignal(true);
+            const directory = createMemo(() => props.workspace.directories?.[path()]);
+            const readResult = createMemo(
+              () => ({ pending: props.workspace.directories?.[path()]?.readResult }),
+              { equals: (previous, next) => previous.pending === next.pending },
+            );
+            const read = createMemo(async () => {
+              const current = directory();
+              const pending = readResult().pending;
+              await pending;
+              if (current?.error != null) {
+                throw new Error(current.error || t("chat.workspaceFiles.folderUnavailable"));
+              }
+              return null;
+            });
+            const browser = () =>
+              props.workspace.directories?.[path()]?.browser ??
+              (!props.workspace.list?.browser?.search &&
+              props.workspace.list?.browser?.path === path()
+                ? props.workspace.list.browser
+                : undefined);
+            return (
+              <>
+                <RailRow
+                  file={childProps.row}
+                  workspace={props.workspace}
+                  directory={isDirectory()}
+                  depth={props.depth}
+                  expanded={expanded()}
+                  onToggle={(immediate) => {
+                    setInstant(immediate);
+                    props.workspace.onToggleDirectory?.(path());
+                  }}
+                />
+                <FileDisclosure
+                  variant="folder"
+                  open={expanded()}
+                  active={active()}
+                  instant={instant()}
+                >
+                  <Errored
+                    fallback={(error) => (
+                      <div class="workspace-desktop__notice" role="alert">
+                        {formatUiError(error())}
+                      </div>
+                    )}
+                  >
+                    <Loading
+                      on={directory()}
+                      fallback={
+                        <div class="workspace-desktop__notice" role="status">
+                          {t("chat.workspaceFiles.loading")}
+                        </div>
+                      }
+                    >
+                      {latest(read)}
+                      <Show when={isPending(read)}>
+                        <div class="workspace-desktop__notice" role="status">
+                          {t("chat.workspaceFiles.loading")}
+                        </div>
+                      </Show>
+                    </Loading>
+                  </Errored>
+                  <Show when={browser()?.truncated}>
+                    <div class="workspace-desktop__notice" role="status">
+                      {t("chat.workspaceFiles.truncated")}
+                    </div>
+                  </Show>
+                  <WorkspaceRows
+                    rows={props.childrenByPath.get(path()) ?? []}
+                    workspace={props.workspace}
+                    childrenByPath={props.childrenByPath}
+                    depth={props.depth + 1}
+                    viewport={props.viewport}
+                    content={props.content}
+                    active={props.active && expanded()}
+                  />
+                </FileDisclosure>
+              </>
+            );
+          }}
+        </Show>
+      </div>
+    );
+  }
+
   return (
     <div
       role="list"
@@ -376,127 +485,6 @@ export function WorkspaceRows(props: {
       <For each={renderedRows()} keyed={(row) => row.key}>
         {(row) => <Row row={row()} />}
       </For>
-    </div>
-  );
-}
-
-function DirectoryBranch(props: {
-  row: WorkspaceCatalogRow;
-  workspace: SessionWorkspaceProps;
-  childrenByPath: ReadonlyMap<string, readonly WorkspaceCatalogRow[]>;
-  depth: number;
-  viewport: HTMLElement | undefined;
-  content: HTMLElement | undefined;
-  active: boolean;
-  position?: number;
-  setSize?: number;
-}) {
-  return (
-    <div class="workspace-desktop__branch">
-      <Show
-        when={props.row.directory}
-        fallback={
-          <RailRow
-            file={props.row}
-            workspace={props.workspace}
-            depth={props.depth}
-            position={props.position}
-            setSize={props.setSize}
-          />
-        }
-      >
-        {(isDirectory) => {
-          const path = () => props.row.workspacePath ?? props.row.path;
-          const expanded = createMemo(
-            () => props.workspace.navigation?.expandedPaths.includes(path()) ?? false,
-          );
-          const active = createMemo(
-            () =>
-              props.workspace.navigation?.treeVisible !== false &&
-              !props.workspace.navigation?.searchOpen,
-          );
-          const [instant, setInstant] = createSignal(true);
-          const directory = createMemo(() => props.workspace.directories?.[path()]);
-          const readResult = createMemo(
-            () => ({ pending: props.workspace.directories?.[path()]?.readResult }),
-            { equals: (previous, next) => previous.pending === next.pending },
-          );
-          const read = createMemo(async () => {
-            const current = directory();
-            const pending = readResult().pending;
-            await pending;
-            if (current?.error != null) {
-              throw new Error(current.error || t("chat.workspaceFiles.folderUnavailable"));
-            }
-            return null;
-          });
-          const browser = () =>
-            props.workspace.directories?.[path()]?.browser ??
-            (!props.workspace.list?.browser?.search &&
-            props.workspace.list?.browser?.path === path()
-              ? props.workspace.list.browser
-              : undefined);
-          return (
-            <>
-              <RailRow
-                file={props.row}
-                workspace={props.workspace}
-                directory={isDirectory()}
-                depth={props.depth}
-                expanded={expanded()}
-                onToggle={(immediate) => {
-                  setInstant(immediate);
-                  props.workspace.onToggleDirectory?.(path());
-                }}
-              />
-              <FileDisclosure
-                variant="folder"
-                open={expanded()}
-                active={active()}
-                instant={instant()}
-              >
-                <Errored
-                  fallback={(error) => (
-                    <div class="workspace-desktop__notice" role="alert">
-                      {formatUiError(error())}
-                    </div>
-                  )}
-                >
-                  <Loading
-                    on={directory()}
-                    fallback={
-                      <div class="workspace-desktop__notice" role="status">
-                        {t("chat.workspaceFiles.loading")}
-                      </div>
-                    }
-                  >
-                    {latest(read)}
-                    <Show when={isPending(read)}>
-                      <div class="workspace-desktop__notice" role="status">
-                        {t("chat.workspaceFiles.loading")}
-                      </div>
-                    </Show>
-                  </Loading>
-                </Errored>
-                <Show when={browser()?.truncated}>
-                  <div class="workspace-desktop__notice" role="status">
-                    {t("chat.workspaceFiles.truncated")}
-                  </div>
-                </Show>
-                <WorkspaceRows
-                  rows={props.childrenByPath.get(path()) ?? []}
-                  workspace={props.workspace}
-                  childrenByPath={props.childrenByPath}
-                  depth={props.depth + 1}
-                  viewport={props.viewport}
-                  content={props.content}
-                  active={props.active && expanded()}
-                />
-              </FileDisclosure>
-            </>
-          );
-        }}
-      </Show>
     </div>
   );
 }

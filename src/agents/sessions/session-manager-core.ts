@@ -23,6 +23,7 @@ import {
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
   partitionSessionFileEntries,
+  reuseResidentSessionEntryStrings,
 } from "./session-manager-codec.js";
 import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import {
@@ -435,6 +436,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
         );
       }
     }
+    reuseResidentSessionEntryStrings(candidate.fileEntries, this.byId);
     Object.assign(this, candidate.captureTranscriptView());
     this.persistenceTarget = candidate.persistenceTarget;
   }

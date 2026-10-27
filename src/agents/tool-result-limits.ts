@@ -11,7 +11,7 @@ const XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 64_000;
 const LARGE_CONTEXT_TOOL_RESULT_TOKENS = 100_000;
 const XL_CONTEXT_TOOL_RESULT_TOKENS = 200_000;
 
-export function resolveAutoLiveToolResultMaxChars(contextWindowTokens: number): number {
+function resolveAutoLiveToolResultMaxChars(contextWindowTokens: number): number {
   if (!Number.isFinite(contextWindowTokens)) {
     return DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
   }
@@ -25,7 +25,7 @@ export function resolveAutoLiveToolResultMaxChars(contextWindowTokens: number): 
   return DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 }
 
-export function calculateMaxToolResultCharsWithCap(
+function calculateMaxToolResultCharsWithCap(
   contextWindowTokens: number,
   hardCapChars: number,
 ): number {

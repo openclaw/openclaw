@@ -38,6 +38,42 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       containers.splice(0).forEach((container) => container.remove());
     });
 
+    it.each(["dark", "light"])("keeps public sharing neutral in the %s theme", async (theme) => {
+      const root = document.documentElement;
+      const previousMode = root.getAttribute("data-theme-mode");
+      root.setAttribute("data-theme-mode", theme);
+      onTestFinished(() => {
+        if (previousMode === null) {
+          root.removeAttribute("data-theme-mode");
+        } else {
+          root.setAttribute("data-theme-mode", previousMode);
+        }
+      });
+      const { container } = mountChatPaneHeader(containers, {
+        sharingControl: chatPaneHeaderSharing({
+          state: {
+            loading: false,
+            result: {
+              sessionKey: "agent:main:test",
+              members: [],
+              identities: [],
+              permissions: [],
+              role: "owner",
+              allowedVisibilities: ["shared"],
+              publicShare: { token: `v1.${"a".repeat(96)}`, createdAt: 1 },
+            },
+          },
+        }),
+      });
+      const trigger = container.querySelector<HTMLElement>(".chat-pane__sharing-trigger")!;
+      const state = trigger.querySelector<HTMLElement>(".chat-pane__sharing-trigger-state")!;
+      expect(state.textContent).toBe("Public");
+      expect(getComputedStyle(state).color).toBe(getComputedStyle(trigger).color);
+      const icons = trigger.querySelectorAll("svg");
+      expect(icons).toHaveLength(2);
+      expect(getComputedStyle(icons[0]!).color).toBe(getComputedStyle(icons[1]!).color);
+    });
+
     it.each([false, true])(
       "reserves the trailing header region before actions arrive (agent=%s)",
       async (agent) => {

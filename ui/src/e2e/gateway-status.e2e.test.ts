@@ -30,7 +30,6 @@ suite.define(() => {
         await page.clock.install();
         const sessionKey = "agent:main:scope-reader";
         const operatorMethods = [
-          "board.get",
           "presence.activity",
           "cron.list",
           "cron.status",

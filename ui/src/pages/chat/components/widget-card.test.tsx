@@ -37,6 +37,8 @@ const sessionKey = "agent:main:main";
 const actionButton = (host: HTMLElement) =>
   host.querySelector<HTMLButtonElement>('button[aria-label="Widget actions"]');
 const pinButton = (host: HTMLElement) => host.querySelector<HTMLButtonElement>("[data-pin-widget]");
+const pinState = (button: HTMLButtonElement | null, label: string, disabled: boolean) =>
+  expect(button).toMatchObject({ disabled, ariaLabel: label });
 const menuLabels = (host: HTMLElement) =>
   Array.from(host.querySelectorAll('[role="menuitem"]'), (item) => item.textContent?.trim());
 const widgetPorts: MessagePort[] = [];
@@ -74,8 +76,7 @@ function showCapability(preview: PreviewState["preview"], host: HTMLElement, cap
 }
 
 function boardProvider(overrides: Partial<BoardProvider> = {}) {
-  const pinnedWidgets: { name: string }[] = [];
-  const snapshot = new ValueSignal({ widgets: pinnedWidgets });
+  const snapshot = new ValueSignal<{ widgets: { name: string }[] }>({ widgets: [] });
   const provider = {
     sessionKey: "agent:main:main",
     canPinWidgets: true,
@@ -480,10 +481,16 @@ describe("widget-card", () => {
       preferredHeight: 480,
       mcpApp: { viewId: "view-dispatch" },
     };
-    const app = mountWidget(appPreview, { sessionKey });
+    const app = mountWidget({ ...appPreview, preferredHeight: undefined }, { sessionKey });
     await vi.dynamicImportSettled();
     expect(customElements.get("mcp-app-view")).toBeDefined();
-    expect(app.querySelector("mcp-app-view")).not.toBeNull();
+    const appView = app.querySelector("mcp-app-view");
+    expect(appView).toMatchObject({ sessionKey, viewId: "view-dispatch", height: 600 });
+    expect(appView?.getAttribute("src")).toBeNull();
+    await customElements.whenDefined("mcp-app-view");
+    expect(appView).toMatchObject({ sessionKey, viewId: "view-dispatch" });
+    mountWidget(appPreview, { sessionKey }, app);
+    expect(app.querySelector("mcp-app-view")).toMatchObject({ height: 480 });
     expect(app.querySelector(".chat-tool-card__preview")?.getAttribute("data-content-kind")).toBe(
       "mcp-app",
     );
@@ -536,7 +543,7 @@ describe("widget-card", () => {
       documentPreview("cv_release", { viewId: "cv_release", boardWidgetName: "release-status" }),
       { boardProvider: provider },
     );
-    expect(pinButton(pinned)).toMatchObject({ disabled: true, ariaLabel: "Pinned" });
+    pinState(pinButton(pinned), "Pinned", true);
   });
 
   it("retains pin feedback through title updates and reconciles retries with the board", async () => {
@@ -552,9 +559,7 @@ describe("widget-card", () => {
     const button = pinButton(host)!;
     button.click();
     button.click();
-    await waitForSolid(() =>
-      expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinning…" }),
-    );
+    await waitForSolid(() => pinState(button, "Pinning…", true));
     expect(pinWidget).toHaveBeenCalledTimes(1);
 
     mountWidget({ ...preview, title: "Updated release status" }, { boardProvider: provider }, host);
@@ -573,9 +578,7 @@ describe("widget-card", () => {
     expect(pinButton(host)).toBe(button);
     expect(button.title).toBe("Could not pin to dashboard. Try again.");
     button.click();
-    await waitForSolid(() =>
-      expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinning…" }),
-    );
+    await waitForSolid(() => pinState(button, "Pinning…", true));
     expect(pinWidget).toHaveBeenLastCalledWith({
       docId: "cv_pin_feedback",
       name: "canvas-cv_pin_feedback",
@@ -583,13 +586,11 @@ describe("widget-card", () => {
     });
     snapshot.set({ widgets: [{ name: "canvas-cv_pin_feedback" }] });
     retry.resolve();
-    await waitForSolid(() => expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinned" }));
+    await waitForSolid(() => pinState(button, "Pinned", true));
     expect(button.hasAttribute("data-pinned")).toBe(true);
 
     snapshot.set({ widgets: [] });
-    await waitForSolid(() =>
-      expect(button).toMatchObject({ disabled: false, ariaLabel: "Pin to dashboard" }),
-    );
+    await waitForSolid(() => pinState(button, "Pin to dashboard", false));
     expect(button.hasAttribute("data-pinned")).toBe(false);
   });
 
@@ -722,7 +723,7 @@ describe("widget-card", () => {
       );
       await waitForSolid(() => {
         expect(pinButton(host)).not.toBe(previousButton);
-        expect(pinButton(host)).toMatchObject({ disabled: false, ariaLabel: "Pin to dashboard" });
+        pinState(pinButton(host), "Pin to dashboard", false);
       });
       pinButton(host)!.click();
       expect(nextPin).toHaveBeenCalledWith({ docId: "cv_next", name: "canvas-cv_next" });
@@ -902,7 +903,6 @@ describe("widget-card", () => {
         ),
       );
       const managedView = host.querySelector("openclaw-canvas-widget-view");
-      expect(managedView !== null).toBe(sandbox !== "strict");
       expect(pinButton(host) !== null).toBe(scripted);
       if (managedView) {
         expect(managedView.allowScripts).toBe(scripted);

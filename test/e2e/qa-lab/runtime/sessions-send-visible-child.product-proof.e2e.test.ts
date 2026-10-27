@@ -236,6 +236,7 @@ it("returns the waited reply inline without an announce run against the child", 
   cleanups.push(async () => expect((await owner.stop()).errors).toEqual([]));
   const gateway = await owner.start({
     repoRoot: REPO_ROOT,
+    initializeCurrentRuntimeState: true,
     // Source-mode startup exceeds the child Gateway's listen deadline.
     command: {
       executablePath: process.execPath,
