@@ -9,10 +9,21 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
-import { chromium, type BrowserContext, type CDPSession, type Page } from "playwright";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type CDPSession,
+  type Page,
+} from "playwright";
 import { acquireGatewayE2ePortBlock } from "../src/gateway/test-helpers.listener.ts";
 import { createRedactingStreamWriter } from "../src/logging/redacting-stream.ts";
 import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../src/shared/control-ui-storage.js";
+import {
+  measureRendererProcessMetrics,
+  readControlUiPerformanceMetrics as metrics,
+  readRendererProcessSnapshot,
+} from "./lib/control-ui-renderer-metrics.ts";
 import { stopGatewayGracefully } from "./lib/gateway-bench-child.ts";
 import { hashFile, hashInstall } from "./lib/gateway-bench-installed-package.ts";
 import {
@@ -61,6 +72,7 @@ const helperFiles = [
   "lib/usage-bench-child.ts",
   "lib/usage-bench-observer.mjs",
   "lib/usage-bench-rtt.ts",
+  "lib/control-ui-renderer-metrics.ts",
 ];
 const helperHashes = async () =>
   Object.fromEntries(
@@ -86,6 +98,8 @@ type Owner = {
 };
 type PageEntry = {
   owner: Owner;
+  browser: Browser;
+  processSession: CDPSession;
   context: BrowserContext;
   page: Page;
   cdp: CDPSession;
@@ -94,7 +108,10 @@ type PageEntry = {
 };
 const owners: Owner[] = [];
 const fixtureTokens: string[] = [];
-const samples: object[] = [];
+const samples: Array<
+  Record<string, unknown> & { browserResources: ReturnType<typeof browserResources> }
+> = [];
+const browsers = new Set<Browser>();
 const failures: string[] = [];
 const errorText = (error: unknown) =>
   fixtureTokens.reduce(
@@ -116,12 +133,6 @@ await writeFile(
   path.join(out, "helper-sources.json"),
   JSON.stringify({ root: tooling, files: helperSources, ui: uiBuild }, null, 2),
 );
-const browser = await chromium.launch({
-  headless: true,
-  ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
-    ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
-    : {}),
-});
 
 async function inspectBuild(root: string) {
   const git = (...args: string[]) =>
@@ -503,10 +514,28 @@ async function settled(page: Page, count: number) {
       }),
   );
 }
-async function metrics(cdp: CDPSession) {
-  return Object.fromEntries(
-    (await cdp.send("Performance.getMetrics")).metrics.map(({ name, value }) => [name, value]),
-  );
+async function rendererProbe(cdp: CDPSession) {
+  const startedMs = performance.now();
+  const processes = await readRendererProcessSnapshot(cdp);
+  return { startedMs, finishedMs: performance.now(), processes };
+}
+function browserResources(
+  before: Awaited<ReturnType<typeof rendererProbe>>,
+  after: Awaited<ReturnType<typeof rendererProbe>>,
+  metricsBefore: Awaited<ReturnType<typeof metrics>>,
+  metricsAfter: Awaited<ReturnType<typeof metrics>>,
+) {
+  assert(Number.isFinite(metricsBefore.JSHeapUsedSize), "Valid initial browser heap");
+  assert(Number.isFinite(metricsAfter.JSHeapUsedSize), "Valid final browser heap");
+  return {
+    complete: true,
+    ...measureRendererProcessMetrics(before.processes, after.processes),
+    heapBeforeBytes: metricsBefore.JSHeapUsedSize,
+    heapAfterBytes: metricsAfter.JSHeapUsedSize,
+    heapDeltaBytes: metricsAfter.JSHeapUsedSize - metricsBefore.JSHeapUsedSize,
+    probes: { before, after },
+    hostMemory: { freeBytes: os.freemem(), totalBytes: os.totalmem() },
+  };
 }
 
 try {
@@ -522,6 +551,14 @@ try {
       const pages: PageEntry[] = [];
       try {
         for (const owner of owners) {
+          // Process metrics include every renderer in this browser, so each role owns one.
+          const browser = await chromium.launch({
+            headless: true,
+            ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+              ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
+              : {}),
+          });
+          browsers.add(browser);
           const context = await browser.newContext({
             viewport: { width: 1440, height: 900 },
             locale: "en-US",
@@ -531,6 +568,8 @@ try {
           const page = await context.newPage();
           const entry: PageEntry = {
             owner,
+            browser,
+            processSession: await browser.newBrowserCDPSession(),
             context,
             page,
             cdp: await context.newCDPSession(page),
@@ -539,7 +578,7 @@ try {
           };
           pages.push(entry);
           entry.proxy = rtt ? await startUsageRttProxy(owner.ready.port, 50) : undefined;
-          const { cdp, proxy, responses } = entry;
+          const { cdp, proxy } = entry;
           page.setDefaultTimeout(60_000);
           await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpu });
           await cdp.send("Performance.enable", { timeDomain: "threadTicks" });
@@ -555,6 +594,10 @@ try {
             key: `${CONTROL_UI_TOKEN_SESSION_KEY_PREFIX}${gatewayOriginScope(gatewayUrl)}`,
             token: owner.ready.token,
           });
+        }
+        for (const { owner, page, cdp, processSession, proxy, responses } of pages) {
+          const url = new URL(`http://127.0.0.1:${proxy?.port ?? owner.ready.port}/usage`);
+          const defaultRendererBefore = await rendererProbe(processSession);
           const defaultCpuBefore = await readGatewayCpuUsage(owner.child);
           const defaultBrowserBefore = await metrics(cdp);
           const defaultDispatchBefore = (await owner.snapshot()).length;
@@ -566,6 +609,7 @@ try {
           const defaultWallMs = performance.now() - defaultStarted;
           const defaultBrowserAfter = await metrics(cdp);
           const defaultCpuAfter = await readGatewayCpuUsage(owner.child);
+          const defaultRendererAfter = await rendererProbe(processSession);
           const expectedDefault = expectedRange(
             owner.ready,
             defaultResponse.startDate,
@@ -587,6 +631,16 @@ try {
             cpu,
             rtt,
             wallMs: defaultWallMs,
+            actionInterval: {
+              startedMs: defaultStarted,
+              finishedMs: defaultStarted + defaultWallMs,
+            },
+            browserResources: browserResources(
+              defaultRendererBefore,
+              defaultRendererAfter,
+              defaultBrowserBefore,
+              defaultBrowserAfter,
+            ),
             gatewayCpu: measureGatewayCpuUsage(defaultCpuBefore, defaultCpuAfter),
             browserCpuMs: Object.fromEntries(
               [
@@ -605,6 +659,7 @@ try {
             load: os.loadavg(),
           });
           const coldDispatchBefore = (await owner.snapshot()).length;
+          const coldRendererBefore = await rendererProbe(processSession);
           const coldCpuBefore = await readGatewayCpuUsage(owner.child);
           const coldBrowserBefore = await metrics(cdp);
           const coldStarted = performance.now();
@@ -620,12 +675,20 @@ try {
           const coldWallMs = performance.now() - coldStarted;
           const coldBrowserAfter = await metrics(cdp);
           const coldCpuAfter = await readGatewayCpuUsage(owner.child);
+          const coldRendererAfter = await rendererProbe(processSession);
           samples.push({
             role: owner.role,
             phase: "population-range",
             cpu,
             rtt,
             wallMs: coldWallMs,
+            actionInterval: { startedMs: coldStarted, finishedMs: coldStarted + coldWallMs },
+            browserResources: browserResources(
+              coldRendererBefore,
+              coldRendererAfter,
+              coldBrowserBefore,
+              coldBrowserAfter,
+            ),
             gatewayCpu: measureGatewayCpuUsage(coldCpuBefore, coldCpuAfter),
             browserCpuMs: Object.fromEntries(
               [
@@ -648,12 +711,13 @@ try {
           const pair = Math.floor(iteration / 2);
           const order = pair % 2 ? pages.toReversed() : pages;
           for (const entry of order) {
-            const { owner, page, cdp, responses } = entry;
+            const { owner, page, cdp, processSession, responses } = entry;
             const model = `fixture-model-${iteration % 2 ? "01" : "00"}-end`;
             const query = `model:${model}`;
             const truth = owner.ready.models[model]!;
             const requestsBefore = responses.length;
             const dispatchBefore = (await owner.snapshot()).length;
+            const rendererBefore = await rendererProbe(processSession);
             const cpuBefore = await readGatewayCpuUsage(owner.child);
             const browserBefore = await metrics(cdp);
             const started = performance.now();
@@ -666,6 +730,7 @@ try {
             const wallMs = performance.now() - started;
             const browserAfter = await metrics(cdp);
             const cpuAfter = await readGatewayCpuUsage(owner.child);
+            const rendererAfter = await rendererProbe(processSession);
             const dispatches = (await owner.snapshot()).slice(dispatchBefore);
             if (owner.role === "head") {
               assert.deepEqual(
@@ -693,6 +758,13 @@ try {
               rtt,
               model,
               wallMs,
+              actionInterval: { startedMs: started, finishedMs: started + wallMs },
+              browserResources: browserResources(
+                rendererBefore,
+                rendererAfter,
+                browserBefore,
+                browserAfter,
+              ),
               browserCpuMs: delta,
               gatewayCpu: measureGatewayCpuUsage(cpuBefore, cpuAfter),
               dispatches,
@@ -717,10 +789,23 @@ try {
         }
       } finally {
         for (const entry of pages.toReversed()) {
+          for (const cdp of [entry.processSession, entry.cdp]) {
+            try {
+              await cdp.detach();
+            } catch (error) {
+              failures.push(`${entry.owner.role} CDP cleanup: ${errorText(error)}`);
+            }
+          }
           try {
             await entry.context.close();
           } catch (error) {
             failures.push(`${entry.owner.role} browser context cleanup: ${errorText(error)}`);
+          }
+          try {
+            await entry.browser.close();
+            browsers.delete(entry.browser);
+          } catch (error) {
+            failures.push(`${entry.owner.role} browser cleanup: ${errorText(error)}`);
           }
           try {
             await entry.proxy?.close();
@@ -734,10 +819,12 @@ try {
 } catch (error) {
   failures.push(errorText(error));
 } finally {
-  try {
-    await browser.close();
-  } catch (error) {
-    failures.push(`Browser cleanup: ${errorText(error)}`);
+  for (const browser of browsers) {
+    try {
+      await browser.close();
+    } catch (error) {
+      failures.push(`Browser cleanup: ${errorText(error)}`);
+    }
   }
   for (const owner of owners.toReversed()) {
     try {
@@ -778,10 +865,11 @@ try {
       {
         failures,
         samples: samples.length,
+        browserResourceSamples: samples.filter((sample) => sample.browserResources.complete).length,
         pairsPerQuery: values.smoke ? 1 : pairs,
         queries: ["model:fixture-model-00-end", "model:fixture-model-01-end"],
         limitations:
-          "Backend runs at native CPU; 1x/4x applies only to Chromium. Browser metrics use threadTicks. Same frozen UI for all roles. Population has one/two actual turns per session spread over180days. Durable source seeding and compiled startup recorded separately; no source server or report prewarming. Gateway reused across CPU/RTT cells; default/readiness and population-range phases are not independent cold-process samples. Setup logs retained. No provider calls.",
+          "Backend runs at native CPU; 1x/4x applies only to Chromium. Browser metrics use threadTicks. Each role owns an isolated browser. Whole-renderer CPU and RSS probes bracket each action; their recorded bounds include collection overhead outside wall/main-thread intervals. Heap and RSS are sampled endpoints, not retained heap, peaks, or GPU memory. Same frozen UI for all roles. Population has one/two actual turns per session spread over180days. Durable source seeding and compiled startup recorded separately; no source server or report prewarming. Gateway reused across CPU/RTT cells; default/readiness and population-range phases are not independent cold-process samples. Setup logs retained. No provider calls.",
       },
       null,
       2,

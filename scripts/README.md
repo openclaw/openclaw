@@ -129,8 +129,16 @@ noisy wall times with CPU and work counts. A clean median regression is at most
 5% with no worse p95; any 20% regression requires investigation.
 
 Outputs include actual RPC latency/bytes, Gateway process and main-thread CPU,
-Chromium thread-tick task/script/layout/style CPU, worker dispatch counts and
-packed bytes, resource snapshots, and cleanup failures. Child output streams
+Chromium thread-tick task/script/layout/style CPU, whole-renderer process CPU,
+sampled renderer RSS and JS heap endpoints, worker dispatch counts and packed
+bytes, resource snapshots, and cleanup failures. Each role owns a separate
+headless browser so process metrics exclude the other roles; record host memory
+as well as load with this three-browser setup. Process probes retain their own
+start/end timestamps and bracket the action outside its wall/main-thread timing;
+whole-process CPU includes that boundary overhead. Missing metrics or renderer
+PID changes fail collection. Heap and RSS endpoints are neither retained-memory
+nor peak/GPU measurements; no browser GC runs inside these timed cells. Child
+output streams
 redact each generated fixture token before writing setup or shutdown logs.
 Chromium throttling does
 not throttle the Node Gateway. The TCP relay adds 50 ms in each direction without
