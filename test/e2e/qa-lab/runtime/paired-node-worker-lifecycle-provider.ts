@@ -155,7 +155,9 @@ export async function startPairedNodeWorkerLifecycleProvider(holdMarkers: readon
       }
       pendingResponses.clear();
       server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     },
   };
 }
