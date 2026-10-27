@@ -64,7 +64,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Verify release source
@@ -72,6 +72,13 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Fetch release source history
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Keep release-note history without fetching unrelated branches and tags.
+          git fetch --no-tags --unshallow origin "$GITHUB_SHA"
 
       - name: Prepare trusted Linux Android tooling
         if: >-
