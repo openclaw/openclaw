@@ -154,6 +154,17 @@ use the runtime-only compiled-worker registry. The local TUI file does the same
 when its existing built-CLI mode is enabled; source TUI and broad, mixed, or
 custom selections retain the full registry.
 
+When the artifact producer selects both channels and core support checks with
+matching compiler heap options, they share one full compiled-worker generation.
+Both test commands still run concurrently with their original configurations,
+worker limits, and separate transform caches. The generation remains owned until
+both commands finish; either failure fails the producer without canceling its
+sibling. Single selections, differing compiler heap options, and older targets
+without the shared runner retain their independent commands. Changes to the shared
+runner select both checks in the artifact producer on current targets, while the
+changed Node plan defers its boundary coverage to that producer. This opt-in does
+not enable unrelated proof-tier checks.
+
 Real-Gateway UI shards have a 30-minute whole-job budget on the normal Blacksmith
 path. Successful 16-class jobs reached 19:04, leaving too little margin under the
 former 20-minute limit. Hosted and retry paths retain their 40-minute budget;

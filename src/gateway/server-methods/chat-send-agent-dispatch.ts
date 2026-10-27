@@ -34,6 +34,7 @@ import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/age
 import { updateChatRunProvider } from "../chat-abort.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { prepareGatewaySkillLibraryTurn } from "../skill-library-authoring.js";
+import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatDelta } from "./chat-broadcast.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
@@ -665,7 +666,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
   // Runtime completion must not retire the source before media and reply persistence settle.
   // Keep terminal cleanup outside this receipt because it can join source settlement.
   trackSessionControllerSourceWork(admission.sourceRef.input, dispatch);
-  return (async () => {
+  const completion = (async () => {
     try {
       await dispatch;
     } finally {
@@ -687,4 +688,9 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
       }
     }
   })();
+  // Ordinary chat.send detaches completion; Goal acknowledgments still consume its rejection.
+  void completion.catch((error: unknown) => {
+    context.logGateway.warn(`webchat dispatch settlement failed: ${formatForLog(error)}`);
+  });
+  return completion;
 }
