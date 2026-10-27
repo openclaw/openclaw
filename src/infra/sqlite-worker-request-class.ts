@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 
 // Keep this vocabulary below database contracts to avoid broker import cycles.
 // Keep caller-controlled SDK command names and suffixes out of metric labels.

@@ -2,7 +2,7 @@ import { types } from "node:util";
 import { isMainThread, type Worker } from "node:worker_threads";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { resolveGlobalSingleton } from "../shared/global-singleton.ts";
-import { normalizeWorkerRequestClass } from "./sqlite-worker-request-class.js";
+import { normalizeWorkerRequestClass } from "./sqlite-worker-request-class.ts";
 
 export type WorkerMessageKind =
   | "sqlite_request"
