@@ -108,6 +108,7 @@ async function expectRestartedChannel(
   expect(manager.stopChannel).toHaveBeenCalledWith(channel, accountId, { manual: false });
   expect(manager.startChannel).toHaveBeenCalledWith(channel, accountId, {
     reason: "health-monitor",
+    preserveManualStop: true,
   });
   monitor.stop();
 }
@@ -178,6 +179,7 @@ describe("channel-health-monitor", () => {
         reason: "health-monitor",
       });
       expect(manager.resetRestartAttempts).toHaveBeenCalledExactlyOnceWith("discord", "default");
+      expect(manager.captureAccountRestart).not.toHaveBeenCalled();
     } finally {
       monitor.stop();
     }
@@ -326,6 +328,7 @@ describe("channel-health-monitor", () => {
     expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default", { manual: false });
     expect(manager.startChannel).toHaveBeenCalledWith("discord", "default", {
       reason: "health-monitor",
+      preserveManualStop: true,
     });
     expect(manager.stopChannel).not.toHaveBeenCalledWith("discord", "quiet", { manual: false });
     expect(manager.startChannel).not.toHaveBeenCalledWith("discord", "quiet", expect.anything());

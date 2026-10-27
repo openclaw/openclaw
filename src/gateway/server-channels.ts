@@ -148,7 +148,6 @@ export type ChannelManager = ChannelAccountLifecycle & {
   isAmbientAutostartSuppressed: (channelId: string) => boolean;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
   isAutoRestartScheduled: (channelId: ChannelId, accountId: string) => boolean;
-  resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
   isHealthMonitorEnabled: (channelId: ChannelId, accountId: string) => boolean;
 };
 
@@ -1470,12 +1469,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     startChannels: () => startChannelsWithOptions(),
     startChannel: startChannelInternal,
     stopChannel,
-    captureAccountRestart: (channelId, accountId, reason) =>
+    captureAccountRestart: (channelId, accountId, reason, options) =>
       captureChannelAccountRestart({
         store: channelStores.get(channelId),
         channelId,
         accountId,
         reason,
+        ...options,
         manager,
         log: ensureChannelLog(channelId),
       }),

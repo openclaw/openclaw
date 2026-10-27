@@ -47,22 +47,22 @@ export function startChannelHealthMonitor(params: {
         await channelManager.recoverAutostartSuppression(scheduler.signal);
       }
       const snapshot = channelManager.getRuntimeSnapshot();
-      const globalAutostartSuppression = channelManager.getAutostartSuppression();
-
       for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
-        if (!accounts || snapshot.reloadingChannels?.has(channelId)) {
+        if (!accounts) {
           continue;
         }
-        const autostartSuppressed =
-          globalAutostartSuppression !== null ||
-          channelManager.isAmbientAutostartSuppressed(channelId);
-        for (const [accountId, status] of Object.entries(accounts)) {
+        for (const accountId of Object.keys(accounts)) {
           // A replacement monitor owns future accounts. The retired monitor may
           // only finish the restart it had already begun.
           if (stopped) {
             return;
           }
-          if (!status) {
+          // Earlier account teardown can yield long enough for a later account
+          // to recover. The first snapshot enumerates only; admission uses live facts.
+          const current = channelManager.getRuntimeSnapshot({ channelId });
+          const status = current.channelAccounts[channelId]?.[accountId];
+          const now = scheduler.now();
+          if (!status || current.reloadingChannels?.has(channelId)) {
             continue;
           }
           // Status also exposes unlisted lifetimes; automatic recovery keeps its configured scope.
@@ -76,7 +76,10 @@ export function startChannelHealthMonitor(params: {
             continue;
           }
           const key = `${channelId}:${accountId}`;
-          if (autostartSuppressed) {
+          if (
+            channelManager.getAutostartSuppression() !== null ||
+            channelManager.isAmbientAutostartSuppressed(channelId)
+          ) {
             if (status.running !== true && !suppressedAccounts.has(key)) {
               log.info(
                 `[${channelId}:${accountId}] health-monitor: channel autostart suppressed; treating as expected stopped`,
@@ -121,9 +124,14 @@ export function startChannelHealthMonitor(params: {
 
           try {
             if (status.running) {
-              await channelManager.stopChannel(channelId, accountId, {
-                manual: false,
-              });
+              const restart = channelManager.captureAccountRestart(
+                channelId,
+                accountId,
+                "health-monitor",
+                { resetRestartAttempts: true },
+              );
+              await restart?.(() => !abandonInFlightRestart);
+              continue;
             }
             // Shutdown owns channel teardown, so a stop that completes after the
             // shutdown handoff must not resurrect the channel.
