@@ -99,7 +99,7 @@ async function persist(store: SessionSnapshotStore, cacheKey: string, value: Cha
   store.write(cacheKey, value);
   await store.flush();
 }
-const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion = 5) => ({
+const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion = 6) => ({
   projectionVersion,
   sessionKey: cacheKey,
   savedAt: 1,
@@ -604,7 +604,14 @@ describe("persistent chat session snapshots", () => {
   it.each(["unrelated", "session", "cache-eviction", "all"] as const)(
     "settles an in-flight transcript through %s invalidation",
     async (scope) => {
-      const value = snapshot("important transcript");
+      const value: ChatSessionSnapshot = {
+        ...snapshot("important transcript"),
+        headerViewers: {
+          users: [{ id: "peer", name: "Peer", avatarUrl: "/peer.png" }],
+          totalCount: 5,
+          ownerViewing: true,
+        },
+      };
       writer.connect();
       connected.add(writer);
       writer.write(sessionKey, value);
