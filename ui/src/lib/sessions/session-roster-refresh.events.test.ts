@@ -73,7 +73,6 @@ describe("session roster event traffic", () => {
     const shared = { agentId: "main", limit: 200 };
     const personal = { ...shared, involvingMe: true };
     const reads = { shared: 0, personal: 0 };
-    const bytes = { shared: 0, personal: 0 };
     const request = async (method: string, params?: unknown) => {
       const queryParams = listParams(method, params);
       const scope = queryParams.involvingMe ? "personal" : "shared";
@@ -92,7 +91,6 @@ describe("session roster event traffic", () => {
         : [];
       const response = rosterPage([...page, ...ownerRows], eligible.length, 200, Date.now());
       reads[scope]++;
-      bytes[scope] += new TextEncoder().encode(JSON.stringify(response)).byteLength;
       await delay(200);
       return response;
     };
@@ -102,6 +100,10 @@ describe("session roster event traffic", () => {
     watch(personal);
     const emit = (row: GatewaySessionRow) =>
       harness.publishEvent("sessions.changed", snapshot(row, { agentId: "main" }));
+    const update = (index: number, fields: Partial<GatewaySessionRow>) => {
+      rows[index] = { ...rows[index]!, snapshotAt: Date.now() + 1, ...fields };
+      emit(rows[index]!);
+    };
     settle(async () => {
       await advance(200);
       random.mockRestore();
@@ -115,28 +117,22 @@ describe("session roster event traffic", () => {
     expect(sessions.state.result?.sessions).toHaveLength(220);
     expect(listRows(personal)).toHaveLength(200);
     const bootReads = { ...reads };
-    const bootBytes = { ...bytes };
     for (let index = 0; index < 1_200; index++) {
       const hot = index % 10;
-      rows[hot] = {
-        ...rows[hot]!,
+      update(hot, {
         updatedAt: 100_001 + index,
-        snapshotAt: Date.now() + 1,
         totalTokens: index + 1,
         hasActiveRun: index % 20 < 10,
         status: index % 20 < 10 ? "running" : "done",
         unread: hot % 2 === 0,
         lastReadAt: hot % 2 === 0 ? 98_000 : 100_001 + index,
-      };
-      emit(rows[hot]!);
+      });
       await advance(100);
       if (index === 599) {
         expect(reads).toEqual(bootReads);
-        expect(bytes).toEqual(bootBytes);
       }
     }
     expect(reads).toEqual(bootReads);
-    expect(bytes).toEqual(bootBytes);
     for (const query of [shared, personal]) {
       const held = listRows(query) ?? [];
       expect(held.slice(0, 10).map((row) => row.key)).toEqual(
@@ -161,8 +157,7 @@ describe("session roster event traffic", () => {
     await advance(200);
     await Promise.all(fresh);
     const settledReads = { ...reads };
-    rows[8] = { ...rows[8]!, unread: false, lastReadAt: Date.now(), snapshotAt: Date.now() + 1 };
-    emit(rows[8]!);
+    update(8, { unread: false, lastReadAt: Date.now() });
     for (const query of [shared, personal]) {
       expect(listRows(query)?.find((row) => row.key === rows[8]!.key)).toMatchObject({
         unread: false,
@@ -170,12 +165,10 @@ describe("session roster event traffic", () => {
       });
     }
     expect(reads).toEqual(settledReads);
-    rows[250] = { ...rows[250]!, updatedAt: 90_100, snapshotAt: Date.now() + 1 };
-    emit(rows[250]!);
+    update(250, { updatedAt: 90_100 });
     await advance(5_200);
     expect(reads.shared).toBe(settledReads.shared);
-    rows[250] = { ...rows[250]!, updatedAt: Date.now(), snapshotAt: Date.now() + 1 };
-    emit(rows[250]!);
+    update(250, { updatedAt: Date.now() });
     await advance(5_200);
     expect(reads.shared).toBe(settledReads.shared + 1);
     expect(sessions.state.result?.sessions).toHaveLength(219);
@@ -189,13 +182,7 @@ describe("session roster event traffic", () => {
       [2, { participants: [] }],
     ] satisfies Array<[number, Partial<GatewaySessionRow>]>) {
       const before = reads.personal;
-      rows[index] = {
-        ...rows[index]!,
-        ...patch,
-        updatedAt: Date.now(),
-        snapshotAt: Date.now() + 1,
-      };
-      emit(rows[index]!);
+      update(index, { ...patch, updatedAt: Date.now() });
       await advance(5_200);
       const held = listRows(personal) ?? [];
       expect(reads.personal).toBe(before + 1);
@@ -203,13 +190,13 @@ describe("session roster event traffic", () => {
       expect(held.some((row) => row.key === rows[index]!.key)).toBe(false);
     }
     const beforeUnknown = { ...reads };
-    const unknown = session("main", Date.now(), {
+    const unknown = {
       ...rows[3]!,
       key: "agent:main:new-conversation",
       sessionId: "new-conversation",
       updatedAt: Date.now(),
       snapshotAt: Date.now() + 1,
-    });
+    };
     rows.push(unknown);
     emit(unknown);
     expect(listRows(personal)?.some((row) => row.key === unknown.key)).toBe(false);
