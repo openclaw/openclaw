@@ -1,7 +1,4 @@
-import {
-  MAX_DATE_TIMESTAMP_MS,
-  MAX_TIMER_TIMEOUT_MS,
-} from "@openclaw/normalization-core/number-coercion";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VERSION } from "../version.js";
 
@@ -145,7 +142,7 @@ describe("provider operation deadlines", () => {
     const deadline = makeDeadline(MAX_TIMER_TIMEOUT_MS + 1_000_000);
 
     expect(deadline.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(deadline.deadlineAtMs).toBe(1_000 + MAX_TIMER_TIMEOUT_MS);
+    expect(deadline.deadlineAtMs).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(
       resolveProviderOperationTimeoutMs({
         deadline: makeDeadline(undefined, "no deadline"),
@@ -154,15 +151,27 @@ describe("provider operation deadlines", () => {
     ).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
-  it("keeps operation deadlines inside the Date timestamp range", () => {
-    vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
-
+  it("exhausts a short deadline as the monotonic clock advances", () => {
     const deadline = makeDeadline(1);
 
-    expect(deadline.deadlineAtMs).toBe(MAX_DATE_TIMESTAMP_MS);
+    vi.advanceTimersByTime(1);
+
     expect(() => resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toThrow(
       "video generation timed out after 1ms",
     );
+  });
+
+  it("keeps the deadline on the monotonic clock across wall-clock jumps", () => {
+    const deadline = makeDeadline(60_000);
+
+    vi.setSystemTime(1_000 - 100_000);
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 120_000 })).toBe(60_000);
+
+    vi.setSystemTime(1_000 + 120_000);
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 120_000 })).toBe(60_000);
+
+    vi.advanceTimersByTime(30_000);
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 120_000 })).toBe(30_000);
   });
 
   it("resolves a lazy total timeout once when the deadline starts", () => {
@@ -172,7 +181,7 @@ describe("provider operation deadlines", () => {
       label: "generated media download",
       timeoutMs: resolveTimeoutMs,
     });
-    vi.setSystemTime(4_250);
+    vi.advanceTimersByTime(3_250);
 
     expect(resolveTimeoutMs).toHaveBeenCalledTimes(1);
     expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(1_750);
@@ -249,7 +258,7 @@ describe("provider operation deadlines", () => {
     async (stage) => {
       const sleep = vi.fn(async () => undefined);
       const fetchFn = vi.fn<typeof fetch>(async () => {
-        vi.setSystemTime(2_001);
+        vi.advanceTimersByTime(1_001);
         if (stage === "download") {
           throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
         }

@@ -1,9 +1,5 @@
 import path from "node:path";
-import {
-  resolveDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-  resolveTimerTimeoutMs,
-} from "@openclaw/normalization-core/number-coercion";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import type {
   ProviderRequestCapability,
@@ -129,8 +125,7 @@ export function createProviderOperationDeadline(params: {
     return { label: params.label };
   }
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
-  const deadlineAtMs =
-    resolveExpiresAtMsFromDurationMs(resolvedTimeoutMs) ?? resolveDateTimestampMs(Date.now());
+  const deadlineAtMs = performance.now() + resolvedTimeoutMs;
   return {
     deadlineAtMs,
     label: params.label,
@@ -148,7 +143,7 @@ export function resolveProviderOperationTimeoutMs(params: {
   if (typeof deadlineAtMs !== "number") {
     return defaultTimeoutMs;
   }
-  const remainingMs = deadlineAtMs - Date.now();
+  const remainingMs = deadlineAtMs - performance.now();
   if (remainingMs <= 0) {
     throw createProviderOperationTimeoutError(params.deadline);
   }
@@ -187,7 +182,8 @@ export async function waitProviderOperationPollInterval(params: {
 }): Promise<void> {
   const pollIntervalMs = resolveTimerTimeoutMs(params.pollIntervalMs, 1);
   const deadlineAtMs = params.deadline.deadlineAtMs;
-  const remainingMs = typeof deadlineAtMs === "number" ? deadlineAtMs - Date.now() : pollIntervalMs;
+  const remainingMs =
+    typeof deadlineAtMs === "number" ? deadlineAtMs - performance.now() : pollIntervalMs;
   if (remainingMs <= 0) {
     throw createProviderOperationTimeoutError(params.deadline);
   }
