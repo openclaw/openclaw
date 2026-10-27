@@ -54,7 +54,13 @@ Unknown tools use a puzzle icon unless their plugin supplies an activity icon.
 
 A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
-the row shows **Outcome unknown**. Partial output alone does not finish a tool.
+the row keeps the tool's known purpose and shows **Outcome unknown** separately.
+Reloading history preserves the recorded purpose. A saved call without a loaded
+result shows **No result available** rather than counting as an unknown outcome.
+Live execution facts and the active run’s replay snapshot establish **Running**;
+the run being active alone does not. Refreshing the same session retains those
+facts until history records an outcome. Partial output alone does not finish a
+tool.
 
 While a turn is still working and has subagents running, its working indicator
 ends with their count, such as **3 subagents running**, and counts down as they

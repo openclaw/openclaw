@@ -238,7 +238,8 @@ it.each([
   ["exec", { title: "Inspect", code: "return null" }, "start", "Inspect…"],
   ["web_search", { query: "new plugin APIs" }, "start", 'for "new plugin APIs"…'],
   ["lookup_record", { query: "release notes" }, "start", "release notes…"],
-  ["exec", { title: "Inspect source", code: "return null" }, "result", "Outcome unknown"],
+  ["exec", { title: "Inspect source", code: "return null" }, "result", "Inspect source"],
+  ["exec", {}, "result", "Exec"],
   ["session_status", {}, "result", "1 other operation"],
 ] as const)("renders accessible %s activity", async (name, args, phase, expected) => {
   const activity = projectAgentToolActivity({

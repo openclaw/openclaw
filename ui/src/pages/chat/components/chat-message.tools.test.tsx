@@ -111,7 +111,7 @@ describe("grouped chat rendering", () => {
     expectCount(".chat-tool-row", 2);
   });
 
-  it("renders a persisted call with an unknown outcome until its matching result arrives", async () => {
+  it("keeps a persisted call provisional until its matching result arrives", async () => {
     const call = createAssistantMessage(
       [createToolCall("orphan", "exec", { command: "check-workspace" })],
       { __openclaw: { id: "orphan-call", runId: "historic-run" } },
@@ -136,10 +136,12 @@ describe("grouped chat rendering", () => {
     const unknown = await renderHistory([call]);
     expect(unknown.activity[0]?.items[0]).toMatchObject({
       phase: "end",
-      summary: "Outcome unknown",
+      unpairedCall: true,
     });
     expect(unknown.activity[0]?.items[0]).not.toHaveProperty("status");
-    expect(elementText(".chat-activity-group__label")).toBe("1 command · 1 unknown");
+    expect(elementText(".chat-activity-group__label")).toBe("1 command");
+    expect(harness.view.textContent).not.toContain("Outcome unknown");
+    expect(harness.view.textContent).toContain("No result available.");
     expectAbsent(".chat-tool-row--running");
     expect(harness.view.textContent).toContain("check-workspace");
 
