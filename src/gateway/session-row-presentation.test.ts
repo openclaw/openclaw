@@ -39,6 +39,7 @@ import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { captureSessionRowGeneration } from "./session-row-identity.js";
+import * as preparedRead from "./session-row-prepared-read.js";
 import {
   prepareProjectedSessionPresentation,
   prepareSessionRowPublication,
@@ -818,7 +819,7 @@ it("preserves selected account across role changes but rejects a changed merge i
   });
 });
 
-it("reuses follow-up run progress across presentations until the run index changes", async () => {
+it("reuses unchanged run presentation and refreshes follow-up activity and row replacements", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const key = "agent:main:subagent:progress-fact";
     seedRow(key, {
@@ -835,8 +836,12 @@ it("reuses follow-up run progress across presentations until the run index chang
     const index = projection.state.rowContext.projectedAgentRuns!;
     using keys = vi.spyOn(index.sessionKeys, "get");
     using ids = vi.spyOn(index.sessionIds, "get");
+    using states = vi.spyOn(preparedRead, "projectPreparedSessionRunState");
     await list();
+    const initialState = states.mock.results.at(-1)?.value;
     await list();
+    expect(initialState).toBeDefined();
+    expect(states.mock.results.at(-1)?.value).toBe(initialState);
     expect(keys).not.toHaveBeenCalled();
     expect(ids).not.toHaveBeenCalled();
 
@@ -849,6 +854,11 @@ it("reuses follow-up run progress across presentations until the run index chang
       expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).toBe(
         true,
       );
+      const activeState = states.mock.results.at(-1)?.value;
+      expect(activeState).not.toBe(initialState);
+      expect(initialState.fields.hasActiveSubagentRun).not.toBe(true);
+      await list();
+      expect(states.mock.results.at(-1)?.value).toBe(activeState);
       seedRow(key, {
         sessionId: "replacement-session",
         updatedAt: 2,
@@ -864,5 +874,62 @@ it("reuses follow-up run progress across presentations until the run index chang
     expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).not.toBe(
       true,
     );
+  });
+});
+
+it("refreshes live elapsed time but retains completed run presentation across clocks", async () => {
+  using clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const key = "agent:main:subagent:elapsed-presentation";
+    const runId = "elapsed-presentation";
+    const startedAt = Date.now() - 1_000;
+    seedRow(key, { sessionId: "elapsed-presentation", updatedAt: startedAt });
+    const running = createSubagentRunRecord({
+      runId,
+      childSessionKey: key,
+      requesterSessionKey: "agent:main:parent",
+      requesterDisplayKey: "parent",
+      createdAt: startedAt,
+      startedAt,
+    });
+    subagentRuns.set(runId, running);
+    subagentRuns.commitOwnership(running);
+    const execution = holdSubagentExecution(runId, key);
+    publishSubagentRunChanges([runId]);
+    try {
+      using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
+      using states = vi.spyOn(preparedRead, "projectPreparedSessionRunState");
+      const list = () => listProjectedSessions({ projection, opts: { limit: 10 } });
+      expect((await list()).sessions[0]?.runtimeMs).toBe(1_000);
+      const first = states.mock.results.at(-1)?.value;
+      clock.mockReturnValue(startedAt + 2_000);
+      expect((await list()).sessions[0]?.runtimeMs).toBe(2_000);
+      expect(states.mock.results.at(-1)?.value).not.toBe(first);
+      expect(first.fields.runtimeMs).toBe(1_000);
+
+      execution[Symbol.dispose]();
+      const completed = createSubagentRunRecord({
+        runId,
+        childSessionKey: key,
+        requesterSessionKey: "agent:main:parent",
+        requesterDisplayKey: "parent",
+        createdAt: startedAt,
+        startedAt,
+        endedAt: Date.now(),
+        outcome: { status: "ok" },
+      });
+      subagentRuns.set(runId, completed);
+      subagentRuns.commitOwnership(completed);
+      publishSubagentRunChanges([runId]);
+      expect((await list()).sessions[0]?.runtimeMs).toBe(2_000);
+      const finished = states.mock.results.at(-1)?.value;
+      clock.mockReturnValue(startedAt + 3_000);
+      expect((await list()).sessions[0]?.runtimeMs).toBe(2_000);
+      expect(states.mock.results.at(-1)?.value).toBe(finished);
+    } finally {
+      execution[Symbol.dispose]();
+      subagentRuns.delete(runId);
+      publishSubagentRunChanges([runId]);
+    }
   });
 });

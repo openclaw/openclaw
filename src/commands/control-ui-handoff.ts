@@ -10,6 +10,7 @@ import {
   CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
 } from "../gateway/control-ui-contract.js";
+import { resolveControlUiLinks } from "../gateway/control-ui-links.js";
 import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
 import { CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS } from "../infra/control-ui-assets.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
@@ -20,7 +21,6 @@ import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { inspectGatewayTlsCertificate } from "../infra/tls/gateway.js";
 import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { sleep } from "../utils.js";
-import { resolveControlUiLinks } from "./onboard-helpers.js";
 
 const CONTROL_UI_DOCUMENT_REQUEST_TIMEOUT_MS = 2_000;
 const CONTROL_UI_DOCUMENT_ERROR_MAX_BYTES = 2_048;

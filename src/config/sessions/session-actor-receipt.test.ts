@@ -58,7 +58,17 @@ it("detaches read and committed metadata while retaining the actor's current fac
     const participant = { identity: { type: "agent" as const, id: "peer" }, promptedAt: 10 };
     f.participant(participant);
     addSessionMember(f.scope, { identityId: "viewer", addedBy: "owner", addedAt: 1 });
-    const before = f.read();
+    f.restartActor();
+    let before: SessionActorHotState;
+    {
+      using decode = vi.spyOn(JSON, "parse");
+      before = f.read();
+      expect(
+        decode.mock.calls.filter(
+          ([json]) => json.includes('"actor_id"') && json.includes('"contribution_count"'),
+        ),
+      ).toHaveLength(1);
+    }
     const command: Mutation = {
       type: "session.actor.patch",
       input: {

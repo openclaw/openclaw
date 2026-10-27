@@ -234,6 +234,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/device-pair-setup.ts":
       // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
       return "device-pair-setup-runtime";
+    case "ui/src/lib/channels/index.ts":
+      // Channel owners load on their first consumer, outside earlier shared boot captures.
+      return "channels-runtime";
     case "ui/src/pages/chat/talk/conversation.ts":
       return "talk-conversation-runtime";
     case "ui/src/pages/chat/chat-goal-operations.runtime.ts":
@@ -328,13 +331,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown.ts":
     case "ui/src/components/github-link-target.ts":
     case "ui/src/components/markdown-assistant-transcript.ts":
-    case "ui/src/components/markdown-audio-transcript.ts":
     case "ui/src/components/markdown-code-blocks.ts":
     case "ui/src/components/markdown-copy.ts":
     case "ui/src/components/markdown-details.ts":
     case "ui/src/components/markdown-file-links.ts":
     case "ui/src/components/markdown-github-refs.ts":
-    case "ui/src/components/markdown-hex-colors.ts":
     case "ui/src/components/markdown-human-mentions.ts":
     case "ui/src/components/markdown-icon.ts":
     case "ui/src/components/markdown-json.ts":
@@ -456,6 +457,9 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("ui/src/plugins/control-ui-actions.ts");
                 // Both routes read deferred resources; share their existing boot partition.
                 modules.add("node_modules/@solidjs/signals/dist/prod/deferred.js");
+                // Chat and creation share the same identity-scoped preference owner.
+                modules.add("ui/src/pages/new-session/draft-preference-state.ts");
+                modules.add("ui/src/pages/new-session/preferences.ts");
                 // Opened person cards share labels with New Session, not its composer chunk.
                 modules.add("ui/src/lib/platform-label.ts");
                 // Placement and delivery share retries without importing either route's bundle.

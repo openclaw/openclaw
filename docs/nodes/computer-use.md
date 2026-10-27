@@ -71,7 +71,7 @@ Add `--runtime <executable>` to start the built Gateway on another runtime, such
 
 ## The `computer` agent tool
 
-The built-in `computer` tool takes one action per call. Choose `target: "gateway"` for the Gateway desktop or `target: "node"` for a paired node. Supplying `node` also selects the node route. With neither selector, the first call uses the configured Gateway computer, otherwise the sole connected computer-capable node. A configured but unavailable Gateway computer reports its error; it never silently redirects input to a node. Later calls retain the selected host unless explicitly changed. Cloud sessions retain their fixed desktop and reject host overrides.
+The built-in `computer` tool takes one action per call. Choose `target: "gateway"` for the Gateway desktop or `target: "node"` for a paired node. Supplying `node` also selects the node route. With neither selector, the first call uses the configured Gateway computer, otherwise the sole connected computer-capable node. When the Gateway has no computer provider configured, the tool schema omits `target: "gateway"` and the guidance asks the model to omit `target` or use `target: "node"`; an explicit `target: "gateway"` reports the missing provider and names the paired-node retry instead of silently redirecting input. A configured but unavailable Gateway computer reports its error; it never silently redirects input to a node. Later calls retain the selected host unless explicitly changed. Cloud sessions retain their fixed desktop and reject host overrides.
 
 On the MCP tool path, computer control belongs to the admitted agent run and is released when that run ends. A later run can then use the same computer. Recording and file-transfer actions remain unavailable on this path.
 

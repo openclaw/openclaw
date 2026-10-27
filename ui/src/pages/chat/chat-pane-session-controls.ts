@@ -148,7 +148,10 @@ export function renderChatPaneComposerControls(params: {
     onProviderSettings,
     onModelAccounts,
   } = params;
+  void state.accessPreferenceRevision;
+  state.accessPreferences?.synchronize();
   const sessionKey = state.sessionKey;
+  const preferenceAgentId = scopedAgentListParamsForSession(state, sessionKey).agentId;
   const client = state.client;
   const accountSelection = state.chatAccountSelection;
   const connectionIsCurrent = captureChatConnectionOwner(state);
@@ -275,6 +278,8 @@ export function renderChatPaneComposerControls(params: {
           ? undefined
           : accessProgramAccess.reason,
         requestedAccessProgram: settingsSession?.cyberAccessProgram,
+        daybreakAccessProgram: state.accessPreferences?.readPreference(preferenceAgentId ?? "main")
+          ?.daybreakAccessProgram,
         contextWindowTarget: settingsPreview
           ? { ...(selectedSession ?? state.sessionsResult?.defaults), ...settingsPreview }
           : undefined,
@@ -302,14 +307,31 @@ export function renderChatPaneComposerControls(params: {
         },
         onModelSetup,
         onProviderSettings,
-        onAccessProgramSelect: (next, targetSessionKey) =>
-          canPatch({ cyberAccessProgram: next }, targetSessionKey)
-            ? switchChatSetting(
-                state,
-                { kind: "cyberAccessProgram", value: next },
-                targetSessionKey,
-              )
-            : Promise.resolve(false),
+        onAccessProgramSelect: async (next, targetSessionKey, previous) => {
+          if (!canPatch({ cyberAccessProgram: next }, targetSessionKey)) {
+            return false;
+          }
+          const confirmed = await switchChatSetting(
+            state,
+            { kind: "cyberAccessProgram", value: next },
+            targetSessionKey,
+          );
+          if (confirmed && ownsRoute()) {
+            await state.accessPreferences?.persistPreference(
+              preferenceAgentId ?? "main",
+              undefined,
+              {
+                cyberAccessProgram: next,
+                ...(next !== "standard"
+                  ? { daybreakAccessProgram: next }
+                  : previous
+                    ? { daybreakAccessProgram: previous }
+                    : {}),
+              },
+            );
+          }
+          return confirmed;
+        },
         onFastModeSelect: (next, targetSessionKey) =>
           effortAccess.allowed && canPatch({ fastMode: null }, targetSessionKey)
             ? switchChatSetting(state, { kind: "fastMode", value: next }, targetSessionKey)

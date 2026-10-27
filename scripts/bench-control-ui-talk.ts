@@ -680,6 +680,7 @@ try {
                 serverVersion: slot.version,
                 historyMessages: [TALK_READY_HISTORY_MESSAGE],
                 methodResponses: {
+                  "question.list": { questions: [] },
                   "talk.catalog": {
                     realtime: {
                       activeProvider: "openai",

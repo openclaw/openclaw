@@ -2,7 +2,7 @@
 
 import { beforeEach, describe, expect, it, onTestFinished, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
-import type { GatewaySessionRow } from "../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { createChatSubmissions } from "../app/chat-submissions.ts";
 import type { ApplicationOverlaySnapshot } from "../app/overlays-types.ts";
@@ -127,6 +127,73 @@ async function update(sidebar: Sidebar, change: (() => void) | Partial<Sidebar>)
 }
 
 describe("sidebar projection memo", () => {
+  it("reuses a held roster without enumerating it for each navigation read", async () => {
+    const first = session("first");
+    const { sidebar } = await mount([first]);
+    const result = sidebar.sessionData.sessionsResult!;
+    const enumerate = vi.fn(Reflect.ownKeys);
+    sidebar.sessionData.sessionResultsByAgent = new Proxy<Record<string, SessionsListResult>>(
+      { main: result },
+      { ownKeys: enumerate },
+    );
+    const navigation = sidebar.getSessionNavigationState();
+    enumerate.mockClear();
+
+    expect(sidebar.findSidebarSessionByKey(first.key)?.label).toBe("first");
+    expect(sidebar.getSessionNavigationState()).toBe(navigation);
+    expect(sidebar.findSidebarSessionByKey(first.key)?.label).toBe("first");
+    expect(enumerate).not.toHaveBeenCalled();
+
+    const added = session("added", { key: "agent:work:added", agentId: "work" });
+    sidebar.sessionData.sessionResultsByAgent = new Proxy<Record<string, SessionsListResult>>(
+      { main: result, work: { ...result, sessions: [added], count: 1 } },
+      { ownKeys: enumerate },
+    );
+    const replacement = sidebar.getSessionNavigationState();
+    expect(replacement).not.toBe(navigation);
+    expect(sidebar.findSidebarSessionByKey(added.key)?.label).toBe("added");
+    expect(sidebar.sessionProjection.createdOrder.has(added.key)).toBe(true);
+    enumerate.mockClear();
+    expect(sidebar.getSessionNavigationState()).toBe(replacement);
+    expect(sidebar.findSidebarSessionByKey(first.key)?.label).toBe("first");
+    expect(enumerate).not.toHaveBeenCalled();
+  });
+
+  it("shares one cached row graph between navigation, geometry and badge consumers", async () => {
+    const target = session("shared-cached-row", { unread: true });
+    const { sidebar, sessions } = await mount([target]);
+    const owner = getAppSidebarOwner(sidebar.hostElement)!;
+    vi.spyOn(owner, "sidebarSnapshotSettled").mockReturnValue(false);
+    const rows = snapshotSessions([sidebar.getSessionNavigationState().toSidebarSession(target)]);
+    owner.restoreSidebarSnapshot({
+      ...sidebarBootSnapshot(captureBootRoster(sessions.sessions.state)),
+      mode: "chip",
+      sections: [
+        {
+          id: "ungrouped",
+          rows,
+          totalRowCount: 1,
+          visibleRowCount: 1,
+          visibleLimit: 10,
+          collapsedVisibleRowCount: 1,
+          renderHeader: false,
+        },
+      ],
+    });
+    owner.invalidate();
+    await settleLitElement(sidebar);
+    const navigationRow = owner.findSidebarMenuSessionByKey(target.key);
+    const badgeRow = () => owner.readSessionPullRequestRows().find((row) => row.key === target.key);
+    expect(navigationRow).toBeDefined();
+    expect(badgeRow()).toBe(navigationRow);
+    expect(owner.reconciledSidebarZone().sessionRows.get(target.key)).toBe(navigationRow);
+    await update(sidebar, { activeRouteId: "chat", sessionKey: target.key });
+    const selected = owner.findSidebarMenuSessionByKey(target.key);
+    expect(selected?.visuallyActive).toBe(true);
+    expect(badgeRow()).toBe(selected);
+    expect(owner.reconciledSidebarZone().sessionRows.get(target.key)).toBe(selected);
+  });
+
   it.each([10, 30])("keeps newer pagination at %s rows through cached handoff", async (limit) => {
     const sessionsToShow = Array.from({ length: 40 }, (_, index) => session(`row-${index}`));
     const { sidebar, sessions } = await mount(sessionsToShow);
@@ -142,7 +209,6 @@ describe("sidebar projection memo", () => {
     owner.restoreSidebarSnapshot({
       ...sidebarBootSnapshot(captureBootRoster(sessions.sessions.state)),
       mode: "chip",
-      sessions: rows,
       entries: [],
       sections: [
         {
@@ -395,6 +461,30 @@ describe("sidebar projection memo", () => {
       }
     },
   );
+
+  it("re-arms snoozed visibility for the next deadline without a new list", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const first = session("first-wake", { snoozedUntil: 11_000, snoozedAt: 9_000 });
+    const second = session("second-wake", { snoozedUntil: 12_000, snoozedAt: 9_000 });
+    const { sidebar, row, sessions } = await mount([first, second]);
+    sidebar.sessionsStatusFilter = "snoozed";
+    await settleLitElement(sidebar);
+    expect(row(first.key)).not.toBeNull();
+    expect(row(second.key)).not.toBeNull();
+    const reads = sessions.list.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(11_001 - Date.now());
+    await settleLitElement(sidebar);
+    expect(row(first.key)).toBeNull();
+    expect(row(second.key)).not.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(12_001 - Date.now());
+    await settleLitElement(sidebar);
+    expect(row(first.key)).toBeNull();
+    expect(row(second.key)).toBeNull();
+    expect(sessions.list).toHaveBeenCalledTimes(reads);
+  });
 
   it("updates timed attention, questions, and approvals without replacing the row", async () => {
     vi.useFakeTimers();

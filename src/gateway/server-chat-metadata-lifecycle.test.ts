@@ -1,6 +1,11 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createPreparedAccountCatalogAccess } from "../agents/prepared-model-runtime.catalog-auth.js";
+import {
+  notifyPreparedModelRuntimePublication,
+  registerPreparedModelRuntimePublicationListener,
+} from "../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getSessionCostUsageUpdatedAt,
@@ -109,6 +114,59 @@ function expectMetadataBroadcast(broadcast: Mock, payload: Record<string, unknow
     dropIfSlow: true,
   });
 }
+
+it("broadcasts only downgrade onset and recovery for alternating service-tier responses", async () => {
+  vi.useFakeTimers({ now: 1_000 });
+  mocks.registerModelListener.mockImplementation(registerPreparedModelRuntimePublicationListener);
+  const broadcast = vi.fn();
+  await attachLifecycle({ broadcast });
+  const retirement = new AbortController();
+  const catalog = createPreparedAccountCatalogAccess(
+    () => true,
+    retirement.signal,
+    {},
+    () => {
+      notifyPreparedModelRuntimePublication({
+        phase: "catalog-observation",
+        modelFactsChanged: false,
+        agentId: "main",
+      });
+    },
+  );
+  try {
+    const record = catalog.prepareServiceTierObserver({
+      selectedCredential: { source: "direct", provider: "openai", identityKey: "direct:openai" },
+    });
+    const route = {
+      modelId: "fixture-model",
+      runtimeId: "openclaw",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      requestedTier: "ultrafast",
+    };
+    for (let index = 0; index < 100; index++) {
+      record({ ...route, responseTier: index % 2 === 0 ? "priority" : "ultrafast" });
+      vi.advanceTimersByTime(500);
+    }
+    const payload = {
+      agentId: "main",
+      modelCatalogChanged: true,
+      authChanged: false,
+      commandsChanged: false,
+    };
+    expectMetadataBroadcast(broadcast, payload);
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(60_000);
+    expect(broadcast).toHaveBeenCalledTimes(2);
+    expect(broadcast).toHaveBeenLastCalledWith("chat.metadata.changed", payload, {
+      dropIfSlow: true,
+    });
+    vi.advanceTimersByTime(60_000);
+    expect(broadcast).toHaveBeenCalledTimes(2);
+  } finally {
+    retirement.abort();
+  }
+});
 
 it.each([false, true])(
   "publishes usage completion (failed: %s) without rebuilding metadata and retires its listener on stop",

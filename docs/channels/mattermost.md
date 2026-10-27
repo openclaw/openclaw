@@ -235,6 +235,7 @@ Notes:
 - Approve via:
   - `openclaw pairing list mattermost`
   - `openclaw pairing approve mattermost <CODE>`
+- If the pending pairing queue is full, slash commands return a capacity message instead of an empty pairing code. Ask the bot owner to approve or dismiss requests in **Settings → Channels → DM access requests**, then retry. Existing pending requests keep their valid codes.
 - Public DMs: `channels.mattermost.dmPolicy="open"` plus `channels.mattermost.allowFrom=["*"]` (the config schema enforces the wildcard).
 - `channels.mattermost.allowFrom` accepts user ids (recommended) and `accessGroup:<name>` entries. See [Access groups](/channels/access-groups).
 

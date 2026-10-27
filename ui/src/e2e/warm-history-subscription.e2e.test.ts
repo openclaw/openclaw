@@ -144,6 +144,9 @@ suite.define(() => {
         sidebarView: "sessions",
         offRosterSession: true,
       };
+      await page
+        .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
+        .waitFor({ state: "attached" });
       const persisted = await page.evaluate(persistColdLoadWarmState, warmInput);
       expect(persisted.rosterContainsSession).toBe(false);
       expect(persisted.messages).toBe(2);

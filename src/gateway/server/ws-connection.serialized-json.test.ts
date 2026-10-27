@@ -242,12 +242,15 @@ it.each([512, 2048])(
     );
     const frame = new SerializedGatewayFrame(segments);
     const retained = new Map<number, Buffer | SerializedGatewayFrame>();
+    const headers = new Map<number, unknown>();
     for (const windowBits of [15, 10, 15, 10]) {
-      const { peer, codec, transport } = await connectTransport({
+      const { peer, request, codec, transport } = await connectTransport({
         serverMaxWindowBits: windowBits,
       });
+      using writes = vi.spyOn(request.socket, "write");
       using compress = vi.spyOn(codec, "compress");
       const received = once(peer, "message");
+      transport.batchWrites?.();
       await send(transport, frame);
       const [data, binary] = await received;
       expect(binary).toBe(false);
@@ -256,8 +259,10 @@ it.each([512, 2048])(
       expect(payload).toBeDefined();
       if (retained.has(windowBits)) {
         expect(payload).toBe(retained.get(windowBits));
+        expect(writes.mock.calls[0]?.[0]).toBe(headers.get(windowBits));
       } else {
         retained.set(windowBits, payload!);
+        headers.set(windowBits, writes.mock.calls[0]?.[0]);
       }
     }
     expect(retained.get(10)).not.toBe(retained.get(15));
