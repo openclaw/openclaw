@@ -404,8 +404,11 @@
 }
 
 .chat-sender-name.person-activity-link {
-  pointer-events: auto;
   color: color-mix(in srgb, var(--chat-sender-name-color, var(--muted)) 60%, var(--text));
+}
+
+.chat-group-footer--persistent-identity .chat-sender-name.person-activity-link {
+  pointer-events: auto;
 }
 
 .chat-sender-name.person-activity-link:hover,

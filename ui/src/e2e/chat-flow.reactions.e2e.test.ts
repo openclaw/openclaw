@@ -135,49 +135,66 @@ suite.define(() => {
           `.chat-reaction-chip[aria-pressed="${pressed}"][aria-label="${emoji} 1"]`,
         );
       await message.locator(".chat-bubble").filter({ hasText: prompt }).hover();
-      const visibleActionRows = (group: Locator = message) =>
-        group
-          .locator("[data-message-actions-for]")
-          .evaluateAll((rows) =>
-            rows
-              .filter((row) =>
-                [...row.querySelectorAll("button")].some((button) =>
-                  button.checkVisibility({ checkOpacity: true }),
-                ),
-              )
-              .map((row) => row.getAttribute("data-message-actions-for")),
-          );
-      await expect.poll(() => visibleActionRows()).toEqual([`msg:id:${messageId}:0`]);
-      const visibleTimes = () =>
-        message
-          .locator("time")
-          .evaluateAll((times) =>
-            times
-              .filter((time) => time.checkVisibility({ checkOpacity: true }))
-              .map((time) => time.dateTime),
-          );
-      await expect.poll(visibleTimes).toEqual([new Date(1700000360000).toISOString()]);
+      const visibleMetadata = (group: Locator = message) =>
+        group.evaluate((element) => ({
+          actions: [...element.querySelectorAll("[data-message-actions-for]")]
+            .filter((row) =>
+              [...row.querySelectorAll("button")].some((button) =>
+                button.checkVisibility({ checkOpacity: true }),
+              ),
+            )
+            .map((row) => row.getAttribute("data-message-actions-for")),
+          times: [...element.querySelectorAll("time")]
+            .filter((time) => time.checkVisibility({ checkOpacity: true }))
+            .map((time) => time.getAttribute("datetime")),
+        }));
+      const middleMetadata = {
+        actions: [`msg:id:${messageId}:0`],
+        times: [new Date(1700000360000).toISOString()],
+      };
+      await expect.poll(() => visibleMetadata()).toEqual(middleMetadata);
 
       const ownedActions = message.locator(`[data-message-actions-for="msg:id:${messageId}:0"]`);
       await ownedActions.getByRole("button", { name: "Copy as markdown", exact: true }).focus();
       await page.mouse.move(0, 0);
-      await expect.poll(() => visibleActionRows()).toEqual([`msg:id:${messageId}:0`]);
-      await expect.poll(visibleTimes).toEqual([new Date(1700000360000).toISOString()]);
+      await expect.poll(() => visibleMetadata()).toEqual(middleMetadata);
       await message.locator(".chat-bubble").filter({ hasText: "Last checklist note." }).hover();
       await page.locator("textarea").first().focus();
-      await expect.poll(visibleTimes).toEqual([new Date(1700000420000).toISOString()]);
+      await expect
+        .poll(() => visibleMetadata())
+        .toEqual({
+          actions: ["msg:id:riley-note-2:0"],
+          times: [new Date(1700000420000).toISOString()],
+        });
 
       const desktopViewport = page.viewportSize()!;
       await page.setViewportSize({ width: 560, height: 1000 });
+      await page.mouse.move(0, 0);
+      await expect
+        .poll(() =>
+          message.locator(".chat-sender-name.person-activity-link").evaluateAll((names) =>
+            names.map((name) => {
+              const box = name.getBoundingClientRect();
+              return name.contains(
+                document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+              );
+            }),
+          ),
+        )
+        .toEqual([false, false, true]);
       const ownGroup = page.locator(".chat-group.user", { hasText: "First own note." });
       await ownGroup.locator(".chat-bubble").filter({ hasText: "First own note." }).hover();
-      await expect.poll(() => visibleActionRows(ownGroup)).toEqual(["msg:id:own-note-0:0"]);
+      await expect
+        .poll(async () => (await visibleMetadata(ownGroup)).actions)
+        .toEqual(["msg:id:own-note-0:0"]);
       await ownGroup
         .locator('[data-message-actions-for="msg:id:own-note-0:0"]')
         .getByRole("button", { name: "Copy as markdown", exact: true })
         .focus();
       await page.mouse.move(0, 0);
-      await expect.poll(() => visibleActionRows(ownGroup)).toEqual(["msg:id:own-note-0:0"]);
+      await expect
+        .poll(async () => (await visibleMetadata(ownGroup)).actions)
+        .toEqual(["msg:id:own-note-0:0"]);
       await page.setViewportSize(desktopViewport);
       await message.locator(".chat-bubble").filter({ hasText: prompt }).hover();
       // Without reactions the hover row carries the picker; once reacted, the chip row owns it.
