@@ -141,7 +141,7 @@ async function fixture() {
           return recoverWorkspaceBeforeTurn({
             ...params,
             turn: input,
-            environments: { startTunnel: async () => tunnel },
+            tunnel,
           });
         }
         await placements.markWorkspaceResultPending(turnClaim);

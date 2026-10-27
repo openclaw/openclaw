@@ -97,7 +97,7 @@ export function workerWorkspaceFailure(
 }
 
 export async function recoverWorkspaceBeforeTurn(params: {
-  environments: Pick<WorkerEnvironmentService, "startTunnel">;
+  tunnel: WorkerTunnelHandle;
   placement: ActiveWorkerPlacement;
   placements: WorkerSessionPlacementStore;
   turn: Parameters<typeof resolveWorkerTurnTranscriptTarget>[0];
@@ -117,11 +117,6 @@ export async function recoverWorkspaceBeforeTurn(params: {
   };
   try {
     assertCurrent();
-    const tunnel = await params.environments.startTunnel({
-      environmentId: params.placement.environmentId,
-      ownerEpoch: params.placement.activeOwnerEpoch,
-      authorize: assertCurrent,
-    });
     await params.placements.markWorkspaceResultPending(params.turnClaim, assertCurrent);
     await reconcileWorkspaceAfterTurn({
       placement: params.placement,
@@ -129,8 +124,8 @@ export async function recoverWorkspaceBeforeTurn(params: {
       turnClaim: params.turnClaim,
       workspaceOperations: params.workspaceOperations,
       workspace: params.workspace,
-      signal: params.signal,
-      tunnel,
+      beforeTurnSignal: params.signal,
+      tunnel: params.tunnel,
       transcriptTarget: resolveWorkerTurnTranscriptTarget(params.turn),
       beforeTurn: true,
     });
@@ -157,7 +152,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
   transcriptTarget: ReturnType<typeof resolveWorkerTurnTranscriptTarget>;
   tunnel: WorkerTunnelHandle;
   beforeTurn?: true;
-  signal?: AbortSignal;
+  beforeTurnSignal?: AbortSignal;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 }): Promise<WorkspaceConflictReport | undefined> {
@@ -197,7 +192,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
     throw new Error("Cloud worker completed without a durable workspace-result fence");
   }
   const assertWorkspaceResultCurrent = () => {
-    params.signal?.throwIfAborted();
+    params.beforeTurnSignal?.throwIfAborted();
     if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
       throw new Error("Cloud worker workspace result lost its placement owner");
     }
@@ -335,7 +330,11 @@ export async function reconcileWorkspaceAfterTurn(params: {
         }
       }
     };
-    await params.workspaceOperations.run(currentPlacement.environmentId, reconcile, params.signal);
+    await params.workspaceOperations.run(
+      currentPlacement.environmentId,
+      reconcile,
+      params.beforeTurnSignal,
+    );
   } catch (error) {
     await createWorkerWorkspaceConflictTranscriptHandlers(transcriptTarget, assertResultCurrent)
       .reportFailure(workspaceError(error))
@@ -394,7 +393,6 @@ export async function executeRemoteExecTurn(params: {
   ) {
     throw new Error("Active remote-exec placement does not match its attached environment");
   }
-  await recoverWorkspaceBeforeTurn({ ...params, signal: params.turn.abortSignal });
   params.assertRunCurrent?.();
   const tunnel = await waitForTurnOperation({
     start: () =>
@@ -405,6 +403,9 @@ export async function executeRemoteExecTurn(params: {
     ...(params.turn.abortSignal ? { signal: params.turn.abortSignal } : {}),
     timeoutMs: params.turn.timeoutMs,
   });
+  params.assertRunCurrent?.();
+  await recoverWorkspaceBeforeTurn({ ...params, tunnel, signal: params.turn.abortSignal });
+  params.assertRunCurrent?.();
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(params.turn);
   const attachmentNote = await prepareWorkerTurnAttachments({
     turn: params.turn,

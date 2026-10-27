@@ -123,7 +123,6 @@ export async function executeWorkerTurn(
       );
     }
   }
-  await recoverWorkspaceBeforeTurn({ ...params, signal: turn.abortSignal });
   params.assertRunCurrent();
   turn.abortSignal?.throwIfAborted();
   // Keep credential discovery independent of the brokered publication request tool.
@@ -222,6 +221,9 @@ export async function executeWorkerTurn(
   if (!tunnel.launchTurn) {
     throw new Error("Worker tunnel does not support worker turns");
   }
+  assertContextCurrent();
+  await recoverWorkspaceBeforeTurn({ ...params, turn, tunnel, signal: turn.abortSignal });
+  assertContextCurrent();
   const portalAvailable =
     Boolean(environment.nodeDeviceId) &&
     environment.sshEndpoint === null &&

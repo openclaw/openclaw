@@ -63,7 +63,7 @@ test("device-folder turn settlement and reclaim release ownership without synchr
   };
   await recoverWorkspaceBeforeTurn({
     ...result,
-    environments: { startTunnel: unexpected },
+    tunnel,
     turn: sessionIdentity(REQUEST.sessionId),
   });
   await reconcileWorkspaceAfterTurn({
