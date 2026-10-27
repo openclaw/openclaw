@@ -42,15 +42,15 @@ const controlUiPerformanceBudgets = {
   // Consolidated eager/route partitions measure 5/20/17 requests over HTTP/1.1.
   // Preserve the initial two-request headroom; route limits match their measured graphs.
   startupJsRequests: 7,
-  chatBootJsRequests: 20,
+  // Cached transcript images require their existing renderer with the row.
+  chatBootJsRequests: 21,
   // A neutral controls chunk keeps other routes from loading the New Session renderer.
   newBootJsRequests: 17,
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Streaming token-to-DOM: 1,274,050 B measured + the existing 811 B headroom.
-  // Peter accepted chat growth for less streaming CPU and HTML parsing.
-  chatBootJsGzipBytes: 1_274_861,
+  // Complete cached rows measure 1,280,058 B; retain only 64 B of build variance.
+  chatBootJsGzipBytes: 1_280_122,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.

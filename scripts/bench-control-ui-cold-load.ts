@@ -1745,6 +1745,7 @@ try {
           JSON.stringify({
             errors,
             consoleErrors,
+            diagnostics: await page.evaluate(() => Reflect.get(window, "__coldLoad")?.read()),
             thread: await page.locator(".chat-pane-cache__pane--active .chat-thread").innerHTML(),
           }),
         );
@@ -2136,9 +2137,8 @@ try {
       await page.reload({ waitUntil: "domcontentloaded" });
     }
     await settle(runRoute);
-    await qualifyLateRowFacts();
     if (values["late-row-facts"]) {
-      // Keep the probe alive until the qualified final image state has been sampled.
+      // Seeds are qualified above; best-effort live link prefetch can skip a reload.
       await page.evaluate(() => new Promise(requestAnimationFrame));
     }
     const coverage = values.coverage
