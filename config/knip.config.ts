@@ -142,6 +142,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-actor-residency-snapshot.mjs!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-row-materialization-measure.ts!",
+  "scripts/perf/session-row-refresh-measure.ts!",
   "scripts/perf/session-row-lineage-measure.ts!",
   "scripts/perf/tool-result-hash-measure.ts!",
   "scripts/perf/tool-result-size-measure.ts!",
@@ -248,6 +249,8 @@ const repositoryScriptEntries = [
   "scripts/perf/worker-task-metrics-measure.ts!",
   // scripts/perf/README.md invokes this worker protocol benchmark by path.
   "scripts/perf/worker-module-graphs-measure.mjs!",
+  // Its header documents the built-worker nursery and natural-idle comparison.
+  "scripts/perf/worker-young-generation-measure.mjs!",
   // scripts/perf/README.md invokes this cold usage-cache measurement CLI by path.
   "scripts/perf/chat-metadata-burst-measure.ts!",
   // scripts/perf/README.md invokes this model-prompt statistics measurement CLI by path.
@@ -285,6 +288,8 @@ const repositoryScriptEntries = [
   "scripts/perf/prompt-cache-history-measure.ts!",
   // scripts/perf/README.md invokes this synthetic authority allocation probe by path.
   "scripts/perf/operator-authority-measure.ts!",
+  // The transcript driver selects this diagnostic preload through --gateway-preload.
+  "scripts/perf/plugin-access-authority-census.mjs!",
   // #179149 invokes this synthetic event-dispatch allocation probe by path.
   "scripts/perf/agent-event-dispatch-measure.ts!",
   // scripts/perf/README.md invokes this WebSocket diagnostic accounting benchmark.
@@ -492,6 +497,8 @@ const repositoryScriptEntries = [
   "scripts/perf/placement-recovery-reads-bench.ts!",
   "scripts/perf/plain-tool-brace-measure.ts!",
   "scripts/perf/plugin-cache-stat-facts.ts!",
+  // Its header documents the paired metadata-root allocation benchmark.
+  "scripts/perf/plugin-cache-root-measure.ts!",
   "scripts/perf/plugin-preparation-boot.mjs!",
   "scripts/perf/plugin-preparation-boot-preload.mjs!",
   "scripts/perf/plugin-relative-path-measure.ts!",
@@ -683,6 +690,7 @@ const repositoryScriptEntries = [
   "scripts/perf/async-work-scope-measure.ts!",
   "scripts/perf/local-workspace-callers-measure.ts!",
   "scripts/perf/plugin-iterator-membrane-measure.ts!",
+  "scripts/perf/plugin-generation-retention.ts!",
   "scripts/perf/placement-startup-wake-measure.ts!",
   "scripts/perf/response-decode-measure.mts!",
   "scripts/perf/text-projection-append-measure.ts!",
@@ -715,6 +723,8 @@ const repositoryScriptEntries = [
   "scripts/perf/heap-headroom.ts!",
   // Maintainers invoke this isolated Doctor metadata-retention benchmark by path.
   "scripts/perf/doctor-metadata-retention.ts!",
+  // Maintainers invoke the factory settlement benchmark by path; usage is in its header.
+  "scripts/perf/context-engine-factory-retention.ts!",
   // The connected-idle benchmark runs by path and loads its instrumentation with --import.
   "scripts/perf/idle-gateway-measure.ts!",
   "scripts/perf/idle-gateway-measure-preload.mjs!",

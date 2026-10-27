@@ -1,8 +1,8 @@
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import {
   isHiddenAssistantStreamText,
   isVisibleChatHistoryMessage,
-  shouldHideAssistantChatMessage,
   visibleChatHistoryMessages,
 } from "../../lib/chat/message-visibility.ts";
 import {
@@ -357,7 +357,7 @@ export async function hydrateChatHistory(
     if (resetStream) {
       const streamReconciliation = {
         persistCommentary: state.chatRunId ? true : persistsChatCommentary(state),
-        isHiddenAssistantMessage: shouldHideAssistantChatMessage,
+        isHiddenAssistantMessage: isAssistantHeartbeatAckForDisplay,
         isHiddenStreamText: isHiddenAssistantStreamText,
       };
       for (const message of state.chatMessages) {

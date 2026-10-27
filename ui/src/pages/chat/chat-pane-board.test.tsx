@@ -959,22 +959,16 @@ describe("chat pane board shell", () => {
   });
 
   it("enables MCP App pinning only when app-view and put methods are both advertised", () => {
-    const cases = [
-      { suffix: "put-only", methods: ["board.get", "board.widget.put"], expected: false },
-      { suffix: "view-only", methods: ["board.get", "board.widget.appView"], expected: false },
-      {
-        suffix: "complete",
-        methods: ["board.get", "board.widget.appView", "board.widget.put"],
-        expected: true,
-      },
-    ];
-
-    for (const testCase of cases) {
+    for (const [suffix, advertised, expected] of [
+      ["put-only", ["board.widget.put"], false],
+      ["view-only", ["board.widget.appView"], false],
+      ["complete", ["board.widget.appView", "board.widget.put"], true],
+    ] as const) {
       const { pane } = createGatewayBoardPane({
-        sessionKey: `agent:main:${testCase.suffix}`,
-        methods: testCase.methods,
+        sessionKey: `agent:main:${suffix}`,
+        methods: ["board.get", ...advertised],
       });
-      expect(pane.resolveBoardProvider().canPinMcpApps).toBe(testCase.expected);
+      expect(pane.resolveBoardProvider().canPinMcpApps).toBe(expected);
     }
   });
 

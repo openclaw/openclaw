@@ -456,6 +456,7 @@ const enChatSession = {
       askLabel: "Ask in side chat",
       askPlaceholder: "Ask a question",
       askImageQuestion: "What does this image show?",
+      askSelectionQuestion: "Respond to the selected text and comments.",
       selectionTooLong:
         "These comments are too long for Side chat. Use a shorter selection or comment.",
       askSubmit: "Ask",

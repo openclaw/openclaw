@@ -49,7 +49,9 @@ export function sessionRailQuestion(companion: ChatSessionCompanionThread): stri
     companion.draft.trim() ||
     (companion.attachments?.some((attachment) => attachment.mimeType.startsWith("image/"))
       ? t("chat.rail.askImageQuestion")
-      : "")
+      : companion.attachments?.some((attachment) => attachment.selectionAnnotation)
+        ? t("chat.rail.askSelectionQuestion")
+        : "")
   );
 }
 

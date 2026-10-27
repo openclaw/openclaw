@@ -358,8 +358,9 @@ in the default hybrid reload mode. See
 [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
 for application failures, cleanup warnings, and source-edit reloads.
 Plugins that declare OAuth-backed MCP servers list them under **Accounts** on
-the plugin's page; an administrator selects **Connect** to sign in once after
-the plugin is added. `openclaw mcp login <name>` signs in only to servers
+the plugin's page; an administrator selects **Sign in** to sign in once after
+the plugin is added. Until then, the plugin page and the chat install card show
+**Sign in** where the Install button was. `openclaw mcp login <name>` signs in only to servers
 defined under `mcp.servers`, not to servers a plugin declares.
 
 The page intentionally focuses on inventory, discovery, install, enablement,

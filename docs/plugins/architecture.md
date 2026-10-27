@@ -583,6 +583,9 @@ references while preserving revocation. Native module exports no longer retain t
 disposed registry through instance ownership, and stale calls remain rejected. Pending or failed
 cleanup retains its custody.
 Successfully disposed registrations leave their plugin caches.
+Failed model-runtime refresh diagnostics retain the error message, name, code, and
+materialized stack, not the failed build or its cause graph. Active publication
+settlement still uses the original failure for lifecycle recovery.
 
 Catalog observation is passive. Inventory requests can ask the catalog owner to
 renew expired providers while returning its accepted rows. Chat metadata and
