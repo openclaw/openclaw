@@ -195,16 +195,15 @@ it("does not admit commits added after the checkout revision was captured", asyn
   expect(metadata.mergeBase?.subject).toBe("base");
 });
 
-it.skipIf(process.platform === "win32")(
-  "reuses a clean status inventory and still observes later edits",
-  () =>
+it.skipIf(process.platform === "win32").each(["all", "uncommitted"] as const)(
+  "reuses a clean status inventory for %s and still observes later edits",
+  (scope) =>
     withCheckout("openclaw-diff-index-refresh-", async ({ root, write }) => {
       await seedRepository(root, { "file.txt": "original\n" });
       const indexPath = path.join(root, ".git", "index");
       const originalIndex = await fs.readFile(indexPath);
       await fs.utimes(path.join(root, "file.txt"), new Date(0), new Date(0));
-      const read = () =>
-        loadCheckoutDiff({ cwd: root, sessionKey: "fixture", scope: "uncommitted" });
+      const read = () => loadCheckoutDiff({ cwd: root, sessionKey: "fixture", scope });
 
       const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
       expect(await read()).toMatchObject({ files: [], additions: 0, deletions: 0 });
@@ -224,7 +223,7 @@ it.skipIf(process.platform === "win32")(
     }),
 );
 
-it("binds a clean inventory to its checkout, HEAD, and uncommitted scope", () =>
+it("binds a clean inventory to its checkout, HEAD, and selected comparison", () =>
   withCheckout("openclaw-clean-diff-scope-", async ({ root, git, write }) => {
     await seedRepository(root, { "file.txt": "base\n" });
     const base = (await git("rev-parse", "HEAD")).trim();
@@ -238,6 +237,7 @@ it("binds a clean inventory to its checkout, HEAD, and uncommitted scope", () =>
       input: { cwd: root, scope: "uncommitted", cleanWorktree },
     });
     expect(clean).toMatchObject({ files: [], aheadCount: 1, commits: [{ subject: "feature" }] });
+    const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
     for (const input of [{ scope: "all" as const }, { scope: "commit" as const, commit: head }]) {
       const diff = await runGitWorkerOperation({
         type: "checkout.diff",
@@ -245,6 +245,7 @@ it("binds a clean inventory to its checkout, HEAD, and uncommitted scope", () =>
       });
       expect(diff.files[0]).toMatchObject({ path: "file.txt", additions: 1, deletions: 1 });
     }
+    expect(commands.mock.calls.filter(([argv]) => argv.includes("ls-files"))).toHaveLength(0);
     await write("file.txt", "unstaged\n");
     for (const stale of [
       { root, head: base },
