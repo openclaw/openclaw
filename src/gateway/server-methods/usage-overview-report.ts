@@ -96,7 +96,9 @@ export async function prepareUsageOverviewUsage(params: {
       inputBytes: usageOverviewInputBytes(params.usage, params.rows.length),
     },
   );
-  if (result.kind !== "prepared") throw new Error("Expected prepared Usage cohorts");
+  if (result.kind !== "prepared") {
+    throw new Error("Expected prepared Usage cohorts");
+  }
   params.usage.prepared = { members: usageOverviewMembers(params.rows), cohorts: result.value };
 }
 
@@ -212,7 +214,9 @@ export function createUsageOverviewReporter(params: {
                 inputBytes: usageOverviewInputBytes(usage, rows.length),
               })
               .then((result) => {
-                if (result.kind !== "report") throw new Error("Expected Usage report");
+                if (result.kind !== "report") {
+                  throw new Error("Expected Usage report");
+                }
                 return result.value;
               }),
           };
@@ -231,7 +235,17 @@ export function withVisibleUsageOverviewRows(
   slice: UsageOverviewSlice,
   visible: readonly SessionUsageEntry[],
 ): UsageOverviewSlice {
-  const byKey = new Map(visible.map((row) => [usageOverviewRowKey(row), row]));
+  const requestedKeys = new Set([
+    ...slice.sessions.map((row) => row.key),
+    ...slice.overview.selectedRows.map((row) => row.key),
+  ]);
+  const byKey = new Map<string, SessionUsageEntry>();
+  // Only index returned rows, but visit every duplicate so the last one still wins.
+  for (const row of visible) {
+    if (requestedKeys.has(row.key)) {
+      byKey.set(usageOverviewRowKey(row), row);
+    }
+  }
   const restore = (row: SessionUsageEntry): SessionUsageEntry =>
     Object.assign({}, byKey.get(usageOverviewRowKey(row)) ?? row, { usage: row.usage });
   slice.sessions = slice.sessions.map(restore);
