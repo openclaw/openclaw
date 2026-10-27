@@ -60,9 +60,14 @@ function createActiveRun(...[sessionKey, options]: Parameters<typeof createUnsco
   });
 }
 
-function abortAsOwner(params: Omit<Parameters<typeof invokeAbort>[0], "connId" | "deviceId">) {
-  return invokeAbort({ ...params, connId: "conn-owner", deviceId: "dev-owner" });
+function abortAs(identity: string, scopes?: string[]) {
+  return (params: Omit<Parameters<typeof invokeAbort>[0], "connId" | "deviceId" | "scopes">) =>
+    invokeAbort({ ...params, connId: `conn-${identity}`, deviceId: `dev-${identity}`, scopes });
 }
+
+const abortAsOwner = abortAs("owner");
+const abortAsOther = abortAs("other");
+const abortAsAdmin = abortAs("admin", ["operator.admin"]);
 
 function queuedTurn(owner?: string): RpcSourceRef {
   return createActiveRun("main", {
@@ -85,21 +90,6 @@ function workerContext(
     cancel,
   );
   return context;
-}
-
-function abortAsOther(params: Omit<Parameters<typeof invokeAbort>[0], "connId" | "deviceId">) {
-  return invokeAbort({ ...params, connId: "conn-other", deviceId: "dev-other" });
-}
-
-function abortAsAdmin(
-  params: Omit<Parameters<typeof invokeAbort>[0], "connId" | "deviceId" | "scopes">,
-) {
-  return invokeAbort({
-    ...params,
-    connId: "conn-admin",
-    deviceId: "dev-admin",
-    scopes: ["operator.admin"],
-  });
 }
 
 describe("chat.abort authorization", () => {
@@ -251,9 +241,8 @@ describe("chat.abort queued-turn contract", () => {
     const context = createChatAbortContext({ sources: [["queued-1", queued]] });
 
     const respond = await abortAsOwner({ context, runId: "queued-1" });
-    const call = requireLastRespondCall(respond);
-    expect(call[0]).toBe(true);
-    expectAbortPayload(call[1], { aborted: true, runIds: ["queued-1"] });
+    expect(requireLastRespondCall(respond)[0]).toBe(true);
+    expectResult(respond, ["queued-1"]);
     expect(queued.input.abortSignal.aborted).toBe(true);
     expect(rpcSourceTesting.has("queued-1")).toBe(false);
   });

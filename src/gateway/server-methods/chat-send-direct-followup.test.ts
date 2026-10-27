@@ -105,9 +105,19 @@ function expectChat(fixture: Fixture, runId: string, state: string, content: unk
   );
 }
 
+async function recordInput({ followupRun, opts }: Parameters<typeof executeAgentTurn>[0]) {
+  const runId = expectDefined(opts?.runId, "followup run ID");
+  opts?.onAgentRunStart?.(runId);
+  await expectDefined(followupRun.userTurnTranscriptRecorder, "input recorder").persistApproved();
+  return runId;
+}
+
 it("refuses cross-requester steering by default and admits only an explicit fresh followup", async ({
   signal,
 }) => {
+  const wait = <T>(pending: PromiseLike<T>) => withinTest(pending, signal);
+  const waitForGate = (...args: Parameters<typeof awaitGateBeforeSettlement>) =>
+    wait(awaitGateBeforeSettlement(...args));
   const refusal =
     "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.";
   const fixture = await createFixture({ preserveContent: true });
@@ -146,22 +156,19 @@ it("refuses cross-requester steering by default and admits only an explicit fres
   const consumed: Parameters<typeof executeAgentTurn>[0][] = [];
   runtime.execute.mockReset();
   runtime.execute.mockRejectedValue(new Error("Refused input must not execute"));
-  dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
+  dispatchInboundMessageMock.mockImplementation((raw: unknown) => {
     const params = raw as DispatchParams;
     const isExplicitFollowup = params.replyOptions?.runId === followupId;
     if (isExplicitFollowup) {
       observeAdmission(params, queued, settled);
     }
-    try {
-      return await dispatchActual({ ...params, cfg: config });
-    } finally {
+    return dispatchActual({ ...params, cfg: config }).finally(() => {
       (isExplicitFollowup ? followupDispatched : dispatched).resolve();
-    }
+    });
   });
   try {
-    const ack = await fixture.send();
-    expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-    await withinTest(dispatched.promise, signal);
+    expect((await fixture.send()).mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+    await wait(dispatched.promise);
     await rpcSourceTesting.get(fixture.params.idempotencyKey)?.input.settlement.promise;
     expect(injected).not.toHaveBeenCalled();
     expect(operation.result).toBeNull();
@@ -176,10 +183,9 @@ it("refuses cross-requester steering by default and admits only an explicit fres
       items: [{ runId: fixture.params.idempotencyKey, state: "cancelled" }],
     });
     const duplicate = await fixture.send();
-    expect(duplicate.mock.calls[0]?.[0]).toBe(false);
-    expect(duplicate.mock.calls[0]?.[1]).toMatchObject({
-      status: "error",
-      summary: refusal,
+    expect(duplicate.mock.calls[0]).toMatchObject({
+      0: false,
+      1: { status: "error", summary: refusal },
     });
     fixture.context.dedupe.clear();
     const durableRetry = await fixture.send();
@@ -192,16 +198,10 @@ it("refuses cross-requester steering by default and admits only an explicit fres
     expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
 
     runtime.execute.mockImplementation(async (params) => {
-      const { followupRun, opts } = params;
-      const runId = expectDefined(opts?.runId, "followup run ID");
-      opts?.onAgentRunStart?.(runId);
-      await expectDefined(
-        followupRun.userTurnTranscriptRecorder,
-        "input recorder",
-      ).persistApproved();
+      const runId = await recordInput(params);
       consumed.push(params);
       started.resolve();
-      await withinTest(release.promise, signal);
+      await wait(release.promise);
       return successfulChatTurn(runId, "Bob's explicit followup answered.");
     });
     const followupOutcome = createDeferred();
@@ -223,22 +223,18 @@ it("refuses cross-requester steering by default and admits only an explicit fres
     setRuntimeConfigSnapshot(config, config);
     fixture.params.idempotencyKey = followupId;
     fixture.params.message = "/followup Answer Bob's separate request.";
-    const explicitAck = await fixture.send();
-    expect(explicitAck.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        queued.promise,
-        followupDispatched.promise,
-        "Explicit followup did not queue",
-      ),
-      signal,
+    expect((await fixture.send()).mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+    await waitForGate(
+      queued.promise,
+      followupDispatched.promise,
+      "Explicit followup did not queue",
     );
-    await withinTest(followupDispatched.promise, signal);
+    await wait(followupDispatched.promise);
     expect(isRpcSourceQueued(rpcSourceTesting.get(followupId))).toBe(true);
     expect(operation.result).toBeNull();
     expect(injected).not.toHaveBeenCalled();
     expect(consumed).toEqual([]);
-    await withinTest(followupOutcome.promise, signal);
+    await wait(followupOutcome.promise);
     expectChat(fixture, followupId, "delta", [
       {
         type: "text",
@@ -249,13 +245,10 @@ it("refuses cross-requester steering by default and admits only an explicit fres
     config.tools = { ...config.tools, deny: ["exec"] };
     setRuntimeConfigSnapshot(config, config);
     operation.complete();
-    await withinTest(
-      awaitGateBeforeSettlement(
-        started.promise,
-        settled.promise,
-        "Explicit followup settled without execution",
-      ),
-      signal,
+    await waitForGate(
+      started.promise,
+      settled.promise,
+      "Explicit followup settled without execution",
     );
     expect(consumed).toHaveLength(1);
     const run = consumed[0]!.followupRun;
@@ -268,7 +261,7 @@ it("refuses cross-requester steering by default and admits only an explicit fres
       resolveRequesterPrincipalKey({ operatorProfileId: bob.id }),
     );
     release.resolve();
-    await withinTest(settled.promise, signal);
+    await wait(settled.promise);
     await fixture.finishDispatch();
     expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
     fixture.params.idempotencyKey = "strict-steer-bob-input";
@@ -293,7 +286,6 @@ it("refuses cross-requester steering by default and admits only an explicit fres
 it.for([false, true])(
   "preserves chat.send behind a direct announce (tool_authority_mismatch, cancel=%s)",
   async (cancel, { signal }) => {
-    const reason = "tool_authority_mismatch";
     const wait = <T>(pending: PromiseLike<T>) => withinTest(pending, signal);
     const waitForGate = (...args: Parameters<typeof awaitGateBeforeSettlement>) =>
       wait(awaitGateBeforeSettlement(...args));
@@ -310,7 +302,7 @@ it.for([false, true])(
       (await listSessionPendingInputs(scope)).items.map((input) => input.state);
     fixture.activeRun?.complete();
     sendParams.queueMode = "steer";
-    sendParams.idempotencyKey = `direct-followup-${reason}-${cancel}`;
+    sendParams.idempotencyKey = `direct-followup-tool_authority_mismatch-${cancel}`;
     runtime.execute.mockReset();
 
     const config = steeringConfig(fixture);
@@ -370,23 +362,18 @@ it.for([false, true])(
     const releaseCleanup = createDeferred();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const dispatchActual = await loadRealChatDispatch();
-    dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
+    dispatchInboundMessageMock.mockImplementation((raw: unknown) => {
       const params = raw as DispatchParams;
       recorder = params.replyOptions?.userTurnTranscriptRecorder;
       observeAdmission(params, queued, settled);
-      try {
-        return await dispatchActual({ ...params, cfg: config });
-      } finally {
+      return dispatchActual({ ...params, cfg: config }).finally(() => {
         dispatchReturned = true;
         dispatched.resolve();
-      }
+      });
     });
-    runtime.execute.mockImplementation(async ({ followupRun, opts }) => {
-      const runId = expectDefined(opts?.runId, "followup run ID");
-      opts?.onAgentRunStart?.(runId);
-      const input = expectDefined(followupRun.userTurnTranscriptRecorder, "input recorder");
-      await input.persistApproved();
-      consumed.push(followupRun.prompt);
+    runtime.execute.mockImplementation(async (params) => {
+      const runId = await recordInput(params);
+      consumed.push(params.followupRun.prompt);
       return successfulChatTurn(runId, "Followup answered.");
     });
     let command: Promise<void> | undefined;
@@ -431,10 +418,10 @@ it.for([false, true])(
                 ),
             );
             directReady.resolve();
-            await withinTest(releaseDirect.promise, signal);
+            await wait(releaseDirect.promise);
             runs.detachActiveEmbeddedRun(scope.sessionId, handle);
             cleanupReady.resolve();
-            await withinTest(releaseCleanup.promise, signal);
+            await wait(releaseCleanup.promise);
             await sessions.patchSessionEntryCore(scope, () => ({
               restartRecoveryRuns: undefined,
               status: "done",
@@ -443,7 +430,7 @@ it.for([false, true])(
         }),
       );
       void command.catch(() => {});
-      await withinTest(directReady.promise, signal);
+      await wait(directReady.promise);
       const directOwner = expectDefined(
         getSessionControllerOperation(scope.sessionKey),
         "direct command controller owner",
@@ -452,15 +439,14 @@ it.for([false, true])(
         abortedLastRun: false,
         restartRecoveryRuns: [{ runId: instance.runId, lifecycleGeneration }],
       });
-      const ack = await fixture.send();
-      expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+      expect((await fixture.send()).mock.calls[0]?.[1]).toMatchObject({ status: "started" });
       await waitForGate(
         queued.promise,
         dispatched.promise,
         "Dispatch returned without queue custody",
       );
       expect(isRpcSourceQueued(rpcSourceTesting.get(sendParams.idempotencyKey))).toBe(true);
-      await withinTest(dispatched.promise, signal);
+      await wait(dispatched.promise);
       expect(getSessionControllerOperation(scope.sessionKey)).toBe(directOwner);
       expect(consumed).toEqual([]);
       expect(injected).not.toHaveBeenCalled();
@@ -491,7 +477,7 @@ it.for([false, true])(
         expect(await pendingStates()).toEqual(["cancelled"]);
       }
       releaseDirect.resolve();
-      await withinTest(cleanupReady.promise, signal);
+      await wait(cleanupReady.promise);
       expect(getSessionControllerOperation(scope.sessionKey)).toBe(directOwner);
       expect(await pendingStates()).toEqual([cancel ? "cancelled" : "queued"]);
       expect(consumed).toEqual([]);
@@ -568,20 +554,15 @@ it("preserves direct pre-adoption rejection guidance instead of publishing queue
       };
     });
   runtime.execute.mockReset();
-  dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
+  dispatchInboundMessageMock.mockImplementation((raw: unknown) => {
     const params = raw as Parameters<typeof dispatchInboundMessage>[0];
     inputSignal = params.replyOptions?.turnAdoptionLifecycle?.abortSignal;
-    try {
-      return await dispatchActual({ ...params, cfg: config });
-    } finally {
-      dispatched.resolve();
-    }
+    return dispatchActual({ ...params, cfg: config }).finally(() => dispatched.resolve());
   });
   const guidance =
     "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.";
   try {
-    const ack = await fixture.send();
-    expect(ack.mock.calls[0]?.[1]).toMatchObject({ runId, status: "started" });
+    expect((await fixture.send()).mock.calls[0]?.[1]).toMatchObject({ runId, status: "started" });
     await withinTest(dispatched.promise, signal);
     await fixture.finishDispatch();
     expect(inputSignal?.aborted).toBe(false);
