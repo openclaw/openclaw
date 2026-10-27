@@ -429,10 +429,8 @@ export function prepareProjectedSessionPresentation(
       }
       excludedChildKeys = excluded;
     }
-    const sourceSwarm =
-      options.rowMode === "sidebar" || options.rowMode === "dashboard"
-        ? undefined
-        : record.materialized.row.swarm;
+    const fullRow = options.rowMode !== "sidebar" && options.rowMode !== "dashboard";
+    const sourceSwarm = fullRow ? record.materialized.row.swarm : undefined;
     let excludedSwarmKeys: Set<string> | undefined;
     for (const group of sourceSwarm?.groups ?? []) {
       for (const { sessionKey } of group.children ?? []) {
@@ -527,10 +525,7 @@ export function prepareProjectedSessionPresentation(
     const views = published?.views;
     const value = published?.target ?? toProjectedSessionSharingTarget(record);
     const recipientView = client === undefined ? undefined : viewer(value, options.rowMode);
-    const includeActivitySummary =
-      options.includeActivitySummary !== false &&
-      options.rowMode !== "sidebar" &&
-      options.rowMode !== "dashboard";
+    const includeActivitySummary = options.includeActivitySummary !== false && fullRow;
     const canEnsure =
       includeActivitySummary && client !== undefined && preparedFacts?.activitySummary
         ? !authorizeIncognitoSessionTarget({
