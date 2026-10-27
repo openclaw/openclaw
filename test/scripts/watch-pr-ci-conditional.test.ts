@@ -57,7 +57,7 @@ describe.skipIf(process.platform === "win32")("conditional CI-run polling", () =
         const calls: string[][] = readFileSync(callsPath, "utf8")
           .trim()
           .split("\n")
-          .map(JSON.parse);
+          .map((line) => JSON.parse(line));
         expect(calls.filter((call) => call.includes('If-None-Match: W/"run-a"'))).toHaveLength(
           outcome === "head-moved" ? 1 : 2,
         );
