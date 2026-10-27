@@ -130,6 +130,7 @@ for (let index = 0; index < histories.length; index++) {
   const projected = projections[index]![0]!;
   const original = histories[index]![0]!;
   assert.notEqual(projected, original);
+  assert(projected.role === "toolResult" && original.role === "toolResult");
   assert.notEqual(projected.content, original.content);
 }
 writeFileSync(
