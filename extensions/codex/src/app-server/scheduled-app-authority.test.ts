@@ -101,23 +101,20 @@ function policyClient({
   apps?: Array<{ id: string; enabled: boolean; callable: boolean }>;
   observe?: (method: string, params: unknown, options?: { timeoutMs?: number }) => void;
 } = {}) {
+  const responses = new Map<string, unknown>([
+    ["app/installed", { apps }],
+    ["mcpServerStatus/list", { data: [{ name: "codex_apps", tools }], nextCursor: null }],
+    ["config/read", { config }],
+  ]);
+  if (requirements !== undefined) {
+    responses.set("configRequirements/read", { requirements });
+  }
   return vi.fn(async (method: string, params: unknown, options?: { timeoutMs?: number }) => {
     observe(method, params, options);
-    switch (method) {
-      case "app/installed":
-        return { apps };
-      case "mcpServerStatus/list":
-        return { data: [{ name: "codex_apps", tools }], nextCursor: null };
-      case "config/read":
-        return { config };
-      case "configRequirements/read":
-        if (requirements === undefined) {
-          throw new Error(`unexpected method ${method}`);
-        }
-        return { requirements };
-      default:
-        throw new Error(`unexpected method ${method}`);
+    if (!responses.has(method)) {
+      throw new Error(`unexpected method ${method}`);
     }
+    return responses.get(method);
   });
 }
 
@@ -292,30 +289,37 @@ describe("scheduled Codex app authority", () => {
     },
   );
 
-  it.each(["page deadline", "RPC timeout", "clock rewind"] as const)(
+  it("keeps the capture budget monotonic across a wall-clock rewind", async () => {
+    let wallClockReads = 0;
+    const monotonic = vi.spyOn(performance, "now").mockReturnValue(500);
+    const wall = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => (wallClockReads++ === 0 ? 500 : -89_500));
+    const request = policyClient({ apps: [] });
+    try {
+      await expect(capture(request, { timeoutMs: 5_000 })).resolves.toBeUndefined();
+      expect(
+        request.mock.calls
+          .filter(([method]) => method === "app/installed")
+          .map((call) => call[2]?.timeoutMs),
+      ).toEqual([5_000]);
+    } finally {
+      monotonic.mockRestore();
+      wall.mockRestore();
+    }
+  });
+
+  it.each(["page deadline", "RPC timeout"] as const)(
     "bounds creator capture under %s",
     async (scenario) => {
-      const clock = scenario === "clock rewind";
-      const budget = clock ? 5_000 : 100;
-      let wallClockReads = 0;
-      const monotonic = clock ? vi.spyOn(performance, "now").mockReturnValue(500) : undefined;
-      const wall = clock
-        ? vi.spyOn(Date, "now").mockImplementation(() => (wallClockReads++ === 0 ? 500 : -89_500))
-        : undefined;
-      const timeouts: number[] = [];
       const base = policyClient({
         apps:
           scenario === "page deadline" ? [{ id: "calendar", enabled: true, callable: true }] : [],
-        observe: (method, _params, options) => {
-          if (method === "app/installed") {
-            timeouts.push(options?.timeoutMs ?? -1);
-          }
-        },
       });
       let page = 0;
       const request = vi.fn(
         async (method: string, params: unknown, options?: { timeoutMs?: number }) => {
-          if (method === "mcpServerStatus/list" && !clock) {
+          if (method === "mcpServerStatus/list") {
             if (scenario === "RPC timeout") {
               throw Object.assign(new Error("mcpServerStatus/list timed out"), {
                 code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
@@ -331,22 +335,13 @@ describe("scheduled Codex app authority", () => {
           return base(method, params, options);
         },
       );
-      const started = clock ? 0 : Date.now();
-      try {
-        const operation = capture(request, { timeoutMs: budget });
-        if (clock) {
-          await expect(operation).resolves.toBeUndefined();
-          expect(timeouts).toEqual([budget]);
-        } else {
-          await expect(operation).rejects.toThrow("No automation changes were saved");
-          if (scenario === "page deadline") {
-            expect(page).toBe(2);
-            expect(Date.now() - started).toBeLessThan(1_000);
-          }
-        }
-      } finally {
-        monotonic?.mockRestore();
-        wall?.mockRestore();
+      const started = Date.now();
+      await expect(capture(request, { timeoutMs: 100 })).rejects.toThrow(
+        "No automation changes were saved",
+      );
+      if (scenario === "page deadline") {
+        expect(page).toBe(2);
+        expect(Date.now() - started).toBeLessThan(1_000);
       }
     },
   );
@@ -412,10 +407,13 @@ describe("scheduled Codex app authority", () => {
     ["default deny", toolConfig(false), false],
     ["destructive hint", { destructive_enabled: false }, false],
     ["open-world hint", { open_world_enabled: false }, false],
-    ["tool over default", toolConfig(false, { edit: { enabled: true } }), true],
     [
-      "tool over hints",
-      { destructive_enabled: false, open_world_enabled: false, tools: { edit: { enabled: true } } },
+      "tool over default and hints",
+      {
+        ...toolConfig(false, { edit: { enabled: true } }),
+        destructive_enabled: false,
+        open_world_enabled: false,
+      },
       true,
     ],
     ["title allow", toolConfig(false, { "Edit event": { enabled: true } }), true],

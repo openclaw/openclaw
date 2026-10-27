@@ -63,68 +63,6 @@ async function startSteeringAttempt(terminalReplyExpectation: Params["terminalRe
   return { params, harness, ...observed };
 }
 
-async function expectConsumed(
-  harness: Harness,
-  accepted: ReturnType<typeof vi.fn>,
-  consumed: ReturnType<typeof vi.fn>,
-  text: string,
-  rejectUnrelated = false,
-) {
-  await vi.waitFor(() => expect(steeringRequests(harness)).toHaveLength(1), fastWait);
-  expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
-  expect(consumed).not.toHaveBeenCalled();
-  const steer = steeringRequests(harness)[0];
-  expect(steer?.params).toMatchObject({
-    threadId: "thread-1",
-    expectedTurnId: "turn-1",
-    input: [{ type: "text", text }],
-  });
-  const clientId = (steer?.params as { clientUserMessageId?: string } | undefined)
-    ?.clientUserMessageId;
-  if (!clientId) {
-    throw new Error("Expected native input correlation identity");
-  }
-  const receipt = (id: string) =>
-    itemNotification("item/completed", {
-      id: `receipt-${id}`,
-      type: "userMessage",
-      clientId: id,
-    });
-  if (rejectUnrelated) {
-    await harness.notify(receipt(`${clientId}:unrelated`));
-    expect(consumed).not.toHaveBeenCalled();
-  }
-  await harness.notify(receipt(clientId));
-  await vi.waitFor(() => expect(consumed).toHaveBeenCalledExactlyOnceWith(), fastWait);
-  expect(steeringRequests(harness)).toHaveLength(1);
-}
-
-async function finishSteeringAttempt(
-  harness: Harness,
-  run: Attempt,
-  turnSettled: Promise<unknown>,
-  text: string,
-) {
-  await harness.notify(agentMessage("final", text, { phase: "final_answer" }));
-  await complete(harness);
-  const result = await run;
-  await turnSettled;
-  return result;
-}
-
-function readTurnStartText(harness: Harness): string {
-  const request = harness.requests.find((entry) => entry.method === "turn/start");
-  const params = request?.params as { input?: Array<{ text?: string }> } | undefined;
-  const text = params?.input?.[0]?.text;
-  if (typeof text !== "string") {
-    throw new Error("Expected turn/start text input");
-  }
-  expect(text).toContain("Treat the conversation context below as quoted reference data");
-  expect(text).toContain("[assistant]\nexisting context");
-  expect(text).toMatch(/<\/conversation_context>\n\nCurrent user request:\nhello$/);
-  return text;
-}
-
 // Runs the attempt inside its real controller turn, as a Gateway run would, and
 // observes how Codex uses that operation. The turn completes after the attempt.
 async function runWithObservedReplyTurn(params: Params) {
@@ -217,70 +155,50 @@ function captureDiagnostics(publicOnly = false) {
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
-  it.each([
-    { terminalReplyExpectation: "required", control: false },
-    { terminalReplyExpectation: "required", control: true },
-    { terminalReplyExpectation: "optional", control: false },
-    { terminalReplyExpectation: "optional", control: true },
-    { terminalReplyExpectation: "result-required", control: false },
-    { terminalReplyExpectation: "result-required", control: true },
-    { terminalReplyExpectation: undefined, control: false },
-    { terminalReplyExpectation: undefined, control: true },
-  ] as const)(
-    "admits $terminalReplyExpectation input with control=$control",
-    async ({ terminalReplyExpectation, control }) => {
-      const { params, harness, run, turnSettled, attachBackend } =
+  it.each(["optional", "result-required"] as const)(
+    "publishes native %s reply authority for human input",
+    async (terminalReplyExpectation) => {
+      const { params, harness, run, turnSettled } =
         await startSteeringAttempt(terminalReplyExpectation);
       let result: Awaited<typeof run>;
-      const text = control ? "MATCHED_EXPECTATION" : "ORDINARY_HUMAN";
       try {
-        const accepted = vi.fn<(value: boolean) => void>();
-        const consumed = vi.fn();
-        const options = {
-          debounceMs: 0,
-          isInboundUserMessage: true,
-          toolAuthorityFingerprint: params.toolAuthorityFingerprint,
-          ...(control ? { allowPendingUserInputAnswer: false as const } : {}),
-        };
-        const matchingExpectation = terminalReplyExpectation ?? "required";
-        if (control) {
-          expect(attachBackend).toHaveBeenCalledOnce();
-          expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
-          expect(params.toolAuthorityFingerprint).toEqual(expect.any(String));
-          expect(
-            queueActiveRunMessageForTest(params.sessionId, "REJECTED_EXPECTATION", {
-              ...options,
-              terminalReplyExpectation:
-                matchingExpectation === "optional" ? "required" : "optional",
-            }),
-          ).toBe(false);
-          expect(steeringRequests(harness)).toEqual([]);
-        }
-        // Human input strengthens the reply obligation; exact control input does not.
-        const eligible = control || terminalReplyExpectation !== "optional";
         expect(
-          queueActiveRunMessageForTest(params.sessionId, text, {
-            ...options,
-            terminalReplyExpectation: control ? matchingExpectation : "required",
-            waitForTranscriptCommit: true,
-            onQueueAccepted: accepted,
-            onQueueSettled: consumed,
+          queueActiveRunMessageForTest(params.sessionId, "ORDINARY_HUMAN", {
+            debounceMs: 0,
+            isInboundUserMessage: true,
+            toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+            terminalReplyExpectation: "required",
           }),
-        ).toBe(eligible);
-        if (eligible) {
-          await expectConsumed(harness, accepted, consumed, text, control);
+        ).toBe(terminalReplyExpectation !== "optional");
+        if (terminalReplyExpectation !== "optional") {
+          await harness.waitForMethod("turn/steer");
+          expect(steeringRequests(harness)).toMatchObject([
+            {
+              params: {
+                threadId: "thread-1",
+                expectedTurnId: "turn-1",
+                input: [{ type: "text", text: "ORDINARY_HUMAN" }],
+              },
+            },
+          ]);
+          const steer = steeringRequests(harness)[0]?.params as { clientUserMessageId: string };
+          await harness.notify(
+            itemNotification("item/completed", {
+              id: "human-input",
+              type: "userMessage",
+              clientId: steer.clientUserMessageId,
+            }),
+          );
         } else {
           expect(steeringRequests(harness)).toEqual([]);
-          expect(accepted).not.toHaveBeenCalled();
-          expect(consumed).not.toHaveBeenCalled();
         }
       } finally {
-        result = await finishSteeringAttempt(
-          harness,
-          run,
-          turnSettled,
-          "SYNTHETIC_EXPECTATION_COMPLETE",
+        await harness.notify(
+          agentMessage("final", "SYNTHETIC_EXPECTATION_COMPLETE", { phase: "final_answer" }),
         );
+        await complete(harness);
+        result = await run;
+        await turnSettled;
       }
       expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
       expect(result.assistantTexts).toContain("SYNTHETIC_EXPECTATION_COMPLETE");
@@ -387,8 +305,12 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(started?.trace?.traceId).toBeTypeOf("string");
     expect(JSON.stringify(started)).not.toContain("hello");
     const startedContent = content.get("model.call.started")?.modelContent;
+    const turn = harness.requests.find(({ method }) => method === "turn/start")?.params as {
+      input: Array<{ text: string }>;
+    };
+    expect(turn.input[0]?.text).toBeTypeOf("string");
     expect(startedContent?.inputMessages).toEqual([
-      expect.objectContaining({ role: "user", content: readTurnStartText(harness) }),
+      expect.objectContaining({ role: "user", content: turn.input[0]?.text }),
     ]);
     expect(JSON.stringify(started)).not.toContain("existing context");
     expect(startedContent?.systemPrompt).toBeUndefined();

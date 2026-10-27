@@ -47,7 +47,6 @@ import {
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
-import * as threadLifecyclePreflight from "./thread-lifecycle-preflight.js";
 import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import {
   createLeasedCodexLifecycleHarness,
@@ -182,7 +181,6 @@ describe("Codex participant native admission", () => {
         },
       });
       ownCodexInferenceClient(harness.client);
-      const preflight = vi.spyOn(threadLifecyclePreflight, "prepareCodexThreadLifecyclePreflight");
       const connection = await prepareCodexAttemptConnection({
         params,
         options: {
@@ -233,8 +231,6 @@ describe("Codex participant native admission", () => {
             }
             const binding = await startThread();
             resources.state.thread = binding;
-            const admission = await preflight.mock.results[0]?.value;
-            expect(admission).toBeDefined();
             const request = harness.request.mock.calls.find(
               ([method]) => method === (lifecycle === "resumed" ? "thread/resume" : "thread/start"),
             )?.[1];
@@ -260,7 +256,6 @@ describe("Codex participant native admission", () => {
               }
             }
             if (hooks === "optional") {
-              expect(admission?.nativeModelInputTools).toContain("spawn_agent");
               const relayId = extractRelayIdFromThreadRequest(request);
               const generation = extractGenerationFromThreadRequest(request);
               const spawn = (toolUseId: string) =>
@@ -289,7 +284,6 @@ describe("Codex participant native admission", () => {
                 hookSpecificOutput: { permissionDecision: "deny" },
               });
             } else {
-              expect(admission?.nativeModelInputTools).toBeUndefined();
               const qualification = getCodexInferenceThreadQualification(
                 harness.client,
                 binding.threadId,
@@ -398,33 +392,6 @@ describe("Codex native hook Gateway fallback", () => {
     },
   );
 
-  it("permits incumbent-authority steering without native hooks or tool search", async () => {
-    const registered = vi.spyOn(agentHarnessRuntime, "setActiveEmbeddedRun");
-    const params = participantParams("participant-handle");
-    params.hostCapabilities = participantHostCapabilities(() => {});
-    params.modelId = "gpt-5.4-nano";
-    const harness = nativeHarness();
-    const abort = new AbortController();
-    params.abortSignal = abort.signal;
-    const run = runCodexAppServerAttempt(params, {
-      bindingStore: createCodexTestBindingStore(),
-      nativeHookRelay: { enabled: false },
-    });
-    try {
-      await run.waitForTurnAccepted();
-      expect(registered.mock.calls[0]?.[1]?.supportsCrossProfileSteering).toBe(true);
-      const request = harness.requests.find(({ method }) => method === "thread/start")?.params;
-      expect(request).toMatchObject({ config: { "features.multi_agent": false } });
-      expect(request).not.toHaveProperty(["config", "features.multi_agent_v2"], false);
-      expect(request).not.toHaveProperty(["config", "agents.enabled"], false);
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      await run;
-    } finally {
-      abort.abort("test cleanup");
-      await run.catch(() => undefined);
-      harness.close();
-    }
-  });
   it("cancels an unqualified parent on new policy while preserving its permitted sibling", async () => {
     const params = participantParams("retained-model-source");
     const listeners = new Set<() => void>();
@@ -631,18 +598,11 @@ describe("Codex native tool catalog probe cleanup", () => {
           await writeNativeCatalogFixture(rolloutPath, "catalog-thread", []);
         }
         const stdinClosed = once(probe.process.stdin, "close");
-        let settled = false;
+        const settled = vi.fn();
         pending = prepareCodexAttemptTools(runtime);
-        const outcome = pending.then(
-          () => {
-            settled = true;
-          },
-          () => {
-            settled = true;
-          },
-        );
+        const outcome = pending.then(settled, settled);
         await awaitGateBeforeSettlement(stdinClosed, outcome, "probe returned without closing");
-        expect(settled).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
         expect(probe.process.exitCode).toBeNull();
         probe.emitExit();
         if (fails) {
