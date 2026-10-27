@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { managedGitHubIdentityEnvironment } from "../github-tool-identity-env.js";
 import type { CreateSandboxBackendParams, SandboxBackendHandle } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import type { SandboxContainerEngineTarget } from "./container-engine.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -50,7 +51,7 @@ const readOnlyResourceMounts = [
   { hostPath: "/host/attachments", containerPath: "/openclaw/attachments" },
 ];
 const completed = { status: "completed", exitCode: 0, timedOut: false } as const;
-const localTarget = { key: "local", globalArgs: [] };
+const localTarget: SandboxContainerEngineTarget = { key: "local", globalArgs: [] };
 
 function createConfig(backend?: "docker" | "podman", browserEnabled = true): OpenClawConfig {
   const sandbox = {
