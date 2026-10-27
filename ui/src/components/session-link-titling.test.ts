@@ -10,11 +10,11 @@ import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
+import { registerSessionTitleTarget } from "./markdown-link-display.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
-import { SessionLinkTitler } from "./session-link-titling.ts";
 import "./session-progress-hovercard-registration.ts";
+import { SessionLinkTitler } from "./session-link-titling.ts";
 import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
-import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
 
 const SESSION_KEY = "agent:main:research";
 const DASHBOARD_KEY = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";

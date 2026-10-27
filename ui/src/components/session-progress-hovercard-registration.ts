@@ -3,9 +3,9 @@ import {
   LazyHovercardBootstrap,
   type HovercardBootstrapTrigger,
 } from "./lazy-hovercard-registration.ts";
+import { installSessionTitleRegistrar } from "./markdown-link-display.ts";
 import { sessionProgressHoverTargetFromEvent } from "./session-progress-hovercard-target.ts";
 import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
-import { installSessionTitleRegistrar } from "./session-title-target-registration.ts";
 
 const HOVERCARD_TAG = "openclaw-session-progress-hovercard-provider";
 

@@ -17,7 +17,7 @@ suite.define(() => {
         );
         const loginRequests = () => requested.filter((path) => loginModuleRequest.test(path));
         const imageModule = controlUiE2eBuiltModuleRequest(
-          "ui/src/pages/chat/components/chat-message-images-view.tsx",
+          "ui/src/pages/chat/components/chat-message-images-solid.tsx",
         );
         const mediaModules = ["chat-message-attachments-solid.tsx", "widget-card-view.tsx"].map(
           (file) => controlUiE2eBuiltModuleRequest(`ui/src/pages/chat/components/${file}`),

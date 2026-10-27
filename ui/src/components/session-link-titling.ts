@@ -18,15 +18,11 @@ import {
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
 import { findLocalSessionReference } from "../pages/chat/route-loader-short-cache.ts";
+import { stampSessionTitleLabel, type SessionTitleDisplay } from "./markdown-link-display.ts";
 import {
   markdownSessionPublicOrigin,
   parseLocalMarkdownSessionUrl,
 } from "./markdown-session-links.ts";
-import {
-  sessionTitleAnchor,
-  stampSessionTitleLabel,
-  type SessionTitleDisplay,
-} from "./session-title-label.ts";
 
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
@@ -54,23 +50,17 @@ type SessionReference = {
   params: SessionsResolveParams;
 };
 
-type CacheEntry = {
+type CacheEntry<T = SessionTitle> = {
   expiresAt: number;
-  promise: Promise<SessionTitle>;
-  value?: SessionTitle;
-};
-
-type ReferenceEntry = {
-  expiresAt: number;
-  promise: Promise<SessionTitleTarget | null>;
-  value?: SessionTitleTarget | null;
+  promise: Promise<T>;
+  value?: T;
 };
 
 export class SessionLinkTitler {
   private currentClient: GatewayBrowserClient | null = null;
   private currentContext: ApplicationContext | null = null;
   private readonly cache = new Map<string, CacheEntry>();
-  private readonly references = new Map<string, ReferenceEntry>();
+  private readonly references = new Map<string, CacheEntry<SessionTitleTarget | null>>();
   private scope = {};
   private presentationScope: number | undefined;
   private readonly registered = new Map<HTMLElement, RegisteredTitle>();
@@ -115,6 +105,18 @@ export class SessionLinkTitler {
       this.retireTitles();
     }
     return this.scope;
+  }
+
+  private canRead(method: string, client = this.client, scope?: object): boolean {
+    return (
+      client === this.client &&
+      (scope === undefined || this.currentScope() === scope) &&
+      canCallGatewayMethod(
+        this.context && { ...this.context.gateway.snapshot, client },
+        method,
+        "operator.read",
+      )
+    );
   }
 
   register(element: HTMLElement, label: HTMLElement, display?: SessionTitleDisplay): () => void {
@@ -167,7 +169,7 @@ export class SessionLinkTitler {
     }
     const scope = this.currentScope();
     let target = this.targetForAnchor(element, targets);
-    const anchor = sessionTitleAnchor(element);
+    const anchor = stampSessionTitleLabel(element, entry.label);
     if (element !== anchor) {
       this.registered.delete(element);
       entry.element = anchor;
@@ -182,13 +184,7 @@ export class SessionLinkTitler {
       this.titledAnchors.delete(anchor);
     }
     if (target && !("sessionKey" in target)) {
-      if (
-        !canCallGatewayMethod(
-          this.context && { ...this.context.gateway.snapshot, client: this.client },
-          "sessions.resolve",
-          "operator.read",
-        )
-      ) {
+      if (!this.canRead("sessions.resolve")) {
         return;
       }
       try {
@@ -210,7 +206,7 @@ export class SessionLinkTitler {
       return;
     }
     try {
-      const title = await this.loadTitle(target);
+      const title = await (cached?.promise ?? this.loadTitle(target));
       if (this.currentScope() === scope && this.registered.get(anchor) === entry) {
         this.stampAnchor(entry, target, title);
       }
@@ -326,50 +322,55 @@ export class SessionLinkTitler {
       return cached.promise;
     }
     const client = this.client;
-    const entry: ReferenceEntry = {
-      expiresAt: now + SUCCESS_CACHE_MS,
-      promise: Promise.resolve().then(async () => {
-        if (
-          !client ||
-          client !== this.client ||
-          this.currentScope() !== scope ||
-          !canCallGatewayMethod(
-            this.context && { ...this.context.gateway.snapshot, client },
-            "sessions.resolve",
-            "operator.read",
-          )
-        ) {
-          throw new Error("Session link resolution requires a connected Gateway");
-        }
-        const result = await client.request<SessionsResolveResult>(
-          "sessions.resolve",
-          reference.params,
-        );
-        if (!result.ok) {
-          // Missing and ambiguous references stay plain links.
-          return null;
-        }
-        const target = {
-          sessionKey: result.key,
-          agentId: result.agentId,
-          namespace: reference.namespace,
-        };
-        const title = readNonBlankString(result.displayName);
-        if (title && this.scope === scope && !this.cache.has(target.sessionKey)) {
-          const value = { ...target, title };
-          this.setCacheEntry(target.sessionKey, {
-            expiresAt: Date.now() + SUCCESS_CACHE_MS,
-            promise: Promise.resolve(value),
-            value,
-          });
-        }
-        return target;
-      }),
+    return this.load(this.references, reference.cacheKey, async () => {
+      if (!client || !this.canRead("sessions.resolve", client, scope)) {
+        throw new Error("Session link resolution requires a connected Gateway");
+      }
+      const result = await client.request<SessionsResolveResult>(
+        "sessions.resolve",
+        reference.params,
+      );
+      if (!result.ok) {
+        // Missing and ambiguous references stay plain links.
+        return null;
+      }
+      const target = {
+        sessionKey: result.key,
+        agentId: result.agentId,
+        namespace: reference.namespace,
+      };
+      const title = readNonBlankString(result.displayName);
+      if (title && this.scope === scope && !this.cache.has(target.sessionKey)) {
+        const value = { ...target, title };
+        this.remember(this.cache, target.sessionKey, {
+          expiresAt: Date.now() + SUCCESS_CACHE_MS,
+          promise: Promise.resolve(value),
+          value,
+        });
+      }
+      return target;
+    });
+  }
+
+  private remember<T>(cache: Map<string, CacheEntry<T>>, key: string, entry: CacheEntry<T>): void {
+    cache.delete(key);
+    cache.set(key, entry);
+    pruneMapToMaxSize(cache, CACHE_LIMIT);
+  }
+
+  private load<T>(
+    cache: Map<string, CacheEntry<T>>,
+    key: string,
+    request: () => Promise<T>,
+  ): Promise<T> {
+    const entry: CacheEntry<T> = {
+      expiresAt: Date.now() + SUCCESS_CACHE_MS,
+      promise: Promise.resolve().then(request),
     };
     entry.promise = entry.promise.then(
       (value) => {
         entry.value = value;
-        if (!value) {
+        if (value === null) {
           entry.expiresAt = Date.now() + FAILURE_CACHE_MS;
         }
         return value;
@@ -379,16 +380,8 @@ export class SessionLinkTitler {
         throw error;
       },
     );
-    this.references.delete(reference.cacheKey);
-    this.references.set(reference.cacheKey, entry);
-    pruneMapToMaxSize(this.references, CACHE_LIMIT);
+    this.remember(cache, key, entry);
     return entry.promise;
-  }
-
-  private setCacheEntry(key: string, entry: CacheEntry): void {
-    this.cache.delete(key);
-    this.cache.set(key, entry);
-    pruneMapToMaxSize(this.cache, CACHE_LIMIT);
   }
 
   private cachedOrSeededEntry(target: SessionTitleTarget): CacheEntry | undefined {
@@ -399,7 +392,7 @@ export class SessionLinkTitler {
     );
     if (!row) {
       if (cached && cached.expiresAt > now) {
-        this.setCacheEntry(target.sessionKey, cached);
+        this.remember(this.cache, target.sessionKey, cached);
         return cached;
       }
       this.cache.delete(target.sessionKey);
@@ -418,41 +411,22 @@ export class SessionLinkTitler {
       cached.value.agentId === value.agentId &&
       cached.value.title === value.title
     ) {
-      this.setCacheEntry(target.sessionKey, cached);
+      this.remember(this.cache, target.sessionKey, cached);
       return cached;
     }
     const entry = { expiresAt: now + SUCCESS_CACHE_MS, promise: Promise.resolve(value), value };
-    this.setCacheEntry(target.sessionKey, entry);
+    this.remember(this.cache, target.sessionKey, entry);
     return entry;
   }
 
   private loadTitle(target: SessionTitleTarget): Promise<SessionTitle | undefined> {
-    const cached = this.cachedOrSeededEntry(target);
-    if (cached) {
-      return cached.promise;
-    }
     const client = this.client;
-    if (
-      !client ||
-      !canCallGatewayMethod(
-        this.context && { ...this.context.gateway.snapshot, client },
-        "controlUi.sessionPreview",
-        "operator.read",
-      )
-    ) {
+    if (!client || !this.canRead("controlUi.sessionPreview", client)) {
       return Promise.resolve(undefined);
     }
     const scope = this.currentScope();
-    const load = async () => {
-      if (
-        client !== this.client ||
-        this.currentScope() !== scope ||
-        !canCallGatewayMethod(
-          this.context && { ...this.context.gateway.snapshot, client },
-          "controlUi.sessionPreview",
-          "operator.read",
-        )
-      ) {
+    return this.load(this.cache, target.sessionKey, async () => {
+      if (!this.canRead("controlUi.sessionPreview", client, scope)) {
         throw new Error("Session title requires a connected Gateway");
       }
       const value = await client.request<ControlUiSessionPreview>("controlUi.sessionPreview", {
@@ -467,23 +441,7 @@ export class SessionLinkTitler {
         namespace: target.namespace,
         title: readNonBlankString(value.title) ?? readNonBlankString(value.derivedTitle),
       };
-    };
-    const entry: CacheEntry = {
-      expiresAt: Date.now() + SUCCESS_CACHE_MS,
-      promise: Promise.resolve().then(load),
-    };
-    entry.promise = entry.promise.then(
-      (value) => {
-        entry.value = value;
-        return value;
-      },
-      (error: unknown) => {
-        entry.expiresAt = Date.now() + FAILURE_CACHE_MS;
-        throw error;
-      },
-    );
-    this.setCacheEntry(target.sessionKey, entry);
-    return entry.promise;
+    });
   }
 
   private stampAnchor(

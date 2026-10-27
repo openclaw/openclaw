@@ -218,7 +218,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/components/chat-image-rendition.ts":
     case "ui/src/pages/chat/components/chat-message-image-open.ts":
     case "ui/src/pages/chat/components/chat-message-images-solid.tsx":
-    case "ui/src/pages/chat/components/chat-message-images-view.tsx":
     case "ui/src/pages/chat/components/chat-image-actions.tsx":
     case "ui/src/pages/chat/components/chat-message-local-media.ts":
     case "ui/src/pages/chat/components/chat-message-attachment-availability.ts":

@@ -2,7 +2,7 @@ import { createSignal, flush } from "solid-js";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.tsx";
-import { MessageImages } from "../pages/chat/components/chat-message-images-view.tsx";
+import { MessageImages } from "../pages/chat/components/chat-message-images-solid.tsx";
 import {
   MessageMarkdown,
   type MessageMarkdownProps,

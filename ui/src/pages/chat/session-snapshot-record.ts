@@ -1,9 +1,16 @@
+import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import { detailsSnapshotSchema } from "./session-details-snapshot-schema.ts";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
+import { removePairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import {
   MAX_CHAT_THUMBNAILS,
   MAX_CHAT_THUMBNAIL_BYTES,
-  MAX_CHAT_THUMBNAIL_SIZE,
+  avatarSourcesSchema,
+  boundChatThumbnails,
+  chatThumbnailWeight,
+  projectChatRowDisplay,
+  rowDisplaySchema,
 } from "../../lib/chat/row-display-facts.ts";
 import {
   isChatTranscriptMetadata,
@@ -15,9 +22,13 @@ import {
   chatHeaderSharingSnapshotSchema,
   chatHeaderViewersSnapshotSchema,
 } from "./chat-header-viewers-snapshot.ts";
+import { projectChatMessageReactions } from "./chat-message-reactions-snapshot.ts";
 import { chatSessionStateSnapshotSchema } from "./chat-session-state-snapshot.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
-import { chatThumbnailWeight } from "./session-message-display-facts.ts";
+import {
+  loadChatHistoryStateValidator,
+  prewarmedHistoryStateValidator,
+} from "./session-snapshot-prewarm.ts";
 
 const nonnegative = json.refine(json.number, (value) => value >= 0);
 const sessionKeySchema = json.refine(json.text, (value) => value.length > 0);
@@ -45,78 +56,14 @@ const paginationSchema = {
   },
 };
 const permissionModeSchema = json.enumeration(["read-only", "guarded", "workspace", "full"]);
-const shortText = json.refine(json.text, (value) => value.length <= 256);
-const displayKey = json.refine(json.text, (value) => value.length <= 4096);
-const boundedDisplayRecord = <T>(reader: json.SnapshotReader<T>) =>
-  json.refine(
-    json.record(reader),
-    (value) =>
-      Object.keys(value).length <= 8 &&
-      Object.keys(value).every((key) => displayKey.parse(key) === key),
-  );
-const thumbnailSchema = json.checked(
-  (value): value is Blob =>
-    value instanceof Blob &&
-    value.size > 0 &&
-    value.size <= MAX_CHAT_THUMBNAIL_SIZE &&
-    /^(?:image\/png|image\/jpeg|image\/webp|image\/avif)$/u.test(value.type),
-);
-const imageDimension = json.refine(
-  json.number,
-  (value) => Number.isInteger(value) && value > 0 && value <= 100_000,
-);
 const snapshotSchema = json.object(
   {
     sessionState: json.optional(chatSessionStateSnapshotSchema),
     details: detailsSnapshotSchema,
     headerViewers: json.optional(chatHeaderViewersSnapshotSchema),
     headerSharing: json.optional(json.nullable(chatHeaderSharingSnapshotSchema)),
-    rowDisplay: json.optional(
-      json.refine(
-        json.record(
-          json.object({
-            links: json.optional(
-              boundedDisplayRecord(
-                json.object({
-                  title: json.optional(shortText),
-                  badge: json.optional(
-                    json.object({
-                      label: shortText,
-                      tone: json.enumeration([
-                        "neutral",
-                        "positive",
-                        "negative",
-                        "attention",
-                        "accent",
-                      ]),
-                    }),
-                  ),
-                }),
-              ),
-            ),
-            images: json.optional(
-              boundedDisplayRecord(
-                json.object({
-                  width: imageDimension,
-                  height: imageDimension,
-                  rendition: json.checked(
-                    (value): value is 480 | 960 => value === 480 || value === 960,
-                  ),
-                  thumbnail: json.optional(thumbnailSchema),
-                }),
-              ),
-            ),
-          }),
-        ),
-        (rows) => Object.keys(rows).length <= 80,
-      ),
-    ),
-    avatarSources: json.optional(
-      json.refine(
-        json.record(json.nullable(json.refine(json.text, (value) => value.length <= 2048))),
-        (value) => Object.keys(value).length <= 24,
-      ),
-    ),
+    rowDisplay: json.optional(rowDisplaySchema),
+    avatarSources: json.optional(avatarSourcesSchema),
     composer: json.optional(
       json.nullable(
         json.object({
@@ -194,21 +141,146 @@ export const recordSchema = json.refine(
 export type SessionSnapshotRecord = Omit<json.SnapshotValue<typeof recordSchema>, "snapshot"> & {
   snapshot: ChatSessionSnapshot;
 };
-const metadataFields = {
-  savedAt: nonnegative,
-  sessionKey: sessionKeySchema,
-};
-export const metadataSchema = json.object(
+const metadataSchema = json.object(
   {
-    ...metadataFields,
+    savedAt: nonnegative,
+    sessionKey: sessionKeySchema,
     weight: nonnegative,
     thumbnailCount: json.defaulted(nonnegative, () => 0),
     thumbnailBytes: json.defaulted(nonnegative, () => 0),
   },
   true,
 );
+export const metadataRecordsSchema = json.array(metadataSchema);
 export type SessionSnapshotMetadata = json.SnapshotValue<typeof metadataSchema>;
 export type PreparedSnapshotRecord = {
   record: SessionSnapshotRecord;
   metadata: SessionSnapshotMetadata;
 };
+
+export async function parseSnapshotRecord(
+  value: unknown,
+  sessionKey?: string,
+): Promise<SessionSnapshotRecord | null> {
+  const parsed = json.parseSnapshot(recordSchema, value);
+  if (!parsed || (sessionKey && parsed.sessionKey !== sessionKey)) {
+    return null;
+  }
+  const historyState = parsed.snapshot.historyState;
+  if (historyState !== undefined) {
+    // A repeated dynamic import can yield past dispatch even after prewarm evaluated it.
+    const isChatHistoryState =
+      prewarmedHistoryStateValidator ?? (await loadChatHistoryStateValidator());
+    if (!isChatHistoryState(historyState)) {
+      return null;
+    }
+  }
+  return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
+}
+
+export const CHAT_SNAPSHOT_PROJECTION_VERSION = 10;
+const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
+
+export async function createSnapshotRecord(
+  sessionKey: string,
+  pending: { savedAt: number; snapshot: ChatSessionSnapshot },
+): Promise<PreparedSnapshotRecord | null> {
+  let snapshot: ChatSessionSnapshot;
+  let weight: number;
+  try {
+    let projected = { ...pending.snapshot };
+    const messages = projected.messages;
+    let start = Math.max(0, messages.length - CHAT_SNAPSHOT_MESSAGE_LIMIT);
+    // A history entry can project multiple rows; retain its whole sequence group.
+    while (start > 0) {
+      const seq = readSessionMessageSequence(messages[start]);
+      if (seq === null || seq !== readSessionMessageSequence(messages[start - 1])) {
+        break;
+      }
+      start--;
+    }
+    if (start > 0) {
+      // Display rows are not Gateway page boundaries. Refill from zero on the
+      // first upward scroll; the history owner deduplicates the overlap and
+      // returns the next authoritative offset, including merged CLI histories.
+      projected.messages = messages.slice(start);
+      projected.pagination = {
+        hasMore: true,
+        nextOffset: 0,
+        ...(projected.pagination.totalMessages !== undefined
+          ? { totalMessages: projected.pagination.totalMessages }
+          : {}),
+      };
+    }
+    let historyChanged = false;
+    if (projected.messages.some((message) => readLiveTerminalRunId(message))) {
+      const { reconcileTerminalCanvasMessages } = await import("./chat-thread-canvas.ts");
+      const projectedMessages = reconcileTerminalCanvasMessages(projected.messages);
+      if (projectedMessages !== projected.messages) {
+        projected = { ...projected, messages: projectedMessages };
+        historyChanged = true;
+      }
+    }
+    if (projected.messageReactions) {
+      projected.messageReactions = projectChatMessageReactions(
+        projected.messages,
+        new Map(Object.entries(projected.messageReactions)),
+      );
+    }
+    projected.rowDisplay = projectChatRowDisplay(projected);
+    projected = boundChatThumbnails(projected);
+    // Pairing credentials stay in the live projection, never the browser's disk cache.
+    const serialized = JSON.stringify(projected, (_key, value: unknown) => {
+      if (value instanceof Blob) {
+        return undefined;
+      }
+      if (value === projected.messages) {
+        return projected.messages.map((message) => {
+          const record = asOptionalRecord(message);
+          if (!record || !Object.hasOwn(record, "openclawResponsesInputReplay")) {
+            return message;
+          }
+          const { openclawResponsesInputReplay: _replay, ...display } = record;
+          return display;
+        });
+      }
+      const sanitized = removePairingQrContent(value);
+      historyChanged ||= sanitized !== value;
+      return sanitized;
+    });
+    snapshot = JSON.parse(serialized);
+    // Structured clone stores bounded thumbnails alongside the JSON projection.
+    // No image decode or object URL creation runs on the snapshot-read path.
+    for (const [id, row] of Object.entries(projected.rowDisplay ?? {})) {
+      for (const [key, image] of Object.entries(row.images ?? {})) {
+        if (image.thumbnail && snapshot.rowDisplay?.[id]?.images?.[key]) {
+          snapshot.rowDisplay[id]!.images![key]!.thumbnail = image.thumbnail;
+        }
+      }
+    }
+    // A receipt cannot certify history changed by the disk display or privacy projection.
+    if (historyChanged) {
+      delete snapshot.historyState;
+    }
+    weight = serialized.length;
+  } catch {
+    return null;
+  }
+  const envelope = {
+    projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
+    savedAt: pending.savedAt,
+    sessionId: pending.snapshot.sessionId,
+    sessionKey,
+  };
+  const thumbnails = chatThumbnailWeight(snapshot);
+  return {
+    record: { ...envelope, snapshot },
+    metadata: {
+      savedAt: pending.savedAt,
+      sessionKey,
+      weight: weight + JSON.stringify(envelope).length,
+      thumbnailCount: thumbnails.count,
+      thumbnailBytes: thumbnails.bytes,
+    },
+  };
+}

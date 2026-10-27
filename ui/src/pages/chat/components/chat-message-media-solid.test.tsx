@@ -10,7 +10,7 @@ import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { stubManualIntersectionObserver } from "./chat-media-observer.test-support.ts";
 import { loadAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
-import { MessageImages } from "./chat-message-images-view.tsx";
+import { MessageImages } from "./chat-message-images-solid.tsx";
 import { stubObjectUrls } from "./chat-message-media.test-helpers.ts";
 import type { AttachmentItem, ImageBlock, ImageRenderOptions } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";

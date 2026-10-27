@@ -11,7 +11,7 @@ import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { MessageGroup } from "./chat-message-group-view.tsx";
 import { readImageOriginalBlob } from "./chat-message-image-open.ts";
-import { MessageImages, type MessageImagesProps } from "./chat-message-images-view.tsx";
+import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import {
   imageResponse,
   managedSource,

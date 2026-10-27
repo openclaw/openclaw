@@ -12,11 +12,15 @@ import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatDetailsSnapshot, DetailsSnapshotPatch } from "./chat-details-snapshot.ts";
 import {
   chatDisplaySourceKey,
+  chatRowDisplaySchema,
+  boundChatThumbnails,
+  projectChatRowDisplay,
   MAX_CHAT_THUMBNAILS,
   MAX_CHAT_THUMBNAIL_BYTES,
   type ChatDisplayFacts,
   type ChatRowDisplayFacts,
 } from "../../lib/chat/row-display-facts.ts";
+import { parseSnapshot } from "../../lib/snapshot-json.ts";
 import type {
   ChatHeaderSharingSnapshot,
   ChatHeaderViewersSnapshot,
@@ -27,7 +31,6 @@ import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript
 import { createTranscriptMemo } from "./components/chat-transcript-memo.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
-import { boundChatThumbnails, projectChatRowDisplay } from "./session-message-display-facts.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
@@ -184,28 +187,8 @@ export function createChatDisplayFacts(
             return;
           }
           const previous = snapshot.rowDisplay?.[messageId];
-          const row = { ...previous, ...update };
-          if (
-            Object.keys(row.links ?? {}).length > 8 ||
-            Object.keys(row.images ?? {}).length > 8 ||
-            JSON.stringify(row).length > 8192 ||
-            Object.entries(row.links ?? {}).some(
-              ([linkKey, value]) =>
-                linkKey.length > 4096 ||
-                (value.title?.length ?? 0) > 256 ||
-                (value.badge?.label.length ?? 0) > 256,
-            ) ||
-            Object.entries(row.images ?? {}).some(
-              ([imageKey, value]) =>
-                imageKey.length > 4096 ||
-                !Number.isSafeInteger(value.width) ||
-                !Number.isSafeInteger(value.height) ||
-                value.width <= 0 ||
-                value.width > 100_000 ||
-                value.height <= 0 ||
-                value.height > 100_000,
-            )
-          ) {
+          const row = parseSnapshot(chatRowDisplaySchema, { ...previous, ...update });
+          if (!row || JSON.stringify(row).length > 8192) {
             return;
           }
           cacheChatSessionSnapshot(cache, host, target, {
@@ -667,26 +650,25 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
     const envelope = { ...snapshot, messages: [], rowDisplay, pagination };
     let weight: number | null;
     try {
-      const envelopeWeight = JSON.stringify(envelope)?.length ?? 0;
       weight =
-        envelopeWeight + retainedMessageWeight + Math.max(0, messageWeights.length - start - 1);
+        (JSON.stringify(envelope)?.length ?? 0) +
+        retainedMessageWeight +
+        Math.max(0, messageWeights.length - start - 1);
     } catch {
       weight = null;
     }
     if (weight !== null && weight <= MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
-      if (start === 0) {
-        return {
-          snapshot: rowDisplay === snapshot.rowDisplay ? snapshot : { ...snapshot, rowDisplay },
-          weight,
-        };
-      }
       return {
-        snapshot: {
-          ...snapshot,
-          messages: snapshot.messages.slice(start),
-          rowDisplay,
-          pagination: { ...pagination },
-        },
+        snapshot:
+          start === 0 && rowDisplay === snapshot.rowDisplay
+            ? snapshot
+            : {
+                ...snapshot,
+                rowDisplay,
+                ...(start > 0
+                  ? { messages: snapshot.messages.slice(start), pagination: { ...pagination } }
+                  : {}),
+              },
         weight,
       };
     }

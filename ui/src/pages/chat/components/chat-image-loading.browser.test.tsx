@@ -6,7 +6,7 @@ import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
-import { MessageImages, type MessageImagesProps } from "./chat-message-images-view.tsx";
+import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import {
   projectMessageMedia,
   releaseChatMediaResourceOwner,
