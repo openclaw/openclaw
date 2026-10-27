@@ -459,12 +459,16 @@ if (
     const inspector = new Session();
     let expectedDigest: string | undefined;
     let workerPosts = 0;
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- The probe forwards the original Worker receiver and restores the method afterward.
-    const postMessage = Worker.prototype.postMessage;
-    Worker.prototype.postMessage = function (this: Worker, ...messageArgs) {
-      workerPosts++;
-      return postMessage.apply(this, messageArgs);
-    };
+    // Swap and restore the exact descriptor; Reflect.apply preserves the Worker receiver.
+    const postMessageDescriptor = Object.getOwnPropertyDescriptor(Worker.prototype, "postMessage");
+    assert(postMessageDescriptor, "Worker.prototype.postMessage descriptor");
+    Object.defineProperty(Worker.prototype, "postMessage", {
+      ...postMessageDescriptor,
+      value(this: Worker, ...messageArgs: Parameters<Worker["postMessage"]>) {
+        workerPosts++;
+        return Reflect.apply(postMessageDescriptor.value, this, messageArgs);
+      },
+    });
     setRuntimeConfigSnapshot({
       gateway: { controlUi: { github: { token: "synthetic-service-preview" } } },
     });
@@ -542,7 +546,7 @@ if (
         }
       }
     } finally {
-      Worker.prototype.postMessage = postMessage;
+      Object.defineProperty(Worker.prototype, "postMessage", postMessageDescriptor);
       inspector.disconnect();
       clearRuntimeConfigSnapshot();
     }
