@@ -70,7 +70,7 @@ it("keeps Babel diagnostic filtering local to repeated source transforms", async
     expect(() =>
       loader.options.transform!({
         source: "",
-        get babel() {
+        get babel(): never {
           throw new Error("unreadable transform options");
         },
       }),
