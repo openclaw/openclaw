@@ -10,6 +10,7 @@ function streamFixture() {
   const admitted: XPostEnvelope[] = [];
   const statuses: XEventStatus[] = [];
   const warning = vi.fn();
+  const connected = Promise.withResolvers<void>();
   let stream!: ReadableStreamDefaultController<Uint8Array>;
   const api = createXApiClient({
     bearerToken: "bearer",
@@ -39,10 +40,17 @@ function streamFixture() {
     onPost: async (envelope) => {
       admitted.push(envelope);
     },
-    onStatus: (value) => statuses.push(value),
+    onStatus: (value) => {
+      statuses.push(value);
+      if (value.streamConnected) {
+        connected.resolve();
+      }
+    },
     onWarning: warning,
   });
+  void run.catch(connected.reject);
   return {
+    connected: connected.promise,
     admitted,
     statuses,
     warning,
@@ -68,7 +76,7 @@ describe("X event transport", () => {
     });
     const ignored = JSON.stringify({ data: { event_type: "post.create", payload: post("19") } });
     try {
-      await vi.advanceTimersByTimeAsync(0);
+      await test.connected;
       for (let index = 0; index < 4; index++) {
         test.send(ignored);
       }
@@ -255,197 +263,139 @@ describe("X event transport", () => {
     }
   });
 
-  it("receives documented mentions after subscription creation and backfills after an idle reconnect", async () => {
-    vi.useFakeTimers();
-    const abort = new AbortController();
-    const firstConnected = Promise.withResolvers<void>();
-    const reconnected = Promise.withResolvers<void>();
-    const firstAdmitted = Promise.withResolvers<void>();
-    const secondAdmitted = Promise.withResolvers<void>();
-    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
-    const admitted: string[] = [];
-    const envelopes: XPostEnvelope[] = [];
-    const lookups: string[] = [];
-    const backfills: (string | null)[] = [];
-    const statuses: XEventStatus[] = [];
-    let cursor: XCursorState = { sinceId: "10" };
-    const encoder = new TextEncoder();
-    const api = createXApiClient({
-      bearerToken: "bearer",
-      fetch: async (input, init) => {
-        const url = new URL(input);
-        if (url.pathname.endsWith("/oauth2/token")) {
-          return Response.json({ access_token: "access" });
-        }
-        if (url.pathname.endsWith("/subscriptions")) {
-          if (init?.method === "POST") {
-            expect(new Headers(init.headers).get("authorization")).toBe("Bearer access");
-            return Response.json({ data: [{ subscription_id: "1" }] });
+  it.each([
+    { label: "absent entities", entities: undefined, sinceId: "10" },
+    {
+      label: "URL-only entities",
+      entities: { urls: [{ url: "https://example.com" }] },
+      sinceId: undefined,
+    },
+  ])(
+    "hydrates $label mentions and backfills after an idle reconnect",
+    async ({ entities, sinceId }) => {
+      vi.useFakeTimers();
+      const abort = new AbortController();
+      const firstConnected = Promise.withResolvers<void>();
+      const reconnected = Promise.withResolvers<void>();
+      const firstAdmitted = Promise.withResolvers<void>();
+      const secondAdmitted = Promise.withResolvers<void>();
+      const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+      const admitted: string[] = [];
+      const envelopes: XPostEnvelope[] = [];
+      const lookups: string[] = [];
+      const backfills: (string | null)[] = [];
+      const statuses: XEventStatus[] = [];
+      let cursor: XCursorState = { sinceId };
+      const encoder = new TextEncoder();
+      const api = createXApiClient({
+        bearerToken: "bearer",
+        fetch: async (input, init) => {
+          const url = new URL(input);
+          if (url.pathname.endsWith("/oauth2/token")) {
+            return Response.json({ access_token: "access" });
           }
-          return Response.json({ data: [] });
-        }
-        if (url.pathname.endsWith("/stream")) {
-          return new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                streams.push(controller);
-              },
-            }),
-          );
-        }
-        if (url.pathname === "/2/tweets") {
-          const id = url.searchParams.get("ids")!;
-          lookups.push(id);
-          return Response.json({
-            data: [
-              {
-                ...post(id),
-                entities: {
-                  mentions: [
-                    id === "50" ? { id: "99", username: "bot" } : { id: "9", username: "BOT" },
-                  ],
+          if (url.pathname.endsWith("/subscriptions")) {
+            if (init?.method === "POST") {
+              expect(new Headers(init.headers).get("authorization")).toBe("Bearer access");
+              return Response.json({ data: [{ subscription_id: "1" }] });
+            }
+            return Response.json({ data: [] });
+          }
+          if (url.pathname.endsWith("/stream")) {
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  streams.push(controller);
                 },
-              },
-            ],
-            includes: { users: [{ id: "7", username: "maintainer", name: "Maintainer" }] },
-          });
-        }
-        backfills.push(url.searchParams.get("since_id"));
-        return Response.json({ data: backfills.length === 2 ? [post("21")] : [] });
-      },
-    });
-    const run = runXEvents({
-      api,
-      userId: "9",
-      signal: abort.signal,
-      bearerConfigured: true,
-      getCursor: async () => cursor,
-      setCursor: async (id) => {
-        cursor = id;
-      },
-      onStatus: (value) => {
-        statuses.push(value);
-        if (value.streamConnected) {
-          (streams.length === 1 ? firstConnected : reconnected).resolve();
-        }
-      },
-      onPost: async (envelope) => {
-        envelopes.push(envelope);
-        admitted.push(envelope.post.id);
-        (envelope.post.id === "20" ? firstAdmitted : secondAdmitted).resolve();
-      },
-    });
-    try {
-      await firstConnected.promise;
-      streams[0]!.enqueue(
-        encoder.encode(
-          `${JSON.stringify({ data: { event_type: "post.create", payload: post("49") } })}\n`,
-        ),
-      );
-      streams[0]!.enqueue(
-        encoder.encode(
-          `${JSON.stringify({ data: { event_type: "post.mention.create", payload: { ...post("50"), entities: undefined } } })}\n`,
-        ),
-      );
-      const event = JSON.stringify({
-        data: {
-          event_type: "post.mention.create",
-          payload: { ...post("20"), entities: undefined },
+              }),
+            );
+          }
+          if (url.pathname === "/2/tweets") {
+            const id = url.searchParams.get("ids")!;
+            lookups.push(id);
+            return Response.json({
+              data: [
+                {
+                  ...post(id),
+                  entities: {
+                    mentions: [
+                      id === "50" ? { id: "99", username: "bot" } : { id: "9", username: "BOT" },
+                    ],
+                  },
+                },
+              ],
+              includes: { users: [{ id: "7", username: "maintainer", name: "Maintainer" }] },
+            });
+          }
+          backfills.push(url.searchParams.get("since_id"));
+          return Response.json({ data: backfills.length === 2 ? [post("21")] : [] });
         },
       });
-      streams[0]!.enqueue(encoder.encode(`\n${event.slice(0, 15)}`));
-      streams[0]!.enqueue(encoder.encode(`${event.slice(15)}\n\n`));
-      await firstAdmitted.promise;
-      await vi.advanceTimersByTimeAsync(0);
-      expect(admitted).toEqual(["20"]);
-      expect(cursor.sinceId).toBe("10");
-      expect(lookups).toEqual(["50", "20"]);
-      expect(envelopes[0]?.users).toEqual([
-        { id: "7", username: "maintainer", name: "Maintainer" },
-      ]);
-      await vi.advanceTimersByTimeAsync(20_000);
-      streams[0]!.enqueue(encoder.encode("\n"));
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(streams).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(6_000);
-      await reconnected.promise;
-      await secondAdmitted.promise;
-      expect(admitted).toEqual(["20", "21"]);
-      expect(backfills).toEqual(["10", "10"]);
-      expect(statuses).toContainEqual(expect.objectContaining({ streamBackoffMs: 1000 }));
-    } finally {
-      abort.abort();
-      await run;
-    }
-  });
-
-  it.each([
-    { label: "absent entities", entities: undefined },
-    { label: "URL-only entities", entities: { urls: [{ url: "https://example.com" }] } },
-  ])("hydrates recipient evidence for stream posts with $label", async ({ entities }) => {
-    vi.useFakeTimers();
-    const abort = new AbortController();
-    const consumed = Promise.withResolvers<void>();
-    const admitted: XPostEnvelope[] = [];
-    const lookups: string[] = [];
-    let cursor: XCursorState = {};
-    const api = createXApiClient({
-      refreshToken: "seed",
-      bearerToken: "bearer",
-      fetch: async (input) => {
-        const url = new URL(input);
-        if (url.pathname.endsWith("/oauth2/token")) {
-          return Response.json({ access_token: "access" });
-        }
-        if (url.pathname.endsWith("/subscriptions")) {
-          return Response.json({
-            data: [{ event_type: "post.mention.create", filter: { user_id: "9" } }],
-          });
-        }
-        if (url.pathname.endsWith("/stream")) {
-          return new Response(
-            `${JSON.stringify({ data: { event_type: "post.mention.create", payload: { ...post("20"), entities } } })}\n`,
-          );
-        }
-        if (url.pathname === "/2/tweets") {
-          lookups.push(url.searchParams.get("ids")!);
-          return Response.json({
-            data: [post("20")],
-            includes: { users: [{ id: "7", username: "maintainer" }] },
-          });
-        }
-        return Response.json({ data: [] });
-      },
-    });
-    const run = runXEvents({
-      api,
-      userId: "9",
-      signal: abort.signal,
-      bearerConfigured: true,
-      getCursor: async () => cursor,
-      setCursor: async (id) => {
-        cursor = id;
-      },
-      onPost: async (envelope) => {
-        admitted.push(envelope);
-      },
-      onStatus: (value) => {
-        if (value.message === "activity stream reconnect backoff") {
-          consumed.resolve();
-        }
-      },
-    });
-    try {
-      await consumed.promise;
-      expect(admitted.map((envelope) => envelope.post.id)).toEqual(["20"]);
-      expect(cursor.sinceId).toBeUndefined();
-      expect(lookups).toEqual(["20"]);
-      expect(admitted[0]?.users).toEqual([{ id: "7", username: "maintainer" }]);
-    } finally {
-      abort.abort();
-      await run;
-    }
-  });
+      const run = runXEvents({
+        api,
+        userId: "9",
+        signal: abort.signal,
+        bearerConfigured: true,
+        getCursor: async () => cursor,
+        setCursor: async (id) => {
+          cursor = id;
+        },
+        onStatus: (value) => {
+          statuses.push(value);
+          if (value.streamConnected) {
+            (streams.length === 1 ? firstConnected : reconnected).resolve();
+          }
+        },
+        onPost: async (envelope) => {
+          envelopes.push(envelope);
+          admitted.push(envelope.post.id);
+          (envelope.post.id === "20" ? firstAdmitted : secondAdmitted).resolve();
+        },
+      });
+      try {
+        await firstConnected.promise;
+        streams[0]!.enqueue(
+          encoder.encode(
+            `${JSON.stringify({ data: { event_type: "post.create", payload: post("49") } })}\n`,
+          ),
+        );
+        streams[0]!.enqueue(
+          encoder.encode(
+            `${JSON.stringify({ data: { event_type: "post.mention.create", payload: { ...post("50"), entities: undefined } } })}\n`,
+          ),
+        );
+        const event = JSON.stringify({
+          data: {
+            event_type: "post.mention.create",
+            payload: { ...post("20"), entities },
+          },
+        });
+        streams[0]!.enqueue(encoder.encode(`\n${event.slice(0, 15)}`));
+        streams[0]!.enqueue(encoder.encode(`${event.slice(15)}\n\n`));
+        await firstAdmitted.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(admitted).toEqual(["20"]);
+        expect(cursor.sinceId).toBe(sinceId);
+        expect(lookups).toEqual(["50", "20"]);
+        expect(envelopes[0]?.users).toEqual([
+          { id: "7", username: "maintainer", name: "Maintainer" },
+        ]);
+        await vi.advanceTimersByTimeAsync(20_000);
+        streams[0]!.enqueue(encoder.encode("\n"));
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(streams).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(6_000);
+        await reconnected.promise;
+        await secondAdmitted.promise;
+        expect(admitted).toEqual(["20", "21"]);
+        expect(backfills).toEqual([sinceId ?? null, sinceId ?? null]);
+        expect(statuses).toContainEqual(expect.objectContaining({ streamBackoffMs: 1000 }));
+      } finally {
+        abort.abort();
+        await run;
+      }
+    },
+  );
 
   it.each([
     { endpoint: "subscriptions", failure: 403, mode: "stream", shouldPoll: true },
@@ -457,6 +407,7 @@ describe("X event transport", () => {
     { endpoint: "subscriptions", failure: "network", mode: "auto", shouldPoll: true },
     { endpoint: "subscriptions", failure: 401, mode: "stream", shouldPoll: false },
     { endpoint: "subscriptions", failure: "network", mode: "stream", shouldPoll: false },
+    { endpoint: "subscriptions", failure: "abort", mode: "stream", shouldPoll: false },
   ] as const)(
     "handles Activity $endpoint $failure in $mode mode",
     async ({ endpoint, failure, mode, shouldPoll }) => {
@@ -473,6 +424,10 @@ describe("X event transport", () => {
             input.endsWith(`/${endpoint}`) ||
             (endpoint === "create" && input.endsWith("/subscriptions") && init?.method === "POST")
           ) {
+            if (failure === "abort") {
+              abort.abort();
+              throw abort.signal.reason;
+            }
             if (failure === "network") {
               throw new Error("Synthetic Activity transport failure");
             }
@@ -515,6 +470,11 @@ describe("X event transport", () => {
         onPost: async () => {},
         onStatus: (value) => statuses.push(value),
       });
+      if (failure === "abort") {
+        await expect(run).resolves.toBeUndefined();
+        expect(statuses).toEqual([]);
+        return;
+      }
       if (!shouldPoll) {
         await expect(run).rejects.toThrow(
           failure === "network" ? "X API network request failed" : "HTTP 401",
