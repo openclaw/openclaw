@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/knowledge",
-  "version": "2026.10.10-beta.5",
+  "version": "2026.10.7",
   "private": true,
   "description": "OpenClaw evidence-backed knowledge vault and memory provider",
   "type": "module",
@@ -17,7 +17,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.10.10-beta.5"
+    "openclaw": ">=2026.10.7"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -30,7 +30,7 @@
     ],
     "controlUi": "./src/control-ui.ts",
     "compat": {
-      "pluginApi": ">=2026.10.10-beta.5"
+      "pluginApi": ">=2026.10.7"
     },
     "build": {
       "bundledDist": true,
