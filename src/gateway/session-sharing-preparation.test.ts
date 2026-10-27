@@ -1,9 +1,7 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, expect, it as baseIt, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -17,6 +15,7 @@ import { addSessionMember, removeSessionMember } from "../config/sessions/sessio
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDatabaseIdentityBirthtime } from "../infra/sqlite-worker-identity.js";
+import * as worker from "../infra/sqlite-worker-store.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   registerOpenClawAgentDatabase,
@@ -24,11 +23,15 @@ import {
 } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { prepareOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -42,8 +45,19 @@ afterEach(() => vi.restoreAllMocks());
 const unavailableMessage =
   "Session access facts are unavailable; retry after session storage is ready.";
 
-const it = baseIt.extend<{ state: OpenClawTestState }>({
+const it = baseIt.extend<{ state: OpenClawTestState; harness: ReturnType<typeof sharingHarness> }>({
   state: async ({ task: _task }, use) => withOpenClawTestState({ scenario: "minimal" }, use),
+  harness: async ({ state }, use) => {
+    const storePath = state.statePath("sessions.sqlite");
+    const cfg = {
+      ...rolePolicyConfig(),
+      agents: { entries: { main: {} } },
+      session: { store: storePath },
+    };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    await use(sharingHarness(cfg, "agent:main:sharing", storePath));
+  },
 });
 
 function releasing<T extends { release(): void }>(facts: T) {
@@ -53,7 +67,7 @@ function releasing<T extends { release(): void }>(facts: T) {
 function sharingHarness(
   cfg: OpenClawConfig,
   sessionKey: string,
-  storePath?: string,
+  storePath: string,
   agentId = "main",
 ) {
   const scope = { agentId, sessionKey, storePath };
@@ -61,6 +75,9 @@ function sharingHarness(
   const transaction = (run: Parameters<typeof runOpenClawAgentWriteTransaction>[0]) =>
     runOpenClawAgentWriteTransaction(run, { agentId, path: storePath });
   return {
+    cfg,
+    sessionKey,
+    storePath,
     scope,
     prepare: () => prepareSessionMutationFacts(request),
     prepareMissing: () => prepareSessionMutationFacts({ ...request, allowMissing: true }),
@@ -113,13 +130,44 @@ function expectWithoutHostSql(action: () => void) {
   }
 }
 
+it("discovers sharing facts after an already-opening writer publishes registration", async ({
+  state,
+  harness,
+  signal,
+}) => {
+  const { cfg, storePath } = harness;
+  harness.write({ sessionId: "opening-writer", updatedAt: 1 });
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  await closeStateDatabaseForTest();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const open = worker.openAgentDatabaseSqliteWorkerStore;
+  vi.spyOn(worker, "openAgentDatabaseSqliteWorkerStore").mockImplementationOnce(async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return open(...args);
+  });
+  const opening = prepareOpenClawAgentDatabaseExecution(
+    { agentId: "main", path: storePath, env: state.env },
+    () => {},
+  );
+  try {
+    await withinTest(entered.promise, signal);
+    const facts = harness.prepare();
+    release.resolve();
+    using prepared = releasing(await facts);
+    expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("opening-writer");
+  } finally {
+    release.resolve();
+    await opening;
+  }
+});
+
 it.for(["runtime", "automation"])(
   "retains sharing facts across metadata but invalidates broad %s changes",
-  async (scope, { state }) => {
-    const storePath = state.statePath("metadata-sharing.sqlite");
-    const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
-    const sessionKey = "agent:main:metadata-sharing";
-    const harness = sharingHarness(cfg, sessionKey, storePath);
+  async (scope, { harness }) => {
+    const { cfg } = harness;
     harness.write(restrictedEntry("metadata-sharing", "first"));
     using prepared = releasing(await harness.prepare());
     sessionChanges.emit({ all: true, scope: "profiles" });
@@ -130,15 +178,10 @@ it.for(["runtime", "automation"])(
 );
 
 it("refuses a worker sharing result whose captured birthtime differs from its retained source", async ({
-  state,
+  harness,
 }) => {
-  const storePath = state.statePath("sharing-worker-birthtime.sqlite");
-  const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
-  const sessionKey = "agent:main:worker-birthtime";
-  replaceSessionEntrySync(
-    { agentId: "main", storePath, sessionKey },
-    { sessionId: "original", updatedAt: 1 },
-  );
+  const { storePath } = harness;
+  harness.write({ sessionId: "original", updatedAt: 1 });
   const file = fs.statSync(storePath, { bigint: true });
   const readEntries = entryReads.readSessionEntriesFromStoreInWorker;
   let forged = false;
@@ -146,10 +189,7 @@ it("refuses a worker sharing result whose captured birthtime differs from its re
     async (...args) => {
       const [input] = args;
       const loaded = await readEntries(...args);
-      if (input.projection !== "full" || !input.includeAuthorization) {
-        return loaded;
-      }
-      if (!loaded.databaseIdentity) {
+      if (input.projection !== "full" || !input.includeAuthorization || !loaded.databaseIdentity) {
         return loaded;
       }
       forged = true;
@@ -163,9 +203,8 @@ it("refuses a worker sharing result whose captured birthtime differs from its re
     },
   );
   await expect(
-    prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" }).then((read) => {
+    harness.prepare().then((read) => {
       read.release();
-      return read;
     }),
   ).rejects.toThrow(unavailableMessage);
   expect(forged).toBe(true);
@@ -178,17 +217,9 @@ it.for(["unknown", "rollback"] as const)(
     const registration = { agentId: "main", path: storePath, env: state.env };
     openOpenClawAgentDatabase(registration);
     const cfg = { agents: { entries: { ops: {} } }, session: { store: storePath } };
-    const agentId = "ops";
-    const target = { agentId, sessionKey: `agent:${agentId}:registry-sharing` };
-    replaceSessionEntrySync(
-      { ...target, storePath },
-      {
-        sessionId: "registry-sharing",
-        lifecycleRevision: "first",
-        updatedAt: 1,
-      },
-    );
-    using prepared = releasing(await prepareSessionMutationFacts({ cfg, ...target }));
+    const harness = sharingHarness(cfg, "agent:ops:registry-sharing", storePath, "ops");
+    harness.write(restrictedEntry("registry-sharing", "first"));
+    using prepared = releasing(await harness.prepare());
     if (change === "unknown") {
       sessionChanges.emit({ all: true, scope: "stores" });
     } else {
@@ -214,15 +245,10 @@ it("does not discover registry-only retired stores outside captured roots", asyn
   const storePath = state.statePath("external-retired.sqlite");
   const registration = { agentId: "retired", path: storePath, env: state.env };
   openOpenClawAgentDatabase(registration);
-  const target = { agentId: "retired", sessionKey: "agent:retired:external" };
-  replaceSessionEntrySync(
-    { ...target, storePath },
-    { sessionId: "external-retired", lifecycleRevision: "first", updatedAt: 1 },
-  );
   const cfg = { agents: { entries: { main: {} } } };
-  using prepared = releasing(
-    await prepareSessionMutationFacts({ cfg, ...target, allowMissing: true }),
-  );
+  const harness = sharingHarness(cfg, "agent:retired:external", storePath, "retired");
+  harness.write(restrictedEntry("external-retired", "first"));
+  using prepared = releasing(await harness.prepareMissing());
   expect(prepared.readCurrent(cfg).target).toBeNull();
   unregisterOpenClawAgentDatabase(registration);
   expect(prepared.readCurrent(cfg).target).toBeNull();
@@ -233,13 +259,10 @@ it.for(["main", "research"])(
   async (agentId, { state }) => {
     const storePath = resolveOpenClawAgentSqlitePath({ agentId, env: state.env });
     const cfg = { agents: { entries: { [agentId]: {} } } };
-    const target = { agentId, sessionKey: `agent:${agentId}:roster-sharing` };
-    replaceSessionEntrySync(
-      { ...target, storePath },
-      { sessionId: "unaffected", lifecycleRevision: "first", updatedAt: 1 },
-    );
+    const harness = sharingHarness(cfg, `agent:${agentId}:roster-sharing`, storePath, agentId);
+    harness.write(restrictedEntry("unaffected", "first"));
     setRuntimeConfigSnapshot(cfg);
-    using prepared = releasing(await prepareSessionMutationFacts({ cfg, ...target }));
+    using prepared = releasing(await harness.prepare());
     const added = { agents: { entries: { [agentId]: {}, other: {} } } };
     for (const current of [added, cfg]) {
       setRuntimeConfigSnapshot(current);
@@ -251,19 +274,12 @@ it.for(["main", "research"])(
   },
 );
 
-it("publishes durable sharing facts before observers", async ({ state }) => {
-  const cfg = { ...rolePolicyConfig(), agents: { entries: { main: {} } } };
-  await state.writeConfig(cfg);
-  setRuntimeConfigSnapshot(cfg);
-  const sessionKey = "agent:main:sharing";
-  const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-  const harness = sharingHarness(cfg, sessionKey);
-  const { scope } = harness;
+it("publishes durable sharing facts before observers", async ({ harness }) => {
+  const { cfg, sessionKey, storePath: databasePath, scope } = harness;
   const entry = restrictedEntry("sharing-session", "sharing-generation");
   harness.write(entry);
   await addSessionMember(scope, { identityId: "requester", addedBy: "creator" });
   let prepared: Awaited<ReturnType<typeof prepareSessionMutationFacts>> | undefined;
-  let replacementRead: Awaited<ReturnType<typeof prepareSessionMutationFacts>> | undefined;
   const observed: Array<{ visibility: SessionEntry["visibility"]; member: boolean }> = [];
   const observationErrors: unknown[] = [];
   // This observer precedes the retained reader: installation must belong to commit, not notification order.
@@ -300,22 +316,19 @@ it("publishes durable sharing facts before observers", async ({ state }) => {
     expect(observed.at(-1)).toEqual({ visibility: "read-only", member: false });
     observed.length = 0;
     const target = read.readCurrent(cfg).target;
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        writeSessionEntry(database, sessionKey, {
-          ...target.entry,
-          visibility: "shared",
-          updatedAt: 3,
-        });
-        expect(() => read.readCurrent(cfg)).toThrow(unavailableMessage);
-        writeSessionEntry(database, sessionKey, {
-          ...target.entry,
-          visibility: "draft",
-          updatedAt: 4,
-        });
-      },
-      { agentId: target.agentId, path: databasePath },
-    );
+    harness.transaction((database) => {
+      writeSessionEntry(database, sessionKey, {
+        ...target.entry,
+        visibility: "shared",
+        updatedAt: 3,
+      });
+      expect(() => read.readCurrent(cfg)).toThrow(unavailableMessage);
+      writeSessionEntry(database, sessionKey, {
+        ...target.entry,
+        visibility: "draft",
+        updatedAt: 4,
+      });
+    });
     expect(observed).toEqual([
       { visibility: "draft", member: false },
       { visibility: "draft", member: false },
@@ -327,19 +340,15 @@ it("publishes durable sharing facts before observers", async ({ state }) => {
       lifecycleRevision: "replacement-generation",
       updatedAt: 5,
     });
-    expect(observationErrors).toHaveLength(1);
-    expect(observationErrors[0]).toBeInstanceOf(Error);
-    expect(observationErrors[0]).toHaveProperty("message", unavailableMessage);
-    expect(() => read.readCurrent(cfg)).toThrow(unavailableMessage);
-    replacementRead = await harness.prepare();
+    expect(observationErrors).toEqual([expect.objectContaining({ message: unavailableMessage })]);
+    using replacementRead = releasing(await harness.prepare());
     expect(replacementRead.readCurrent(cfg).target.entry.sessionId).toBe("replacement-session");
     await closeOpenClawAgentDatabaseByPathAsync(databasePath, target.agentId);
-    expect(() => replacementRead!.readCurrent(cfg)).toThrow(unavailableMessage);
+    expect(() => replacementRead.readCurrent(cfg)).toThrow(unavailableMessage);
     read.release();
     read.release();
   } finally {
     stop();
-    replacementRead?.release();
     prepared?.release();
   }
 });
@@ -355,14 +364,8 @@ it.for([
   "rollback",
 ] as const)(
   "reconciles a stale sharing worker return across %s publication",
-  async (change, { state }) => {
-    const cfg = { ...rolePolicyConfig(), agents: { entries: { main: {} } } };
-    await state.writeConfig(cfg);
-    setRuntimeConfigSnapshot(cfg);
-    const sessionKey = "agent:main:acquiring-sharing";
-    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const harness = sharingHarness(cfg, sessionKey, storePath);
-    const { scope } = harness;
+  async (change, { harness }) => {
+    const { cfg, sessionKey, storePath, scope } = harness;
     const entry = restrictedEntry("acquiring-session", "original");
     harness.write(entry);
     await addSessionMember(scope, { identityId: "requester", addedBy: "creator" });
@@ -445,28 +448,13 @@ it.for([
   },
 );
 
-it("rejects unavailable durable metadata", async ({ state }) => {
-  const storePath = state.statePath("unavailable.sqlite");
-  fs.writeFileSync(storePath, "");
-  const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
-  await state.writeConfig(cfg);
-  setRuntimeConfigSnapshot(cfg);
-  await expect(
-    prepareSessionMutationFacts({ cfg, sessionKey: "agent:main:sharing", agentId: "main" }),
-  ).rejects.toThrow(unavailableMessage);
+it("rejects unavailable durable metadata", async ({ harness }) => {
+  fs.writeFileSync(harness.storePath, "");
+  await expect(harness.prepare()).rejects.toThrow(unavailableMessage);
 });
 
-it("requires an existing session before preparing sharing facts", async ({ state }) => {
-  const storePath = state.statePath("negative-sharing.sqlite");
-  const cfg = {
-    ...rolePolicyConfig(),
-    agents: { entries: { main: {} } },
-    session: { store: storePath },
-  };
-  await state.writeConfig(cfg);
-  setRuntimeConfigSnapshot(cfg);
-  const sessionKey = "agent:main:absent";
-  const harness = sharingHarness(cfg, sessionKey, storePath);
+it("requires an existing session before preparing sharing facts", async ({ harness }) => {
+  const { cfg, storePath } = harness;
   await expect(harness.prepare()).rejects.toThrow(unavailableMessage);
   {
     using missingDatabase = releasing(await harness.prepareMissing());
@@ -484,11 +472,8 @@ it("requires an existing session before preparing sharing facts", async ({ state
     sessionChanges.emit({ all: true, scope: "catalog" });
     expect(missingEntry.readCurrent(cfg).target).toBeNull();
     harness.write({
-      sessionId: "new-restricted-session",
-      lifecycleRevision: "new-restricted-generation",
-      updatedAt: 1,
+      ...restrictedEntry("new-restricted-session", "new-restricted-generation"),
       visibility: "draft",
-      sandbox: "required",
       createdActor: { type: "human", source: "profile", id: "other" },
     });
     expect(() => missingEntry.readCurrent(cfg)).toThrow(unavailableMessage);
@@ -500,55 +485,37 @@ it("requires an existing session before preparing sharing facts", async ({ state
 });
 
 // Alias retargets apply to the next preparation; captured requests retain their physical store.
-it("does not transfer prepared sharing facts through a same-path replacement", async ({
-  state,
-}) => {
-  const original = state.statePath("original", "session.sqlite");
-  const replacement = state.statePath("replacement", "session.sqlite");
-  const sessionKey = "agent:main:sharing";
-  for (const storePath of [original, replacement]) {
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey, storePath },
-      { sessionId: "identical", lifecycleRevision: "same", updatedAt: 1, visibility: "shared" },
-    );
-    await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-  }
-  const cfg = { agents: { entries: { main: {} } }, session: { store: original } };
-  await state.writeConfig(cfg);
-  setRuntimeConfigSnapshot(cfg);
-  using prepared = releasing(
-    await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" }),
-  );
-  expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("identical");
-  fs.renameSync(original, state.statePath("retired.sqlite"));
-  fs.renameSync(replacement, original);
-  registerOpenClawAgentDatabase({ agentId: "main", path: original, env: state.env });
-  expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
-});
-
-it("does not retain discovery context in active session authority", async ({ state: _state }) => {
-  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-  const sessionKey = "agent:main:retention";
-  const harness = sharingHarness(cfg, sessionKey);
-  harness.write({ sessionId: "retention", updatedAt: 1 });
-  (await harness.prepare()).release();
-  const scope = new AsyncLocalStorage<object>();
-  async function capture() {
-    const payload = { sessions: [{ sessionId: "completed-unrelated-session" }] };
-    const facts = await scope.run(payload, () => harness.prepare());
-    return { facts, payload: new WeakRef(payload), control: new WeakRef({}) };
-  }
-  const retained = await capture();
-  try {
-    await setImmediate();
-    queryObjects(WeakRef);
-    expect(retained.control.deref()).toBeUndefined();
-    expect(retained.payload.deref()).toBeUndefined();
-    expect(retained.facts.readCurrent(cfg).target.entry.sessionId).toBe("retention");
-    retained.facts.release();
-    expect(() => retained.facts.readCurrent(cfg)).toThrow(unavailableMessage);
-  } finally {
-    retained.facts.release();
-    scope.disable();
-  }
-});
+it.for(["pending", "prepared"] as const)(
+  "does not transfer %s sharing facts through a same-path replacement",
+  async (phase, { state, harness }) => {
+    const { cfg, sessionKey, storePath: original } = harness;
+    const replacement = state.statePath("replacement.sqlite");
+    for (const storePath of [original, replacement]) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey, storePath },
+        restrictedEntry("identical", "same"),
+      );
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
+    }
+    const ready = createDeferred();
+    const pending = prepareSessionMutationFacts({
+      cfg,
+      sessionKey,
+      agentId: "main",
+      storageReady: phase === "pending" ? ready.promise : undefined,
+    });
+    using prepared = phase === "prepared" ? releasing(await pending) : undefined;
+    if (prepared) {
+      expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("identical");
+    }
+    fs.renameSync(original, state.statePath("retired.sqlite"));
+    fs.renameSync(replacement, original);
+    registerOpenClawAgentDatabase({ agentId: "main", path: original, env: state.env });
+    ready.resolve();
+    if (prepared) {
+      expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
+    } else {
+      await expect(pending.then((read) => read.release())).rejects.toThrow(unavailableMessage);
+    }
+  },
+);

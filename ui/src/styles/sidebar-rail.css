@@ -176,7 +176,9 @@
       --sidebar-rail-control-surface: var(--sidebar-rail-selected-surface);
 
       &:is(.sidebar-rail__button, .nav-item) > :is(svg, .nav-item__icon) {
-        color: var(--accent);
+        :root:where([data-theme-mode="light"]) & {
+          color: var(--accent);
+        }
       }
     }
 

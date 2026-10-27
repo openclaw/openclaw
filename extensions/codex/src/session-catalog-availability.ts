@@ -1,3 +1,4 @@
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTimeout } from "./app-server/timeout.js";
 import {
@@ -46,6 +47,7 @@ export class CodexCatalogAvailability {
   }
 
   fail(error: unknown): void {
+    materializeErrorStack(error);
     this.failure = { error };
     this.notify();
   }

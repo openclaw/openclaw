@@ -76,6 +76,11 @@ caller label. A reservation includes worker queueing, preparation, and result
 delivery; its duration alone does not establish a slow SQL transaction.
 Schemas, stored data, live commit authority, and update behavior are unchanged.
 
+Entry reclamation derives each surviving row's transcript references once per
+synchronous deletion, even when several retained generations need a new owner.
+Those reference lists expire with the deletion; direct current-generation matches
+and the first matching successor in session-key order retain their existing behavior.
+
 Refused ordered session reads include the conflicting admission's shortened,
 bounded database path, operation, thread, age, and any recorded caller or worker
 operation labels in the error itself. They never include request payloads.
@@ -1063,6 +1068,14 @@ entry. The commit receipt carries the resulting failure and recovery facts back
 to the Gateway, which publishes runtime changes and appends failure records in
 the existing order. Terminal persistence still completes before reply accounting
 and final-delivery custody.
+
+Internal metadata patches that preserve activity compare their projected entry
+with the actor's complete current facts inside the existing writer FIFO. An
+unchanged entry skips the worker commit request; real changes retain the existing
+transaction and publication. Cold or invalidated facts, transaction predicates,
+source checks, and commit observers keep their worker path. Live host authority
+still gates no-op completion, and returned entries retain caller-owned copies.
+This adds no cache or deferred writes and changes no durability or stored format.
 
 Trajectory append and retention writers publish the session and trajectory
 sequence range they changed. Their trajectory-only SQL declares no session-row
@@ -2711,6 +2724,14 @@ facts in their mutation statements. Approval expiry and corrupt-row repair are
 writers too. Effective exec policy and usage accounting remain separate domains:
 recording a use does not advertise a new policy. Existing cron grant and
 resolution receipts retain their settlement meaning alongside those facts.
+
+Exec approval initialization checks the existing owner-invalidated policy snapshot
+before entering the writer queue. Missing or noncanonical state still normalizes
+inside the writer transaction. Authorization replies carry the policy file their
+host consumes without repeating raw JSON, paths, and hashes; policy-edit receipts
+share one postimage between precommit validation and committed publication. Usage
+publications retain the full policy for unseeded hosts and final execution checks.
+No schema, stored shape, or approval-authority contract changes.
 
 Environment receipts replace each affected environment's complete environment,
 credential, and attachment tuple, including explicit absence. Placement receipts
@@ -6821,6 +6842,12 @@ The manager adopts that receipt before publishing pending-tool changes. Each
 event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
+
+Individual message appends carry pending-user custody only for keyed user
+messages. Assistant and tool-result appends use their prepared message facts to
+omit the unrelated pending user payload. Their live admission and fresh-message
+checks remain unchanged. Multi-command metadata and transcript rewrites retain
+custody because they can promote or relocate user input.
 
 Bulk appends resolve prepared arrays' identity and idempotency-key conflicts in
 one read, then insert payloads, identities, and active projection rows in groups

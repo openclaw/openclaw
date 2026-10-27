@@ -711,6 +711,7 @@ src/config/sessions/migration-required.ts
 src/config/sessions/model-override-provenance.ts
 src/config/sessions/paths.ts
 src/config/sessions/session-accessor.sqlite-entry-inventory.ts
+src/config/sessions/session-accessor.sqlite-entry-equality.ts
 src/config/sessions/session-accessor.sqlite-conversation-publication.ts
 src/config/sessions/session-accessor.sqlite-owner-projection.ts
 src/config/sessions/session-accessor.sqlite-scope-helpers.ts

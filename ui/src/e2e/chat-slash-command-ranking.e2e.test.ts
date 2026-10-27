@@ -261,6 +261,7 @@ suite.define(() => {
         )
         .toEqual(["/pair", "/pair-device", "/openclaw"]);
 
+      await polledAttribute(options.first(), "aria-selected").toBe("true");
       await composer.press("ArrowDown");
       await polledAttribute(options.nth(1), "aria-selected").toBe("true");
       await polledText(options.nth(1).locator(".slash-menu-name")).toContain("/pair-device");

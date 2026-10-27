@@ -1,6 +1,7 @@
 // Host-owned SQLite leases serialize trusted work across processes.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
@@ -160,6 +161,7 @@ async function runStateLeaseOwnerInScope<T>(
             ? createOpenClawStateLeaseLostErrorFromDatabase(identity, validated.database, cause)
             : createOpenClawStateLeaseLostError(validated, cause),
       );
+      materializeErrorStack(leaseLost.signal.reason);
     }
   };
   const assertActive = () => {
@@ -304,11 +306,7 @@ async function runStateLeaseOwnerInScope<T>(
         label: `${validated.leaseLabel} ${validated.scope}/${validated.key}`,
         waitMs: validated.waitMs,
         signal: validated.signal,
-        assertCurrent() {
-          if (leaseLost.signal.aborted) {
-            throw leaseLost.signal.reason;
-          }
-        },
+        assertCurrent: () => leaseLost.signal.throwIfAborted(),
         prepare:
           invocation.kind === "native" &&
           validated.prepareDatabase &&

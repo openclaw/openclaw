@@ -1,6 +1,9 @@
 import { fileURLToPath } from "node:url";
 import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.ts";
-import { runtimeProcessScriptEntrypoints } from "../../src/infra/runtime-process-manifest.ts";
+import {
+  pluginRuntimeProcessManifest,
+  runtimeProcessScriptEntrypoints,
+} from "../../src/infra/runtime-process-manifest.ts";
 import { managedMemoryEntrypoint } from "./managed-memory-entrypoint.mts";
 import { managedWindowsJobEntrypoint } from "./managed-windows-job-entrypoint.mts";
 
@@ -34,6 +37,30 @@ export const runtimeProcessCoreEntrypoints = [
   managedMemoryEntrypoint,
 ];
 
+const privateChunkRuntimeProcessEntrypoints = [
+  runtimeProcessEntrypoints.sessionDiskBudget,
+  runtimeProcessEntrypoints.pluginModelCatalogRead,
+  runtimeProcessEntrypoints.attachmentProcessor,
+  runtimeProcessEntrypoints.codeModeNode,
+  runtimeProcessEntrypoints.imageProcessor,
+  runtimeProcessEntrypoints.identityFile,
+  runtimeProcessEntrypoints.localAgentAvatar,
+  runtimeProcessEntrypoints.fsSafeCopy,
+  runtimeProcessEntrypoints.controlUiFile,
+  runtimeProcessEntrypoints.publicSessionCard,
+  runtimeProcessEntrypoints.sessionTranscriptReconcile,
+  runtimeProcessEntrypoints.gitOperations,
+  runtimeProcessEntrypoints.cronStreamMatcher,
+  runtimeProcessEntrypoints.fileToolPlanning,
+  {
+    ...pluginRuntimeProcessManifest.codexCatalogPage,
+    currentModuleUrl: new URL(
+      `../../${pluginRuntimeProcessManifest.codexCatalogPage.ownerSource}`,
+      import.meta.url,
+    ).href,
+  },
+];
+
 // Keep small helper processes out of the shared runtime bundle.
 export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEntries([
   managedMemoryEntrypoint,
@@ -45,10 +72,7 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
   runtimeProcessEntrypoints.sqliteSourceRevision,
   runtimeProcessEntrypoints.stateRead,
   runtimeProcessEntrypoints.sessionTranscript,
-  runtimeProcessEntrypoints.sessionDiskBudget,
-  runtimeProcessEntrypoints.pluginModelCatalogRead,
-  runtimeProcessEntrypoints.attachmentProcessor,
-  runtimeProcessEntrypoints.codeModeNode,
+  ...privateChunkRuntimeProcessEntrypoints,
   runtimeProcessEntrypoints.shellSnapshotEnvironment,
   runtimeProcessEntrypoints.nativeHookRelayClient,
   runtimeProcessEntrypoints.spawnBroker,
@@ -60,12 +84,9 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
 
 export function getStandaloneRuntimeProcessOutputOptions(name: string) {
   if (
-    [
-      runtimeProcessEntrypoints.sessionDiskBudget,
-      runtimeProcessEntrypoints.pluginModelCatalogRead,
-      runtimeProcessEntrypoints.attachmentProcessor,
-      runtimeProcessEntrypoints.codeModeNode,
-    ].some((entry) => entry.distWorkerPath.replace(/\.js$/u, "") === name)
+    privateChunkRuntimeProcessEntrypoints.some(
+      (entry) => entry.distWorkerPath.replace(/\.js$/u, "") === name,
+    )
   ) {
     // Small workers must not evaluate shared Gateway chunks; keep optional paths lazy.
     return { codeSplitting: true, chunkFileNames: `${name}-[name]-[hash].mjs` };
