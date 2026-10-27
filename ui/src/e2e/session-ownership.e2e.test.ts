@@ -242,6 +242,8 @@ suite.define(() => {
       key: "agent:main:child",
       kind: "direct",
       label: "Verify release checks",
+      // A nonempty category makes this an explicit root instead of a nested child.
+      category: "",
       hasActiveRun: true,
       status: "running",
       createdActor: patrick,
@@ -253,6 +255,7 @@ suite.define(() => {
       key: "agent:main:mira",
       kind: "direct",
       label: "Mira session",
+      category: "",
       createdActor: mira,
       owner: { actor: mira },
       updatedAt: 1,
@@ -293,7 +296,10 @@ suite.define(() => {
     const rowGeometry = (id: string) =>
       row(id).evaluate((element) => {
         const box = (selector: string) => element.querySelector(selector)?.getBoundingClientRect();
+        const link = element.querySelector(".sidebar-recent-session__link")!;
         return {
+          link: link.getBoundingClientRect(),
+          gap: Number.parseFloat(getComputedStyle(link).columnGap),
           top: element.getBoundingClientRect().top,
           right: element.getBoundingClientRect().right,
           text: box(".sidebar-recent-session__text"),
@@ -373,8 +379,34 @@ suite.define(() => {
     );
     await expectBrowser(toggle).toHaveAttribute("aria-expanded", "true");
     await row("child").locator(".session-glyph__ring").waitFor();
-    await row("child").hover();
+    await row("child").hover({ position: { x: 2, y: 10 } });
     const child = await rowGeometry("child");
+    if (grouping === "None") {
+      const tree = group.locator('[data-session-tree="agent:main:parent"]');
+      const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [row("child")], {
+        animations: "disabled",
+        elements: [tree],
+      });
+      await writeFile(
+        path.join(suite.artifactDir, `child-title-${width}.png`),
+        frame.elements[0]!.png,
+      );
+      await writeFile(path.join(suite.artifactDir, `child-title-${width}-context.png`), frame.png);
+      await writeFile(
+        path.join(suite.artifactDir, `child-title-${width}-geometry.json`),
+        JSON.stringify(child, null, 2),
+      );
+    }
+    // Child actions already take their width in flow. The title should fill
+    // the link to within its normal inter-item gap, not lose an action reserve again.
+    expect(child.text?.width).toBeGreaterThanOrEqual(
+      child.link.right - child.text!.left - child.gap,
+    );
+    await row("child").locator("a").focus();
+    const focusedChild = await rowGeometry("child");
+    expect(focusedChild.text?.width).toBeGreaterThanOrEqual(
+      focusedChild.link.right - focusedChild.text!.left - focusedChild.gap,
+    );
     expect(child.indicator?.left).toBeGreaterThanOrEqual(child.actions?.right ?? Infinity);
     expect(child.right - (child.indicator?.right ?? 0)).toBeCloseTo(
       running.right - (running.indicator?.right ?? 0),
