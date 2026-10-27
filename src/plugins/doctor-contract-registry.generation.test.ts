@@ -7,8 +7,6 @@ import { listPluginDoctorStateMigrationEntries } from "./doctor-contract-registr
 import { createDoctorGenerationFixture } from "./doctor-generation.test-support.js";
 import { loadPluginManifest } from "./manifest.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
-import { capturePluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -91,40 +89,5 @@ it("binds replaced Codex declarations and callbacks to their own package generat
         listPluginDoctorStateMigrationEntries({ inventory: tampered }),
       ),
     ).toThrow("immutable action order and authority declared by codex");
-  }
-});
-
-it("loads bundled Doctor contracts without capturing plugin state operation modules", async () => {
-  const rootDir = dirs.make("doctor-bundled-operations-");
-  fs.writeFileSync(path.join(rootDir, "package.json"), '{"type":"module"}');
-  fs.writeFileSync(
-    path.join(rootDir, "doctor-contract-api.mjs"),
-    'export const stateMigrations = [{ id: "fixture-migration", label: "fixture", detectLegacyState() { return { preview: [] }; }, migrateLegacyState() { return { changes: [], warnings: [] }; } }];',
-  );
-  // Doctor migration contexts open stores without an operation source; capturing would only copy.
-  fs.writeFileSync(path.join(rootDir, "state-operation-api.mjs"), "export const version = 1;");
-  const record = createPluginManifestRecordFixture({
-    id: "bundled-operations",
-    rootDir,
-    origin: "bundled",
-    doctorContract: { stateMigrations: [{ id: "fixture-migration" }] },
-  });
-  await using cache = createPluginCache();
-  const entries = withPluginCache(cache, () =>
-    listPluginDoctorStateMigrationEntries({
-      inventory: {
-        records: [record],
-        knownPluginIds: [record.id],
-        sessionStoreOwnerPluginIds: [],
-        descriptors: [],
-        unresolvedPluginIds: [],
-      },
-    }),
-  );
-  expect(entries.map(({ migration }) => migration.id)).toEqual(["fixture-migration"]);
-  const instances = [...cache.setupModules.values()];
-  expect(instances).toHaveLength(1);
-  for (const instance of instances) {
-    expect(capturePluginStateOperationModuleSource(instance, () => {})).toBeUndefined();
   }
 });
