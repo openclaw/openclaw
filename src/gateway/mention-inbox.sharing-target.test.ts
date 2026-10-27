@@ -2,6 +2,7 @@ import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import * as sessionEntryReads from "../config/sessions/session-entry-read-runtime.js";
@@ -49,26 +50,6 @@ function emitSettlement(f: Fixture, cfg: OpenClawConfig = {}) {
     { accessChanged: false, rowScope: "runtime" },
   );
 }
-
-it.each(["runtime settlement", "agent runs", "automation"] as const)(
-  "serves the prepared mention Inbox without storage reads after %s",
-  (publication) =>
-    withMentionInbox(async (f) => {
-      await f.post();
-      const before = await f.call("mentions.list", {});
-      expect(before).toMatchObject({ ok: true, payload: { items: [expect.any(Object)] } });
-      const reads = vi.spyOn(sessionEntryReads, "readSessionEntriesFromStoreInWorker");
-      if (publication === "runtime settlement") {
-        emitSettlement(f);
-      } else if (publication === "agent runs") {
-        sessionChanges.emit({ all: true, scope: "agent-runs" });
-      } else {
-        sessionChanges.emit({ sessionKey: SESSION_KEY, agentId: "main", scope: "automation" });
-      }
-      expect(await f.call("mentions.list", {})).toEqual(before);
-      expect(reads).not.toHaveBeenCalled();
-    }),
-);
 
 it("recovers background views when a session is replaced during cold target preparation", () =>
   withMentionInbox(async (f) => {
@@ -172,10 +153,28 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
   },
 );
 
-it("refreshes 50 connected mention views after session and viewer changes", async () => {
+it("refreshes 50 mention views without repeated warm preparation after viewer and session changes", async () => {
   const cfg: OpenClawConfig = {};
   await withMentionInbox(
     async (f) => {
+      const countCheckpoints = async (client = f.bobClient) => {
+        let checkpoints = 0;
+        let active = true;
+        // Bun has no promise init hooks; a bounded pump lets unexpected I/O settle.
+        const tick = () => {
+          if (active && checkpoints < 256) {
+            checkpoints++;
+            queueMicrotask(tick);
+          }
+        };
+        queueMicrotask(tick);
+        await f.call("mentions.list", {}, client).finally(() => {
+          active = false;
+        });
+        expect(checkpoints).toBeGreaterThan(0);
+        expect(checkpoints).toBeLessThan(256);
+        return checkpoints;
+      };
       const alternateStorePath = path.join(resolveStateDir(), "mention-alternate.sqlite");
       await f.setSession(
         { displayName: "Alternate conversation" },
@@ -190,21 +189,16 @@ it("refreshes 50 connected mention views after session and viewer changes", asyn
       for (const client of f.clients) {
         expect(await f.items(client)).toHaveLength(1);
       }
+      const checkpoints = await countCheckpoints();
+      for (let index = 1; index < 32; index++) {
+        await f.post(`source-${index}`);
+      }
+      expect(await f.items()).toHaveLength(32);
+      expect(await countCheckpoints()).toBe(checkpoints);
       expect((await f.items())[0]?.sessionTitle).toBe("Design review");
       f.broadcast.mockClear();
-      let exactRowReads = 0;
-      // Inspect while the statement is live; sourceSQL is unsafe after its database closes.
-      // oxlint-disable-next-line typescript/unbound-method -- apply preserves the intercepted statement receiver.
-      const originalGet = StatementSync.prototype.get;
-      vi.spyOn(StatementSync.prototype, "get").mockImplementation(function (
-        this: StatementSync,
-        ...values
-      ) {
-        if (/from "session_nodes"/i.test(this.sourceSQL)) {
-          exactRowReads++;
-        }
-        return originalGet.apply(this, values);
-      });
+      const queries = observeSqliteReadSql(StatementSync.prototype).queries;
+      const workerReads = vi.spyOn(sessionEntryReads, "readSessionEntriesFromStoreInWorker");
       const context = sessionContext(f, cfg);
       const invalidation = vi.spyOn(f.inbox, "invalidateAsync");
       const emit = async (sessionKey = "agent:main:unrelated") => {
@@ -212,12 +206,23 @@ it("refreshes 50 connected mention views after session and viewer changes", asyn
         await invalidation.mock.results.at(-1)?.value;
       };
       const expectPublication = async (count: number, publish = emit) => {
-        exactRowReads = 0;
+        queries.length = 0;
         await publish();
-        expect(exactRowReads).toBe(0);
+        expect(queries.join("\n")).not.toMatch(/from "session_nodes"/i);
         expect(f.broadcast).toHaveBeenCalledTimes(count);
       };
       await expectPublication(0);
+      const before = await f.call("mentions.list", {});
+      for (const publish of [
+        async () => emitSettlement(f, cfg),
+        async () => sessionChanges.emit({ all: true, scope: "agent-runs" }),
+        async () =>
+          sessionChanges.emit({ sessionKey: SESSION_KEY, agentId: "main", scope: "automation" }),
+      ]) {
+        await expectPublication(0, publish);
+        expect(await f.call("mentions.list", {})).toEqual(before);
+        expect(workerReads).not.toHaveBeenCalled();
+      }
 
       await f.setSession({ visibility: "draft" });
       await expectPublication(50);
@@ -235,6 +240,9 @@ it("refreshes 50 connected mention views after session and viewer changes", asyn
       f.broadcast.mockClear();
       await expectPublication(1);
       expect([...f.broadcast.mock.calls[0]![2]]).toEqual(["viewer-0"]);
+      expect(await f.items(f.clients[0])).toEqual([]);
+      expect(await countCheckpoints(f.clients[0])).toBe(checkpoints);
+      expect(await countCheckpoints()).toBe(checkpoints);
 
       cfg.session = { store: alternateStorePath };
       setRuntimeConfigSnapshot(cfg);

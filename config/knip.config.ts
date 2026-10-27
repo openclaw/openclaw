@@ -658,6 +658,7 @@ const repositoryScriptEntries = [
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",
   "scripts/perf/agent-catalog-display-measure.ts!",
+  "scripts/perf/mention-target-preparation-measure.ts!",
   "scripts/perf/agent-event-routing-measure.ts!",
   "scripts/perf/archive-record-framing-measure.mjs!",
   "scripts/perf/board-grid-measure.ts!",
