@@ -5,7 +5,7 @@ import { isCrablineServerChannel, OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@ope
 import { Command } from "commander";
 import type { QaRunnerCliContribution } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeRuntimeParitySummary } from "./agentic-parity-report-test-helpers.js";
+import { makeSingleRuntimeParitySummary as runtimeSummary } from "./agentic-parity-report-test-helpers.js";
 import type { QaScenarioPack } from "./scenario-catalog.js";
 import * as taxonomyModule from "./scorecard-taxonomy.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
@@ -63,7 +63,9 @@ vi.mock("./mantis/cli.runtime.js", () => ({
   runMantisSlackDesktopSmokeCommand,
 }));
 
-vi.mock("./manual-lane.runtime.js", () => ({ runQaManualLane }));
+vi.mock("./manual-lane.runtime.js", () => ({
+  runQaManualLane,
+}));
 
 vi.mock("./suite-launch.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./suite-launch.runtime.js")>()),
@@ -71,8 +73,13 @@ vi.mock("./suite-launch.runtime.js", async (importOriginal) => ({
   runQaSuite,
 }));
 
-vi.mock("./character-eval.js", () => ({ runQaCharacterEval }));
-vi.mock("./multipass.runtime.js", () => ({ runQaMultipass }));
+vi.mock("./character-eval.js", () => ({
+  runQaCharacterEval,
+}));
+
+vi.mock("./multipass.runtime.js", () => ({
+  runQaMultipass,
+}));
 
 vi.mock("./live-transports/cli.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./live-transports/cli.js")>()),
@@ -83,14 +90,18 @@ vi.mock("./live-transports/telegram/adapter.runtime.js", () => ({
   createTelegramQaTransportAdapter: vi.fn(),
 }));
 
-vi.mock("./lab-server.js", () => ({ startQaLabServer }));
+vi.mock("./lab-server.js", () => ({
+  startQaLabServer,
+}));
 
 vi.mock("./docker-harness.js", () => ({
   writeQaDockerHarnessFiles,
   buildQaDockerHarnessImage,
 }));
 
-vi.mock("./docker-up.runtime.js", () => ({ runQaDockerUp }));
+vi.mock("./docker-up.runtime.js", () => ({
+  runQaDockerUp,
+}));
 
 vi.mock("./model-selection.runtime.js", () => ({
   defaultQaRuntimeModelForMode,
@@ -183,29 +194,6 @@ function expectWriteContains(mock: unknown, fragment: string): void {
 
 async function writeJson(filePath: string, value: unknown) {
   await fs.writeFile(filePath, JSON.stringify(value), "utf8");
-}
-
-function runtimeSummary(index: number, scenarioId?: string) {
-  const summary = makeRuntimeParitySummary();
-  const scenario = summary.scenarios[index];
-  if (!scenario?.runtimeParity) {
-    throw new Error("runtime parity fixture missing");
-  }
-  const entry = {
-    ...scenario,
-    name: scenarioId ?? scenario.name,
-    runtimeParity: {
-      ...scenario.runtimeParity,
-      scenarioId: scenarioId ?? scenario.runtimeParity.scenarioId,
-    },
-  };
-  const scenarios: [typeof entry] = [entry];
-  return {
-    ...summary,
-    scenarios,
-    counts: { total: 1, passed: 1, failed: 0 },
-    run: { ...summary.run, status: "completed" },
-  };
 }
 
 function makeQaEvidence(entries: unknown[] = []) {
