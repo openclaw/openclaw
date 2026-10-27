@@ -97,7 +97,7 @@ const originalParse = JSON.parse;
 const inspector = new Session();
 try {
   globalThis.fetch = mockFetch;
-  const identities = [];
+  const identities: Awaited<ReturnType<typeof identityApi.prepareGitHubReadIdentity>>[] = [];
   for (let i = 0; i < 40; i++) {
     const agentId = `agent-${i}`;
     const directory = identityApi.resolveManagedGitHubProfileDir({
@@ -150,15 +150,17 @@ try {
     bytes.set(i, JSON.stringify(githubPreviewView(await read(i))));
   }
   fetches = fetchMs = authorityCalls = authorityMs = parses = parseMs = stateDirReads = 0;
-  JSON.parse = (text: string, reviver?: Parameters<typeof JSON.parse>[1]) => {
-    const started = performance.now();
-    parses++;
-    try {
-      return originalParse(text, reviver);
-    } finally {
-      parseMs += performance.now() - started;
-    }
-  };
+  JSON.parse = new Proxy(originalParse, {
+    apply(target, receiver, args) {
+      const started = performance.now();
+      parses++;
+      try {
+        return Reflect.apply(target, receiver, args);
+      } finally {
+        parseMs += performance.now() - started;
+      }
+    },
+  });
   if (allocations) {
     inspector.connect();
     await inspector.post("HeapProfiler.startSampling", {
