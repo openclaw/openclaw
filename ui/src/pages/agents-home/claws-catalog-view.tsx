@@ -5,6 +5,7 @@ import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
+import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import "../../styles/claws-catalog.css";
 import { PluginDetailLoadingHero } from "../plugins/detail-loading-hero.tsx";

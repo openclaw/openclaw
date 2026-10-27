@@ -6,6 +6,7 @@ import type { ApplicationGateway } from "../app/context.ts";
 import { storeSidebarSessionOwnerFilter } from "../components/app-sidebar-session-types.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { disposeSidebarContextLifecycles } from "./app-sidebar-context-lifecycle.ts";
+import { preserveDocumentStyle } from "./preserve-document-style.ts";
 import { createStorageMock } from "./storage.ts";
 
 export function setupSidebarTest() {
@@ -15,6 +16,7 @@ export function setupSidebarTest() {
     Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
 
   beforeEach(() => {
+    preserveDocumentStyle();
     layoutGlobals = [
       "matchMedia",
       "ResizeObserver",

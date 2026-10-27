@@ -53,7 +53,7 @@ import { forkSessionEntryFromParentTargetWithPatch } from "./session-accessor.sq
 import {
   appendTranscriptEventSnapshotSync,
   appendTranscriptMessageSnapshotSync,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-transcript-write.kernel.js";
 import {
   appendTranscriptEventSync,
   replaceTranscriptEvents,
@@ -640,13 +640,17 @@ describe("cold current transcript lifecycle", () => {
       }
       interceptRestoration((params) => ({
         ...params,
-        withWriteAdmission: (run, diagnostics) =>
-          params.withWriteAdmission((refusal) => {
-            if (!refusal && !foreign && !changed) {
-              revokeBinding();
-            }
-            return run(refusal);
-          }, diagnostics),
+        withWriteAdmission: (run, diagnostics, operation) =>
+          params.withWriteAdmission(
+            (refusal) => {
+              if (!refusal && !foreign && !changed) {
+                revokeBinding();
+              }
+              return run(refusal);
+            },
+            diagnostics,
+            operation,
+          ),
         onCommitRequest: (...args) => {
           inCommitGrant = true;
           try {
@@ -707,20 +711,24 @@ describe("cold current transcript lifecycle", () => {
       let changed = false;
       interceptRestoration((params) => ({
         ...params,
-        withWriteAdmission: (run, diagnostics) =>
-          params.withWriteAdmission((refusal) => {
-            if (!refusal) {
-              replaceSessionEntrySync(fixture.scope, {
-                ...fixture.entry,
-                ...(change === "source"
-                  ? { label: "revoked grant" }
-                  : { lifecycleRevision: "successor" }),
-              });
-              changed = true;
-              before = fixture.snapshot();
-            }
-            return run(refusal);
-          }, diagnostics),
+        withWriteAdmission: (run, diagnostics, operation) =>
+          params.withWriteAdmission(
+            (refusal) => {
+              if (!refusal) {
+                replaceSessionEntrySync(fixture.scope, {
+                  ...fixture.entry,
+                  ...(change === "source"
+                    ? { label: "revoked grant" }
+                    : { lifecycleRevision: "successor" }),
+                });
+                changed = true;
+                before = fixture.snapshot();
+              }
+              return run(refusal);
+            },
+            diagnostics,
+            operation,
+          ),
       }));
       await expect(authority.trim()).rejects.toThrow(
         change === "source"

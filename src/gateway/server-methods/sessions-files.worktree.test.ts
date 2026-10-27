@@ -36,10 +36,10 @@ vi.mock("../worker-environments/local-workspace-projection.js", async (importOri
     await importOriginal<typeof import("../worker-environments/local-workspace-projection.js")>();
   return {
     ...actual,
-    withSettledLocalWorkspacePath: (async (params, operation) => {
+    checkpointLocalWorkspacePath: (async (params) => {
       await hooks.duringSettlement?.();
-      return await actual.withSettledLocalWorkspacePath(params, operation);
-    }) satisfies typeof actual.withSettledLocalWorkspacePath,
+      return await actual.checkpointLocalWorkspacePath(params);
+    }) satisfies typeof actual.checkpointLocalWorkspacePath,
   };
 });
 

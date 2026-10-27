@@ -48,7 +48,10 @@ export type SessionControllerWatchdogAttempt = {
     toolName: string;
     deadlineAtMs?: number;
   }): void;
-  beginRequest(params: { deadlineAtMs?: number; requestTimeoutMs?: number }): () => void;
+  beginRequest(params: {
+    deadlineAtMs?: number;
+    requestTimeoutMs?: number;
+  }): (recoveryDeadlineAtMs?: number) => void;
   requestEvent(event: { phase: "start" | "end"; callId: string; requestTimeoutMs?: number }): void;
   setExecutionDeadline(deadlineAtMs: number | undefined): void;
   close(): void;
@@ -123,6 +126,7 @@ export function createSessionControllerWatchdog(params: {
   const progressOrigin = (at: number) =>
     stagnationCurrent(at) ? stagnation!.startedAtMs : semanticAt;
   let retryAllowanceAt: number | undefined;
+  let requestRecoveryAt: number | undefined;
   let cleanupAt: number | undefined;
   let executionAt: number | undefined;
   let attempt: SessionControllerWatchdogAttempt | undefined;
@@ -144,6 +148,7 @@ export function createSessionControllerWatchdog(params: {
   const semanticDeadline = (at = now()) =>
     Math.max(
       progressOrigin(at) + abortMs,
+      requestRecoveryAt ?? 0,
       ...[...requests].map((request) => request.deadlineAtMs ?? 0),
     );
 
@@ -592,14 +597,19 @@ export function createSessionControllerWatchdog(params: {
             emittedTools.delete(event.toolCallId);
           }
         },
-        beginRequest({ deadlineAtMs, requestTimeoutMs }) {
+        beginRequest(request) {
           if (!valid()) {
             return noop;
           }
-          const request = { requestTimeoutMs, deadlineAtMs };
+          // Keep the request owner's live deadline rather than a start-time copy.
           requests.add(request);
-          const close = () => {
-            requests.delete(request);
+          const close = (recoveryDeadlineAtMs?: number) => {
+            if (!requests.delete(request)) {
+              return;
+            }
+            if (recoveryDeadlineAtMs !== undefined) {
+              requestRecoveryAt = Math.max(requestRecoveryAt ?? 0, recoveryDeadlineAtMs);
+            }
             ownedReleases.delete(close);
           };
           ownedReleases.add(close);

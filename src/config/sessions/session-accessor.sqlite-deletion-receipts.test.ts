@@ -27,7 +27,7 @@ import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { mutateMemory } from "./session-actor-memory-publication.test-support.js";
-import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

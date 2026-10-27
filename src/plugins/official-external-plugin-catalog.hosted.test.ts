@@ -13,14 +13,16 @@ import {
   getOfficialExternalPluginCatalogManifest as manifest,
   resolveOfficialExternalPluginInstall as install,
   loadConfiguredHostedOfficialExternalPluginCatalogEntries as loadHostedCatalogImpl,
-  type OfficialExternalPluginCatalogFeed,
 } from "./official-external-plugin-catalog.js";
 import {
   createInMemoryHostedCatalogSnapshotStore as memoryStore,
   installableEntry,
   hostedCatalogFeed as makeFeed,
 } from "./official-external-plugin-catalog.test-support.js";
-import type { HostedOfficialExternalPluginCatalogSnapshot } from "./official-external-plugin-catalog.types.js";
+import type {
+  HostedOfficialExternalPluginCatalogSnapshot,
+  OfficialExternalPluginCatalogFeed,
+} from "./official-external-plugin-catalog.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {

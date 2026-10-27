@@ -15,6 +15,10 @@
  * --max-bytes-per-audience 2560 checks the median sampled bytes per preparation.
  * Use one owner per budget run; this is a sampled allocation gate, not a unit test.
  * Acceptance: identical digest, lower CPU/allocation, unchanged live authority.
+ * --revision-every 1 measures cache-miss churn on each row publication; the
+ * default 100 mixes misses with transcript-only hits. --gc-markers brackets
+ * each measured pass for --trace-gc-nvp main-thread promotion/survival
+ * totals; run that separately from timing and allocation sampling.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -38,6 +42,8 @@ const { values } = parseArgs({
     workload: { type: "string", default: "events" },
     allocations: { type: "boolean", default: false },
     "max-bytes-per-audience": { type: "string" },
+    "revision-every": { type: "string", default: "100" },
+    "gc-markers": { type: "boolean", default: false },
   },
 });
 const events = Number(values.events);
@@ -46,6 +52,8 @@ const workload = values.workload;
 assert(workload === "events" || workload === "rows");
 const pairs = Number(values.pairs ?? (values["compare-owner"] ? "5" : "1"));
 assert(Number.isSafeInteger(pairs) && pairs > 0);
+const revisionEvery = Number(values["revision-every"]);
+assert(Number.isSafeInteger(revisionEvery) && revisionEvery > 0);
 const allocationBudget = values["max-bytes-per-audience"];
 if (allocationBudget !== undefined) {
   assert(values.allocations && workload === "events" && !values["compare-owner"]);
@@ -122,7 +130,7 @@ async function measure(owner: (typeof owners)[number], pair: number, arm: string
   let checksum = 0;
   function publish(index: number, digest?: ReturnType<typeof createHash>) {
     // A committed sharing change retires the owner fact; transcript deltas do not.
-    if (index % 100 === 0) {
+    if (index % revisionEvery === 0) {
       revision = {};
       member = !member;
     }
@@ -181,12 +189,18 @@ async function measure(owner: (typeof owners)[number], pair: number, arm: string
   const memoryBefore = process.memoryUsage();
   const cpuStart = process.threadCpuUsage();
   const start = performance.now();
+  if (values["gc-markers"]) {
+    console.log(JSON.stringify({ gcPass: "begin", pair, arm }));
+  }
   for (let i = 0; i < events; i++) {
     run(i);
   }
   const elapsedMs = performance.now() - start;
   const cpu = process.threadCpuUsage(cpuStart);
   const memoryAfter = process.memoryUsage();
+  if (values["gc-markers"]) {
+    console.log(JSON.stringify({ gcPass: "end", pair, arm }));
+  }
   let sampledBytes: number | undefined;
   if (values.allocations) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -215,6 +229,7 @@ async function measure(owner: (typeof owners)[number], pair: number, arm: string
       audienceKeys: events * clients.length,
       roleChecks: events * clients.length * (workload === "rows" ? targets.length : 1),
       mode: values.allocations ? "allocation" : "timing",
+      revisionEvery,
       elapsedMs,
       threadCpuMs: (cpu.user + cpu.system) / 1000,
       sampledBytes,

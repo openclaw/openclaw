@@ -25,7 +25,7 @@ describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
     syncBuiltinESMExports();
   });
 
-  async function fixture(algorithm = "sha1", version = 2) {
+  async function fixture(algorithm = "sha1", version = 2, extraFiles = 0) {
     vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
     vi.stubEnv("GIT_CONFIG_GLOBAL", "/dev/null");
     const root = tempDirs.make("openclaw-apfs-index-");
@@ -35,6 +35,9 @@ describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
     await git(source, "config", "index.version", String(version));
     for (const name of ["clean", "dirty-destination", "dirty-source", "é space\nname"]) {
       await writeStamped(source, name, "original\n");
+    }
+    for (let index = 0; index < extraFiles; index++) {
+      await writeStamped(source, `file-${index}`, "original\n");
     }
     await fs.symlink("clean", path.join(source, "link"));
     await git(source, "add", ".");
@@ -74,6 +77,16 @@ describe.skipIf(process.platform !== "darwin")("APFS checkout index", () => {
     expect(await status(f.destination)).toBe("");
     await writeStamped(f.destination, "clean");
     expect(await status(f.destination)).toBe("M clean");
+  });
+
+  it("prepares a 3,000-file clone in one metadata request without hiding later edits", async () => {
+    const f = await fixture("sha1", 2, 2_996);
+    const metadata = vi.spyOn(filesystem, "readMetadata");
+    expect(await f.copy()).toBe(true);
+    expect(metadata).toHaveBeenCalledTimes(1);
+    expect(await status(f.destination)).toBe("");
+    await writeStamped(f.destination, "file-2995");
+    expect(await status(f.destination)).toBe("M file-2995");
   });
 
   it.each(["sha1", "sha256"])(

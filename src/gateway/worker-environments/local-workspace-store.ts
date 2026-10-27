@@ -1,6 +1,6 @@
 import { promisify } from "node:util";
-import { serialize } from "node:v8";
-import { deflateRaw } from "node:zlib";
+import { deserialize, serialize } from "node:v8";
+import { deflateRaw, deflateRawSync, inflateRawSync } from "node:zlib";
 import {
   captureWorktreeRunEndContext,
   retainWorktreeRunEndFailure,
@@ -16,6 +16,10 @@ import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import {
+  localWorkspaceDigestBytes,
+  prepareLocalWorkspaceSourcePathSet,
+} from "./local-workspace-cas.js";
 import type {
   LocalWorkspaceBaselineDocument,
   LocalWorkspaceManifestAction,
@@ -144,12 +148,57 @@ export function withLocalWorkspaceStore<T>(
                   reply?.type === "localWorkspace.get" && reply.row
                     ? Object.freeze(reply.row)
                     : undefined;
+                const pruneLegacy = async () => {
+                  if (!row?.tree_root_digest) {
+                    return;
+                  }
+                  // Resume retirement after a crash between root publication and row cleanup.
+                  let more: boolean;
+                  do {
+                    assertCurrent();
+                    more = await runOpenClawStateWorkerOperation(
+                      context,
+                      (scope) =>
+                        scope.execute({
+                          type: "localWorkspace.pruneLegacy",
+                          input: { id: params.worktreeId },
+                        }),
+                      { assertCurrent },
+                    );
+                  } while (more);
+                };
+                await pruneLegacy();
+                const prepare = async (preparations: readonly Uint8Array[]) => {
+                  for (const preparation of preparations) {
+                    assertCurrent();
+                    await runOpenClawStateWorkerOperation(
+                      context,
+                      (scope) =>
+                        scope.execute({
+                          type: "localWorkspace.prepare",
+                          input: { preparation },
+                        }),
+                      { assertCurrent },
+                    );
+                  }
+                  assertCurrent();
+                };
                 const mutate = async (
                   mutation: LocalWorkspaceMutation,
                   guard: WorktreeWorkerAuthority = params.workerAuthority ?? {},
-                  prepared?: Uint8Array,
                 ) => {
                   assertCurrent();
+                  const source =
+                    mutation.kind === "create"
+                      ? mutation.row
+                      : mutation.kind === "update"
+                        ? mutation.patch
+                        : undefined;
+                  if (typeof source?.source_paths_json === "string") {
+                    const paths = prepareLocalWorkspaceSourcePathSet(source.source_paths_json);
+                    await prepare([deflateRawSync(serialize({ paths }))]);
+                    source.source_paths_digest = localWorkspaceDigestBytes(paths.digest);
+                  }
                   let pending:
                     | {
                         mutation: LocalWorkspaceMutation;
@@ -159,16 +208,15 @@ export function withLocalWorkspaceStore<T>(
                   // Projection owns mutation bytes through settlement; authority is captured separately.
                   const predicates = structuredClone(guard.predicates);
                   // Compress large inventories to fit the broker's existing queue budget.
-                  const serialized = prepared ? undefined : serialize(mutation);
+                  const serialized = serialize(mutation);
                   const compressed =
                     serialized && serialized.byteLength > 32 * 1024 * 1024
                       ? await compressMutation(serialized)
                       : undefined;
                   let wireMutation: LocalWorkspaceMutation | Uint8Array | undefined =
-                    prepared ??
-                    (compressed && serialized && compressed.byteLength < serialized.byteLength
+                    compressed && serialized && compressed.byteLength < serialized.byteLength
                       ? compressed
-                      : mutation);
+                      : mutation;
                   let admission: SqliteWorkerOperationAdmission | undefined;
                   let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
                   const assertWrite = () => {
@@ -228,6 +276,9 @@ export function withLocalWorkspaceStore<T>(
                       pending!.mutation,
                       pending!.previous,
                     );
+                    if (!pending!.previous?.tree_root_digest) {
+                      await pruneLegacy();
+                    }
                   } catch (error) {
                     const outcome = await settled;
                     if (outcome?.kind === "completed" && admission?.committed) {
@@ -271,14 +322,24 @@ export function withLocalWorkspaceStore<T>(
                   if (!result) {
                     throw new Error("Local workspace manifest is unavailable");
                   }
-                  return result.value;
+                  const value = result.value;
+                  if (value.kind === "scan") {
+                    await prepare(value.preparations ?? []);
+                    const { preparations: _preparations, ...checkpoint } = value;
+                    return checkpoint;
+                  }
+                  if (value.kind === "replace") {
+                    await prepare(value.update.preparations ?? []);
+                    value.update.preparations = undefined;
+                  }
+                  return value;
                 };
                 const accept: LocalWorkspaceStore["accept"] = async (prepared, guard) => {
-                  await mutate(
-                    { kind: "update", revision: prepared.revision, patch: prepared.patch },
-                    guard,
-                    prepared.mutation,
-                  );
+                  await prepare(prepared.preparations ?? []);
+                  const mutationBytes = inflateRawSync(prepared.mutation);
+                  // SAFETY: prepareUpdate serializes this owner-created mutation after immutable preparation.
+                  const mutation = deserialize(mutationBytes) as LocalWorkspaceMutation;
+                  await mutate(mutation, guard);
                   return row!;
                 };
                 return await run({
@@ -315,6 +376,16 @@ export function withLocalWorkspaceStore<T>(
                       });
                       if (prepared.kind !== "replace") {
                         throw new Error("Local workspace baseline preparation is missing");
+                      }
+                      await accept(prepared.update, guard);
+                    } else if (manifest && !manifest.treeRoot) {
+                      const prepared = await readManifest(previous, {
+                        kind: "prepare",
+                        manifest,
+                        patch,
+                      });
+                      if (prepared.kind !== "replace") {
+                        throw new Error("Local workspace checkpoint preparation is missing");
                       }
                       await accept(prepared.update, guard);
                     } else {

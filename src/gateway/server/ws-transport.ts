@@ -21,6 +21,10 @@ export function createGatewayWebSocketTransport(
   let batch: { chunks: Uint8Array[]; callbacks: ((error?: Error | null) => void)[] } | undefined;
   let pendingBytes = 0;
   let batched = false;
+  const uncorkBatch = () => {
+    batched = false;
+    stream.uncork();
+  };
   // Pinned Bun HTTP sockets disable _writev. Keep one copy per burst there;
   // replacing _writev itself could consume Bun's queued HTTP response operations.
   if (!nativeWritev) {
@@ -82,10 +86,7 @@ export function createGatewayWebSocketTransport(
       if (!batched) {
         batched = true;
         stream.cork();
-        process.nextTick(() => {
-          batched = false;
-          stream.uncork();
-        });
+        process.nextTick(uncorkBatch);
       }
     },
     send(

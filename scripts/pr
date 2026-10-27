@@ -584,6 +584,35 @@ function sweep(cache, current) {
   }
 }
 
+function dependencyKey(rows, tree, audit) {
+  let identity = tree;
+  if (audit && audit.runtime.platform === process.platform && audit.runtime.arch === process.arch &&
+      audit.runtime.modules === process.versions.modules) {
+    const names = rows.map((row) => row.slice(row.indexOf("\t") + 1));
+    const codeInputs = [...audit.files, ...audit.directories];
+    const inputs = rows.filter((row, index) => {
+      const name = names[index];
+      return audit.files.includes(name) ||
+        name === "pnpm-lock.yaml" || name.startsWith("patches/") ||
+        /(?:^|\/)(?:package\.json|\.npmrc|\.pnpmfile\.[cm]js|pnpm-workspace\.yaml)$/.test(name) ||
+        (name.endsWith("/tsconfig.json") && codeInputs.some((input) =>
+          input.startsWith(name.slice(0, -"tsconfig.json".length)))) ||
+        (audit.directories.some((directory) => name.startsWith(`${directory}/`)) &&
+          /\.(?:ts|mts|mjs|js|json)$/.test(name) && !/\.(?:test|spec)\./.test(name));
+    });
+    // Changed executable inputs may read new source paths. Keep the original
+    // full-tree contract until their read set (including dependency hooks) is audited.
+    const digest = createHash("sha256").update(inputs.join("\0")).digest("hex");
+    if (digest === audit.auditSha256 && !names.some((name) => name.startsWith("dist/"))) {
+      identity = [inputs, audit.presence.map((path) =>
+        names.some((name) => name === path || name.startsWith(`${path}/`)))];
+    }
+  }
+  return createHash("sha256").update(JSON.stringify([
+    identity, process.platform, process.arch, process.versions.modules,
+  ])).digest("hex");
+}
+
 function materializeDependencies(owner, canonicalPath, destination, revision) {
   const canonical = realpathSync(canonicalPath);
   const gitBinary = process.env.OPENCLAW_PR_GIT;
@@ -637,11 +666,11 @@ function materializeDependencies(owner, canonicalPath, destination, revision) {
     }
   }
   const tree = git(canonical, ["rev-parse", `${revision}^{tree}`]);
-  // Full source includes every workspace, patch, and lifecycle input. Keying by
-  // its tree deliberately trades some reuse for an exact frozen install contract.
-  const key = createHash("sha256").update(JSON.stringify([
-    tree, process.platform, process.arch, process.versions.modules,
-  ])).digest("hex");
+  const sourceRows = git(canonical, ["ls-tree", "-r", "-z", revision]).split("\0").filter(Boolean);
+  const auditPath = join(dirname(owner), "dependency-inputs.json");
+  // Older retained wrappers without a read-set audit keep full-tree isolation.
+  const audit = existsSync(auditPath) ? JSON.parse(readFileSync(auditPath, "utf8")) : null;
+  const key = dependencyKey(sourceRows, tree, audit);
   const cache = join(homedir(), ".cache", "openclaw", "pr-dependencies");
   mkdirSync(cache, { recursive: true, mode: 0o700 });
   const entry = join(cache, key);
@@ -655,7 +684,7 @@ function materializeDependencies(owner, canonicalPath, destination, revision) {
       rmSync(archive);
       // Verify archive bytes, including symlinks, before any package lifecycle runs.
       const sourcePaths = new Set();
-      for (const row of git(canonical, ["ls-tree", "-r", "-z", revision]).split("\0").filter(Boolean)) {
+      for (const row of sourceRows) {
         const match = /^(100644|100755|120000) blob ([a-f0-9]{40})\t([^\0]+)$/.exec(row);
         if (!match) throw new Error("Unsupported frozen install source entry.");
         const [, mode, oid, name] = match;

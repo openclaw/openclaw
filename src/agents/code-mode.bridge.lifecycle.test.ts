@@ -2,6 +2,7 @@
 import { getEventListeners } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { attachInternalToolExecutionPreparer } from "../../packages/agent-core/src/internal-hooks.js";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -23,7 +24,6 @@ import {
   waitUntilCompleted,
 } from "./code-mode.test-support.js";
 import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.tools.start.js";
-import { attachInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";

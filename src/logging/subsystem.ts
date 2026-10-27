@@ -504,16 +504,22 @@ export function runtimeForLogger(
 ): OutputRuntimeEnv {
   return {
     log(...args) {
-      logger.info(args.map(formatRuntimeArg).join(" ").trim());
+      if (logger.isEnabled("info")) {
+        logger.info(args.map(formatRuntimeArg).join(" ").trim());
+      }
     },
     error(...args) {
-      logger.error(args.map(formatRuntimeArg).join(" ").trim());
+      if (logger.isEnabled("error")) {
+        logger.error(args.map(formatRuntimeArg).join(" ").trim());
+      }
     },
     writeStdout(value) {
       logger.info(value);
     },
     writeJson(value: unknown, space = 2) {
-      logger.info(JSON.stringify(value, undefined, space > 0 ? space : undefined));
+      if (logger.isEnabled("info")) {
+        logger.info(JSON.stringify(value, undefined, space > 0 ? space : undefined));
+      }
     },
     exit,
   };

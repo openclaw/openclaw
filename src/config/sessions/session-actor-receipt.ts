@@ -25,7 +25,7 @@ export function projectSessionActorCommittedOutcome<Value>(
     receipt.phase === "appendTranscriptEvent" ||
     (receipt.phase === "appendToolResult" && receipt.transcript.append !== undefined);
   if (
-    !append ||
+    (!append && receipt.phase !== "patch") ||
     receipt.transcript.append?.initialEntry ||
     !reference ||
     receipt.postimage.entry !== reference.entry

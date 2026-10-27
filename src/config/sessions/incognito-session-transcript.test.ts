@@ -29,10 +29,8 @@ import {
 } from "./session-accessor.js";
 import type { SessionAccessScope } from "./session-accessor.types.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import {
-  withSessionActorStorage,
-  type SelectedSessionActorStorageBinding,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import type { SelectedSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 

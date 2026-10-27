@@ -471,6 +471,13 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             listSessionEntries: session.listSessionEntries,
             listSessionEntriesAsync: (params) =>
               runWithCurrentPluginScope(() => session.listSessionEntriesAsync(params)),
+            withSessionEntriesAsync: (params, consume) =>
+              runWithCurrentPluginScope(() =>
+                session.withSessionEntriesAsync(params, (entries) => {
+                  assertRuntimeCurrent();
+                  return consume(entries);
+                }),
+              ),
             createSessionEntryListReader: (params) =>
               runWithPluginScope(async () => {
                 const read = await session.createSessionEntryListReader(params);

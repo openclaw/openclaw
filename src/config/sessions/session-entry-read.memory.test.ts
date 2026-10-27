@@ -11,8 +11,8 @@ import {
 } from "./session-accessor.entry.js";
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
   runWithSessionActorStorage,
 } from "./session-actor-storage-binding.js";

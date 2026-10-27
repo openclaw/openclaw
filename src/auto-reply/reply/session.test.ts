@@ -1,4 +1,3 @@
-// Tests reply session persistence, route updates, and label behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -2645,7 +2644,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         sessionKey,
         storePath,
       });
-      expect(events.map((event) => (event as { type?: unknown }).type)).toContain("reset");
       const resetEvent = events.findLast((event) => (event as { type?: unknown }).type === "reset");
       expect(resetEvent).toMatchObject({ reason: slug });
       expect(resetEvent).not.toHaveProperty("firstKeptEntryId");

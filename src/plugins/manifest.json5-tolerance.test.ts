@@ -75,6 +75,15 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     }
   });
 
+  it.each([
+    { reload: { turnHandover: true }, expected: { turnHandover: true } },
+    { reload: { turnHandover: "yes" }, expected: undefined },
+    { reload: true, expected: undefined },
+    { reload: undefined, expected: undefined },
+  ])("reads reload.turnHandover only when it is true: $reload", ({ reload, expected }) => {
+    expect(parseManifest({ reload }).reload).toEqual(expected);
+  });
+
   it("normalizes static doctor session route-state owners", () => {
     const manifest = parseManifest({
       sessionRouteStateOwners: [

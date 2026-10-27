@@ -11,7 +11,7 @@ import {
   completeRestartRecoveryTerminalDelivery,
 } from "./restart-recovery-receipt.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import { withSessionActorStorage } from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import type { SessionActorStorageCommand } from "./session-actor-storage-contract.js";
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import { addSessionSuggestionInWorker } from "./session-metadata-write.async.js";

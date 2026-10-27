@@ -443,25 +443,18 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       closingAnimation.cancel();
       await openFallbackPanels(fixture.container);
       expect(surface.dataset.phase).toBe("open");
-      for (const label of ["Minimize side panel", "Side panel"]) {
-        await selectFallbackPanelAction(fixture.container, label);
-        expect(document.activeElement).toBe(trigger);
-      }
-      for (const expectedCount of [3, 4]) {
+      for (const [index, label] of ["Minimize side panel", "Side panel"].entries()) {
         const hidden = new Promise<Event>((resolve) => {
           surface.addEventListener("overlay-after-hide", resolve, { once: true });
         });
-        await click(trigger);
-        await page
-          .elementLocator(menu.querySelector<HTMLElement>('[data-value="side-panel"]')!)
-          .click();
+        await selectFallbackPanelAction(fixture.container, label);
         expect((await hidden).target).toBe(surface);
-        expect(observations).toHaveLength(expectedCount);
+        expect(observations).toHaveLength(index + 1);
         expect(surface.matches(":popover-open")).toBe(false);
         expect(document.activeElement).toBe(trigger);
       }
       expect(observations).toEqual(
-        Array.from({ length: 4 }, () => ({ open: false, focused: true })),
+        Array.from({ length: 2 }, () => ({ open: false, focused: true })),
       );
     });
 

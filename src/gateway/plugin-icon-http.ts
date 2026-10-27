@@ -3,7 +3,6 @@ import { closeSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { fileTypeFromBuffer } from "file-type";
 import pLimit from "p-limit";
 import { startsWithSvgRootElement } from "../../packages/gateway-protocol/src/svg-image.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -84,6 +83,7 @@ async function validateImageMime(body: Buffer, contentType: string): Promise<boo
       !text.includes("\0") && !/<!doctype|<!entity/iu.test(text) && startsWithSvgRootElement(text)
     );
   }
+  const { fileTypeFromBuffer } = await import("file-type");
   const detected = await fileTypeFromBuffer(body);
   return resolveHttpImageMimeType(detected?.mime) === contentType;
 }

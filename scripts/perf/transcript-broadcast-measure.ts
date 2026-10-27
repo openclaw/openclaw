@@ -48,6 +48,14 @@
 // --chat-active-after-tool with --chat-active-hold-ms waits for the first text delta
 // after a committed tool result before sending queued/steering inputs. Requires --runs 1;
 // the stream continues during admission and holds completion for the requested interval.
+// --scenario chat.send --runs 20 --heap-snapshot captures active-<round>.heapsnapshot
+// after all primary requests arrive and any pre-release steering hold finishes,
+// before releasing their mock responses. Heap capture is diagnostic, not timing evidence.
+// Heap captures use a 131072-character string limit; match the analyzer's --string-limit.
+// --turn-start-phases also retains at most 100,000 raw reservation/worker observations
+// in turn-start-timeline.json. Observed clocks precede batched IPC; completed reservation
+// intervals can be reconstructed from elapsed/queue/execution times (rounded to ms).
+// blocking* labels describe the holder seen at enqueue, not every preceding queued job.
 // Add --worktree-tool-churn to memory-soak --stress-tools --mixed-rpc to give each
 // foreground session its own managed worktree, read/grep its README, and cycle list searches.
 // This mode keeps a fixed viewer set instead of adding reconnect churn.
@@ -476,6 +484,9 @@ if (values["stress-network-tool"] && !values["stress-tools"]) {
   throw new Error("--stress-network-tool requires --stress-tools");
 }
 const chatActiveHoldMs = integer(values["chat-active-hold-ms"], "--chat-active-hold-ms", 0);
+if (scenario === "chat.send" && values["heap-snapshot"] && values["turn-start-phases"]) {
+  throw new Error("Active heap snapshots require the cohort barrier; omit --turn-start-phases");
+}
 if (
   chatActiveHoldMs &&
   (scenario !== "chat.send" || values["session-event-wake"] || values["cron-operator-turn"])
@@ -703,6 +714,9 @@ if (values["turn-start-phases"] && (!values["stress-tools"] || exactClients < 2)
 let measuredPhaseRound: number | undefined;
 const turnStartPhases: Array<Record<string, unknown>> = [];
 const turnStartSamples: TurnStartSample[] = [];
+const turnStartTimeline: Array<Record<string, unknown>> = [];
+let turnStartTimelineDropped = 0;
+const turnStartTimelineLimit = 100_000;
 const listIntervalMs = integer(values["list-interval-ms"], "--list-interval-ms", 0);
 if (soakScenario && values["list-filter-churn"] && !listIntervalMs) {
   throw new Error("memory-soak --list-filter-churn requires --list-interval-ms");
@@ -1501,7 +1515,68 @@ if (values["turn-start-phases"]) {
   writeFileSync(
     turnStartPreload,
     `import { isMainThread } from "node:worker_threads";
+import { channel } from "node:diagnostics_channel";
+import { performance } from "node:perf_hooks";
 import { onTrustedInternalDiagnosticEvent } from ${JSON.stringify(new URL("../../src/infra/diagnostic-events.ts", import.meta.url).href)};
+import { onWorkerRequestMetrics } from ${JSON.stringify(new URL("../../src/infra/worker-request-diagnostics.ts", import.meta.url).href)};
+if (isMainThread) {
+  const limit = ${turnStartTimelineLimit};
+  let captured = 0, dropped = 0, stopped = false, pending = [];
+  const observe = (source, fields) => {
+    if (stopped) return;
+    if (captured >= limit) { dropped++; return; }
+    pending.push({ sequence: captured++, source, observedAtEpochMs: Date.now(),
+      observedAtMonotonicMs: performance.now(), ...fields });
+  };
+  const numbers = (source, keys) => Object.fromEntries(keys.flatMap(key =>
+    typeof source?.[key] === "number" && Number.isFinite(source[key]) && source[key] >= 0
+      ? [[key, source[key]]] : []));
+  const label = value => typeof value === "string" && /^[a-zA-Z0-9_.-]{1,160}$/.test(value)
+    ? value : undefined;
+  const labels = values => Array.isArray(values) ? values.map(label).filter(Boolean).slice(0, 8) : undefined;
+  const flush = () => {
+    if (!process.connected) return;
+    const batch = pending;
+    pending = [];
+    for (let at = 0; at < batch.length; at += 256) {
+      process.send?.({ turnStartTimelineBatch: batch.slice(at, at + 256), dropped });
+    }
+  };
+  const reservation = channel("openclaw.agent-database.reservation");
+  const onReservation = event => observe("reservation", {
+    operation: label(event.operation), caller: label(event.caller), outcome: label(event.outcome),
+    workerOperations: labels(event.workerOperations), blockingOperation: label(event.blockingOperation),
+    blockingCaller: label(event.blockingCaller), blockingWorkerOperations: labels(event.blockingWorkerOperations),
+    ...numbers(event, ["elapsedMs", "queueWaitMs", "writerExecutionMs", "completionDelayMs", "transactionCount"]),
+  });
+  reservation.subscribe(onReservation);
+  const worker = channel("openclaw.worker.task");
+  const onWorker = event => observe("worker-task", {
+    worker: label(event.worker), outcome: label(event.outcome),
+    ...numbers(event, ["queueMs", "preparationMs", "hostWaitMs", "runMs", "transferMs", "pendingTasks", "pendingBytes"]),
+  });
+  worker.subscribe(onWorker);
+  const stopRequests = onWorkerRequestMetrics((kind, requestClass, phase, queueDepth, queueWaitMs, durationMs, timing) => {
+    if (phase !== "completed") return;
+    observe("worker-request", { kind, requestClass, queueDepth, queueWaitMs, durationMs,
+      timing: numbers(timing, ["enqueued", "dispatched", "posted", "postFinished", "received", "inputReady",
+        "executeStarted", "executeFinished", "serialized", "replied", "replyReceived"]) });
+  });
+  const timer = setInterval(flush, 250);
+  timer.unref();
+  process.on("message", message => {
+    if (message?.turnStartTimelineFlush !== true) return;
+    process.channel?.ref();
+    stopped = true;
+    clearInterval(timer);
+    reservation.unsubscribe(onReservation);
+    worker.unsubscribe(onWorker);
+    stopRequests();
+    flush();
+    process.send?.({ turnStartTimelineFlushed: true, dropped }, () => process.channel?.unref());
+  });
+  process.channel?.unref();
+}
 if (isMainThread) onTrustedInternalDiagnosticEvent(event => {
   if (event.type === "diagnostic.phase.completed" &&
       (event.name.startsWith("chat.send.") || event.name === "worktree.preparation")) {
@@ -1819,6 +1894,7 @@ if (isMainThread) {
         scope: "main-isolate capture calls and clone payloads; serialized UTF-8 bytes and graph objects, not heap allocation" }));
     }
   });
+  process.channel?.unref();
 }
 `,
   );
@@ -4452,6 +4528,17 @@ async function runRound(
       };
     }
   }
+  if (scenario === "chat.send" && values["heap-snapshot"] && measuredRound !== undefined) {
+    const beforeRelease = current.beforeRelease;
+    current.beforeRelease = async () => {
+      await beforeRelease?.();
+      // Admission has completed; snapshot IPC owns its separate diagnostic timeout.
+      clearTimeout(timeout);
+      await readGatewayResources(child, {
+        snapshotPath: path.join(output, `active-${measuredRound}.heapsnapshot`),
+      });
+    };
+  }
   // Include the first response processing after the mock releases the whole cohort.
   const captureWork =
     profilePath || heapProfilePath || finishAdmissionDiagnostics
@@ -5279,6 +5366,7 @@ try {
     values.entry,
     port,
     [
+      ...(values["heap-snapshot"] ? ["--heap-snapshot-string-limit=131072"] : []),
       ...(values.allocations || values["stream-start-allocations"] || values["trace-gc"]
         ? ["--trace-gc-nvp"]
         : []),
@@ -5344,6 +5432,16 @@ try {
   );
   if (values["turn-start-phases"]) {
     gateway.on("message", (message: unknown) => {
+      if (isRecord(message) && Array.isArray(message.turnStartTimelineBatch)) {
+        for (const event of message.turnStartTimelineBatch) {
+          if (isRecord(event) && turnStartTimeline.length < turnStartTimelineLimit) {
+            turnStartTimeline.push(event);
+          }
+        }
+        if (typeof message.dropped === "number") {
+          turnStartTimelineDropped = message.dropped;
+        }
+      }
       if (
         isRecord(message) &&
         isRecord(message.turnStartPhase) &&
@@ -5796,7 +5894,10 @@ try {
     { archived: true },
     { search: teamPluginCatalog ? "Synthetic" : "team-shape" },
     { agentId: "main" },
-    { excludeSubagents: true },
+    {
+      excludeSubagents: true,
+      ...(values["team-stress"] ? { includeOwnerSessionCounts: true } : {}),
+    },
     { excludeSystem: true, excludeCron: true },
   ];
   let listChurnSequence = 0;
@@ -7487,6 +7588,55 @@ try {
       ? await readGatewayResources(gateway, { includeWorkers: true })
       : undefined;
   const wholeWorkloadDiagnostics = await finishWholeWorkloadDiagnostics?.();
+  if (values["turn-start-phases"]) {
+    const child = gateway;
+    await new Promise<void>((resolve, reject) => {
+      const finish = (error?: Error) => {
+        clearTimeout(timeout);
+        child.off("message", onMessage);
+        child.off("exit", onExit);
+        child.off("error", finish);
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+      const onMessage = (message: unknown) => {
+        if (isRecord(message) && message.turnStartTimelineFlushed === true) {
+          if (typeof message.dropped === "number") {
+            turnStartTimelineDropped = message.dropped;
+          }
+          finish();
+        }
+      };
+      const onExit = () => finish(new Error("Gateway exited before turn-start timeline flush"));
+      const timeout = setTimeout(
+        () => finish(new Error("Turn-start timeline flush timed out")),
+        60_000,
+      );
+      child.on("message", onMessage);
+      child.once("exit", onExit);
+      child.once("error", finish);
+      child.send({ turnStartTimelineFlush: true }, (error) => {
+        if (error) {
+          finish(error);
+        }
+      });
+    });
+    writeFileSync(
+      path.join(output, "turn-start-timeline.json"),
+      JSON.stringify(
+        {
+          limit: turnStartTimelineLimit,
+          dropped: turnStartTimelineDropped,
+          events: turnStartTimeline,
+        },
+        null,
+        2,
+      ),
+    );
+  }
   const wholeSoakCpu = wholeSoakCpuBefore
     ? measureGatewayCpuUsage(wholeSoakCpuBefore, await readGatewayCpuUsage(gateway))
     : undefined;

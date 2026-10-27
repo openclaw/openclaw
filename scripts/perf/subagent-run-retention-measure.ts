@@ -5,6 +5,7 @@
  * on base/candidate in alternating order. Accept a lower retained-heap slope with
  * identical selected run IDs and no consistent CPU/allocation regression. Setup
  * and forced GC are outside timing; this is owner evidence, not Gateway latency.
+ * Add `--batch-runs=4653` to retain 4,653 then 9,306 rows at the same boundaries.
  * `timing --assert-retention` checks settled 32 KiB replies stay below 8 KiB/run.
  * `preview-timing --assert-retention` checks retained terminal previews alone stay
  * below 10 KiB/run, without compaction masking full-reply backing-string retention.
@@ -14,6 +15,10 @@
  * 10k rows must retain less than 3,300 bytes/run (base retained ~3,667 bytes/run).
  * `topology-timing` / `topology-allocation` build the complete read topology with
  * the same rows present in live and committed views; old builds are released.
+ * `view-timing` / `view-allocation --batch-runs=4300` exercise the resident list
+ * reader and its comparison map with 4,300 then 8,600 immutable retained rows.
+ * Report retained heap with the view and after disposal; row-owned facts can
+ * survive the view until their source rows retire. Run the same script per revision.
  */
 import assert from "node:assert/strict";
 import { Session, type HeapProfiler } from "node:inspector/promises";
@@ -23,11 +28,15 @@ import { prepareAgentRunTerminalReply } from "../../src/agents/agent-run-termina
 import {
   compactSubagentRunForMemory,
   getSubagentSessionReadLookup,
+  immutableSubagentRunSessionList,
   subagentRuns,
 } from "../../src/agents/subagents/registry/subagent-registry-memory.js";
+import { createSubagentSessionListReadIndex } from "../../src/agents/subagents/registry/subagent-registry-read-index.js";
 import { buildSubagentRunReadTopology } from "../../src/agents/subagents/registry/subagent-registry-read-topology.js";
+import type { SubagentRunReadRecord } from "../../src/agents/subagents/registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
 import { SubagentSessionReadLookup } from "../../src/agents/subagents/registry/subagent-session-read-scope.js";
+import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 assert(global.gc, "Run with --expose-gc");
 const mode = process.argv[2] ?? "timing";
@@ -41,20 +50,34 @@ assert(
     "lookup-allocation",
     "topology-timing",
     "topology-allocation",
+    "view-timing",
+    "view-allocation",
   ].includes(mode),
 );
 const previewOnly = mode.startsWith("preview-");
 const previews: Array<ReturnType<typeof prepareAgentRunTerminalReply>["terminalReply"]> = [];
 const lookupOnly = mode.startsWith("lookup-");
 const topologyOnly = mode.startsWith("topology-");
+const viewOnly = mode.startsWith("view-");
 const allocation = mode.endsWith("allocation");
-const count = lookupOnly || topologyOnly ? 10_000 : 1_000;
+const count = parseStrictIntegerOption({
+  raw: process.argv.find((arg) => arg.startsWith("--batch-runs="))?.slice("--batch-runs=".length),
+  label: "--batch-runs",
+  fallback: lookupOnly || topologyOnly ? 10_000 : 1_000,
+  min: 1,
+});
 let persisted = new SubagentSessionReadLookup();
 const topologyRuns = new Map<string, SubagentRunRecord>();
 let topology: ReturnType<typeof buildSubagentRunReadTopology<SubagentRunRecord>> | undefined;
+const viewRuns = new Map<string, SubagentRunReadRecord>();
+let view: ReturnType<typeof createSubagentSessionListReadIndex> | undefined;
+function disposeView() {
+  view?.dispose();
+  view = undefined;
+}
 function createRun(index: number): SubagentRunRecord {
   const text =
-    lookupOnly || topologyOnly
+    lookupOnly || topologyOnly || viewOnly
       ? "short reply"
       : Buffer.from(`Synthetic reply ${index}. `.repeat(2_000).slice(0, 32_768)).toString();
   return {
@@ -92,12 +115,28 @@ function append(start: number, end: number) {
       continue;
     }
     subagentRuns.set(row.runId, row);
+    if (viewOnly) {
+      viewRuns.set(row.runId, immutableSubagentRunSessionList(subagentRuns.get(row.runId)!));
+    }
     if (lookupOnly) {
       persisted.set(row.runId, row);
     }
   }
   if (previewOnly) {
     assert.equal(previews.length, end);
+    return;
+  }
+  if (viewOnly) {
+    disposeView();
+    view = createSubagentSessionListReadIndex(
+      {
+        snapshotIdentity: () => viewRuns,
+        runs: () => new Map(viewRuns),
+        prepare: async () => {},
+      },
+      end + 10,
+    );
+    assert.equal(view.read(end + 10).runsByChildSessionKey.size, end);
     return;
   }
   if (topologyOnly) {
@@ -137,6 +176,8 @@ subagentRuns.clear();
 persisted = new SubagentSessionReadLookup();
 topologyRuns.clear();
 topology = undefined;
+disposeView();
+viewRuns.clear();
 previews.length = 0;
 const baselineHeap = await heap();
 const inspector = new Session();
@@ -171,7 +212,18 @@ if (allocation) {
   allocatedBytes = sum(profile.head);
   inspector.disconnect();
 }
-console.log(JSON.stringify({ mode, iterations: count * 2, load, points, allocatedBytes }));
+disposeView();
+const releasedViewRetainedBytes = viewOnly ? (await heap()) - baselineHeap : undefined;
+console.log(
+  JSON.stringify({
+    mode,
+    iterations: count * 2,
+    load,
+    points,
+    allocatedBytes,
+    releasedViewRetainedBytes,
+  }),
+);
 subagentRuns.clear();
 if (process.argv.includes("--assert-retention")) {
   assert(

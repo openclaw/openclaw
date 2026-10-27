@@ -25,6 +25,7 @@ import {
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { sessionListResult } from "../test-helpers/chat-model.ts";
 import { domProbe } from "../test-helpers/dom-probe.ts";
+import { preserveDocumentStyle } from "../test-helpers/preserve-document-style.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "./assistant-panel-solid.tsx";
@@ -153,6 +154,7 @@ function researchAgents(workspace: string) {
 }
 describe("assistant panel", () => {
   beforeEach(() => {
+    preserveDocumentStyle();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal(
       "matchMedia",

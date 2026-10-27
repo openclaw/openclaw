@@ -2,12 +2,14 @@ import type { AgentDatabaseDeletionSnapshot } from "../../state/agent-deletion-j
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionEntryListScope, SessionEntrySummary } from "./session-accessor.types.js";
 import type { SessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import type { SessionStoreTargetInventoryRequest } from "./session-store-target-inventory.js";
 import type { SessionStoreTarget } from "./targets-collision.js";
 
 export type GatewaySessionStoreDiscovery = {
   env: NodeJS.ProcessEnv;
   snapshot: AgentDatabaseDeletionSnapshot | undefined;
   readCandidates?: readonly SessionStoreReadCandidate[];
+  recoveryExclusions?: SessionStoreTargetInventoryRequest["recoveryExclusions"];
 };
 
 export type GatewaySessionEntryProjection = NonNullable<SessionEntryListScope["projection"]>;

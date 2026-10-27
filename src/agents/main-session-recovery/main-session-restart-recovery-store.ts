@@ -86,6 +86,7 @@ export async function recoverStore(params: {
   expectedTarget?: ExpectedRestartRecoveryTarget;
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
+  shouldRecoverAgent?: (agentId: string) => boolean;
   signal?: AbortSignal;
   gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<RecoveryCounts> {
@@ -179,6 +180,14 @@ export async function recoverStore(params: {
         continue;
       }
       const agentId = dispatchTarget.agentId;
+      if (params.shouldRecoverAgent?.(agentId) === false) {
+        decision = {
+          decision: "deferred",
+          reason: "input_recovery_pending",
+          nextOwner: "main-session-recovery",
+        };
+        continue;
+      }
       const target = { agentId, sessionKey, storePath: params.storePath };
       const { getPrivateRequesterSettleRecoveryOwner } =
         await import("../subagents/registry/subagent-registry.js");

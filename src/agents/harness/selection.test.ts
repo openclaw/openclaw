@@ -84,6 +84,7 @@ import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { assembleHarnessContextEngine } from "./context-engine-lifecycle.js";
 import { createContextEngineRequiringAssembly } from "./context-engine-lifecycle.test-support.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
+import { createTurnLease } from "./context-engine-turn.test-support.js";
 import { prepareAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 import {
@@ -479,7 +480,13 @@ function registerTestCompactor(
 }
 
 describe("runAgentHarnessAttempt", () => {
-  registerSelectionContextCases({ createAttemptParams, registerHarness });
+  registerSelectionContextCases({
+    createAttemptParams,
+    registerHarness,
+    agentRunAttempt,
+    createBuiltInAttemptParams: () =>
+      createAttemptParams(providerRuntimeConfig("codex", "openclaw")),
+  });
   registerSelectionQueueInputCases({ createAttemptParams });
 
   it.each(["close", "abort", "lifecycle replacement"] as const)(
@@ -1377,6 +1384,7 @@ describe("runAgentHarnessAttempt", () => {
       ...(degradedReason ? { reason: degradedReason } : {}),
     });
     const lease = {
+      ...createTurnLease(configuredEngine),
       get engine() {
         return effectiveEngine;
       },
@@ -1403,10 +1411,6 @@ describe("runAgentHarnessAttempt", () => {
         order.push("begin");
         return asEffective();
       }),
-      deferDisposalUntil: vi.fn(),
-      disposed: false,
-      onDispose: vi.fn(),
-      dispose: vi.fn(async () => {}),
     } satisfies ContextEngineLogicalTurnLease;
     contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun.mockImplementationOnce(
       async (params) => {
@@ -1541,44 +1545,6 @@ describe("runAgentHarnessAttempt", () => {
         policyScope: "conversation",
       },
     ]);
-    expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
-  });
-
-  it("binds the same host OpenClaw scope to the built-in OpenClaw harness", async () => {
-    let toolNames: string[] = [];
-    agentRunAttempt.mockImplementationOnce(async () => {
-      await Promise.resolve();
-      toolNames = createOpenClawCodingTools({
-        config: { tools: { allow: ["read"], deny: ["openclaw"], toolSearch: true } },
-        runtimeToolAllowlist: ["openclaw"],
-        toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
-      }).map((tool) => tool.name);
-      return createAttemptResult("openclaw");
-    });
-    const onContextAccountingEvent = vi.fn();
-    const onCompactionRequestBudget = vi.fn();
-    const params = Object.freeze({
-      ...createAttemptParams(providerRuntimeConfig("codex", "openclaw")),
-      toolsAllow: ["openclaw"],
-      systemAgentTool: { surface: "gateway" as const, proposalRef: {}, directiveRef: {} },
-      compactionCountOwner: "caller" as const,
-      onContextAccountingEvent,
-      onCompactionRequestBudget,
-    });
-
-    const result = await runAgentHarnessAttempt(params);
-
-    expect(result.sessionIdUsed).toBe("openclaw");
-    const attempt = agentRunAttempt.mock.calls[0]?.[0];
-    expect(attempt).toMatchObject({
-      compactionCountOwner: "caller",
-      onContextAccountingEvent,
-      onCompactionRequestBudget,
-      operationalRunInstance: selectionAdmittedRunContext.operationalRunInstance,
-    });
-    expect(params).not.toHaveProperty("operationalRunInstance");
-    expect(attempt).not.toHaveProperty("systemAgentTool");
-    expect(toolNames).toEqual(["openclaw"]);
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
 

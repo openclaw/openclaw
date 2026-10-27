@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
   readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
@@ -42,6 +43,7 @@ import { preserveGenerationPrivateFields } from "../config/sessions/session-entr
 import {
   readSessionEntrySummariesInWorker,
   readSessionUpdatedAtInWorker,
+  withSessionEntriesFromStoresInWorker,
 } from "../config/sessions/session-entry-read-runtime.js";
 import {
   captureExternalSessionCommitGuard,
@@ -53,9 +55,11 @@ import { readTranscriptStatsAsync as readAccessorTranscriptStatsAsync } from "..
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
+import { filterSessionEntriesByProfile } from "../gateway/session-identity-projection.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { prepareCurrentUserProfileIdentity } from "../state/user-profile-reads.js";
 import {
   getSessionEntryAsync,
   projectPluginSessionEntry,
@@ -256,6 +260,81 @@ export async function listSessionEntriesAsync(params: {
     sessionKey,
     entry: projectPluginSessionEntry(entry),
   }));
+}
+
+export type SessionStoreSelectedEntries = {
+  agentId: string;
+  storePath: string;
+  sessionKeys: readonly string[];
+};
+
+export type SessionStoreSelectedEntry = SessionStoreEntrySummary & {
+  agentId: string;
+  storePath: string;
+};
+
+/**
+ * Prepare selected stores and a fresh profile snapshot off-thread, then consume synchronously.
+ * Final native session guards observe cross-process commits; stores are not one atomic snapshot.
+ * Profile matching uses current canonical owners/direct participants, never display references.
+ * Returned data carries no authority after the callback; caller policy must be checked inside it.
+ */
+export async function withSessionEntriesAsync<T>(
+  params: {
+    stores: readonly SessionStoreSelectedEntries[];
+    env?: NodeJS.ProcessEnv;
+    involvingProfileId?: string;
+  },
+  consume: (entries: SessionStoreSelectedEntry[]) => T,
+): Promise<T> {
+  const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
+  const profileId = params.involvingProfileId;
+  const stores = params.stores.map((store) => ({
+    ...store,
+    sessionKeys: [...store.sessionKeys],
+  }));
+  let identity: Awaited<ReturnType<typeof prepareCurrentUserProfileIdentity>> | undefined;
+  return await withSessionEntriesFromStoresInWorker(
+    stores.map((store) => ({ ...store, env, projection: "list" as const })),
+    (reads) => {
+      identity?.assertCurrent();
+      // Writer queues cover this process only. Keep the selected-key native guard
+      // after all awaits so a separate Gateway's committed revocation is visible.
+      const entries = stores.flatMap((store) =>
+        listAccessorSessionEntriesReadOnly({
+          ...store,
+          env,
+          projection: "list",
+          includeParticipants: profileId !== undefined,
+        }).map(({ sessionKey, entry }) => ({
+          agentId: store.agentId,
+          storePath: store.storePath,
+          sessionKey,
+          entry: projectPluginSessionEntry(entry),
+        })),
+      );
+      const selected =
+        profileId !== undefined
+          ? filterSessionEntriesByProfile({
+              entries,
+              profile: identity?.profile,
+            })
+          : entries;
+      reads.forEach((read) => read.assertCurrent());
+      identity?.assertCurrent();
+      return consume(selected);
+    },
+    {
+      ordered: true,
+      ...(profileId !== undefined
+        ? {
+            prepareConsume: async () => {
+              identity = await prepareCurrentUserProfileIdentity(profileId, { env });
+            },
+          }
+        : {}),
+    },
+  );
 }
 
 type SessionStoreTranscriptReadParams = {

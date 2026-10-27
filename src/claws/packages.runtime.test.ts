@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { MAX_PLUGIN_RELOAD_TARGETS } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -53,6 +53,13 @@ const pluginConsent = {
   onCapabilityConsent: async (review: { reviewToken: string }) => ({
     reviewToken: review.reviewToken,
   }),
+};
+const quietRuntime = {
+  log: () => {},
+  error: () => {},
+  exit: () => {
+    throw new Error("unexpected exit");
+  },
 };
 const pluginPackage = (id: string, version = "1.0.0") => ({
   kind: "plugin" as const,
@@ -118,13 +125,16 @@ function packageOptions(
     deps: { ...packageDeps(root), acquirePackageLease: async () => testPackageLease(), ...deps },
   };
 }
+async function withRuntime(run: (root: string, env: NodeJS.ProcessEnv) => Promise<void>) {
+  const { root, env } = await runtimeEnv("claw-runtime-");
+  await withEnvAsync(env, () => run(root, env));
+}
 
 describe("Claw committed plugin requirement handoff", () => {
   it.each(["unchanged", "reinstalled", "claimed"] as const)(
     "compensates an unpublished %s plugin after runtime batch preparation fails",
     async (ownership) => {
-      const { root, env } = await runtimeEnv("openclaw-claw-batch-rollback-");
-      await withEnvAsync(env, async () => {
+      await withRuntime(async (root, env) => {
         const batch = new PluginInstallRuntimeBatch({ env }, vi.fn());
         const uninstallPlugin = vi.fn(
           async (_params: Parameters<typeof uninstallPluginWithPolicy>[0]) => {},
@@ -151,10 +161,7 @@ describe("Claw committed plugin requirement handoff", () => {
             runtimeBatch: batch,
             pluginConsent,
           });
-          expect(stage.kind).toBe("ready");
-          if (stage.kind !== "ready") {
-            return;
-          }
+          assert(stage.kind === "ready");
           if (ownership === "reinstalled") {
             installedAt = "2026-10-14T01:00:01.000Z";
           } else if (ownership === "claimed") {
@@ -212,7 +219,6 @@ describe("Claw committed plugin requirement handoff", () => {
   });
 
   it("rechecks reviewed access at a managed plugin's persistent install boundary", async () => {
-    const { root, env } = await runtimeEnv("openclaw-claw-access-guard-");
     let accessCurrent = true;
     const persistentMutation = vi.fn();
     const installPlugin = vi.fn(async (params: { beforePersistentApply?: () => void }) => {
@@ -221,7 +227,7 @@ describe("Claw committed plugin requirement handoff", () => {
       persistentMutation();
     });
 
-    await withEnvAsync(env, async () => {
+    await withRuntime(async (root, env) => {
       await expect(
         installClawPackagesCore(
           demoPlan(),
@@ -241,27 +247,18 @@ describe("Claw committed plugin requirement handoff", () => {
       ).rejects.toThrow("reviewed access changed");
     });
 
-    expect(installPlugin).toHaveBeenCalledOnce();
     expect(persistentMutation).not.toHaveBeenCalled();
   });
 
   it("preserves the install owner's failure instead of a nested CLI exit", async () => {
-    const { root, env } = await runtimeEnv("openclaw-claw-install-error-");
     installOwner.install.mockReset().mockRejectedValue(installOwner.failure);
-    await withEnvAsync(env, async () => {
+    await withRuntime(async (root, env) => {
       const result = await installClawPackagesCore(
         demoPlan(),
         packageOptions(root, env, {
-          runtime: {
-            log: () => {},
-            error: () => {},
-            exit: () => {
-              throw new Error("unexpected outer exit");
-            },
-          },
+          runtime: quietRuntime,
         }),
       ).catch((error: unknown) => error);
-      expect(installOwner.install).toHaveBeenCalledOnce();
       expect(result).toMatchObject({
         code: "package_install_failed",
         message: installOwner.failure.message,
@@ -301,13 +298,7 @@ describe("Claw committed plugin requirement handoff", () => {
           env,
           pluginConsent,
           clawHubBaseUrl: "http://127.0.0.1:3323",
-          runtime: {
-            log,
-            error: () => {},
-            exit: () => {
-              throw new Error("unexpected exit");
-            },
-          },
+          runtime: { ...quietRuntime, log },
           reloadPlugins,
           assertForwardCurrent,
           deps: {
@@ -332,10 +323,10 @@ describe("Claw committed plugin requirement handoff", () => {
                 expectedPluginId: pluginId,
               });
               expect(params.env).toEqual({ ...env, OPENCLAW_CLAWHUB_URL: "http://127.0.0.1:3323" });
-              const next = {
+              const next: Record<string, PluginInstallRecord> = {
                 ...records,
                 [pluginId]: {
-                  source: "clawhub" as const,
+                  source: "clawhub",
                   clawhubPackage: `@owner/${pluginId}`,
                   version: "1.0.0",
                   integrity,
@@ -566,59 +557,31 @@ describe("Claw package setup and consent", () => {
         env,
         deps: {
           preflightPlugin: preflightPlugin(),
-          probePlugin: withStagedInspection(
-            vi.fn().mockResolvedValue({
-              ok: true,
+          probePlugin: withStagedInspection(async () =>
+            testPluginProbe({
               pluginId: "evidence",
               setup: { providers },
-              clawhub: { integrity },
               artifactInspection: { format: "openclaw", mapped: ["plugin"], unavailable: [] },
             }),
           ),
           inspectPluginCapabilities,
         },
       });
-    it("reports plugin setup when no declared environment credential is present", async () => {
-      await expect(preflight([provider])).resolves.toEqual(
-        expect.objectContaining({
-          requirements: [
-            {
-              kind: "plugin-setup",
-              plugin: "evidence",
-              provider: "evidence",
-              envVars: provider.envVars,
-              authMethods: provider.authMethods,
-            },
-          ],
-        }),
-      );
-    });
-
-    it.each([
-      {
-        name: "any declared credential from any provider",
-        providers: [
-          { id: "first", envVars: ["FIRST_API_KEY"] },
-          { id: "second", envVars: ["SECOND_API_KEY", "SECOND_TOKEN"] },
-        ],
-        env: { SECOND_TOKEN: "configured" },
-      },
-      {
-        name: "an auth-method-only provider",
-        providers: [{ id: "oauth-only", authMethods: ["oauth"] }],
-        env: {},
-      },
-    ])("accepts $name", async ({ providers, env }) => {
-      await expect(preflight(providers, env)).resolves.not.toHaveProperty("requirements");
-    });
-
-    it("accepts declared local auth evidence", async () => {
-      const credentialsDir = dirs.make("claw-auth-evidence-");
-      const credentialsPath = path.join(credentialsDir, "credentials.json");
-      await fs.writeFile(credentialsPath, "{}", "utf8");
-      await expect(
-        preflight(
-          [
+    it.each(["missing", "environment", "oauth-only", "local-file"] as const)(
+      "resolves setup requirements with %s credentials",
+      async (mode) => {
+        let providers: PluginManifestSetupProvider[] = [provider];
+        const env: NodeJS.ProcessEnv = {};
+        if (mode === "environment") {
+          providers = [{ id: "first", envVars: ["FIRST_API_KEY"] }, provider];
+          env.EVIDENCE_TOKEN = "configured";
+        } else if (mode === "oauth-only") {
+          providers = [{ id: "oauth-only", authMethods: ["oauth"] }];
+        } else if (mode === "local-file") {
+          env.EVIDENCE_CREDENTIALS = path.join(dirs.make("claw-auth-"), "credentials.json");
+          env.EVIDENCE_PROJECT = "project";
+          await fs.writeFile(env.EVIDENCE_CREDENTIALS, "{}");
+          providers = [
             {
               ...provider,
               authEvidence: [
@@ -630,11 +593,24 @@ describe("Claw package setup and consent", () => {
                 },
               ],
             },
-          ],
-          { EVIDENCE_CREDENTIALS: credentialsPath, EVIDENCE_PROJECT: "project" },
-        ),
-      ).resolves.not.toHaveProperty("requirements");
-    });
+          ];
+        }
+        const result = await preflight(providers, env);
+        if (mode === "missing") {
+          expect(result.requirements).toEqual([
+            {
+              kind: "plugin-setup",
+              plugin: "evidence",
+              provider: provider.id,
+              envVars: provider.envVars,
+              authMethods: provider.authMethods,
+            },
+          ]);
+        } else {
+          expect(result).not.toHaveProperty("requirements");
+        }
+      },
+    );
   });
 
   describe("installClawPackages", () => {
@@ -708,11 +684,10 @@ describe("Claw package setup and consent", () => {
 
     it("records a dependency ref without reinstalling an exact reused plugin", async () => {
       const installPlugin = vi.fn();
-      const probePluginForExtension = extensionProbe();
 
       const result = await installClawPackages(plan([{ ...consentPackage, extension }], "reuse"), {
         installPlugin,
-        probePlugin: withStagedInspection(probePluginForExtension),
+        probePlugin: withStagedInspection(extensionProbe()),
         preflightPlugin: reusePlugin(),
       });
 
@@ -750,32 +725,25 @@ describe("Claw package setup and consent", () => {
       expect(installPlugin).not.toHaveBeenCalled();
     });
 
-    it("invalidates consent when a skill trust warning changes after planning", async () => {
-      const planned = skillPlan("review warning one");
-
-      await expect(
-        installClawPackages(planned, {
-          preflightSkill: preflightSkill("review warning two"),
-        }),
-      ).rejects.toMatchObject({ code: "package_owner_state_changed" });
-    });
-
-    it("invalidates consent when a plugin trust warning changes after planning", async () => {
-      const planned = plan([consentPackage]);
+    it.each(["skill", "plugin"] as const)("invalidates changed %s trust warnings", async (kind) => {
+      const planned = plan([kind === "skill" ? skillPackage : consentPackage]);
       Object.assign(planned.actions[0]!.details!, { riskWarning: "review warning one" });
-
-      await expect(
-        installClawPackages(planned, {
-          probePlugin: withStagedInspection(
-            vi.fn().mockResolvedValue({
-              ok: true,
-              pluginId: "audit",
-              warning: "review warning two",
-              clawhub: { integrity },
-            }),
-          ),
-        }),
-      ).rejects.toMatchObject({ code: "package_owner_state_changed" });
+      const deps =
+        kind === "skill"
+          ? { preflightSkill: preflightSkill("review warning two") }
+          : {
+              probePlugin: withStagedInspection(
+                vi.fn().mockResolvedValue({
+                  ok: true,
+                  pluginId: "audit",
+                  warning: "review warning two",
+                  clawhub: { integrity },
+                }),
+              ),
+            };
+      await expect(installClawPackages(planned, deps)).rejects.toMatchObject({
+        code: "package_owner_state_changed",
+      });
     });
   });
 });

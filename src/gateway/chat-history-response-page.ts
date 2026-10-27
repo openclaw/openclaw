@@ -7,6 +7,7 @@ import type {
   ChatHistoryPageParams,
   ChatHistoryResponsePage,
 } from "../config/sessions/session-history-types.js";
+import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   buildOversizedHistoryPlaceholder,
@@ -42,8 +43,7 @@ export function enrichChatHistoryCompactionMarkers(
     return messages;
   }
   const checkpointByEntryId = new Map(metrics.map((metric) => [metric.entryId, metric]));
-  let changed = false;
-  const enriched = messages.map((message) => {
+  return mapChatDisplayMessages(messages, (message) => {
     const record = asOptionalRecord(message);
     const metadata = asOptionalRecord(record?.["__openclaw"]);
     if (metadata?.kind !== "compaction" || typeof metadata.id !== "string") {
@@ -58,7 +58,6 @@ export function enrichChatHistoryCompactionMarkers(
     if (tokensBefore === undefined && tokensAfter === undefined) {
       return message;
     }
-    changed = true;
     return {
       ...record,
       __openclaw: {
@@ -68,7 +67,6 @@ export function enrichChatHistoryCompactionMarkers(
       },
     };
   });
-  return changed ? enriched : messages;
 }
 
 function resolveChatHistoryMessageGroup(
@@ -121,28 +119,31 @@ export function prepareChatHistoryResponsePage(
   const framingCost = 1 + byteCounter.framingBytes(normalized);
   const maxCost = responseHistoryBytes - framingCost;
   const messageCost = (message: unknown) => byteCounter.messageBytes(message) + 1;
-  const groups: unknown[] = [];
+  let groups: unknown[] | undefined;
   for (let index = 0; index < normalized.length;) {
     const group = resolveChatHistoryMessageGroup(normalized, index, messageCost, messageSequences);
     // A source row is the fetchable unit; replacing its display siblings keeps
     // numeric offsets lossless without letting one row escape the page budget.
-    groups.push(
-      ...(group.cost > maxCost
-        ? [
-            buildOversizedHistoryPlaceholder(
-              normalized
-                .slice(group.start, group.end)
-                .find((message) => readChatHistoryMessageId(message) === messageId) ??
-                normalized[group.end - 1],
-            ),
-          ]
-        : normalized.slice(group.start, group.end)),
-    );
+    if (group.cost > maxCost) {
+      groups ??= normalized.slice(0, group.start);
+      groups.push(
+        buildOversizedHistoryPlaceholder(
+          normalized
+            .slice(group.start, group.end)
+            .find((message) => readChatHistoryMessageId(message) === messageId) ??
+            normalized[group.end - 1],
+        ),
+      );
+    } else if (groups) {
+      for (let cursor = group.start; cursor < group.end; cursor++) {
+        groups.push(normalized[cursor]);
+      }
+    }
     index = group.end;
   }
   const replaced = replaceOversizedChatHistoryMessages({
     byteCounter,
-    messages: groups,
+    messages: groups ?? normalized,
     maxSingleMessageBytes: Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxCost - 1),
   });
   const messages = replaced.messages;

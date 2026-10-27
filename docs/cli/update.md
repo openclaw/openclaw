@@ -52,12 +52,13 @@ Scheduler, its original terminal, or `openclaw gateway stop`, then rerun
 `openclaw update`. Updates without a live lock still continue on all platforms.
 This admission check requires an updated installed updater.
 
-For a global npm installation, the manual recovery path is
-`npm i -g openclaw@<target> --allow-scripts=openclaw`, then
-`openclaw doctor --fix`, then `openclaw gateway restart`. Replace `<target>` with
-the intended release and run service repair/restart from an elevated terminal
-if Task Scheduler denies access. OpenClaw prints this alternative; it does not
-run it automatically. Per-user Startup-folder installations do not require
+For a global npm installation, OpenClaw prints a short manual alternative
+(`npm i -g openclaw@<target> --allow-scripts=openclaw`, then
+`openclaw doctor --fix`, then `openclaw gateway restart`); it does not run it
+automatically. Follow the complete
+[manual update procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+with the intended release as the target, and run the service commands from an
+elevated terminal if Task Scheduler denies access. Per-user Startup-folder installations do not require
 elevation for this check. An older installed updater keeps its previous behavior
 until replaced; use the elevated or manual path for that first upgrade.
 

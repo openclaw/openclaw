@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Page } from "playwright";
+import type { JSHandle, Page } from "playwright";
 import type { ToolsCatalogResult, ToolsEffectiveResult } from "../../ui/src/api/types.ts";
 import { pathForAgentPanel, pathForRoute } from "../../ui/src/app-route-paths.ts";
 import type {
@@ -9,7 +9,10 @@ import type {
 } from "../../ui/src/lib/plugins/index.ts";
 import { createSkill } from "../../ui/src/pages/skills/view.test-support.ts";
 import { defaultControlUiFeatureMethods } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import { prepareInteractionNavigation } from "./control-ui-interaction-navigation.ts";
+import {
+  openNavigationDrawer,
+  prepareInteractionNavigation,
+} from "./control-ui-interaction-navigation.ts";
 import type {
   InteractionFixtureOverrides,
   InteractionScenario,
@@ -235,6 +238,32 @@ async function countRows(page: Page, selector: string, expected: number) {
   );
 }
 
+async function catalogCount(page: Page, expected: number) {
+  await page.waitForFunction((count) => {
+    const grids = Array.from(document.querySelectorAll(".plugin-catalog-grid"));
+    return (
+      grids.reduce((total, grid) => {
+        const listItem = grid.querySelector(".plugin-catalog-window-item[aria-setsize]");
+        return (
+          total +
+          (listItem
+            ? Number(listItem.getAttribute("aria-setsize"))
+            : grid.querySelectorAll(".plugin-catalog-card").length)
+        );
+      }, 0) === count
+    );
+  }, expected);
+}
+
+async function prepareCatalogPages(page: Page, count: number) {
+  await page.getByRole("button", { name: "Tools", exact: true }).click();
+  await catalogCount(page, catalogPageSize);
+  for (let loaded = catalogPageSize; loaded < count; loaded += catalogPageSize) {
+    await page.getByRole("button", { name: "Load more", exact: true }).click();
+    await catalogCount(page, loaded + catalogPageSize);
+  }
+}
+
 const fixture = {
   fixtureOverrides: () => createDataCatalogFixture(),
   dataPage: "catalog" as const,
@@ -262,6 +291,9 @@ async function agentAvatarCounts(references: Awaited<ReturnType<typeof agentAvat
 }
 
 async function prepareAgentSelector(page: Page) {
+  if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+    await openNavigationDrawer(page);
+  }
   await page.locator(".settings-sidebar__agent .agent-select__trigger").click();
   await countRows(page, "[data-agent-option]", agentCount);
   // Each rendered emoji acknowledges that agent's initial identity reply.
@@ -308,6 +340,9 @@ function agentSelectionScenario(roundTripMs: 0 | 100): InteractionScenario {
     }),
     prepare: prepareAgentSelector,
     run: async (page, gateway) => {
+      if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+        await openNavigationDrawer(page);
+      }
       const identityRequestsBefore = (await gateway.getRequests("agent.identity.get")).length;
       const originalAvatars = await agentAvatarReferences(page);
       try {
@@ -655,12 +690,13 @@ function catalogScenario(
   roundTripMs: 0 | 100,
 ): InteractionScenario {
   const append = action === "load-more";
+  const retainedByPage = new WeakMap<Page, JSHandle<(Element | null)[]>>();
   return {
     ...fixture,
     id: `data-catalog-${action}${roundTripMs ? "-100ms" : ""}`,
     route: pathForRoute("plugins"),
     expected: append
-      ? "The final cursor page appends 100 cards to a 900-card catalog without replacing existing cards."
+      ? "The final cursor page appends 100 entries to a 900-entry catalog and retains visible cards."
       : "Catalog search waits for its debounced Gateway request and renders 100 matching results.",
     rowSelector: ".plugin-catalog-card",
     createRequestHandlers: roundTripMs
@@ -696,28 +732,33 @@ function catalogScenario(
       : undefined,
     prepare: async (page) => {
       if (append) {
-        await page.getByRole("button", { name: "Tools", exact: true }).click();
+        await prepareCatalogPages(page, 900);
+        await page.getByRole("button", { name: "Load more", exact: true }).scrollIntoViewIfNeeded();
       } else {
         await page.getByRole("searchbox", { name: "Search plugins" }).waitFor();
+        await countRows(page, ".plugin-catalog-card", 8);
       }
-      await countRows(page, ".plugin-catalog-card", append ? catalogPageSize : 8);
-      if (append) {
-        for (let count = catalogPageSize; count < 900; count += catalogPageSize) {
-          await page.getByRole("button", { name: "Load more", exact: true }).click();
-          await countRows(page, ".plugin-catalog-card", count + catalogPageSize);
+      await frames(page);
+      const retained = await page.evaluateHandle((isAppend): (Element | null)[] => {
+        if (!isAppend) {
+          return [document.querySelector('input[aria-label="Search plugins"]')];
         }
+        const viewport = document.querySelector(".content")!.getBoundingClientRect();
+        return Array.from(document.querySelectorAll(".plugin-catalog-card")).filter((card) => {
+          const bounds = card.getBoundingClientRect();
+          return bounds.bottom > viewport.top && bounds.top < viewport.bottom;
+        });
+      }, append);
+      if (!(await retained.evaluate((nodes) => nodes.length > 0 && nodes.every(Boolean)))) {
+        await retained.dispose();
+        throw new Error("Catalog setup has no visible cards or search input to retain");
       }
+      retainedByPage.set(page, retained);
     },
     run: async (page, gateway) => {
       const match = append ? { category: "tools", cursor: "catalog:900" } : { query: pluginQuery };
       const after = (await gateway.getRequests("plugins.catalog.browse", match)).length;
-      const retained = await page.evaluateHandle((isAppend) => {
-        if (!isAppend) {
-          return [document.querySelector('input[aria-label="Search plugins"]')];
-        }
-        const cards = document.querySelectorAll(".plugin-catalog-card");
-        return [cards[0], cards[cards.length - 1]];
-      }, append);
+      const retained = retainedByPage.get(page)!;
       try {
         if (append) {
           await page.getByRole("button", { name: "Load more", exact: true }).click();
@@ -726,24 +767,24 @@ function catalogScenario(
         }
         await gateway.waitForRequest("plugins.catalog.browse", { after, match });
         const expectedCount = append ? inventorySize : 100;
-        await countRows(page, ".plugin-catalog-card", expectedCount);
-        await page.waitForFunction(
-          ({ start, count }) => {
+        await catalogCount(page, expectedCount);
+        if (!append) {
+          await page.waitForFunction(() => {
             const ids = new Set(
               Array.from(document.querySelectorAll(".plugin-catalog-card"), (card) =>
                 card.getAttribute("data-plugin-id"),
               ),
             );
-            return Array.from(
-              { length: count },
-              (_, index) => `data-catalog-${String(start + index).padStart(4, "0")}`,
-            ).every((id) => ids.has(id));
-          },
-          { start: append ? 0 : 900, count: expectedCount },
-        );
+            return (
+              ids.has("data-catalog-0900") &&
+              ids.has("data-catalog-0999") &&
+              [...ids].every((id) => /^data-catalog-09\d{2}$/u.test(id ?? ""))
+            );
+          });
+        }
         if (!(await retained.evaluate((nodes) => nodes.every((node) => node?.isConnected)))) {
           throw new Error(
-            append ? "Catalog append replaced an existing card" : "Search replaced its input",
+            append ? "Catalog append replaced a visible card" : "Search replaced its input",
           );
         }
         await frames(page);
@@ -755,12 +796,21 @@ function catalogScenario(
         return {
           fixturePlugins: inventorySize,
           ...(append
-            ? { mountedPlugins: inventorySize, retainedEndpointCards: 2 }
-            : { matchingPlugins: expectedCount, retainedSearchInput: true }),
+            ? {
+                loadedPlugins: inventorySize,
+                mountedPlugins: await page.locator(".plugin-catalog-card").count(),
+                retainedVisibleCards: await retained.evaluate((nodes) => nodes.length),
+              }
+            : {
+                matchingPlugins: expectedCount,
+                mountedPlugins: await page.locator(".plugin-catalog-card").count(),
+                retainedSearchInput: true,
+              }),
           catalogBrowseRequests: requests,
           catalogBrowseRoundTripMs: roundTripMs,
         };
       } finally {
+        retainedByPage.delete(page);
         await retained.dispose();
       }
     },
@@ -770,6 +820,55 @@ function catalogScenario(
 export const dataCatalogScenarios: readonly InteractionScenario[] = [
   catalogEntryScenario(0),
   catalogEntryScenario(100),
+  {
+    ...fixture,
+    id: "data-catalog-category-first-render",
+    route: pathForRoute("plugins"),
+    expected: "Opening Tools presents the first 100 entries of the 1,000-entry catalog.",
+    rowSelector: ".plugin-catalog-card",
+    prepare: async (page, gateway) => {
+      await countRows(page, ".plugin-catalog-card", 8);
+      const requests = await gateway.getRequests("plugins.catalog.browse");
+      if (requests.length !== 1) {
+        throw new Error("Category setup must contain only the initial overview request");
+      }
+      await page.getByRole("button", { name: "Tools", exact: true }).waitFor();
+      await frames(page);
+    },
+    run: async (page, gateway) => {
+      const match = { intent: "all", category: "tools", pageSize: catalogPageSize };
+      await page.getByRole("button", { name: "Tools", exact: true }).click();
+      await gateway.waitForRequest("plugins.catalog.browse", { match, exactParams: true });
+      await catalogCount(page, catalogPageSize);
+      await frames(page);
+      const ids = await page
+        .locator(".plugin-catalog-card")
+        .evaluateAll((cards) => cards.map((card) => card.getAttribute("data-plugin-id")));
+      if (
+        ids[0] !== "data-catalog-0000" ||
+        ids.at(-1) !== "data-catalog-0099" ||
+        ids.some(
+          (id, index) =>
+            !id || !/^data-catalog-00\d{2}$/u.test(id) || (index > 0 && id <= ids[index - 1]!),
+        )
+      ) {
+        throw new Error("First category page lost its endpoints or canonical entry ordering");
+      }
+      const requests = await gateway.getRequests("plugins.catalog.browse", match, {
+        exactParams: true,
+      });
+      const allRequests = await gateway.getRequests("plugins.catalog.browse");
+      if (requests.length !== 1 || allRequests.length !== 2) {
+        throw new Error("Category entry must issue exactly one 100-entry browse request");
+      }
+      return {
+        fixturePlugins: inventorySize,
+        firstPageEntries: catalogPageSize,
+        mountedPlugins: ids.length,
+        catalogBrowseRequests: requests.length,
+      };
+    },
+  },
   {
     ...fixture,
     id: "data-plugins-render",
@@ -823,6 +922,40 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
   catalogScenario("load-more", 100),
   catalogScenario("search", 0),
   catalogScenario("search", 100),
+  {
+    ...fixture,
+    id: "data-catalog-scroll",
+    route: pathForRoute("plugins"),
+    expected:
+      "All 1,000 sorted catalog entries remain reachable after scrolling through the window.",
+    rowSelector: ".plugin-catalog-card",
+    prepare: async (page) => {
+      await prepareCatalogPages(page, inventorySize);
+      await page.locator(".content").evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      await frames(page);
+    },
+    run: async (page) => {
+      await page.locator(".content").evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      const last = page.locator('[data-plugin-id="data-catalog-0999"]');
+      await last.waitFor({ state: "visible" });
+      await last.scrollIntoViewIfNeeded();
+      await frames(page);
+      const mountedPlugins = await page.locator(".plugin-catalog-card").count();
+      const positions = await page
+        .locator(".plugin-catalog-card")
+        .evaluateAll((cards) =>
+          cards.map((card) => Number(card.getAttribute("data-plugin-id")!.slice(-4))),
+        );
+      if (positions.some((position, index) => index > 0 && position <= positions[index - 1]!)) {
+        throw new Error("Catalog window changed canonical entry ordering");
+      }
+      return { loadedPlugins: inventorySize, mountedPlugins, finalEntryVisible: true };
+    },
+  },
   agentSelectionScenario(0),
   agentSelectionScenario(100),
   agentReopenRetentionScenario,

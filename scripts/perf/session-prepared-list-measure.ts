@@ -30,6 +30,7 @@ const { values } = parseArgs({
     warmup: { type: "string", default: "48" },
     "updates-per-list": { type: "string", default: "33" },
     mode: { type: "string", default: "timing" },
+    "running-candidates": { type: "boolean", default: false },
     reconciliation: { type: "boolean", default: false },
     "metadata-churn": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
@@ -37,6 +38,8 @@ const { values } = parseArgs({
     "sort-rows": { type: "string" },
     "sort-workload": { type: "boolean", default: false },
     "collector-presentation": { type: "boolean", default: false },
+    "search-workload": { type: "boolean", default: false },
+    "search-profile": { type: "boolean", default: false },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -92,6 +95,13 @@ const [
   import("../../src/state/openclaw-state-db.js"),
   import("../../src/infra/gateway-work-metrics.js"),
 ]);
+const { filterSessionEntries } = await import("../../src/gateway/session-list-filters.js");
+if (values["search-workload"]) {
+  const main = cfg.agents?.entries?.main;
+  assert(main);
+  main.identity = { name: "Synthetic Explorer" };
+  main.model = "openai/gpt-4.1";
+}
 config.setRuntimeConfigSnapshot(cfg);
 plugins.setActivePluginRegistry(pluginRegistry.createEmptyPluginRegistry());
 const releaseForeground = foreground.retainSessionListForegroundWork();
@@ -175,6 +185,38 @@ if (values["sort-workload"]) {
   }
 }
 
+if (values["running-candidates"]) {
+  cases.splice(0, cases.length, {
+    source: "agent-roster",
+    rowMode: "sidebar",
+    archived: "all",
+    limit: 50,
+    includeOwnerSessionCounts: true,
+    excludeSubagents: true,
+  });
+}
+
+if (values["search-workload"]) {
+  cases.length = 0;
+  for (const search of [
+    "investigation 123",
+    "Explorer",
+    "gpt-4.1",
+    "running",
+    "idle",
+    "zz-no-match",
+  ]) {
+    cases.push({
+      source: "agent-roster",
+      rowMode: "sidebar",
+      archived: "all",
+      limit: 50,
+      search,
+      ...(values["search-profile"] ? { involvingProfileId: profileId } : {}),
+    });
+  }
+}
+
 if (values.mode === "verify") {
   let seed = 224;
   const choose = <T>(items: readonly T[]): T => {
@@ -251,21 +293,60 @@ function sampledBytes(profile: HeapProfiler.SamplingHeapProfile) {
 }
 
 function sampledCpu(profile: Profiler.Profile) {
-  const targets = new Set(["withPreparedExactRows", "withAgentRosterFactsBatch", "selectPage"]);
-  const nodes = new Map(profile.nodes.map((node) => [node.id, node.callFrame.functionName]));
+  const targets = new Set([
+    "withPreparedExactRows",
+    "withAgentRosterFactsBatch",
+    "selectPage",
+    "matchesSearch",
+    "filterSessionEntries",
+    "matchesSessionArchiveFilter",
+    "readSessionRowModelFacts",
+    "mayMatchSessionRowModelSearch",
+    "resolveGatewaySessionThinkingProjectionInternal",
+    "resolveAvailableAgentHarnessPolicy",
+    "projectGatewaySessionRunState",
+  ]);
+  const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
+  const parents = new Map(
+    profile.nodes.flatMap((node) => (node.children ?? []).map((id) => [id, node.id] as const)),
+  );
   const selfMicros: Record<string, number> = {};
+  const inclusiveMicros: Record<string, number> = {};
+  const weights = new Map<number, number>();
   for (const [index, id] of (profile.samples ?? []).entries()) {
-    const name = nodes.get(id);
-    if (name && targets.has(name)) {
-      selfMicros[name] = (selfMicros[name] ?? 0) + (profile.timeDeltas?.[index] ?? 0);
+    weights.set(id, (weights.get(id) ?? 0) + (profile.timeDeltas?.[index] ?? 0));
+  }
+  for (const [id, weight] of weights) {
+    const seen = new Set<string>();
+    let current: number | undefined = id;
+    while (current !== undefined) {
+      const frame = nodes.get(current)?.callFrame;
+      const name = frame?.functionName;
+      if (
+        name &&
+        (targets.has(name) ||
+          (name === "entries" && frame.url.endsWith("/session-row-selection.ts")))
+      ) {
+        seen.add(name);
+        if (current === id) {
+          selfMicros[name] = (selfMicros[name] ?? 0) + weight;
+        }
+      }
+      current = parents.get(current);
+    }
+    for (const name of seen) {
+      inclusiveMicros[name] = (inclusiveMicros[name] ?? 0) + weight;
     }
   }
-  return selfMicros;
+  return { selfMicros, inclusiveMicros };
 }
 
 try {
   projection = await projections.createSessionRowProjection({ cfg, modelCatalog: [] });
   await projection.ensureMaterialized();
+  const searchIdentities = values["search-workload"]
+    ? await lists.prepareSessionSearchIdentityNames(projection, {}, true)
+    : undefined;
   const rows = projection.selectEntries({ agentId: "main" });
   if (values["sort-rows"]) {
     writeFileSync(
@@ -283,17 +364,27 @@ try {
         : row.key.startsWith("agent:main:dashboard:")),
   );
   assert(parent && children.length > 0, "Team fixture must contain child and dashboard rows");
+  const requesterParents = values["running-candidates"]
+    ? rows.filter(
+        (row) =>
+          row.key.startsWith("agent:main:dashboard:") &&
+          row.entry &&
+          row.entry.archivedAt === undefined,
+      )
+    : [parent];
+  assert(requesterParents.length > 0, "Running candidates require unarchived parent rows");
   for (const [index, child] of children.entries()) {
     assert(child.entry);
+    const requesterParent = requesterParents[index % requesterParents.length]!;
     active.push({
       runId: `prepared-list-live-${index}`,
       childSessionKey: child.key,
       childAgentId: "main",
       childSessionIdentity: { sessionId: child.entry.sessionId },
-      requesterSessionKey: parent.key,
+      requesterSessionKey: requesterParent.key,
       requesterAgentId: "main",
-      requesterDisplayKey: parent.key,
-      controllerSessionKey: parent.key,
+      requesterDisplayKey: requesterParent.key,
+      controllerSessionKey: requesterParent.key,
       task: "Synthetic list preparation churn",
       cleanup: "keep",
       generation: 1,
@@ -383,6 +474,16 @@ try {
   let collectorChildren = 0;
   const eventResponses =
     values.mode === "verify" && values["collector-presentation"] ? createHash("sha256") : undefined;
+  const bySearch = new Map<
+    string,
+    {
+      calls: number;
+      cpuMicros: number;
+      maxCpuMicros: number;
+      filterCpuMicros: number;
+      maxFilterCpuMicros: number;
+    }
+  >();
   const responses = values.mode === "verify" ? createHash("sha256") : undefined;
   const run = async (count: number, measured: boolean) => {
     for (let index = 0; index < count; index++) {
@@ -459,8 +560,24 @@ try {
         });
       }
       before = process.threadCpuUsage();
+      const query = cases[sequence % cases.length]!;
       const result = await read(sequence++);
       used = process.threadCpuUsage(before);
+      if (
+        values.mode === "verify" &&
+        values["running-candidates"] &&
+        (sequence - 1) % cases.length === 0
+      ) {
+        assert(result.ownerSessionCounts);
+        assert.equal(
+          result.ownerSessionCounts.reduce((total, owner) => total + owner.running, 0),
+          new Set(
+            active
+              .filter((subagentRun) => subagentRun.execution?.status === "running")
+              .map((subagentRun) => subagentRun.requesterSessionKey),
+          ).size,
+        );
+      }
       assert.equal(result.count, result.sessions.length);
       assert(typeof result.totalCount === "number");
       assert(result.totalCount >= result.count);
@@ -468,6 +585,19 @@ try {
       if (measured) {
         listCpuMicros += used.user + used.system;
         returnedRows += result.count;
+        if (values["search-workload"]) {
+          const sample = bySearch.get(query.search!) ?? {
+            calls: 0,
+            cpuMicros: 0,
+            maxCpuMicros: 0,
+            filterCpuMicros: 0,
+            maxFilterCpuMicros: 0,
+          };
+          sample.calls++;
+          sample.cpuMicros += used.user + used.system;
+          sample.maxCpuMicros = Math.max(sample.maxCpuMicros, used.user + used.system);
+          bySearch.set(query.search!, sample);
+        }
       }
     }
   };
@@ -499,6 +629,25 @@ try {
       ? (await inspector.post("HeapProfiler.stopSampling")).profile
       : undefined;
   const cpu = values["cpu-profile"] ? (await inspector.post("Profiler.stop")).profile : undefined;
+  // Owner probes allocate full result arrays; keep them out of subsequent list samples.
+  if (values["search-workload"]) {
+    for (let index = sequence - iterations; index < sequence; index++) {
+      const query = cases[index % cases.length]!;
+      const sample = bySearch.get(query.search!)!;
+      const prepared = lists.prepareSessionRowSelection(projection, query, {
+        now: clock,
+        metadataPrepared: true,
+      });
+      const filterBefore = process.threadCpuUsage();
+      filterSessionEntries({ ...prepared, identityNames: searchIdentities?.names });
+      const filterUsed = process.threadCpuUsage(filterBefore);
+      sample.filterCpuMicros += filterUsed.user + filterUsed.system;
+      sample.maxFilterCpuMicros = Math.max(
+        sample.maxFilterCpuMicros,
+        filterUsed.user + filterUsed.system,
+      );
+    }
+  }
   if (allocation) {
     writeFileSync(path.join(root, "allocation.heapprofile"), JSON.stringify(allocation));
   }
@@ -523,8 +672,17 @@ try {
     );
   const firstPartitions = partitionTotals(beforeSelections);
   const lastPartitions = partitionTotals(afterSelections);
+  const candidateSelections = (snapshot: typeof beforeSelections) =>
+    snapshot.selections.reduce(
+      (total, metric) => total + (metric.kind === "running-candidate" ? metric.calls : 0),
+      0,
+    );
+  const runningCandidateSelections =
+    candidateSelections(afterSelections) - candidateSelections(beforeSelections);
+  const sampled = cpu ? sampledCpu(cpu) : undefined;
   const result = {
     mode: values.mode,
+    runningCandidateWorkload: values["running-candidates"],
     cpuProfile: values["cpu-profile"],
     reconciliation: values.reconciliation,
     metadataChurn: values["metadata-churn"],
@@ -541,6 +699,8 @@ try {
     iterations,
     warmup,
     updatesPerList,
+    runningCandidateSelections,
+    runningCandidateSelectionsPerList: runningCandidateSelections / iterations,
     returnedRows,
     elapsedMs,
     threadCpuMs: (used.user + used.system) / 1000,
@@ -550,7 +710,9 @@ try {
     allocatedBytesPerList:
       bytes &&
       Object.fromEntries(Object.entries(bytes).map(([key, value]) => [key, value / iterations])),
-    targetSelfCpuMicros: cpu ? sampledCpu(cpu) : undefined,
+    targetSelfCpuMicros: sampled?.selfMicros,
+    targetInclusiveCpuMicros: sampled?.inclusiveMicros,
+    bySearch: Object.fromEntries(bySearch),
     golden,
     cases,
     host: { node: process.version, load: loadavg() },

@@ -56,6 +56,7 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 32      | Native PostgreSQL index ordering for non-null keys; metadata-only SQLite advance ([#183015](https://github.com/openclaw/openclaw/pull/183015))                                                                                                                                                                                                 | Unreleased          |
 | 33      | Native PostgreSQL ordering for predicate-proven non-null partial-index keys; metadata-only SQLite advance ([#183443](https://github.com/openclaw/openclaw/pull/183443))                                                                                                                                                                        | Unreleased          |
 | 34      | Durable default cron partition binding, independent of the state directory                                                                                                                                                                                                                                                                     | Unreleased          |
+| 35      | Content-addressed local workspace directory packs and source path sets, with compact per-projection file fingerprints                                                                                                                                                                                                                          | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
@@ -76,6 +77,47 @@ advances without guessing: the Gateway starts, cron reports the partition
 inventory, and `openclaw doctor --fix` offers an explicit interactive selection.
 Other partitions remain unchanged. Rollback restores the verified predecessor
 backup and its matching binary.
+
+### State schema 35
+
+Schema 35 shares immutable directory packs across local workspace projections
+and revisions in `local_workspace_tree_packs`. Each pack holds one directory's
+sibling treap records as JSON TEXT and a small child-pack digest array. Its
+primary key is the sibling root's existing 32-byte digest; the ordinary rowid
+table keeps large payloads outside that digest index. Loads traverse packs level
+by level in one read snapshot, without a root cache or digest recomputation.
+The existing digest definitions and deterministic tree shape are unchanged.
+Projections retain their accepted root in `tree_root_digest`, while
+`baseline_ref` keeps its existing base-commit-bound meaning. Shared,
+digest-addressed zstd blobs in `local_workspace_source_path_sets` replace repeated
+source path arrays; `source_paths_digest` selects a projection's set.
+
+Each projection also has one compact fingerprint blob per scan target. A blob
+binds its filesystem device, path-sorted file count, and inode/ctime records to
+the accepted tree root. Reuse requires a valid matching blob and unchanged inode,
+ctime, and file size, with ctime older than scan start minus two seconds.
+Recent, missing, stale, or malformed fingerprints force hashing;
+the process-local hash memo remains available. Fingerprints publish atomically
+with the root they describe.
+
+The migration adds tables and columns only. It does not scan or rewrite manifest
+data during database open or admission. The existing reconciliation owner
+converts one projection at a time from v31 node rows or legacy `baseline_json`,
+preserving pending receipts and checkpoint recovery. It prepares shared packs in
+bounded transactions before publishing the root, then retires that projection's
+old rows. `local_workspace_manifest_nodes` remains in schema 35 and will be
+dropped in a later version after conversion empties it. The agent schema version
+is unchanged.
+
+Workspace maintenance collects unreachable packs and path sets with an epoch
+grace period, retaining every accepted and pending checkpoint root. Missing roots
+are reconstructed only from an exact digest match in a workspace copy; otherwise,
+reconciliation reports an error and preserves files and the accepted baseline.
+SQLite and the generated PostgreSQL schema use the same representation and migration
+contract. Older workspace writers cannot safely maintain these roots, so builds
+supporting state schema 34 or earlier refuse schema 35. Rollback requires the
+verified pre-upgrade backup and matching build; never lower the schema markers.
+See the [storage contract](/reference/database-schemas/storage-changes#local-workspace-manifest-storage).
 
 ### State schemas 32 and 33
 

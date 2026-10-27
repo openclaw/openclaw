@@ -90,11 +90,6 @@ vi.mock("../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir,
 }));
 
-const applyAuthProfileConfig = vi.hoisted(() => vi.fn((config) => config));
-vi.mock("../plugins/provider-auth-helpers.js", () => ({
-  applyAuthProfileConfig,
-}));
-
 const isRemoteEnvironment = vi.hoisted(() => vi.fn(() => false));
 const openUrl = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../infra/browser-open.js", () => ({
@@ -249,7 +244,6 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       version: 1,
       profiles: {},
     });
-    applyAuthProfileConfig.mockImplementation((config) => config);
     resolveManifestProviderAuthChoice.mockReturnValue(undefined);
     resolvePluginSetupProvider.mockReturnValue(undefined);
     resolveProviderInstallCatalogEntry.mockReturnValue(undefined);
@@ -495,26 +489,6 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
   });
 
   it("merges provider config patches and emits provider notes", async () => {
-    applyAuthProfileConfig.mockImplementation(((
-      config: {
-        auth?: {
-          profiles?: Record<string, { provider: string; mode: string }>;
-        };
-      },
-      profile: { profileId: string; provider: string; mode: string },
-    ) => ({
-      ...config,
-      auth: {
-        profiles: {
-          ...config.auth?.profiles,
-          [profile.profileId]: {
-            provider: profile.provider,
-            mode: profile.mode,
-          },
-        },
-      },
-    })) as never);
-
     const events: string[] = [];
     const note = vi.fn(async () => {
       events.push("note");

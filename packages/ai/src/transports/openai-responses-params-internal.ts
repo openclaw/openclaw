@@ -16,7 +16,7 @@ import { prepareResponsesTools } from "../providers/openai-responses-tools.js";
 import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
 import { hasResponsesWebSearchTool } from "../providers/openai-web-search-tools.js";
 import { clampMaxTokensToModel } from "../providers/simple-options.js";
-import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
 import { usesNativeOpenAICodexResponsesBackend } from "./openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
 import {
@@ -36,7 +36,6 @@ import {
 } from "./openai-responses-replay-internal.js";
 import { getCompat } from "./openai-transport-params.js";
 import { resolvePromptCacheKey, type OpenAIModeModel } from "./openai-transport-shared.js";
-import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 const OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS = [
   "max_output_tokens",
@@ -81,7 +80,7 @@ function buildOpenAIResponsesInstructionsText(context: Context): string | undefi
   if (!context.systemPrompt) {
     return undefined;
   }
-  return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
+  return prepareSystemPrompt(context.systemPrompt, context.preparedSystemPrompt).instructions;
 }
 
 // xAI /responses/compact needs the system prompt first in input, not instructions:

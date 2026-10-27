@@ -49,7 +49,7 @@ import {
 } from "./session-source-authority.js";
 import { retainSessionTranscriptWorkerPublication } from "./session-transcript-authority.js";
 import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
-import { collectSessionEntryLookupKeys } from "./store-entry.js";
+import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Persisted entries are JSON; isolate mutable containers without copying immutable strings.
@@ -198,18 +198,25 @@ export async function patchSessionEntryInWorker(params: {
             source?.assertCurrent();
             const snapshot = await runOpenClawAgentWorkerWrite(params.database, async () => {
               const generation = execution.capturePreparedGenerationClaim();
+              const selection = params.selection;
+              const sessionKey =
+                selection.kind === "entry"
+                  ? selection.exact
+                    ? selection.sessionKey
+                    : selection.sessionKey.trim()
+                  : selection.target.canonicalKey;
+              const singleEntry =
+                selection.kind === "entry" ||
+                (sessionKey === normalizeStoreSessionKey(sessionKey) &&
+                  selection.target.storeKeys.every((key) => key === sessionKey));
               // Complete current facts already contain the callback's CAS preimage.
               // Alias targets and cold/incomplete facts keep their worker-owned selection.
               const retained =
-                params.selection.kind === "entry" && generation
+                singleEntry && generation
                   ? readRetainedSessionEntryFacts(
                       params.database,
                       {
-                        sessionKeys: [
-                          params.selection.exact
-                            ? params.selection.sessionKey
-                            : params.selection.sessionKey.trim(),
-                        ],
+                        sessionKeys: [sessionKey],
                         projection: "full",
                       },
                       generation,
@@ -325,7 +332,7 @@ export async function runSessionEntryWorkerOperation<
   agentId: string;
   assertCurrent: () => void;
   assertPrepared?: () => void;
-  assertCandidate?: (candidate: Candidate) => void;
+  assertCandidate?: (candidate: Candidate, operation: RetainedWorkerTransactionAdmission) => void;
   decodeCandidate?: (candidate: Candidate) => void;
   releaseSource?: () => void | Promise<void>;
   candidateKind: Candidate["kind"];
@@ -522,7 +529,7 @@ export async function runSessionEntryWorkerOperation<
       if (!isRecord(facts) || !matchesReceipt(facts.publication) || !settlement.candidate) {
         throw new Error("Session patch commit omitted its exact candidate");
       }
-      params.assertCandidate?.(settlement.candidate);
+      params.assertCandidate?.(settlement.candidate, retained);
       settlement.admitted = { admission, retained };
       transcriptPublication?.begin(
         settlement.candidate.publication?.transcriptPublication

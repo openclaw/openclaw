@@ -1,17 +1,24 @@
 // Selection-only owner measurement; no credentials, Git subprocesses, or network.
-// node --import ./scripts/tsx.mjs scripts/perf/github-tool-selection-measure.ts [iterations=100000]
+// node --import ./scripts/tsx.mjs scripts/perf/github-tool-selection-measure.ts [iterations=100000] [owner-module.ts]
 // Run unchanged and candidate sources in alternating order. Compare CPU and sampled
 // allocation per selection; Gateway load/latency evidence must be measured separately.
 import assert from "node:assert/strict";
 import { Session } from "node:inspector/promises";
+import { loadavg } from "node:os";
+import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
-import { matchesPreparedGitHubPublicationIdentity } from "../../src/agents/github-tool-identity.ts";
+import { pathToFileURL } from "node:url";
 import type { PreparedGitHubPublicationIdentity } from "../../src/agents/github-tool-identity.types.ts";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
 import { freezeTrustedJsonSnapshot } from "../../src/shared/immutable-data.ts";
 
 const iterations = Number(process.argv[2] ?? 100_000);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
+const {
+  matchesPreparedGitHubPublicationIdentity,
+}: typeof import("../../src/agents/github-tool-identity.js") = await import(
+  pathToFileURL(resolve(process.argv[3] ?? "src/agents/github-tool-identity.ts")).href
+);
 const profileId = `ghp_${"1".repeat(32)}`;
 const identity: PreparedGitHubPublicationIdentity = {
   source: "system-configured",
@@ -67,6 +74,7 @@ try {
       JSON.stringify({
         sample,
         iterations,
+        hostLoad: loadavg(),
         elapsedMs,
         cpuUsPerSelection: (cpu.user + cpu.system) / iterations,
         sampledBytesPerSelection: sampledBytes / iterations,

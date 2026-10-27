@@ -39,7 +39,7 @@ export function renderSessionSection(params: {
   const group = createMemo(() => section().category);
   // Created rows lead their section, so a create for this group takes that slot now.
   const pendingCreate = createMemo(() => {
-    const pending = host().pendingSessionCreate();
+    const pending = host().sessionCreateDisplay();
     return pending?.category && pending.category === group() ? pending : undefined;
   });
   const personOwner = createMemo(() => section().personOwner);
@@ -233,9 +233,12 @@ export function renderSessionSection(params: {
           `sidebar-recent-sessions__group--section-drop-${host().sessionOrganizer.sidebarSectionDropTarget?.position}`,
         {
           "sidebar-recent-sessions__group--headless": !section().renderHeader,
-          // Only a single selected owner's Person section renders without a header.
+          // A headerless Person catch-all shares the selected owner's title column,
+          // even when older rows lack identity metadata for a named Person section.
           "sidebar-recent-sessions__group--inline-owner":
-            !section().renderHeader && section().id.startsWith("person:"),
+            !section().renderHeader &&
+            (section().id.startsWith("person:") ||
+              (section().id === "ungrouped" && host().sessionsGrouping === "person")),
           "sidebar-recent-sessions__group--collapsed": collapsed(),
           "sidebar-recent-sessions__group--dragging":
             host().sessionOrganizer.draggingSidebarSection === section().id,
