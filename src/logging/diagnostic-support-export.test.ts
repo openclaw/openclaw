@@ -5,7 +5,6 @@ import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
-  type DiagnosticStabilityBundle,
   uninstallDiagnosticStabilityFatalHook,
   writeDiagnosticStabilityBundleForFailureSync,
 } from "./diagnostic-stability-bundle.js";
@@ -35,10 +34,6 @@ function emptyLogTail(file: string): LogTailPayload {
 
 function readJsonEntry(entries: Record<string, string>, name: string): unknown {
   return JSON.parse(entries[name] ?? "{}");
-}
-
-function logLine(msg: string, fields: Record<string, unknown> = {}) {
-  return JSON.stringify({ level: "info", ...fields, msg });
 }
 
 function writeJson(file: string, value: unknown) {
@@ -143,10 +138,12 @@ describe("diagnostic support export", () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       vi.stubEnv("OPENCLAW_CONFIG_PATH", privatePath);
       vi.mocked(logTailModule.readConfiguredLogTail).mockResolvedValue({
-        ...emptyLogTail(privatePath),
+        file: privatePath,
         cursor: 1,
         size: 1,
         lines: [JSON.stringify({ msg: marker })],
+        truncated: false,
+        reset: false,
       });
       const files = await exportEntries({ stabilityBundle: privatePath });
       expect(Object.values(files).join("\n")).not.toContain(marker);
@@ -224,19 +221,32 @@ describe("diagnostic support export", () => {
       gateway: {
         mode: "local",
         tailscale: { mode: "serve" },
-        auth: { mode: "token", token: fakeToken },
+        auth: {
+          mode: "token",
+          token: fakeToken,
+        },
       },
-      logging: { redactSensitive: "off" },
+      logging: {
+        redactSensitive: "off",
+      },
       models: {
         providers: {
           supportProxy: {
             request: {
-              auth: { mode: "header", headerName: "X-Support-Auth", value: requestAuthValue },
-              tls: { passphrase: requestTlsPassphrase },
+              auth: {
+                mode: "header",
+                headerName: "X-Support-Auth",
+                value: requestAuthValue,
+              },
+              tls: {
+                passphrase: requestTlsPassphrase,
+              },
               proxy: {
                 mode: "explicit-proxy",
                 url: "http://127.0.0.1:8080",
-                tls: { passphrase: proxyTlsPassphrase },
+                tls: {
+                  passphrase: proxyTlsPassphrase,
+                },
               },
             },
             models: [{ id: "support-model" }],
@@ -248,7 +258,11 @@ describe("diagnostic support export", () => {
         defaults: { groupPolicy: "disabled" },
         telegram: {
           accounts: {
-            "15555551212": { botToken: fakeToken, allowFrom: [privateChat], ownerId: 8675309001 },
+            "15555551212": {
+              botToken: fakeToken,
+              allowFrom: [privateChat],
+              ownerId: 8675309001,
+            },
           },
         },
       },
@@ -290,17 +304,21 @@ describe("diagnostic support export", () => {
     expect(bundle.status).toBe("written");
 
     const logTail: LogTailPayload = {
-      ...emptyLogTail(path.join(tempDir, "logs", "openclaw.log")),
+      file: path.join(tempDir, "logs", "openclaw.log"),
       cursor: 200,
       size: 200,
+      truncated: false,
+      reset: false,
       lines: [
-        logLine(`gateway websocket listening at ${credentialUrl}`, {
+        JSON.stringify({
           time: "2026-04-22T12:00:00.000Z",
+          level: "info",
           subsystem: "gateway",
           component: "gateway/server",
           channel: "telegram",
           sessionId: "gateway-session-15555551212",
           sessionKey: "matrix:!supportRoom:matrix.example.com:$supportEventSecret",
+          msg: `gateway websocket listening at ${credentialUrl}`,
           hostname: "support-host",
           message: privateChat,
           body: webhookBody,
@@ -318,10 +336,15 @@ describe("diagnostic support export", () => {
             }),
           },
         }),
-        logLine("user said structured secret payload", { component: "gateway/server" }),
-        logLine(`stuck session: lastAssistant="${privateAssistantReply}"`, {
+        JSON.stringify({
+          level: "info",
+          component: "gateway/server",
+          msg: "user said structured secret payload",
+        }),
+        JSON.stringify({
           level: "warn",
           subsystem: "diagnostic",
+          msg: `stuck session: lastAssistant="${privateAssistantReply}"`,
         }),
         JSON.stringify({
           "0": `stalled session: lastAssistant="${privateLogTapeAssistantReply}"`,
@@ -330,7 +353,10 @@ describe("diagnostic support export", () => {
         JSON.stringify({
           "0": JSON.stringify({ subsystem: "gateway/channels/matrix" }),
           "1": privateChat,
-          _meta: { logLevelName: "warn", name: "gateway-runtime" },
+          _meta: {
+            logLevelName: "warn",
+            name: "gateway-runtime",
+          },
         }),
         JSON.stringify({ module: `gAAAA${"b".repeat(40_000)}` }),
         `plain fallback ${privateChat} ${fakeToken}`,
@@ -345,11 +371,19 @@ describe("diagnostic support export", () => {
         service: {
           command: {
             programArguments: ["--token", fakeToken],
-            environment: { HOME: tempDir, OPENCLAW_GATEWAY_TOKEN: fakeToken },
+            environment: {
+              HOME: tempDir,
+              OPENCLAW_GATEWAY_TOKEN: fakeToken,
+            },
           },
         },
-        gateway: { probeUrl: credentialUrl },
-        warning: { chatId: 4444555566, message: privateChat },
+        gateway: {
+          probeUrl: credentialUrl,
+        },
+        warning: {
+          chatId: 4444555566,
+          message: privateChat,
+        },
       }),
       readHealthSnapshot: async () => ({
         ok: true,
@@ -360,7 +394,10 @@ describe("diagnostic support export", () => {
                 accountId: 15555551212,
                 configured: true,
                 phone: 4444555566,
-                probe: { ok: false, error: webhookBody },
+                probe: {
+                  ok: false,
+                  error: webhookBody,
+                },
               },
             },
           },
@@ -479,28 +516,63 @@ describe("diagnostic support export", () => {
   );
 
   it("sanitizes imported stability bundles before adding them to support exports", async () => {
-    const written = writeDiagnosticStabilityBundleForFailureSync(
-      "gateway.startup_failed",
-      undefined,
-      { stateDir: tempDir },
-    );
-    if (written.status !== "written") {
-      throw new Error("Expected fixture stability bundle");
-    }
-    const importedBundle: DiagnosticStabilityBundle = JSON.parse(
-      fs.readFileSync(written.path, "utf8"),
-    );
-    importedBundle.host.hostname = "private-hostname";
-    importedBundle.reason = "private reason token=secret";
-    writeJson(written.path, importedBundle);
+    const bundlePath = path.join(tempDir, "imported-stability.json");
+    const importedBundle = {
+      version: 1,
+      generatedAt: "2026-04-22T12:00:00.000Z",
+      reason: "private reason token=secret",
+      process: { pid: 123, platform: "darwin", arch: "arm64", node: "24.14.1", uptimeMs: 1000 },
+      host: { hostname: "private-hostname" },
+      error: { name: "private error name", code: "ERR_TEST" },
+      snapshot: {
+        generatedAt: "2026-04-22T12:00:00.000Z",
+        capacity: 1000,
+        count: 1,
+        dropped: 0,
+        events: [
+          {
+            seq: 1,
+            ts: 1,
+            type: "webhook.error",
+            channel: "telegram",
+            reason: "private event reason",
+            error: "event-error-secret",
+          },
+        ],
+        summary: {
+          byType: {
+            "webhook.error": 1,
+            "private summary type": 1,
+          },
+          privateSummary: "summary-secret",
+        },
+      },
+    };
+    writeJson(bundlePath, importedBundle);
 
-    const entries = await exportEntries({ stabilityBundle: written.path });
+    const entries = await exportEntries({ stabilityBundle: bundlePath });
     const stability = readJsonEntry(entries, "stability/latest.json");
     expect(stability).toHaveProperty("reason", "unknown");
     expect(stability).toHaveProperty("host", { hostname: "<redacted-hostname>" });
+    expect(stability).toHaveProperty("error", { code: "ERR_TEST" });
+    expect(stability).toHaveProperty("snapshot.events.0", {
+      seq: 1,
+      ts: 1,
+      type: "webhook.error",
+      channel: "telegram",
+    });
+    expect(stability).toHaveProperty("snapshot.summary.byType", { "webhook.error": 1 });
 
     const combined = Object.values(entries).join("\n");
-    for (const secret of ["private reason", "private-hostname"]) {
+    for (const secret of [
+      "private reason",
+      "private-hostname",
+      "private error name",
+      "private event reason",
+      "event-error-secret",
+      "private summary type",
+      "summary-secret",
+    ]) {
       expect(combined).not.toContain(secret);
     }
   });
@@ -516,16 +588,22 @@ describe("diagnostic support export", () => {
       const configPath = path.join(tempDir, "openclaw.json");
       writeJson(configPath, { discovery: { mdns: { mode: "minimal" } } });
       vi.mocked(logTailModule.readConfiguredLogTail).mockResolvedValue({
-        ...emptyLogTail(path.join(tempDir, "logs", "openclaw.log")),
+        file: path.join(tempDir, "logs", "openclaw.log"),
+        cursor: 0,
+        size: 0,
+        truncated: false,
+        reset: false,
         lines: [
-          logLine("bonjour: suppressing ciao interface assertion: AssertionError", {
+          JSON.stringify({
             time: "2026-04-22T12:00:00.000Z",
             level: "warn",
             subsystem: "gateway/discovery/bonjour",
+            msg: "bonjour: suppressing ciao interface assertion: AssertionError",
           }),
-          logLine("bonjour: disabling advertiser after 3 failed restarts", {
+          JSON.stringify({
             time: "2026-04-22T12:00:00.500Z",
             level: "warn",
+            msg: "bonjour: disabling advertiser after 3 failed restarts",
           }),
         ],
       });
@@ -541,8 +619,16 @@ describe("diagnostic support export", () => {
       expect(diagnostics).toHaveProperty("bonjour", {
         count: 2,
         warnings: 2,
-        last: { time: "2026-04-22T12:00:00.500Z", level: "warn", kind: "disabled" },
-        flags: { disabled: true, restarted: false, ciaoSuppressed: true },
+        last: {
+          time: "2026-04-22T12:00:00.500Z",
+          level: "warn",
+          kind: "disabled",
+        },
+        flags: {
+          disabled: true,
+          restarted: false,
+          ciaoSuppressed: true,
+        },
       });
     },
   );

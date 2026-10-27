@@ -213,6 +213,7 @@ test("sessions.delete rejects main and aborts active runs", async () => {
     { targetSessionKey: key, targetKind: "acp", reason, sendFarewell: true, outcome: "deleted" },
     { childSessionKey: key },
   );
+  expect(unbind).toHaveBeenCalledExactlyOnceWith({ targetSessionKey: key, reason });
 });
 
 test("sessions.delete preserves locked archived sessions and deletes ordinary archived sessions", async () => {

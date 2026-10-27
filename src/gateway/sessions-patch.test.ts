@@ -1,3 +1,5 @@
+// Session patch tests cover model/provider edits, subagent patching, provider
+// aliases, model catalog validation, and rejected invalid patch payloads.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
@@ -139,17 +141,6 @@ function catalogEntry(ref: string, metadata: Partial<ModelCatalogEntry> = {}): M
 
 function loadCatalog(...refs: string[]): ApplySessionsPatchArgs["loadGatewayModelCatalog"] {
   return async () => refs.map((ref) => catalogEntry(ref));
-}
-
-function reasoningCatalog(supported = true) {
-  return vi.fn(async () => [
-    catalogEntry(ANTHROPIC_SONNET_MODEL, {
-      reasoning: true,
-      contextWindows: supported
-        ? [{ id: "extended", label: "Extended", contextWindow: 200_000 }]
-        : [],
-    }),
-  ]);
 }
 
 function expectModelSelection(
@@ -363,7 +354,11 @@ describe("gateway sessions patch", () => {
     expect(archived.pinnedAt).toBeUndefined();
 
     const idempotent = await patchOk({
-      mainEntry: archived,
+      mainEntry: {
+        archivedAt: archived.archivedAt,
+        archivedBy,
+        archiveReason: "manual",
+      },
       archived: true,
       expectedSessionId: "sess",
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
@@ -529,7 +524,10 @@ describe("gateway sessions patch", () => {
     expect(entry.agentStatus?.expiresAt).toBeGreaterThanOrEqual(before + 30 * 60_000);
     expect(entry.agentStatus?.expiresAt).toBeLessThanOrEqual(Date.now() + 30 * 60_000);
 
-    await patchError({ mainEntry: {}, statusNote: "Waiting", ttlMinutes: 121 }, "use 1-120");
+    expectPatchError(
+      await runPatch({ mainEntry: {}, statusNote: "Waiting", ttlMinutes: 121 }),
+      "use 1-120",
+    );
   });
 
   test("clears the whole agent status explicitly", async () => {
@@ -561,9 +559,9 @@ describe("gateway sessions patch", () => {
   );
 
   test("recreates partial rows without dropping session settings", async () => {
-    const entry = await patchOk({
-      mainEntry: {
-        sessionId: undefined,
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        updatedAt: 1,
         sessionFile: "stale.jsonl",
         label: "Stale Session",
         sendPolicy: "deny",
@@ -571,9 +569,9 @@ describe("gateway sessions patch", () => {
         liveModelSwitchPending: true,
         responseUsage: "tokens",
         parentSessionKey: "agent:main:main",
-      },
-      fastMode: true,
-    });
+      } as SessionEntry,
+    };
+    const entry = await patchOk({ store, fastMode: true });
 
     expect(entry.sessionId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
@@ -913,7 +911,15 @@ describe("gateway sessions patch", () => {
   test.each([true, false])(
     "model reset revalidates retained selections once (context supported: %s)",
     async (supported) => {
-      const loadGatewayModelCatalog = reasoningCatalog(supported);
+      const loadGatewayModelCatalog = vi.fn(async () => [
+        {
+          ...catalogEntry(ANTHROPIC_SONNET_MODEL),
+          reasoning: true,
+          contextWindows: supported
+            ? [{ id: "extended", label: "Extended", contextWindow: 200_000 }]
+            : [],
+        },
+      ]);
       const entry = await patchOk({
         cfg: agentConfig({ model: ANTHROPIC_SONNET_MODEL }),
         mainEntry: {
@@ -933,7 +939,13 @@ describe("gateway sessions patch", () => {
   );
 
   test("one catalog prepares a combined model, thinking, and context-window patch", async () => {
-    const loadGatewayModelCatalog = reasoningCatalog();
+    const loadGatewayModelCatalog = vi.fn(async () => [
+      {
+        ...catalogEntry(ANTHROPIC_SONNET_MODEL),
+        reasoning: true,
+        contextWindows: [{ id: "extended", label: "Extended", contextWindow: 200_000 }],
+      },
+    ]);
     const entry = await patchOk({
       cfg: createAllowlistedAnthropicModelCfg(),
       mainEntry: {},
@@ -957,8 +969,8 @@ describe("gateway sessions patch", () => {
         throw new Error("Catalog failure must not replace early validation");
       });
       const store = mainStoreEntry({ label: "Original" });
-      await patchError(
-        { store, contextWindow: "extended", ...patch, loadGatewayModelCatalog },
+      expectPatchError(
+        await runPatch({ store, contextWindow: "extended", ...patch, loadGatewayModelCatalog }),
         message,
       );
       expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
@@ -1086,9 +1098,13 @@ describe("gateway sessions patch", () => {
   test("validates global patches against the selected agent", async () => {
     const entry = await patchOk({
       cfg: agentConfig(undefined, {
-        main: { model: { primary: "gmn/gpt-5.4" } },
-        work: { model: { primary: "openai/gpt-5.5" } },
-      }),
+        main: {
+          model: { primary: "gmn/gpt-5.4" },
+        },
+        work: {
+          model: { primary: "openai/gpt-5.5" },
+        },
+      }) as OpenClawConfig,
       storeKey: "global",
       agentId: "work",
       thinkingLevel: "xhigh",
@@ -1194,17 +1210,18 @@ describe("gateway sessions patch", () => {
       lastActivityAt: 1,
     });
 
-    await patchError(
-      {
-        cfg: modelConfig("openai/gpt-5.6-luna", {
-          models: { "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-        }),
-        mainEntry: {},
-        thinkingLevel: "xhigh",
-        loadGatewayModelCatalog: async () => [],
-      },
-      'thinkingLevel "xhigh" is not supported',
-    );
+    const result = await runPatch({
+      cfg: modelConfig("openai/gpt-5.6-luna", {
+        models: {
+          "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
+        },
+      }),
+      mainEntry: {},
+      thinkingLevel: "xhigh",
+      loadGatewayModelCatalog: async () => [],
+    });
+
+    expectPatchError(result, 'thinkingLevel "xhigh" is not supported');
     expect(acpSessionMetaMocks.readAcpSessionMetaForEntryAsync).toHaveBeenCalledWith({
       sessionKey: MAIN_SESSION_KEY,
       agentId: "main",
@@ -1228,33 +1245,41 @@ describe("gateway sessions patch", () => {
   });
 
   test.each([
-    ["completionOwnerSessionKey", MAIN_SESSION_KEY, "agent:main:discord:direct:bob", "changed"],
-    ["inheritedToolPolicyVersion", 1, null, "cleared"],
+    {
+      field: "completionOwnerSessionKey",
+      value: "agent:main:main",
+      replacement: "agent:main:discord:direct:bob",
+      error: "completionOwnerSessionKey cannot be changed once set",
+    },
+    {
+      field: "inheritedToolPolicyVersion",
+      value: 1,
+      replacement: null,
+      error: "inheritedToolPolicyVersion cannot be cleared once set",
+    },
   ] as const)(
-    "sets immutable %s for ACP sessions",
-    async (field, value, replacement, operation) => {
+    "sets immutable $field for ACP sessions",
+    async ({ field, value, replacement, error }) => {
       const entry = await patchOk({ storeKey: "agent:main:acp:child", [field]: value });
       expect(entry[field]).toBe(value);
 
-      await patchError(
-        {
-          storeKey: "agent:main:acp:child",
-          store: { "agent:main:acp:child": entry },
-          [field]: replacement,
-        },
-        `${field} cannot be ${operation} once set`,
-      );
+      const result = await runPatch({
+        storeKey: "agent:main:acp:child",
+        store: { "agent:main:acp:child": entry },
+        [field]: replacement,
+      });
+      expectPatchError(result, error);
     },
   );
 
   test.each([
-    ["inheritedToolDeny", ["bash", "read", "bash"], ["exec", "read"]],
-    [
-      "inheritedToolAllow",
-      ["sessions_spawn", "read", "sessions_spawn"],
-      ["sessions_spawn", "read"],
-    ],
-  ] as const)("normalizes %s for ACP sessions", async (field, input, expected) => {
+    { field: "inheritedToolDeny", input: ["bash", "read", "bash"], expected: ["exec", "read"] },
+    {
+      field: "inheritedToolAllow",
+      input: ["sessions_spawn", "read", "sessions_spawn"],
+      expected: ["sessions_spawn", "read"],
+    },
+  ] as const)("normalizes $field for ACP sessions", async ({ field, input, expected }) => {
     const entry = await patchOk({ storeKey: "agent:main:acp:child", [field]: [...input] });
     expect(entry[field]).toEqual(expected);
   });

@@ -640,7 +640,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
     180_000,
   );
 
-  it.each(["absent", "changed environment"])(
+  it.each(["environment", "absent", "changed environment"])(
     "restores the authored %s engine value after a committed config write fails",
     async (authored) => {
       await fixture(async ({ state, source }) => {
