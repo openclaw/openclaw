@@ -357,75 +357,102 @@ describe("runReplyAgent runtime config", () => {
     },
   );
 
-  it("keeps the ingress watchdog scoped around runnable memory flush", async () => {
-    await useRealMemory();
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 4_000,
-        forceFlushTranscriptBytes: 1_000_000_000,
-        reserveTokensFloor: 20_000,
-        prompt: "Save durable notes. NO_REPLY",
-        systemPrompt: "Write memory to memory/notes.md.",
-        relativePath: "memory/notes.md",
-      }),
-    });
-    try {
-      await withTestDir({ prefix: "openclaw-memory-heartbeat-" }, async (tempDir) => {
-        const runtime = await createStoredRuntime(tempDir, {
-          totalTokens: 95_000,
-          totalTokensFresh: true,
-          totalTokensVersion: 1,
-        });
-        const { replyParams, followupRun } = runtime;
-        followupRun.run.workspaceDir = tempDir;
-        const lifecycle = {
-          admission: "exclusive" as const,
-          onAdopted: vi.fn(),
-          onDeferredHeartbeat: vi.fn(),
-          deferredHeartbeatIntervalMs: 100,
-        };
-        followupRun.turnAdoptionLifecycle = lifecycle;
-        replyParams.opts = { turnAdoptionLifecycle: lifecycle };
-        const cfg = resolveMemoryConfig(runtime, {
-          agents: { defaults: { compaction: { memoryFlush: {} } } },
-        });
-        setRuntimeConfigSnapshot(cfg);
-        onTestFinished(() => clearRuntimeConfigSnapshot());
-        const entered = createDeferred();
-        const release = createDeferred();
-        runEmbeddedAgentMock.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return { payloads: [], meta: {} };
-        });
-        vi.useFakeTimers();
-        const pending = runReplyAgent(replyParams);
-        try {
-          await expect(
-            Promise.race([
-              entered.promise.then(() => "entered"),
-              pending.then(() => "completed-before-flush"),
-            ]),
-          ).resolves.toBe("entered");
-          await vi.advanceTimersByTimeAsync(350);
-          expect(lifecycle.onDeferredHeartbeat.mock.calls.length).toBeGreaterThanOrEqual(2);
-          release.resolve();
-          await expect(pending).resolves.toEqual({ text: "main reply" });
-          expect(lifecycle.onAdopted).toHaveBeenCalledOnce();
-          lifecycle.onDeferredHeartbeat.mockClear();
-          await vi.advanceTimersByTimeAsync(500);
-          expect(lifecycle.onDeferredHeartbeat).not.toHaveBeenCalled();
-          expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-        } finally {
-          release.resolve();
-          await Promise.allSettled([pending]);
-          vi.useRealTimers();
-        }
+  it.each([
+    { name: "runnable", expectedHeartbeats: 2, denyWrite: false },
+    { name: "write-denied", expectedHeartbeats: 0, denyWrite: true },
+  ])(
+    "keeps the ingress watchdog scoped around $name memory flush before compaction and reply",
+    async (testCase) => {
+      await useRealMemory();
+      registerMemoryCapability("memory-core", {
+        flushPlanResolver: () => ({
+          softThresholdTokens: 4_000,
+          forceFlushTranscriptBytes: 1_000_000_000,
+          reserveTokensFloor: 20_000,
+          prompt: "Save durable notes. NO_REPLY",
+          systemPrompt: "Write memory to memory/notes.md.",
+          relativePath: "memory/notes.md",
+        }),
       });
-    } finally {
-      clearMemoryPluginState();
-    }
-  });
+      try {
+        await withTestDir({ prefix: "openclaw-memory-heartbeat-" }, async (tempDir) => {
+          const runtime = await createStoredRuntime(tempDir, {
+            totalTokens: 95_000,
+            totalTokensFresh: true,
+            totalTokensVersion: 1,
+          });
+          const { replyParams, followupRun } = runtime;
+          followupRun.run.workspaceDir = tempDir;
+          const lifecycle = {
+            admission: "exclusive" as const,
+            onAdopted: vi.fn(),
+            onDeferredHeartbeat: vi.fn(),
+            deferredHeartbeatIntervalMs: 100,
+          };
+          followupRun.turnAdoptionLifecycle = lifecycle;
+          replyParams.opts = { turnAdoptionLifecycle: lifecycle };
+          const cfg = resolveMemoryConfig(runtime, {
+            agents: { defaults: { compaction: { memoryFlush: {} } } },
+            ...(testCase.denyWrite ? { tools: { deny: ["write"] } } : {}),
+          });
+          setRuntimeConfigSnapshot(cfg);
+          onTestFinished(() => clearRuntimeConfigSnapshot());
+          const entered = createDeferred();
+          const release = createDeferred();
+          runEmbeddedAgentMock.mockImplementationOnce(async () => {
+            entered.resolve();
+            if (testCase.expectedHeartbeats > 0) {
+              await release.promise;
+            }
+            return { payloads: [], meta: {} };
+          });
+          vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+          const pending = runReplyAgent(replyParams);
+          try {
+            if (testCase.expectedHeartbeats > 0) {
+              await expect(
+                Promise.race([
+                  entered.promise.then(() => "entered"),
+                  pending.then(() => "completed-before-flush"),
+                ]),
+              ).resolves.toBe("entered");
+              await vi.advanceTimersByTimeAsync(350);
+              expect(lifecycle.onDeferredHeartbeat.mock.calls.length).toBeGreaterThanOrEqual(
+                testCase.expectedHeartbeats,
+              );
+              release.resolve();
+            }
+            await expect(pending).resolves.toEqual({ text: "main reply" });
+            expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledOnce();
+            expect(executeAgentTurnMock).toHaveBeenCalledOnce();
+            expect(
+              executeAgentTurnMock.mock.calls[0]?.[0].getActiveSessionEntry()?.compactionCount,
+            ).toBe(1);
+            if (testCase.denyWrite) {
+              await expect(
+                runMemoryFlushIfNeededMock.mock.results[0]?.value,
+              ).resolves.toMatchObject({
+                outcome: "skipped",
+              });
+            }
+            expect(lifecycle.onAdopted).toHaveBeenCalledOnce();
+            lifecycle.onDeferredHeartbeat.mockClear();
+            await vi.advanceTimersByTimeAsync(500);
+            expect(lifecycle.onDeferredHeartbeat).not.toHaveBeenCalled();
+            expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(
+              testCase.expectedHeartbeats > 0 ? 1 : 0,
+            );
+          } finally {
+            release.resolve();
+            await Promise.allSettled([pending]);
+            vi.useRealTimers();
+          }
+        });
+      } finally {
+        clearMemoryPluginState();
+      }
+    },
+  );
 
   it("records abortForRestart during memory flush as cancellation without starting the main turn", async () => {
     const { replyParams } = createDirectRuntimeReplyParams();
