@@ -245,7 +245,11 @@ async function readWarmCache(page: Page, sessionKey: string) {
                 .objectStore("snapshots")
                 .get(value);
               request.addEventListener("success", () => resolve(request.result), { once: true });
-              request.addEventListener("error", () => reject(request.error), { once: true });
+              request.addEventListener(
+                "error",
+                () => reject(new Error("Unable to read warm snapshot", { cause: request.error })),
+                { once: true },
+              );
             }),
         ),
       );

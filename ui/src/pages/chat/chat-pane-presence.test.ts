@@ -171,4 +171,10 @@ it("keeps the roster unknown through self-only hello until full presence arrives
   expect(pane.presence.snapshot).toBe(full);
   const empty = await publishPresence(pane, []);
   expect(pane.presence.snapshot).toBe(empty);
+  const accepted = withSelf(person("Riley"));
+  const lateGateway = { ...context.gateway, readPresence: () => accepted };
+  owner.context = { ...owner.context, gateway: lateGateway };
+  owner.connectedClient = null;
+  owner.applyGatewaySnapshot(lateGateway.snapshot);
+  expect(pane.presence.snapshot).toEqual({ presence: accepted });
 });

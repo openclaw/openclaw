@@ -26,7 +26,7 @@ export async function startWarmReloadAdmission(options: { gatewayPort: number; p
     email: `proof-viewer-${index}@example.invalid`,
     session: randomUUID(),
   }));
-  const identities = new Map([
+  const identities = new Map<string, string>([
     [session, viewerEmail],
     ...peerSessions.map((peer) => [peer.session, peer.email] as const),
   ]);

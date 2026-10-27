@@ -209,7 +209,7 @@ describe("public session sharing", () => {
     cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
       messages: [],
       pagination: { hasMore: false },
-      sessionId: row.sessionId,
+      sessionId: state.currentSessionId,
       headerSharing: "shared",
     });
     expect(pane.headerSharingPlaceholder({ ...row, sharingRole: undefined }, undefined)).toBe(

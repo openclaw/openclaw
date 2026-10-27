@@ -310,9 +310,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (clientChanged) {
       this.replaceStagedAttachmentGatewayOwner(snapshot.client);
     }
-    // Hello carries only self identity; the presence stream owns the full roster.
+    // A pane can mount after the full roster arrived; hello itself is self-only.
     if (snapshot.phase !== "connected" || clientChanged) {
-      this.presence.update(undefined);
+      const presence =
+        snapshot.phase === "connected" ? this.context.gateway.readPresence?.() : undefined;
+      this.presence.update(presence === undefined ? undefined : { presence });
     }
     const rename = this.headerPresentation.renameSession;
     const draftOwnerChanged = state.client !== snapshot.client || pairingOwnerChanged;

@@ -45,12 +45,12 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
   ): ChatHeaderSharingSnapshot | undefined {
     const state = this.state;
     if (!state) {
-      return;
+      return undefined;
     }
     const target = { sessionKey: state.sessionKey };
     const saved = readChatSessionSnapshot(state.chatMessagesBySession, state, target);
     if (!saved || saved.sessionId !== state.currentSessionId) {
-      return;
+      return undefined;
     }
     if (
       row &&
@@ -71,7 +71,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
           headerSharing: display,
         });
       }
-      return;
+      return undefined;
     }
     // A connected row can precede control admission; retain its geometry until replacement.
     return saved.headerSharing ?? undefined;

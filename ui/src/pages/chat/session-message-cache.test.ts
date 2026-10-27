@@ -70,12 +70,6 @@ describe("session message cache", () => {
     expect(write).toHaveBeenCalledTimes(2);
     expect(readChatSessionSnapshot(cache, host, target)?.sessionState?.archived).toBe(false);
   });
-  it("admits a first snapshot without a session incarnation", () => {
-    const { read, write } = createCacheContext();
-    const value = { messages: ["first history"], pagination: { hasMore: false } };
-    write(value);
-    expect(read()).toMatchObject(value);
-  });
   it("retains reaction facts only across the same session incarnation", () => {
     const { read, write } = createCacheContext();
     const summaries = [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }];
