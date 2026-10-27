@@ -6,8 +6,8 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { FAST_RESET_LINEAGE_FIXTURE } from "../../config/sessions/session-lineage.test-support.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
-import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
 import {
