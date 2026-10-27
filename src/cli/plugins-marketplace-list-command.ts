@@ -31,7 +31,9 @@ export async function runPluginMarketplaceListCommand(
   }
 
   if (result.manifest.plugins.length === 0) {
-    defaultRuntime.log(`No plugins found in marketplace ${result.sourceLabel}.`);
+    defaultRuntime.log(
+      `No plugins found in marketplace ${sanitizeTerminalText(result.sourceLabel)}.`,
+    );
     return;
   }
 
