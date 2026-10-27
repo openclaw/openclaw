@@ -214,11 +214,6 @@ export async function listPage(
         const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
         const source = state.store?.jobs ?? [];
         sourceCount = source.length;
-        const readJobs = (read.readJobs ??= resolveCronListSnapshotRows(
-          source,
-          state.listSnapshotRows,
-        ));
-        state.listSnapshotRows = readJobs;
         const defaultAgentId = requestedAgentId ? resolveCurrentDefaultAgentId(state) : undefined;
         const filtered = source.filter((job) => {
           if (enabledFilter === "enabled" && !isJobEnabled(job)) {
@@ -278,7 +273,14 @@ export async function listPage(
             candidate.filteredJobs.every((job, index) => job === filtered[index]),
         );
         if (!snapshot) {
-          const jobs = sortCronJobs([...filtered], sortBy, sortDir);
+          // A list miss also covers row replacements inside the same source array.
+          const readJobs = resolveCronListSnapshotRows(source, state.listSnapshotRows);
+          state.listSnapshotRows = readJobs;
+          const jobs = sortCronJobs(
+            filtered.map((job) => readJobs.get(job.id)!.job),
+            sortBy,
+            sortDir,
+          );
           snapshot = {
             filteredJobs: filtered,
             sortBy,
@@ -299,9 +301,7 @@ export async function listPage(
         const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
         const defaultLimit = total === 0 ? 50 : total;
         const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
-        const jobs = sortedJobs
-          .slice(offset, offset + limit)
-          .map((job) => readJobs.get(job.id)!.job);
+        const jobs = sortedJobs.slice(offset, offset + limit);
         const nextOffset = offset + jobs.length;
         return (result = {
           jobs,

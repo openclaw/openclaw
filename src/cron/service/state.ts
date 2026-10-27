@@ -369,6 +369,7 @@ export type CronJobPolicyContext = {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
+  /** Detached rows and their content digests survive unchanged store publications. */
   listSnapshotRows?: ReturnType<typeof resolveCronListSnapshotRows>;
   /** Worker publications replace the source rows or advance the store revision. */
   readSnapshot?: {
@@ -379,11 +380,10 @@ export type CronServiceState = {
       filteredJobs: CronJob[];
       sortBy: CronJobsSortBy;
       sortDir: CronSortDir;
+      /** Frozen rows captured with this exact list revision. */
       jobs: CronJob[];
       snapshotRevision: string;
     }[];
-    /** Detached rows and their content digests survive unchanged store publications. */
-    readJobs?: ReturnType<typeof resolveCronListSnapshotRows>;
     searchText: WeakMap<CronJob, string>;
   };
   /** Last known durable wake for each persisted job. Map presence distinguishes

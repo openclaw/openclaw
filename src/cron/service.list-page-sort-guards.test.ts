@@ -314,5 +314,19 @@ it("hashes only changed rows across publications and interleaved list variants",
   });
   expect((await listPage(state, { query: "alpha" })).snapshotRevision).toBe(first.snapshotRevision);
   expect(hash).toHaveBeenCalledTimes(1);
-  expect((await listPage(state, { query: "beta" })).jobs[0]?.state.lastStatus).toBe("ok");
+  const original = state.store!.jobs[1]!;
+  const beforeReplacement = await listPage(state, { query: "beta" });
+  expect(beforeReplacement.jobs[0]?.state.lastStatus).toBe("ok");
+  await locked(state, async () => {
+    state.store!.jobs[1] = { ...original, name: "beta replaced" };
+  });
+  const replaced = await listPage(state, { query: "beta" });
+  expect(replaced.jobs[0]?.name).toBe("beta replaced");
+  expect(replaced.snapshotRevision).not.toBe(beforeReplacement.snapshotRevision);
+  await locked(state, async () => {
+    state.store!.jobs[1] = original;
+  });
+  const restored = await listPage(state, { query: "beta" });
+  expect(restored.snapshotRevision).toBe(beforeReplacement.snapshotRevision);
+  expect(restored.jobs[0]).toBe(beforeReplacement.jobs[0]);
 });
