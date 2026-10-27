@@ -299,7 +299,9 @@ export function composeSessionSourceAssertion(
   function prepare(scoped?: false): Promise<PreparedSessionSourceAuthority>;
   async function prepare(scoped = false): Promise<PreparedSessionSourceAuthority | undefined> {
     const prepared: PreparedSessionSourceAuthority[] = [];
-    const scopedSources = new Map<SessionSourceAssertion, PreparedSessionSourceAuthority>();
+    const scopedSources = scoped
+      ? new Map<SessionSourceAssertion, PreparedSessionSourceAuthority>()
+      : undefined;
     const release = () => releaseSessionSourceAuthorities(prepared);
     const assertCurrentSources = () => {
       for (const source of prepared) {
@@ -316,7 +318,7 @@ export function composeSessionSourceAssertion(
         const value = scoped
           ? await prepareSessionSourceScope(source)
           : await prepareSessionSourceAuthority(source);
-        if (scoped && value && source) {
+        if (scopedSources && value && source) {
           for (const [assertion, nested] of value.scopedSources ?? []) {
             scopedSources.set(assertion, nested);
           }
@@ -332,7 +334,7 @@ export function composeSessionSourceAssertion(
           },
         );
       }
-      if (scoped && scopedSources.size === 0) {
+      if (scopedSources?.size === 0) {
         return undefined;
       }
       return {
@@ -343,16 +345,18 @@ export function composeSessionSourceAssertion(
         assertPreparedCurrent: () => (options?.preparedCheck ?? check)(assertPreparedSources),
         ...(scoped ? { scopedSources } : {}),
         checks: prepared.flatMap((source, index) =>
-          source.checks.map(({ refuse, ...preparedCheck }) => ({
-            ...preparedCheck,
-            refuse: (facts) => {
-              check(() => {
-                prepared.slice(0, index).forEach((previous) => previous.assertCurrent());
-                refuse(facts);
-              });
-              throw new Error("Source authority refusal was suppressed");
-            },
-          })),
+          source.checks.length === 0
+            ? source.checks
+            : source.checks.map(({ refuse, ...preparedCheck }) => ({
+                ...preparedCheck,
+                refuse: (facts) => {
+                  check(() => {
+                    prepared.slice(0, index).forEach((previous) => previous.assertCurrent());
+                    refuse(facts);
+                  });
+                  throw new Error("Source authority refusal was suppressed");
+                },
+              })),
         ),
         release,
       };

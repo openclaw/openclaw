@@ -89,30 +89,25 @@ describe("plugins cli multi-package uninstall", () => {
     for (const record of index.plugins) {
       recordInstalledPluginIndexInstallOwner(record, "pack");
     }
-    const indexSpy = vi
-      .spyOn(installedIndexModule, "loadInstalledPluginIndex")
-      .mockReturnValue(index);
-    try {
-      await uninstall("pack/one", "pack/two", "pack", "One", "pack/one", "--force", "--keep-files");
-      expect(pluginsCliRuntimeLogs.filter((line) => line.startsWith("Plugin:"))).toHaveLength(1);
-      expectRuntimeLogIncludes("all entries will be removed: pack/one, pack/two");
-      expectRuntimeLogIncludes("channels.first");
-      expectRuntimeLogIncludes("channels.second");
-      expect(promptYesNoMock).not.toHaveBeenCalled();
-      expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
-      expect(await fs.readFile(path.join(packageInstallPath, "keep.txt"), "utf8")).toBe(
-        "owned plugin files",
-      );
-      expect(readInstallRecords()).toEqual({});
-      expect(pluginCliConfigMock().plugins?.entries).toEqual({
-        "pack/one": { enabled: false },
-        "pack/two": { enabled: false },
-      });
-      expect(pluginCliConfigMock().channels).toEqual({ unrelated: {} });
-      expect(configWriteMock).toHaveBeenCalledOnce();
-    } finally {
-      indexSpy.mockRestore();
-    }
+    using _ = vi.spyOn(installedIndexModule, "loadInstalledPluginIndex").mockReturnValue(index);
+
+    await uninstall("pack/one", "pack/two", "pack", "One", "pack/one", "--force", "--keep-files");
+    expect(pluginsCliRuntimeLogs.filter((line) => line.startsWith("Plugin:"))).toHaveLength(1);
+    expectRuntimeLogIncludes("all entries will be removed: pack/one, pack/two");
+    expectRuntimeLogIncludes("channels.first");
+    expectRuntimeLogIncludes("channels.second");
+    expect(promptYesNoMock).not.toHaveBeenCalled();
+    expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(packageInstallPath, "keep.txt"), "utf8")).toBe(
+      "owned plugin files",
+    );
+    expect(readInstallRecords()).toEqual({});
+    expect(pluginCliConfigMock().plugins?.entries).toEqual({
+      "pack/one": { enabled: false },
+      "pack/two": { enabled: false },
+    });
+    expect(pluginCliConfigMock().channels).toEqual({ unrelated: {} });
+    expect(configWriteMock).toHaveBeenCalledOnce();
   });
 
   describe("multiple package owners", () => {

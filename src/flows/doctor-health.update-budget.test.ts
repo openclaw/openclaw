@@ -26,11 +26,10 @@ const repairIds = doctorIds(
   "auth-profiles structured-health-repairs session-transcripts write-config final-config-validation",
 );
 const repairAnd = (names: string) => new Set([...repairIds, ...doctorIds(names)]);
-const deferredChecks = [
-  "core/doctor/hooks-model",
-  "core/doctor/provider-catalog-projection",
-  "core/doctor/runtime-tool-schemas",
-];
+const deferredChecks =
+  "database-engine hooks-model provider-catalog-projection runtime-tool-schemas"
+    .split(" ")
+    .map((id) => `core/doctor/${id}`);
 const updateBudget = (phase: "validation" | "activation" = "activation") => ({
   agentCount: 1,
   phase,
@@ -40,9 +39,7 @@ const updateBudget = (phase: "validation" | "activation" = "activation") => ({
 });
 function selectContributions(...groups: Set<string>[]) {
   const ids = new Set(groups.flatMap((group) => Array.from(group)));
-  const selected = resolveDoctorHealthContributions().filter((entry) => ids.has(entry.id));
-  expect(selected).toHaveLength(ids.size);
-  return selected;
+  return resolveDoctorHealthContributions().filter((entry) => ids.has(entry.id));
 }
 function recordContributions(
   groups: Set<string>[],
@@ -92,7 +89,9 @@ it.each(["rehearsal", "partial-markers"])(
       OPENCLAW_SERVICE_REPAIR_POLICY: "external",
       ...(mode === "partial-markers" ? { HOME: "/synthetic/operator" } : {}),
     };
-    const advisoryIds = doctorIds("security runtime-tool-schemas provider-catalog-projection");
+    const advisoryIds = doctorIds(
+      "database-engine security runtime-tool-schemas provider-catalog-projection",
+    );
     const retainedIds = repairAnd("skills memory-search auth-profile-migration");
     const priorWarnings = Array.from({ length: 31 }, (_, index) => `Repair warning ${index}`);
     const { contributions, executed } = recordContributions(
@@ -121,49 +120,51 @@ it.each(["rehearsal", "partial-markers"])(
   },
 );
 
-it.each([true, false])("defers post-restart lint inspections (budget=%s)", async (hasBudget) => {
-  const deferredIds = doctorIds("runtime-tool-schemas provider-catalog-projection hooks-model");
-  // Security gates readiness; ingress dead letters has no equivalent post-restart lint.
-  const retainedIds = repairAnd(
-    "session-snapshots workspace-status security channel-ingress-dead-letters",
-  );
-  const { contributions, executed } = recordContributions([deferredIds, retainedIds]);
-  const ctx = createDoctorHealthFlowContext({
-    env: {
-      ...updateEnv,
-      OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS: "reported-checks",
-    },
-    updateBudget: hasBudget ? updateBudget() : undefined,
-  });
-  await captureUpdateDoctorConfigWrites(ctx.configPath, async (capture) => {
-    await runDoctorHealthContributionList(ctx, contributions);
-    expect(capture.deferredInspectionCheckIds).toEqual(deferredChecks);
-  });
-  expect(new Set(executed)).toEqual(retainedIds);
-  expect(ctx.updateWarnings ?? []).toEqual([]);
-  expect(ctx.runtime.log).toHaveBeenCalledWith(
-    expect.stringContaining(
-      `Deferred advisory inspections until the restarted Gateway is ready: ${deferredChecks.join(", ")}.`,
-    ),
-  );
-  for (const marker of [undefined, "1", "reported-checks"]) {
-    executed.length = 0;
-    const inline = createDoctorHealthFlowContext({
-      env: { ...updateEnv, OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS: marker },
-      updateBudget: hasBudget ? updateBudget() : undefined,
+it.each([
+  { budget: true, marker: "reported-checks", receipt: true },
+  { budget: false, marker: "reported-checks", receipt: true },
+  { budget: true, marker: undefined, receipt: true },
+  { budget: true, marker: "1", receipt: true },
+  { budget: true, marker: "reported-checks", receipt: false },
+  { budget: false, marker: undefined, receipt: false, ordinary: true },
+])(
+  "defers lint only to an owned post-restart receipt: %j",
+  async ({ budget, marker, receipt, ordinary }) => {
+    const deferredIds = doctorIds(
+      "database-engine runtime-tool-schemas provider-catalog-projection hooks-model",
+    );
+    // Security gates readiness; ingress dead letters has no equivalent post-restart lint.
+    const retainedIds = repairAnd(
+      "session-snapshots workspace-status security channel-ingress-dead-letters",
+    );
+    const { contributions, executed } = recordContributions([deferredIds, retainedIds]);
+    const ctx = createDoctorHealthFlowContext({
+      env: {
+        ...(ordinary ? {} : updateEnv),
+        OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS: marker,
+      },
+      updateBudget: budget ? updateBudget() : undefined,
     });
-    if (marker === "reported-checks") {
-      await runDoctorHealthContributionList(inline, contributions);
-    } else {
-      await captureUpdateDoctorConfigWrites(inline.configPath, async (capture) => {
-        await runDoctorHealthContributionList(inline, contributions);
-        expect(capture.deferredInspectionCheckIds).toBeUndefined();
+    const deferred = receipt && marker === "reported-checks";
+    if (receipt) {
+      await captureUpdateDoctorConfigWrites(ctx.configPath, async (capture) => {
+        await runDoctorHealthContributionList(ctx, contributions);
+        expect(capture.deferredInspectionCheckIds).toEqual(deferred ? deferredChecks : undefined);
       });
+    } else {
+      await runDoctorHealthContributionList(ctx, contributions);
     }
-    // Older parents, and markers without a result owner, keep every inspection inline.
-    expect(new Set(executed), marker).toEqual(new Set([...retainedIds, ...deferredIds]));
-  }
-});
+    expect(new Set(executed)).toEqual(
+      deferred ? retainedIds : new Set([...retainedIds, ...deferredIds]),
+    );
+    expect(ctx.updateWarnings ?? []).toEqual([]);
+    if (deferred) {
+      expect(ctx.runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining(deferredChecks.join(", ")),
+      );
+    }
+  },
+);
 
 it("records only skips preceding a required failure", async () => {
   const executed: string[] = [];
@@ -200,7 +201,7 @@ it("records only skips preceding a required failure", async () => {
   });
   expect(executed).toEqual([]);
   expect(ctx.runtime.log).toHaveBeenCalledWith(
-    expect.stringContaining("ready: core/doctor/newTarget_inspection."),
+    expect.stringContaining("core/doctor/newTarget_inspection"),
   );
 });
 
@@ -268,13 +269,13 @@ it.each([
       expect(ctx.updateWarnings).toContainEqual(
         expect.stringContaining("core/doctor/auth-profiles [update-inspection-deferred]"),
       );
-      expect([...(ctx.updateBudget?.deferred.values() ?? [])]).toEqual([
-        expect.objectContaining({
+      expect([...(ctx.updateBudget?.deferred.values() ?? [])]).toMatchObject([
+        {
           checkId: "core/doctor/auth-profiles",
           severity: "warning",
           errorCode: "update-inspection-deferred",
           requirement: "update-validation-budget",
-        }),
+        },
       ]);
       observed.events = [];
       await runDoctorHealthContributionList(

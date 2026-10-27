@@ -14,6 +14,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
+import type { RegistryRegistrationFixture } from "./subagent-registry.requester-completion.fixture.test-support.js";
 import {
   releaseSubagentRun,
   resetSubagentRegistryForTests,
@@ -56,13 +57,7 @@ export async function retainedOperatorFixture(
 export function registerCompletedFollowupAuthorityTests({
   registration,
   updateRun,
-}: {
-  registration: (
-    runId: string,
-    overrides?: Partial<Parameters<typeof registerSubagentRun>[0]>,
-  ) => Parameters<typeof registerSubagentRun>[0];
-  updateRun: (runId: string, update: (draft: SubagentRunRecord) => void) => Promise<void>;
-}) {
+}: RegistryRegistrationFixture) {
   it.each(["original", "successor"] as const)(
     "keeps completed-result and followup custody independent when the %s source is revoked",
     (revokedOwner) =>

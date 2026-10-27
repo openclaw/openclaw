@@ -14,14 +14,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Select synthetic stores without reading operator config.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
-  loadConfig: mocks.getRuntimeConfig,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
-    async () =>
-      mocks.getRuntimeConfig(...args),
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("./test-runtime-config-helpers.js");
+  return createTestConfigReadMocks(mocks, "getRuntimeConfig");
+});
 
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
@@ -66,17 +62,19 @@ async function expectTrajectoryFailure(options: Options, message: string) {
     humanOutput: message,
     machineOutput: message,
   });
-  expect(runtime.error).not.toHaveBeenCalled();
-  expect(runtime.exit).not.toHaveBeenCalled();
-  expect(runtime.log).not.toHaveBeenCalled();
+  expectUncalled(runtime.error, runtime.exit, runtime.log);
+}
+function expectUncalled(...spies: ReturnType<typeof vi.fn>[]) {
+  for (const spy of spies) {
+    expect(spy).not.toHaveBeenCalled();
+  }
 }
 function expectNoSessionLookup() {
-  expect(mocks.resolveStorePath).not.toHaveBeenCalled();
-  expectNoReadOrExport();
-}
-function expectNoReadOrExport() {
-  expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
-  expect(mocks.exportTrajectoryBundle).not.toHaveBeenCalled();
+  expectUncalled(
+    mocks.resolveStorePath,
+    mocks.loadSessionEntryReadOnly,
+    mocks.exportTrajectoryBundle,
+  );
 }
 
 beforeEach(() => {
@@ -158,20 +156,6 @@ it.each(["encoded", "configured"] as const)(
   },
 );
 
-it("routes invalid explicit stores through the command failure owner", async () => {
-  mocks.resolveStorePath.mockReturnValue("/tmp/missing.sqlite");
-  mocks.resolveExplicitStorePath.mockImplementationOnce(() => {
-    throw new Error("Session store target does not exist: /tmp/missing.sqlite");
-  });
-
-  await expectTrajectoryFailure(
-    { store: "/tmp/missing.sqlite", json: true },
-    "Session store target does not exist: /tmp/missing.sqlite",
-  );
-
-  expectNoReadOrExport();
-});
-
 it("rejects an unknown explicit agent before reading a session", async () => {
   mocks.getRuntimeConfig.mockReturnValue({ agents: { entries: { main: {} } } });
   await expectTrajectoryFailure(
@@ -188,38 +172,47 @@ it("requires an explicit owner for an ambiguous alias before reading or exportin
 
   await expect(run({ sessionKey: "global" })).rejects.toThrow("--agent <id>");
 
-  expectNoReadOrExport();
+  expectUncalled(mocks.loadSessionEntryReadOnly, mocks.exportTrajectoryBundle);
 });
 
-it("reports a missing session without resolving its transcript or exporting", async () => {
-  mocks.loadSessionEntryReadOnly.mockReturnValue(undefined);
-
-  await expectTrajectoryFailure(
-    {},
-    "Session not found: agent:main:telegram:direct:123. Run openclaw sessions to see available sessions.",
-  );
-
-  expect(mocks.resolveSessionTranscriptReadTarget).not.toHaveBeenCalled();
-  expect(mocks.exportTrajectoryBundle).not.toHaveBeenCalled();
-});
-
-it("reports transcript target resolution failures without invoking the exporter", async () => {
-  mocks.resolveSessionTranscriptReadTarget.mockImplementationOnce(() => {
-    throw new Error("transcript target is unavailable");
-  });
-
-  await expectTrajectoryFailure(
-    {},
-    "Failed to resolve session file: transcript target is unavailable",
-  );
-
-  expect(mocks.exportTrajectoryBundle).not.toHaveBeenCalled();
-});
-
-it("reports exporter failures without formatting a successful result", async () => {
-  mocks.exportTrajectoryBundle.mockRejectedValueOnce(new Error("workspace is unavailable"));
-
-  await expectTrajectoryFailure({}, "Failed to export trajectory: workspace is unavailable");
-
-  expect(runtime.log).not.toHaveBeenCalled();
+it.each([
+  {
+    name: "invalid explicit store",
+    options: { store: "/tmp/missing.sqlite", json: true },
+    setup: () =>
+      mocks.resolveExplicitStorePath.mockImplementationOnce(() => {
+        throw new Error("Session store target does not exist: /tmp/missing.sqlite");
+      }),
+    message: "Session store target does not exist: /tmp/missing.sqlite",
+    blocked: [mocks.loadSessionEntryReadOnly, mocks.exportTrajectoryBundle],
+  },
+  {
+    name: "missing session",
+    options: {},
+    setup: () => mocks.loadSessionEntryReadOnly.mockReturnValueOnce(undefined),
+    message: `Session not found: ${sessionKey}. Run openclaw sessions to see available sessions.`,
+    blocked: [mocks.resolveSessionTranscriptReadTarget, mocks.exportTrajectoryBundle],
+  },
+  {
+    name: "unavailable transcript",
+    options: {},
+    setup: () =>
+      mocks.resolveSessionTranscriptReadTarget.mockImplementationOnce(() => {
+        throw new Error("transcript target is unavailable");
+      }),
+    message: "Failed to resolve session file: transcript target is unavailable",
+    blocked: [mocks.exportTrajectoryBundle],
+  },
+  {
+    name: "exporter failure",
+    options: {},
+    setup: () =>
+      mocks.exportTrajectoryBundle.mockRejectedValueOnce(new Error("workspace is unavailable")),
+    message: "Failed to export trajectory: workspace is unavailable",
+    blocked: [],
+  },
+])("reports $name without executing later stages", async ({ options, setup, message, blocked }) => {
+  setup();
+  await expectTrajectoryFailure(options, message);
+  expectUncalled(...blocked);
 });

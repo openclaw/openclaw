@@ -1,12 +1,15 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { LegacyAgentListEntry } from "../config/legacy.roster.js";
+import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getMainThreadTaskName, runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
   normalizeAgentId,
   normalizeOptionalAgentId,
 } from "../routing/session-key.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { SYSTEM_AGENT_ROSTER_ENTRIES } from "../system-agent/agent-id.js";
 
 type AgentEntry = AgentConfig;
@@ -26,6 +29,59 @@ type ListedLegacyAgentEntry = {
   entry: LegacyAgentListEntry;
   source: ListedAgentEntry["source"];
 };
+
+type AgentRosterFacts = {
+  agentIds?: string[];
+  compatibilityAgentId?: { value: string | undefined };
+  legacyDataOwnerAgentId?: { value: string | undefined };
+  entryByNormalizedId?: Map<string, { clone: boolean; entry: AgentEntry }>;
+};
+
+type AgentRosterFactsBatch = {
+  config: AgentRosterConfig;
+  facts: AgentRosterFacts;
+};
+
+let activeAgentRosterFactsBatch: AgentRosterFactsBatch | undefined;
+const agentRosterFacts = new WeakMap<
+  AgentRosterConfig,
+  { publication: object | undefined; facts: AgentRosterFacts }
+>();
+
+/** Share roster reads synchronously; unbound mutable configs expire when the callback returns. */
+export function withAgentRosterFactsBatch<T>(config: AgentRosterConfig, callback: () => T): T {
+  return runWithMainThreadTask(
+    getMainThreadTaskName() ?? "gateway",
+    () => {
+      const parent = activeAgentRosterFactsBatch;
+      activeAgentRosterFactsBatch =
+        parent?.config === config ? parent : { config, facts: readAgentRosterFacts(config) ?? {} };
+      try {
+        return callback();
+      } finally {
+        activeAgentRosterFactsBatch = parent;
+      }
+    },
+    "agent-roster",
+  );
+}
+
+export function readAgentRosterFacts(cfg: AgentRosterConfig): AgentRosterFacts | undefined {
+  if (activeAgentRosterFactsBatch?.config === cfg) {
+    return activeAgentRosterFactsBatch.facts;
+  }
+  const current = runtimeConfigPublication.current;
+  const publication = current?.config === cfg ? current.revision : undefined;
+  if (publication === undefined && !isDeeplyFrozenPlainData(cfg)) {
+    return undefined;
+  }
+  let cached = agentRosterFacts.get(cfg);
+  if (!cached || cached.publication !== publication) {
+    cached = { publication, facts: {} };
+    agentRosterFacts.set(cfg, cached);
+  }
+  return cached.facts;
+}
 
 function collectAgentEntries(
   cfg: AgentRosterConfig,
@@ -111,12 +167,22 @@ export function hasAgentRosterProperty(raw: unknown): boolean {
 
 /** Lists unique configured agent ids. */
 export function listAgentIds(cfg: AgentRosterConfig): string[] {
-  const agents = listAgentEntries(cfg);
-  if (agents.length === 0 && !hasAgentRosterProperty(cfg)) {
-    // Match resolveDefaultAgentId's Plugin SDK compatibility for raw pre-roster configs.
-    return [LEGACY_IMPLICIT_AGENT_ID];
+  const facts = readAgentRosterFacts(cfg);
+  if (facts?.agentIds) {
+    return facts.agentIds;
   }
-  return [...new Set(agents.map((entry) => normalizeAgentId(entry?.id)))];
+  const agents = listAgentEntries(cfg);
+  // Match resolveDefaultAgentId's Plugin SDK compatibility for raw pre-roster configs.
+  const ids =
+    agents.length === 0 && !hasAgentRosterProperty(cfg)
+      ? [LEGACY_IMPLICIT_AGENT_ID]
+      : [...new Set(agents.map((entry) => normalizeAgentId(entry?.id)))];
+  if (facts) {
+    // Published generations and immutable captures share ids, never mutable entry objects.
+    Object.freeze(ids);
+    facts.agentIds = ids;
+  }
+  return ids;
 }
 
 /** Lists ACP harness ids and ACP-runtime roster agents named by config; native agents are excluded. */

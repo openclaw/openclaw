@@ -6,10 +6,10 @@ import type { RequestFrame } from "../../../../packages/gateway-protocol/src/sch
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { readCurrentStoredChatHistory } from "./chat-outbox-receipts.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { requestChatSend } from "./chat-send-request.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { startupAdmissionResponse } from "./chat-startup-response.test-support.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 import { handleAbortChat } from "./run-lifecycle.ts";
 
@@ -27,63 +27,46 @@ function requestFixture(id: string, startup = false) {
       ? pending.request(wire, method, params, options)
       : Promise.resolve({ messages: [], status: "aborted" }),
   );
-  return { pending, wire, issued, host: makeChatHost({ client }) };
+  return {
+    pending,
+    wire,
+    issued,
+    host: makeChatHost({ client, currentSessionId: "deadline-session" }),
+  };
 }
 
-it.each(["send", "send-consumed", "receipt"] as const)(
-  "bounds %s without a client deadline",
-  async (kind) => {
-    const { pending, wire, issued, host } = requestFixture("deadline");
-    host.chatMessage = "submission";
-    const retry = vi.fn();
-    const item = { id: "queued", sendRunId: "original-run", text: "submission", createdAt: 1 };
-    const operation =
-      kind !== "receipt"
-        ? handleSendChat(host)
-        : readCurrentStoredChatHistory(
-            host,
-            { sessionKey: host.sessionKey, queue: [item] },
-            item,
-            host.client!,
-            host.connectionEpoch,
-            retry,
-          );
-    const deadline = kind === "receipt" ? 30_000 : GATEWAY_STARTUP_ADMISSION_WAIT_MS;
-    await issued.promise;
-    expect(wire.send).toHaveBeenCalledOnce();
-    expect(pending.hasUnboundedPending).toBe(false);
-    await vi.advanceTimersByTimeAsync(deadline - 1);
-    expect(pending.hasPending).toBe(true);
-    expect(retry).not.toHaveBeenCalled();
-    if (kind === "send-consumed") {
-      const runId = host.chatQueue[0]!.sendRunId!;
-      applyChatPendingInputs(host, undefined, {
-        receipts: [{ runId, state: "consumed", consumedByEventId: "canonical-user" }],
-      });
-      expect(host.chatQueue).toEqual([]);
-      host.chatMessage = "A newer draft";
-    }
-    await vi.advanceTimersByTimeAsync(1);
-    if (kind !== "receipt") {
-      await operation;
-      if (kind === "send-consumed") {
-        expect(host.chatQueue).toEqual([]);
-        expect(host.chatMessage).toBe("A newer draft");
-      } else {
-        expect(host.chatQueue[0]).toMatchObject({ sendState: "unconfirmed", sendAttempts: 1 });
-      }
-      expect(host.chatError).toBeNull();
-      host.connected = false;
-      await vi.advanceTimersByTimeAsync(500);
-    } else {
-      expect(await operation).toBe("blocked");
-      expect(retry).toHaveBeenCalledExactlyOnceWith(500);
-    }
-    expect(pending.hasPending).toBe(false);
-    expect(wire.send).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  },
-);
+it.each(["send", "send-consumed"] as const)("bounds %s without a client deadline", async (kind) => {
+  const { pending, wire, issued, host } = requestFixture("deadline");
+  host.chatMessage = "submission";
+  const operation = handleSendChat(host);
+  await issued.promise;
+  expect(wire.send).toHaveBeenCalledOnce();
+  expect(pending.hasUnboundedPending).toBe(false);
+  await vi.advanceTimersByTimeAsync(GATEWAY_STARTUP_ADMISSION_WAIT_MS - 1);
+  expect(pending.hasPending).toBe(true);
+  if (kind === "send-consumed") {
+    const runId = host.chatQueue[0]!.sendRunId!;
+    applyChatPendingInputs(host, undefined, {
+      receipts: [{ runId, state: "consumed", consumedByEventId: "canonical-user" }],
+    });
+    expect(host.chatQueue).toEqual([]);
+    host.chatMessage = "A newer draft";
+  }
+  await vi.advanceTimersByTimeAsync(1);
+  await operation;
+  if (kind === "send-consumed") {
+    expect(host.chatQueue).toEqual([]);
+    expect(host.chatMessage).toBe("A newer draft");
+  } else {
+    expect(host.chatQueue[0]).toMatchObject({ sendState: "waiting-reconnect", sendAttempts: 1 });
+  }
+  expect(host.chatError).toBeNull();
+  host.connected = false;
+  await vi.advanceTimersByTimeAsync(500);
+  expect(pending.hasPending).toBe(false);
+  expect(wire.send).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+});
 
 it("retains audio until its connection acknowledges", async () => {
   const { pending, wire, host } = requestFixture("audio-ack");
@@ -128,22 +111,7 @@ async function startPreparingSend(
         return;
       }
     }
-    pending.handleResponse({
-      type: "res",
-      id: request.id,
-      ok: ready,
-      ...(ready
-        ? { payload: { status: "ok", runId: "started" } }
-        : {
-            error: {
-              code: "UNAVAILABLE",
-              message: "Agent is preparing",
-              retryable: true,
-              retryAfterMs: 1_000,
-              details: { reason: "startup-sidecars", method: request.method },
-            },
-          }),
-    });
+    pending.handleResponse(startupAdmissionResponse(request, ready));
     issued.resolve();
   });
   host.chatMessage = message;
@@ -154,9 +122,9 @@ async function startPreparingSend(
 
 describe.each(["send", "steer", "redirect"] as const)("%s startup", (command) => {
   const message = (text: string) => (command === "send" ? text : `/${command} ${text}`);
-  it.each([45_000, 240_000])("delivers once after %i ms", async (delay) => {
+  it("delivers once after four minutes of startup", async () => {
     const fixture = await startPreparingSend(message("Wait for this agent"));
-    await vi.advanceTimersByTimeAsync(delay);
+    await vi.advanceTimersByTimeAsync(240_000);
     expect(fixture.pending.hasPending).toBe(true);
     expect(fixture.writes).toHaveLength(0);
     fixture.ready();

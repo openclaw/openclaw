@@ -1,38 +1,44 @@
 {
   "entries": [
     {
-      "name": "@openclaw/liquid-provider",
-      "description": "OpenClaw Liquid AI provider plugin.",
+      "name": "@openclaw/abliteration-provider",
+      "description": "OpenClaw Abliteration provider plugin.",
       "source": "official",
       "kind": "provider",
       "openclaw": {
-        "plugin": { "id": "liquid", "label": "Liquid AI" },
-        "providerEndpoints": [
-          { "endpointClass": "liquid-native", "hosts": ["api.liquid.ai"] }
+        "plugin": {
+          "id": "abliteration",
+          "label": "Abliteration"
+        },
+        "providers": [
+          {
+            "id": "abliteration",
+            "name": "Abliteration",
+            "docs": "/providers/abliteration",
+            "categories": ["cloud", "llm"],
+            "envVars": ["ABLITERATION_API_KEY", "ABLIT_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "abliteration-api-key",
+                "appGuidedSecret": true,
+                "choiceLabel": "Abliteration API key",
+                "choiceHint": "OpenAI-compatible abliterated open-weight models",
+                "groupId": "abliteration",
+                "groupLabel": "Abliteration",
+                "groupHint": "OpenAI-compatible abliterated open-weight models",
+                "optionKey": "abliterationApiKey",
+                "cliFlag": "--abliteration-api-key",
+                "cliOption": "--abliteration-api-key <key>",
+                "cliDescription": "Abliteration API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
         ],
-        "providers": [{
-          "id": "liquid",
-          "name": "Liquid AI",
-          "docs": "/providers/liquid",
-          "categories": ["cloud", "llm"],
-          "envVars": ["LIQUID_API_KEY"],
-          "authChoices": [{
-            "method": "api-key",
-            "choiceId": "liquid-api-key",
-            "choiceLabel": "Liquid AI API key",
-            "groupId": "liquid",
-            "groupLabel": "Liquid AI",
-            "groupHint": "Native Decision models",
-            "optionKey": "liquidApiKey",
-            "cliFlag": "--liquid-api-key",
-            "cliOption": "--liquid-api-key <key>",
-            "cliDescription": "Liquid AI API key"
-          }]
-        }],
-        "contracts": { "decisionProviders": ["liquid"] },
         "install": {
-          "clawhubSpec": "clawhub:@openclaw/liquid-provider",
-          "npmSpec": "@openclaw/liquid-provider",
+          "clawhubSpec": "clawhub:@openclaw/abliteration-provider",
+          "npmSpec": "@openclaw/abliteration-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.10.6"
         }
@@ -826,6 +832,65 @@
           "npmSpec": "@openclaw/gmi-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/liquid-ai-provider",
+      "description": "OpenClaw Liquid AI provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "liquid-ai",
+          "label": "Liquid AI"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "liquid-ai-native",
+            "hosts": [
+              "api.liquid.ai"
+            ]
+          }
+        ],
+        "providers": [
+          {
+            "id": "liquid-ai",
+            "name": "Liquid AI",
+            "docs": "/providers/liquid-ai",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "LIQUIDAI_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "liquid-ai-api-key",
+                "choiceLabel": "Liquid AI API key",
+                "groupId": "liquid-ai",
+                "groupLabel": "Liquid AI",
+                "groupHint": "Native Decision models",
+                "optionKey": "liquidAiApiKey",
+                "cliFlag": "--liquid-ai-api-key",
+                "cliOption": "--liquid-ai-api-key <key>",
+                "cliDescription": "Liquid AI API key"
+              }
+            ]
+          }
+        ],
+        "contracts": {
+          "decisionProviders": [
+            "liquid-ai"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/liquid-ai-provider",
+          "npmSpec": "@openclaw/liquid-ai-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.6"
         }
       }
     },

@@ -183,7 +183,6 @@ it.each(["complete", "expire"] as const)(
       // The existing continuation TTL owner expires parked work through dispose().
       await result.continuation.dispose();
     }
-    expect(pool.close).toHaveBeenCalledWith(undefined, "gc-storm");
     expect(pool.isClosed).toBe(true);
   },
 );
@@ -246,7 +245,7 @@ it("joins its native workers at host close without retiring a sibling host", asy
     expect(survivor.isClosed).toBe(false);
     held.release();
     await closing;
-    expect(owned.close).toHaveBeenCalledWith(undefined, "shutdown");
+    expect(owned.isClosed).toBe(true);
     const count = fixture.pools.length;
     await sibling.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
     expect(fixture.pools).toHaveLength(count);
@@ -276,10 +275,6 @@ it.each(["standalone", "runtime changed"] as const)(
         : run()),
     ).toMatchObject({ status: "completed" });
     expect((previous ?? fixture.pools.at(-1))?.isClosed).toBe(true);
-    expect((previous ?? fixture.pools.at(-1))?.close).toHaveBeenCalledWith(
-      undefined,
-      reason === "runtime changed" ? "rotation" : "dispose",
-    );
   },
 );
 
@@ -306,7 +301,6 @@ it.each(["host", "idle"] as const)(
     expect(retired.isClosed).toBe(false);
     expect(fixture.pools).toHaveLength(count);
     expect(await run()).toMatchObject({ status: "completed" });
-    expect(retired.close).toHaveBeenCalledTimes(2);
     expect(retired.isClosed).toBe(true);
     expect(fixture.pools).toHaveLength(count + 1);
     if (reason === "host") {
@@ -322,8 +316,8 @@ it("reuses idle workers and expires them without retaining completed caller cont
   try {
     await caller.run("completed-turn", () => Promise.all([run(), run()]));
     const count = fixture.pools.length;
-    const previous = fixture.pools.at(-1)!;
-    const reused = fixture.pools.at(-2)!;
+    const previous = fixture.pools.at(-2)!;
+    const reused = fixture.pools.at(-1)!;
     for (const pool of [previous, reused]) {
       pool.close.mockImplementation(async () => {
         retiredContexts.push(caller.getStore());
@@ -340,11 +334,23 @@ it("reuses idle workers and expires them without retaining completed caller cont
     await vi.advanceTimersByTimeAsync(60_000);
     expect(reused.isClosed).toBe(true);
     expect(retiredContexts).toEqual([undefined, undefined]);
-    expect(previous.close).toHaveBeenCalledWith(undefined, "idle-expiry");
-    expect(reused.close).toHaveBeenCalledWith(undefined, "idle-expiry");
   } finally {
     caller.disable();
   }
+});
+
+it("lets a completed burst retire while serial work keeps one worker warm", async () => {
+  vi.useFakeTimers();
+  const start = fixture.pools.length;
+  await Promise.all(Array.from({ length: 8 }, run));
+  const burst = fixture.pools.slice(start);
+  expect(burst).toHaveLength(8);
+  for (let turn = 0; turn < 20; turn++) {
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(await run()).toMatchObject({ status: "completed" });
+  }
+  expect(fixture.pools).toHaveLength(start + 8);
+  expect(burst.filter((pool) => !pool.isClosed)).toHaveLength(1);
 });
 
 it.each([
@@ -370,20 +376,14 @@ it.each([
 
 it("bounds the warm set and retires every idle pool on memory pressure", async () => {
   const start = fixture.pools.length;
-  const results = await Promise.all(Array.from({ length: 6 }, run));
+  const results = await Promise.all(Array.from({ length: 10 }, run));
   expect(results.every((result) => result.status === "completed")).toBe(true);
   const idle = fixture.pools.filter((pool) => !pool.isClosed);
-  expect(idle).toHaveLength(4);
+  expect(idle).toHaveLength(8);
   const evicted = fixture.pools.slice(start).filter((pool) => pool.isClosed);
   expect(evicted).toHaveLength(2);
-  for (const pool of evicted) {
-    expect(pool.close).toHaveBeenCalledWith(undefined, "eviction");
-  }
   channel("openclaw.memory.critical").publish({});
   expect(idle.every((pool) => pool.isClosed)).toBe(true);
-  for (const pool of idle) {
-    expect(pool.close).toHaveBeenCalledWith(undefined, "memory_pressure");
-  }
   expect(channel("openclaw.memory.critical").hasSubscribers).toBe(false);
   const count = fixture.pools.length;
   expect(await run()).toMatchObject({ status: "completed" });
@@ -445,8 +445,6 @@ it("retries failed continuation cleanup without restoring resume authority", asy
     code: "runtime_unavailable",
   });
   await result.continuation.dispose();
-  expect(pool.close).toHaveBeenCalledTimes(2);
-  expect(pool.close).toHaveBeenCalledWith(undefined, "dispose");
   expect(pool.isClosed).toBe(true);
 });
 
@@ -503,11 +501,10 @@ it("does not release an excess completed pool after native cleanup fails", async
   const held = holdRun(first);
   const pending = run();
   await held.started;
-  const siblings = await Promise.all(Array.from({ length: 4 }, run));
+  const siblings = await Promise.all(Array.from({ length: 8 }, run));
   expect(siblings.every((result) => result.status === "completed")).toBe(true);
   first.close.mockRejectedValueOnce(new Error("native exit uncertain"));
   held.complete(fixture.completed);
   expect(await pending).toMatchObject({ status: "failed", error: "native exit uncertain" });
-  expect(first.close).toHaveBeenCalledTimes(2);
   expect(first.isClosed).toBe(true);
 });

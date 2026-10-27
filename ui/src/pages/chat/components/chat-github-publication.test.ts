@@ -2,10 +2,18 @@
 
 import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
+import type {
+  GitHubPublicationOptions,
+  GitHubPublicationView,
+} from "../../../lib/sessions/github-publication-owner.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { setup, settled } from "../chat-github-publication.test-support.ts";
+import {
+  options as publicationOptions,
+  setup,
+  settled,
+  shared as sharedPublisher,
+} from "../chat-github-publication.test-support.ts";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 import {
@@ -18,6 +26,12 @@ import {
 let container: HTMLDivElement;
 const query = (selector: string) => container.querySelector(selector);
 const publish = () => container.querySelector<HTMLButtonElement>(".chat-pr__create");
+const waitForPublication = () =>
+  waitForSolid(() => {
+    const button = publish();
+    expect(button).not.toBeNull();
+    return button!;
+  });
 let environmentView:
   | {
       update: (work: ChatPullRequestsProps) => void;
@@ -98,6 +112,95 @@ afterEach(() => {
   environmentView = undefined;
   clearChatPullRequests(container);
   container.remove();
+});
+
+const unknownAvailability =
+  "GitHub publication account verification is unavailable. Reload and retry, or check gh auth status on the Gateway runtime host. Settings connections are optional; My GitHub is separate.";
+function availability(
+  reason: GitHubPublicationOptions["sharedUnavailableReason"],
+  message: string | undefined,
+  extra: { name?: string; native?: boolean; unidentified?: boolean } = {},
+) {
+  return { name: reason?.replaceAll("_", "-") ?? "unknown", reason, message, ...extra };
+}
+
+it.each([
+  availability(
+    "unavailable",
+    "No usable GitHub credential is available in the Gateway environment. Sign in with gh auth login on the Gateway runtime host, or optionally add a connection in Settings → Profile → GitHub connections. My GitHub is separate and optional.",
+  ),
+  availability(
+    "rate_limited",
+    "GitHub rate-limited account verification. Wait and retry publication; reconnecting is not needed.",
+  ),
+  availability(
+    "unverified",
+    "GitHub account verification is unavailable. Retry publication or check gh auth status on the Gateway runtime host.",
+  ),
+  availability(
+    "unsupported_workspace",
+    "Publish PR needs a session-owned worktree or repository workspace. Normal agent gh commands still work; reconnecting GitHub will not help.",
+  ),
+  availability(undefined, unknownAvailability),
+  availability(undefined, unknownAvailability, {
+    name: "unknown-unidentified",
+    unidentified: true,
+  }),
+  availability(undefined, undefined, { name: "native-publisher", native: true }),
+  availability(undefined, undefined, {
+    name: "native-publisher-unidentified",
+    native: true,
+    unidentified: true,
+  }),
+])("explains $name publication availability without requiring a connection", async (scenario) => {
+  const shared = scenario.native
+    ? { ...sharedPublisher, source: "system-detected" as const }
+    : null;
+  const { controller, request } = setup({
+    ...publicationOptions,
+    shared,
+    personal: scenario.unidentified
+      ? null
+      : {
+          ...personalAccount(),
+          state: "disconnected",
+          account: null,
+          generation: null,
+        },
+    ...(scenario.reason ? { sharedUnavailableReason: scenario.reason } : {}),
+  });
+  paintEnvironment({
+    pullRequests: [],
+    status: "ready",
+    onDismiss: () => {},
+    onDismissBranch: () => {},
+    branch: sessionBranch(),
+    publication: await settled(controller),
+  });
+  const action = await waitForPublication();
+  const row = container.querySelector<HTMLElement>(".chat-environment__branch")!;
+  expect(action.textContent).toBe("Create PR");
+  expect(action.disabled).toBe(!scenario.native);
+  row.querySelector<HTMLButtonElement>(".chat-pr__actions-trigger")!.click();
+  await waitForSolid(() =>
+    expect(query(".chat-pr-branch-menu")?.matches(":popover-open")).toBe(true),
+  );
+  const note = row.querySelector(".chat-pr__publication-note");
+  const refresh = row.querySelector<HTMLButtonElement>('[aria-label="Refresh publication"]');
+  if (scenario.native) {
+    expect(note).toBeNull();
+    expect(refresh).toBeNull();
+  } else {
+    expect(note?.textContent).toContain(scenario.message);
+    expect(row.querySelectorAll('[aria-label="Refresh publication"]')).toHaveLength(1);
+    expect(refresh?.disabled).toBe(false);
+  }
+  expect(row.textContent).not.toContain("Connect GitHub in Settings");
+  expect(row.querySelector('[aria-label="Publication account"]')).toBeNull();
+  expect(request).toHaveBeenCalledExactlyOnceWith("sessions.github.options", {
+    sessionKey: "agent:main:one",
+    agentId: "main",
+  });
 });
 
 it.each(["system-configured", "agent-override", null] as const)(
@@ -228,9 +331,7 @@ it("selects an eligible profile directly from Details and publishes its exact id
     });
   changed.mockImplementation(draw);
   draw();
-  const create = container.querySelector<HTMLButtonElement>(
-    ".chat-environment__branch button.chat-pr__create",
-  );
+  const create = await waitForPublication();
   expect(create?.textContent).toBe("Create PR");
   expect(
     request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
@@ -291,9 +392,7 @@ it.each(["personal", "confirmation"] as const)(
         onConfirm: nativeAction,
       }),
     });
-    const entry = container.querySelector<HTMLButtonElement>(
-      ".chat-environment__branch button.chat-pr__create",
-    )!;
+    const entry = await waitForPublication();
     expect(entry.textContent).toBe(state === "personal" ? "Create PR" : "Review");
     entry.click();
     await waitForSolid(() =>
@@ -311,7 +410,7 @@ it.each(["personal", "confirmation"] as const)(
   },
 );
 
-it.each([false, true])("labels publication reads as Loading (recovery=%s)", (recovery) => {
+it.each([false, true])("labels publication reads as Loading (recovery=%s)", async (recovery) => {
   const onPublish = vi.fn();
   const draw = (activity: GitHubPublicationView["activity"]) =>
     paintEnvironment({
@@ -322,6 +421,7 @@ it.each([false, true])("labels publication reads as Loading (recovery=%s)", (rec
       publication: publication({ activity, locked: recovery, onPublish }),
     });
   draw("read");
+  await waitForPublication();
   expect(publish()?.textContent?.trim()).toBe("Loading…");
   draw("publish");
   expect(publish()?.textContent?.trim()).toBe("Creating…");
@@ -336,7 +436,7 @@ it.each(["pull-requests", "environment"] as const)(
     const readiness = { read: null, retired: retired.promise };
     const onPublish = vi.fn(() => completion.promise);
     paint({ readiness, onPublish }, surface);
-    const button = publish()!;
+    const button = await waitForPublication();
     button.click();
     await waitForSolid(() => expect(button.disabled).toBe(true));
     expect(onPublish).toHaveBeenCalledOnce();
@@ -372,7 +472,7 @@ it.each(["pull-requests", "environment"] as const)(
   async (surface) => {
     const completion = Promise.withResolvers<void>();
     paint({ onPublish: () => completion.promise }, surface);
-    publish()!.click();
+    (await waitForPublication()).click();
     completion.reject(new Error("Publication action unavailable"));
     await waitForSolid(() =>
       expect(container.textContent).toContain("Publication action unavailable"),
@@ -391,7 +491,7 @@ it.each(["pull-requests", "environment"] as const)(
   async (surface) => {
     const completion = Promise.withResolvers<void>();
     paint({ onPublish: () => completion.promise }, surface);
-    publish()!.click();
+    (await waitForPublication()).click();
     await waitForSolid(() => expect(publish()?.disabled).toBe(true));
     if (surface === "environment") {
       environmentView?.unmount();
@@ -417,7 +517,7 @@ it.each(["pull-requests", "environment"] as const)(
       },
       surface,
     );
-    publish()!.click();
+    (await waitForPublication()).click();
     await waitForSolid(() =>
       expect(container.querySelector('button[aria-label="Refresh publication"]')).not.toBeNull(),
     );
@@ -436,7 +536,7 @@ it.each([
   ["publishing", "Could not read publication status.", "Retry", true],
 ] as const)(
   "distinguishes %s with status error %s in Environment",
-  (status, error, label, warning) => {
+  async (status, error, label, warning) => {
     const result =
       status === "failed"
         ? {
@@ -450,6 +550,7 @@ it.each([
           ? { status, requestId: "request-one", message: "Publication status." }
           : null;
     paint({ locked: status !== "failed", result, error }, "environment");
+    await waitForPublication();
     expect(publish()?.textContent).toContain(label);
     expect(publish()?.querySelector(".chat-pr__publication-warning") !== null).toBe(warning);
   },

@@ -1,7 +1,6 @@
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
-import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -46,9 +45,9 @@ import { assertStateReadSchemaForPolicy } from "./openclaw-state-db-read-schema.
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
   admitStateSchemaFacts,
-  PostgresSchemaAdmissionUnavailableError,
   type StateSchemaContentVersionRowReader,
 } from "./openclaw-state-db-schema-version.js";
+import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
 import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
@@ -80,6 +79,7 @@ function retireReader(reader: RetainedReader): void {
     return;
   }
   clearTimeout(reader.idleTimer);
+  reader.idleTimer = undefined;
   reader.retiring = true;
   reader.connection.close();
   retainedReaders.delete(reader.identity.key);
@@ -97,8 +97,7 @@ function scheduleReaderRetirement(reader: RetainedReader): void {
   ) {
     return;
   }
-  clearTimeout(reader.idleTimer);
-  reader.idleTimer = runInDetachedAsyncContext(() =>
+  reader.idleTimer ??= runInDetachedAsyncContext(() =>
     setTimeout(() => {
       try {
         retireReader(reader);
@@ -106,9 +105,9 @@ function scheduleReaderRetirement(reader: RetainedReader): void {
         process.emitWarning(`Idle shared-state reader cleanup failed: ${String(error)}`);
         scheduleReaderRetirement(reader);
       }
-    }, SQLITE_IDLE_HANDLE_TTL_MS),
+    }, SQLITE_IDLE_HANDLE_TTL_MS).unref(),
   );
-  reader.idleTimer.unref?.();
+  reader.idleTimer.refresh();
 }
 
 /** The host joins this receipt before allowing replacement or deletion of live state. */
@@ -169,8 +168,7 @@ function borrowStateReadConnection(
   }
   const retained = reader;
   observeOpenClawDatabaseMaintenanceResource(retained);
-  retained.borrowed = true;
-  clearTimeout(retained.idleTimer);
+  retained.borrowed = true; // Borrowing and settlement cannot yield to the idle timer.
   return {
     status: "available",
     value: {
@@ -297,27 +295,11 @@ export function readOpenClawStateReadOnlyLocation<T>(
               true,
             )
           : read();
-      let value: T;
-      try {
-        value = readTransaction();
-      } catch (error) {
-        if (
-          !(error instanceof PostgresSchemaAdmissionUnavailableError) ||
-          operationStarted ||
-          snapshot?.path === pathname ||
-          !isPostgresSqlConnection(opened.database.db) ||
-          !opened.database.db.isOpen ||
-          opened.database.db.isTransaction
-        ) {
-          throw error;
-        }
-        // A sibling can publish schema after BEGIN. Refresh only after rollback,
-        // before caller work, and without replacing an imported MVCC snapshot.
-        if (!getPostgresPhysicalFacts(opened.database.db)) {
-          throw error;
-        }
-        value = readTransaction();
-      }
+      const value = withPostgresSchemaAdmissionRetry(
+        opened.database.db,
+        readTransaction,
+        () => !operationStarted && snapshot?.path !== pathname,
+      );
       result = { status: "available", value };
     } catch (error) {
       if (!isPostgresSqlConnection(opened.database.db) && isSqliteCorruptionError(error)) {

@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { listenLoopback } from "../../../../test/helpers/gateway-integration-fixtures.js";
 import type { AssistantMessageEvent, Context, StreamFn } from "../types.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
@@ -74,15 +75,9 @@ export async function withServer(
     });
     req.on("end", () => handler(req, res, body));
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const baseUrl = await listenLoopback(server);
   try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing loopback server address");
-    }
-    await run(`http://127.0.0.1:${address.port}/v1`);
+    await run(`${baseUrl}/v1`);
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));

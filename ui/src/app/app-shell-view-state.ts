@@ -52,7 +52,6 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly navigationSidebar: HTMLElement;
   readonly onboardingMode: boolean;
   readonly routeState: ShellRouteState;
-  readonly settingsPreloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   readonly settingsSearchQuery: string;
   readonly storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   readonly viewCallbacks: ShellViewCallbacks;
@@ -92,9 +91,10 @@ export function readShellView(host: ShellViewHost) {
     historyRecovering,
   );
   const presentationScope = gatewayPresentationScope(context.gateway);
-  // Initial hello can paint the shell before recovery finishes. Keep that brief
-  // startup state in existing chrome rather than flashing recovery feedback.
+  // Cold hello can paint the shell before recovery finishes. Suppress that brief
+  // startup feedback, but keep admitted warm-boot chrome stable through reconnect.
   const initialConnection =
+    !runtime.warmBoot &&
     !presentationScope.readyOnce &&
     !gatewaySnapshot.offlineStable &&
     (connectionStatus === "connecting" ||
@@ -164,7 +164,6 @@ export function readShellView(host: ShellViewHost) {
       onboarding,
       compact: mergedChatChrome,
     });
-  const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
   // A route query is navigation input, not an owner record. Let it override the
   // live selection only after the roster proves that agent exists.
   const requestedRouteAgentId = host.shellNavigation.newSessionRouteAgentId();
@@ -204,7 +203,7 @@ export function readShellView(host: ShellViewHost) {
       isClawsAvailable(context.runtimeConfig.state) === true
         ? APP_ROUTE_IDS
         : APP_ROUTE_IDS.filter((routeId) => routeId !== "claws"),
-    sessionKey: host.activeSessionKey,
+    sessionKey: host.routeState.sessionRouteNotice ? "" : host.activeSessionKey,
     connected: gatewayConnected,
     connectionStatus,
     footerControlsOverlap: host.shellLayout.footerControlsOverlap,
@@ -229,7 +228,6 @@ export function readShellView(host: ShellViewHost) {
     onUpdateSidebarEntries: callbacks.updateSidebarEntries,
     onPairMobile: callbacks.openDevicePairSetup,
     onNavigate: host.shellNavigation.navigate,
-    onPreloadRoute: callbacks.preloadRoute,
   };
   const embedNavigation =
     nativeEmbed && !(nativeEmbedHost()?.surface === "conversation" && activeRoute === "chat");
@@ -314,7 +312,10 @@ export function readShellView(host: ShellViewHost) {
     expandedNavWidth,
     navigationSurfaceHidden,
     floatingAttentionVisible,
-    shellWidth,
+    // Only the visible desktop divider needs viewport geometry.
+    get shellWidth() {
+      return Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
+    },
     selectedAgentId,
     newSessionDisabledReason,
     workspacePluginsEnabled,

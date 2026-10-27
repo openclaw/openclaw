@@ -4,6 +4,7 @@ import {
   type ArtifactsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ArtifactLookup } from "../artifacts-content.js";
 import { resolveSessionForRun } from "../server-session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
@@ -18,15 +19,9 @@ import {
   createSessionListEntryFilter,
 } from "../session-sharing.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
-import type { ArtifactLookup } from "./artifacts-content.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 export type ArtifactQuery = ArtifactsListParams;
-
-type ResolvedArtifactSession = {
-  sessionKey: string;
-  agentId: string;
-};
 
 type ArtifactSessionProjection = Pick<
   SessionRowProjection,
@@ -65,7 +60,7 @@ function resolveQuerySession(
   query: ArtifactQuery,
   cfg: OpenClawConfig,
   projection?: ArtifactSessionProjection,
-): ResolvedArtifactSession | undefined {
+) {
   const selected =
     !query.sessionKey && query.runId
       ? resolveSessionForRun(query.runId, {

@@ -257,7 +257,7 @@ export const GatewayConfigSchema = z
           .optional(),
         /**
          * DANGEROUS: Allow hosted embeds to load absolute external http(s) URLs.
-         * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
+         * Default off; prefer hosted /__openclaw__/canvas content.
          */
         allowExternalEmbedUrls: z.boolean().optional(),
         /** Fetch public-site favicons through the Gateway for Control UI links (default true). */

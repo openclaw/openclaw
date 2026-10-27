@@ -78,7 +78,7 @@ const retiringPools = new Set<NodePool>();
 const idlePools = new Map<NodePool, GatewayScheduledJob[]>();
 const poolLifetimes = new WeakMap<LegacyPluginSdkResourceHost, NodePoolLifetime>();
 let nextPoolId = 0;
-const MAX_IDLE_POOLS = 4;
+const MAX_IDLE_POOLS = 8;
 const memoryPressure = channel("openclaw.memory.critical");
 const gcStorm = channel("openclaw.code-mode.gc-storm");
 let nextGcStormRetirementAt = 0;
@@ -176,6 +176,7 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
     }
     await Promise.all([...retiring].map((owner) => closePool(owner, "rotation")));
   }
+  let warm: NodePool | undefined;
   for (const owner of idlePools.keys()) {
     if (
       owner.memoryLimitBytes === memoryLimitBytes &&
@@ -183,9 +184,13 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
       owner.url === workerUrl.href &&
       !owner.tasks.isClosed
     ) {
-      removeIdlePool(owner);
-      return owner;
+      warm = owner;
     }
+  }
+  // Reuse the newest matching pool so serial work lets an earlier burst expire.
+  if (warm) {
+    removeIdlePool(warm);
+    return warm;
   }
   const owner: NodePool = {
     id: `code-mode-node:${++nextPoolId}`,
@@ -257,8 +262,7 @@ async function releasePool(owner: NodePool): Promise<void> {
         id: `code-mode-worker-surplus:${++nextPoolId}`,
         delayMs: 30_000,
         // Keep one warm isolate through gaps without retaining the completed burst.
-        run: () =>
-          idlePools.keys().next().value === owner ? undefined : closePool(owner, "idle-expiry"),
+        run: () => (idlePools.size === 1 ? undefined : closePool(owner, "idle-expiry")),
       }),
     ]),
   );
@@ -379,9 +383,6 @@ async function run(
           clearTimeout(timer);
           if (!inlineHost || !isRecord(value) || value.status !== "boundary") {
             throw new Error("invalid code mode worker boundary");
-          }
-          if (!Number.isFinite(admittedTimeoutMs) || admittedTimeoutMs <= 0) {
-            throw new Error("invalid code mode worker admission budget");
           }
           if (value.networkContentObserved === true) {
             inlineHost?.onNetworkContent?.();

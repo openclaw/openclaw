@@ -35,7 +35,12 @@ The icon rail stays separate from the selected navigation list. **Pages** opens
 available built-in pages, dashboards, and plugin destinations, **Sessions** opens conversations,
 and **Users** opens the people list. Its header selects **Online** (the default)
 or **All users**, including offline profiles from the authorized user directory.
-The header is a filter, not a collapse control. Pages always hides dashboards from
+The header is a filter, not a collapse control. Right-click a person, or focus their
+row and press Shift+F10, to open their actions. The **⋯** button appears beside
+their name on hover or keyboard focus and stays visible on touch screens. Use
+**Pin to sidebar** or **Unpin from sidebar** to manage your personal shortcut,
+**View activity** to open their feed, or copy/open their activity link in a new tab.
+Pages always hides dashboards from
 archived sessions and has no archive toggle. To find archived sessions in the
 sidebar, use the **Sessions** filter instead. Hover or focus an icon for its name.
 The active agent's avatar sits at the top of the rail and opens the agent menu;
@@ -64,6 +69,10 @@ release is ready. The Inbox also shows an update notice; dismissing it does not 
 the account-menu badge. The `dev` channel never shows new-update notifications.
 Home toggles the Home panel and shows the active agent’s Home activity and attention state.
 Home navigation and agent switching remain available before a Home session has loaded.
+For roles with `sessions.others: "none"`, opening Home first checks whether the
+Gateway can resolve that conversation. An unavailable Home offers **New conversation**
+without repeatedly requesting its transcript or sidebar ancestry. Home sessions
+that the caller can access still open normally; session visibility does not change.
 Home stays a navigation root regardless of its stored session ancestry.
 On desktop, opening Home or a rail shortcut for a session, page, plugin, or person collapses
 the list while leaving the rail available. The mobile drawer keeps its normal
@@ -113,14 +122,21 @@ the page topbar while the drawer is closed. Opening the drawer moves that action
 back to the rail, without a second header button. In team mode, creation opens the
 same agent picker as the rail. Native apps keep their native creation controls.
 
-In a single-owner list, session activity stays at the far-right edge, including
-when hover or keyboard focus reveals pin and archive actions.
+When an owner filter already identifies a row's owner, standalone activity and
+unread indicators stay at the far-right edge in grouped, ungrouped, pinned, and
+child rows, including when hover or keyboard focus reveals pin and archive
+actions. Other rows keep their leading indicator slot. Owner avatars, session
+artwork, and their activity rings keep their leading attribution slot; team mode
+keeps its compact status layout.
 
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
-without a saved choice starts with **My sessions**. Before a profile is identified,
+without a saved choice starts with **My sessions**, except guests: a role that can
+only view other people's sessions and has no general read access (the role
+[Visitor Access](/gateway/team-server#invite-guests) requires) starts with **Involving me**.
+A saved choice always wins. Before a profile is identified,
 or when the connection has no durable profile, the list shows **All owners**.
-Identifying the profile restores its saved choice or the **My sessions** default.
+Identifying the profile restores its saved choice or the default for that role.
 During reconnection, a known profile's title and filter stay in place until identity
 resolves or the connection changes.
 The filtered session list loads before custom group metadata, so a slow group
@@ -184,7 +200,7 @@ explicit confirmation because unsynced files and in-flight work may be lost.
 If an accepted move fails with a draining source,
 **Retry move** resumes its saved destination and original source. It does not
 open another destination picker or replay the interrupted turn. The same retry
-is available from the **Move failed** chip. An offline-device abandonment retry
+is available from the **Move failed** chip and the failure banner above the composer. The composer stays blocked until the move recovers; a failed move shows its error rather than an ongoing progress indicator. An offline-device abandonment retry
 requires the destructive confirmation again. Wait for that move to finish before
 choosing a different destination.
 
@@ -286,9 +302,11 @@ cancellation or a Gateway restart interrupts that wait,
 the message stays readable with its recorded disposition and is never resent
 automatically. Stopped messages stay at their original time in the conversation,
 before messages sent later; only inputs still waiting to run stay at the live edge.
-Copy a stopped message into the composer to start a new attempt. **Show earlier
-messages** pages through messages that are still waiting or were stopped before
-processing; **Show latest messages** returns to the newest page. Incoming activity
+Copy a stopped message into the composer to start a new attempt. When there are
+more of these messages than fit on one page, **Show earlier unsent messages**
+appears at the top of the conversation once all earlier history has loaded; it
+pages through messages that are still waiting or were stopped before processing,
+and **Show latest unsent messages** returns to the newest page. Incoming activity
 refreshes the page you are reading without changing your selection. A long message
 uses the normal full-message reader without becoming a transcript reply, fork,
 or rewind target.
@@ -353,7 +371,10 @@ enablement and sizing.
 The **Filter & sort** popover keeps **Filters** and **Display** in one panel.
 **Filters** controls status, automation, and system sessions. **Display**
 controls grouping, sorting, message previews, and empty groups. Choices take
-effect immediately. The filter button shows a dot only when **Status** differs from **Active**. **Reset** appears at the right of the Filters header
+effect immediately. The filter button names the current **Status**, including the
+default **Active**. Choose **All** under **Status** to include archived and snoozed
+conversations without clearing the current owner or agent selection. The button
+also shows a dot when Status differs from Active. **Reset** appears at the right of the Filters header
 whenever any visible Filters or Display setting differs from its default. It restores
 all visible panel settings: Active status, automation and system sessions off,
 Custom groups, Created sort, When filtering for empty groups, and message previews off.
@@ -427,7 +448,7 @@ To inspect Home’s subagents, open **Home** and select **Subagents**. The side 
 
 Follow-up turns in an existing subagent session keep the parent’s activity ring running, even after the original task has finished. Opening the parent refreshes its hidden subagent activity without adding subagent rows to the sidebar. The ring clears when no work remains active.
 
-When a child run fails or publishes an attention request, the parent chat shows the child’s name and full diagnostic above the composer, even if the parent has no new reply. **Open session** opens that child’s details. Opening the parent does not acknowledge a child’s active attention request; its notice follows the child’s read state, explicit clearing, and expiry.
+Child failures and attention requests stay in **Subagents**, where you can open the child’s details. They do not add banners above the parent composer. The parent’s own errors, approvals, and input requests remain in the parent chat. Opening the parent or sending another prompt does not acknowledge a child’s failure or active attention request.
 
 Hover a session to see its project and branch. Repository details and the working directory stay in the hovercard and tooltip, leaving sidebar rows clear for session titles and activity indicators. Associated pull requests appear in the same hovercard, with titles, repository references, state, available diff totals, and CI status. Open and draft PRs appear before merged and closed history. The sidebar also counts pull requests published by the session and its accessible descendants, including delegated work on other branches. The hovercard combines those recorded publications with up to three PRs for the current branch, deduplicates links, and identifies each task branch. Recorded links remain available after a checkout changes or the Gateway restarts; unavailable GitHub metadata is labeled **Status unavailable**, never guessed from a publication receipt. The preview shows up to 20 recorded publications and indicates when more exist. Merely mentioning a PR in chat does not associate it with the task. Keyboard users can focus the session row and Tab into its PR links. A warning identifies retained GitHub data that could not be refreshed. An open hovercard refreshes its channel avatar after the Gateway reconnects, without requiring you to close and reopen it.
 
@@ -600,7 +621,7 @@ The root menu keeps everyday actions together: **Pin/Unpin**, **Rename**, **Mark
 - **Move to group** includes **New group** and **Remove from group**. **Assign to** stays on the root menu when more than one eligible owner is available ([session ownership](/concepts/multi-user#assigning-an-owner)).
 - **Fork conversation** creates a separate conversation; while a run is active, it forks from the last completed message. Forks of local folder and project sessions keep that workspace, so existing file references continue to open. **Fork from here** keeps the same local workspace as well.
 - **Copy link** copies the session link in one step. **Advanced → Copy details** offers the preview link, conversation text as Markdown, and the session ID, without duplicating the common session link. The link requires normal Gateway authentication and session access; copying it does not grant access. Markdown loads the available conversation history, not just the messages currently visible. Both copied Markdown and `/export` downloads retain the conversation's sender labels, so messages from different participants remain distinguishable. Records without exportable text, such as tool calls without text output, are omitted.
-- In the Control UI, `/export` and `/export-session` download Markdown through your browser and take no file path. An argument leaves the draft intact and shows how to retry. The server-side HTML export available through other clients keeps its separate workspace-path behavior.
+- In the Control UI, `/export` and `/export-session` load the available conversation history before downloading Markdown through your browser, even when older messages have not been scrolled into view. If history cannot be read completely or the conversation changes while paging, the export fails instead of downloading a partial file; retry the command. These commands take no file path. An argument leaves the draft intact and shows how to retry. The server-side HTML export available through other clients keeps its separate workspace-path behavior.
 - The chat header's **Session sharing** control manages authenticated teammate visibility and membership. For a saved, non-incognito session, its creator or a Gateway admin can also enable world-readable, read-only public access.
 - **Open in** offers a new browser tab or window. Desktop chat also offers **Split right** and **Split below**. When the same conversation is open in multiple splits, each pane restores its transcript after a page reload and catches up independently when another pane is further ahead. After an upgrade, older cached transcripts are refreshed from the Gateway before incremental updates resume. Eligible local workspaces expose native editor destinations, and the chat header includes **Continue in terminal** in this submenu.
 
@@ -768,6 +789,10 @@ Leave **From** empty to fetch `origin` when creating the worktree and use its de
 
 ### Start a native coding CLI
 
+The actions beside **Codex** and **Claude Code** appear on hover or keyboard
+focus, and stay visible on touch screens. The main **Filter & sort** button
+stays visible independently of these catalog actions.
+
 The **+** beside **Codex** or **Claude Code** opens a native CLI draft, not an
 OpenClaw Chat. Choose the machine and folder, optionally enter a first prompt,
 and press **Start in terminal** or Enter (or your configured submit shortcut).
@@ -811,7 +836,7 @@ On an OpenClaw Chat send, the submitted text and attachments appear immediately 
 
 If the model catalog is still loading, session creation stops waiting after a shared 20-second catalog deadline and reports that the session was not created. Retry shortly; your draft remains available. Closing the requesting connection or losing its authority also ends a pending catalog wait.
 
-Starting a suggested task immediately removes its card without switching sessions or changing your draft. The card stays hidden after confirmation. If session creation fails or acceptance is interrupted or unconfirmed, the card reappears with its original instructions and recovery controls. **Retry** checks the same task and preserves the selected launch mode. A confirmed retry clears that task’s earlier error banner without clearing newer or unrelated chat errors. Skill Workshop revisions carry their submitted instructions into chat while history loads.
+Starting a suggested task immediately removes its card without switching sessions or changing your draft. The card stays hidden after confirmation. If session creation fails or acceptance is interrupted or still pending, the card reappears with its original instructions and recovery controls. **Retry** checks the same task and preserves the selected launch mode. A confirmed retry clears that task’s earlier error banner without clearing newer or unrelated chat errors. Skill Workshop revisions carry their submitted instructions into chat while history loads.
 
 Attributed submissions show your avatar immediately, in the same position as the chat transcript. Opening the created session focuses the composer quietly; the attention cue is reserved for navigation that prefills a draft.
 
@@ -833,11 +858,11 @@ Once the session is created, chat opens immediately. Remote startup uses the sam
 
 If startup recovery cannot load after a page reload, the session keeps the loading error and **Retry** available across session switches. Switching sessions does not restart recovery or reset its elapsed time. The saved first message continues blocking delivery of queued follow-ups until recovery loads and confirms its delivery state. While this page is responsive and unsaved starts await the recovery code, automatic in-app reloads are blocked and **Retry** is replaced by a warning. This includes Incognito starts and paused starts whose recovery could not be saved. Reload controls elsewhere in the app explain the same restriction. Choose **Discard unsaved starts and reload** to resume saved starts and discard the unsaved starts. The same action is available in the warning shown by other blocked Reload controls. This protection is limited to the open, responsive page; closing it or browser-managed navigation can still discard unsaved input. Incognito input is never saved to browser storage.
 
-If remote startup fails before the first message is sent, chat retains the submitted text, attachments, selected destination, and a bounded error in the same browser tab and Gateway credential scope. Reloading shows the paused submission without provisioning another worker. **Retry** retains the repository URL/ref or Gateway worktree choice and uses the already-created session and the original profile and machine class, device, or Auto selection; it waits for active placement before sending. The session keeps its model and reasoning settings, including any later changes you make in that session. This tab-local startup recovery uses the tab's existing session-storage lifetime, separately from the ordinary browser draft limits below. Incognito startup recovery remains in memory only. An ordinary reconnect keeps the already-submitted prompt visible with **Reconnecting**. **Retry** and **Check delivery** wait for a ready connection. Changing the Gateway, credentials, or authenticated owner clears private presentation. While disconnected, ordinary follow-up messages can enter the local queue. During the brief account-recovery check after reconnect, submitted input stays in the composer. Once that check finishes, queue admission resumes, but delivery still waits until the initial message is resolved.
+If remote startup fails before the first message is sent, chat retains the submitted text, attachments, selected destination, and a bounded error in the same browser tab and Gateway credential scope. Reloading shows the paused submission without provisioning another worker. **Retry** retains the repository URL/ref or Gateway worktree choice and uses the already-created session and the original profile and machine class, device, or Auto selection; it waits for active placement before sending. The session keeps its model and reasoning settings, including any later changes you make in that session. This tab-local startup recovery uses the tab's existing session-storage lifetime, separately from the ordinary browser draft limits below. Incognito startup recovery remains in memory only. An ordinary reconnect keeps the already-submitted prompt visible with **Reconnecting** and automatically resends an attempted first message with its original submission key after the same account and recovery scope are accepted. **Retry** waits for a ready connection. Changing the Gateway, credentials, or authenticated owner clears private presentation. While disconnected, ordinary follow-up messages can enter the local queue. During the brief account-recovery check after reconnect, submitted input stays in the composer. Once that check finishes, queue admission resumes, but delivery still waits until the initial message is resolved.
 
-If the Gateway explicitly rejects the first send, **Retry** creates a new send attempt on that same session and destination. If delivery is uncertain, **Check delivery** looks for the original user message or an exact Gateway receipt showing that the input was retained or consumed. It never resends the prompt, provisions a worker, or treats missing history as proof that delivery failed. A matching receipt clears the browser startup hold without implying that the run has finished. The prompt stays visible until chat receives the corresponding Gateway-owned input or transcript message, then switches to that authoritative copy without duplication. Retained inputs keep their Gateway-owned status, including interrupted or cancelled inputs. Without a receipt, the prompt and attachments remain accessible, and queued follow-ups remain held. You can continue drafting or queuing ordinary messages. Inspect the conversation, or copy the retained prompt if you choose to start a separate attempt. This recovery does not promise exactly-once delivery across Gateway restarts. If browser storage rejects a recovery update, keep the current page open to preserve its in-memory input.
+If the Gateway explicitly rejects the first send, the message shows **Not sent** and offers **Retry** on that same session and destination. A missing acknowledgment instead keeps the message pending for automatic resend; it does not provision another worker or create another session. The Gateway's recorded submission check prevents a duplicate turn or transcript append, including after a restart. An acknowledgment or duplicate response clears the browser startup hold without implying that the run has finished. The prompt stays visible until chat receives the corresponding Gateway-owned input or transcript message, then switches to that authoritative copy without duplication. Retained inputs keep their Gateway-owned status, including interrupted or cancelled inputs. You can continue drafting or queuing ordinary messages while waiting. See [Offline and reconnect](/web/control-ui/offline-and-reconnect) for delivery and discard behavior. If browser storage rejects a recovery update, keep the current page open to preserve its in-memory input.
 
-When an interrupted remote-placement draft needs deletion, cleanup reclaims the placement by session key, archives it with its expected session identity, then uses the write-scoped archived-only delete contract. Cleanup errors remain visible. If an interrupted Incognito startup is successfully cleaned up, the current pane keeps a read-only copy of its prompt and an interruption notice. It does not recreate the session or resend the message; the copy lasts only in the current browser tab and credential scope. Restoring paused or unconfirmed recovery does not itself request deletion.
+When an interrupted remote-placement draft needs deletion, cleanup reclaims the placement by session key, archives it with its expected session identity, then uses the write-scoped archived-only delete contract. Cleanup errors remain visible. If an interrupted Incognito startup is successfully cleaned up, the current pane keeps a read-only copy of its prompt and an interruption notice. It does not recreate the session or resend the message; the copy lasts only in the current browser tab and credential scope. Restoring paused or pending recovery does not itself request deletion.
 
 Unsent text and staged attachments can be recovered only in the same browser profile and Gateway credential scope; they are never stored on the Gateway or synced across devices. The browser keeps the 20 most recently edited draft scopes per Gateway credential scope for up to seven days, with at most 25 MiB of attachment data per draft, but it can evict browser storage sooner. A successful send or New Session creation, explicit attachment removal, or confirmed session deletion retires the corresponding browser draft. If cleanup fails after deletion, clear site data for the Control UI origin to remove it. Clearing site data also removes every other browser draft. If a draft's attachments exceed the cap, the current tab keeps them and shows the existing storage warning, but only the text is restart-recoverable. OpenClaw **Incognito** drafts are never durable. Turning Incognito off resumes browser autosave for the current text and attachments, without requiring another edit. Switching New Session destinations, or leaving an existing Incognito chat for Settings and returning with Back, keeps unsent text and attachments in the current tab. Reloading or closing the tab discards that unsent input. Automatic UI updates pause while an unsent Incognito draft remains in a chat pane, New Session, or its navigation handoff. If an update requires a fresh page, sending remains unavailable; choose **Refresh** and **Review private draft** to copy the text or download staged files, keep the tab open, or explicitly discard that draft and retry the refresh. Other unsaved-work guards still apply. This protection requires a document running the updated UI; a server update cannot retrofit it into an already-open older page. A manual browser reload or closing the tab still discards the memory-only draft. Submitted Incognito messages in the tab-only inline outbox retain their separate reload behavior. In a private browser window, IndexedDB availability and lifetime are controlled by the browser and stored data is normally cleared when the private session ends. The **Incognito** toggle in the new-session page's top-right control rail retires that browser draft and creates a web-only thread whose session entry, transcript, and compaction state stay in memory for 24 hours after creation or until the Gateway restarts, whichever comes first; OpenClaw also skips its automatic memory flush. The agent keeps its normal tools, so an explicit save request or tool-driven file write can still persist data. The model provider still processes messages, and content-free audit metadata is still recorded. Remote-placement starts persist their model and reasoning choices before dispatching the session to its worker.
 

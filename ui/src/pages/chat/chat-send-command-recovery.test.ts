@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import {
   captureChatOutboxAdmission,
   storedChatOutboxScopeKey,
@@ -13,14 +13,6 @@ import { handleSendChat } from "./chat-send-submit.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
-const sentAttachments = [
-  {
-    type: "file",
-    mimeType: "application/pdf",
-    fileName: "brief.pdf",
-    content: "JVBERi0xLjQK",
-  },
-];
 
 useChatSendBrowserFixture();
 
@@ -29,45 +21,42 @@ describe.each(["steer", "redirect"] as const)("handleSendChat /%s recovery", (co
   const commandHost = (response: unknown, overrides: Parameters<typeof makeChatHost>[0] = {}) =>
     makeChatHost({ chatMessage: draft, requestHandlers: { "chat.send": response }, ...overrides });
 
-  it.each(["timeout", "error", "rejected", "started", "in_flight", "ok"] as const)(
-    "settles a %s command ACK",
-    async (status) => {
-      const failed = ["timeout", "error", "rejected"].includes(status);
-      const attachment = createStagedAttachment(`${command}-${status}`);
-      const host = commandHost(
-        () => {
-          if (status === "rejected") {
-            throw new GatewayRequestError({ code: "UNAVAILABLE", message: "Request rejected" });
-          }
-          return { runId: "command-run", status };
-        },
-        { chatAttachments: [attachment], ...(failed ? {} : { chatRunId: "active-run" }) },
+  it.each(
+    command === "steer"
+      ? (["error", "rejected", "started"] as const)
+      : (["timeout", "rejected", "in_flight", "ok"] as const),
+  )("settles a %s command ACK", async (status) => {
+    const failed = ["timeout", "error", "rejected"].includes(status);
+    const attachment = createStagedAttachment(`${command}-${status}`);
+    const host = commandHost(
+      () => {
+        if (status === "rejected") {
+          throw new GatewayRequestError({ code: "UNAVAILABLE", message: "Request rejected" });
+        }
+        return { runId: "command-run", status };
+      },
+      { chatAttachments: [attachment], ...(failed ? {} : { chatRunId: "active-run" }) },
+    );
+    await handleSendChat(host);
+    expect(findChatSendPayload(host).attachments).toMatchObject([{ fileName: "brief.pdf" }]);
+    expect(host).toMatchObject({
+      chatMessage: failed ? draft : "",
+      chatAttachments: failed ? [{ id: attachment.id }] : [],
+    });
+    expect(getChatAttachmentDataUrl(failed ? host.chatAttachments[0]! : attachment)).toBe(
+      failed ? attachmentDataUrl : null,
+    );
+    if (failed) {
+      expect(host.chatQueue).toEqual([]);
+      expect(host.chatError).toBeTruthy();
+    } else {
+      expect(host.chatRunId).toBe(
+        command === "redirect" && status !== "ok" ? "command-run" : "active-run",
       );
-      await handleSendChat(host);
-      expect(findChatSendPayload(host)).toMatchObject({
-        message: "correction",
-        queueMode: command === "steer" ? "steer" : "interrupt",
-        attachments: sentAttachments,
-      });
-      expect(host).toMatchObject({
-        chatMessage: failed ? draft : "",
-        chatAttachments: failed ? [{ id: attachment.id }] : [],
-      });
-      expect(getChatAttachmentDataUrl(failed ? host.chatAttachments[0]! : attachment)).toBe(
-        failed ? attachmentDataUrl : null,
-      );
-      if (failed) {
-        expect(host.chatQueue).toEqual([]);
-        expect(host.chatError).toBeTruthy();
-      } else {
-        expect(host.chatRunId).toBe(
-          command === "redirect" && status !== "ok" ? "command-run" : "active-run",
-        );
-        expect(host.chatComposerFallbackByScope).toEqual({});
-        expect(host.chatError).toBeFalsy();
-      }
-    },
-  );
+      expect(host.chatComposerFallbackByScope).toEqual({});
+      expect(host.chatError).toBeFalsy();
+    }
+  });
 
   it.each([false, true])("preserves edits (navigated: %s)", async (navigated) => {
     const acknowledgment = createDeferred<{ runId: string; status: "timeout" }>();

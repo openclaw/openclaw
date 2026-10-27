@@ -1,6 +1,6 @@
 {
   "id": "team-reports",
-  "version": 1,
+  "version": 2,
   "minimumPostgresVersion": 16,
   "schema": "",
   "sqlite": "\nCREATE TABLE IF NOT EXISTS team_reports_schema_migrations (\n  id TEXT PRIMARY KEY,\n  applied_at INTEGER NOT NULL\n) STRICT;\n\nCREATE TABLE IF NOT EXISTS team_reports_periods (\n  period TEXT NOT NULL,\n  period_key TEXT NOT NULL,\n  since_ms INTEGER NOT NULL,\n  until_ms INTEGER NOT NULL,\n  status TEXT NOT NULL,\n  generated_at_ms INTEGER NOT NULL,\n  data_json TEXT NOT NULL,\n  summary_json TEXT,\n  markdown TEXT NOT NULL,\n  PRIMARY KEY (period, period_key)\n) STRICT;\n\nCREATE TABLE IF NOT EXISTS team_reports_person_days (\n  day_key TEXT NOT NULL,\n  login TEXT NOT NULL,\n  github_total INTEGER NOT NULL,\n  commits INTEGER NOT NULL,\n  prs_opened INTEGER NOT NULL,\n  prs_merged INTEGER NOT NULL,\n  prs_closed INTEGER NOT NULL,\n  issues_opened INTEGER NOT NULL,\n  issues_closed INTEGER NOT NULL,\n  issue_comments INTEGER NOT NULL,\n  review_comments INTEGER NOT NULL,\n  discord_messages INTEGER NOT NULL,\n  PRIMARY KEY (day_key, login)\n) STRICT;\n\nCREATE TABLE IF NOT EXISTS team_reports_runs (\n  id TEXT PRIMARY KEY,\n  kind TEXT NOT NULL,\n  started_at_ms INTEGER NOT NULL,\n  finished_at_ms INTEGER,\n  status TEXT NOT NULL,\n  periods_json TEXT NOT NULL,\n  stats_json TEXT,\n  error TEXT\n) STRICT;\nCREATE INDEX IF NOT EXISTS idx_team_reports_runs_started\n  ON team_reports_runs(started_at_ms DESC);\n",
@@ -281,6 +281,6 @@
   ],
   "postData": [
     1512,
-    1617
+    1606
   ]
 }

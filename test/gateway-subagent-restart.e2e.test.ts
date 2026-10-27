@@ -699,14 +699,24 @@ it
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "resumes a drain-interrupted dashboard child once before notifying its parent",
+it.skipIf(process.platform === "win32").for([
+  { parentAgentId: "main", parentKey: "agent:main:main", followup: false },
+  {
+    parentAgentId: "requester",
+    parentKey: "agent:requester:x:group:restart-fixture",
+    followup: true,
+  },
+])(
+  "resumes a drain-interrupted dashboard child once for $parentKey (follow-up: $followup)",
   { timeout: 240_000 },
-  async ({ signal }) => {
-    const parentKey = "agent:main:main";
+  async ({ parentAgentId, parentKey, followup }, { signal }) => {
     const parentRequest = "DASHBOARD_RESTART_PARENT: start a visible child, then finish.";
     const childTask = "DASHBOARD_RESTART_CHILD: finish the retained assignment.";
     const childFinal = "DASHBOARD_CHILD_COMPLETED";
+    const peerRequest = "DASHBOARD_PEER_SEND: continue the retained child.";
+    const peerKey = `agent:${parentAgentId}:dashboard:restart-peer`;
+    let childKey = "";
+    let peerCalls = 0;
     const parentFinal = "DASHBOARD_PARENT_RECEIVED_RESULT";
     const failed = createDeferred<never>();
     void failed.promise.catch(() => {});
@@ -714,6 +724,7 @@ it.skipIf(process.platform === "win32")(
     const resumedChild = createDeferred<ServerResponse>();
     let parentCalls = 0;
     let childCalls = 0;
+    const resumedCall = followup ? 4 : 3;
     const reservation = await reserveTestPortListener({
       port: 64_872,
       offsets: [0, 1, 2, 3],
@@ -750,6 +761,26 @@ it.skipIf(process.platform === "win32")(
             } else {
               text(title);
             }
+          } else if (input.includes(peerRequest) && !input.includes(childTask)) {
+            peerCalls += 1;
+            if (peerCalls === 1) {
+              writeRestartToolCall(
+                response,
+                "peer_send",
+                "sessions_send",
+                {
+                  sessionKey: childKey,
+                  message: "DASHBOARD_CONTINUE: inspect retained work and finish.",
+                  mode: "followup",
+                  timeoutSeconds: 0,
+                  watch: false,
+                },
+                peerCalls,
+              );
+            } else {
+              expect(input).not.toContain('"status":"forbidden"');
+              text("DASHBOARD_PEER_ACKNOWLEDGED");
+            }
           } else if (input.includes(parentRequest)) {
             parentCalls += 1;
             if (parentCalls === 1) {
@@ -759,6 +790,7 @@ it.skipIf(process.platform === "win32")(
                 "sessions_spawn",
                 {
                   task: childTask,
+                  agentId: "main",
                   taskName: "dashboard_restart_child",
                   visible: true,
                   context: "isolated",
@@ -777,14 +809,40 @@ it.skipIf(process.platform === "win32")(
           } else {
             expect(input).toContain(childTask);
             childCalls += 1;
-            expect(childCalls).toBeLessThanOrEqual(2);
+            expect(childCalls).toBeLessThanOrEqual(resumedCall + 1);
             if (childCalls === 1) {
+              writeRestartToolCall(
+                response,
+                "dashboard_checkpoint",
+                "subagents",
+                { action: "list" },
+                childCalls,
+              );
+            } else if (followup && childCalls === 2) {
+              text(childFinal);
+            } else if (childCalls === resumedCall - 1) {
               initialChild.resolve();
-            } else {
+            } else if (childCalls === resumedCall) {
               resumedChild.resolve(response);
+            } else {
+              // A resumed agent must be able to inspect retained work before finishing.
+              const output = asRecord(
+                (Array.isArray(body.input) ? body.input : []).find(
+                  (item) =>
+                    isRecord(item) &&
+                    item.type === "function_call_output" &&
+                    item.call_id === `call_dashboard_recovered_history_${resumedCall}`,
+                ),
+              );
+              expect(output.output).toBeTypeOf("string");
+              const history = asRecord(JSON.parse(String(output.output)));
+              expect(history).toMatchObject({ messages: expect.any(Array) });
+              expect(history.error).toBeUndefined();
+              expect(JSON.stringify(history.messages)).toContain("call_dashboard_checkpoint_1");
+              text(childFinal);
             }
-            // Hold the original transport through the drain, then the resumed
-            // transport until the test proves the parent has not been notified.
+            // After recording a checkpoint, hold the next transport through the drain,
+            // then hold the resumed transport until the parent is proven still waiting.
           }
         }),
     });
@@ -845,7 +903,10 @@ it.skipIf(process.platform === "win32")(
             },
           },
           agents: {
+            ownership: "explicit",
             defaults: {
+              systemAgent: { agentId: "main" },
+              subagents: { maxSpawnDepth: 2 },
               workspace: instance.state.workspaceDir,
               model: { primary: model.modelRef },
               modelPolicy: { allow: [model.modelRef] },
@@ -859,10 +920,15 @@ it.skipIf(process.platform === "win32")(
               skills: [],
               timeoutSeconds: 180,
             },
-            entries: { main: {} },
+            entries: {
+              main: {},
+              requester: { subagents: { allowAgents: ["main"] } },
+            },
           },
           tools: {
-            allow: ["sessions_spawn", "sessions_send", "sessions_history", "subagents"],
+            sessions: { visibility: "all" },
+            agentToAgent: { enabled: true },
+            allow: ["read", "sessions_spawn", "sessions_send", "sessions_history", "subagents"],
             codeMode: { enabled: false },
             toolSearch: false,
           },
@@ -876,27 +942,84 @@ it.skipIf(process.platform === "win32")(
         });
         await instance.startGateway();
         client = await connect();
-        await client.request("sessions.create", { key: parentKey, agentId: "main" });
+        await client.request("sessions.create", { key: parentKey, agentId: parentAgentId });
         const accepted = await client.request<{ runId: string }>(
           "chat.send",
           { sessionKey: parentKey, message: parentRequest, idempotencyKey: "dashboard-original" },
           { expectFinal: false },
         );
-        await wait(initialChild.promise);
+        if (!followup) {
+          await wait(initialChild.promise);
+        }
         expect(
           await client.request("agent.wait", { runId: accepted.runId, timeoutMs: 60_000 }),
         ).toMatchObject({ status: "ok" });
         const rows = await client.request<SessionsListResult>("sessions.list", { agentId: "main" });
-        const child = rows.sessions.find((row) => row.key.includes(":dashboard:"));
-        expect(child, instance.logs()).toMatchObject({ status: "running", hasActiveRun: true });
+        const child = rows.sessions.find((row) => row.spawnedBy === parentKey);
+        expect(child, instance.logs()).toBeDefined();
         if (!child) {
           throw new Error("Visible spawn did not publish its dashboard child");
         }
-        expect(parentCalls).toBe(2);
+        if (followup) {
+          await wait(
+            vi.waitFor(
+              async () => {
+                const settled = await client!.request<SessionsListResult>("sessions.list", {});
+                for (const key of [parentKey, child.key]) {
+                  expect(settled.sessions.find((row) => row.key === key)).toMatchObject({
+                    status: "done",
+                    hasActiveRun: false,
+                  });
+                }
+                expect(parentCalls).toBe(3);
+              },
+              { timeout: 60_000 },
+            ),
+          );
+          // Peer follow-ups keep the original child task historical.
+          childKey = child.key;
+          await client.request("sessions.create", { key: peerKey, agentId: parentAgentId });
+          const peerRun = await client.request<{ runId: string }>(
+            "chat.send",
+            {
+              sessionKey: peerKey,
+              message: peerRequest,
+              idempotencyKey: "dashboard-peer-followup",
+            },
+            { expectFinal: false },
+          );
+          await wait(initialChild.promise);
+          expect(
+            await client.request("agent.wait", { runId: peerRun.runId, timeoutMs: 60_000 }),
+          ).toMatchObject({ status: "ok" });
+        }
+        const beforeRestart = await client.request<SessionsListResult>("sessions.list", {
+          agentId: "main",
+        });
+        expect(beforeRestart.sessions.find((row) => row.key === child.key)).toMatchObject({
+          status: "running",
+          hasActiveRun: true,
+          ...(followup ? { subagentRunState: "historical" } : {}),
+        });
+        expect(parentCalls).toBe(followup ? 3 : 2);
         await restart();
+        await wait(
+          vi.waitFor(
+            async () => {
+              const state = await client!.request<SessionsListResult>("sessions.list", {
+                agentId: "main",
+              });
+              expect(state.sessions.find((row) => row.key === child.key)).toMatchObject({
+                status: "running",
+                hasActiveRun: true,
+              });
+            },
+            { timeout: 60_000 },
+          ),
+        );
         const resumedResponse = await wait(resumedChild.promise);
-        expect(parentCalls, instance.logs()).toBe(2);
-        expect(childCalls).toBe(2);
+        expect(parentCalls, instance.logs()).toBe(followup ? 3 : 2);
+        expect(childCalls).toBe(resumedCall);
         const running = await client!.request<SessionsListResult>("sessions.list", {
           agentId: "main",
         });
@@ -904,15 +1027,15 @@ it.skipIf(process.platform === "win32")(
           status: "running",
           hasActiveRun: true,
         });
-        writeOpenAiResponsesText(resumedResponse, {
-          text: childFinal,
-          messageId: "msg_dashboard_child_final",
-          responseId: "resp_dashboard_child_final",
-        });
+        writeRestartToolCall(
+          resumedResponse,
+          "dashboard_recovered_history",
+          "sessions_history",
+          { sessionKey: child.key, limit: 20 },
+          childCalls,
+        );
         const assertCompleted = async () => {
-          const sessions = await client!.request<SessionsListResult>("sessions.list", {
-            agentId: "main",
-          });
+          const sessions = await client!.request<SessionsListResult>("sessions.list", {});
           for (const key of [parentKey, child.key]) {
             expect(
               sessions.sessions.find((row) => row.key === key),
@@ -928,9 +1051,12 @@ it.skipIf(process.platform === "win32")(
           expect(
             history.messages.map(extractAssistantPhaseText).filter((text) => text === parentFinal),
           ).toHaveLength(1);
-          expect({ parentCalls, childCalls }).toEqual({ parentCalls: 3, childCalls: 2 });
+          expect({ parentCalls, childCalls }).toEqual({
+            parentCalls: 3,
+            childCalls: resumedCall + 1,
+          });
         };
-        await vi.waitFor(assertCompleted, { timeout: 60_000 });
+        await wait(vi.waitFor(assertCompleted, { timeout: 60_000 }));
         const recoveryPasses = () =>
           (instance.logs().match(/startup trace: sidecars.subagent-recovery /g) ?? []).length;
         const completedPasses = recoveryPasses();
@@ -938,9 +1064,14 @@ it.skipIf(process.platform === "win32")(
         await vi.waitFor(() => expect(recoveryPasses()).toBeGreaterThan(completedPasses), {
           timeout: 60_000,
         });
-        await vi.waitFor(assertCompleted, { timeout: 60_000 });
+        await wait(vi.waitFor(assertCompleted, { timeout: 60_000 }));
       },
-      () => client?.stopAndWait(),
+      async () => {
+        if (signal.aborted) {
+          console.error(instance.logs().replaceAll(instance.gatewayToken, "[fixture token]"));
+        }
+        await client?.stopAndWait();
+      },
       () => instance.cleanup(),
       async () => {
         reservation.listener.closeAllConnections();

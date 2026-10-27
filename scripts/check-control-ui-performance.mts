@@ -7,10 +7,14 @@ import {
   CONTROL_UI_ROUTE_PRELOAD_ATTRIBUTE,
   selectControlUiRoutePreloads,
 } from "../src/gateway/control-ui-route-preloads.ts";
+import { extractControlUiStartupAssetPaths } from "../ui/config/control-ui-startup-assets.ts";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
+import {
+  MERMAID_RENDERER_ASSET,
+  controlUiLocaleAssetIdentity,
+} from "./lib/control-ui-optional-assets.ts";
 import { isRecord } from "./lib/record-shared.mjs";
-import { escapeRegExp } from "./lib/regexp.mjs";
 
 const KIB = 1024;
 const STARTUP_JS_BASELINE_RATCHET_BYTES = 4096;
@@ -29,39 +33,24 @@ const CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES = 64;
 const CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES = 45 * KIB;
 // Immediate Home and diagnostic frames approved in #147574, including shared header styles.
 const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = 1.5 * KIB;
-// The opaque Mermaid sandbox loads one self-contained classic script only when
-// a diagram is viewed. Keep its size visible without relaxing ordinary chunks.
-const MERMAID_RENDERER_ASSET = /^assets\/mermaid\.min-[\w-]+\.js$/u;
 const MERMAID_RENDERER_GZIP_BYTES = 960 * KIB;
-// Locale catalogs are named Vite chunks loaded only after a language selection.
-// Keep one combined cap for base and on-demand config hints in every locale.
-const CONTROL_UI_LOCALE_ASSET_PATTERNS = CONTROL_UI_LOCALE_ENTRIES.flatMap(({ locale }) => [
-  {
-    locale,
-    kind: "base" as const,
-    pattern: new RegExp(`^assets/${escapeRegExp(locale)}-[^/]+\\.js$`, "u"),
-  },
-  {
-    locale,
-    kind: "configHints" as const,
-    pattern: new RegExp(`^assets/locale-config-hints-${escapeRegExp(locale)}-[^/]+\\.js$`, "u"),
-  },
-]);
 const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
-  // Deferred menu and emoji/Markdown loads use 7/23/17 requests; retain two per path.
-  startupJsRequests: 9,
-  chatBootJsRequests: 25,
-  newBootJsRequests: 19,
+  // Consolidated eager/route partitions measure 5/20/17 requests over HTTP/1.1.
+  // Preserve the initial two-request headroom; route limits match their measured graphs.
+  startupJsRequests: 7,
+  chatBootJsRequests: 20,
+  // A neutral controls chunk keeps other routes from loading the New Session renderer.
+  newBootJsRequests: 17,
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Defer optional root English: matched bf93c438 1,269,817 to 1,268,099 B Chat.
-  // New Session 763,598 to 761,956 B; preserve each surface's relative headroom.
-  chatBootJsGzipBytes: 1_357_842,
+  // Streaming token-to-DOM: 1,274,050 B measured + the existing 811 B headroom.
+  // Peter accepted chat growth for less streaming CPU and HTML parsing.
+  chatBootJsGzipBytes: 1_274_861,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
@@ -71,55 +60,33 @@ const controlUiPerformanceBudgets = {
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
-  largestJsGzipBytes: 215 * KIB,
+  // Fewer boot requests save 15,022 B across Chat JS/CSS. The consolidated
+  // Chat chunk measures 463,077 B; the cap retains 25,328 B headroom.
+  largestJsGzipBytes: 488_405,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
+  // CLS reservation costs 266 B gzip over main while all measured reloads stay <=0.02.
+  // The campaign permits this measured win; retain only 64 B of build variance.
+  totalCssGzipBytes: 307_769,
+  totalCssRawBytes: 1_597_581,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
-
-function controlUiAssetPathFromUrl(value: string): string | null {
-  const normalized = value.split(/[?#]/u, 1)[0]?.replace(/\\/gu, "/") ?? "";
-  const markerIndex = normalized.lastIndexOf("assets/");
-  if (markerIndex === -1) {
-    return null;
-  }
-  const assetPath = normalized.slice(markerIndex);
-  if (assetPath.includes("../") || !/\.(?:css|js)$/u.test(assetPath)) {
-    return null;
-  }
-  return assetPath;
-}
-
-export function extractControlUiStartupAssetPaths(html: string): string[] {
-  const assets = new Set<string>();
-  for (const tag of html.matchAll(/<(?:link|script)\b[^>]*>/giu)) {
-    const attribute = tag[0].match(/\s(?:href|src)\s*=\s*["']([^"']+)["']/iu);
-    const assetPath = attribute?.[1] ? controlUiAssetPathFromUrl(attribute[1]) : null;
-    if (assetPath) {
-      assets.add(assetPath);
-    }
-  }
-  return [...assets].toSorted((left, right) => left.localeCompare(right));
-}
 
 function readAssetMetrics(assetsDir: string, entry: fs.Dirent) {
   const file = `assets/${entry.name}`;
   const sourcePath = path.join(assetsDir, entry.name);
   const gzipPath = `${sourcePath}.gz`;
   const brotliPath = `${sourcePath}.br`;
-  for (const sidecarPath of [gzipPath, brotliPath]) {
-    if (!fs.existsSync(sidecarPath)) {
-      throw new Error(`Control UI performance check missing ${path.basename(sidecarPath)}`);
-    }
-  }
+  const rawBytes = fs.statSync(sourcePath).size;
   const type = entry.name.endsWith(".js") ? "js" : "css";
   return {
     file,
     type,
-    rawBytes: fs.statSync(sourcePath).size,
-    gzipBytes: fs.statSync(gzipPath).size,
-    brotliBytes: fs.statSync(brotliPath).size,
+    rawBytes,
+    // The Gateway serves identity when a requested compression sidecar is absent.
+    gzipBytes: fs.statSync(gzipPath, { throwIfNoEntry: false })?.size ?? rawBytes,
+    brotliBytes: fs.statSync(brotliPath, { throwIfNoEntry: false })?.size ?? rawBytes,
   };
 }
 
@@ -139,13 +106,6 @@ function largestAsset(assets: Array<ReturnType<typeof readAssetMetrics>>) {
   return assets.toSorted(
     (left, right) => right.gzipBytes - left.gzipBytes || left.file.localeCompare(right.file),
   )[0]!;
-}
-
-function controlUiLocaleAssetIdentity(
-  file: string,
-): { locale: string; kind: "base" | "configHints" } | null {
-  const match = CONTROL_UI_LOCALE_ASSET_PATTERNS.find(({ pattern }) => pattern.test(file));
-  return match ? { locale: match.locale, kind: match.kind } : null;
 }
 
 function collectControlUiLocaleAssetGroups(assets: Array<ReturnType<typeof readAssetMetrics>>) {
@@ -253,6 +213,8 @@ function collectControlUiPerformanceBudgetChecks(
     ["startup CSS gzip", metrics.startup.css.gzipBytes, budgets.startupCssGzipBytes, "bytes"],
     ["largest JS gzip", metrics.largest.js.gzipBytes, budgets.largestJsGzipBytes, "bytes"],
     ["largest CSS gzip", metrics.largest.css.gzipBytes, budgets.largestCssGzipBytes, "bytes"],
+    ["total CSS gzip", metrics.total.css.gzipBytes, budgets.totalCssGzipBytes, "bytes"],
+    ["total CSS raw", metrics.total.css.rawBytes, budgets.totalCssRawBytes, "bytes"],
     ["isolated Mermaid JS assets", metrics.mermaidRenderer.length, 1, "count"],
     [
       "isolated Mermaid JS gzip",
@@ -374,27 +336,12 @@ export function evaluateControlUiPerformanceBudgets(
     }
   }
   if (baseMetrics) {
-    for (const area of ["startup", "total"] as const) {
-      const limit =
-        area === "startup"
-          ? CONTROL_UI_CSS_GZIP_GROWTH_BYTES - 1
-          : CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES;
-      const growth = metrics[area].css.gzipBytes - baseMetrics[area].css.gzipBytes;
-      if (growth > limit) {
-        violations.push({
-          metric: `${area} CSS gzip growth`,
-          actual: growth,
-          limit,
-          unit: "bytes",
-        });
-      }
-    }
-    const rawGrowth = metrics.total.css.rawBytes - baseMetrics.total.css.rawBytes;
-    if (rawGrowth > CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES) {
+    const growth = metrics.startup.css.gzipBytes - baseMetrics.startup.css.gzipBytes;
+    if (growth >= CONTROL_UI_CSS_GZIP_GROWTH_BYTES) {
       violations.push({
-        metric: "total CSS raw growth",
-        actual: rawGrowth,
-        limit: CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES,
+        metric: "startup CSS gzip growth",
+        actual: growth,
+        limit: CONTROL_UI_CSS_GZIP_GROWTH_BYTES - 1,
         unit: "bytes",
       });
     }
@@ -499,7 +446,7 @@ export function formatControlUiPerformanceReport(
   );
   const lines = [
     "Control UI performance:",
-    `  measurement: shipped gzip sidecars; Node ${process.version}`,
+    `  measurement: shipped sidecars with identity fallback; Node ${process.version}`,
     `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(startupJsLimits.enforcementLimit)} gzip / ${startupJsLimits.enforcementLimit} B)`,
   ];
   if (startupBudgetBaseline) {
@@ -512,7 +459,7 @@ export function formatControlUiPerformanceReport(
     `  largest ordinary JS: ${metrics.largest.js.file}, ${formatControlUiPerformanceBytes(metrics.largest.js.gzipBytes)} gzip (limit: ${formatControlUiPerformanceBytes(budgets.largestJsGzipBytes)})`,
     `  largest CSS: ${metrics.largest.css.file}, ${metrics.largest.css.gzipBytes} B gzip (hard ceiling ${budgets.largestCssGzipBytes} B; headroom ${budgets.largestCssGzipBytes - metrics.largest.css.gzipBytes} B)`,
     `  all JS: ${formatAssetSummary(metrics.total.js)}`,
-    `  all CSS: ${formatAssetSummary(metrics.total.css)}`,
+    `  all CSS: ${formatAssetSummary(metrics.total.css)} (fixed ceilings: ${budgets.totalCssGzipBytes} B gzip, ${budgets.totalCssRawBytes} B raw)`,
   );
   if (metrics.routeBoot) {
     lines.push(
@@ -546,20 +493,24 @@ export function formatControlUiPerformanceReport(
     lines.push(
       `  startup JS gzip vs base: ${baseMetrics.startup.js.gzipBytes} B -> ${metrics.startup.js.gzipBytes} B (${startupGrowth >= 0 ? "+" : ""}${startupGrowth} B); requests ${baseMetrics.startup.js.requests} -> ${metrics.startup.js.requests}`,
     );
-    for (const area of ["startup", "total"] as const) {
-      const limit =
-        area === "startup"
-          ? CONTROL_UI_CSS_GZIP_GROWTH_BYTES - 1
-          : CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES;
-      const growth = metrics[area].css.gzipBytes - baseMetrics[area].css.gzipBytes;
+    const cssGrowth = metrics.startup.css.gzipBytes - baseMetrics.startup.css.gzipBytes;
+    lines.push(
+      `  startup CSS gzip vs base: ${baseMetrics.startup.css.gzipBytes} B -> ${metrics.startup.css.gzipBytes} B (${cssGrowth >= 0 ? "+" : ""}${cssGrowth} B; growth up to ${CONTROL_UI_CSS_GZIP_GROWTH_BYTES - 1} B allowed)`,
+    );
+    for (const [metric, bytes, baseBytes, cap] of [
+      [
+        "gzip",
+        metrics.total.css.gzipBytes,
+        baseMetrics.total.css.gzipBytes,
+        budgets.totalCssGzipBytes,
+      ],
+      ["raw", metrics.total.css.rawBytes, baseMetrics.total.css.rawBytes, budgets.totalCssRawBytes],
+    ] as const) {
+      const growth = bytes - baseBytes;
       lines.push(
-        `  ${area} CSS gzip vs base: ${baseMetrics[area].css.gzipBytes} B -> ${metrics[area].css.gzipBytes} B (${growth >= 0 ? "+" : ""}${growth} B; growth up to ${limit} B allowed)`,
+        `  total CSS ${metric} vs base: ${baseBytes} B -> ${bytes} B (${growth >= 0 ? "+" : ""}${growth} B; fixed ceiling ${cap} B)`,
       );
     }
-    const rawGrowth = metrics.total.css.rawBytes - baseMetrics.total.css.rawBytes;
-    lines.push(
-      `  total CSS raw vs base: ${baseMetrics.total.css.rawBytes} B -> ${metrics.total.css.rawBytes} B (${rawGrowth >= 0 ? "+" : ""}${rawGrowth} B; growth up to ${CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES} B allowed)`,
-    );
   }
   for (const warning of controlUiPerformanceWarnings(metrics, budgets)) {
     lines.push(`  warning: ${warning}`);

@@ -3,10 +3,9 @@ import { setDeferredPluginMigrationConfigFacts } from "./deferred-plugin-migrati
 import { observeConfigSnapshot } from "./io.observe.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type { ReadConfigFileSnapshotInternalResult } from "./io.types.js";
-import { findLegacyConfigIssues } from "./legacy.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "./materialize.js";
 import { setConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
-import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "./types.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 export function createConfigFileSnapshot(
   params: Omit<
@@ -78,24 +77,4 @@ export async function finalizeReadConfigSnapshotInternalResult(
     await observeConfigSnapshot(deps, result.snapshot);
   }
   return result;
-}
-
-export async function collectInvalidConfigLegacyIssues(
-  raw: unknown,
-  sourceRaw: unknown,
-  preparePluginDiagnostics?: () => Promise<() => void>,
-): Promise<LegacyConfigIssue[]> {
-  if (!raw || typeof raw !== "object") {
-    return [];
-  }
-  // Known core repairs must not wait for executable plugin diagnostics or their state reads.
-  const coreIssues = findLegacyConfigIssues(raw, sourceRaw);
-  if (coreIssues.length > 0) {
-    return coreIssues;
-  }
-  const { findDoctorLegacyConfigIssues } =
-    await import("../commands/doctor/shared/legacy-config-issues.js");
-  const activatePluginState = await preparePluginDiagnostics?.();
-  activatePluginState?.();
-  return findDoctorLegacyConfigIssues(raw, sourceRaw);
 }

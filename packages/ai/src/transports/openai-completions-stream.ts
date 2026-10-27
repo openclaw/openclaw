@@ -31,7 +31,6 @@ import {
   type ToolArgumentPreviewSchedule,
 } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
-import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { createDsmlRecoverer } from "./openai-completions-dsml.js";
@@ -51,6 +50,10 @@ import {
 } from "./openai-transport-shared.js";
 import type { RecoveredTextToolCall, TextToolCallRecoveryPart } from "./text-tool-call-recovery.js";
 import { iterateModelStream, throwIfModelStreamAborted } from "./transport-stream-shared.js";
+
+let reasoningParserModule:
+  | Promise<typeof import("../utils/reasoning-tag-text-partitioner.js")>
+  | undefined;
 
 type OpenAICompatibleChatCompletionChunk = Omit<ChatCompletionChunk, "choices"> & {
   choices: (ChatCompletionChunk["choices"][number] & {
@@ -138,6 +141,8 @@ export async function processCompletionsStream(
     | { mode?: "managed"; beforeContentBlock?: never }
   ),
 ) {
+  const { createReasoningTagTextPartitioner } = await (reasoningParserModule ??=
+    import("../utils/reasoning-tag-text-partitioner.js"));
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const directMode = options?.mode === "direct";
   const emitReasoning = options?.emitReasoning ?? true;

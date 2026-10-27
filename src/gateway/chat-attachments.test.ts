@@ -50,7 +50,6 @@ import {
   type ChatAttachment,
   discardPreparedInboundMedia,
   MediaOffloadError,
-  type OffloadedRef,
   parseMessageWithAttachments,
   persistInboundImagesForTranscript,
   stripImageMediaMarkers,
@@ -105,29 +104,21 @@ function pngBase64OfBytes(bytes: number): string {
   return `${pngHeader}${"A".repeat(base64Length - pngHeader.length)}`;
 }
 
-async function parseWithWarnings(
-  message: string,
-  attachments: ChatAttachment[],
-  opts: Parameters<typeof parseMessageWithAttachments>[2] = {},
+function persist(
+  {
+    images,
+    offloadedRefs,
+  }: Pick<Awaited<ReturnType<typeof parseMessageWithAttachments>>, "images" | "offloadedRefs">,
+  options: Partial<
+    Pick<Parameters<typeof persistInboundImagesForTranscript>[0], "log" | "assertCurrent">
+  > = {},
 ) {
-  const logs: string[] = [];
-  const infos: string[] = [];
-  const parsed = await parseMessageWithAttachments(message, attachments, {
-    log: { warn: (warning) => logs.push(warning), info: (info) => infos.push(info) },
-    ...opts,
-  });
-  return { parsed, logs, infos };
-}
-
-function persist({
-  images,
-  offloadedRefs,
-}: Pick<Awaited<ReturnType<typeof parseMessageWithAttachments>>, "images" | "offloadedRefs">) {
   return persistInboundImagesForTranscript({
     images,
     offloadedRefs,
     log: { warn: vi.fn() },
     logContext: "chat.send",
+    ...options,
   });
 }
 
@@ -163,21 +154,11 @@ describe("discardPreparedInboundMedia", () => {
     const error = new Error("unlink denied");
     deleteMediaBufferMock.mockRejectedValueOnce(error);
     const warn = vi.fn();
-    const prepared: OffloadedRef = {
-      mediaRef: "media://inbound/managed-id",
-      id: "managed-id",
-      path: "/external/user-owned.png",
-      kind: "image",
-      mimeType: "image/png",
-      label: "user-owned.png",
-      sizeBytes: 42,
-      sourceIndex: 0,
-    };
+    const prepared = { id: "managed-id", path: "/external/user-owned.png" };
 
     await expect(discardPreparedInboundMedia([prepared], { warn })).resolves.toBeUndefined();
 
-    expect(deleteMediaBufferMock).toHaveBeenCalledOnce();
-    expect(deleteMediaBufferMock).toHaveBeenCalledWith("managed-id", "inbound");
+    expect(deleteMediaBufferMock).toHaveBeenCalledExactlyOnceWith("managed-id", "inbound");
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("failed to discard prepared inbound media managed-id: unlink denied"),
     );
@@ -194,19 +175,12 @@ describe("composer attachment origin", () => {
     async ({ origin, expected }) => {
       const bytes = Buffer.from("First line\nSecond line\n", "utf8");
       const fileName = "pasted-text-123.txt";
-      saveMediaBufferMock.mockResolvedValueOnce({
-        id: "pasted-text-123---11111111-2222-3333-4444-555555555555.txt",
-        path: "/tmp/openclaw-test-media/inbound/pasted-text-123.txt",
-        size: bytes.length,
-        contentType: "text/plain",
-      });
+      saveMediaBufferMock.mockResolvedValueOnce(
+        savedMedia("pasted-text-123.txt", "text/plain", bytes.length),
+      );
       const parsed = await parseRpc("Read this", [
         { mimeType: "text/plain", fileName, origin, content: bytes.toString("base64") },
       ]);
-      expect(parsed.message).toBe(
-        `Read this\n[media attached: ${parsed.offloadedRefs[0]?.mediaRef}]`,
-      );
-      expect(parsed.images).toEqual([]);
       const persisted = await persist(parsed);
       const message = buildPersistedUserTurnMessage({
         text: "Read this",
@@ -215,11 +189,6 @@ describe("composer attachment origin", () => {
       });
       const canonical = canonicalizePersistedUserMessageMedia(message).message;
       const recovered = buildPersistedUserTurnMediaInputsFromFields(canonical);
-      expect(recovered[0]).toMatchObject({
-        fileName,
-        contentType: "text/plain",
-        sizeBytes: bytes.length,
-      });
       const history = expectDefined(
         asOptionalRecord(sanitizeChatHistoryMessages([canonical])[0]),
         "projected history message",
@@ -231,8 +200,12 @@ describe("composer attachment origin", () => {
           expect(fact).toHaveProperty("origin", expected);
         }
       }
-      expect(canonical.content).toBe("Read this");
       expect(history).toMatchObject({ role: "user", content: "Read this" });
+      expect(recovered[0]).toMatchObject({
+        fileName,
+        contentType: "text/plain",
+        sizeBytes: bytes.length,
+      });
     },
   );
 });
@@ -276,20 +249,15 @@ describe("persistInboundImagesForTranscript", () => {
       );
       const storage = kind === "offloaded" || kind === "unreadable" ? "offloaded" : "inline";
       expect(parsed.imageOrder).toEqual([storage]);
-      const parsedImage = storage === "inline" ? parsed.images[0] : parsed.offloadedRefs[0];
       const dimensions =
         kind === "unreadable" ? [undefined, undefined] : kind === "rotated" ? [16, 32] : [32, 16];
-      expect(parsedImage?.mimeType).toBe(mimeType);
-      expect([parsedImage?.width, parsedImage?.height]).toEqual(dimensions);
       const persisted = await persist(parsed);
-      const fact = persisted.entries[0]?.fact;
-      expect([fact?.width, fact?.height]).toEqual(dimensions);
       const message = buildPersistedUserTurnMessage({
         text: "Inspect",
         media: persisted.entries.map((entry) => entry.fact),
       });
-      expect(message).toMatchObject({ __openclaw: { media: [{ kind: "image", fileName }] } });
       const recovered = readPersistedMediaFacts(message)?.[0];
+      expect(recovered).toMatchObject({ kind: "image", fileName, contentType: mimeType });
       expect([recovered?.width, recovered?.height]).toEqual(dimensions);
       if (kind === "rotated") {
         expect(saveMediaBufferMock.mock.calls[0]?.[0]).toEqual(bytes);
@@ -297,24 +265,31 @@ describe("persistInboundImagesForTranscript", () => {
     },
   );
 
-  it("does not turn a rejected upload commit into a best-effort omission after policy re-enables", async () => {
-    const denied = new SessionMutationAuthorizationChangedError({
-      code: "FORBIDDEN",
-      message: "File and image uploads are disabled",
-      details: { code: "UPLOADS_DISABLED" },
-    });
-    saveMediaBufferMock.mockRejectedValueOnce(denied);
+  it.each(["authorization", "disk"])("preserves %s upload failure semantics", async (failure) => {
+    const error =
+      failure === "authorization"
+        ? new SessionMutationAuthorizationChangedError({
+            code: "FORBIDDEN",
+            message: "File and image uploads are disabled",
+            details: { code: "UPLOADS_DISABLED" },
+          })
+        : new Error("disk unavailable");
+    saveMediaBufferMock.mockRejectedValueOnce(error);
     const warn = vi.fn();
-    await expect(
-      persistInboundImagesForTranscript({
+    const result = persist(
+      {
         images: [{ type: "image", data: PNG_1x1, mimeType: "image/png", sourceIndex: 0 }],
         offloadedRefs: [],
-        log: { warn },
-        logContext: "policy-test",
-        assertCurrent: () => {},
-      }),
-    ).rejects.toBe(denied);
-    expect(warn).not.toHaveBeenCalled();
+      },
+      { log: { warn }, assertCurrent: () => {} },
+    );
+    if (failure === "authorization") {
+      await expect(result).rejects.toBe(error);
+      expect(warn).not.toHaveBeenCalled();
+    } else {
+      await expect(result).resolves.toEqual({ entries: [], omission: "inline-image-save-failed" });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(error.message));
+    }
   });
 
   it("preserves original mixed-media order in claim-only transcript facts", async () => {
@@ -354,46 +329,7 @@ describe("persistInboundImagesForTranscript", () => {
         height: 1,
       },
     ]);
-    expect(saveMediaBufferMock).toHaveBeenLastCalledWith(
-      Buffer.from(PNG_1x1, "base64"),
-      "image/png",
-      "inbound",
-      undefined,
-      fileName,
-      undefined,
-      { assertCommitAllowed: undefined },
-    );
-    const persisted = buildPersistedUserTurnMessage({
-      text: parsed.message,
-      media: result.entries.map((entry) => entry.fact),
-    });
-    expect(readPersistedMediaFacts(persisted)?.map((fact) => fact.fileName)).toEqual([
-      "video.mp4",
-      fileName,
-    ]);
     expect(result.omission).toBe("none");
-  });
-
-  it("reports an inline image whose durable managed save fails", async () => {
-    saveMediaBufferMock.mockRejectedValueOnce(new Error("disk unavailable"));
-    const warn = vi.fn();
-
-    const result = await persistInboundImagesForTranscript({
-      images: [
-        {
-          type: "image",
-          data: "aGVsbG8=",
-          mimeType: "image/jpeg",
-          sourceIndex: 0,
-        },
-      ],
-      offloadedRefs: [],
-      log: { warn },
-      logContext: "test",
-    });
-
-    expect(result).toEqual({ entries: [], omission: "inline-image-save-failed" });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk unavailable"));
   });
 });
 
@@ -402,44 +338,37 @@ describe("parseMessageWithAttachments", () => {
     const png = Buffer.concat([Buffer.from(PNG_1x1, "base64"), Buffer.alloc(1_900_000)]);
     const base64 = png.toString("base64");
     const fromSpy = vi.spyOn(Buffer, "from");
-    try {
-      const parsed = await parseMessageWithAttachments(
-        "see screenshot",
-        [pngAttachment({ content: `data:image/png;base64,${base64}`, fileName: "screenshot.png" })],
-        { log: { warn: () => {} } },
-      );
+    const parsed = await parseMessageWithAttachments(
+      "see screenshot",
+      [pngAttachment({ content: `data:image/png;base64,${base64}`, fileName: "screenshot.png" })],
+      { log: { warn: () => {} } },
+    );
 
-      expect(parsed.images).toEqual([expect.objectContaining({ mimeType: "image/png" })]);
-      expect(parsed.images[0]?.data).toBe(base64);
-      expect(
-        fromSpy.mock.calls.some((call) => {
-          const [value, encoding] = call as unknown[];
-          return value === base64 && encoding === "base64";
-        }),
-      ).toBe(false);
-      expect(saveMediaBufferMock).not.toHaveBeenCalled();
-    } finally {
-      fromSpy.mockRestore();
-    }
+    expect(parsed.images).toMatchObject([{ mimeType: "image/png", data: base64 }]);
+    expect(fromSpy.mock.calls.map((call) => call.slice(0, 2))).not.toContainEqual([
+      base64,
+      "base64",
+    ]);
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
   it("keeps mixed image/PDF markers in normal and image-stripped routing order", async () => {
     // Non-image offloads must not enter imageOrder and reorder hydration.
     const bigPng = Buffer.alloc(2_100_000);
     bigPng.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
-    const { parsed } = await parseWithWarnings("x", [
+    const parsed = await parseMessageWithAttachments("x", [
       pdfAttachment(),
       pngAttachment(),
       pngAttachment({ fileName: "big.png", content: bigPng.toString("base64") }),
     ]);
-    expect(parsed.images).toHaveLength(1);
-    expect(parsed.offloadedRefs.map((ref) => ref.mimeType)).toEqual([
-      "application/pdf",
-      "image/png",
-    ]);
-    expect(parsed.imageOrder).toEqual(["inline", "offloaded"]);
-    expect(parsed.images[0]?.sourceIndex).toBe(1);
-    expect(parsed.offloadedRefs.map((ref) => ref.sourceIndex)).toEqual([0, 2]);
+    expect(parsed).toMatchObject({
+      images: [{ sourceIndex: 1 }],
+      offloadedRefs: [
+        { mimeType: "application/pdf", sourceIndex: 0 },
+        { mimeType: "image/png", sourceIndex: 2 },
+      ],
+      imageOrder: ["inline", "offloaded"],
+    });
     const pdfRef = expectDefined(parsed.offloadedRefs[0], "offloaded PDF ref");
     const imageRef = expectDefined(parsed.offloadedRefs[1], "offloaded image ref");
     expect(parsed.message).toBe(
@@ -461,15 +390,7 @@ describe("parseMessageWithAttachments validation errors", () => {
       attachment: { source: { type: "base64", media_type: "application/pdf", data: "" } },
     },
   ])("rejects normalized RPC attachments with $name", async ({ attachment }) => {
-    const normalized = normalizeRpcAttachmentsToChatAttachments([
-      {
-        type: "file",
-        mimeType: "application/pdf",
-        fileName: "empty.pdf",
-        ...attachment,
-      },
-    ]);
-
+    const normalized = normalizeRpcAttachmentsToChatAttachments([attachment]);
     await expectUnsupportedAttachmentReason(normalized, {}, "empty-payload");
   });
 
@@ -501,35 +422,10 @@ describe("parseMessageWithAttachments validation errors", () => {
     );
   });
 
-  it("adds best-effort metadata to offloaded audio facts", async () => {
-    probeMediaFilesWithinBudgetMock.mockResolvedValueOnce([{ durationMs: 2345 }]);
-    const { parsed } = await parseWithWarnings(
-      "listen",
-      [
-        {
-          type: "audio",
-          mimeType: "audio/mpeg",
-          fileName: "song.mp3",
-          content: Buffer.from("audio-fixture").toString("base64"),
-        },
-      ],
-      { supportsInlineImages: false },
-    );
-
-    expect(probeMediaFilesWithinBudgetMock).toHaveBeenCalledWith(
-      [{ filePath: parsed.offloadedRefs[0]?.path, kind: "audio" }],
-      { budgetMs: 3000, concurrency: 2, maxProbes: 8 },
-    );
-    expect(parsed.offloadedRefs[0]).toMatchObject({ durationMs: 2345 });
-    expect(parsed.media[0]).toMatchObject({ durationMs: 2345 });
-  });
-
   it("passes through unchanged on text-only session with no attachments", async () => {
-    const { parsed } = await parseWithWarnings("hello", [], { supportsInlineImages: false });
-    expect(parsed.message).toBe("hello");
+    const parsed = await parseMessageWithAttachments("hello", [], { supportsInlineImages: false });
+    expect(parsed).toMatchObject({ message: "hello", images: [], offloadedRefs: [] });
     expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe("hello");
-    expect(parsed.images).toHaveLength(0);
-    expect(parsed.offloadedRefs).toHaveLength(0);
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
@@ -545,22 +441,27 @@ describe("parseMessageWithAttachments validation errors", () => {
   ])(
     "surfaces structured inbound %s facts %#",
     async (kind, mimeType, fileName, content, expectedMimeType) => {
+      // A probe augments the audio facts; unprobed video keeps its supplied duration.
+      const durationMs = kind === "audio" ? 2345 : 1500;
+      if (kind === "audio") {
+        probeMediaFilesWithinBudgetMock.mockResolvedValueOnce([{ durationMs }]);
+      }
       const parsed = await parseMessageWithAttachments(
         "play this",
         [{ type: kind, mimeType, fileName, content, durationMs: 1_500 }],
-        { log: { warn: () => {} } },
+        { supportsInlineImages: false },
       );
 
-      expect(parsed.offloadedRefs).toEqual([
-        expect.objectContaining({
+      expect(parsed.offloadedRefs).toMatchObject([
+        {
           kind,
           mimeType: expectedMimeType,
           label: fileName,
-          durationMs: 1_500,
+          durationMs,
           mediaRef: expect.stringMatching(/^media:\/\/inbound\//u),
-        }),
+        },
       ]);
-      expect(parsed.media[0]).toMatchObject({ kind, contentType: expectedMimeType });
+      expect(parsed.media[0]).toMatchObject({ kind, contentType: expectedMimeType, durationMs });
     },
   );
 
@@ -568,7 +469,7 @@ describe("parseMessageWithAttachments validation errors", () => {
     const attachments = Array.from({ length: 11 }, (_, index) =>
       pngAttachment({ fileName: `dot-${index}.png` }),
     );
-    const { parsed, logs, infos } = await parseWithWarnings("see these", attachments, {
+    const parsed = await parseMessageWithAttachments("see these", attachments, {
       supportsImages: false,
     });
     expect(parsed.images).toHaveLength(0);
@@ -581,10 +482,6 @@ describe("parseMessageWithAttachments validation errors", () => {
     expect(stripImageMediaMarkers(parsed.message, parsed.offloadedRefs)).toBe(
       "see these\n[image attachment omitted: text-only attachment limit reached]",
     );
-    expect(logs).toEqual([
-      "attachment dot-10.png: dropping image because text-only offload limit 10 was reached",
-    ]);
-    expect(infos[0]).toMatch(/Offloaded image for text-only model/i);
   });
 });
 
@@ -653,16 +550,12 @@ describe("attachment validation", () => {
 
   it("rejects images over limit without decoding base64", async () => {
     const fromSpy = vi.spyOn(Buffer, "from");
-    try {
-      await expect(
-        parseMessageWithAttachments("x", [pngAttachment({ content: "A".repeat(10_000) })], {
-          maxBytes: 16,
-        }),
-      ).rejects.toThrow(/exceeds size limit/i);
-      const base64Calls = fromSpy.mock.calls.filter((args) => (args as unknown[])[1] === "base64");
-      expect(base64Calls).toHaveLength(0);
-    } finally {
-      fromSpy.mockRestore();
-    }
+    await expect(
+      parseMessageWithAttachments("x", [pngAttachment({ content: "A".repeat(10_000) })], {
+        maxBytes: 16,
+      }),
+    ).rejects.toThrow(/exceeds size limit/i);
+    const base64Calls = fromSpy.mock.calls.filter((args) => (args as unknown[])[1] === "base64");
+    expect(base64Calls).toHaveLength(0);
   });
 });

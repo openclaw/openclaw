@@ -275,7 +275,10 @@ function parseCheckDetailsParams(
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey.trim() : "";
   const headSha = typeof params.headSha === "string" ? params.headSha : "";
   const target = gitHubPublicApi.parseControlUiGitHubPreviewTarget({ ...params, kind: "pull" });
-  return target && sessionKey && sessionKey.length <= 512 && /^[0-9a-f]{40}$/i.test(headSha)
+  return target?.kind === "pull" &&
+    sessionKey &&
+    sessionKey.length <= 512 &&
+    /^[0-9a-f]{40}$/i.test(headSha)
     ? {
         sessionKey,
         owner: target.owner,
@@ -544,7 +547,7 @@ export const controlUiHandlers: GatewayRequestHandlers = {
       preparedSession?.release();
     }
   },
-  "controlUi.sessionPullRequests.subscribe": async ({ params, client, context, respond }) => {
+  "controlUi.sessionPullRequests.subscribe": ({ params, client, context, respond }) => {
     const parsed = parseControlUiSessionPullRequestsSubscribeParams(params);
     if (!parsed) {
       respondError(
@@ -564,20 +567,19 @@ export const controlUiHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    await new Promise<void>((resolve) => {
-      const replacement = subscriptions.replace(
+    // The owner records the replace-set now; preparation and guarded updates settle later.
+    void subscriptions
+      .replace(
         connId,
         parsed.sessionKeys,
         parsed.refreshSessionKeys.length > 0 ? new Set(parsed.refreshSessionKeys) : undefined,
-        resolve,
         parsed.passiveSessionKeys ? new Set(parsed.passiveSessionKeys) : undefined,
-      );
-      void replacement.catch((error: unknown) => {
+      )
+      .catch((error: unknown) => {
         context.logGateway.warn(
           `Failed to prepare Control UI pull request subscriptions; retry the subscription: ${String(error)}`,
         );
       });
-    });
     respond(
       true,
       { subscribed: parsed.sessionKeys.length > 0 || Boolean(parsed.passiveSessionKeys?.length) },

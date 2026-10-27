@@ -260,38 +260,6 @@ async function runBrowserLiveProbe(profileCtx: ProfileContext, signal: AbortSign
   }
 }
 
-function parseHeadlessStartOverride(params: {
-  req: BrowserRequest;
-  res: BrowserResponse;
-  profileCtx: ProfileContext;
-}): { ok: true; headless?: boolean } | { ok: false } {
-  if (!Object.hasOwn(params.req.query ?? {}, "headless")) {
-    return { ok: true };
-  }
-
-  const headless = toBoolean(params.req.query.headless);
-  if (typeof headless !== "boolean") {
-    jsonError(params.res, 400, 'Invalid headless value. Use "true" or "false".');
-    return { ok: false };
-  }
-
-  const capabilities = getBrowserProfileCapabilities(params.profileCtx.profile);
-  if (
-    params.profileCtx.profile.driver !== "openclaw" ||
-    params.profileCtx.profile.attachOnly ||
-    capabilities.isRemote
-  ) {
-    jsonError(
-      params.res,
-      400,
-      `Headless start override is only supported for locally launched openclaw profiles. Profile "${params.profileCtx.profile.name}" is attach-only, remote, or existing-session.`,
-    );
-    return { ok: false };
-  }
-
-  return { ok: true, headless };
-}
-
 export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
   app.get("/system-profiles", async (req, res) => {
     await sendBasicJsonResponse(res, async () => ({
@@ -358,12 +326,31 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
   }
 
   registerBasicProfilePost(app, ctx, "/start", async ({ req, res, profileCtx }) => {
-    const headlessOverride = parseHeadlessStartOverride({ req, res, profileCtx });
-    if (!headlessOverride.ok) {
-      return;
+    let headless: boolean | undefined;
+    if (Object.hasOwn(req.query ?? {}, "headless")) {
+      const requestedHeadless = toBoolean(req.query.headless);
+      if (typeof requestedHeadless !== "boolean") {
+        jsonError(res, 400, 'Invalid headless value. Use "true" or "false".');
+        return;
+      }
+
+      const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+      if (
+        profileCtx.profile.driver !== "openclaw" ||
+        profileCtx.profile.attachOnly ||
+        capabilities.isRemote
+      ) {
+        jsonError(
+          res,
+          400,
+          `Headless start override is only supported for locally launched openclaw profiles. Profile "${profileCtx.profile.name}" is attach-only, remote, or existing-session.`,
+        );
+        return;
+      }
+      headless = requestedHeadless;
     }
     await profileCtx.ensureBrowserAvailable({
-      headless: headlessOverride.headless,
+      headless,
       ...(req.signal ? { signal: req.signal } : {}),
     });
     res.json({ ok: true, profile: profileCtx.profile.name });

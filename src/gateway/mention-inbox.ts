@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   extractErrorCode,
   formatErrorMessage,
@@ -84,7 +84,11 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   let sessionRevision = 0;
   let refreshRetryAt = 0;
   let refreshRetryMs = 0;
-  const views = new WeakMap<GatewayClient, { signature: string; revision: number }>();
+  const views = new WeakMap<GatewayClient, { profileId: string; result: MentionsListResult }>();
+  const presentedItems = new WeakMap<
+    StoredMention,
+    { sender: ReturnType<typeof policy.readProfile>; value: MentionInboxItem }
+  >();
   let capacityReported = false;
   let profileInvalidationPending = false;
   const applyCommittedInput = createMentionInputRecorder({
@@ -199,7 +203,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
           {
             expectedHead,
             nextSequence: draft.head.nextSequence,
-            changes: [...draft.dirtySources].map((key) => {
+            changes: Array.from(draft.dirtySources, (key) => {
               const source = draft.processed.get(key);
               return [key, source ? serializeMentionSource(source) : undefined];
             }),
@@ -259,16 +263,29 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     item: StoredMention,
     current: NonNullable<ReturnType<typeof currentTarget>>,
   ): MentionInboxItem {
+    const previous = presentedItems.get(item);
+    if (
+      previous &&
+      previous.sender === current.sender &&
+      previous.value.sessionTitle === current.sessionTitle &&
+      previous.value.expiresAt === item.source.expiresAt
+    ) {
+      return previous.value;
+    }
     const { content } = item.message;
-    return {
+    const value: MentionInboxItem = {
       ...content,
       id: item.id,
+      excerpt: content.excerpt,
       expiresAt: item.source.expiresAt,
       senderProfileId: current.sender?.profileId ?? content.senderProfileId,
       senderLabel: humanMentionDisplayLabel(current.sender?.label, content.senderProfileId),
-      ...(current.sender ? { senderAvatarUrl: current.sender.avatarUrl } : {}),
+      senderAvatarUrl: current.sender?.avatarUrl,
       sessionTitle: current.sessionTitle,
     };
+    // Stored message content is immutable; profile display, title and expiry own replacements.
+    presentedItems.set(item, { sender: current.sender, value });
+    return value;
   }
 
   function readView(
@@ -284,21 +301,29 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     const requester = identified.value;
     const visible: MentionInboxItem[] = [];
     const profileItems = projection.itemsByProfile.get(requester.profile.profileId);
-    for (const item of [...(profileItems ?? [])].toReversed()) {
+    for (const item of profileItems ?? []) {
       const current = currentTarget(item, cfg, projection);
       if (current && requester.canRead(current.target)) {
         visible.push(projectItem(item, current));
       }
     }
-    const signature = createHash("sha256")
-      .update(JSON.stringify([requester.profile.profileId, visible]))
-      .digest("hex");
+    visible.reverse();
     const previous = client && views.get(client);
-    const revision = previous ? previous.revision + Number(signature !== previous.signature) : 0;
-    if (client && remember) {
-      views.set(client, { signature, revision });
+    if (
+      previous?.profileId === requester.profile.profileId &&
+      isDeepStrictEqual(previous.result.items, visible)
+    ) {
+      return ok(previous.result);
     }
-    return ok({ gatewayInstanceId: params.gatewayInstanceId, revision, items: visible });
+    const result = {
+      gatewayInstanceId: params.gatewayInstanceId,
+      revision: previous ? previous.result.revision + 1 : 0,
+      items: visible,
+    };
+    if (client && remember) {
+      views.set(client, { profileId: requester.profile.profileId, result });
+    }
+    return ok(result);
   }
 
   function publishConnectedViews(): void {
@@ -314,7 +339,9 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       const result = readView(client, cfg, true);
       if (
         !result.ok ||
-        (previous ? previous.revision === result.value.revision : result.value.items.length === 0)
+        (previous
+          ? previous.result.revision === result.value.revision
+          : result.value.items.length === 0)
       ) {
         continue;
       }
@@ -431,6 +458,14 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       }
     }
     return mentionInboxUnavailable();
+  }
+
+  function readResponse(client: GatewayClient | null): Result<MentionsListResult, ErrorShape> {
+    const result = readOperation(() => readView(client, params.getRuntimeConfig(), true));
+    // Embedded list/dismiss callers own mutable responses; publication snapshots stay private.
+    return result.ok
+      ? ok({ ...result.value, items: result.value.items.map((item) => ({ ...item })) })
+      : result;
   }
 
   function legacyError(
@@ -629,7 +664,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       } catch {
         failure = mentionInboxUnavailable(log);
       }
-      publish(failure ?? readOperation(() => readView(client, params.getRuntimeConfig(), true)));
+      publish(failure ?? readResponse(client));
     },
     async dismissAsync(client, ids, publish) {
       let failure: Result<never, ErrorShape> | undefined;
@@ -673,7 +708,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       } catch {
         failure = mentionInboxUnavailable(log);
       }
-      publish(failure ?? readOperation(() => readView(client, params.getRuntimeConfig(), true)));
+      publish(failure ?? readResponse(client));
     },
     recordCommittedInput(input: MentionCommittedInput): void {
       warnMentionInboxDeprecation("recordCommittedInput");

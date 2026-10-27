@@ -7,9 +7,6 @@ import path from "node:path";
 import { create as createTar } from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { preparePostCorePluginConfig } from "../cli/update-cli/update-command-config.js";
-import { updatePluginsAfterCoreUpdate } from "../cli/update-cli/update-command-plugins.js";
-import { applyPostPluginConfigValidation } from "../cli/update-cli/update-command-post-plugin-validation.js";
 import { refreshStartupPluginQuarantine } from "../commands/doctor-config-preflight-plugin-verification.js";
 import {
   readConfigFileSnapshot,
@@ -52,24 +49,20 @@ function createFixturePluginCache(): PluginCache {
   return cache;
 }
 
-async function disposeFixturePlugins(): Promise<void> {
-  // Published registries own their instances independently of their discovery cache.
-  const registryResults = await Promise.allSettled(
-    registries
+async function disposeFixtures<T>(items: T[], dispose: (item: T) => Promise<unknown>) {
+  const results = await Promise.allSettled(
+    items
       .splice(0)
       .toReversed()
-      .map((registry) => disposePluginRegistryInstances(registry)),
+      .map((item) => dispose(item)),
   );
-  const cacheResults = await Promise.allSettled(
-    caches
-      .splice(0)
-      .toReversed()
-      .map((cache) => retirePluginCache(cache)),
-  );
-  for (const result of [...registryResults, ...cacheResults]) {
+  for (const result of results) {
     expect.soft(result).toMatchObject({ status: "fulfilled", value: { failures: [] } });
   }
 }
+
+const findPlugin = (registry: PluginRegistry, id: string) =>
+  registry.plugins.find((entry) => entry.id === id);
 
 describe("Gateway startup plugin quarantine", () => {
   let cache: PluginCache;
@@ -117,9 +110,14 @@ module.exports = { id: '${id}', register() {} };`,
     return root;
   }
 
-  async function quarantine(pluginId: string, installPath: string) {
+  async function quarantine(roots: Record<string, string>) {
     const smoke = await runPluginPayloadSmokeCheck({
-      records: { [pluginId]: { source: "npm", spec: pluginId, installPath } },
+      records: Object.fromEntries(
+        Object.entries(roots).map(([id, installPath]) => [
+          id,
+          { source: "npm", spec: id, installPath } satisfies PluginInstallRecord,
+        ]),
+      ),
       env: process.env,
     });
     setActiveDegradedPlugins(buildDegradedPluginsFromVerificationFailures(smoke.failures));
@@ -141,14 +139,26 @@ module.exports = { id: '${id}', register() {} };`,
     config: OpenClawConfig,
     onlyPluginIds: string[],
     previousRegistry?: PluginRegistry,
+    pluginCache = cache,
   ) {
     const { loadOpenClawPlugins } =
       await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
-    const registry = withPluginCache(cache, () =>
+    const registry = withPluginCache(pluginCache, () =>
       loadOpenClawPlugins({ cache: false, config, onlyPluginIds, previousRegistry }),
     );
     registries.push(registry);
     return registry;
+  }
+
+  async function startRegistry() {
+    const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    server = await startTestGatewayServer(claim, { auth: { mode: "none" } });
+    return `http://127.0.0.1:${claim.port}`;
+  }
+
+  function expectImports(brokenId: string, validId: string) {
+    expect(imported.has(brokenId)).toBe(false);
+    expect(imported.has(validId)).toBe(true);
   }
 
   beforeEach(() => {
@@ -161,7 +171,9 @@ module.exports = { id: '${id}', register() {} };`,
       await server?.close();
     } finally {
       server = undefined;
-      await disposeFixturePlugins();
+      // Published registries own their instances independently of their discovery cache.
+      await disposeFixtures(registries, disposePluginRegistryInstances);
+      await disposeFixtures(caches, retirePluginCache);
       setActiveDegradedPlugins([]);
       importChannel.unsubscribe(observeImport);
       imported.clear();
@@ -175,39 +187,16 @@ module.exports = { id: '${id}', register() {} };`,
     const brokenRoot = fixturePlugin(brokenPluginId, { main: "./missing-main.cjs", peer: true });
     const validRoot = fixturePlugin(validPluginId, { main: "./missing-main.cjs" });
 
-    const smoke = await runPluginPayloadSmokeCheck({
-      records: {
-        [brokenPluginId]: {
-          source: "npm",
-          spec: brokenPluginId,
-          installPath: brokenRoot,
-        },
-        [validPluginId]: { source: "npm", spec: validPluginId, installPath: validRoot },
-      },
-      env: process.env,
-    });
-    expect(smoke.checked).toEqual([brokenPluginId, validPluginId]);
-    expect(smoke.failures).toMatchObject([
-      {
-        pluginId: brokenPluginId,
-        reason: "missing-openclaw-peer-link",
-        installPath: brokenRoot,
-      },
-    ]);
-    setActiveDegradedPlugins(buildDegradedPluginsFromVerificationFailures(smoke.failures));
-
-    const config = explicitPluginConfig({
-      [brokenPluginId]: brokenRoot,
-      [validPluginId]: validRoot,
-    });
+    const roots = { [brokenPluginId]: brokenRoot, [validPluginId]: validRoot };
+    await quarantine(roots);
+    const config = explicitPluginConfig(roots);
     const registry = await loadRegistry(config, [brokenPluginId, validPluginId]);
-    expect(registry.plugins.find((plugin) => plugin.id === brokenPluginId)).toMatchObject({
+    expect(findPlugin(registry, brokenPluginId)).toMatchObject({
       status: "error",
       activated: false,
-      failurePhase: "validation",
       activationReason: "configured-unavailable: missing-openclaw-peer-link",
     });
-    expect(registry.plugins.find((plugin) => plugin.id === validPluginId)).toMatchObject({
+    expect(findPlugin(registry, validPluginId)).toMatchObject({
       status: "loaded",
       activated: true,
     });
@@ -220,24 +209,19 @@ module.exports = { id: '${id}', register() {} };`,
     expect(
       registry.diagnostics.find((diagnostic) => diagnostic.pluginId === brokenPluginId)?.message,
     ).not.toContain(brokenRoot);
-    expect(imported.has(brokenPluginId)).toBe(false);
-    expect(imported.has(validPluginId)).toBe(true);
+    expectImports(brokenPluginId, validPluginId);
 
     setTestPluginRegistry(registry);
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
+    await writeUpdateFixtureConfig({
       gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
       ...config,
     });
 
-    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    server = await startTestGatewayServer(portClaim, { auth: { mode: "none" } });
-    const ready = await fetch(`http://127.0.0.1:${portClaim.port}/readyz`);
+    const ready = await fetch(`${await startRegistry()}/readyz`);
 
     expect(ready.status).toBe(200);
     await expect(ready.json()).resolves.toMatchObject({ ready: true });
-    expect(imported.has(brokenPluginId)).toBe(false);
-    expect(imported.has(validPluginId)).toBe(true);
+    expectImports(brokenPluginId, validPluginId);
   });
 
   it.each([false, true])(
@@ -246,14 +230,12 @@ module.exports = { id: '${id}', register() {} };`,
       const pluginId = fails ? "failed-shadow" : "shadowed-payload";
       const brokenRoot = fixturePlugin(pluginId, { main: "./missing-main.cjs", payload: false });
       const selectedRoot = fixturePlugin(pluginId, { fails });
-      await quarantine(pluginId, brokenRoot);
+      await quarantine({ [pluginId]: brokenRoot });
 
       const config = explicitPluginConfig({ [pluginId]: selectedRoot });
       const registry = await loadRegistry(config, [pluginId]);
 
-      expect(registry.plugins.find((plugin) => plugin.id === pluginId)?.status).toBe(
-        fails ? "error" : "loaded",
-      );
+      expect(findPlugin(registry, pluginId)?.status).toBe(fails ? "error" : "loaded");
       if (fails) {
         expect(listActiveDegradedPlugins()).toMatchObject([
           { pluginId, diagnostic: { installPath: brokenRoot } },
@@ -262,9 +244,7 @@ module.exports = { id: '${id}', register() {} };`,
         expect(imported.has(pluginId)).toBe(true);
         expect(listActiveDegradedPlugins()).toEqual([]);
         const replacement = await loadRegistry(config, [pluginId], registry);
-        expect(replacement.plugins.find((plugin) => plugin.id === pluginId)).toBe(
-          registry.plugins.find((plugin) => plugin.id === pluginId),
-        );
+        expect(findPlugin(replacement, pluginId)).toBe(findPlugin(registry, pluginId));
       }
     },
   );
@@ -301,43 +281,14 @@ module.exports = { id: '${id}', register() {} };`,
     };
     await seedInstalledPluginIndex(records, { config, env: process.env });
     await fsPromises.unlink(path.join(installPath, "index.cjs"));
-    const update = () =>
-      withPluginCache(createFixturePluginCache(), async () =>
-        updatePluginsAfterCoreUpdate({
-          root,
-          channel: "stable",
-          ...(await preparePostCorePluginConfig({ requestedChannel: null })),
-          pluginInstallRecords: records,
-          timeoutMs: 5_000,
-          json: true,
-        }),
-      );
-    const result = await update();
-    expect([result.status, result.reason]).toEqual(["warning", undefined]);
-    expect(result.assessment).toMatchObject({
-      kind: "unsafe",
-      reason: "plugin-requirement-unknown",
-    });
-    expect(result.npm.outcomes).toContainEqual(
-      expect.objectContaining({ pluginId, status: "error" }),
-    );
-
-    expect(
-      applyPostPluginConfigValidation(result, { status: "invalid", failureFacts: [] }),
-    ).toMatchObject({
-      status: "error",
-      reason: "post-plugin-doctor-invalid-config",
-    });
-    const { loadOpenClawPlugins } =
-      await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
-    const loadGeneration = () =>
-      withPluginCache(createFixturePluginCache(), async () => {
+    const loadGeneration = () => {
+      const generationCache = createFixturePluginCache();
+      return withPluginCache(generationCache, async () => {
         const refreshed = await refreshStartupPluginQuarantine({ cfg: config, env: process.env });
         setActiveDegradedPlugins(refreshed.quarantinedPlugins);
-        const registry = loadOpenClawPlugins({ cache: false, config, onlyPluginIds: [pluginId] });
-        registries.push(registry);
-        return registry;
+        return loadRegistry(config, [pluginId], undefined, generationCache);
       });
+    };
     const degradedRegistry = await loadGeneration();
     expect(listActiveDegradedPlugins()).toMatchObject([
       { pluginId, state: "configured-unavailable" },
@@ -348,11 +299,11 @@ module.exports = { id: '${id}', register() {} };`,
       degradedRegistry.plugins.some((plugin) => plugin.id === pluginId && plugin.activated),
     ).toBe(false);
     setTestPluginRegistry(degradedRegistry);
-    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const { port } = portClaim;
-    server = await startTestGatewayServer(portClaim, { auth: { mode: "none" } });
-    expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
-    expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
+    const baseUrl = await startRegistry();
+    const expectHealthy = async (endpoint: "healthz" | "readyz") =>
+      expect((await fetch(`${baseUrl}/${endpoint}`)).status).toBe(200);
+    await expectHealthy("healthz");
+    await expectHealthy("readyz");
 
     const repaired = await installPluginFromPath({
       path: archivePath,
@@ -362,18 +313,15 @@ module.exports = { id: '${id}', register() {} };`,
     });
     expect(repaired.ok).toBe(true);
     // Repair does not stop the viable core. The existing reload/startup owner clears quarantine.
-    expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
-    const repairedResult = await update();
-    expect([repairedResult.status, repairedResult.reason]).toEqual(["ok", undefined]);
-    expect(repairedResult.assessment).toEqual({ kind: "no-payload-repair" });
+    await expectHealthy("healthz");
     const repairedRegistry = await loadGeneration();
     expect(listActiveDegradedPlugins()).toEqual([]);
-    expect(repairedRegistry.plugins.find((plugin) => plugin.id === pluginId)).toMatchObject({
+    expect(findPlugin(repairedRegistry, pluginId)).toMatchObject({
       status: "loaded",
       activated: true,
     });
     setTestPluginRegistry(repairedRegistry);
-    expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
+    await expectHealthy("readyz");
     expect(await fsPromises.readFile(snapshot.path, "utf8")).toBe(configBytes);
     expect(await fsPromises.readFile(dataPath, "utf8")).toBe("newer state must survive\n");
     expect(

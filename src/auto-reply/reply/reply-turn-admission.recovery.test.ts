@@ -67,6 +67,7 @@ afterEach(async () => {
 });
 function createRecoveryGatewayContext(storePath?: string) {
   const recoveryRuntime: GatewayRecoveryRuntime = {
+    prepareFailedWorkerPlacement: async () => undefined,
     prepareRestartRecovery: () => undefined,
     resumeChatInput: async () => {
       throw new Error("Unexpected chat input recovery");

@@ -252,7 +252,8 @@
 
 /* Keep the destination responsive without flashing a loader on fast history.
    Removing the skeleton when content arrives also cancels its pending reveal. */
-.chat-thread-inner > openclaw-panel-loading-skeleton {
+.chat-thread-inner > openclaw-panel-loading-skeleton,
+.chat-thread-inner > .lazy-view-state--loading {
   animation: chat-skeleton-reveal 150ms ease-out 500ms backwards;
 }
 
@@ -320,10 +321,6 @@
   corner-shape: inherit;
 }
 
-.chat-image-frame--managed > .chat-image-surface {
-  min-height: 32px;
-}
-
 .chat-image-frame--image {
   display: block;
   flex: none;
@@ -376,6 +373,17 @@
   right: 0;
   width: 44px;
   height: 44px;
+}
+
+/* Reserve the menu outside the ratio-preserving surface so it cannot cover the next image. */
+.chat-image-frame--small-actions {
+  min-height: 44px;
+}
+
+/* Narrow previews keep their ratio; the full-size menu target may extend beside them. */
+.chat-image-frame--small > .chat-image-actions {
+  right: auto;
+  inset-inline-start: 0;
 }
 
 .chat-image-actions .oc-menu {

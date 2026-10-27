@@ -8,7 +8,6 @@ import type { AgentTurnContext } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
-  persistSessionTranscriptTurn: vi.fn(),
   resolveSessionTranscriptRuntimeTarget: vi.fn(),
   stageSessionPendingInput: vi.fn(),
   persistInboundImagesForTranscript: vi.fn(),
@@ -31,10 +30,6 @@ vi.mock("../session-utils-store-worker.js", () => ({
   loadGatewaySessionEntryReadOnlyInWorker: mocks.loadSessionEntry,
 }));
 
-vi.mock(import("../../config/sessions/session-accessor.js"), async (original) => ({
-  ...(await original()),
-  persistSessionTranscriptTurn: mocks.persistSessionTranscriptTurn,
-}));
 vi.mock(import("../../config/sessions/session-accessor.pending-inputs.js"), async (original) => ({
   ...(await original()),
   stageSessionPendingInput: mocks.stageSessionPendingInput,
@@ -48,16 +43,17 @@ vi.mock(
 );
 
 type TurnParams = Parameters<typeof prepareAgentRunUserTurn>[0];
-function prepareTurn(sessionEntry: SessionEntry, overrides: Partial<TurnParams> = {}) {
+const sessionEntry: SessionEntry = { sessionId: "admitted-session", updatedAt: 1 };
+function prepareTurn(entry: SessionEntry, overrides: Partial<TurnParams> = {}) {
   const message = "user input";
-  const runId = `${sessionEntry.sessionId}-run`;
+  const runId = `${entry.sessionId}-run`;
   return prepareAgentRunUserTurn({
-    sessionEntry,
+    sessionEntry: entry,
     message,
     effectiveTranscriptInputText: message,
     runId,
     request: { message, idempotencyKey: runId },
-    admittedSessionId: sessionEntry.sessionId,
+    admittedSessionId: entry.sessionId,
     resolvedSessionKey: "agent:main:worker-child",
     activeSessionAgentId: "main",
     cfg: {},
@@ -74,17 +70,11 @@ function prepareTurn(sessionEntry: SessionEntry, overrides: Partial<TurnParams> 
   });
 }
 
-function loadEntry(
-  entry: SessionEntry | undefined,
-  canonicalKey = "agent:main:worker-child",
-  includeInStore = true,
-) {
+function loadEntry(entry: SessionEntry | undefined, includeInStore = true) {
   mocks.loadSessionEntry.mockResolvedValue({
-    cfg: {},
     storePath: "/tmp/sessions.json",
-    canonicalKey,
     entry,
-    store: includeInStore && entry ? { [canonicalKey]: entry } : {},
+    store: includeInStore && entry ? { "agent:main:worker-child": entry } : {},
   });
 }
 
@@ -113,24 +103,22 @@ beforeEach(() => {
       finish: vi.fn(),
     };
   });
-  mocks.persistSessionTranscriptTurn.mockReset();
+  loadEntry(sessionEntry);
 });
 
 it.each([undefined, "replacement-session"])(
   "fails closed when the admitted session entry changed to %s before transcript persistence",
   async (currentSessionId) => {
     const sessionKey = "agent:main:main";
-    const sessionEntry: SessionEntry = { sessionId: "admitted-session", updatedAt: 1 };
     loadEntry(
       currentSessionId ? { ...sessionEntry, sessionId: currentSessionId } : undefined,
-      sessionKey,
       false,
     );
 
     await expect(prepareTurn(sessionEntry, { resolvedSessionKey: sessionKey })).rejects.toThrow(
       "agent turn was not durably admitted",
     );
-    expect(mocks.persistSessionTranscriptTurn).not.toHaveBeenCalled();
+    expect(mocks.stageSessionPendingInput).not.toHaveBeenCalled();
   },
 );
 
@@ -141,12 +129,9 @@ it.each([
 ] as const)(
   "does not stage input after authority closes during %s (fresh child=%s)",
   async (phase, freshChild) => {
-    const sessionEntry: SessionEntry = { sessionId: "worker-child-session", updatedAt: 1 };
-    loadEntry(sessionEntry);
-    let authorityActive = true;
-    const revoke = () => {
-      authorityActive = false;
-    };
+    const authority = new AbortController();
+    const revoke = () =>
+      authority.abort(new TypeError("agent runtime authority is no longer active"));
     if (phase === "input") {
       mocks.beforeTranscriptCommit = revoke;
     } else {
@@ -159,11 +144,7 @@ it.each([
     await expect(
       prepareTurn(sessionEntry, {
         freshChildStorePath: freshChild ? "/tmp/sessions.json" : undefined,
-        assertCurrent: () => {
-          if (!authorityActive) {
-            throw new TypeError("agent runtime authority is no longer active");
-          }
-        },
+        assertCurrent: () => authority.signal.throwIfAborted(),
       }),
     ).rejects.toThrow("agent runtime authority is no longer active");
     expect(mocks.persistedMessages).toEqual([]);
@@ -188,8 +169,6 @@ it.each([
 ] as const)(
   "transfers failed preparation cleanup exactly once for %s input custody (stop=%s)",
   async (custody, stopReason) => {
-    const sessionEntry: SessionEntry = { sessionId: "media-custody-session", updatedAt: 1 };
-    loadEntry(sessionEntry);
     mocks.persistInboundImagesForTranscript.mockResolvedValue({
       entries: [{ id: "retained-media", imageKind: "inline", fact: {} }],
     });
@@ -250,7 +229,6 @@ it.each([
         );
       }
       expect(cleanup).toHaveBeenCalledTimes(1);
-      expect(mocks.stageSessionPendingInput).toHaveBeenCalledTimes(1);
       expect(onUserTurnMediaPersisted).toHaveBeenCalledTimes(custody === "unretained" ? 0 : 1);
       expect(mocks.deleteMediaBuffer).toHaveBeenCalledTimes(custody === "unretained" ? 1 : 0);
       if (custody === "unretained") {

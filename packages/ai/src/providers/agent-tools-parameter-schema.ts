@@ -24,7 +24,10 @@ import {
   wasToolSchemaTruncated,
 } from "./tool-schema-depth.js";
 import { getPublishedRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
-import { createToolSchemaNormalizationCache } from "./tool-schema-normalization-cache.js";
+import {
+  createToolSchemaNormalizationCache,
+  isPreparedToolSchemaNormalization,
+} from "./tool-schema-normalization-cache.js";
 import { normalizeToolSchema } from "./tool-schema-normalization.js";
 import {
   setOwnSchemaProperty,
@@ -87,10 +90,6 @@ export type ToolParameterSchemaOptions = {
 };
 
 const toolParameterSchemaCache = createToolSchemaNormalizationCache<TSchema>();
-
-function isGeminiModelId(modelId: string): boolean {
-  return /(?:^|[/:])gemini(?:$|[-/:.])/.test(modelId);
-}
 
 function extractEnumValues(schema: unknown, requireAllVariants = false): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
@@ -257,9 +256,10 @@ export function normalizeToolParameterSchema(
   schema: unknown,
   options?: ToolParameterSchemaOptions,
 ): TSchema {
-  const published = getPublishedRuntimeToolInputSchema(schema);
-  const boundedSchema = published ? schema : truncateToolSchemaDepth(schema, options?.toolName);
-  if (published && wasToolSchemaTruncated(schema)) {
+  const prepared =
+    getPublishedRuntimeToolInputSchema(schema) || isPreparedToolSchemaNormalization(schema);
+  const boundedSchema = prepared ? schema : truncateToolSchemaDepth(schema, options?.toolName);
+  if (prepared && wasToolSchemaTruncated(schema)) {
     reportToolSchemaTruncation(schema, options?.toolName);
   }
   const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
@@ -291,7 +291,7 @@ export function normalizeToolParameterSchema(
   const isGeminiProvider =
     normalizedProvider.includes("google") ||
     normalizedProvider.includes("gemini") ||
-    isGeminiModelId(normalizedModelId) ||
+    /(?:^|[/:])gemini(?:$|[-/:.])/.test(normalizedModelId) ||
     normalizedToolSchemaProfile === "gemini";
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const isLlamacppGbnfProfile = normalizedToolSchemaProfile === "llamacpp";

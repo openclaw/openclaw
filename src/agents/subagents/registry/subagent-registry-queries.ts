@@ -17,6 +17,8 @@ import {
 } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
 
+const ACTIVE_DESCENDANTS_ONLY = { activeOnly: true } as const;
+
 function isDeliveryTerminalForRequesterSettle(
   entry: Pick<SubagentRunRecord, "delivery" | "pauseReason">,
 ): boolean {
@@ -241,7 +243,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     latestRunsByChildSessionKey,
     runsByControllerSessionKey,
     swarmRunsByRequesterSessionKey,
-    getDescendantRuns,
+    getDescendantKeys,
   } = topology;
 
   const isRetainedReadRun = (entry: T, clock = now): boolean => {
@@ -286,7 +288,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     };
 
     const countDescendantRuns = (
-      rootSessionKey: string,
+      descendants: readonly string[],
       options?: {
         excludeRunId?: string;
         settledBefore?: number;
@@ -298,7 +300,10 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     ): number => {
       const excludedRunId = options?.excludeRunId?.trim();
       let count = 0;
-      for (const entry of getDescendantRuns(rootSessionKey)) {
+      // Frozen topology arrays allocate iterator records; read their prepared keys directly.
+      let index = 0;
+      while (index < descendants.length) {
+        const entry = latestRunsByChildSessionKey.get(descendants[index++]!)!;
         if (entry.runId === excludedRunId) {
           continue;
         }
@@ -336,21 +341,37 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       options?: { activeOnly?: boolean; excludeSuspendedDelivery?: boolean },
     ): number => {
       const root = rootSessionKey.trim();
-      if (!getDescendantRuns(root).length) {
+      const descendants = getDescendantKeys(root);
+      if (!descendants.length) {
         return 0;
       }
       if (counts.has(root)) {
         return counts.get(root) ?? 0;
       }
-      const count = countDescendantRuns(root, options);
+      if (options?.activeOnly) {
+        let index = 0;
+        while (
+          index < descendants.length &&
+          hasSubagentRunEnded(latestRunsByChildSessionKey.get(descendants[index]!)!)
+        ) {
+          index++;
+        }
+        // Settled topology stays inactive until a row patch creates a fresh query window.
+        if (index === descendants.length) {
+          return 0;
+        }
+      }
+      const count = countDescendantRuns(descendants, options);
       counts.set(root, count);
       return count;
     };
 
     const countActiveDescendantRuns = (rootSessionKey: string) =>
-      cachedDescendantCount(rootSessionKey, activeDescendantCountBySessionKey, {
-        activeOnly: true,
-      });
+      cachedDescendantCount(
+        rootSessionKey,
+        activeDescendantCountBySessionKey,
+        ACTIVE_DESCENDANTS_ONLY,
+      );
     const countPendingDescendantRuns = (
       rootSessionKey: string,
       options?: { excludeSuspendedDelivery?: boolean },
@@ -369,16 +390,15 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       excludeRunId?: string,
       settledBefore?: number,
     ): boolean =>
-      countDescendantRuns(rootSessionKey, {
+      countDescendantRuns(getDescendantKeys(rootSessionKey), {
         excludeRunId,
         settledBefore,
         treatSuspendedDeliveryAsSettled: true,
         stopAtFirst: true,
       }) > 0;
 
-    const listDescendantRunsForRequester = (rootSessionKey: string): T[] => [
-      ...getDescendantRuns(rootSessionKey),
-    ];
+    const listDescendantRunsForRequester = (rootSessionKey: string): T[] =>
+      getDescendantKeys(rootSessionKey).map((key) => latestRunsByChildSessionKey.get(key)!);
 
     return {
       inputs,

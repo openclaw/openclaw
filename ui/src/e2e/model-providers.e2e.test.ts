@@ -2,8 +2,9 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
-import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { applyMergePatch } from "../../../src/config/merge-patch.js";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -17,11 +18,13 @@ import {
   pickerValue as modelPickerValue,
   selectPickerValue as selectModelPicker,
 } from "../test-helpers/select-picker-e2e.ts";
+import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import {
   catalogModel,
   emptyUsage,
   keyCapabilities,
   providerPageOptions,
+  configAuth,
 } from "./model-catalog-fixtures.test-support.ts";
 import {
   requestRaw,
@@ -30,7 +33,6 @@ import {
   createProviderProofCapture,
   expandProvider,
 } from "./model-providers.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -69,7 +71,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
     server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const { wsEndpoint } = inject("controlUiE2eChromium");
+    if (!wsEndpoint) {
+      throw new Error("Control UI E2E requires its shared Chromium server");
+    }
+    browser = await chromium.connect(wsEndpoint);
   });
 
   afterAll(async () => {
@@ -93,7 +99,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         "openclaw.setup.detect",
       ],
       methodResponses: {
-        "config.get": configSnapshot(config, "credential-only-model-provider"),
+        "config.get": sourceConfigSnapshot(config, "credential-only-model-provider"),
         "models.list": {
           cases: [
             {
@@ -224,7 +230,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         catalogModel("openai", "gpt-4.1", "GPT-4.1"),
       ],
       methodResponses: {
-        "config.get": configSnapshot(config, "read-only-model-providers"),
+        "config.get": sourceConfigSnapshot(config, "read-only-model-providers"),
         "models.authStatus": { ts: NOW, providers: [] },
         ...emptyUsage(NOW),
       },
@@ -272,7 +278,14 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
               provider: "claude-cli",
               displayName: "Claude",
               status: "ok",
-              profiles: [{ profileId: "anthropic:default", type: "oauth", status: "expired" }],
+              profiles: [
+                {
+                  profileId: "anthropic:default",
+                  type: "oauth",
+                  status: "expired",
+                  expiry: { at: NOW - 1, remainingMs: -1, label: "0m" },
+                },
+              ],
               usage: {
                 providerId: "anthropic",
                 plan: "Max 20x",
@@ -317,9 +330,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await expect.poll(async () => claudeReadiness.textContent()).not.toContain("Expiring");
       await expect.poll(async () => claudeReadiness.textContent()).not.toContain("Not signed in");
       await expandProvider(page, "anthropic");
-      await expect
-        .poll(async () => claudeCard.locator(".model-providers__profile").textContent())
-        .toContain("Expired");
+      const claudeProfile = claudeCard.locator(".model-providers__profile");
+      await expect.poll(async () => claudeProfile.textContent()).toContain("Access token expired");
+      expect(await claudeProfile.textContent()).toContain("Credentials configured");
+      expect(await claudeProfile.textContent()).toContain(
+        "Access-token expiry alone does not mean you need to sign in again.",
+      );
       // The open row trades its summary chips for the full window tiles.
       expect(await claudeCard.locator(".provider-usage__chip").count()).toBe(0);
       const fiveHour = claudeCard.locator(".provider-usage__window", { hasText: "5h" });
@@ -449,7 +465,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       ],
       models: [...configuredModels, catalogModel("google", "gemini-3-pro", "Gemini 3 Pro")],
       methodResponses: {
-        "config.get": configSnapshot(config, "model-providers-hash"),
+        "config.get": sourceConfigSnapshot(config, "model-providers-hash"),
         "models.list": {
           cases: [
             {
@@ -478,13 +494,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           ts: NOW,
           providerCapabilities: keyCapabilities("openai", "anthropic", "google"),
           providers: [
-            {
-              provider: "openai",
-              displayName: "OpenAI",
-              status: "static",
-              profiles: [],
-              apiKey: { source: "config" },
-            },
+            configAuth("openai", { displayName: "OpenAI", status: "static" }),
             {
               provider: "anthropic",
               displayName: "Anthropic",
@@ -625,13 +635,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         ts: NOW,
         providerCapabilities: keyCapabilities("openai", "anthropic", "google"),
         providers: [
-          {
-            provider: "openai",
-            displayName: "OpenAI",
-            status: "static",
-            profiles: [],
-            apiKey: { source: "config" },
-          },
+          configAuth("openai", { displayName: "OpenAI", status: "static" }),
           {
             provider: "anthropic",
             displayName: "Anthropic",
@@ -775,16 +779,8 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       defaultAgentId: "main",
       featureMethods: ["chat.metadata", "chat.startup", "config.patch"],
       methodResponses: {
-        "agents.list": {
-          agents: [
-            { id: "main", name: "Main" },
-            { id: "writer", name: "Writer" },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
-        "config.get": configSnapshot(initialConfig, "model-providers-reconnect-1"),
+        "agents.list": createAgentRoster({ main: "Main", writer: "Writer" }, "main", "agent"),
+        "config.get": sourceConfigSnapshot(initialConfig, "model-providers-reconnect-1"),
         "models.list": {
           models: [
             catalogModel("openai", "initial-model", "Initial Model"),
@@ -857,7 +853,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       };
       await gateway.setMethodResponse(
         "config.get",
-        configSnapshot(reconnectedConfig, "model-providers-reconnect-2"),
+        sourceConfigSnapshot(reconnectedConfig, "model-providers-reconnect-2"),
       );
       await gateway.setMethodResponse("models.list", {
         models: [catalogModel("openai", "reconnected-model", "Reconnected Model")],

@@ -14,7 +14,7 @@ import {
   captureSessionTranscriptTargetBinding,
   sameSessionTranscriptStorageEnvironment,
 } from "../../config/sessions/transcript-target-binding.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../cron/run-continuation-cleanup.js";
 import {
@@ -110,6 +110,8 @@ type CreateMediaGenerationTaskRunParams = {
 type RecordMediaGenerationTaskProgressParams = {
   handle: MediaGenerationTaskHandle | null;
   progressSummary: string;
+  provider?: string;
+  model?: string;
 };
 
 type CompleteMediaGenerationTaskRunParams = {
@@ -324,6 +326,8 @@ function recordMediaGenerationTaskProgress(params: RecordMediaGenerationTaskProg
   touchMediaGenerationTaskRunContext(params.handle);
   updateMediaGenerationOperation(params.handle.runId, {
     progressSummary: params.progressSummary,
+    ...(params.provider ? { provider: params.provider } : {}),
+    ...(params.model ? { model: params.model } : {}),
   });
 }
 
@@ -391,7 +395,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
           progressSummary: params.progressSummary,
         });
       }, MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS);
-      interval.unref?.();
+      interval.unref();
       try {
         executed = await params.run();
       } finally {

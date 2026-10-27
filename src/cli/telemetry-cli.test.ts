@@ -17,15 +17,13 @@ const mocks = await vi.hoisted(async () => {
 });
 
 // mock-isolation: Telemetry fixtures capture config mutations without reading or writing operator state.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
-  loadConfig: mocks.getRuntimeConfig,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
-    async () =>
-      mocks.getRuntimeConfig(...args),
-  transformConfigFileWithRetry: mocks.transformConfigFileWithRetry,
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "getRuntimeConfig"),
+    transformConfigFileWithRetry: mocks.transformConfigFileWithRetry,
+  };
+});
 vi.mock("../infra/telemetry.js", () => ({
   buildTelemetryPayload: mocks.buildTelemetryPayload,
   buildTelemetryUserAgent: mocks.buildTelemetryUserAgent,

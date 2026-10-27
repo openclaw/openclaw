@@ -70,6 +70,7 @@ export function createPlacementWorkspaceReservationOps(
         database: { scope: "shared", options: { path: runtime.path } },
         leaseMs: 60000,
         waitMs: 0,
+        heartbeat: "worker",
         leaseLabel: "session publication exclusion",
         signal,
       },

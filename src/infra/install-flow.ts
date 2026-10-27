@@ -14,7 +14,7 @@ import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { withInstallActivity, type InstallActivityObserver } from "./install-progress.js";
 import { withInstallWorkspace } from "./install-source-utils.js";
 
-type ExistingInstallPathResult =
+export async function resolveExistingInstallPath(inputPath: string): Promise<
   | {
       ok: true;
       resolvedPath: string;
@@ -23,11 +23,8 @@ type ExistingInstallPathResult =
   | {
       ok: false;
       error: string;
-    };
-
-export async function resolveExistingInstallPath(
-  inputPath: string,
-): Promise<ExistingInstallPathResult> {
+    }
+> {
   const resolvedPath = resolveUserPath(inputPath);
   if (!(await pathExists(resolvedPath))) {
     return { ok: false, error: `path not found: ${resolvedPath}` };

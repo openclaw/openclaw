@@ -471,6 +471,7 @@ const DYNAMIC_ROUTE_MATCHERS = [
   ["activity", activityPersonFromPath],
   ["workboard", workboardBoardIdFromPath],
   ["memory", memoryTabFromPath],
+  ["plugins", pluginCatalogIdFromPath],
   ["plugins", isLegacyPluginsDiscoveryPath],
   ["plugin-settings", pluginSettingsIdFromPath],
 ] as const;

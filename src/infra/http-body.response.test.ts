@@ -8,6 +8,7 @@ import {
   readResponseTextSnippet,
   readResponseWithLimit,
 } from "./http-body.js";
+import { makeStallingStream } from "./http-body.test-support.js";
 
 afterEach(() => vi.useRealTimers());
 
@@ -27,20 +28,6 @@ function makeStream(chunks: Uint8Array[], delayMs?: number) {
       }
       controller.close();
     },
-  });
-}
-
-function makeStallingStream(
-  initialChunks: Uint8Array[],
-  onCancel?: UnderlyingSource<Uint8Array>["cancel"],
-) {
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const chunk of initialChunks) {
-        controller.enqueue(chunk);
-      }
-    },
-    cancel: onCancel,
   });
 }
 

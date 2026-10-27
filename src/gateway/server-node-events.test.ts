@@ -16,6 +16,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { NodeRegistry } from "./node-registry.js";
 import * as nodeEventSource from "./server-node-event-source.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
@@ -60,12 +61,6 @@ function eventResult(event: string, reason: string, handled = false) {
 
 function waitForFast<T>(callback: () => T | Promise<T>) {
   return vi.waitFor(callback, { interval: 1 });
-}
-
-function expectNoCalls(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 beforeEach(() => {
@@ -692,15 +687,16 @@ describe("agent request events", () => {
   it.each(["voice touch", "agent dispatch", "receipt delivery"] as const)(
     "keeps accepted detached %s visible to suspension",
     async (phase) => {
-      const dispatchGate = createDeferred<never>();
-      const receipt = createDeferred<DurableMessageBatchSendResult>();
-      const touch = createDeferred();
+      const gate = createDeferred();
       if (phase === "voice touch") {
-        touchSession.mockImplementationOnce(() => touch.promise);
+        touchSession.mockImplementationOnce(() => gate.promise);
       } else if (phase === "agent dispatch") {
-        dispatch.mockImplementationOnce(() => dispatchGate.promise);
+        dispatch.mockImplementationOnce(() => gate.promise);
       } else {
-        sendBatch.mockImplementationOnce(() => receipt.promise);
+        sendBatch.mockImplementationOnce(async () => {
+          await gate.promise;
+          return sentDurableMessageBatchResult;
+        });
       }
 
       await runAdmittedNodeEvent(
@@ -722,13 +718,7 @@ describe("agent request events", () => {
 
       await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
       expectSuspendBusyWithRootWork(`${phase}-busy`);
-      if (phase === "voice touch") {
-        touch.resolve();
-      } else if (phase === "agent dispatch") {
-        dispatchGate.resolve(undefined as never);
-      } else {
-        receipt.resolve(sentDurableMessageBatchResult);
-      }
+      gate.resolve();
       await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       expectSuspendReady(`${phase}-ready`);
     },
@@ -942,10 +932,12 @@ describe("agent request events", () => {
         registry.invalidateConnectionForPairingChange(client.connId);
       }
       const nowSpy = vi.spyOn(Date, "now").mockReturnValue(100_000);
+      using parse = vi.spyOn(JSON, "parse");
+      const payload = current ? stats : { ...stats, memoryFreeBytes: 1024 };
       setActiveNodeContexts([{ nodeId: "active-computer" }]);
       try {
         await expect(
-          emit("node.host.stats", current ? stats : { ...stats, memoryFreeBytes: 1024 }, {
+          emit("node.host.stats", payload, {
             connId: connection === "stale" ? "retired-connection" : client.connId,
             presenceAllowed: false,
           }),
@@ -953,6 +945,7 @@ describe("agent request events", () => {
           eventResult("node.host.stats", current ? "updated" : "stale_connection", current),
         );
         expect(session.hostStats).toEqual({ ...stats, updatedAtMs: current ? 100_000 : 100 });
+        expect(parse.mock.calls.filter(([raw]) => raw === JSON.stringify(payload))).toHaveLength(1);
         if (current) {
           expect(broadcast).toHaveBeenCalledExactlyOnceWith(
             "node.hostStats",

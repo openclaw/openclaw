@@ -44,7 +44,7 @@ Explicit `decision_evaluate` remains independent of Labs.
 
 Configure the provider plugin before selecting its model:
 
-- [Liquid AI](/providers/liquid) connects directly to hosted d1 and d1 Ultra.
+- [Liquid AI](/providers/liquid-ai) connects directly to hosted d1 and d1 Ultra.
   Install the plugin candidate from a compatible development checkout and
   configure a Liquid AI API key. Text/JSON and inline image evidence use the
   native Decision endpoint; connecting it does not change the chat model.

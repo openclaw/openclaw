@@ -1,3 +1,4 @@
+import "../styles/session-progress-hovercard.css";
 import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-protocol";
 import { render, spread } from "@solidjs/web";
 import { createMemo, onSettled, runWithOwner, Show } from "solid-js";

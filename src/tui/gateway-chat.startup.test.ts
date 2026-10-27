@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { GatewayClient } from "../../packages/gateway-client/src/client.js";
+import { GatewayClient } from "../../packages/gateway-client/src/client.js";
 import type { GatewayProtocolSocket } from "../../packages/gateway-client/src/protocol-client.js";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { RequestFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
+import { GatewayChatRequests } from "./gateway-chat-requests.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import {
@@ -186,48 +188,39 @@ it.each([
   },
 );
 
-it("does not start a legacy creation retry after /abort", async () => {
+it.each([false, true])("fences legacy creation retries (aborted=%s)", async (aborted) => {
   const f = createFixture(true);
   f.state.currentSessionId = "original-session";
   const originalKey = f.state.currentSessionKey;
-  const operation = f.commands.handleCommand("/new");
-  expect(f.writes).toHaveLength(1);
-  await f.commands.handleCommand("/abort");
-  f.finishWrite(legacyCreationError);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.writes).toHaveLength(1);
-  await operation;
-  expect(f.state.currentSessionKey).toBe(originalKey);
-});
-
-it("keeps the original deadline and key through a legacy creation retry", async () => {
-  const f = createFixture(true);
-  f.state.currentSessionId = "original-session";
   const settled = vi.fn();
   const operation = f.commands.handleCommand("/new").then(settled);
-  await vi.advanceTimersByTimeAsync(240_000);
+  expect(f.writes).toHaveLength(1);
+  if (aborted) {
+    await f.commands.handleCommand("/abort");
+  } else {
+    await vi.advanceTimersByTimeAsync(240_000);
+  }
   f.finishWrite(legacyCreationError);
   await vi.advanceTimersByTimeAsync(0);
-  expect(f.writes).toHaveLength(2);
-  const firstWrite = f.writes[0];
-  assert(firstWrite);
-  const key = (firstWrite.params as { key: string }).key;
-  expect(f.writes.map((frame) => (frame.params as { key: string }).key)).toEqual([key, key]);
-  await vi.advanceTimersByTimeAsync(GATEWAY_STARTUP_ADMISSION_WAIT_MS - 240_000);
+  if (aborted) {
+    expect(f.writes).toHaveLength(1);
+    await operation;
+    expect(f.state.currentSessionKey).toBe(originalKey);
+  } else {
+    expect(f.writes).toHaveLength(2);
+    const keys = f.writes.map((frame) => (frame.params as { key: string }).key);
+    expect(keys).toEqual([keys[0], keys[0]]);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STARTUP_ADMISSION_WAIT_MS - 240_000);
+  }
   expect(settled).toHaveBeenCalledOnce();
   await operation;
 });
 
-it.each([
-  ["send", 45_000],
-  ["send", 240_000],
-  ["new", 45_000],
-  ["new", 240_000],
-] as const)("%s waits through %i ms of startup and writes once", async (action, preparationMs) => {
+it.each(["send", "new"] as const)("%s waits through startup and writes once", async (action) => {
   const f = createFixture();
   const settled = vi.fn();
   const operation = f.submit(action).then(settled);
-  await vi.advanceTimersByTimeAsync(preparationMs);
+  await vi.advanceTimersByTimeAsync(240_000);
   expect(settled).not.toHaveBeenCalled();
   expect(f.writes).toHaveLength(0);
   f.ready();
@@ -263,4 +256,44 @@ it.each([
   } else {
     expect(f.state.pendingSubmit).toBeNull();
   }
+});
+
+it("keeps the startup admission budget when the wall clock rewinds", async () => {
+  const client = new GatewayClient({ url: "ws://tui-startup.invalid" });
+  const requestSpy = vi.spyOn(client, "request").mockResolvedValue({});
+  const requests = new GatewayChatRequests(client);
+  await requests.write({ sessionKey: "agent:main:main" }, async (request) => {
+    vi.setSystemTime(Date.now() - 90_000);
+    await vi.advanceTimersByTimeAsync(500);
+    return request("chat.send", {});
+  });
+  expect(requestSpy).toHaveBeenCalledWith(
+    "chat.send",
+    {},
+    expect.objectContaining({ timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS - 500 }),
+  );
+});
+
+it("retries chat.history when the wall clock jumps forward", async () => {
+  const client = new GatewayClient({ url: "ws://tui-startup.invalid" });
+  const requestSpy = vi
+    .spyOn(client, "request")
+    .mockRejectedValueOnce(
+      new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "Agent is preparing",
+        retryable: true,
+        retryAfterMs: 100,
+        details: { method: "chat.history" },
+      }),
+    )
+    .mockResolvedValue({ messages: [] });
+  const requests = new GatewayChatRequests(client);
+  const history = requests
+    .loadHistory({ sessionKey: "agent:main:main" })
+    .catch((error: unknown) => error);
+  vi.setSystemTime(Date.now() + 120_000);
+  await vi.advanceTimersByTimeAsync(100);
+  expect(await history).toEqual({ messages: [] });
+  expect(requestSpy).toHaveBeenCalledTimes(2);
 });

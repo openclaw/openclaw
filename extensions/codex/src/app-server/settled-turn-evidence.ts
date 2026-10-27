@@ -9,6 +9,10 @@ export type SettledTurnMessages = {
   mirroredMessages: readonly AgentMessage[];
   settledMessages: readonly AgentMessage[];
   turnId: string;
+  /** The run's persisted prompt when a continuation started a later native turn. */
+  promptIdentity?: string;
+  /** The run mirrored no prompt for this turn: an internal system turn without a recorder. */
+  promptSuppressed?: boolean;
 };
 
 function rejectEvidence(): never {
@@ -36,7 +40,7 @@ function* verifiedSettledMessages(
   params: SettledTurnMessages,
   prior: SettledTurnPriorContext,
 ): Generator<AgentMessage> {
-  const promptIdentity = `${params.turnId}:prompt`;
+  const promptIdentity = params.promptIdentity ?? `${params.turnId}:prompt`;
   const boundaryIndex = params.settledMessages.findLastIndex(
     (message) => message.role === "toolResult",
   );
@@ -45,11 +49,17 @@ function* verifiedSettledMessages(
   const requiredIds = params.settledMessages
     .slice(0, boundaryIndex + 1)
     .flatMap((message) => readMirrorIdentity(message) ?? []);
+  // A turn without a mirrored prompt starts at its first mirrored row; the user turn
+  // that produced it is then prior context, never borrowed as this turn's prompt.
+  const anchorIdentity = params.promptSuppressed ? requiredIds[0] : promptIdentity;
+  const hasPrompt = requiredIds.includes(promptIdentity);
   if (
     !boundaryIdentity?.startsWith(`${params.turnId}:tool:`) ||
     requiredIds.length !== boundaryIndex + 1 ||
     new Set(requiredIds).size !== requiredIds.length ||
-    !requiredIds.includes(promptIdentity)
+    (params.promptSuppressed
+      ? hasPrompt || !anchorIdentity?.startsWith(`${params.turnId}:`)
+      : !hasPrompt)
   ) {
     rejectEvidence();
   }
@@ -89,7 +99,7 @@ function* verifiedSettledMessages(
         matched += 1;
       }
     }
-    currentStarted ||= identity === promptIdentity;
+    currentStarted ||= identity === anchorIdentity;
     if (!currentStarted) {
       prior.append(message);
     } else if (!throughBoundary) {

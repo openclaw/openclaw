@@ -70,25 +70,27 @@ export async function runCodexAppServerAttempt(
         };
         let activeTurnOwnsCleanup = false;
         try {
-          await preparation.measure("runtime-start", () => startCodexAttemptRuntime(resources));
+          const startedResources = await preparation.measure("runtime-start", () =>
+            startCodexAttemptRuntime(resources),
+          );
 
-          const turnRuntime = createCodexAttemptTurnState(resources);
+          const turnRuntime = createCodexAttemptTurnState(startedResources);
           try {
-            const lifecycle = createCodexAttemptLifecycleController(resources, turnRuntime);
+            const lifecycle = createCodexAttemptLifecycleController(startedResources, turnRuntime);
             const notifications = createCodexAttemptNotificationController(
-              resources,
+              startedResources,
               turnRuntime,
               lifecycle,
             );
             const serverRequests = createCodexAttemptServerRequestController(
-              resources,
+              startedResources,
               turnRuntime,
               lifecycle,
               notifications.waitForNativeTerminalItems,
             );
             const { ensureCurrentThreadRoute } = await preparation.measure("thread-route", () =>
               prepareCodexAttemptRoute(
-                resources,
+                startedResources,
                 turnRuntime,
                 notifications,
                 serverRequests.handleServerRequest,
@@ -96,7 +98,7 @@ export async function runCodexAppServerAttempt(
             );
             const turnRequest = await preparation.measure("turn-request", () =>
               prepareCodexAttemptTurnRequest(
-                resources,
+                startedResources,
                 turnRuntime,
                 ensureCurrentThreadRoute,
                 notifications.waitForActiveNativeTurnCompletion,
@@ -104,7 +106,7 @@ export async function runCodexAppServerAttempt(
             );
             preparation.ready();
             const turnStart = await startCodexAttemptTurn(
-              resources,
+              startedResources,
               turnRuntime,
               notifications,
               turnRequest,
@@ -114,7 +116,7 @@ export async function runCodexAppServerAttempt(
               return turnStart.result;
             }
             const activeTurn = activateCodexAttemptTurn(
-              resources,
+              startedResources,
               turnRuntime,
               lifecycle,
               notifications,
@@ -127,7 +129,7 @@ export async function runCodexAppServerAttempt(
               try {
                 await activeTurn.ready;
                 finalizedResult = await finalizeCodexAttempt(
-                  resources,
+                  startedResources,
                   turnRuntime,
                   lifecycle,
                   notifications,
@@ -136,7 +138,7 @@ export async function runCodexAppServerAttempt(
                 );
               } finally {
                 await cleanupCodexAttempt(
-                  resources,
+                  startedResources,
                   turnRuntime,
                   lifecycle,
                   turnRequest,
@@ -167,10 +169,10 @@ export async function runCodexAppServerAttempt(
             // Cleanup retires the execution lease; only then can device loss no longer
             // race the final result captured during asynchronous terminal processing.
             if (
-              resources.state.executionDisconnectError &&
+              startedResources.state.executionDisconnectError &&
               !connection.terminalState.explicitCancellationObserved
             ) {
-              throw resources.state.executionDisconnectError;
+              throw startedResources.state.executionDisconnectError;
             }
             connection.assertModelExecutionCurrent();
             return finalizedResult;

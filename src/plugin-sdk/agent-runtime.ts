@@ -11,13 +11,12 @@ import {
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 
 export {
-  listAgentIds,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
   setAgentEffectiveModelPrimary,
 } from "../agents/agent-scope.js";
-export { resolveSessionAgentIds } from "./agent-scope-runtime.js";
+export { listAgentIds, resolveSessionAgentIds } from "./agent-scope-runtime.js";
 
 export { DEFAULT_PROVIDER } from "../agents/defaults.js";
 // Consumed by the codex plugin's app-server usage surface.

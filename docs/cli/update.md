@@ -52,12 +52,13 @@ Scheduler, its original terminal, or `openclaw gateway stop`, then rerun
 `openclaw update`. Updates without a live lock still continue on all platforms.
 This admission check requires an updated installed updater.
 
-For a global npm installation, the manual recovery path is
-`npm i -g openclaw@<target> --allow-scripts=openclaw`, then
-`openclaw doctor --fix`, then `openclaw gateway restart`. Replace `<target>` with
-the intended release and run service repair/restart from an elevated terminal
-if Task Scheduler denies access. OpenClaw prints this alternative; it does not
-run it automatically. Per-user Startup-folder installations do not require
+For a global npm installation, OpenClaw prints a short manual alternative
+(`npm i -g openclaw@<target> --allow-scripts=openclaw`, then
+`openclaw doctor --fix`, then `openclaw gateway restart`); it does not run it
+automatically. Follow the complete
+[manual update procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+with the intended release as the target, and run the service commands from an
+elevated terminal if Task Scheduler denies access. Per-user Startup-folder installations do not require
 elevation for this check. An older installed updater keeps its previous behavior
 until replaced; use the elevated or manual path for that first upgrade.
 
@@ -128,6 +129,10 @@ launcher scripts).
 Invalid configuration reports `invalid-config` before database schema inspection.
 An unreadable configuration file or failed configuration loading step instead
 reports `config-read-failed`, with a recognized filesystem error code when available.
+An ownership refusal during loading includes the `gateway-ownership-unverified`
+failure fact and points to `openclaw gateway recover-lock` for inspection. Active
+maintenance instead reports `gateway-maintenance-busy` with wait or stop guidance.
+Neither diagnostic includes the recorded holder's private details.
 For supported package targets, the candidate makes that
 decision after private staging; see [Candidate-owned admission](#candidate-owned-admission).
 The local diagnostic identifies invalid fields and recommends
@@ -601,6 +606,14 @@ worker-launch code; installing a corrected candidate cannot repair that first ho
 Source updates retain a retired workspace dependency link when only its ignored `node_modules` directory remains.
 An older installed updater that fails at `updater-runtime-retention` needs this correction in its running code before retrying; a newer candidate cannot repair that earlier step.
 
+Installed updaters up to 2026.10.7 and the 2026.10.10 betas retain their runtime in the update process
+and, after any second without a completed entry, rescan the whole retained tree
+to measure progress. On a busy or slow disk, `updater-runtime-retention` can take
+several minutes for a global install of about 45,000 files while still advancing;
+let it finish instead of interrupting the update. Newer updaters retain in a
+private worker bounded by the update deadline. The candidate does not take part in
+this step, so a newer target cannot speed it up.
+
 Runtime retention excludes updater-owned package backups in the global module
 directory, including backup symlinks to source checkouts. An older installed
 updater such as `2026.9.6` can still follow a retained
@@ -666,7 +679,9 @@ after admission, including every mutation.
 If the marker is absent or invalid, the updater uses its installed admission
 checks and records `update-admission-unsupported-target`. If the candidate times
 out, crashes, or returns no valid protocol-1 verdict, it records
-`update-admission-fallback` and uses those same installed checks. These warnings
+`update-admission-fallback` and uses those same installed checks. When stdout is
+not one JSON document (`malformed-json`), the warning ends with a bounded,
+redacted excerpt of the first stdout line. These warnings
 are informational; the installed checks determine whether the update proceeds.
 Both warning steps retain their identity, status, and timestamps when history
 compacts at its 128-step or 16 KiB limit. Warning text can be compacted to fit
@@ -682,7 +697,12 @@ passes `--context <absolute-path>` to a private mode-0600 context file; this com
 path and required argument select admission child mode. The command emits
 one JSON document with `protocol`, `verdict`, `reasons`, `warnings`, and `facts`
 containing candidate/installed versions, the candidate's `nodeEngines` requirement
-when declared, and named check results. It exits `0`
+when declared, and named check results. Console logs from admission and its
+private inspection workers go to stderr at every console level, so stdout carries
+only that document. Candidates up to 2026.10.7 and the 2026.10.10 betas wrote debug
+diagnostics to stdout when the console level was raised (for example
+`logging.consoleLevel: "debug"`), so their admission fell back with `malformed-json`
+to the installed checks. It exits `0`
 for admission, `3` for refusal, or `2` for an internal error without a valid
 verdict. It rejects inherited update authority variables with exit `2`, allowing
 the supervisor to fall back. It does not perform managed-service ancestry checks.

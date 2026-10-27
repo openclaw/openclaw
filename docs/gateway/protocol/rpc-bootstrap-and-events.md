@@ -190,6 +190,18 @@ Omitting the ID retains the legacy single-observer behavior.
 Older clients remain compatible with the updated Gateway; the updated SDK's
 ownership fields require an updated Gateway.
 
+Foreground readers can include `initialHistory` to receive the first `chat.startup`
+snapshot in the same acknowledgment. It accepts `cursor`, `knownState`, `limit`,
+`maxBytes`, `toolResultMaxChars`, and `inputRunIds`; the subscription's normalized
+session and agent select the transcript. The Gateway admits the observer before
+reading history, so subsequent live events cover activity after the snapshot.
+The response adds `initialHistory: { ok: true, payload }` or
+`initialHistory: { ok: false, error }`. A history error leaves the successful
+subscription active: retry the history read or release the returned observer.
+Clients that omit `initialHistory` keep the existing acknowledgment shape. This
+optional request requires a Gateway that supports it; it does not change wire
+protocol v4.
+
 Background narration consumers declare `mode: "narration"`. The Gateway replaces
 their token-level `chat` deltas and raw `agent` assistant events with
 `session.narration` snapshots. Each snapshot contains `sessionKey`, optional
@@ -467,6 +479,23 @@ or protocol-version change.
   Job definitions, run summaries, diagnostics, and delivery traces are omitted;
   use `cron.get`, `cron.list`, or `cron.runs` when displaying those details.
   Internal `cron_changed` plugin hooks still receive the full job snapshot.
+- `cron.inventory.changed`: payload-free notice after a committed cron definition
+  change, including add, update, retarget, remove, and enable/disable changes.
+  It reaches every operator connection admitted to read cron, including readers
+  who can no longer see a retargeted job. It contains no job ID, session, or job
+  content; clients refresh only their own authorized inventory. Normal runtime
+  `started`, `finished`, and `scheduled` events do not invalidate inventory.
+  State-only `updated` publications and unchanged declarative saves also stay
+  quiet. A run that actually disables a job publishes a definition invalidation;
+  completing an already-disabled job does not. The same committed-definition
+  comparison gates `sessions.changed` with reason `cron-binding`, including
+  both old and new bound sessions on retarget. Known jobs consume runtime facts
+  locally; unrelated unknown job IDs do not require a list read.
+  Support is advertised in `hello-ok.features.events`. Clients using this
+  contract debounce invalidations, share inventory reads by connection and query,
+  and defer hidden views until they become visible. When the event is absent
+  from the catalog, retain the older `cron`-event refresh behavior. The notice
+  uses the ordinary per-connection sequence and slow-client gap recovery.
 - `shutdown`: gateway shutdown notification.
 - `node.pair.requested` / `node.pair.resolved`: node pairing lifecycle.
 - `node.invoke.request`: node invoke request broadcast.

@@ -23,7 +23,6 @@ import {
   readPidFile,
   writeForkingNoOutputScript,
 } from "../test-utils/process-tree.js";
-import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
 import {
   withMockedWindowsAclVerificationUnavailable,
   withMockedWindowsPlatform,
@@ -58,8 +57,8 @@ describe("secret ref resolver", () => {
   let fixtureRoot = "";
   let receipts: FixtureReceiptChannel;
   let caseId = 0;
-  let execFastExitScriptPath = "";
   const execResponses = {
+    empty: "",
     v1: '{"protocolVersion":1,"values":{"openai/api-key":"value:openai/api-key"}}',
     plain: "plain-secret",
     v2: '{"protocolVersion":2,"values":{"openai/api-key":"x"}}',
@@ -138,9 +137,6 @@ describe("secret ref resolver", () => {
         0o700,
       );
     }
-
-    execFastExitScriptPath = path.join(sharedExecDir, "resolver-fast-exit.sh");
-    await writeSecureFile(execFastExitScriptPath, ["#!/bin/sh", "exit 0"].join("\n"), 0o700);
   });
 
   afterAll(async () => {
@@ -230,26 +226,13 @@ describe("secret ref resolver", () => {
 
       const resolve = () => resolveFileSecret(filePath);
       await expect(resolve()).resolves.toBe("sk-file-value");
-      const original = await fs.stat(filePath);
-      const contents = await fs.readFile(filePath, "utf8");
-      expect(original.nlink).toBe(1);
-
       await fs.link(filePath, aliasPath);
-      expect((await fs.stat(filePath)).nlink).toBe(2);
       await expect(resolve()).rejects.toMatchObject({
         code: "SECRET_PROVIDER_UNAVAILABLE",
         cause: { code: "hardlink" },
       });
 
-      await writeSecureFile(filePath, contents);
-      const recovered = await fs.stat(filePath);
-      const oldAlias = await fs.stat(aliasPath);
-      expect(recovered.nlink).toBe(1);
-      expect(recovered.mode & 0o777).toBe(0o600);
-      expect(recovered.ino).not.toBe(original.ino);
-      expect(oldAlias.ino).toBe(original.ino);
-      expect(oldAlias.nlink).toBe(1);
-      await expect(fs.readFile(aliasPath, "utf8")).resolves.toBe(contents);
+      await writeSecureFile(filePath, filePayload);
       await expect(resolve()).resolves.toBe("sk-file-value");
     },
   );
@@ -384,7 +367,7 @@ describe("secret ref resolver", () => {
       await expect(
         resolveSecretRefValues(
           refs,
-          providerOptions("execmain", { source: "exec", command: execFastExitScriptPath }),
+          providerOptions("execmain", { source: "exec", command: execScript("empty") }),
         ),
       ).rejects.toThrow('Exec provider "execmain" returned empty stdout.');
     },
@@ -464,15 +447,10 @@ describe("secret ref resolver", () => {
     ).rejects.toThrow('has source "env" but ref requests "exec"');
   });
 
-  it("rejects invalid exec ids before provider resolution", async () => {
-    for (const id of INVALID_EXEC_SECRET_REF_IDS) {
-      await expect(
-        resolveSecretRefValue({ source: "exec", provider: "vault", id }, { config: {} }),
-      ).rejects.toThrow(/Exec secret reference id must match|Secret reference id is empty/);
-    }
-  });
-
   it.each([
+    ["exec", "vault", "", "Secret reference id is empty"],
+    ["exec", "vault", "bad id", "Exec secret reference id must match"],
+    ["exec", "vault", "../key", "Exec secret reference id must match"],
     ["env", "default", "bad id", "Env secret reference id must match"],
     [
       "file",

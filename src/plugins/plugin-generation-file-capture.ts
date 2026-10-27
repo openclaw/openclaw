@@ -7,7 +7,6 @@ import {
   type RootFileCopyBatchSync,
   type RootFileOpenBatchSync,
 } from "@openclaw/fs-safe/advanced";
-import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
@@ -60,25 +59,6 @@ export function linkPluginGenerationDependency(link: string, target: string): bo
   return true;
 }
 
-/** Native child imports can follow host identity without borrowing parent resolver hooks. */
-export function linkPluginGenerationHostModule(link: string, target: string): boolean {
-  if (fs.lstatSync(link, { throwIfNoEntry: false })) {
-    return false;
-  }
-  fs.mkdirSync(path.dirname(link), { recursive: true, mode: 0o700 });
-  try {
-    fs.symlinkSync(target, link, "file");
-    return true;
-  } catch (error) {
-    // Directory junctions can work where file links are denied. Keep the
-    // existing parent redirect; never copy a second SDK graph.
-    if (!["EPERM", "EACCES", "ENOSYS", "ENOTSUP"].some((code) => hasErrnoCode(error, code))) {
-      throw error;
-    }
-    return false;
-  }
-}
-
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();
   return {
@@ -103,7 +83,6 @@ export function createPluginGenerationFileCapture({
   directory,
   outputRoot,
   capturedPaths,
-  hostModuleLinks,
   originalSources,
   hardlinkedSources,
   sourceCapture,
@@ -120,7 +99,6 @@ export function createPluginGenerationFileCapture({
   directory: string;
   outputRoot?: string;
   capturedPaths: Map<string, string>;
-  hostModuleLinks: ReadonlySet<string>;
   originalSources: Map<string, string>;
   hardlinkedSources: Set<string>;
   sourceCapture: Pick<ReturnType<typeof createPluginSourceCapture>, "additions">;
@@ -139,15 +117,19 @@ export function createPluginGenerationFileCapture({
     target: string,
     copyFile: RootFileCopyBatchSync["copyFile"],
     openFile: RootFileOpenBatchSync["openFile"],
+    realParent?: string,
   ) => {
     // Metadata can precede its package body; promotion never replaces those captured bytes.
-    if (capturedPaths.get(path.resolve(source)) === target || hostModuleLinks.has(target)) {
+    if (capturedPaths.get(path.resolve(source)) === target) {
       return;
     }
     const prepared = nativeAdmission.resolvePreparedSource(source);
     const input = prepared?.path ?? source;
     const inputBoundary = prepared?.boundary ?? boundary;
-    const real = fs.realpathSync(input);
+    // Directory recursion already resolved the parent; only links need another path walk.
+    const entry = !prepared && realParent ? fs.lstatSync(input, { bigint: true }) : undefined;
+    const ordinary = entry && !entry.isSymbolicLink();
+    const real = ordinary ? path.join(realParent!, path.basename(input)) : fs.realpathSync(input);
     const retainedNative = nativeAdmission.isRetainedReference(source, real);
     if (!isPathInside(inputBoundary, real) && !retainedNative) {
       throw new Error(
@@ -157,7 +139,7 @@ export function createPluginGenerationFileCapture({
     if (!prepared && outputRoot && isPathInside(outputRoot, real)) {
       return;
     }
-    const stat = fs.statSync(real, { bigint: true });
+    const stat = ordinary ? entry : fs.statSync(real, { bigint: true });
     const captured = capturedPaths.get(real);
     capturedPaths.set(path.resolve(source), target);
     originalSources.set(target, path.resolve(source));
@@ -184,7 +166,7 @@ export function createPluginGenerationFileCapture({
             sourceLinks.defer(path.join(input, name), inputBoundary, path.join(source, name))
           )
         ) {
-          copy(path.join(source, name), path.join(target, name), copyFile, openFile);
+          copy(path.join(source, name), path.join(target, name), copyFile, openFile, real);
         }
       }
       ancestors.delete(real);
@@ -192,7 +174,9 @@ export function createPluginGenerationFileCapture({
       if (stat.nlink > 1n) {
         hardlinkedSources.add(target);
       }
-      fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      if (!realParent) {
+        fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      }
       // Register before copying or admission can fail: known aliases must remain
       // rejected by the acquisition owner even when the first attempt is incomplete.
       additions.add(target);

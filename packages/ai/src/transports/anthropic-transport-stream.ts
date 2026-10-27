@@ -1,4 +1,9 @@
-import type { Model, StreamFn } from "@openclaw/llm-core";
+import {
+  omitNullRequestHeaders,
+  type Model,
+  type ModelRequestHeaders,
+  type StreamFn,
+} from "@openclaw/llm-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -44,23 +49,6 @@ const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
 // bypass that layer; without a parser-local guard, partial frames grow forever.
 const ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
 type AnthropicTransportModel = Model<"anthropic-messages">;
-
-function isKimiAnthropicProvider(provider: string | undefined): boolean {
-  return /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(provider ?? ""));
-}
-
-function buildAnthropicBetaHeader(
-  model: AnthropicTransportModel,
-  betaFeatures: readonly string[],
-  params: { oauth: boolean },
-): string | undefined {
-  if (!isDirectAnthropicModel(model)) {
-    return undefined;
-  }
-  return params.oauth
-    ? `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`
-    : betaFeatures.join(",");
-}
 
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 
@@ -119,12 +107,10 @@ async function* parseAnthropicSseBody(
         completed = chunk.done;
         return chunk;
       },
-      (pending) => {
-        if (pending.length > ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS) {
-          throw new Error(
-            `Anthropic Messages SSE response exceeded max pending buffer size (${ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS} chars) without event boundary`,
-          );
-        }
+      {
+        max: ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS,
+        unit: "characters",
+        message: `Anthropic Messages SSE response exceeded max pending buffer size (${ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS} chars) without event boundary`,
       },
     )) {
       const data = (terminated ? frame : frame.trim())
@@ -197,13 +183,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         // Kimi's Anthropic thinking SSE is already well-formed for this parser, but
         // the OpenAI SDK compatibility sanitizer can stall before the text block.
         const fetch =
-          isKimiAnthropicProvider(model.provider) && transportOptions.thinkingEnabled === true
+          /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(model.provider ?? "")) &&
+          transportOptions.thinkingEnabled === true
             ? buildGuardedModelFetch(model, undefined, { sanitizeSse: false })
             : buildGuardedModelFetch(model);
         const copilot = model.provider === "github-copilot";
         const bearerAuth = copilot || usesFoundryBearerAuth(resolveModelHeaderSentinels(model));
         const isOAuthToken = !bearerAuth && isAnthropicOAuthApiKey(apiKey);
-        let defaultHeaders: Record<string, string> | undefined;
+        let defaultHeaders: ModelRequestHeaders | undefined;
         let claudeCodeVersion: string | undefined;
         let directApiKeyBetaHeader: string | undefined;
         if (bearerAuth) {
@@ -226,7 +213,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           if (needsInterleavedBeta) {
             betaFeatures.push("interleaved-thinking-2025-05-14");
           }
-          const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: isOAuthToken });
+          const betaHeader = !isDirectAnthropicModel(model)
+            ? undefined
+            : isOAuthToken
+              ? `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`
+              : betaFeatures.join(",");
           if (isOAuthToken) {
             const identity = buildAnthropicClaudeCodeIdentity(
               betaHeader,
@@ -259,7 +250,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             );
             // Binding controls are verified only on direct API-key requests, not OAuth or proxies.
             directApiKeyBetaHeader = isDirectAnthropicModel(model)
-              ? (new Headers(defaultHeaders).get("anthropic-beta") ?? "")
+              ? (new Headers(omitNullRequestHeaders(defaultHeaders)).get("anthropic-beta") ?? "")
               : undefined;
           }
         }
@@ -273,15 +264,17 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           directApiKeyBetaHeader,
           request: async (body, requestHeaders) => {
             const headers = new Headers(
-              mergeTransportHeaders(
-                {
-                  "content-type": "application/json",
-                  "anthropic-version": "2023-06-01",
-                  ...(bearerAuth || isOAuthToken
-                    ? { authorization: `Bearer ${apiKey}` }
-                    : { "x-api-key": apiKey }),
-                },
-                defaultHeaders,
+              omitNullRequestHeaders(
+                mergeTransportHeaders(
+                  {
+                    "content-type": "application/json",
+                    "anthropic-version": "2023-06-01",
+                    ...(bearerAuth || isOAuthToken
+                      ? { authorization: `Bearer ${apiKey}` }
+                      : { "x-api-key": apiKey }),
+                  },
+                  defaultHeaders,
+                ),
               ),
             );
             for (const [name, value] of Object.entries(requestHeaders ?? {})) {

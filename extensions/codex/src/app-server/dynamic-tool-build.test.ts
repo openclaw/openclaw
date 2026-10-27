@@ -195,7 +195,7 @@ it("binds a resolver-backed constructed tool surface exactly once", async () => 
   expect(factory).toHaveBeenCalledOnce();
   expect(bindToolSurface).toHaveBeenCalledExactlyOnceWith(
     expect.arrayContaining([expect.objectContaining({ name: "read" })]),
-    { cwd: effectiveCwd },
+    { cwd: effectiveCwd, nativeLocalExecution: true },
   );
   expect(tools).toEqual([]);
 });
@@ -1023,20 +1023,19 @@ it("quarantines exposed Codex memory writes and edits after a network tool", asy
 
   const tools = await buildTools({ sandbox: null as never });
   const tool = (name: string) => toolNamed(tools, name);
-  await tool("write").execute("codex-trusted-write", {
-    path: "memory/trusted.md",
-    content: "owner note\n",
-  });
+  const write = (surface: AnyAgentTool[], name: string, content: string) =>
+    toolNamed(surface, "write").execute(`codex-${name}-write`, {
+      path: `memory/${name}.md`,
+      content,
+    });
+  await write(tools, "trusted", "owner note\n");
   await tool("web_fetch").execute("codex-network-call", {});
   expect(params.onToolOutcome).toHaveBeenCalledWith(
     expect.objectContaining({ toolName: "web_fetch", resultContentSource: "network" }),
   );
   expect(params.isTurnTainted()).toBe(true);
 
-  await tool("write").execute("codex-network-write", {
-    path: "memory/network.md",
-    content: "network note\n",
-  });
+  await write(tools, "network", "network note\n");
   await tool("edit").execute("codex-network-edit", {
     path: "memory/trusted.md",
     edits: [{ oldText: "owner note", newText: "network edit" }],
@@ -1053,10 +1052,7 @@ it("quarantines exposed Codex memory writes and edits after a network tool", asy
     isTurnTainted: () => false,
   });
   const freshTools = await buildDynamicToolsForTest(fresh, workspaceDir, { sandbox: null });
-  await toolNamed(freshTools, "write").execute("codex-fresh-write", {
-    path: "memory/fresh.md",
-    content: "fresh owner note\n",
-  });
+  await write(freshTools, "fresh", "fresh owner note\n");
 
   const origin = async (relativePath: string) =>
     (await readMemoryArtifactProvenance({ workspaceDir, relativePath }))?.originClass;

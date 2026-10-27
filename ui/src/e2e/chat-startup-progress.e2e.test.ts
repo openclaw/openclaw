@@ -7,6 +7,7 @@ import type { GatewaySessionRow } from "../../../src/gateway/session-utils.types
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 let proofDir: string;
@@ -119,7 +120,7 @@ suite.define(() => {
         .fill("Check the next workspace.");
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       await gateway.waitForRequest("chat.send");
-      await working.getByText("Waiting for turn to start…", { exact: true }).waitFor();
+      await working.getByText("Waiting for turn to start", { exact: true }).waitFor();
       // A late event from the previous run must not claim the next run's progress.
       await gateway.emitGatewayEvent("agent", {
         sessionKey,
@@ -143,9 +144,7 @@ suite.define(() => {
 
   it("preserves tool and approval activity received before the send ACK", async () => {
     const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
+      ...createControlUiE2eContextOptions(),
       ...(capture ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } } : {}),
     });
     const page = await context.newPage();
@@ -155,7 +154,7 @@ suite.define(() => {
     });
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await gateway.waitForRequest("exec.approval.list");
       await gateway.deferNext("chat.send");
       const composer = page.locator(".agent-chat__composer-combobox textarea");
@@ -226,9 +225,7 @@ suite.define(() => {
 
   it("retains current startup progress through delayed history", async () => {
     const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
+      ...createControlUiE2eContextOptions(),
       ...(capture ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 900 } } } : {}),
     });
     const page = await context.newPage();
@@ -264,7 +261,7 @@ suite.define(() => {
     });
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const working = page.locator('.chat-working-indicator[role="status"]');
       await expect.poll(() => working.textContent()).toContain("Naming worktree…");
       const before = (await gateway.getRequests("chat.history")).length;
@@ -362,7 +359,7 @@ suite.define(() => {
     const artifactDir = capture ? createControlUiE2eArtifactDir("cloud-start-status") : undefined;
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const working = page.locator('.chat-working-indicator[role="status"]');
       await expect.poll(() => working.textContent()).toContain("Provisioning environment…");
       const screenshot = async (fileName: string) => {

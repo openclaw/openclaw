@@ -340,8 +340,7 @@ type EnglishCatalog = TranslationMap & {
       | "forkedSession"
       | "archiveSession"
       | "restoreSession"
-      | "deleteSessionStale"
-      | "deleteSessionsStale"
+      | "deleteSessionIdentityMissing"
       | "groupMenu"
       | "groupOptions"
       | "newSessionInGroup"
@@ -792,9 +791,10 @@ const startupEnglish = {
     forkedSession: "Forked session",
     archiveSession: "Archive session",
     restoreSession: "Restore session",
-    deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
-    deleteSessionsStale:
-      "Gateway connection replaced before {count} sessions were deleted. Try again.",
+    deleteSessionStale: {},
+    deleteSessionIdentityMissing:
+      'Cannot queue deletion of "{session}" without its session identity. Refresh after reconnecting and try again.',
+    deleteSessionsStale: {},
     groupMenu: "Group options for {group}",
     groupOptions: "Group options",
     newSessionInGroup: "New session in {group}",
@@ -904,7 +904,7 @@ const startupEnglish = {
     agentPendingOne: "{count} pending approval",
     agentPending: "{count} pending approvals",
 
-    reviewOnly: "Review only. Sign in with approval access to record a decision.",
+    reviewOnly: "You don’t have permission to approve.",
 
     labels: {},
   },
@@ -1231,6 +1231,13 @@ const startupEnglish = {
       running: "Running sessions",
       total: "Total sessions",
       name: "Name",
+    },
+    menu: {
+      label: "Actions for {name}",
+      pin: "Pin to sidebar",
+      unpin: "Unpin from sidebar",
+      openNewTab: "Open activity in new tab",
+      copyLink: "Copy activity link",
     },
     active: "Active",
     onlineActive: "Online · Active",
@@ -1564,6 +1571,7 @@ const startupEnglish = {
       retryingIn: "Retrying in {seconds}s",
       tryingFallback: "Trying fallback model…",
       failedTitle: "Unable to finish this reply",
+      failedRepeatCount: "{count} times",
       failedHelp: "Automatic recovery has stopped. Check any completed work before trying again.",
       tryAgain: "Try again",
       continuePrompt:
@@ -1586,7 +1594,6 @@ const startupEnglish = {
     waitingForApproval: "Waiting for approval…",
     waitingOnSubagents: "Waiting on subagents",
     waitingForMessage: "Waiting for a message",
-    turnElapsed: "Total time since your message, including subagent waits",
     waitingOnSubagent: "Waiting on {name}",
     subagentsRunning: "{count} subagents running",
     subagentsRunningOne: "1 subagent running",
@@ -1601,7 +1608,7 @@ const startupEnglish = {
       preparingCloudEnvironment: "Preparing cloud environment…",
       savingSnapshot: "Saving snapshot…",
       preparingContext: "Preparing this turn…",
-      waitingForTurn: "Waiting for turn to start…",
+      waitingForTurn: "Waiting for turn to start",
       memoryFlushing: "Saving conversation memory…",
       startingModel: "Waiting for a response",
       waitingForLocalModel: "Waiting for the local model to respond",
@@ -1654,6 +1661,9 @@ const startupEnglish = {
     },
     sessionHeader: {},
     board: {},
+    codexSupervisionDisabled:
+      "Codex supervision is off. Enable it in plugin settings to continue this session.",
+    openCodexSettings: "Open settings",
     catalog: {},
     taskSuggestions: {},
     pullRequests: {
@@ -1791,7 +1801,6 @@ const startupEnglish = {
       menuFilters: "Filters",
       menuDisplay: "Display",
       hideEmpty: "Hide empty",
-      activeFilterCount: "Active filters: {count}",
       sortSessions: "Filter & sort",
       sessionSources: "Session sources",
       showAllSessions: "Show all sessions",
@@ -1850,6 +1859,8 @@ const startupEnglish = {
       close: "Close {panel}",
     },
     sidePanel: {
+      context: "Context",
+      contextEmpty: "Send a message to capture context usage.",
       label: "Side panel",
       quickAccess: "Quick access",
       explorePanels: "Explore panels",

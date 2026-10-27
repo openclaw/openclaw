@@ -5,6 +5,10 @@ import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runti
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import {
+  confirmWithBoundAutomations,
+  withBoundAutomationNotice,
+} from "../../components/session-automation-confirm.ts";
+import {
   formatBatchSessionRemovalError,
   withSessionWorkspaceRecovery,
 } from "../../components/session-workspace-recovery.runtime.ts";
@@ -14,7 +18,11 @@ import {
   type SessionMethodAccessRequest,
 } from "../../lib/session-method-access.ts";
 import { fetchPagedSessionRows } from "../../lib/sessions/paged-session-rows.ts";
-import type { SessionPatch, SessionPatchResult } from "../../lib/sessions/patch.ts";
+import {
+  isSessionDeferredPatch,
+  type SessionPatch,
+  type SessionPatchResult,
+} from "../../lib/sessions/patch.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import type {
   SessionDeleteTarget,
@@ -24,10 +32,7 @@ import { resolveUiSessionRowAgentId } from "../../lib/sessions/session-key.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { sessionAgentId, sessionPathAgentId } from "./agent-scope.ts";
-import {
-  createSessionsMutationRunner,
-  type SessionsPageMutationResult,
-} from "./mutation-runner.ts";
+import type { SessionsPageMutationResult } from "./mutation-runner.ts";
 import type { SessionsPageRequestScope } from "./request-scope.ts";
 import { settleSelectedSession, type SessionDeleteRow } from "./selection.ts";
 import type { SessionsPageState } from "./sessions-page-state.types.ts";
@@ -35,7 +40,9 @@ import type { SessionsPageState } from "./sessions-page-state.types.ts";
 type SessionsPageMutationHost = {
   application: ApplicationContext;
   state: SessionsPageState;
-  captureScope: () => SessionsPageRequestScope | null;
+  captureScope: (
+    options?: Pick<SessionsPageRequestScope, "allowDeferred">,
+  ) => SessionsPageRequestScope | null;
   isCurrent: (scope: SessionsPageRequestScope) => boolean;
   refresh: (scope: SessionsPageRequestScope) => Promise<void>;
   listOptions: (context: ApplicationContext) => SessionListOptions;
@@ -57,18 +64,37 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     refresh: refreshSessionList,
     listOptions: sessionListOptions,
   } = host;
-  const sessionMutations = createSessionsMutationRunner({
-    isCurrent: isRequestScopeCurrent,
-    started: () => {
+  let pending = false;
+  const sessionMutations = {
+    get pending() {
+      return pending;
+    },
+    retire() {
+      pending = false;
+    },
+    async run(
+      scope: SessionsPageRequestScope,
+      mutate: () => Promise<SessionsPageMutationResult | void>,
+    ): Promise<SessionsPageMutationResult | void> {
       state.error = null;
-    },
-    settled: (outcome) => {
-      host.reconcile();
-      if (outcome && typeof outcome === "object") {
-        state.error = outcome.error;
+      pending = true;
+      let outcome: SessionsPageMutationResult | void = undefined;
+      try {
+        outcome = await mutate();
+      } catch (error) {
+        outcome = { status: "failed", error };
+      } finally {
+        if (isRequestScopeCurrent(scope)) {
+          pending = false;
+          host.reconcile();
+          if (outcome && typeof outcome === "object") {
+            state.error = outcome.error;
+          }
+        }
       }
+      return isRequestScopeCurrent(scope) ? outcome : "stale";
     },
-  });
+  };
 
   function publishRequestError(
     scope: SessionsPageRequestScope,
@@ -102,6 +128,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     for (const row of state.selectedSessions.values()) {
       const reason = mutationDisabledReason({
         method: "sessions.delete",
+        allowDeferred: true,
         params: {
           key: row.key,
           ...(row.archived === true ? { archivedOnly: true } : {}),
@@ -119,7 +146,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     if (rows.length === 0 || state.loading || sessionMutations.pending) {
       return;
     }
-    const scope = captureRequestScope();
+    const scope = captureRequestScope({ allowDeferred: true });
     if (!scope) {
       return;
     }
@@ -129,13 +156,48 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
         : "sessionsView.deleteSelectedConfirm",
       { count: String(rows.length) },
     );
-    if (
-      !(await confirmMutation(message, { signal: scope.signal })) ||
-      !isRequestScopeCurrent(scope)
-    ) {
+    if (!(await confirmDelete(message, rows, scope)) || !isRequestScopeCurrent(scope)) {
       return;
     }
     return deleteSessions(rows.filter((row) => state.selectedSessions.get(row.key) === row));
+  }
+
+  // Selections keep captured row copies across same-incarnation refreshes;
+  // automation facts come from the roster row for that incarnation when present.
+  function currentAutomationFlag(row: SessionDeleteRow): boolean | undefined {
+    const current = state.result?.sessions.find(
+      (entry) => entry.key === row.key && entry.sessionId === row.sessionId,
+    );
+    return (current ?? row).hasAutomation;
+  }
+
+  // Bound automations turn the delete confirm into an explicit pause warning.
+  function confirmDelete(
+    message: string,
+    rows: readonly SessionDeleteRow[],
+    scope: SessionsPageRequestScope,
+  ) {
+    const options = {
+      message,
+      confirmLabel: t("common.delete"),
+      danger: true,
+      signal: scope.signal,
+    };
+    return confirmWithBoundAutomations(
+      {
+        action: "delete",
+        sessions: rows.map((row) => ({
+          key: row.key,
+          agentId: sessionAgentId(row.key, scope.context),
+          label: normalizeOptionalString(row.label) ?? row.key,
+          hasAutomation: currentAutomationFlag(row),
+        })),
+        gateway: scope.gateway,
+        signal: scope.signal,
+      },
+      (notice) => showConfirmDialog(notice ? withBoundAutomationNotice(options, notice) : options),
+      Boolean,
+    );
   }
 
   function confirmMutation(
@@ -157,7 +219,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     if (rows.length === 0 || state.loading || sessionMutations.pending) {
       return;
     }
-    const scope = captureRequestScope();
+    const scope = captureRequestScope({ allowDeferred: true });
     if (!scope) {
       return;
     }
@@ -169,7 +231,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
       ...(row.archived === true ? { archivedOnly: true } : {}),
     }));
     for (const params of requests) {
-      if (mutationAccessError(scope, { method: "sessions.delete", params })) {
+      if (mutationAccessError(scope, { method: "sessions.delete", params, allowDeferred: true })) {
         return;
       }
     }
@@ -271,12 +333,14 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
 
   async function deleteSessionFromMenu(row: GatewaySessionRow) {
     const label = normalizeOptionalString(row.label) ?? row.key;
-    const scope = captureRequestScope();
+    const scope = captureRequestScope({ allowDeferred: true });
     if (
       !scope ||
-      !(await confirmMutation(t("sessionsView.deleteSessionConfirm", { session: label }), {
-        signal: scope.signal,
-      })) ||
+      !(await confirmDelete(
+        t("sessionsView.deleteSessionConfirm", { session: label }),
+        [row],
+        scope,
+      )) ||
       !isRequestScopeCurrent(scope)
     ) {
       return;
@@ -322,7 +386,9 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
   async function patchSession(
     key: string,
     patch: SessionPatch,
-    scope: SessionsPageRequestScope | null = captureRequestScope(),
+    scope: SessionsPageRequestScope | null = captureRequestScope({
+      allowDeferred: isSessionDeferredPatch(patch),
+    }),
     expectedSessionId?: string,
     options: { onConfirmed?: (result: SessionPatchResult) => void; sessionScope?: boolean } = {},
   ): Promise<SessionsPageMutationResult> {
@@ -343,6 +409,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     const row = state.result?.sessions.find((entry) => entry.key === key);
     const accessError = mutationAccessError(scope, {
       method: "sessions.patch",
+      allowDeferred: scope.allowDeferred && isSessionDeferredPatch(patch),
       sessionScope: options.sessionScope,
       session: row,
       params: {
@@ -360,6 +427,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
         scope.sessions.patch(key, patch, {
           agentId,
           ...(expectedSessionId ? { expectedSessionId } : {}),
+          ...(options.onConfirmed ? { onConfirmed: options.onConfirmed } : {}),
         });
       const patched =
         patch.archived === true
@@ -376,9 +444,6 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
               request,
             })
           : await request();
-      if (patched && !("queued" in patched)) {
-        options.onConfirmed?.(patched);
-      }
       if (!isRequestScopeCurrent(scope)) {
         return "stale";
       }

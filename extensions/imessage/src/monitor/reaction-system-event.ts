@@ -1,19 +1,17 @@
 import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 
-type IMessageReactionSystemEventDecision = {
-  text: string;
-  contextKey: string;
-  route: Parameters<typeof enqueueRoutedSystemEvent>[1];
-  reaction: {
-    targetGuid?: string;
-    action: "added" | "removed";
-    emoji: string;
-  };
-};
-
 export function enqueueIMessageReactionSystemEvent(params: {
-  decision: IMessageReactionSystemEventDecision;
+  decision: {
+    text: string;
+    contextKey: string;
+    route: Parameters<typeof enqueueRoutedSystemEvent>[1];
+    reaction: {
+      targetGuid?: string;
+      action: "added" | "removed";
+      emoji: string;
+    };
+  };
   runtime: RuntimeEnv;
 }): boolean {
   const { decision, runtime } = params;

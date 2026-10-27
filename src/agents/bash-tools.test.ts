@@ -1,7 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
 import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
@@ -16,6 +15,7 @@ import {
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
+import type { SpawnInput } from "../process/supervisor/types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
@@ -29,31 +29,11 @@ import { createExecTool, createProcessTool } from "./bash-tools.js";
 import { getBashShellConfig } from "./shell-utils.js";
 
 // mock-isolation: Hold normal follow-up admission so factory tests can inspect exact queued routing.
-vi.mock("../auto-reply/dispatch.js", () => ({
-  dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn<
-    typeof dispatchInboundMessageWithRoutedChannelDispatcher
-  >(async ({ replyOptions }) => {
-    const lifecycle = expectDefined(replyOptions?.turnAdoptionLifecycle, "notification lifecycle");
-    const signal = expectDefined(lifecycle.abortSignal, "notification cancellation");
-    lifecycle.onDeferred?.();
-    const onAbort = async () => {
-      try {
-        await lifecycle.onAbandoned?.();
-      } finally {
-        await lifecycle.onSettled?.();
-      }
-    };
-    signal.addEventListener("abort", () => void onAbort(), { once: true });
-    if (signal.aborted) {
-      await onAbort();
-    }
-    return {
-      deferredToActiveRun: "followup",
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    };
-  }),
-}));
+vi.mock("../auto-reply/dispatch.js", async () => {
+  const { createDeferredExecDispatchMock } =
+    await import("./bash-tools.exec-runtime.test-support.js");
+  return createDeferredExecDispatchMock();
+});
 
 vi.mock("../infra/channel-summary.js", () => ({
   buildChannelSummary: vi.fn(async () => []),
@@ -69,10 +49,8 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 vi.mock("../infra/shell-env.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
   return {
-    ...actual,
+    ...(await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js")),
     getShellPathFromLoginShell: vi.fn(() => null),
     resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
   };
@@ -82,16 +60,7 @@ vi.mock("../infra/shell-env.js", async () => {
 vi.mock("../process/supervisor/index.js", async () => {
   const { takeHeldSupervisorExit, createRunExit } =
     await import("./bash-tools.exec-runtime.test-support.js");
-  type SpawnInput = {
-    argv?: string[];
-    env?: NodeJS.ProcessEnv;
-    onStdout?: (chunk: string) => void;
-  };
-
-  const immediate = () =>
-    new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+  const { setImmediate: immediate } = await import("node:timers/promises");
   const splitCommands = (command: string) =>
     command
       .split(";")
@@ -120,7 +89,7 @@ vi.mock("../process/supervisor/index.js", async () => {
 
   return {
     getProcessSupervisor: () => ({
-      spawn: async (input: SpawnInput) => {
+      spawn: async (input: Partial<Extract<SpawnInput, { mode: "child" }>>) => {
         const exitGate = takeHeldSupervisorExit();
         const command = input.argv?.at(-1) ?? "";
         const output = commandOutput(command, input.env);
@@ -316,7 +285,7 @@ it("reads the unbounded offset log window", async () => {
   const log = await processAction({ action: "log", sessionId, offset: 30 });
   expect(log.details).toMatchObject({ totalLines: 201 });
   expect(text(log).split("\n")[0]).toBe("line-31");
-  expect(text(log).split("\n").at(-1)).toBe("line-201");
+  expect(text(log)).toMatch(/line-201\n\nProcess exited with code 0\.$/);
   expect(text(log)).not.toContain("showing last 200");
 });
 

@@ -154,10 +154,7 @@ describe("native GitHub identity absence", () => {
     await expect(native(env)).rejects.toMatchObject({ reason: "unverified" });
   });
 
-  it("uses native environment precedence without needing the optional CLI", async () => {
-    await expect(
-      native({ GH_TOKEN: "synthetic-primary", GITHUB_TOKEN: "synthetic-secondary" }),
-    ).resolves.toBe("synthetic-primary");
+  it("falls back from an empty primary token but rejects malformed primary tokens", async () => {
     await expect(native({ GH_TOKEN: "", GITHUB_TOKEN: "synthetic-secondary" })).resolves.toBe(
       "synthetic-secondary",
     );

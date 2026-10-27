@@ -28,6 +28,15 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     31: ["memory_index_sources", "memory_index_chunks"],
     // PostgreSQL-only function replacement; SQLite advances metadata only.
     32: [],
+    // PostgreSQL-only derived vector projection; SQLite advances metadata only.
+    33: [],
+    // PostgreSQL-only index ordering; SQLite advances metadata only.
+    34: [],
+    // PostgreSQL-only partial-index ordering; SQLite advances metadata only.
+    35: [],
+    // PostgreSQL-only exact-path index; SQLite advances metadata only.
+    36: [],
+    37: ["session_transcript_cold_archive_chunks"],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [
@@ -50,6 +59,19 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
       "local_workspace_manifest_nodes",
       "sqlite_stat1",
       "sqlite_stat4",
+    ],
+    // PostgreSQL-only index ordering; SQLite advances metadata only.
+    32: [],
+    // PostgreSQL-only partial-index ordering; SQLite advances metadata only.
+    33: [],
+    // Default cron identity is one machine-state binding; existing partition rows stay untouched.
+    34: ["config_machine_state"],
+    35: [
+      "local_workspace_projections",
+      // Online conversion later removes these retained pre-v35 rows.
+      "local_workspace_manifest_nodes",
+      "local_workspace_tree_packs",
+      "local_workspace_source_path_sets",
     ],
   },
 };

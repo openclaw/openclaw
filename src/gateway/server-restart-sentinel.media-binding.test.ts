@@ -231,45 +231,34 @@ describe("original requester media handoff", () => {
       }
     }));
 
-  it.each(["originating turn", "attempt-marker admission"] as const)(
-    "keeps media queued while the %s owns requester work",
-    (ownerTiming) =>
-      withMediaSession(async ({ wake, acquire, pending, dispatch, drain }) => {
-        let owner: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
-        const markAttempt = queue.markSessionDeliveryAttemptStarted;
-        if (ownerTiming === "attempt-marker admission") {
-          vi.spyOn(queue, "markSessionDeliveryAttemptStarted").mockImplementationOnce(
-            async (...args) => {
-              owner = await acquire();
-              return markAttempt(...args);
-            },
-          );
-        } else {
+  it("keeps media queued when requester work starts at attempt-marker admission", () =>
+    withMediaSession(async ({ wake, acquire, pending, dispatch, drain }) => {
+      let owner: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
+      const markAttempt = queue.markSessionDeliveryAttemptStarted;
+      vi.spyOn(queue, "markSessionDeliveryAttemptStarted").mockImplementationOnce(
+        async (...args) => {
           owner = await acquire();
-        }
-        const complete = async () => {
-          expect(await wake()).toEqual({ status: "queued" });
-          const [entry] = await pending();
-          assert(entry, "Expected queued media completion");
-          await drain(entry.id);
-          const [queued] = await pending();
-          expect(queued).toMatchObject({ id: entry.id, retryCount: 0 });
-          expect(queued?.deliveryStartedAt).toBeUndefined();
-          expect(dispatch).not.toHaveBeenCalled();
-          return entry.id;
-        };
-        let entryId: string;
-        try {
-          // Scheduling may inherit the originating turn's async admission context.
-          entryId = await (owner ? owner.run(complete) : complete());
-        } finally {
-          owner?.release();
-        }
+          return markAttempt(...args);
+        },
+      );
+      let entryId: string;
+      try {
+        expect(await wake()).toEqual({ status: "queued" });
+        const [entry] = await pending();
+        assert(entry, "Expected queued media completion");
+        entryId = entry.id;
         await drain(entryId);
-        expect(dispatch).toHaveBeenCalledOnce();
-        expect(await pending()).toEqual([]);
-      }),
-  );
+        const [queued] = await pending();
+        expect(queued).toMatchObject({ id: entryId, retryCount: 0 });
+        expect(queued?.deliveryStartedAt).toBeUndefined();
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        owner?.release();
+      }
+      await drain(entryId);
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(await pending()).toEqual([]);
+    }));
 
   it.each([
     "current",

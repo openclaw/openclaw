@@ -49,4 +49,4 @@ CREATE TABLE "team_reports_schema_migrations" (
   PRIMARY KEY ("id")
 );
 
-CREATE INDEX "idx_team_reports_runs_started" ON "team_reports_runs" (("started_at_ms") DESC NULLS LAST);
+CREATE INDEX "idx_team_reports_runs_started" ON "team_reports_runs" (("started_at_ms") DESC);

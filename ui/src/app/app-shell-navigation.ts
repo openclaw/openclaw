@@ -3,9 +3,13 @@ import {
   isSessionRouteId,
   pluginSlugCandidate,
   pluginTabSlugFromPath,
+  sameRouteLocation,
 } from "../app-route-paths.ts";
 import { isRouteId, type RouteId } from "../app-routes.ts";
+import { pathForSession } from "../app-session-path-builder.ts";
+import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
+import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import {
   findUiSessionRow,
   resolveSessionNavigationAgentId,
@@ -84,7 +88,8 @@ export class ShellNavigationOwner {
     if (!context || !isRouteId(routeId)) {
       return;
     }
-    this.host.closeNavDrawer({ restoreFocus: true });
+    // The new draft owns focus after it mounts; a drawer return must not reclaim it.
+    this.host.closeNavDrawer({ restoreFocus: routeId !== "new-session" });
     context.navigate(
       routeId,
       isSessionRouteId(routeId) ? this.chatNavigationOptions(routeId, options) : options,
@@ -185,6 +190,44 @@ export class ShellNavigationOwner {
     }
   }
 
+  synchronizeSessionUrl(): void {
+    const context = this.host.context;
+    const { routeId, location, committedRouteId, committedLocation, committedSessionKey } =
+      this.host.routeState;
+    if (
+      !context ||
+      context.gateway.snapshot.phase !== "connected" ||
+      this.host.routeState.sessionUrlPending ||
+      !isSessionRouteId(committedRouteId) ||
+      routeId !== committedRouteId ||
+      !committedLocation ||
+      !committedSessionKey ||
+      !sameRouteLocation(location, committedLocation) ||
+      !sameRouteLocation(window.location, committedLocation)
+    ) {
+      return;
+    }
+    const target = sessionRefFromPath(committedLocation.pathname, context.basePath);
+    // The settled route owns identity; use the same live name projection as the tab title.
+    const row = context.sessions.presentation.result?.sessions.find(
+      (candidate) => candidate.key === committedSessionKey,
+    );
+    if (target?.kind !== "short" || !row?.displayName?.trim()) {
+      return;
+    }
+    const pathname = pathForSession(committedRouteId, target.agentId, row.key, context.basePath, {
+      displayName: row.displayName,
+      shortIdLength: target.shortId.length,
+    });
+    if (!pathname || pathname === committedLocation.pathname) {
+      return;
+    }
+    // Rename only the settled route; pending navigation owns the address bar.
+    // Carry its resolved identity so a title change needs no discovery request.
+    prepareSessionNavigationHandoff(context.gateway, pathname, row.key);
+    context.replace(committedRouteId, { ...committedLocation, pathname });
+  }
+
   updateRouteState(routeState: ShellRouteState): void {
     this.host.routeState = routeState;
     if (routeState.routeId !== undefined) {
@@ -257,6 +300,7 @@ export class ShellNavigationOwner {
     if (context) {
       this.host.ensureAgentsList(context.gateway.snapshot);
     }
+    this.synchronizeSessionUrl();
     if (routeState.routeId && !isSettingsNavigationRoute(routeState.routeId)) {
       this.host.settingsSearchQuery = "";
       this.host.lastWorkspaceLocation = {

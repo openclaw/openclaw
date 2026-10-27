@@ -2,13 +2,11 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ControlUiHost,
-  ControlUiReplacement,
-} from "../../../../../src/plugin-sdk/control-ui.js";
+import type { ControlUiReplacement } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { ControlUiPluginCapability } from "../../../plugins/control-ui-capability.ts";
+import { createInertViewHost } from "../../../plugins/control-ui-view.test-support.ts";
 import "../../../plugins/control-ui-view.solid.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
@@ -23,7 +21,52 @@ import {
   type NativeMessageGroupOptions,
 } from "./chat-message-group-view.tsx";
 import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
+import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
+
+it("shares the mobile layout query while preserving initial and updated message actions", () => {
+  const query =
+    "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
+  const media = Object.assign(new EventTarget(), { matches: true });
+  const matchMedia = vi.fn((value: string) =>
+    value === query ? media : Object.assign(new EventTarget(), { matches: false }),
+  );
+  vi.stubGlobal("matchMedia", matchMedia);
+  const subscribe = vi.spyOn(media, "addEventListener");
+  const unsubscribe = vi.spyOn(media, "removeEventListener");
+  const message = { role: "user", content: "First message", timestamp: 1000 };
+  const group = createMessageGroup(message, "user", {
+    messages: [
+      { key: "first", message },
+      { key: "second", message: { ...message, content: "Second message", timestamp: 1001 } },
+    ],
+  });
+  const view = mountSolid(() => (
+    <>
+      <MessageGroup group={group} options={{ showReasoning: false, onReply: vi.fn() }} />
+      <MessageGroup
+        group={{ ...group, key: "another-group" }}
+        options={{ showReasoning: false, onReply: vi.fn() }}
+      />
+    </>
+  ));
+  try {
+    expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(0);
+    expect(view.container.querySelectorAll(".chat-message-footer")).toHaveLength(2);
+    flush();
+    expect(matchMedia.mock.calls.filter(([value]) => value === query)).toHaveLength(1);
+    expect(subscribe).toHaveBeenCalledOnce();
+    media.matches = false;
+    media.dispatchEvent(new Event("change"));
+    flush();
+    expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(2);
+    view.unmount();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  } finally {
+    view.unmount();
+    vi.unstubAllGlobals();
+  }
+});
 
 it.each([false, true])(
   "does not present a partial response group as complete usage (unavailable: %s)",
@@ -180,7 +223,7 @@ it("keeps distinct peer avatars and focused message content across group updates
   expect(avatars[0]).not.toBe(avatars[1]);
   avatars.forEach((avatar, index) => {
     expect(avatar.closest(".chat-bubble")).toBe(bubbles[index]);
-    expect(avatar.querySelector('[aria-label="Peer"]')).not.toBeNull();
+    expect(avatar.getAttribute("aria-label")).toBe("Peer");
   });
   const control = view.getByRole("button", { name: "Open image Peer image" });
   const image = control.querySelector("img")!;
@@ -213,7 +256,7 @@ it("keeps distinct peer avatars and focused message content across group updates
   expect(updatedAvatars).toHaveLength(2);
   expect(updatedAvatars[0]).not.toBe(updatedAvatars[1]);
   expect(
-    updatedAvatars.every((avatar) => avatar.querySelector('[aria-label="Peer Updated"]') !== null),
+    updatedAvatars.every((avatar) => avatar.getAttribute("aria-label") === "Peer Updated"),
   ).toBe(true);
 });
 
@@ -265,14 +308,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   const listeners = new Set<() => void>();
   const abort = new AbortController();
   // SAFETY: This mounted-view fixture supplies the service objects scoped by the host; it never calls their methods.
-  const pluginHost = {
-    signal: abort.signal,
-    sessions: {},
-    agents: {},
-    navigation: {},
-    ui: {},
-    components: {},
-  } as ControlUiHost;
+  const pluginHost = createInertViewHost(abort.signal);
   let selected: ControlUiReplacement | undefined;
   const reportError = vi.fn();
   const plugins: ControlUiPluginCapability = {
@@ -538,6 +574,34 @@ describe("owned message controls", () => {
     );
     expect(document.activeElement).toBe(timestamp);
   });
+});
+
+it("prepares the detailed timestamp only when metadata exposes its label", () => {
+  const title = new Date(1000).toLocaleString([], {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "short",
+  });
+  const calendarFormat = vi.spyOn(Date.prototype, "toLocaleString");
+  const [metadata, setMetadata] = createSignal(false);
+  const view = mountSolid(() => (
+    <ChatTimestamp timestamp={1000} metadata={metadata() ? [<span>Usage</span>] : undefined} />
+  ));
+  try {
+    expect(calendarFormat.mock.calls.filter(([, options]) => options?.weekday)).toHaveLength(0);
+    setMetadata(true);
+    flush();
+    expect(view.getByRole("button").getAttribute("aria-label")).toContain(title);
+    expect(calendarFormat.mock.calls.filter(([, options]) => options?.weekday)).toHaveLength(1);
+  } finally {
+    view.unmount();
+    calendarFormat.mockRestore();
+  }
 });
 
 it("leaves timestamp attributes untouched when only message usage changes", () => {

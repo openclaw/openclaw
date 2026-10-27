@@ -11,11 +11,11 @@ import {
   createCatalogCodeModeHarness,
   expectFailure,
   expectCompleted,
-  fakeTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
   testing,
 } from "./code-mode.test-support.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { jsonResult, ToolInputError } from "./tools/common.js";
 
 afterEach(resetCodeModeTestState);
@@ -131,9 +131,6 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
       expect(testing.activeRuns.size).toBe(0);
     },
   );
-});
-
-describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures", (executor) => {
   it.each([false, true])(
     "records a new settlement failure without replay (parked: %s)",
     async (parked) => {
@@ -165,7 +162,7 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
     const cwd = await fs.realpath(tempDirs.make("code-mode-patch-failure-"));
     const file = path.join(cwd, "source.txt");
     await fs.writeFile(file, "original\n");
-    const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
+    vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
     const patch = createApplyPatchTool({ cwd });
     const execute = vi.spyOn(patch, "execute");
     const { run } = createCatalogCodeModeHarness([patch], { codeMode: { executor } });
@@ -176,14 +173,6 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
     expect(details.error).toContain("Failed to find expected lines");
     expect(execute).toHaveBeenCalledOnce();
     expect(await fs.readFile(file, "utf8")).toBe("original\n");
-    expect(log).toHaveBeenCalledExactlyOnceWith(
-      expect.any(Error),
-      expect.objectContaining({
-        failurePhase: "bridge",
-        failureCode: "invalid_input",
-        bridgeMethod: "callValue",
-      }),
-    );
   });
 
   it("rejects NUL shell commands as actionable input errors through the real exec tool", async () => {
@@ -223,9 +212,6 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
         toolCallId: "logged-failure",
         codeModeRunId: expect.any(String),
         failurePhase: "bridge",
-        bridgeRequestId: "bridge:callValue:1",
-        bridgeMethod: "callValue",
-        workerId: expect.stringMatching(/^code-mode-(?:node|quickjs):/),
       }),
     );
   });

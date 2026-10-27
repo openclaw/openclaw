@@ -31,23 +31,13 @@ export type FeishuDriveCommentCard = {
 };
 
 export class FeishuReplyCommentError extends Error {
-  httpStatus?: number;
   feishuCode?: number | string;
-  feishuMsg?: string;
   feishuLogId?: string;
 
-  constructor(params: {
-    message: string;
-    httpStatus?: number;
-    feishuCode?: number | string;
-    feishuMsg?: string;
-    feishuLogId?: string;
-  }) {
+  constructor(params: { message: string; feishuCode?: number | string; feishuLogId?: string }) {
     super(params.message);
     this.name = "FeishuReplyCommentError";
-    this.httpStatus = params.httpStatus;
     this.feishuCode = params.feishuCode;
-    this.feishuMsg = params.feishuMsg;
     this.feishuLogId = params.feishuLogId;
   }
 }
@@ -211,8 +201,7 @@ function readDocsLinkUrl(element: Record<string, unknown>): string | undefined {
     normalizeString(docsLink?.url) ||
     normalizeString(docsLink?.link) ||
     normalizeString(element.url) ||
-    normalizeString(element.link) ||
-    undefined
+    normalizeString(element.link)
   );
 }
 
@@ -224,8 +213,7 @@ function readMentionUserId(element: Record<string, unknown>): string | undefined
     normalizeString(mention?.user_id) ||
     normalizeString(mention?.open_id) ||
     normalizeString(element.mention_user) ||
-    normalizeString(element.user_id) ||
-    undefined
+    normalizeString(element.user_id)
   );
 }
 

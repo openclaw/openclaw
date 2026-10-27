@@ -77,8 +77,8 @@ resolver. Return `null` to skip the flush for provider-specific reasons.
 
 There are two resolver fields:
 
-- `flushPlanResolver` returns a complete `MemoryFlushPlan` or `null`. Its
-  contract is unchanged from earlier releases. Memory Core uses it.
+- `flushPlanResolver` returns a complete `MemoryFlushPlan` or `null`. Memory
+  Core uses it.
 - `providerFlushPlanResolver` returns a plan the host completes: a
   `MemoryFlushFilePlanDraft` (a complete `MemoryFlushPlan` is one such draft)
   or a `MemoryFlushToolsPlan`. When a plugin registers both, the host uses
@@ -86,12 +86,10 @@ There are two resolver fields:
 
 Each plan has `prompt`, `systemPrompt`, and one persistence arm. In plans from
 `providerFlushPlanResolver`, the `softThresholdTokens`,
-`forceFlushTranscriptBytes`, `reserveTokensFloor`, and `model` fields are
-deliberate provider overrides. The host fills omitted timing fields from its
-resolved timing, and fills an omitted `model` from `memoryFlush.model` for the
-tools arm only; a file plan without `model` keeps the session's model. A `model` override pins the turn
-to an exact `provider/model` reference, such as `ollama/qwen3:8b`, without
-inheriting the active fallback chain.
+`forceFlushTranscriptBytes`, and `reserveTokensFloor` fields are deliberate
+provider overrides. The host fills omitted timing fields from its resolved
+timing. All flush turns use the active session model and its normal fallback
+chain; resolvers do not select a separate model.
 
 Choose exactly one persistence arm:
 
@@ -280,10 +278,21 @@ type MemoryAudience =
   own agent only when the spawn that crossed agents was owner-attributed and the
   root is the owner's direct chat. Conversation audience never crosses agents;
   that lineage produces no audience.
-- Operator-created root sessions record a `direct` chat type at creation, so
-  sessions started later by `sessions_send`, cron, or the `agent` method resolve
-  an audience. The turn's owner status still selects `owner-private` or
-  `conversation`.
+- Operator-created root sessions record a `direct` chat type at creation under
+  every `session.dmScope` and `session.scope`, so sessions started later by
+  `sessions_send`, cron, or the `agent` method resolve an audience. Children,
+  forks, plugin-owned sessions, and incognito sessions do not take this stamp.
+  The turn's owner status still selects `owner-private` or `conversation`.
+  `openclaw agent exec` records the same `direct` type on the root session it
+  creates and runs its turn as the owner, because local CLI access is Gateway
+  owner access, so its memory tools receive `owner-private` audience.
+  `openclaw doctor --fix` records the same `direct` type on dashboard chats
+  created before that stamp existed: operator-created rows with a generated
+  `dashboard:` key, grouped under their agent's main session, and with no spawn,
+  fork, plugin owner, incognito boundary, or external delivery route. Group and
+  channel sessions never match. Dashboard roots created without the stamp under
+  another `dmScope` are not grouped under main, so doctor leaves them unchanged;
+  create a new session to give them an audience.
 - Missing, malformed, cyclic, or stale lineage produces no audience. Unknown or
   missing durable chat type also produces no audience. The Gateway logs every
   denial as `memory_audience_denied` with the session key and reason.

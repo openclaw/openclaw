@@ -38,7 +38,6 @@ import type {
 import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type { AgentDeletionJournalPurpose } from "./agent-deletion-journal.types.js";
 import type {
-  SharedGitHubPublicationReadInput,
   GitHubPublicationReceiptTarget,
   RepositoryGitHubPublicationReceiptTarget,
 } from "./github-publication-read.types.js";
@@ -92,6 +91,10 @@ export type OpenClawStateReadCommand =
   | {
       type: "operatorApprovals.history";
       input: ListTerminalOperatorApprovalsInput;
+    }
+  | {
+      type: "operatorApprovals.pendingSnapshot";
+      input: { cursor?: string };
     }
   | {
       type: "operatorApprovals.pending";
@@ -161,6 +164,7 @@ export type OpenClawStateReadCommand =
       type: "userModelAccounts.catalog";
       selection: import("./user-model-accounts.js").PersonalCatalogSelection;
     }
+  | { type: "userPreferences.sessionPins" }
   | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }
   | { type: "userPreferences.read"; profileId: string; keys?: readonly string[] }
   | {
@@ -168,7 +172,6 @@ export type OpenClawStateReadCommand =
       publicationKind: "shared" | "personal";
       requestId: string;
     }
-  | { type: "githubPublication.sharedObservation"; input: SharedGitHubPublicationReadInput }
   | { type: "githubPublication.request"; requestId: string }
   | { type: "githubPublication.knownPullRequestUrls"; input: GitHubPublicationReceiptTarget }
   | {

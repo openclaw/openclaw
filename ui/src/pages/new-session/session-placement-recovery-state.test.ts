@@ -55,15 +55,7 @@ describe("pending session placement recovery state", () => {
     const context = {};
     const palette = new PendingSessionPlacementRecoveryState(() => context);
     const page = new PendingSessionPlacementRecoveryState(() => context);
-    const request = palette.stageCreate({
-      agentId: "main",
-      target: { kind: "device", deviceId: "runner" },
-      message: "palette task",
-      gatewayUrl,
-      recoveryScope,
-      createParams: { agentId: "main", message: "", worktree: true, worktreeSource: "empty" },
-    });
-    expect(request).not.toBeNull();
+    expect(stageCreate(palette, { message: "palette task" })).not.toBeNull();
     expect(page.restore(gatewayUrl, recoveryScope)).toBeNull();
     expect(palette.restore(gatewayUrl, recoveryScope)?.message).toBe("palette task");
     palette.releaseClaim();
@@ -82,34 +74,20 @@ describe("pending session placement recovery state", () => {
     ).toBe(expected);
   });
 
-  it.each([
-    ["permission mode", { permissionMode: "guarded" }, { permissionMode: "guarded" }],
-    [
-      "model/runtime",
-      {
-        agentId: "cloud",
-        message: "",
-        titleSource: "keep the selected runtime",
-        model: "openai/gpt-5.6-sol",
-        agentRuntime: "codex",
-        worktree: true,
-      },
-      { model: "openai/gpt-5.6-sol", agentRuntime: "codex" },
-    ],
-    [
-      "explicit names",
-      { displayName: "Repair naming", worktreeName: "my-explicit-branch" },
-      { displayName: "Repair naming", worktreeName: "my-explicit-branch" },
-    ],
-  ] as const)("preserves %s through staging, storage, and capture", (kind, params, expected) => {
+  it("preserves permissions, runtime and explicit names through staging, storage, and capture", () => {
     const pending = new PendingSessionPlacementRecoveryState();
+    const expected = {
+      permissionMode: "guarded" as const,
+      model: "openai/gpt-5.6-sol",
+      agentRuntime: "codex",
+      displayName: "Repair naming",
+      worktreeName: "my-explicit-branch",
+    };
     const createParams = stageCreate(pending, {
-      target:
-        kind === "model/runtime" ? { kind: "auto-device" } : { kind: "profile", profileId: "aws" },
-      attachments: kind === "explicit names" ? [{ type: "image" }] : undefined,
-      createParams: { agentId: "cloud", message: "", worktree: true, ...params },
+      target: { kind: "auto-device" },
+      attachments: [{ type: "image" }],
+      createParams: { agentId: "cloud", message: "", worktree: true, ...expected },
     });
-    expect(createParams).not.toBeNull();
     expect(createParams).toMatchObject(expected);
     const snapshot = {
       phase: "creating",
@@ -124,12 +102,7 @@ describe("pending session placement recovery state", () => {
     "does not promote over a replacement submission (canonical key changes: %s)",
     (changesKey) => {
       const pending = new PendingSessionPlacementRecoveryState();
-      expect(
-        stageCreate(pending, {
-          target: { kind: "device", deviceId: "device-1" },
-          message: "old input",
-        }),
-      ).not.toBeNull();
+      expect(stageCreate(pending, { message: "old input" })).not.toBeNull();
       const previous = pending.capture();
       expect(previous).not.toBeNull();
       const replacement = { ...previous!, messageId: "new-submission", message: "new input" };
@@ -137,9 +110,7 @@ describe("pending session placement recovery state", () => {
       expect(
         pending.promoteToDispatching(changesKey ? "agent:cloud:canonical" : pending.sessionKey),
       ).toBe(false);
-      expect(
-        readSessionPlacementRecovery(pending.gatewayUrl, pending.recoveryScope, pending.sessionKey),
-      ).toEqual(replacement);
+      expect(readRecovery(pending.sessionKey)).toEqual(replacement);
     },
   );
 
@@ -220,8 +191,8 @@ describe("pending session placement recovery state", () => {
     expect(createParams).not.toHaveProperty("key");
     expect(pending.persistent).toBe(false);
     expect(readRecovery(pending.sessionKey)).toBeNull();
-    expect(pending.promoteToDispatching("agent:cloud:dashboard:server-key")).toBe(true);
-    expect(pending.sessionKey).toBe("agent:cloud:dashboard:server-key");
+    expect(pending.promoteToDispatching(canonicalSessionKey)).toBe(true);
+    expect(pending.sessionKey).toBe(canonicalSessionKey);
     expect(readRecovery(canonicalSessionKey)).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Normalizes plugin config and resolves effective enablement, slots, and activation sources. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import {
   resolveMemorySlotDecisionShared,
   resolvePluginActivationStateShared,
@@ -55,12 +55,22 @@ export const createNormalizedPluginsConfig = (
 ): NormalizedPluginsConfig => normalizePluginsConfigWithResolverCore(config, normalizePluginId);
 
 export const normalizePluginsConfig = (
-  config?: OpenClawConfig["plugins"],
+  input?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
-  if (preparedRuntimePluginsConfig && preparedRuntimePluginsConfig.source === config) {
+  if (preparedRuntimePluginsConfig && preparedRuntimePluginsConfig.source === input) {
     return preparedRuntimePluginsConfig.value;
   }
-  return createNormalizedPluginsConfig(config);
+  const config = input ?? EMPTY_PLUGINS_CONFIG;
+  if (!isDeeplyFrozenPlainData(config)) {
+    return createNormalizedPluginsConfig(config);
+  }
+  // Captured configs are frozen and cannot change in place, so they share one frozen policy.
+  let value = frozenPluginsConfigs.get(config);
+  if (!value) {
+    value = createSharedNormalizedPluginsConfig(config);
+    frozenPluginsConfigs.set(config, value);
+  }
+  return value;
 };
 
 export type ContextEngineOwnerMetadata = {
@@ -71,25 +81,39 @@ export type ContextEngineOwnerMetadata = {
 let preparedRuntimePluginsConfig:
   | { source: OpenClawConfig["plugins"]; value: NormalizedPluginsConfig }
   | undefined;
+const EMPTY_PLUGINS_CONFIG = Object.freeze({});
+const frozenPluginsConfigs = new WeakMap<
+  NonNullable<OpenClawConfig["plugins"]>,
+  NormalizedPluginsConfig
+>();
 
-/** Runtime config publication owns replacement, including same-object refreshes and teardown. */
-export function prepareRuntimePluginsConfig(config: OpenClawConfig | null): void {
-  if (!config) {
-    preparedRuntimePluginsConfig = undefined;
-    return;
-  }
-  const value = createNormalizedPluginsConfig(config.plugins);
+function createSharedNormalizedPluginsConfig(
+  config: OpenClawConfig["plugins"],
+): NormalizedPluginsConfig {
+  const value = createNormalizedPluginsConfig(config);
   for (const entry of Object.values(value.entries)) {
-    // Plugin payloads retain their original owner; only normalized policy is shared and frozen.
-    const { config: _config, ...policy } = entry;
-    freezeJsonSnapshot(policy);
+    // Normalization owns these fixed-depth policy fields; plugin payloads retain their owner.
+    Object.freeze(entry.hooks?.timeouts);
+    Object.freeze(entry.hooks);
+    Object.freeze(entry.subagent?.allowedModels);
+    Object.freeze(entry.subagent);
+    Object.freeze(entry.llm?.allowedModels);
+    Object.freeze(entry.llm?.allowedCompletionModels);
+    Object.freeze(entry.llm);
     Object.freeze(entry);
   }
   Object.freeze(value.entries);
   for (const field of [value.allow, value.deny, value.loadPaths, value.slots]) {
     Object.freeze(field);
   }
-  preparedRuntimePluginsConfig = { source: config.plugins, value: Object.freeze(value) };
+  return Object.freeze(value);
+}
+
+/** Runtime config publication owns replacement, including same-object refreshes and teardown. */
+export function prepareRuntimePluginsConfig(config: OpenClawConfig | null): void {
+  preparedRuntimePluginsConfig = config
+    ? { source: config.plugins, value: createSharedNormalizedPluginsConfig(config.plugins) }
+    : undefined;
 }
 
 /** Resolves the enabled plugin selected to own the context-engine slot. */
@@ -327,7 +351,8 @@ export function isTestDefaultMemorySlotDisabled(
 export function resolveEffectivePluginActivationState(params: {
   id: string;
   origin: PluginOrigin;
-  config: NormalizedPluginsConfig;
+  /** Omit when the runtime config already owns prepared plugin policy. */
+  config?: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
   enabledByDefault?: boolean;
   activationSource?: PluginActivationConfigSource;
@@ -336,6 +361,7 @@ export function resolveEffectivePluginActivationState(params: {
 }): PluginActivationState {
   return resolvePluginActivationStateShared({
     ...params,
+    config: params.config ?? normalizePluginsConfig(params.rootConfig?.plugins),
     allowBundledChannelExplicitBypassesAllowlist: true,
   });
 }

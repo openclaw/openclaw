@@ -37,6 +37,7 @@ import {
   hermeticEnv,
   readRequiredPersistedInstalledPluginIndex,
 } from "../../../../src/commands/doctor-plugin-registry.test-support.js";
+import { listDirectoryTreeStrictSync } from "../../../../src/infra/directory-walk.js";
 import { resolveInstalledPluginIndexStorePath } from "../../../../src/plugins/installed-plugin-index-store-path.js";
 import { writePersistedInstalledPluginIndex } from "../../../../src/plugins/installed-plugin-index-store-write.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../../../src/state/openclaw-state-db.js";
@@ -303,6 +304,106 @@ async function waitForExit(
 }
 
 describe("package-openclaw-for-docker", () => {
+  it.each([
+    { pnpmPack: false, rootDecoy: true },
+    { pnpmPack: true, rootDecoy: true },
+    { pnpmPack: true, rootDecoy: false },
+  ])(
+    "packs a selected plugin's patched bundle and installed dependency closure (pnpm=$pnpmPack, root copy=$rootDecoy)",
+    async ({ pnpmPack, rootDecoy }) => {
+      const { sourceDir, outputDir, pluginPackage } = createSelectedPluginPackageFixture();
+      const codecStore = tempDirs.make("openclaw-plugin-codec-store-");
+      const codecRoot = path.join(codecStore, "node_modules/fixture-codec");
+      const supportRoot = path.join(codecStore, "node_modules/codec-support");
+      const pluginRoot = path.join(sourceDir, "extensions/demo");
+      const selectedManifest = {
+        ...pluginPackage,
+        dependencies: { ...pluginPackage.dependencies, "fixture-codec": "1.0.0" },
+        bundleDependencies: ["fixture-codec"],
+      };
+      for (const relative of ["extensions/demo", "dist/extensions/demo"]) {
+        fs.writeFileSync(
+          path.join(sourceDir, relative, "package.json"),
+          JSON.stringify({
+            ...selectedManifest,
+            openclaw: {
+              ...selectedManifest.openclaw,
+              extensions: [relative.startsWith("dist/") ? "./index.js" : "./index.ts"],
+            },
+          }),
+        );
+      }
+      fs.mkdirSync(path.join(codecRoot, "src/node_modules/internal"), { recursive: true });
+      fs.mkdirSync(supportRoot);
+      fs.mkdirSync(path.join(pluginRoot, "node_modules"), { recursive: true });
+      const codecManifest = JSON.stringify({
+        name: "fixture-codec",
+        version: "1.0.0",
+        main: "src/index.cjs",
+        dependencies: { "codec-support": "1.0.0" },
+        optionalDependencies: { "unavailable-platform-codec": "1.0.0" },
+      });
+      fs.writeFileSync(path.join(codecRoot, "package.json"), codecManifest);
+      fs.writeFileSync(
+        path.join(codecRoot, "src/index.cjs"),
+        'module.exports = require("internal");',
+      );
+      fs.writeFileSync(
+        path.join(codecRoot, "src/node_modules/internal/index.js"),
+        'module.exports = "patched:" + require("codec-support").value;',
+      );
+      fs.writeFileSync(
+        path.join(supportRoot, "package.json"),
+        JSON.stringify({
+          name: "codec-support",
+          version: "1.0.0",
+          main: "index.cjs",
+          dependencies: { "fixture-codec": "1.0.0" },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(supportRoot, "index.cjs"),
+        'exports.value = require.resolve("fixture-codec").endsWith(require("node:path").join("src", "index.cjs")) ? "ready" : "wrong";',
+      );
+      const codecLink = path.join(pluginRoot, "node_modules/fixture-codec");
+      fs.symlinkSync(codecRoot, codecLink, "junction");
+      if (rootDecoy) {
+        // An ordinary root dependency must not replace the plugin's patched bytes.
+        const decoy = path.join(sourceDir, "node_modules/fixture-codec");
+        fs.mkdirSync(decoy);
+        fs.writeFileSync(
+          path.join(decoy, "package.json"),
+          JSON.stringify({ name: "fixture-codec", version: "1.0.0", main: "index.cjs" }),
+        );
+        fs.writeFileSync(path.join(decoy, "index.cjs"), 'module.exports = "unpatched";');
+      }
+      const originalLink = fs.readlinkSync(codecLink);
+      const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+        ...skipDocsMapLifecycle,
+        prepareChangelog: async () => {},
+        restoreChangelog: async () => {},
+        pnpmPack,
+        bundlePlugins: ["demo"],
+      });
+      const extractDir = tempDirs.make("openclaw-plugin-codec-extract-");
+      await tar.x({ file: tarball, cwd: extractDir });
+      const packedRoot = path.join(extractDir, "package");
+      const { createRequire } = await import("node:module");
+      const requirePacked = createRequire(path.join(packedRoot, "package.json"));
+      expect(requirePacked("fixture-codec")).toBe("patched:ready");
+      expect(fs.readlinkSync(codecLink)).toBe(originalLink);
+      expect(fs.readFileSync(path.join(codecRoot, "package.json"), "utf8")).toBe(codecManifest);
+      expect(
+        fs.existsSync(
+          path.join(
+            packedRoot,
+            "node_modules/fixture-codec/node_modules/unavailable-platform-codec",
+          ),
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("converges an existing same-version npm plugin onto the selected distribution", async () => {
     const { sourceDir, outputDir, files, pluginPackage } = createSelectedPluginPackageFixture();
     const selected = await packOpenClawPackageForDocker(sourceDir, outputDir, {
@@ -766,6 +867,8 @@ describe("package-openclaw-for-docker", () => {
       "cli-invocation.mjs",
       "cli-parent-lifetime.mjs",
       "gateway-shutdown-budget.mjs",
+      "node-runtime-env.mjs",
+      "runtime-process-bootstrap.generated.mjs",
       "packages/normalization-core/src/number-coercion.ts",
       "packages/normalization-core/src/string-coerce.ts",
       "scripts/package-openclaw-for-docker.mts",
@@ -795,6 +898,8 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
       "scripts/lib/windows-taskkill.mjs",
       "src/infra/npm-command.ts",
+      "src/infra/runtime-process-dependency-url.ts",
+      "src/infra/runtime-process-manifest.ts",
       "src/shared/non-packaged-plugin-dirs.ts",
     ];
     try {
@@ -1094,6 +1199,53 @@ describe("package-openclaw-for-docker", () => {
     expect(entries).not.toContain("package/dist/runtime-OLDHASH.js");
   });
 
+  it.each([false, true])(
+    "packs hardlinked bundled assets as regular files (pnpm=%s)",
+    async (pnpmPack) => {
+      const sourceDir = createPackageSourceFixture("openclaw-package-hardlinks-source-");
+      const outputDir = tempDirs.make("openclaw-package-hardlinks-output-");
+      const bundleDir = path.join(sourceDir, "node_modules/fixture-bundle");
+      fs.mkdirSync(bundleDir);
+      fs.mkdirSync(path.join(sourceDir, "dist"));
+      fs.writeFileSync(path.join(sourceDir, "dist/index.js"), "export {};\n");
+      fs.writeFileSync(
+        path.join(sourceDir, "package.json"),
+        JSON.stringify({
+          name: "openclaw",
+          version: "2026.8.26",
+          files: ["dist"],
+          dependencies: { "fixture-bundle": "1.0.0" },
+          bundleDependencies: ["fixture-bundle"],
+        }),
+      );
+      fs.writeFileSync(
+        path.join(bundleDir, "package.json"),
+        '{"name":"fixture-bundle","version":"1.0.0"}',
+      );
+      const contents = "body { color: red; }\n";
+      const assets = ["original.css", "duplicate.css"] as const;
+      fs.writeFileSync(path.join(bundleDir, assets[0]), contents);
+      fs.linkSync(path.join(bundleDir, assets[0]), path.join(bundleDir, assets[1]));
+
+      const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+        ...skipDocsMapLifecycle,
+        pnpmPack,
+        prepareChangelog: async () => {},
+        restoreChangelog: async () => {},
+      });
+      const types = new Map<string, string>();
+      await tar.t({ file: tarball, onentry: (entry) => types.set(entry.path, entry.type) });
+      const extracted = tempDirs.make("openclaw-package-hardlinks-extracted-");
+      await tar.x({ file: tarball, cwd: extracted });
+      for (const asset of assets) {
+        const relativePath = `package/node_modules/fixture-bundle/${asset}`;
+        expect(types.get(relativePath)).toBe("File");
+        expect(fs.readFileSync(path.join(extracted, relativePath), "utf8")).toBe(contents);
+        expect(fs.statSync(path.join(bundleDir, asset)).nlink).toBe(2);
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32").each([false, true])(
     "reports portable artifacts from owner-only sources (pnpm=%s)",
     async (pnpmPack) => {
@@ -1221,8 +1373,8 @@ describe("package-openclaw-for-docker", () => {
       expect(receipt[0].files).toHaveLength(files.length);
       expect(fs.readdirSync(outputDir).toSorted()).toEqual(["openclaw-current.tgz", "pack.json"]);
       // Inspecting the final archive must not copy it into the caller's npm cache.
-      const cachedArtifactCopies = fs
-        .readdirSync(callerNpmCache, { encoding: "utf8", recursive: true })
+      const cachedArtifactCopies = listDirectoryTreeStrictSync(callerNpmCache)
+        .map((walkEntry) => walkEntry.relativePath)
         .map((entry) => path.join(callerNpmCache, entry))
         .filter((entry) => fs.statSync(entry).isFile() && fs.readFileSync(entry).equals(bytes));
       expect(cachedArtifactCopies).toEqual([]);
@@ -1289,6 +1441,11 @@ describe("package-openclaw-for-docker", () => {
                 },
                 name: "@openclaw/ai",
                 version: "2026.6.17",
+                peerDependencies: { "@opentelemetry/api": "^1.9.0", retained: "1.0.0" },
+                peerDependenciesMeta: {
+                  "@opentelemetry/api": { optional: true },
+                  retained: { optional: true },
+                },
               })}\n`,
             );
             fs.writeFileSync(path.join(destination, "runtime.js"), "export {};\n");
@@ -1313,8 +1470,14 @@ describe("package-openclaw-for-docker", () => {
       expect(fs.existsSync(path.join(installedAiPath, "runtime.js"))).toBe(true);
       const stagedAiPackageJson = JSON.parse(
         fs.readFileSync(path.join(installedAiPath, "package.json"), "utf8"),
-      ) as { dependencies?: Record<string, string> };
+      ) as {
+        dependencies?: Record<string, string>;
+        peerDependencies?: Record<string, string>;
+        peerDependenciesMeta?: Record<string, { optional: boolean }>;
+      };
       expect(stagedAiPackageJson.dependencies).toBeUndefined();
+      expect(stagedAiPackageJson.peerDependencies).toEqual({ retained: "1.0.0" });
+      expect(stagedAiPackageJson.peerDependenciesMeta).toEqual({ retained: { optional: true } });
 
       await cleanup();
       expect(fs.readFileSync(packageJsonPath, "utf8")).toBe(originalPackageJson);
@@ -1570,7 +1733,7 @@ describe("package-openclaw-for-docker", () => {
     expect(calls).toEqual([
       `prepare-docs:${sourceDir}`,
       `prepare:${sourceDir}`,
-      `npm:pack --silent --ignore-scripts --pack-destination ${outputDir} --json=false:${sourceDir}`,
+      `npm:pack --loglevel=error --ignore-scripts --pack-destination ${outputDir} --json=false:${sourceDir}`,
       `restore-changelog:${sourceDir}`,
       `restore-docs:${sourceDir}`,
     ]);

@@ -1,9 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildCrabboxGateTransport } from "../../scripts/pr-lib/crabbox-gate-transport.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const source = readFileSync("scripts/crabbox-untrusted-bootstrap.sh", "utf8");
@@ -12,8 +11,7 @@ const historicalPnpmSpec =
 const roots = useAutoCleanupTempDirTracker(afterEach);
 
 function executable(path: string, body: string) {
-  writeFileSync(path, body);
-  chmodSync(path, 0o755);
+  writeFileSync(path, body, { mode: 0o755 });
 }
 
 function fixture() {
@@ -138,26 +136,22 @@ exit 1
     install,
     corepack,
     spec,
-    run(extraEnv: NodeJS.ProcessEnv = {}, head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
+    run(
+      extraEnv: NodeJS.ProcessEnv = {},
+      head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      exit = 0,
+    ) {
       return spawnSync(
         "bash",
-        [scriptPath, head, "/bin/sh", "-c", `echo ran >> ${JSON.stringify(join(root, "ran"))}`],
+        [
+          scriptPath,
+          head,
+          "/bin/sh",
+          "-c",
+          `echo ran >> ${JSON.stringify(join(root, "ran"))}; exit ${exit}`,
+        ],
         { cwd: root, encoding: "utf8", env: { ...process.env, ...extraEnv } },
       );
-    },
-    runGate(command: string) {
-      const transport = buildCrabboxGateTransport({
-        bootstrap: script,
-        command,
-        headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      });
-      const launcher = join(root, "launcher.sh");
-      writeFileSync(launcher, transport.input);
-      return spawnSync("/bin/bash", [launcher, ...transport.args], {
-        cwd: root,
-        encoding: "utf8",
-        env: process.env,
-      });
     },
     downloads: () => (exists("downloads") ? read("downloads") : ""),
   };
@@ -165,10 +159,10 @@ exit 1
 
 describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
   it.skipIf(process.platform !== "linux").each([37])(
-    "streams the full bootstrap with child exit %i and removes its isolated home",
+    "preserves child exit %i and removes its isolated home",
     (exitCode) => {
       const f = fixture();
-      const result = f.runGate(`set -euo pipefail; /bin/bash -c 'exit ${exitCode}'`);
+      const result = f.run({}, undefined, exitCode);
       expect(result.status, result.stderr).toBe(exitCode);
       expect(f.read("install-log")).toBe("frozen\n");
       expect(existsSync(f.read("install-home"))).toBe(false);

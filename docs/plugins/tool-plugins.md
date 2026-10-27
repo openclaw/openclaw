@@ -20,7 +20,7 @@ or [Provider Plugins](/plugins/sdk-provider-plugins) instead.
 
 ## Requirements
 
-- Node 24.16+ or Node 26.1+.
+- Node 24.22.1+ or Node 26.12.1+.
 - TypeScript ESM package output.
 - `typebox` in `dependencies` (not just `devDependencies` - the generated
   plugin imports it at runtime).
@@ -255,6 +255,12 @@ in the captured lineage changes incarnation or lifecycle.
 `assertInvocationCurrent` separately checks the admitted tool invocation and
 plugin lifetime. Use a version 2 tool context when the tool depends on these live
 authority checks.
+
+`toolContext.browser?.allowLocalLoopback` records that the host prepared
+unrestricted execution on the Gateway machine for this turn. It is a capability
+fact, not authority: the Browser plugin combines it with `assertInvocationCurrent`,
+operator policy, and live ownership of local Chrome. Do not derive it from model
+arguments or apply it to remote browser transports.
 
 `toolContext.approvalReviewerDeviceIds` contains the host-selected devices for
 an approval initiated by this tool. Pass it to `plugin.approval.request` when

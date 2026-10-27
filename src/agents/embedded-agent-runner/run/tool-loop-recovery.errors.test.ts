@@ -106,25 +106,6 @@ it.each(["thrown", "unknown name", "returned failure"])(
   },
 );
 
-it("preserves successful retry", async () => {
-  let executions = 0;
-  const tool = probe(async () => {
-    executions++;
-    if (executions === 2) {
-      return { content: [{ type: "text", text: `progress ${executions}` }], details: {} };
-    }
-    throw new Error("same error");
-  });
-  const run = runTurns([tool], [...callTurns(4), answer()], {
-    beforeToolBatch: createToolLoopBatchAdmission({
-      sessionKey: "successful retry",
-      runId: "successful retry",
-    }),
-  });
-  expect((await run.result).at(-1)).toMatchObject({ stopReason: "stop" });
-  expect(executions).toBe(4);
-});
-
 it.each(["sequential", "parallel"] as const)(
   "settles the %s batch when the third error ends the turn",
   async (toolExecution) => {

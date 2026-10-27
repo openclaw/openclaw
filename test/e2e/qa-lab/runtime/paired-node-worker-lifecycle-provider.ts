@@ -80,6 +80,7 @@ function writeReply(response: ServerResponse, text: string): void {
 export async function startPairedNodeWorkerLifecycleProvider(holdMarkers: readonly string[]) {
   const holdSet = new Set(holdMarkers);
   const releases = new Map(holdMarkers.map((marker) => [marker, createDeferred()] as const));
+  const arrivals = new Map(holdMarkers.map((marker) => [marker, createDeferred()] as const));
   const held = new Set<string>();
   const pendingResponses = new Set<ServerResponse>();
   const server = createServer((request, response) => {
@@ -97,6 +98,7 @@ export async function startPairedNodeWorkerLifecycleProvider(holdMarkers: readon
       const text = responseText(raw);
       if (holdSet.has(text)) {
         held.add(text);
+        arrivals.get(text)!.resolve();
         pendingResponses.add(response);
         response.once("close", () => pendingResponses.delete(response));
         response.writeHead(200, {
@@ -133,6 +135,9 @@ export async function startPairedNodeWorkerLifecycleProvider(holdMarkers: readon
     hasHeld(marker: string): boolean {
       return held.has(marker);
     },
+    waitForHeld(marker: string): Promise<void> {
+      return arrivals.get(marker)!.promise;
+    },
     release(marker: string): void {
       releases.get(marker)?.resolve();
     },
@@ -150,7 +155,9 @@ export async function startPairedNodeWorkerLifecycleProvider(holdMarkers: readon
       }
       pendingResponses.clear();
       server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     },
   };
 }

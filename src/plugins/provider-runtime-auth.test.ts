@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { configForProviders } from "../agents/model-auth.fixtures.test-support.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -47,13 +48,9 @@ it.each(["legacy", "v2"] as const)(
     await expect(
       lazyRuntime.prepareProviderRuntimeAuth({
         provider: "demo",
-        config: {
-          models: {
-            providers: {
-              demo: { auth: "none", api: "openai-completions", baseUrl: MODEL.baseUrl, models: [] },
-            },
-          },
-        },
+        config: configForProviders({
+          demo: { auth: "none", api: "openai-completions", baseUrl: MODEL.baseUrl, models: [] },
+        }),
         context: {
           ...(version === "v2" ? { capability: "decision" as const } : {}),
           env: process.env,

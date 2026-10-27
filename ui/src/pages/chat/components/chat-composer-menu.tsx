@@ -1,9 +1,53 @@
 import type { JSX } from "@solidjs/web";
-import { onSettled } from "solid-js";
+import { createContext, For, onSettled, useContext } from "solid-js";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatComposerInvocationMenu } from "./chat-picker-overlay.ts";
 
-export { handleComposerMenuKeydown } from "../../../components/composer-menu.ts";
+const ComposerMenuPointer = createContext<((event: PointerEvent) => boolean) | null>(null);
+
+/** Keep option semantics and geometry while their visual renderer loads. */
+export function ComposerMenuLoadingRows(props: {
+  rows: readonly {
+    id: string;
+    name: string;
+    description?: string;
+    select: () => void;
+    hover: () => void;
+  }[];
+  activeId: string | null | undefined;
+  preserveFocus?: boolean;
+}) {
+  const Option = renderComposerMenuOption;
+  return (
+    <div aria-busy="true">
+      <For each={props.rows} keyed={false}>
+        {(row) => (
+          <Option
+            id={row().id}
+            active={row().id === props.activeId}
+            preserveFocus={props.preserveFocus}
+            select={() => row().select()}
+            hover={() => row().hover()}
+            iconHidden={true}
+            icon={
+              <span class="skeleton" style={{ display: "block", width: "100%", height: "100%" }} />
+            }
+            name={
+              <span class="skeleton" style={{ display: "block" }}>
+                <span style={{ opacity: 0 }}>{row().name}</span>
+              </span>
+            }
+            description={
+              <span class="skeleton" style={{ display: "block" }}>
+                <span style={{ opacity: 0 }}>{row().description}</span>
+              </span>
+            }
+          />
+        )}
+      </For>
+    </div>
+  );
+}
 
 export function ComposerMenu(options: {
   id: string;
@@ -16,6 +60,14 @@ export function ComposerMenu(options: {
   revision: unknown;
 }) {
   let element!: HTMLDivElement;
+  let pointerX: number | undefined;
+  let pointerY: number | undefined;
+  const pointerMoved = (event: PointerEvent) => {
+    const moved = event.clientX !== pointerX || event.clientY !== pointerY;
+    pointerX = event.clientX;
+    pointerY = event.clientY;
+    return moved;
+  };
   onSettled(() =>
     options.getTextarea
       ? registerChatComposerInvocationMenu(element, options.getTextarea)
@@ -26,17 +78,19 @@ export function ComposerMenu(options: {
     activeId: () => options.activeId,
   });
   return (
-    <div
-      ref={(node) => (element = node)}
-      id={options.id}
-      class={["slash-menu", options.class]}
-      role="listbox"
-      aria-label={options.label}
-    >
-      <div class="slash-menu__scroll" ref={scrollRef}>
-        {options.children}
+    <ComposerMenuPointer value={pointerMoved}>
+      <div
+        ref={(node) => (element = node)}
+        id={options.id}
+        class={["slash-menu", options.class]}
+        role="listbox"
+        aria-label={options.label}
+      >
+        <div class="slash-menu__scroll" ref={scrollRef}>
+          {options.children}
+        </div>
       </div>
-    </div>
+    </ComposerMenuPointer>
   );
 }
 
@@ -51,6 +105,7 @@ export function renderComposerMenuOption(options: {
   name: JSX.Element;
   description: JSX.Element;
 }) {
+  const pointerMoved = useContext(ComposerMenuPointer);
   return (
     <div
       id={options.id}
@@ -64,7 +119,12 @@ export function renderComposerMenuOption(options: {
       }}
       onClick={() => options.select()}
       onPointerMove={(event: PointerEvent) => {
-        if (!options.active && event.pointerType !== "touch") {
+        if (event.pointerType === "touch") {
+          return;
+        }
+        // Keyboard scrolling can move a new row under a stationary pointer.
+        const moved = pointerMoved?.(event) ?? true;
+        if (moved && !options.active) {
           options.hover();
         }
       }}
@@ -73,7 +133,7 @@ export function renderComposerMenuOption(options: {
         {options.icon}
       </span>
       <span class="slash-menu-copy">
-        <span class="slash-menu-name">{options.name}</span>
+        <span class="slash-menu-name">{options.name}</span>{" "}
         <span class="slash-menu-desc">{options.description}</span>
       </span>
     </div>

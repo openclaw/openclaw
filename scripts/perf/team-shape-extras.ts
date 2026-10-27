@@ -16,6 +16,7 @@ import { assertCronStoreCanPersist } from "../../src/cron/store/row-codec.js";
 import { saveCronStoreInDatabase } from "../../src/cron/store/save.kernel.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
 import { insertOperatorApprovalInDatabase } from "../../src/gateway/operator-approval-store.kernel.worker.js";
+import { ensureLocal } from "../../src/gateway/worker-environments/placement-row-codec.js";
 import { insertProjectRegistryInDatabase } from "../../src/projects/project-registry.kernel.js";
 import { runOpenClawAgentWriteTransaction } from "../../src/state/openclaw-agent-db.js";
 import { runOpenClawStateWriteTransaction } from "../../src/state/openclaw-state-db.js";
@@ -35,11 +36,17 @@ export type TeamShapeExtrasOptions = {
   sessions: FixtureSession[];
   retainedRuns: number;
   settledRuns?: boolean;
+  teamStress?: boolean;
   approvals: number;
   cronJobs: number;
   cronAnnounceLast?: boolean;
   projects: number;
+  localPlacements?: number;
   worktreeFiles?: number;
+  worktreeLocalOrigin?: boolean;
+  worktreeFileBytes?: number;
+  worktreeInstallFailure?: boolean;
+  worktreeColdCommits?: number;
   nestedRepository?: boolean;
   githubOptionsConnected?: boolean;
   now: number;
@@ -50,10 +57,18 @@ function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRu
   const childCount = options.sessions.length - rootCount;
   const childOffset = index % childCount;
   const child = options.sessions[rootCount + childOffset]!;
-  const parent = options.sessions[childOffset % rootCount]!;
+  // Keep collector fan-out on the same bounded parents the stress writer updates.
+  const collector = options.teamStress && options.settledRuns;
+  const parent = options.sessions[childOffset % (collector ? Math.min(64, rootCount) : rootCount)]!;
   const runId = `team-shape-run-${index}`;
-  const endedAt =
-    options.now - 60_000 - (options.retainedRuns - 1 - index) * TEAM_SHAPE_RUN_SLOT_MS;
+  // Collector retention is derived from completion time, not the stored archive deadline.
+  const slotMs = collector
+    ? Math.max(
+        1,
+        Math.min(TEAM_SHAPE_RUN_SLOT_MS, Math.floor((30 * 60_000) / options.retainedRuns)),
+      )
+    : TEAM_SHAPE_RUN_SLOT_MS;
+  const endedAt = options.now - 60_000 - (options.retainedRuns - 1 - index) * slotMs;
   const startedAt = endedAt - 30_000 - (index % 100) * 1_000;
   const slot = index % 20;
   const failed = slot >= 12 && slot < 15;
@@ -80,7 +95,15 @@ function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRu
     generation: Math.floor(index / childCount) + 1,
     createdAt: startedAt - 1_000,
     archiveAtMs: options.now + 30 * DAY_MS,
-    expectsCompletionMessage: !interrupted,
+    ...(collector
+      ? {
+          collect: true,
+          groupId: `team-shape-collector-${childOffset % Math.min(64, rootCount)}`,
+          swarmRequesterSessionKey: parent.sessionKey,
+          collectorCompletion: { status: failed ? "failed" : "done" },
+        }
+      : {}),
+    expectsCompletionMessage: !collector && !interrupted,
     endedReason: failed ? "subagent-error" : "subagent-complete",
     execution: interrupted
       ? {
@@ -91,30 +114,31 @@ function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRu
           interruptedAt: endedAt,
         }
       : { status: "terminal", startedAt, endedAt, outcome },
-    completion: { required: !interrupted, resultText, capturedAt: endedAt },
-    delivery: interrupted
-      ? { status: "not_required" }
-      : pending
-        ? {
-            status: "pending",
-            createdAt: endedAt,
-            attemptCount: 1,
-            lastAttemptAt: endedAt,
-            lastError: "Synthetic requester temporarily unavailable",
-            nextAttemptAt: options.now + DAY_MS,
-            payload: {
-              requesterSessionKey: parent.sessionKey,
-              requesterDisplayKey: parent.sessionKey,
-              childSessionKey: child.sessionKey,
-              childRunId: runId,
-              task,
-              startedAt,
-              endedAt,
-              outcome,
-              expectsCompletionMessage: true,
-            },
-          }
-        : { status: "delivered", deliveredAt: endedAt + 500 },
+    completion: { required: !collector && !interrupted, resultText, capturedAt: endedAt },
+    delivery:
+      interrupted || collector
+        ? { status: "not_required" }
+        : pending
+          ? {
+              status: "pending",
+              createdAt: endedAt,
+              attemptCount: 1,
+              lastAttemptAt: endedAt,
+              lastError: "Synthetic requester temporarily unavailable",
+              nextAttemptAt: options.now + DAY_MS,
+              payload: {
+                requesterSessionKey: parent.sessionKey,
+                requesterDisplayKey: parent.sessionKey,
+                childSessionKey: child.sessionKey,
+                childRunId: runId,
+                task,
+                startedAt,
+                endedAt,
+                outcome,
+                expectsCompletionMessage: true,
+              },
+            }
+          : { status: "delivered", deliveredAt: endedAt + 500 },
     ...(!pending ? { cleanupHandled: true, cleanupCompletedAt: endedAt + 1_000 } : {}),
   };
 }
@@ -126,6 +150,7 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
     path: string;
     id: string;
     branch: string;
+    coldBaseRefs?: string[];
   }> = [];
   const gitEnv = {
     ...process.env,
@@ -152,6 +177,22 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
     }
     await fs.writeFile(path.join(repoRoot, "README.md"), `# Synthetic project ${index}\n`);
     await git("add", "README.md");
+    if (index === 0 && options.worktreeInstallFailure) {
+      await fs.writeFile(
+        path.join(repoRoot, "package.json"),
+        JSON.stringify({
+          name: "synthetic-attempt-setup",
+          private: true,
+          packageManager: "pnpm@12.0.0",
+          scripts: { preinstall: "exit 1" },
+        }),
+      );
+      await fs.writeFile(
+        path.join(repoRoot, "pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\nimporters:\n  .: {}\n",
+      );
+      await git("add", "package.json", "pnpm-lock.yaml");
+    }
     await git("-c", "commit.gpgSign=false", "commit", "-m", "test: seed synthetic project");
     await fs.mkdir(path.dirname(worktreePath), { recursive: true });
     const branch = `fixture/task-${index}`;
@@ -167,7 +208,13 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
           await waitForTeamShapeWriteBudget();
           await fs.mkdir(bucket, { recursive: true });
         }
-        await fs.writeFile(path.join(bucket, `${file}.txt`), "");
+        const content = Buffer.alloc(options.worktreeFileBytes ?? 0);
+        let random = file + 1;
+        for (let offset = 0; offset < content.length; offset++) {
+          random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
+          content[offset] = random >>> 24;
+        }
+        await fs.writeFile(path.join(bucket, `${file}.txt`), content);
       }
       await git("-C", worktreePath, "add", "inventory");
       await git(
@@ -201,6 +248,27 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
         "test: seed nested synthetic repository",
       );
     }
+    const coldBaseRefs: string[] = [];
+    if (index === 0 && options.worktreeColdCommits) {
+      const tree = (await git("rev-parse", "refs/heads/main^{tree}")).stdout.trim();
+      const parent = (await git("rev-parse", "refs/heads/main")).stdout.trim();
+      for (let cold = 0; cold < options.worktreeColdCommits; cold++) {
+        const ref = `refs/heads/benchmark-cold-${cold}`;
+        const commit = (
+          await git("commit-tree", tree, "-p", parent, "-m", `test: cold template ${cold}`)
+        ).stdout.trim();
+        await git("update-ref", ref, commit);
+        coldBaseRefs.push(ref);
+      }
+    }
+    if (options.worktreeLocalOrigin) {
+      // Keep the advertised default branch separate from the managed local refs.
+      const origin = path.join(options.stateDir, "fixture-remotes", `${projectId}.git`);
+      await fs.mkdir(path.dirname(origin), { recursive: true });
+      await git("clone", "--bare", "--local", repoRoot, origin);
+      await git("-C", origin, "symbolic-ref", "HEAD", "refs/heads/main");
+      await git("remote", "add", "origin", origin);
+    }
     const repository = await resolveRepositoryIdentity(repoRoot);
     const project = runOpenClawStateWriteTransaction(({ db }) => {
       const registered = insertProjectRegistryInDatabase(db, {
@@ -229,6 +297,7 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
       projectId: project.id,
       repoRoot,
       path: worktreePath,
+      ...(coldBaseRefs.length ? { coldBaseRefs } : {}),
       id: projectId,
       branch,
     });
@@ -246,6 +315,13 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
     throw new Error("Retained runs require a parent and at least one child session");
   }
   const projectWorktrees = await seedProjects(options);
+  if (options.localPlacements) {
+    runOpenClawStateWriteTransaction(({ db }) => {
+      for (const session of options.sessions.slice(0, options.localPlacements)) {
+        ensureLocal(db, { ...session, agentId: "main" }, options.now);
+      }
+    });
+  }
   const records = Array.from({ length: options.retainedRuns }, (_, index) =>
     retainedRun(index, options),
   );
@@ -402,8 +478,12 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
     cronJobs: jobs.length,
     cronAnnounceLast: options.cronAnnounceLast ?? false,
     projects: projectWorktrees.length,
+    localPlacements: options.localPlacements ?? 0,
     githubOptionsConnected: options.githubOptionsConnected ?? false,
     worktreeFiles: options.worktreeFiles ?? 0,
+    worktreeFileBytes: options.worktreeFileBytes ?? 0,
+    worktreeInstallFailure: options.worktreeInstallFailure ?? false,
+    worktreeColdCommits: options.worktreeColdCommits ?? 0,
     nestedRepository: options.nestedRepository ?? false,
     projectWorktrees,
     extrasGenerationMs: performance.now() - started,

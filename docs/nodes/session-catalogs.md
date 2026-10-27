@@ -36,8 +36,9 @@ covers provider discovery and queueing, not session-projection preparation or
 time spent waiting for the Gateway event loop.
 
 Paired-node discovery reuses the current committed node inventory while pairing
-writes are queued. A committed pairing change invalidates that inventory before
-the next read, including when a node's access is revoked.
+writes are queued. Committed pairing receipts refresh that inventory from the
+owner's prepared rows without another database read, including when a node's
+access is revoked. Missing or incomplete publications still reload from storage.
 
 With diagnostics enabled, slow-provider warnings report elapsed time, including
 queueing and asynchronous I/O. `isMainThread` identifies the calling thread; it
@@ -88,8 +89,11 @@ updates the same OpenClaw session. Only previously unseen transcript items are
 appended; an unchanged source adds zero items. This is an explicit sync: later
 native messages are preserved when you import again.
 
-Import preserves the catalog's projected transcript text, not the original native
-files or raw provider records. Each import retains up to 50,000 transcript items
+Import preserves the catalog's projected transcript text and available tool display
+facts, not the original native files or raw provider records. Display facts let
+the Control UI use the same conversion before import and after reopening the copy;
+stored reference text keeps its untrusted-content framing. Existing copies made
+without these facts keep their original presentation. Each import retains up to 50,000 transcript items
 or 64 MiB of projected history, whichever comes first, starting with the most
 recent history. Provider truncation and the existing per-item text limit still
 apply. Pagination also stops on a repeated continuation cursor or after 50,000
@@ -136,7 +140,21 @@ header to flatten or restore the project groups. The same grouping applies to
 the Claude sessions catalog.
 By default, selecting a row opens the normal Chat pane and reads its persisted transcript
 through bounded, cursor-paginated
-`thread/turns/list` calls with full item projection. Use the row menu, the viewer header, or the **Open Codex/Claude sessions in** preference to start `codex resume <thread-id>` in the operator terminal on the computer that owns the session. The paired-node terminal path is an allowlisted PTY relay owned by the Codex plugin, not arbitrary node command execution.
+native item or `thread/turns/list` calls with full item projection. Available
+invocations and outputs appear in ordinary tool cards. Missing outcomes stay
+unknown instead of implying success or completion. Assistant messages stay
+visible in source order. Browsing and newly
+imported copies share this display conversion; importing adds a provenance notice
+and the normal OpenClaw session controls. Tool output previews remain text-only and limited to 500 characters; expanding
+activity does not fetch full native output. Structured inputs and recorded result
+details use the ordinary renderer's command and diff presentation. Recorded
+activity summaries reuse the harness presentation, and assistant message phases
+survive import. Very large commands retain their full input but skip optional
+semantic summary analysis above 10,000 characters. Inputs omitted to satisfy transport or import bounds are labeled.
+Recorded Canvas, MCP app, and embed directives remain inert.
+Older nodes retain their own projected text; upgrading only the Gateway cannot
+restore text their reader omitted or mislabeled.
+Use the row menu, the viewer header, or the **Open Codex/Claude sessions in** preference to start `codex resume <thread-id>` in the operator terminal on the computer that owns the session. The paired-node terminal path is an allowlisted PTY relay owned by the Codex plugin, not arbitrary node command execution.
 
 The terminal relay is separate from paired-node Chat continuation. A connected
 node that advertises and permits both catalog commands plus
@@ -255,6 +273,14 @@ turn them off in the Web UI under **Config > Plugins**.
 Terminal resume uses the stored session working directory and the same
 allowlisted duplex PTY relay as Codex and Claude. It does not expose arbitrary
 node command execution.
+
+## Activity probe failures
+
+For adopted Claude or Pi sessions on the Gateway, an unreadable transcript produces
+a `plugins/session-catalog` warning with the path and recovery guidance. Check that
+the Gateway can read the file. Probing retries automatically while preserving the
+session link and activity marker; an access failure does not mean the transcript
+was deleted.
 
 ## OpenClaw sessions and transcripts
 

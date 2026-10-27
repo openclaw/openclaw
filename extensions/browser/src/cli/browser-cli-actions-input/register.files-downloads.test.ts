@@ -1,10 +1,10 @@
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserPathsModule from "../../browser/paths.js";
 import {
   createBrowserProgram,
   mockBrowserGateway,
   getBrowserCliRuntime,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "../browser-cli.test-support.js";
 
@@ -14,11 +14,7 @@ gatewayMock.mockImplementation(async (_method, _opts, request) =>
     ? { download: { path: "/tmp/openclaw/downloads/file.txt" } }
     : { ok: true },
 );
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
-vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+const browserCliRuntime = mockBrowserCliRuntime();
 vi.spyOn(browserPathsModule, "resolveExistingUploadPaths").mockResolvedValue({
   ok: true,
   paths: ["/tmp/openclaw/uploads/a.pdf", "/tmp/openclaw/uploads/b.pdf"],
@@ -70,8 +66,9 @@ describe("browser action input file/download commands", () => {
   });
 
   it("accepts signed and zero-padded download timeouts", async () => {
-    await run("waitfordownload", "--timeout-ms", "+025000");
+    await run("waitfordownload", " file.txt ", "--timeout-ms", "+025000");
     expect(lastRequest()?.timeoutMs).toBe(30000);
+    expect(lastRequest()?.body).toMatchObject({ path: " file.txt " });
   });
 
   it("uses custom download timeouts as the inner wait plus outer slack", async () => {

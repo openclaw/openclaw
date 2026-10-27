@@ -10,6 +10,7 @@ import {
   createAnthropicResponse,
   registerParityHostLifecycle,
 } from "./provider-transport-parity.test-support.js";
+import { makeProviderModel } from "./providers/provider-model.test-support.js";
 
 type OpenAIChunk = Record<string, unknown>;
 
@@ -63,19 +64,12 @@ type ParityFixture = {
   snapshot?: string;
 };
 
-const openAiModel = {
-  id: "gpt-5.5",
+const openAiModel = makeProviderModel("openai-completions", "openai", "gpt-5.5", {
   name: "GPT-5.5",
-  api: "openai-completions",
-  provider: "openai",
   // Managed official OpenAI reasoning tool turns use Responses; this covers the Chat wire.
   baseUrl: "https://chat-proxy.example/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
   maxTokens: 4096,
-} satisfies Model<"openai-completions">;
+});
 
 const openRouterModel = {
   ...openAiModel,

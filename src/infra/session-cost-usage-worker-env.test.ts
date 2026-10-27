@@ -86,6 +86,12 @@ function writeUsage(sessionFile: string, entry: unknown = usageEvent) {
 function preparing(request: operationAdmission.SqliteWorkerAdmissionRequest, kind: string) {
   return request.stage === "prepare" && isRecord(request.facts) && request.facts.kind === kind;
 }
+function inventory(...entries: [sessionId: string, mtimeMs: number][]) {
+  return {
+    kind: "inventory",
+    files: entries.map(([sessionId, mtimeMs]) => ({ sessionId, mtimeMs })),
+  };
+}
 
 test("refuses a foreign cache file appearing after its creating grant", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -138,17 +144,12 @@ it("inventories retained usage by transcript recency and logical agent after wri
 }) => {
   const storePath = state.path("shared.sqlite");
   const database = open(scope, storePath);
-  const appendUsage = (
-    agentId: string,
-    sessionId: string,
-    sessionKey: string,
-    updatedAt: number,
-  ) => {
+  const appendUsage = (sessionId: string, updatedAt: number, agentId = "main", key = sessionId) => {
     const transcript = resolveSqliteTranscriptScope({
       ...scope,
       agentId,
       sessionId,
-      sessionKey,
+      sessionKey: `agent:${agentId}:${key}`,
       storePath,
     });
     const clock = vi.spyOn(Date, "now").mockReturnValue(updatedAt);
@@ -167,11 +168,11 @@ it("inventories retained usage by transcript recency and logical agent after wri
       clock.mockRestore();
     }
   };
-  appendUsage("main", "old", "agent:main:old", 1000);
-  appendUsage("main", "second", "agent:main:second", 2000);
-  appendUsage("main", "first", "agent:main:first", 2000);
-  appendUsage("main", "hidden", "agent:main:internal-session-effects:hidden", 3000);
-  appendUsage("other", "other", "agent:other:other", 3000);
+  appendUsage("old", 1000);
+  appendUsage("second", 2000);
+  appendUsage("first", 2000);
+  appendUsage("hidden", 3000, "main", "internal-session-effects:hidden");
+  appendUsage("other", 3000, "other");
   write(
     (owner) => {
       writeSessionEntry(owner, "agent:main:metadata-only", {
@@ -182,28 +183,14 @@ it("inventories retained usage by transcript recency and logical agent after wri
     { ...scope, path: database.path },
   );
   const prepared = prepare({ ...scope, storePath });
-  await expect(run(prepared, { kind: "inventory" })).resolves.toMatchObject({
-    kind: "inventory",
-    files: [
-      { sessionId: "first", mtimeMs: 2000 },
-      { sessionId: "second", mtimeMs: 2000 },
-      { sessionId: "old", mtimeMs: 1000 },
-    ],
-  });
-  await expect(run(prepared, { kind: "inventory", minMtimeMs: 2000 })).resolves.toMatchObject({
-    kind: "inventory",
-    files: [
-      { sessionId: "first", mtimeMs: 2000 },
-      { sessionId: "second", mtimeMs: 2000 },
-    ],
-  });
+  await expect(run(prepared, { kind: "inventory" })).resolves.toMatchObject(
+    inventory(["first", 2000], ["second", 2000], ["old", 1000]),
+  );
+  await expect(run(prepared, { kind: "inventory", minMtimeMs: 2000 })).resolves.toMatchObject(
+    inventory(["first", 2000], ["second", 2000]),
+  );
   // The smallest transcript is oldest: refresh priority is independent of inventory recency.
-  await expect(
-    run(prepared, {
-      kind: "refresh",
-      maxFiles: 1,
-    }),
-  ).resolves.toMatchObject({
+  await expect(run(prepared, { kind: "refresh", maxFiles: 1 })).resolves.toMatchObject({
     kind: "refresh",
     changed: true,
     remainingFiles: [
@@ -211,15 +198,10 @@ it("inventories retained usage by transcript recency and logical agent after wri
       { sessionFile: expect.stringContaining(":second:") },
     ],
   });
-  appendUsage("main", "old", "agent:main:old", 4000);
-  await expect(run(prepared, { kind: "inventory", minMtimeMs: 2000 })).resolves.toMatchObject({
-    kind: "inventory",
-    files: [
-      { sessionId: "old", mtimeMs: 4000 },
-      { sessionId: "first", mtimeMs: 2000 },
-      { sessionId: "second", mtimeMs: 2000 },
-    ],
-  });
+  appendUsage("old", 4000);
+  await expect(run(prepared, { kind: "inventory", minMtimeMs: 2000 })).resolves.toMatchObject(
+    inventory(["old", 4000], ["first", 2000], ["second", 2000]),
+  );
 });
 
 it("keeps SQLite selectors distinct", async ({ usage: { state, scope } }) => {

@@ -12,10 +12,11 @@ import {
   stripCliImageTurnContext,
 } from "../agents/cli-image-turn-correlation.js";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
-import { stripCliSessionDriftNote } from "../agents/cli-session.js";
+import { stripCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { resolveClaudeCliProjectsDir } from "../agents/command/claude-cli-project-dir.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
+import { isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT, HEARTBEAT_RESPONSE_TOOL_PROMPT } from "../auto-reply/heartbeat.js";
 import { isToolCallBlock, isToolResultBlock, resolveToolUseId } from "../chat/tool-content.js";
 import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
@@ -29,7 +30,7 @@ import {
 } from "../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import { stripCliPromptDecorations } from "./cli-session-history.prompt-text.js";
-import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
+import { attachOpenClawTranscriptMeta } from "./session-transcript-entry-message.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
 
@@ -382,7 +383,11 @@ function resolveClaudeCliInternalSourceTool(text: string): string | undefined {
     return "exec";
   }
   // Default prompts only; a configured heartbeat prompt is not recognized here.
-  if (body.startsWith(HEARTBEAT_PROMPT) || body.startsWith(HEARTBEAT_RESPONSE_TOOL_PROMPT)) {
+  if (
+    body.startsWith(HEARTBEAT_PROMPT) ||
+    body.startsWith(HEARTBEAT_RESPONSE_TOOL_PROMPT) ||
+    isHeartbeatUserMessage({ role: "user", content: body }, undefined, { claudeImport: true })
+  ) {
     return "heartbeat";
   }
   // Restart recovery only, by its full opening sentence behind the CLI timestamp envelope;

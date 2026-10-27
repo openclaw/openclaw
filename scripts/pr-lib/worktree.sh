@@ -200,6 +200,30 @@ check_prep_baseline_transition() {
     "$command" "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"
 }
 
+prefetch_review_transition_objects() {
+  # Path-based restore fetches cold blobs individually. Refetch skips Git's
+  # local-history negotiation; bounded batches keep each fetch small. Retain
+  # one restore because directory/file replacements can span path batches.
+  GIT_NO_LAZY_FETCH=1 pr_git rev-list --objects --missing=print --no-object-names \
+    --quiet --max-count=1 "$1" |
+    {
+      local oid
+      local batch=()
+      while IFS= read -r oid; do
+        case "$oid" in \?*) batch+=("${oid#?}") ;; *) continue ;; esac
+        if [ "${#batch[@]}" -eq 1024 ]; then
+          printf '%s\n' "${batch[@]}" |
+            fetch_canonical_ref "${batch[0]}" --stdin --refetch --no-write-fetch-head || return 1
+          batch=()
+        fi
+      done
+      if [ "${#batch[@]}" -gt 0 ]; then
+        printf '%s\n' "${batch[@]}" |
+          fetch_canonical_ref "${batch[0]}" --stdin --refetch --no-write-fetch-head || return 1
+      fi
+    }
+}
+
 recover_review_transition() {
   local pr="$1"
   local journal=.local/review-transition.json
@@ -235,6 +259,8 @@ recover_review_transition() {
     return 1
   fi
 
+  # Network preparation precedes the existing admission immediately before writes.
+  prefetch_review_transition_objects "$target" || return 1
   validate_review_transition_state "$pr" "$source" "$target" || return 1
   if [ "$mode" = prep ]; then
     validate_prep_baseline_transition install-transition "$pr" "$source" "$target" "$branch" || return 1

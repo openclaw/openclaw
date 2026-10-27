@@ -4,13 +4,7 @@
   align-content: start;
 }
 
-.chat-session-versions-mobile__help {
-  margin: 12px 0;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 18px;
-}
-
+.chat-session-versions-mobile__help,
 .chat-session-versions-mobile__note {
   margin: 12px 0;
   color: var(--muted);

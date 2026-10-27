@@ -309,6 +309,13 @@ it("merges reasoning deltas within a burst and separates bursts across tools", a
   lines().toEqual(["🧠 _Listing the workspace_", "ls", "🧠 _Picking the largest_", "wc"]);
 });
 
+it("preserves the reasoning budget and italic markers with astral text", async () => {
+  const { progress, rendered } = createProgress({ label: false, toolProgress: true });
+  await progress.pushToolProgress("Exec", { startImmediately: true });
+  await progress.pushReasoningProgress(`${"𠮷".repeat(40)} ${"x".repeat(100)}`);
+  rendered().toBe(`• Exec\n• _${"𠮷".repeat(40)} ${"x".repeat(76)}…_`);
+});
+
 it.each([
   ["buffers tags", ["<thin", "k>Check</think>Answer"], "_Check_", true],
   ["literal code", ["```html\n<think>x</think>\n```"], "_```html <think>x</think> ```_", false],
@@ -508,6 +515,35 @@ it("retains completed edits when clearing a quiet plan", async () => {
   rendered().toContain("📝 1 files +2");
   rendered().not.toContain("Stale plan");
   lines().toEqual([]);
+});
+
+it("compares captured mutation totals without serializing unchanged progress", async () => {
+  const diffStat = { files: 1, added: 2, removed: 0 };
+  const started = createDeferred();
+  const accepted = createDeferred<boolean>();
+  const update = vi
+    .fn<NonNullable<ChannelProgressDraftCompositorParams["update"]>>(() => true)
+    .mockImplementationOnce(() => {
+      started.resolve();
+      return accepted.promise;
+    });
+  const { progress } = createProgress(
+    { ...unlabeledTools, maxLines: 1 },
+    { initialSnapshot: { lines: ["Exec"], diffStat }, updateOnLineChange: true, update },
+  );
+  const stringify = vi.spyOn(JSON, "stringify");
+  const first = progress.noteActivity({ startImmediately: true });
+  await started.promise;
+  diffStat.added = 3;
+  accepted.resolve(true);
+  expect(await first).toBe(true);
+  expect(await progress.pushToolProgress("Exec", { startImmediately: true })).toBe(true);
+  expect(await progress.pushToolProgress("Exec", { startImmediately: true })).toBe(false);
+  const serializedTotals = stringify.mock.calls.filter(([value]) => value === diffStat).length;
+  stringify.mockRestore();
+  expect(update.mock.calls.map(([text]) => text)).toEqual(["• Exec", "• Exec"]);
+  expect(update.mock.lastCall?.[1].snapshot.diffStat).toEqual({ files: 1, added: 3, removed: 0 });
+  expect(serializedTotals).toBe(0);
 });
 
 it("logs timer-fired startup failures at the boundary", async () => {

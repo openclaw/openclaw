@@ -3,6 +3,10 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  extractMessagingToolSend,
+  extractMessagingToolSendResult,
+} from "../../agents/embedded-agent-messaging-extraction.js";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -10,7 +14,8 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
 import { OutboundDeliveryError } from "./deliver-types.js";
-import { runMessageAction as runAction } from "./message-action-runner.js";
+import { getToolResult, runMessageAction as runAction } from "./message-action-runner.js";
+import { registerSlackTextPlugin } from "./message-action-runner.test-support.js";
 
 type SendInput = Omit<Parameters<typeof runAction>[0], "action" | "cfg"> & { cfg?: OpenClawConfig };
 function runMessageAction({ params, ...input }: SendInput) {
@@ -50,28 +55,6 @@ const receipt = (channel: string, messageId: string, chatId: string) => ({
   messageId,
   chatId,
 });
-
-function registerSlackTextPlugin(
-  accountIds: string[] = ["default"],
-  defaultAccountId?: string,
-  deliveryMode: "direct" | "gateway" = "direct",
-) {
-  const sendText = vi.fn().mockResolvedValue(receipt("slack", "m1", "C123"));
-  registerPlugin(
-    "slack",
-    { deliveryMode, sendText },
-    {
-      config: {
-        listAccountIds: () => accountIds,
-        ...(defaultAccountId ? { defaultAccountId: () => defaultAccountId } : {}),
-        resolveAccount: () => ({ enabled: true }),
-        isConfigured: () => true,
-      },
-      threading: { threadAddressing: "message" },
-    },
-  );
-  return sendText;
-}
 
 describe("runMessageAction core send routing", () => {
   afterEach(() => {
@@ -269,7 +252,16 @@ describe("runMessageAction core send routing", () => {
       testCase.accountIds ? undefined : "ada",
       testCase.gatewayOwnedDelivery ? "gateway" : "direct",
     );
-    await runMessageAction({
+    const messageArgs = {
+      action: "send",
+      channel: "slack",
+      target: "channel:OTHER",
+      message: "hello world",
+      ...(testCase.accountId ? { accountId: testCase.accountId } : {}),
+    };
+    const pending = extractMessagingToolSend("message", messageArgs);
+    expect(pending).toBeDefined();
+    const result = await runMessageAction({
       cfg: {
         channels: {
           slack: {
@@ -292,13 +284,10 @@ describe("runMessageAction core send routing", () => {
       agentId: "main",
       defaultAccountId: testCase.defaultAccountId,
       gatewayOwnedDelivery: testCase.gatewayOwnedDelivery,
-      params: {
-        channel: "slack",
-        target: "channel:OTHER",
-        message: "hello world",
-        ...(testCase.accountId ? { accountId: testCase.accountId } : {}),
-      },
+      params: { ...messageArgs },
     });
+    const confirmed = extractMessagingToolSendResult(pending!, getToolResult(result));
+    expect(confirmed.accountId).toBe(testCase.expected);
     const prefix = testCase.expected === "default" ? "[ROOT]" : (testCase.prefix ?? "[ADA]");
     expect(sendText).toHaveBeenCalledOnce();
     expect(mockFirstRecordArg(sendText, "send text")).toMatchObject({

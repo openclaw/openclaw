@@ -71,6 +71,7 @@ import {
   readWorkflow,
   readWorkflowOutputs,
   requiredWorkflowStep,
+  runControlUiE2eWorkflow,
   runGit,
   runWorkflowShellScript,
   testNodeExecPath,
@@ -88,8 +89,6 @@ const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
 const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6";
-const CREATE_GITHUB_APP_TOKEN_V3_2 =
-  "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
 const CREATE_GITHUB_APP_TOKEN_V3_3 =
   "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
@@ -915,8 +914,8 @@ AFTER_CD
     const pullRequest = action.runs.steps.find(
       (step: WorkflowStep) => step.id === "pull-request-token",
     );
-    expect(contents.uses).toBe(CREATE_GITHUB_APP_TOKEN_V3_2);
-    expect(pullRequest.uses).toBe(CREATE_GITHUB_APP_TOKEN_V3_2);
+    expect(contents.uses).toBe(CREATE_GITHUB_APP_TOKEN_V3_3);
+    expect(pullRequest.uses).toBe(CREATE_GITHUB_APP_TOKEN_V3_3);
     expect(contents.with).toEqual({
       "client-id": "${{ inputs.contents-client-id }}",
       "private-key": "${{ inputs.contents-private-key }}",
@@ -1270,9 +1269,9 @@ AFTER_CD
       const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
       expect(installStep.env, workflowPath).toMatchObject({
-        OPENGREP_VERSION: "v1.30.2",
+        OPENGREP_VERSION: "v1.31.0",
         OPENGREP_LINUX_X64_SHA256:
-          "a66aa3278457f02b287b985a45b6762aebcaba5000f2689245fd1ed86d1456c7",
+          "dbbe3c2058dbe600c449a8ba22ea79a1643a6660658400090d0323a8d0d31147",
       });
       expectIncludes(
         run,
@@ -1970,7 +1969,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     const javaStep = requiredWorkflowStep(action.runs.steps, "Setup Java");
     const installStep = requiredWorkflowStep(action.runs.steps, "Install Android SDK packages");
 
-    expect(javaStep.uses).toBe("actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6");
+    expect(javaStep.uses).toBe("actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad");
     expect(javaStep.with).toMatchObject({
       distribution: "temurin",
       "java-version": 17,
@@ -2514,6 +2513,64 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       }
     },
   );
+
+  it("prepares the selected Control UI Gateway runtime before Vitest and stops on preparation failure", () => {
+    const root = tempDirs.make("openclaw-ui-runtime-preparation-");
+    const bin = path.join(root, "bin");
+    const vitest = path.join(root, "node_modules/vitest");
+    const suite = "ui/src/e2e/stale-build-recovery.production.e2e.test.ts";
+    mkdirSync(bin);
+    mkdirSync(vitest, { recursive: true });
+    mkdirSync(path.dirname(path.join(root, suite)), { recursive: true });
+    writeFileSync(path.join(root, suite), "");
+    writeFileSync(
+      path.join(vitest, "package.json"),
+      JSON.stringify({ type: "module", exports: { "./node": "./node.js" } }),
+    );
+    writeFileSync(
+      path.join(vitest, "node.js"),
+      `export async function createVitest() {
+        return {
+          config: { sequence: { sequencer: class { async shard(files) { return files; } } } },
+          async globTestSpecifications() {
+            return process.env.SELECT_RUNTIME === "1" ? [{ moduleId: ${JSON.stringify(path.join(root, suite))} }] : [];
+          },
+          async close() {},
+        };
+      }`,
+    );
+    writeExecutable(path.join(bin, "node"), [
+      "#!/bin/sh",
+      'case "$1" in',
+      '  scripts/run-node.mjs) echo prepare >> "$EVENTS"; exit "${PREPARE_EXIT:-0}" ;;',
+      '  scripts/run-vitest.mjs) echo test >> "$EVENTS" ;;',
+      "  *) exit 1 ;;",
+      "esac",
+    ]);
+    const events = path.join(root, "events");
+    for (const [selected, exit, expected] of [
+      ["0", "0", "test\n"],
+      ["1", "0", "prepare\ntest\n"],
+      ["1", "7", "prepare\n"],
+    ]) {
+      writeFileSync(events, "");
+      const result = runControlUiE2eWorkflow({
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          EVENTS: events,
+          SELECT_RUNTIME: selected,
+          PREPARE_EXIT: exit,
+          OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "",
+          VITEST_SHARD_INDEX: "1",
+          VITEST_SHARD_COUNT: "1",
+        },
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(Number(exit));
+      expect(readFileSync(events, "utf8")).toBe(expected);
+    }
+  });
 
   it("resolves the pull request base and changed files from the shallow security checkout", () => {
     const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
@@ -3405,8 +3462,40 @@ server.listen(0, "127.0.0.1", () => {
       save,
       restore,
       steps.find((step) => step.name === "Warm transform and compile caches"),
+      steps.find((step) => step.name === "Save built-source compiled Vitest workers"),
     ].map((step) => steps.indexOf(expectDefined(step, "ordered warming step")));
     expect(ordered).toEqual(ordered.toSorted((a, b) => a - b));
+
+    const builtSave = requiredWorkflowStep(steps, "Save built-source compiled Vitest workers");
+    const producerSteps = readCiWorkflow().jobs["build-artifacts"].steps as WorkflowStep[];
+    const builtRestore = requiredWorkflowStep(
+      producerSteps,
+      "Restore built-source compiled Vitest workers",
+    );
+    expect(builtSave.uses).toBe(CACHE_SAVE_V5);
+    expect(builtRestore.uses).toBe(CACHE_V5);
+    expect(builtSave.if).toContain("steps.warm-caches.outcome == 'success'");
+    expect(builtSave.with?.path).toBe(".artifacts/vitest-worker-cache/run-cache-0");
+    expect(builtRestore.with?.path).toBe(builtSave.with?.path);
+    const saveKey = String(builtSave.with?.key);
+    const restoreKey = String(builtRestore.with?.key);
+    expect(saveKey).toContain("-vitest-workers-built-v1-protected-");
+    expect(saveKey).toContain("steps.setup-node-env.outputs.node-toolchain-cache-key");
+    expect(restoreKey.replace("steps.node_setup.", "steps.setup-node-env.")).toBe(saveKey);
+    expect(builtRestore.with?.["restore-keys"]).toBe(
+      restoreKey.replace("${{ github.run_id }}-${{ github.run_attempt }}", "") + "\n",
+    );
+    expect(builtRestore.if).toContain(
+      "needs.preflight.outputs.run_built_source_verifiers == 'true'",
+    );
+    const verifiers = requiredWorkflowStep(producerSteps, "Run built artifact checks");
+    expect(producerSteps.indexOf(builtRestore)).toBeLessThan(producerSteps.indexOf(verifiers));
+    expect(verifiers.env?.SOURCE_VERIFIER_CACHE).toContain(
+      "steps.built_worker_cache.outputs.cache-matched-key != ''",
+    );
+    expect(
+      String(requiredWorkflowStep(steps, "Save compiled Vitest workers").with?.key),
+    ).not.toContain("built-v1");
   });
 
   it("persists Node 26 minimum declarations through trusted bounded artifacts", () => {
@@ -4155,7 +4244,7 @@ ${step.run}`,
     );
     const install = requiredWorkflowStep(steps, "Install actionlint");
 
-    expect(setupGo.with).toEqual({ "go-version": "1.27.2", cache: false });
+    expect(setupGo.with).toEqual({ "go-version": "1.27.3", cache: false });
     expect(steps.indexOf(setupGo)).toBeLessThan(steps.indexOf(install));
     expectIncludes(install.run, [
       `ACTIONLINT_REVISION="${revision}"`,
@@ -5486,6 +5575,23 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     assertControlUiE2eOwnership((prefix) => tempDirs.make(prefix), parser);
   });
 
+  it("restores shared build content while retaining private real-Gateway preparation", () => {
+    const job = readCiWorkflow().jobs["checks-ui-e2e-real-gateway"];
+    const setup = requiredWorkflowStep(job.steps, "Setup Node environment");
+    const build = requiredWorkflowStep(
+      job.steps,
+      "Build runtime and Control UI artifacts for real-Gateway tests",
+    );
+    expect(setup.with?.["build-all-cache-scope"]).toBe("full");
+    expect(job.needs).toEqual(["preflight"]);
+    expect(build.run).toBe("pnpm build");
+    expect(build.env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
+    expect(build.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
+    expect(job.steps.some((step: WorkflowStep) => step.name === "Save build-all cache")).toBe(
+      false,
+    );
+  });
+
   it.each([
     { frozen: false, prebuilt: true, childExit: 0, releaseTier: false },
     { frozen: false, prebuilt: true, childExit: 0, releaseTier: true },
@@ -5716,13 +5822,13 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       PARALLEL_BUILT_VERIFIERS: "${{ runner.environment != 'github-hosted' && 'true' || 'false' }}",
       PARALLEL_GATEWAY_WATCH: "${{ runner.environment != 'github-hosted' && 'true' || 'false' }}",
       RUN_CHANNELS:
-        "${{ needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true' }}",
+        "${{ (needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true') || needs.preflight.outputs.run_built_source_verifiers == 'true' }}",
       FROZEN_TARGET: "${{ needs.preflight.outputs.frozen_target }}",
     });
     expectIncludes(run, [
       'OPENCLAW_VITEST_FS_MODULE_CACHE_PATH="${RUNNER_TEMP}/vitest-module-cache/${name}"',
       "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
-      "env OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run",
+      "env OPENCLAW_VITEST_WORKER_CACHE=1 OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run",
       "--config test/vitest/vitest.e2e.config.ts",
       "Selected target predates",
       "pnpm test:build:singleton",
@@ -5734,7 +5840,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1",
       'start_check "channels"',
       'start_check "gateway-watch"',
-      "for name in channels core-support-boundary discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton sqlite-session-lifecycle startup-memory tui-pty; do",
+      "for name in channels core-support-boundary source-support discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton sqlite-session-lifecycle startup-memory tui-pty; do",
       "wait_checks()",
     ]);
     for (const slice of [
@@ -5756,7 +5862,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expectIncludes(run.slice(tui, wait(tui, true)), [
       "src/tui/tui-pty-local.e2e.test.ts",
       "--testNamePattern",
-      "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY",
+      "launches openclaw chat as local mode through a real PTY",
     ]);
     const upload = requiredWorkflowStep(steps, "Upload Discord component attachment proof");
     expect(upload.with["if-no-files-found"]).toBe("error");
@@ -5765,6 +5871,126 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "${{ runner.temp }}/discord-component-attachments.log",
     ]);
     expect(run.match(/wait_checks$/gmu)).toHaveLength(9);
+  });
+
+  it.each([
+    {
+      name: "shared",
+      channels: true,
+      core: true,
+      supported: true,
+      expected: ["source-support|||--max-old-space-size=8192|1"],
+    },
+    {
+      name: "failed shared runner",
+      channels: true,
+      core: true,
+      supported: true,
+      failure: "source-support",
+      expected: ["source-support|||--max-old-space-size=8192|1"],
+    },
+    {
+      name: "channels only",
+      channels: true,
+      core: false,
+      supported: true,
+      cache: "0",
+      expected: ["channels|--max-old-space-size=8192|1|--max-old-space-size=8192|1"],
+    },
+    {
+      name: "core only",
+      channels: false,
+      core: true,
+      supported: true,
+      expected: ["core-support-boundary|--max-old-space-size=8192|2|--max-old-space-size=8192|1"],
+    },
+    {
+      name: "older target",
+      channels: true,
+      core: true,
+      supported: false,
+      failure: "channels",
+      expected: [
+        "channels|--max-old-space-size=8192|1|--max-old-space-size=8192|1",
+        "core-support-boundary|--max-old-space-size=8192|2|--max-old-space-size=8192|1",
+      ],
+    },
+    {
+      name: "different compiler heaps",
+      channels: true,
+      core: true,
+      supported: true,
+      heap: "--max-old-space-size=4096",
+      failure: "core-support-boundary",
+      expected: [
+        "channels|--max-old-space-size=4096|1|--max-old-space-size=4096|1",
+        "core-support-boundary|--max-old-space-size=8192|2|--max-old-space-size=4096|1",
+      ],
+    },
+  ])("dispatches built source checks and preserves failures: $name", (scenario) => {
+    const step = requiredWorkflowStep(
+      readCiWorkflow().jobs["build-artifacts"].steps,
+      "Run built artifact checks",
+    );
+    const directory = tempDirs.make("openclaw-built-source-checks-");
+    const bin = path.join(directory, "bin");
+    const calls = path.join(directory, "calls");
+    mkdirSync(bin);
+    mkdirSync(path.join(directory, "scripts"));
+    writeFileSync(calls, "");
+    if (scenario.supported) {
+      writeFileSync(path.join(directory, "scripts/test-built-source-verifiers.mts"), "");
+    }
+    // Stub only external commands; selection, joining, and failure aggregation run the real shell.
+    for (const command of ["node", "pnpm"]) {
+      writeExecutable(path.join(bin, command), [
+        "#!/bin/sh",
+        'name=""',
+        'case "$(basename "$0") $*" in',
+        "  *scripts/test-built-source-verifiers.mts) name=source-support ;;",
+        '  "pnpm test:channels") name=channels ;;',
+        "  *test/vitest/vitest.full-core-support-boundary.config.ts) name=core-support-boundary ;;",
+        "esac",
+        'if [ -n "$name" ]; then',
+        '  printf "%s|%s|%s|%s|%s|%s\\n" "$name" "${NODE_OPTIONS:-}" "${OPENCLAW_VITEST_MAX_WORKERS:-}" "$CHANNEL_NODE_OPTIONS" "$CHANNEL_MAX_WORKERS" "$OPENCLAW_VITEST_WORKER_CACHE" >> "$CHECK_CALLS"',
+        '  if [ "$name" = "$FAIL_CHECK" ]; then exit 7; fi',
+        "fi",
+      ]);
+    }
+    const heap = scenario.heap ?? "--max-old-space-size=8192";
+    const result = runWorkflowShellScript(step.run, {
+      linuxWorkflow: true,
+      cwd: directory,
+      env: {
+        ...process.env,
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        RUNNER_TEMP: directory,
+        CHECK_CALLS: calls,
+        FAIL_CHECK: scenario.failure ?? "",
+        NODE_OPTIONS: "",
+        OPENCLAW_VITEST_MAX_WORKERS: "",
+        CHANNEL_NODE_OPTIONS: heap,
+        CHANNEL_MAX_WORKERS: "1",
+        SOURCE_VERIFIER_CACHE: scenario.cache ?? "1",
+        RUN_CHANNELS: String(scenario.channels),
+        RUN_CORE_SUPPORT_BOUNDARY: String(scenario.core),
+        RUN_DOCTOR_PLUGIN_INDEX: "false",
+        RUN_SQLITE_SESSION_LIFECYCLE: "false",
+        RUN_GATEWAY_WATCH: "false",
+        RUN_DISCORD_COMPONENT_PROOF: "false",
+        RUN_TUI_PTY: "false",
+        PARALLEL_GATEWAY_WATCH: "true",
+        PARALLEL_BUILT_VERIFIERS: "true",
+        FROZEN_TARGET: String(!scenario.supported),
+      },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(scenario.failure ? 1 : 0);
+    expect(readFileSync(calls, "utf8").trim().split("\n").toSorted()).toEqual(
+      scenario.expected.map((call) => `${call}|${scenario.cache ?? "1"}`).toSorted(),
+    );
+    if (scenario.failure) {
+      expect(result.stdout).toContain(`::error title=${scenario.failure} failed::`);
+    }
   });
 
   it.each([
@@ -5794,6 +6020,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const step = readCiWorkflow().jobs["build-artifacts"].steps.find(
         (entry: WorkflowStep) => entry.name === "Verify built browser native host",
       );
+      expect(step.env).toMatchObject({
+        OPENCLAW_E2E_USE_PREBUILT_DIST: "1",
+        OPENCLAW_VITEST_WORKER_CACHE: "1",
+        OPENCLAW_VITEST_MAX_WORKERS: "1",
+      });
       const root = tempDirs.make("openclaw-frozen-browser-proof-report-");
       const file = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
       const report = {
@@ -5867,6 +6098,63 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(buildArtifactSteps.map((step: WorkflowStep) => step.name)).not.toContain(
       "Cache dist build",
     );
+  });
+
+  it("publishes build records only after trusted scheduled-main compilation", () => {
+    const steps = readCiWorkflow().jobs["build-artifacts"].steps;
+    const save = requiredWorkflowStep(steps, "Save build-all cache");
+    expect(save.uses).toBe(CACHE_SAVE_V5);
+    expect(save.with).toEqual({
+      path: ".artifacts/build-all-cache",
+      key: "${{ steps.node_setup.outputs.build-all-cache-key }}",
+    });
+    expect(save["continue-on-error"]).toBe(true);
+    expect(steps.indexOf(save)).toBeGreaterThan(
+      steps.indexOf(requiredWorkflowStep(steps, "Build dist")),
+    );
+    const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+      eventName: "schedule",
+      repository: "openclaw/openclaw",
+      ref: "refs/heads/main",
+      preflightOutputs: {
+        candidate_trust: "main",
+        cache_write_allowed: "true",
+        cache_mode: "restore",
+        frozen_target: "false",
+        compatibility_target: "false",
+      },
+      steps: {
+        dist_build: { outputs: {}, outcome: "success" },
+        node_setup: { outputs: { "build-all-cache-key": "completed-main-build" } },
+      },
+    };
+    expect(evaluateWorkflowExpression(save.if, context)).toBe(true);
+    for (const rejected of [
+      { eventName: "push" as const },
+      { eventName: "workflow_dispatch" as const },
+      { eventName: "pull_request" as const },
+      { repository: "contributor/openclaw" },
+      { ref: "refs/heads/feature" },
+      { failed: true },
+      { cancelled: true },
+      { releaseGate: true },
+      { preflightOutputs: { ...context.preflightOutputs, candidate_trust: "release" } },
+      { preflightOutputs: { ...context.preflightOutputs, cache_write_allowed: "false" } },
+      { preflightOutputs: { ...context.preflightOutputs, cache_mode: "off" } },
+      { preflightOutputs: { ...context.preflightOutputs, frozen_target: "true" } },
+      { preflightOutputs: { ...context.preflightOutputs, compatibility_target: "true" } },
+      {
+        steps: {
+          ...context.steps,
+          node_setup: { outputs: { "build-all-cache-key": "" } },
+        },
+      },
+      ...(["failure", "cancelled", "skipped"] as const).map((outcome) => ({
+        steps: { ...context.steps, dist_build: { outputs: {}, outcome } },
+      })),
+    ]) {
+      expect(evaluateWorkflowExpression(save.if, { ...context, ...rejected })).toBe(false);
+    }
   });
 
   it("keeps the AI runtime in Testbox build artifact caches", () => {
@@ -6179,9 +6467,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       },
       run: "node scripts/pr-crabbox-gate-publisher.mjs --publish",
     });
-    expect(job.steps[2].run).toContain("crabbox_0.77.0_linux_amd64.tar.gz");
+    expect(job.steps[2].run).toContain("crabbox_0.79.2_linux_amd64.tar.gz");
     expect(job.steps[2].run).toContain(
-      "cbf6cb74251a454c65d13d7a92b070cf8c37ee81c300c97123063b9d21206d5f",
+      "316e2d788c9f85d0a7e876a0a91eab5e0a9257b8c572ca2c1372dbe066395dae",
     );
     expect(job.steps.slice(3, 5)).toMatchObject([
       {

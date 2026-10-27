@@ -1,9 +1,12 @@
 import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
+import { operatorRecoverySnapshotFixture } from "../../gateway/server/client-fixtures.test-support.js";
+import { execNodeEvalSync } from "../../test-utils/node-process.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { createSessionHistoryWorkerReaders } from "./session-transcript-worker-readers.js";
 import { createSessionHistoryWorkerRequestStub } from "./session-transcript-worker-readers.test-support.js";
+import type { InternalSessionEntry } from "./types.js";
 
 const storageStateDir = path.resolve("synthetic-worker-state");
 const storagePath = path.join(storageStateDir, "agents", "main", "agent.sqlite");
@@ -13,21 +16,153 @@ const storageEnv = new Proxy(
 );
 type Readers = ReturnType<typeof createSessionHistoryWorkerReaders>;
 const storageInput = { env: storageEnv };
+const messagePresenceInput = { scope: { agentId: "main", sessionId: "synthetic-session" } };
+
+function summaryEntry(sessionKey: string): InternalSessionEntry {
+  const identity = {
+    sessionId: "synthetic-session",
+    lifecycleRevision: "synthetic-lifecycle",
+  };
+  const summary = { ...identity, sessionKey, agentId: "main" };
+  return {
+    ...identity,
+    updatedAt: 1,
+    lastRunId: "synthetic-run",
+    observerDigest: {
+      ...summary,
+      runId: "synthetic-run",
+      revision: 1,
+      updatedAt: 1,
+      headline: "Finished",
+      health: "done",
+    },
+    restartRecoveryOperatorSource: {
+      version: 1,
+      ...summary,
+      sourceRunId: "synthetic-run",
+      snapshot: operatorRecoverySnapshotFixture("synthetic-profile", "synthetic-grant", {
+        localOperator: true,
+      }),
+    },
+  };
+}
+
+it.each(["matching", "stale", "legacy"] as const)(
+  "preserves %s summary evidence when adopting worker entries",
+  async (kind) => {
+    const sessionKey = "agent:main:synthetic-summary";
+    const entry = summaryEntry(sessionKey);
+    if (kind === "stale") {
+      Object.assign(entry.restartRecoveryOperatorSource!, {
+        sessionKey: "agent:other:previous",
+        sessionId: "previous-session",
+        lifecycleRevision: "previous-lifecycle",
+        sourceRunId: "previous-run",
+        agentId: "other",
+      });
+      Object.assign(entry.observerDigest!, {
+        sessionId: "previous-session",
+        lifecycleRevision: "previous-lifecycle",
+      });
+    } else if (kind === "legacy") {
+      delete entry.observerDigest!.sessionId;
+      delete entry.observerDigest!.lifecycleRevision;
+      delete entry.observerDigest!.runId;
+      delete entry.observerDigest!.agentId;
+      delete entry.restartRecoveryOperatorSource!.lifecycleRevision;
+    }
+    const expected = structuredClone(entry);
+    const readers = createSessionHistoryWorkerReaders(
+      createSessionHistoryWorkerRequestStub(async () => ({
+        kind: "session-exact-entries",
+        entries: structuredClone([{ sessionKey, entry }]),
+        lifecycleTimestamps: {},
+      })),
+    );
+    const result = await readers.readExactEntries({ env: {}, sessionKeys: [sessionKey] });
+    expect(result.entries).toStrictEqual([{ sessionKey, entry: expected }]);
+  },
+);
+
 const session = { ...storageInput, sessionId: "one" };
-// One direct reader covers the shared factory; keep both custom eviction preparers.
+
+it("retains one physical string for each equal summary identity after worker decoding", () => {
+  const sessionKey = "agent:main:synthetic-summary";
+  const payload = JSON.stringify({
+    kind: "session-exact-entries",
+    entries: [{ sessionKey, entry: summaryEntry(sessionKey) }],
+    lifecycleTimestamps: {},
+  });
+  // A small fresh isolate avoids snapshotting the test runner and its other loaded suites.
+  const output = execNodeEvalSync(
+    `
+      import assert from "node:assert/strict";
+      import { getHeapSnapshot } from "node:v8";
+      import { createSessionHistoryWorkerReaders } from "./src/config/sessions/session-transcript-worker-readers.ts";
+      const readers = createSessionHistoryWorkerReaders(async (_prepare, _bytes, receive) =>
+        receive(JSON.parse(${JSON.stringify(payload)})));
+      class RetainedSummaryRows { constructor(rows) { this.rows = rows; } }
+      globalThis.fixture = new RetainedSummaryRows(
+        (await readers.readExactEntries({ env: {}, sessionKeys: [${JSON.stringify(sessionKey)}] })).entries);
+      const chunks = [];
+      for await (const chunk of getHeapSnapshot()) chunks.push(chunk);
+      const { snapshot, nodes, edges, strings } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      const fields = snapshot.meta.node_fields;
+      const edgeFields = snapshot.meta.edge_fields;
+      const width = fields.length;
+      const edgeWidth = edgeFields.length;
+      const type = fields.indexOf("type");
+      const name = fields.indexOf("name");
+      const edgeCount = fields.indexOf("edge_count");
+      const starts = new Map();
+      let offset = 0;
+      let holder;
+      for (let node = 0; node < nodes.length; node += width) {
+        starts.set(node, offset);
+        offset += nodes[node + edgeCount] * edgeWidth;
+        if (snapshot.meta.node_types[type][nodes[node + type]] === "object" &&
+            strings[nodes[node + name]] === "RetainedSummaryRows") holder = node;
+      }
+      assert.notEqual(holder, undefined);
+      function target(node, key) {
+        const start = starts.get(node);
+        for (let edge = start; edge < start + nodes[node + edgeCount] * edgeWidth; edge += edgeWidth) {
+          const kind = snapshot.meta.edge_types[edgeFields.indexOf("type")][edges[edge + edgeFields.indexOf("type")]];
+          const name = edges[edge + edgeFields.indexOf("name_or_index")];
+          if ((kind === "property" && strings[name] === key) || (kind === "element" && name === key)) {
+            return edges[edge + edgeFields.indexOf("to_node")];
+          }
+        }
+        throw new Error("Missing fixture field " + key);
+      }
+      const row = target(target(holder, "rows"), 0);
+      const entry = target(row, "entry");
+      const digest = target(entry, "observerDigest");
+      const source = target(entry, "restartRecoveryOperatorSource");
+      for (const nested of [digest, source]) {
+        for (const field of ["sessionId", "lifecycleRevision"]) {
+          assert.equal(target(nested, field), target(entry, field), field + " retained a duplicate string node");
+        }
+        assert.equal(target(nested, "sessionKey"), target(row, "sessionKey"));
+      }
+      assert.equal(target(source, "sourceRunId"), target(entry, "lastRunId"));
+      assert.equal(target(digest, "runId"), target(entry, "lastRunId"));
+      assert.equal(target(source, "agentId"), target(digest, "agentId"));
+      console.log("shared summary identities");
+    `,
+    { imports: ["./scripts/tsx.mjs"], timeout: 30_000 },
+  );
+  expect(output.trim()).toBe("shared summary identities");
+});
+
+// Exercise both environment locations in the shared reader factory.
 const storageRequests: Array<[string, (readers: Readers) => Promise<unknown>]> = [
   ["cold metadata", (readers) => readers.readColdMetadata(session)],
   [
-    "historical eviction",
+    "activity summary",
     (readers) =>
-      readers.readHistoricalEvictionCandidates({ ...storageInput, admissionIdentities: [] }),
-  ],
-  [
-    "archived eviction",
-    (readers) =>
-      readers.readArchivedEvictionCandidates({
-        ...storageInput,
-        archived: { liveSessionKeys: [] },
+      readers.readActivitySummarySource({
+        scope: { agentId: "main", sessionId: "one", storePath: storagePath, env: storageEnv },
       }),
   ],
 ];
@@ -37,21 +172,14 @@ it.each(storageRequests)("serializes Proxy environments for %s requests", async 
   const readers = createSessionHistoryWorkerReaders(async (prepare) => {
     // Exercise the actual producer without starting a Worker or opening a database.
     const request = structuredClone(prepare());
-    expect(request).toMatchObject({ env: { ...storageEnv } });
+    expect(request).toMatchObject(
+      _name === "activity summary"
+        ? { scope: { env: { ...storageEnv } } }
+        : { env: { ...storageEnv } },
+    );
     throw serialized;
   });
   await expect(read(readers)).rejects.toBe(serialized);
-});
-
-it("serializes the nested Proxy environment for activity summary reads", async () => {
-  const serialized = new Error("Stopped after serializing the worker request");
-  const readers = createSessionHistoryWorkerReaders(async (prepare) => {
-    const request = structuredClone(prepare());
-    expect(request).toMatchObject({ scope: { env: { ...storageEnv } } });
-    throw serialized;
-  });
-  const scope = { agentId: "main", sessionId: "one", storePath: storagePath, env: storageEnv };
-  await expect(readers.readActivitySummarySource({ scope })).rejects.toBe(serialized);
 });
 
 const transcriptInput = {
@@ -81,18 +209,25 @@ function readFrames(frames: unknown[], eventCount: number, rawSeq = 7, encoding 
   return readers.readTranscript(transcriptInput, signal);
 }
 
-it("preserves the direct read request, signal, and projected result", async () => {
-  const input = { scope: { agentId: "main", sessionId: "synthetic-session" } };
+it("keeps interleaved decorated readers on their own request runner", async () => {
+  const first = Promise.withResolvers<boolean>();
+  const second = Promise.withResolvers<boolean>();
   const signal = new AbortController().signal;
-  const readers = createSessionHistoryWorkerReaders(
-    createSessionHistoryWorkerRequestStub(async (prepare, inputBytes, receivedSignal) => {
-      expect(prepare()).toEqual({ kind: "transcript-message-presence", ...input });
-      expect(inputBytes).toBe(JSON.stringify(input).length * 2);
-      expect(receivedSignal).toBe(signal);
-      return { kind: "transcript-message-presence", present: true };
-    }),
-  );
-  await expect(readers.readMessagePresence(input, signal)).resolves.toBe(true);
+  const create = (result: Promise<boolean>) => ({
+    ...createSessionHistoryWorkerReaders(
+      createSessionHistoryWorkerRequestStub(async (_prepare, _bytes, receivedSignal) => {
+        expect(receivedSignal).toBe(signal);
+        return { kind: "transcript-message-presence", present: await result };
+      }),
+    ),
+    assertCurrent() {},
+  });
+  const firstRead = create(first.promise).readMessagePresence(messagePresenceInput, signal);
+  const secondRead = create(second.promise).readMessagePresence(messagePresenceInput, signal);
+  second.resolve(false);
+  await expect(secondRead).resolves.toBe(false);
+  first.resolve(true);
+  await expect(firstRead).resolves.toBe(true);
 });
 
 it.each(["archives", "corpus", "targets", "exact entries", "row facts"] as const)(
@@ -101,6 +236,7 @@ it.each(["archives", "corpus", "targets", "exact entries", "row facts"] as const
     const stateDir = path.resolve("synthetic-state");
     const storePath = path.join(stateDir, "sessions.sqlite");
     const platform = process.platform;
+    const serialized = new Error("Stopped after serializing the worker request");
     Object.defineProperty(process, "platform", { value: "win32" });
     try {
       const env = cloneEnvWithPlatformSemantics({
@@ -119,23 +255,20 @@ it.each(["archives", "corpus", "targets", "exact entries", "row facts"] as const
           };
           switch (request.kind) {
             case "session-row-facts":
-              expect(request.env).toEqual(expectedEnv);
-              return { kind: request.kind, rows: [] };
             case "session-exact-entries":
-              expect(request.env).toEqual(expectedEnv);
-              return { kind: request.kind, entries: [], lifecycleTimestamps: {} };
             case "session-archive-inventory":
               expect(request.env).toEqual(expectedEnv);
-              return { kind: request.kind, archives: [] };
+              break;
             case "session-corpus-inventory":
               expect(request.scope.env).toEqual(expectedEnv);
-              return { kind: request.kind, entries: [] };
+              break;
             case "memory-session-targets":
               expect(request.params.env).toEqual(expectedEnv);
-              return { kind: request.kind, targets: [] };
+              break;
             default:
               throw new Error(`Unexpected inventory request: ${request.kind}`);
           }
+          throw serialized;
         }),
       );
       const archive = { agentId: "main", storePath, env, sessionIds: ["one"] };
@@ -159,34 +292,12 @@ it.each(["archives", "corpus", "targets", "exact entries", "row facts"] as const
             artifacts: [],
           }),
       };
-      await expect(reads[inventory]()).resolves.toEqual(
-        inventory === "row facts"
-          ? { kind: "session-row-facts", rows: [] }
-          : inventory === "exact entries"
-            ? { kind: "session-exact-entries", entries: [], lifecycleTimestamps: {} }
-            : [],
-      );
+      await expect(reads[inventory]()).rejects.toBe(serialized);
     } finally {
       Object.defineProperty(process, "platform", { value: platform });
     }
   },
 );
-
-it("passes the cold metadata caller's signal to its reader task", async () => {
-  const input = { sessionId: "synthetic-cold-session", env: {} };
-  const signal = new AbortController().signal;
-  const readers = createSessionHistoryWorkerReaders(
-    createSessionHistoryWorkerRequestStub(async (prepare, _inputBytes, receivedSignal) => {
-      expect(prepare()).toEqual({ kind: "cold-metadata", ...input });
-      expect(receivedSignal).toBe(signal);
-      return { kind: "cold-metadata", archive: undefined };
-    }),
-  );
-  await expect(readers.readColdMetadata(input, signal)).resolves.toEqual({
-    kind: "cold-metadata",
-    archive: undefined,
-  });
-});
 
 it("decodes cross-realm Uint8Array transcript frames", async () => {
   const event = { type: "message", text: "hello 🦞" };

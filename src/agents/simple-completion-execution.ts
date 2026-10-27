@@ -156,10 +156,11 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
       suppressPluginHooks: true,
     },
     options: completionOptions,
-    createObserver: (capturePromptStats) =>
+    createObserver: (capturePromptStats, captureByteStats) =>
       createModelObserver({
         streamContext: params.context,
         capturePromptStats,
+        captureByteStats,
         suppressPluginHooks: true,
       }),
   });

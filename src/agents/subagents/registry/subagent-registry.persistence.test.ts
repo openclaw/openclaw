@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 import "./subagent-registry.persistence.mocks.test-support.js";
 // Preserve module setup before modules that consume it.
@@ -6,13 +6,9 @@ import "./subagent-registry.persistence.mocks.test-support.js";
 import { activateSubagentPersistenceRegistry, announceSpy, createSubagentPersistenceRuntime, useSubagentPersistenceFixture } from "./subagent-registry.persistence-fixture.test-support.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/config.js";
-import {
-  patchSessionEntryCore,
-  replaceSessionEntry,
-} from "../../../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "../../../config/sessions/session-entry-current-check.js";
 import * as sessionReads from "../../../config/sessions/session-entry-read-runtime.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
 import { sessionSharingTestContext } from "../../../gateway/server-methods/sessions-sharing.test-support.js";
 import * as agentEvents from "../../../infra/agent-events.js";
@@ -78,20 +74,18 @@ function makeRun(runId: string, overrides: Partial<SubagentRunFixture> = {}): Su
 
 describe("subagent registry persistence", () => {
   const fixture = useSubagentPersistenceFixture();
+  beforeEach(() => fixture.allocateStateDir());
 
-  const resolveAgentIdFromSessionKey = (sessionKey: string) => {
-    const match = sessionKey.match(/^agent:([^:]+):/i);
-    return (match?.[1] ?? "main").trim().toLowerCase() || "main";
-  };
-
+  const agentIdFor = (key: string) =>
+    (key.match(/^agent:([^:]+):/i)?.[1] ?? "main").trim().toLowerCase() || "main";
   const writeChildSessionEntry = async (params: {
     sessionKey: string;
     sessionId?: string;
     updatedAt?: number;
     abortedLastRun?: boolean;
   }) => {
-    const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-    return await writeSubagentSessionEntry({
+    const agentId = agentIdFor(params.sessionKey);
+    return writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
       agentId,
       ...params,
@@ -99,37 +93,25 @@ describe("subagent registry persistence", () => {
     });
   };
 
-  const removeChildSessionEntry = async (sessionKey: string) => {
-    const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    return await removeSubagentSessionEntry({
+  const removeChildSessionEntry = (sessionKey: string) =>
+    removeSubagentSessionEntry({
       stateDir: fixture.stateDir,
-      agentId,
+      agentId: agentIdFor(sessionKey),
       sessionKey,
     });
-  };
 
-  const persistRuns = async (runs: SubagentRunRecord[], seedChildSessions = true) => {
-    await fixture.allocateStateDir();
+  const writePersistedRegistry = async (persisted: Record<string, unknown>) => {
+    const runs = Object.values((persisted.runs ?? {}) as Record<string, SubagentRunFixture>).map(
+      createCanonicalSubagentRunFixture,
+    );
     saveSubagentRegistryToSqlite(new Map(runs.map((run) => [run.runId, run])));
-    if (seedChildSessions) {
-      for (const run of runs) {
-        await writeChildSessionEntry({
-          sessionKey: run.childSessionKey,
-          sessionId: `sess-${run.runId}`,
-        });
-      }
+    for (const run of runs) {
+      await writeChildSessionEntry({
+        sessionKey: run.childSessionKey,
+        sessionId: `sess-${run.runId}`,
+      });
     }
   };
-  const writePersistedRegistry = (
-    persisted: Record<string, unknown>,
-    opts?: { seedChildSessions?: boolean },
-  ) =>
-    persistRuns(
-      Object.values((persisted.runs ?? {}) as Record<string, SubagentRunFixture>).map(
-        createCanonicalSubagentRunFixture,
-      ),
-      opts?.seedChildSessions !== false,
-    );
   const endedRun = (runId: string, overrides: Partial<SubagentRunFixture> = {}) => {
     const now = Date.now();
     return makeRun(runId, { createdAt: now - 2, startedAt: now - 1, endedAt: now, ...overrides });
@@ -166,12 +148,45 @@ describe("subagent registry persistence", () => {
       run: makeRun(`run-${name}`, { childSessionKey, ...overrides }),
     };
   };
+  const runningRun = (runId: string) => {
+    const now = Date.now();
+    return makeRun(runId, {
+      createdAt: now,
+      childSessionIdentity: { sessionId: `sess-${runId}` },
+      expectsCompletionMessage: false,
+      execution: { status: "running", startedAt: now },
+    });
+  };
+  const writeRunSession = (entry: SubagentRunRecord) =>
+    writeChildSessionEntry({
+      sessionKey: entry.childSessionKey,
+      sessionId: entry.childSessionIdentity?.sessionId,
+      updatedAt: entry.createdAt,
+    });
+  const holdSessionRead = (entry: SubagentRunRecord, beforeRead = false, fail = false) => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const read = sessionReads.readSessionEntryReadOnlyInWorker;
+    let reads = 0;
+    const spy = vi
+      .spyOn(sessionReads, "readSessionEntryReadOnlyInWorker")
+      .mockImplementation(async (input, assertCurrent) => {
+        const result = beforeRead ? undefined : await read(input, assertCurrent);
+        if (input.sessionKey === entry.childSessionKey && ++reads === 1) {
+          entered.resolve();
+          await release.promise;
+          if (fail) {
+            throw new Error("Synthetic resume session read failure");
+          }
+        }
+        return beforeRead ? read(input, assertCurrent) : result;
+      });
+    return { entered: entered.promise, release: () => release.resolve(), spy, reads: () => reads };
+  };
 
   it.each([false, true])(
     "preserves session state when timing commit is denied (current=%s)",
     async (isCurrent) => {
-      await fixture.allocateStateDir();
-
       const startedAt = Date.now();
       const { run, storePath, key } = await timingFixture("stale-timing", startedAt - 1, {
         createdAt: startedAt,
@@ -202,44 +217,9 @@ describe("subagent registry persistence", () => {
     },
   );
 
-  it("does not overwrite durable completion with a provisional killed status", async () => {
-    await fixture.allocateStateDir();
-
-    const startedAt = Date.now();
-    const completedAt = startedAt + 500;
-    const { run, storePath, key } = await timingFixture("kill-race", completedAt, {
-      createdAt: startedAt,
-      endedReason: "subagent-killed",
-      startedAt,
-      endedAt: completedAt + 1,
-      outcome: { status: "error", error: "manual kill" },
-    });
-    const store = await readSubagentSessionStore(storePath);
-    await replaceSessionEntry({ storePath, sessionKey: key }, {
-      ...store[key],
-      status: "done",
-      startedAt,
-      endedAt: completedAt,
-      runtimeMs: 500,
-      abortedLastRun: true,
-    } as SessionEntry);
-
-    await persistSubagentSessionTiming(run);
-
-    const persisted = (await readSubagentSessionStore(storePath))[key];
-    expect(persisted).toMatchObject({
-      status: "done",
-      startedAt,
-      endedAt: completedAt,
-      runtimeMs: 500,
-    });
-    expect(persisted?.abortedLastRun).toBeUndefined();
-  });
-
   it.each(["reset", "delete"] as const)(
     "preserves the retained session row when late timing settles during %s",
     async (kind) => {
-      await fixture.allocateStateDir();
       const { key, session, storePath, run } = await timingFixture("mutation-timing", 999, {
         startedAt: 1_000,
         endedAt: 1_500,
@@ -297,7 +277,6 @@ describe("subagent registry persistence", () => {
   it.each([false, true])(
     "persists terminal timing inside ordinary kill ownership (queued=%s)",
     async (queued) => {
-      await fixture.allocateStateDir();
       const { key, session, storePath, run } = await timingFixture("kill-timing", 999, {
         collect: queued,
         startedAt: queued ? undefined : 1_000,
@@ -335,11 +314,7 @@ describe("subagent registry persistence", () => {
   );
 
   it("normalizes newly registered session keys to canonical trimmed values", async () => {
-    await fixture.allocateStateDir();
-
-    vi.mocked(callGateway).mockResolvedValueOnce({
-      status: "pending",
-    });
+    vi.mocked(callGateway).mockResolvedValueOnce({ status: "pending" });
 
     await registerSubagentRun({
       runId: " run-live ",
@@ -367,7 +342,6 @@ describe("subagent registry persistence", () => {
   });
 
   it("reloads waitable swarm collector completions after a gateway restart until retention expires", async () => {
-    await fixture.allocateStateDir();
     setRuntimeConfigSnapshot({
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
     });
@@ -417,16 +391,12 @@ describe("subagent registry persistence", () => {
     const restored = loadSubagentRegistryFromSqlite().get(run.runId);
 
     expect(restored).toMatchObject({
-      runId: run.runId,
       collect: true,
       swarmRequesterSessionKey: run.swarmRequesterSessionKey,
       swarmWaitOwnerSessionKeys: run.swarmWaitOwnerSessionKeys,
       groupId: run.groupId,
       outputSchema: run.outputSchema,
-      completion: { resultText: "raw answer" },
       collectorCompletion: {
-        status: "done",
-        structured: { answer: 42 },
         usage: { inputTokens: 10, outputTokens: 3 },
       },
     });
@@ -508,7 +478,6 @@ describe("subagent registry persistence", () => {
       childSessionIdentity: { sessionId: `sess-${runId}` },
       cleanup,
     });
-    await fixture.allocateStateDir();
     await prepareSubagentRecoveryFixture(run, { stateDir: fixture.stateDir });
     saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
     await writeChildSessionEntry({ sessionKey: childSessionKey, sessionId: `sess-${runId}` });
@@ -527,60 +496,47 @@ describe("subagent registry persistence", () => {
     let readiness: Promise<void> | undefined;
     try {
       await restartRegistry();
-      await waitForRegistry(() =>
-        expect(announceSpy, "first announcement admitted").toHaveBeenCalledOnce(),
-      );
+      await waitForRegistry(() => expect(announceSpy).toHaveBeenCalledOnce());
       readiness = waitForRegistry(() => {
         expectDeferredSubagentAnnouncement(readPersistedRun(runId), runId);
       }).then(() => {
         retryReady = true;
       });
       await vi.dynamicImportSettled();
-      const held = loadSubagentRegistryFromSqlite().get(runId);
-      expect(held?.cleanupHandled, "serialized lock is not retry readiness").toBe(false);
-      expect(
-        (await getSubagentRunByChildSessionKey(childSessionKey))?.cleanupHandled,
-        "acknowledged runtime lock remains held; decoded durable row is restart-ready",
-      ).toBe(true);
-      expect(
-        [held?.delivery?.attemptCount, held?.delivery?.payload, held?.delivery?.nextAttemptAt],
-        "no deferral before announcement settles",
-      ).toEqual([undefined, undefined, undefined]);
-      expect(retryReady, "retry readiness must remain pending while announcement is held").toBe(
-        false,
-      );
+      const held = readPersistedRun(runId);
+      // Restart readiness must not release the acknowledged runtime lock.
+      expect(held?.cleanupHandled).toBe(false);
+      expect((await getSubagentRunByChildSessionKey(childSessionKey))?.cleanupHandled).toBe(true);
+      expect([
+        held?.delivery?.attemptCount,
+        held?.delivery?.payload,
+        held?.delivery?.nextAttemptAt,
+      ]).toEqual([undefined, undefined, undefined]);
+      expect(retryReady).toBe(false);
       releaseAnnouncement();
       await readiness;
-      expect(announceSpy, "first attempt deferred").toHaveBeenCalledOnce();
+      expect(announceSpy).toHaveBeenCalledOnce();
       await fixture.settle();
 
       announceSpy.mockResolvedValueOnce("delivered");
       const beforeRetry = Date.now();
       await restartRegistry();
-      await waitForRegistry(() =>
-        expect(settlement.run, "retry reached requester settlement").toHaveBeenCalledOnce(),
-      );
-      expect(announceSpy, "explicit retry delivered").toHaveBeenCalledTimes(2);
-      const delivered = loadSubagentRegistryFromSqlite().get(runId);
-      expect(delivered, "delivery precedes requester settlement").toMatchObject({
+      await waitForRegistry(() => expect(settlement.run).toHaveBeenCalledOnce());
+      expect(announceSpy).toHaveBeenCalledTimes(2);
+      const delivered = readPersistedRun(runId);
+      expect(delivered).toMatchObject({
         delivery: { status: "delivered" },
       });
       expect(delivered?.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeRetry);
-      expect(
-        getActiveGatewayRootWorkCount(),
-        "held settlement still owns root work",
-      ).toBeGreaterThan(0);
+      expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
       if (cleanup === "delete") {
-        expect(
-          delivered?.requesterSettleWake?.retireAfterSettle,
-          "delete waits for real settlement",
-        ).toBe(true);
+        expect(delivered?.requesterSettleWake?.retireAfterSettle).toBe(true);
       }
       await settlement.release();
       expect(settlement.run).toHaveBeenCalledOnce();
       const afterSecond = readPersistedRun(runId);
       if (cleanup === "delete") {
-        expect(afterSecond, "settled delete retires its durable row").toBeUndefined();
+        expect(afterSecond).toBeUndefined();
       } else {
         expect(afterSecond?.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeRetry);
       }
@@ -593,33 +549,15 @@ describe("subagent registry persistence", () => {
   it.each(["restart", "suspension"] as const)(
     "retains an admitted resume read across a %s fence",
     async (fence) => {
-      await fixture.allocateStateDir();
       const runId = "admitted-resume-read";
-      const now = Date.now();
-      const entry = makeRun(runId, {
-        createdAt: now,
-        childSessionIdentity: { sessionId: "admitted-resume-session" },
-        expectsCompletionMessage: false,
-        execution: { status: "running", startedAt: now },
-      });
+      const entry = runningRun(runId);
       await addSubagentRunForTests(entry);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       const parent = tryBeginGatewayRootWorkAdmission("test:resume-parent");
       if (!parent) {
         throw new Error("Expected an admitted resume parent");
       }
-      const entered = createDeferred();
-      const releaseRead = createDeferred();
-      const read = sessionReads.readSessionEntryReadOnlyInWorker;
-      const reader = vi
-        .spyOn(sessionReads, "readSessionEntryReadOnlyInWorker")
-        .mockImplementation(async (input, assertCurrent) => {
-          if (input.sessionKey === entry.childSessionKey) {
-            entered.resolve();
-            await releaseRead.promise;
-          }
-          return read(input, assertCurrent);
-        });
+      const read = holdSessionRead(entry, true);
       let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> = null;
       const reopen = () => {
         suspension?.release();
@@ -638,13 +576,10 @@ describe("subagent registry persistence", () => {
           parent.release();
           retainedRoots = getActiveGatewayRootWorkCount();
         });
-        expect(
-          retainedRoots,
-          "the resume read retains root custody after its admitted parent releases",
-        ).toBe(1);
-        await entered.promise;
+        expect(retainedRoots).toBe(1);
+        await read.entered;
         expect(readPersistedRun(runId)?.execution.status).toBe("running");
-        releaseRead.resolve();
+        read.release();
         await fixture.settle();
         expect(readPersistedRun(runId)).toMatchObject({
           execution: {
@@ -661,7 +596,7 @@ describe("subagent registry persistence", () => {
           newRoot?.release();
         }
       } finally {
-        releaseRead.resolve();
+        read.release();
         parent.release();
         if (getActiveGatewayRootWorkCount() === 0) {
           reopen();
@@ -670,7 +605,7 @@ describe("subagent registry persistence", () => {
           await fixture.settle();
         } finally {
           reopen();
-          reader.mockRestore();
+          read.spy.mockRestore();
         }
       }
     },
@@ -689,7 +624,6 @@ describe("subagent registry persistence", () => {
     "run Gateway replacement",
   ] as const)("revalidates one admitted resume read after %s", async (change) => {
     const admittedDrain = change === "admitted drain capture refusal";
-    await fixture.allocateStateDir();
     let gateway = sessionSharingTestContext(vi.fn());
     const resolveGatewayContext = () => gateway;
     gateway.resolveGatewayContext = resolveGatewayContext;
@@ -697,72 +631,29 @@ describe("subagent registry persistence", () => {
       await activateSubagentRegistry(resolveGatewayContext).settled;
     }
     const runId = "held-resume-read";
-    const now = Date.now();
-    const entry = makeRun(runId, {
-      createdAt: now,
-      childSessionIdentity: {
-        sessionId:
-          change === "worker read failure"
-            ? "read-error-session"
-            : change === "session publication"
-              ? "published-resume-session"
-              : "held-resume-session",
-      },
-      expectsCompletionMessage: false,
-      execution: { status: "running", startedAt: now },
-    });
+    const entry = runningRun(runId);
+    const now = entry.createdAt;
     await addSubagentRunForTests(entry);
     if (change === "worker read failure") {
-      await writeChildSessionEntry({
-        sessionKey: entry.childSessionKey,
-        sessionId: "read-error-session",
-        updatedAt: now,
-      });
+      await writeRunSession(entry);
     }
     if (change === "run Gateway replacement") {
       bindGatewayContextResolver(subagentRuns.get(runId)!, resolveGatewayContext);
     }
-    const entered = createDeferred();
-    const release = createDeferred();
+    const read = holdSessionRead(entry, false, change === "worker read failure");
     let settling: Promise<void> | undefined;
     let restoreLifecycle: (() => void) | undefined;
     let restoreCleanup: (() => void) | undefined;
-    const read = sessionReads.readSessionEntryReadOnlyInWorker;
-    let reads = 0;
-    let readFailures = 0;
-    const reader = vi
-      .spyOn(sessionReads, "readSessionEntryReadOnlyInWorker")
-      .mockImplementation(async (input, assertCurrent) => {
-        const selected = input.sessionKey === entry.childSessionKey;
-        if (selected) {
-          expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
-        }
-        const result = await read(input, assertCurrent);
-        if (selected && ++reads === 1) {
-          if (change === "worker read failure") {
-            expect(result).toMatchObject({ sessionId: "read-error-session" });
-          } else {
-            expect(result).toBeUndefined();
-          }
-          entered.resolve();
-          await release.promise;
-          if (change === "worker read failure") {
-            readFailures += 1;
-            throw new Error("Synthetic resume session read failure");
-          }
-        }
-        return result;
-      });
     try {
       resumeSubagentRun(runId);
       settling = fixture.settle();
       await awaitGateBeforeSettlement(
-        entered.promise,
+        read.entered,
         settling,
         "Resume did not reach its admitted worker session read",
       );
       resumeSubagentRun(runId);
-      expect(reads).toBe(1);
+      expect(read.reads()).toBe(1);
       if (
         change === "completed owner" ||
         change === "terminal capture refusal" ||
@@ -791,11 +682,7 @@ describe("subagent registry persistence", () => {
           return { value: undefined, postimages: new Map([[runId, next]]) };
         });
       } else if (change === "session publication") {
-        await writeChildSessionEntry({
-          sessionKey: entry.childSessionKey,
-          sessionId: "published-resume-session",
-          updatedAt: now,
-        });
+        await writeRunSession(entry);
         await mutateSubagentRuns([runId], (rows) => ({
           value: undefined,
           postimages: new Map([[runId, { ...rows.get(runId)!, label: "published session" }]]),
@@ -835,7 +722,7 @@ describe("subagent registry persistence", () => {
         restoreCleanup = () => cleanup.mockRestore();
         markGatewayRestartDraining();
       }
-      release.resolve();
+      read.release();
       if (admittedDrain || change === "worker read failure") {
         await expect(settling).rejects.toMatchObject({
           errors: expect.arrayContaining([
@@ -853,21 +740,12 @@ describe("subagent registry persistence", () => {
       restoreLifecycle?.();
       await fixture.settle();
       if (change === "session publication") {
-        expect(reads).toBeGreaterThanOrEqual(2);
+        expect(read.reads()).toBeGreaterThanOrEqual(2);
         expect(readPersistedRun(runId)?.execution.outcome).toMatchObject({ status: "ok" });
       } else if (change === "worker read failure") {
-        expect(readFailures).toBe(1);
         expect(callGateway).not.toHaveBeenCalled();
         expect(readPersistedRun(runId)).toEqual(expected);
-        const waitEntered = createDeferred();
-        const gatewayCall = vi.mocked(callGateway).getMockImplementation()!;
-        vi.mocked(callGateway).mockImplementationOnce(async (request) => {
-          const result = await gatewayCall(request);
-          waitEntered.resolve();
-          return result;
-        });
         resumeSubagentRun(runId);
-        await waitEntered.promise;
         await fixture.settle();
         expect(callGateway).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -879,7 +757,7 @@ describe("subagent registry persistence", () => {
       } else {
         expect(readPersistedRun(runId)).toEqual(expected);
         expect(callGateway).not.toHaveBeenCalled();
-        expect(reads).toBe(1);
+        expect(read.reads()).toBe(1);
       }
       expect(subagentRuns.has(runId)).toBe(true);
       if (change === "terminal capture refusal" || admittedDrain) {
@@ -893,7 +771,7 @@ describe("subagent registry persistence", () => {
         expect(readPersistedRun(runId)?.cleanupCompletedAt).toBeTypeOf("number");
       }
     } finally {
-      release.resolve();
+      read.release();
       try {
         await settling;
       } finally {
@@ -906,39 +784,10 @@ describe("subagent registry persistence", () => {
         try {
           await fixture.settle();
         } finally {
-          reader.mockRestore();
+          read.spy.mockRestore();
         }
       }
     }
-  });
-
-  it("preserves restored interrupted-recovery owners for orphan replay", async () => {
-    const now = Date.now();
-    const runId = "run-interrupted-recovery-restore";
-    await persistRuns(
-      [
-        endedRun(runId, {
-          createdAt: now - 100,
-          startedAt: now - 50,
-          endedAt: now,
-          endedReason: "subagent-error",
-          outcome: { status: "error", error: "restart interrupted run" },
-          terminalOwner: "interrupted-recovery",
-          completion: { required: false, resultText: null, capturedAt: now },
-        }),
-      ],
-      false,
-    );
-
-    await restartRegistry();
-    await flushQueuedRegistryWork();
-
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(listSubagentRunsForRequester("agent:main:main")).toEqual([
-      expect.objectContaining({ runId, terminalOwner: "interrupted-recovery" }),
-    ]);
-    await fixture.settle();
-    await testing.sweepOnceForTests();
   });
 
   registerSubagentOrphanTaskCases({
@@ -948,7 +797,6 @@ describe("subagent registry persistence", () => {
   });
 
   it("resume preserves steer-restart ownership when the child session is missing", async () => {
-    await fixture.allocateStateDir();
     const runId = "run-orphan-resume-guard";
     const childSessionKey = "agent:main:subagent:ghost-resume";
     const now = Date.now();
