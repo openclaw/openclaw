@@ -1,3 +1,4 @@
+import { flush } from "solid-js";
 import { vi } from "vitest";
 import type { ToolsCatalogResult, ToolsEffectiveResult } from "../../api/types.ts";
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
@@ -8,6 +9,15 @@ type Params = Parameters<typeof AgentTools>[0] & {
   catalog: ToolsCatalogResult | null;
   effective: ToolsEffectiveResult | null;
 };
+
+/** Reveal the groups whose tool controls a test exercises. */
+export function openToolGroups(container: HTMLElement) {
+  for (const group of container.querySelectorAll<HTMLDetailsElement>(".agent-tools-group")) {
+    group.open = true;
+    group.dispatchEvent(new Event("toggle"));
+  }
+  flush();
+}
 
 export function createBaseParams(overrides: Partial<Params> = {}): Params {
   const githubIdentity = githubIdentityViewFixture();
@@ -52,9 +62,9 @@ export function createBaseParams(overrides: Partial<Params> = {}): Params {
   };
 }
 
-export function createReadToolCatalog(): ToolsCatalogResult {
+export function createReadToolCatalog(agentId = "main", label = "read"): ToolsCatalogResult {
   return {
-    agentId: "main",
+    agentId,
     profiles: [{ id: "full", label: "Full" }],
     groups: [
       {
@@ -63,9 +73,9 @@ export function createReadToolCatalog(): ToolsCatalogResult {
         source: "core",
         tools: [
           {
-            id: "read",
-            label: "read",
-            description: "Read file contents",
+            id: label,
+            label,
+            description: label === "read" ? "Read file contents" : label,
             source: "core",
             defaultProfiles: ["full"],
           },

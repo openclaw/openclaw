@@ -967,7 +967,10 @@ const configs: UserConfig[] = [
       false,
     );
   }),
-  ...Object.entries(standaloneRuntimeProcessBuildEntries).map(([name, source]) => {
+  ...Object.entries(standaloneRuntimeProcessBuildEntries).flatMap(([name, source]) => {
+    if (!Object.hasOwn(unifiedDistEntries, name)) {
+      return [];
+    }
     const bundleFsSafe = [
       "infra/sqlite-readonly-location.worker",
       "state/openclaw-state-read.worker",
