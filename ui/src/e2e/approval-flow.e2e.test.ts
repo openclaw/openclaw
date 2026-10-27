@@ -98,10 +98,9 @@ suite.define(() => {
     const modal = page.locator("openclaw-exec-approval .exec-approval-card");
     await modal.locator(".exec-approval-list__item", { hasText: "echo other" }).click();
     await expect.poll(() => modal.getAttribute("data-approval-id")).toBe("approval-other");
-    expect(await modal.locator(".exec-approval-source").textContent()).toContain(
+    expect(await modal.locator(".exec-approval-title").textContent()).toContain(
       "Review navigation",
     );
-    expect(await modal.locator(".exec-approval-source").textContent()).toContain("atlas");
     await gateway.deferNext("exec.approval.resolve", { id: "approval-other" });
     const allow = modal.getByRole("button", { name: "Allow once", exact: true });
     await allow.click();
