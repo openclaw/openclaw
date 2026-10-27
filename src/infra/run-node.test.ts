@@ -625,7 +625,11 @@ describe("run-node script", () => {
     async (changed, { tmp }) => {
       await setupStampedProject(tmp, { trackConfig: true });
       const { deps } = await trackProjectWithGit(tmp);
-      const env = { ...process.env, OPENCLAW_DEV_SOURCE_ROOT: tmp };
+      const env = {
+        ...process.env,
+        OPENCLAW_DEV_SOURCE_ROOT: tmp,
+        OPENCLAW_VITEST_RUNTIME: "node",
+      };
       await fs.writeFile(resolvePath(tmp, ROOT_SRC), "export const value = 2;\n");
       // The first launcher's build signed these dirty inputs.
       writeBuildStamp({ cwd: tmp, inputSignature: resolveRunNodeInputSignature(deps, "build") });
