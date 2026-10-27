@@ -590,6 +590,7 @@ const repositoryScriptEntries = [
   "scripts/perf/knowledge-worker-heap-measure.mjs!",
   // These source headers document standalone measurement commands.
   "scripts/perf/agent-deletion-blocked-measure.ts!",
+  "scripts/perf/agent-list-read-measure.ts!",
   "scripts/perf/chat-history-response-page-measure.mjs!",
   "scripts/perf/chat-metadata-auth-check-measure.ts!",
   "scripts/perf/config-schema-retention-measure.ts!",
