@@ -123,7 +123,7 @@ export function resolveMatrixMessageAttachment(
   };
 }
 
-/** Caption plus one marker: how many gallery attachments exist, or how many could not be fetched. */
+/** Gallery caption followed by its attachment-count or unavailable marker. */
 export function formatMatrixGalleryText(params: {
   caption?: string;
   attachmentCount: number;

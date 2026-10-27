@@ -372,7 +372,6 @@ export async function resolveMatrixIngressContent(config: {
     mediaContent = resolveMatrixInboundMediaContent(content);
   }
 
-  // Items download one at a time, in event order; one failure leaves the rest intact.
   const mediaList: DownloadedMatrixMedia[] = preflightMedia ? [preflightMedia] : [];
   if (!preflightAudioItem) {
     for (const [index, item] of mediaContent.items.entries()) {
@@ -388,7 +387,8 @@ export async function resolveMatrixIngressContent(config: {
   const mediaPlaceholder = mediaList[0]?.placeholder;
   let bodyText = rawBody;
   if (mediaContent.isGallery) {
-    // Entries skipped at resolve time (no mxc url, unknown itemtype, over the cap) count as unavailable.
+    // Entries skipped at resolve time (no mxc url, unknown itemtype, over the cap)
+    // count as unavailable.
     const unavailableCount = mediaContent.attachmentCount - mediaList.length;
     if (unavailableCount > 0 || !rawBody) {
       bodyText = formatMatrixGalleryText({

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import {
@@ -41,10 +41,17 @@ function gallery(itemtypes: unknown[], extra: MessageContent = {}): MessageConte
   return { msgtype: GALLERY, body: "", itemtypes, ...extra };
 }
 
-function downloaded({ mxcUrl }: { mxcUrl: string }) {
+function downloaded({
+  mxcUrl,
+  contentType = "image/jpeg",
+}: {
+  mxcUrl: string;
+  contentType?: string;
+}) {
+  const ext = contentType === "image/jpeg" ? "jpg" : contentType.split("/")[1];
   return {
-    path: `/tmp/inbound/${mxcUrl.split("/").pop()}.jpg`,
-    contentType: "image/jpeg",
+    path: `/tmp/inbound/${mxcUrl.split("/").pop()}.${ext}`,
+    contentType,
     placeholder: "[matrix media]",
   };
 }
@@ -70,6 +77,10 @@ describe("createMatrixRoomMessageHandler gallery messages", () => {
   beforeEach(() => {
     download.mockReset().mockImplementation(async (params) => downloaded(params));
     installMatrixMonitorTestRuntime();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("delivers every item of a captioned gallery in order with the caption as body", async () => {
@@ -207,11 +218,10 @@ describe("createMatrixRoomMessageHandler gallery messages", () => {
 
     expect(download).toHaveBeenCalledOnce();
     expect(resolve).not.toHaveBeenCalled();
-    expect(f.context().MediaPaths).toEqual(["/tmp/inbound/memo.jpg"]);
-    resolve.mockRestore();
+    expect(f.context().MediaPaths).toEqual(["/tmp/inbound/memo.ogg"]);
   });
 
-  it("records an unmentioned room gallery in pending history with its attachment count", async () => {
+  it("records an unmentioned room gallery as text in history", async () => {
     const f = setup({
       historyLimit: 20,
       groupPolicy: "open",
@@ -270,7 +280,7 @@ describe("createMatrixRoomMessageHandler gallery messages", () => {
     expect(f.context().MediaPaths).toHaveLength(2);
   });
 
-  it("saves decrypted bytes for an encrypted item and keeps its sibling when decryption fails", async () => {
+  it("decrypts encrypted items and keeps siblings when one fails", async () => {
     const { downloadMatrixMedia } =
       await vi.importActual<typeof import("./media.js")>("./media.js");
     download.mockImplementation(downloadMatrixMedia);

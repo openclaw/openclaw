@@ -137,9 +137,7 @@ export type MatrixInboundMediaItem = {
 };
 
 export type MatrixInboundMediaContent = {
-  /** Message text; for a gallery this is the caption. */
   body: string;
-  /** Downloadable `mxc://` attachments in event order: one for a media message, up to the cap for a gallery. */
   items: MatrixInboundMediaItem[];
   /** Attachments the event declares, including gallery entries that cannot be downloaded. */
   attachmentCount: number;
@@ -150,9 +148,7 @@ export type MatrixInboundMediaContent = {
 // attachments in `itemtypes`; each entry has the content shape of the matching media message.
 const MATRIX_GALLERY_MSGTYPES = new Set(["dm.filament.gallery", "m.gallery"]);
 const MATRIX_GALLERY_ITEMTYPES = new Set(["m.image", "m.video", "m.audio", "m.file"]);
-// The event size limit does not bound the entry count (about 40 bytes per minimal entry), so
-// galleries download at most as many items as the image tool accepts (DEFAULT_MAX_IMAGES).
-// Entries over the cap stay in the declared count and are reported as unavailable.
+// Matches the image tool's default; the event size limit alone allows far more entries.
 const MATRIX_GALLERY_MAX_ITEMS = 20;
 
 function resolveMatrixMediaItem(

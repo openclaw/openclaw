@@ -120,12 +120,12 @@ Matrix uses the shared audio media provider under `tools.media.audio`, such as O
 
 Inbound Matrix gallery messages (MSC4274, msgtype `m.gallery` or the unstable `dm.filament.gallery`) deliver their attachments to the agent in the order sent, within the limits below. Galleries are inbound only.
 
-- The gallery caption is the message text. A gallery without a caption is not dropped; the agent sees `[matrix gallery: N attachments]`.
-- Entries typed `m.image`, `m.video`, `m.audio`, and `m.file` are downloaded, decrypted in encrypted rooms, and attached like single media messages. Gallery audio skips the Matrix audio preflight above; later media processing follows the configured audio settings.
-- At most 20 items per gallery are downloaded. Remaining entries, entries that fail to download, and entries with an unsupported or missing type or URL are reported as `[matrix gallery: K of N attachments unavailable]`. When every unavailable entry exceeded the size limit, the marker says `too large`.
+- The gallery caption is the message text. Without a caption, the agent sees `[matrix gallery: N attachments]`.
+- Entries typed `m.image`, `m.video`, `m.audio`, and `m.file` are downloaded, decrypted in encrypted rooms, and attached like single media messages. Gallery audio is not transcribed before the mention check; later media processing follows `tools.media.audio`.
+- At most 20 items per gallery are downloaded. Entries past the 20th, entries that fail to download, and entries with an unsupported or missing type or URL are reported as `[matrix gallery: K of N attachments unavailable]`. When every unavailable entry exceeded the size limit, the marker says `too large`.
 - `mediaMaxMb` applies to each item, not to the gallery as a whole.
 - In rooms with `historyLimit` set, an unmentioned gallery appears in the room history as text only: its caption plus `[matrix gallery: N attachments]`. Its items are downloaded only when the gallery message itself triggers the agent; a later mention does not fetch them.
-- Edits of a gallery are ignored, as for other messages.
+- Gallery edits are not supported.
 
 ## Reactions
 
