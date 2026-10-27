@@ -208,6 +208,15 @@ class SessionCapabilityReadRequired extends Error {
   }
 }
 
+class SessionCapabilityMetadataChangedError extends SessionCapabilityReadRequired {
+  constructor(query: SessionCapabilityRead, cause: Error) {
+    super(query);
+    this.name = "SessionCapabilityMetadataChangedError";
+    this.message = "Session capability metadata changed";
+    this.cause = cause;
+  }
+}
+
 const preparedReads = new AsyncContext<{
   entries: Map<string, () => SessionCapabilityEntry | undefined>;
   retain: boolean;
@@ -254,6 +263,7 @@ async function prepareCapabilityReads<T>(
   const entries = new Map(!retain || inherited?.retain ? inherited?.entries : undefined);
   const scope = { entries, retain, onRead: onRead ?? inherited?.onRead };
   const releases: Array<() => void> = [];
+  const refreshed = new Set<string>();
   let active = true;
   const release = () => {
     active = false;
@@ -285,6 +295,15 @@ async function prepareCapabilityReads<T>(
         const { withSessionEntriesFromStoreInWorker } =
           await import("../../../config/sessions/session-entry-read-runtime.js");
         const query = error.query;
+        if (error instanceof SessionCapabilityMetadataChangedError) {
+          const key = readKey(query);
+          if (refreshed.has(key)) {
+            throw error;
+          }
+          // Only async preparation can replace inherited facts. Synchronous
+          // retained replays remain fenced, and a busy writer gets one refresh.
+          refreshed.add(key);
+        }
         let missingCurrent = true;
         if (retain) {
           releases.push(
@@ -326,7 +345,7 @@ async function prepareCapabilityReads<T>(
               return () => {
                 assertAgentSessionWriteAdmission(database, query.agentId);
                 if (!missingCurrent) {
-                  throw new Error("Session capability metadata changed", { cause: error });
+                  throw new SessionCapabilityMetadataChangedError(query, error);
                 }
                 return undefined;
               };
@@ -359,7 +378,7 @@ async function prepareCapabilityReads<T>(
             return () => {
               assertAgentSessionWriteAdmission(database, query.agentId);
               if (!predicate.isCurrent() || !idCurrent) {
-                throw new Error("Session capability metadata changed", { cause: error });
+                throw new SessionCapabilityMetadataChangedError(query, error);
               }
               return entry;
             };

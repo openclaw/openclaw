@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
+import * as sessionEntryReads from "../../../config/sessions/session-entry-read-runtime.js";
 import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { createDirectChatContext } from "../../../gateway/server-chat.agent-events.test-helpers.js";
@@ -237,6 +238,45 @@ describe("persisted subagent capability lookups", () => {
       retained.release();
     }
   });
+
+  it.each([1, 2])(
+    "bounds capability refresh after %s intervening publications",
+    async (changes) => {
+      const { storePath, key } = fixture("subagent-capability-refresh-");
+      const entry = makeEntry("child", { inheritedToolDeny: ["exec"], model: "initial" });
+      writeEntries(storePath, { [key]: entry });
+      const readEntries = sessionEntryReads.withSessionEntriesFromStoreInWorker;
+      let reads = 0;
+      vi.spyOn(sessionEntryReads, "withSessionEntriesFromStoreInWorker").mockImplementation(
+        async (...args) => {
+          const result = await readEntries(...args);
+          reads += 1;
+          if (reads <= changes) {
+            writeEntries(storePath, { [key]: { ...entry, model: "updated-" + reads } });
+          }
+          return result;
+        },
+      );
+      const store = createSubagentSessionStore(storePath, "main");
+      const pending = prepareSessionCapabilityRead(() => store.get(key)?.inheritedToolDeny);
+      if (changes === 2) {
+        await expect(pending).rejects.toThrow("Session capability metadata changed");
+      } else {
+        const prepared = await pending;
+        try {
+          expect(prepared.read()).toEqual(["exec"]);
+          writeEntries(storePath, { [key]: { ...entry, inheritedToolDeny: ["exec", "write"] } });
+          // A new preparation may read new policy, but cannot renew this retained guard.
+          await expect(withPreparedRead(() => prepared.read())).rejects.toThrow(
+            "Session capability metadata changed",
+          );
+        } finally {
+          prepared.release();
+        }
+      }
+      expect(reads).toBe(2);
+    },
+  );
 
   it("prepares requested capability rows and observes the next committed policy", async () => {
     const { storePath, cfg, key } = fixture("subagent-capability-memo-");

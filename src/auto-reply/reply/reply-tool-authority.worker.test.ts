@@ -5,11 +5,18 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { createSteeredCliMessageInjection } from "../../agents/cli-runner/execute-plugin.steered-transcript.js";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
+import {
+  attachActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
 import * as capabilityReads from "../../agents/subagents/spawn/subagent-session-store.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -42,6 +49,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { MessageInjectionAuthorityError } from "./message-injection-authority.js";
 import {
   createTestReplyOperation,
   queueCurrentReplyRunMessage,
@@ -106,7 +114,7 @@ async function prepareEmbedded(
     };
     return {
       admission,
-      submit: (effect: () => Promise<string>) =>
+      submit: (effect: (prepared: { toolAuthorityFingerprint?: string }) => Promise<string>) =>
         withPreparedEmbeddedRunToolAuthority({ admittedRunContext }, attempt, undefined, effect),
     };
   } catch (error) {
@@ -438,6 +446,129 @@ it.each([
         releaseIngress?.();
         snapshot.close();
         projection.dispose();
+      }
+    });
+  },
+);
+
+it.each(["current", "revoked policy", "reassigned session"] as const)(
+  "dispatches a refreshed child turn only with current authority: %s",
+  async (change) => {
+    await withState(async (state, config) => {
+      setRuntimeConfigSnapshot(config);
+      const sessionKey = "agent:main:subagent:follow-up";
+      const sessionId = "follow-up";
+      const scope = { agentId: "main", sessionKey };
+      await seed(sessionKey, {
+        sessionId,
+        spawnedBy: "agent:main:main",
+        spawnDepth: 1,
+        inheritedToolPolicyVersion: 1,
+        inheritedToolAllow: ["read", "exec"],
+        model: "previous-model",
+      });
+      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+      const source = new AbortController();
+      const { admission, submit } = await prepareEmbedded(state, config, "child-follow-up", {
+        abortSignal: source.signal,
+        sessionKey,
+        sessionId,
+        sessionFile: state.statePath("follow-up.jsonl"),
+        senderId: "child-requester",
+      });
+      const submitNative = vi.fn();
+      let nativeQueueEntered = false;
+      try {
+        await capabilityReads.withPreparedSessionCapabilityRead(
+          () => {
+            const store = capabilityReads.createSubagentSessionStore(storePath, "main");
+            expect(store.get(sessionKey)?.sessionId).toBe(sessionId);
+            return (async () => {
+              // The child inherits stale capability facts before host preparation, not
+              // just before a replay of an already-prepared authority snapshot.
+              await patchSessionEntryCore(scope, () => ({ model: "current-model" }));
+              await expect(
+                submit(async (prepared) => {
+                  const handle = createEmbeddedRunHandle({
+                    runId: "child-follow-up",
+                    toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
+                  });
+                  handle.messageInjectionV2 = createSteeredCliMessageInjection({
+                    cwd: state.workspaceDir,
+                    signal: source.signal,
+                    assertCurrent: () => source.signal.throwIfAborted(),
+                    getInjection: () => ({
+                      isAvailable: () => true,
+                      async queueMessage(text, withCurrent) {
+                        nativeQueueEntered = true;
+                        // The host already projected the refreshed child's policy. A
+                        // native queue wait must not carry it past a later revocation.
+                        if (change !== "current") {
+                          await patchSessionEntryCore(scope, () =>
+                            change === "revoked policy"
+                              ? { inheritedToolDeny: ["exec"] }
+                              : {
+                                  sessionId: "replacement-child",
+                                  spawnedBy: "agent:main:other-parent",
+                                },
+                          );
+                        }
+                        // Real host adapter owns final worker-backed admission; only
+                        // native transport I/O is substituted by the fixture.
+                        await withCurrent(() => submitNative(text));
+                      },
+                    }),
+                  });
+                  const sessionFile = state.statePath("follow-up.jsonl");
+                  const attachment = attachActiveEmbeddedRun(
+                    sessionId,
+                    handle,
+                    sessionKey,
+                    sessionFile,
+                    "main",
+                  );
+                  expect(attachment).toBeDefined();
+                  try {
+                    const result = await queueCurrentReplyRunMessage(sessionId, "continue", {
+                      isInboundUserMessage: true,
+                      toolAuthorityOverlay: {
+                        messageProvider: "webchat",
+                        senderId: "child-requester",
+                        senderIsOwner: true,
+                        disableTools: false,
+                        traceAuthorized: false,
+                      },
+                    });
+                    expect(result).toEqual(
+                      change === "current"
+                        ? { status: "accepted" }
+                        : { status: "failed", error: expect.any(MessageInjectionAuthorityError) },
+                    );
+                    expect(nativeQueueEntered).toBe(true);
+                    if (change === "current") {
+                      expect(submitNative).toHaveBeenCalledExactlyOnceWith("continue");
+                    } else {
+                      expect(submitNative).not.toHaveBeenCalled();
+                    }
+                    return "checked";
+                  } finally {
+                    detachActiveEmbeddedRun(
+                      sessionId,
+                      handle,
+                      sessionKey,
+                      sessionFile,
+                      "run_completed",
+                      attachment,
+                    );
+                  }
+                }),
+              ).resolves.toBe("checked");
+            })();
+          },
+          { retain: true },
+        );
+      } finally {
+        admission.close();
       }
     });
   },
