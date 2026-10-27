@@ -142,12 +142,12 @@ it.each(["direct", "outer"] as const)("prepares and settles with %s ownership", 
     .fn<WorkerTunnelHandle["reconcileWorkspace"]>()
     .mockImplementationOnce(async (request) => {
       events.push("reconcile-before-turn");
-      await writeFile(acceptedFile, "accepted node content");
-      return { ...(await worker.reconcileUnchangedLocalWorkspace(request)), changed: true };
+      return worker.reconcileUnchangedLocalWorkspace(request);
     })
     .mockImplementationOnce(async (request) => {
       events.push("reconcile-after-turn");
-      return worker.reconcileUnchangedLocalWorkspace(request);
+      await writeFile(acceptedFile, "accepted node content");
+      return { ...(await worker.reconcileUnchangedLocalWorkspace(request)), changed: true };
     });
   const tunnel = worker.createWorkerTurnTunnel({ launchTurn, reconcileWorkspace });
   const published = vi.fn(record("publish"));
