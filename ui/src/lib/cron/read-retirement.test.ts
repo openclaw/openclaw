@@ -30,7 +30,7 @@ function runEntry(jobId: string, ts: number) {
 }
 
 describe("cron controller", () => {
-  it("retains the accepted page until the latest queued search returns", async () => {
+  it("retains the accepted page when the latest queued search fails", async () => {
     const retained = createCronJob("retained", "Retained");
     const superseded = createDeferred<CronJobsListResult>();
     const current = createDeferred<CronJobsListResult>();
@@ -57,11 +57,16 @@ describe("cron controller", () => {
     expect(state.cronJobsHasMore).toBe(true);
     expect(state.cronJobsNextOffset).toBe(1);
     expect(state.cronLoading).toBe(true);
-    const latest = createCronJob("latest", "Latest result");
-    current.resolve(cronJobsListResponse([latest]));
+    current.reject(new Error("Latest search unavailable"));
     await pending;
-    expect(state.cronJobs).toEqual([latest]);
+    expect(state.cronJobs).toEqual([retained]);
+    expect(state.cronJobsError).toBe("Latest search unavailable");
     expect(state.cronLoading).toBe(false);
+    const latest = createCronJob("latest", "Latest result");
+    request.mockResolvedValueOnce(cronJobsListResponse([latest]));
+    await loadCronJobsPage(state, { tableFilters: true });
+    expect(state.cronJobs).toEqual([latest]);
+    expect(state.cronJobsError).toBeNull();
   });
 
   it("retires protected inventory and queued page reloads after a forbidden read", async () => {
