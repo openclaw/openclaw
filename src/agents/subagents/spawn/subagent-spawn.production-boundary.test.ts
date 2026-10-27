@@ -78,6 +78,7 @@ import {
 } from "../swarm/swarm-scheduler.js";
 import { cleanupProvisionalSession } from "./subagent-spawn-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
+import { registerAccessStateSpawnCases } from "./subagent-spawn.access-state.test-support.js";
 import { registerNativeCancellationCases } from "./subagent-spawn.cancellation.test-support.js";
 import { registerCollectorResultSpawnCases } from "./subagent-spawn.collector-results.test-support.js";
 import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
@@ -422,6 +423,8 @@ describe("recursive spawn production boundary", () => {
   registerYieldedRequesterBatchCase(boundSpawnFixture);
   registerOperatorSpawnRollbackCases(boundSpawnFixture);
   registerNativeCancellationCases(boundSpawnFixture);
+
+  registerAccessStateSpawnCases({ ...boundSpawnFixture, holdModelRun });
 
   it("admits an isolated descendant with current policy, saved thinking, and the active parent turn model", async () => {
     const customProvider = expectDefined(

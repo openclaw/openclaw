@@ -35,21 +35,6 @@ export function registerSessionsSpawnAccessProgramTests({
       ...options,
     });
 
-  it("forwards a requested cyber Access program and keeps null as inheritance", async () => {
-    const tool = createTool();
-    expect(tool.parameters).toMatchObject({
-      properties: {
-        cyberAccessProgram: { enum: ["standard", "daybreak_blue", "daybreak_red"] },
-      },
-    });
-    await tool.execute("blue", { task: "triage", cyberAccessProgram: "daybreak_blue" });
-    await tool.execute("strict-null", { task: "triage", cyberAccessProgram: null });
-    expect(hoisted.spawnSubagentDirectMock.mock.calls.map(([params]) => params)).toEqual([
-      expect.objectContaining({ cyberAccessProgram: "daybreak_blue" }),
-      expect.objectContaining({ cyberAccessProgram: undefined }),
-    ]);
-  });
-
   it.each([
     [{ cyberAccessProgram: "gpt-daybreak-blue-latest" }, "must be one of"],
     [{ cyberAccessProgram: "daybreak_red", runtime: "acp" }, 'requires runtime="subagent"'],
