@@ -1850,6 +1850,7 @@
                           "plugins/knowledge/corrections",
                           "plugins/knowledge/local-history",
                           "plugins/knowledge/maintenance",
+                          "plugins/knowledge/scribes",
                           "plugins/knowledge/control-ui"
                         ]
                       },
