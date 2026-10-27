@@ -9,7 +9,10 @@ import type {
 } from "../../ui/src/lib/plugins/index.ts";
 import { createSkill } from "../../ui/src/pages/skills/view.test-support.ts";
 import { defaultControlUiFeatureMethods } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import { prepareInteractionNavigation } from "./control-ui-interaction-navigation.ts";
+import {
+  openNavigationDrawer,
+  prepareInteractionNavigation,
+} from "./control-ui-interaction-navigation.ts";
 import type {
   InteractionFixtureOverrides,
   InteractionScenario,
@@ -291,6 +294,9 @@ function agentSelectionScenario(roundTripMs: 0 | 100): InteractionScenario {
       },
     }),
     prepare: async (page) => {
+      if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+        await openNavigationDrawer(page);
+      }
       const trigger = page.locator(".settings-sidebar__agent .agent-select__trigger");
       await trigger.click();
       await countRows(page, "[data-agent-option]", agentCount);
@@ -305,6 +311,9 @@ function agentSelectionScenario(roundTripMs: 0 | 100): InteractionScenario {
       await frames(page);
     },
     run: async (page) => {
+      if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+        await openNavigationDrawer(page);
+      }
       const trigger = page.locator(".settings-sidebar__agent .agent-select__trigger");
       await trigger.click();
       await countRows(page, "[data-agent-option]", agentCount);

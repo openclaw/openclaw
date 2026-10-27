@@ -2,28 +2,41 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
+import { loadPersistedSharedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import {
+  observeUpdateParentDatabaseWrites,
+  recordUpdateDatabaseWrites,
+} from "../cli/update-cli/update-command-database-receipts.js";
+import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
+import { repairAuthProfileMigration } from "../commands/doctor/auth-profile-repair.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
-  prepareOpenClawStateDatabaseSchema,
   repairOpenClawStateDatabaseIndexesForDoctor,
   repairOpenClawStateDatabaseReadabilityForDoctor,
 } from "../state/openclaw-state-db.js";
-import { addPreCutoverClientCredentialTablesForTest } from "../state/openclaw-state-schema.test-support.js";
+import { spawnNodeEvalSync } from "../test-utils/node-process.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   runUpdateStateInspectionWorker,
   parseUpdateStateInspectionWorker,
 } from "./update-candidate-state.inspection.js";
 import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
-import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
+import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
+import type { UpdateDatabaseBackup } from "./update-database-backup.js";
+import {
+  readUpdateDatabaseGenerations,
+  type UpdateDatabaseWriteReceipt,
+} from "./update-database-generations.js";
 import * as updateGenerations from "./update-database-generations.js";
+import { recordUpdateModelRetirement } from "./update-deferred-model-retirement.js";
 import {
   getDoctorMigrationBackup,
   getUpdateDoctorMigrationSource,
@@ -34,7 +47,8 @@ import {
 } from "./update-doctor-migration-attribution.js";
 import { createUpdateDoctorDatabaseWriteCapture } from "./update-doctor-result.js";
 import { readUpdateRunDriver } from "./update-run-driver.js";
-import { createUpdateRun } from "./update-run-ledger.js";
+import { createUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
+import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -276,59 +290,150 @@ async function withCapture(
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
     assertOwnerCurrent() {},
-    assertDatabaseAccess,
+    assertDatabaseAccess: assertDatabaseAccess ?? (() => {}),
   });
   try {
     await capture.admit();
     await scope.run(() => capture.run(operation));
+    await scope.close();
     await capture.settle();
     return { receipt: capture.receipt, warnings };
   } finally {
-    await closeOpenClawStateDatabaseAsync();
-    await scope.close();
+    try {
+      await scope.close();
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
   }
 }
 
-it.each(["lease", "outside"] as const)(
-  "settles prior %s writers before acquiring schema repair custody",
-  async (writer) => {
-    const { root, pathname, env } = fixture(path.join("state", "openclaw.sqlite"));
-    openOpenClawStateDatabase({ env });
-    await closeOpenClawStateDatabaseAsync();
-    fs.rmSync(path.join(root, "client"), { recursive: true });
-    {
-      using database = new DatabaseSync(pathname);
-      addPreCutoverClientCredentialTablesForTest(database);
-      database.exec(`PRAGMA user_version = 20;
-      UPDATE schema_meta SET schema_version = 20;
-      DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion';`);
-    }
-    const generations = readUpdateDatabaseGenerations([pathname]);
-    const { receipt } = await withCapture(env, generations, async () => {
-      expect(repairOpenClawStateDatabaseIndexesForDoctor({ env }).warnings).toEqual([]);
-      expect(repairOpenClawStateDatabaseReadabilityForDoctor({ env }).warnings).toEqual([]);
-      expect(
-        repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true }).warnings,
-      ).toEqual([]);
-      if (writer === "lease") {
-        await withAgentDatabaseMaintenanceLease({ env, processBound: true }, async () => {});
-      } else {
-        using outside = new DatabaseSync(pathname);
-        outside
-          .prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)")
-          .run("test.outside-write", "99", 1);
-      }
-      if (writer === "lease") {
-        expect((await prepareOpenClawStateDatabaseSchema({ env }, "doctor")).warnings).toEqual([]);
-      } else {
-        await expect(prepareOpenClawStateDatabaseSchema({ env }, "doctor")).rejects.toThrow(
-          "SQLite migration source changed after update capture:",
-        );
-      }
+it.each(["native", "worker"] as const)(
+  "completes retirement after Doctor migrations and %s parent bookkeeping",
+  async (parent) =>
+    withOpenClawTestState({}, async (state) => {
+      const { stateDir: root, env, configPath } = state;
+      const pathname = state.statePath("state", "openclaw.sqlite");
+      const credentialsPath = state.statePath("client", "credentials.sqlite");
+      await state.writeConfig({
+        session: { idleMinutes: 45 },
+        gateway: { mode: "local" },
+      });
+      const credential = { type: "api_key", provider: "openai", key: "synthetic-migration-key" };
+      const authSource = await state.writeJson("agents/main/agent/auth-profiles.json", {
+        version: 1,
+        profiles: { "openai:default": credential },
+      });
+      writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env });
+      const { runId } = createUpdateRun({ trigger: "cli" }, { env });
+      Object.assign(env, { [UPDATE_RUN_ID_ENV]: runId });
       await closeOpenClawStateDatabaseAsync();
-    });
-    expect(receipt).toMatchObject({ unchanged: writer === "lease", fromGenerations: generations });
-  },
+      const sourcePaths = [pathname, credentialsPath];
+      const sourceGenerations = readUpdateDatabaseGenerations(sourcePaths);
+      const backup: UpdateDatabaseBackup = {
+        directory: root,
+        databases: [],
+        missingPaths: [],
+        sourcePaths,
+        sourceGenerations: { ...sourceGenerations },
+        warnings: [],
+      };
+      const first = await withCapture(env, sourceGenerations, async () => {
+        for (const repair of [
+          repairOpenClawStateDatabaseIndexesForDoctor,
+          repairOpenClawStateDatabaseReadabilityForDoctor,
+        ]) {
+          expect(repair({ env }).warnings).toEqual([]);
+        }
+        const preflight = await runDoctorConfigPreflight({
+          retiredStateAdmitted: true,
+          repairPrefixedConfig: true,
+          doctorOnlyStateMigrations: true,
+          invalidConfigNote: false,
+          observe: false,
+        });
+        const authRepair = await repairAuthProfileMigration({
+          cfg: preflight.snapshot.config,
+          env,
+          prompter: { shouldRepair: true, confirmAutoFix: async () => true },
+        });
+        expect(authRepair.warnings).toEqual([]);
+        expect(authRepair.storeChanges.length).toBeGreaterThan(0);
+        recordUpdateModelRetirement("deferred", env);
+      });
+      expect(first.warnings).toEqual([]);
+      expect(first.receipt).toMatchObject({ unchanged: true, fromGenerations: sourceGenerations });
+      recordUpdateDatabaseWrites(backup, first.receipt, { name: "pre-plugin doctor" });
+
+      try {
+        const completion = {
+          step: "pre-plugin doctor",
+          status: "completed" as const,
+          endedAtMs: Date.now(),
+        };
+        if (parent === "native") {
+          recordUpdateRunStep(runId, completion, { env });
+        } else {
+          await recordUpdateRunStepAsync(runId, completion, { env });
+        }
+        await observeUpdateParentDatabaseWrites(backup, { env });
+        // A separate Doctor process must acquire exclusion while the parent stays alive.
+        const moduleUrl = (file: string) =>
+          JSON.stringify(pathToFileURL(path.resolve("src", file)).href);
+        const child = spawnNodeEvalSync(
+          `
+              import { createUpdateDoctorDatabaseWriteCapture } from ${moduleUrl("infra/update-doctor-result.ts")};
+              import { createOpenClawDatabaseMaintenanceScope } from ${moduleUrl("state/openclaw-state-db-async-lifecycle.ts")};
+              import { prepareOpenClawStateDatabaseSchema, closeOpenClawStateDatabaseAsync } from ${moduleUrl("state/openclaw-state-db.ts")};
+              import { recordUpdateModelRetirement } from ${moduleUrl("infra/update-deferred-model-retirement.ts")};
+              const warnings = [];
+              const capture = createUpdateDoctorDatabaseWriteCapture(${JSON.stringify(backup.migration!.to)}, {
+                env: process.env, signal: new AbortController().signal,
+                warn: message => warnings.push(message),
+              });
+              const scope = createOpenClawDatabaseMaintenanceScope({
+                schemaMaintenance: true, assertOwnerCurrent() {}, assertDatabaseAccess() {},
+              });
+              try {
+                await capture.admit();
+                await scope.run(() => capture.run(async () => {
+                  const result = await prepareOpenClawStateDatabaseSchema({ env: process.env }, "doctor");
+                  warnings.push(...result.warnings);
+                  recordUpdateModelRetirement("completed", process.env);
+                }));
+                await scope.close();
+                await capture.settle();
+                process.stdout.write(JSON.stringify({ receipt: capture.receipt, warnings }));
+              } finally {
+                await scope.close();
+                await closeOpenClawStateDatabaseAsync();
+              }
+          `,
+          { env, imports: [path.resolve("scripts/tsx.mjs")], timeout: 60_000 },
+        );
+        expect(child.status, child.stderr).toBe(0);
+        const second: { receipt: UpdateDatabaseWriteReceipt; warnings: string[] } = JSON.parse(
+          child.stdout,
+        );
+        expect(second.receipt).toMatchObject({ unchanged: true });
+        recordUpdateDatabaseWrites(backup, second.receipt, { name: "post-plugin doctor" });
+        expect(backup.sourceGenerations).toEqual(sourceGenerations);
+        expect(second.warnings).toEqual([]);
+        expect(backup.restoreRefusal).toBeUndefined();
+        expect(JSON.parse(fs.readFileSync(configPath, "utf8")).session.reset.idleMinutes).toBe(45);
+        expect(fs.existsSync(authSource)).toBe(false);
+        expect(loadPersistedSharedAuthProfileStore(env)?.profiles).toEqual({
+          "openai:default": credential,
+        });
+        expect(getUpdateRun(runId, { env })?.steps).toContainEqual(
+          expect.objectContaining({
+            step: "finalize:doctor:model-retirement",
+            status: "completed",
+          }),
+        );
+      } finally {
+        await closeOpenClawStateDatabaseAsync();
+      }
+    }),
 );
 
 it("attributes a captured absent shared store and its new credential companion during bootstrap", async () => {
