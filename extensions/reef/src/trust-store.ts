@@ -50,6 +50,7 @@ function openStores(openStore: PluginRuntime["state"]["openKeyedStoreV2"]) {
 
 export class ReefTrustStore {
   readonly #prefix: string;
+  #readOperation?: PluginStateOperation<ReefTrustStateOperations>;
   readonly operationState: ReefTrustOperationState;
 
   constructor(
@@ -86,11 +87,18 @@ export class ReefTrustStore {
     input: ReefTrustStateOperations[Type]["input"],
     missingValue: ReefTrustStateOperations[Type]["output"],
     watchStores: readonly number[] = [0],
+    ifEmptyStore?: number,
   ): Promise<PluginStateOperationReceipt<ReefTrustStateOperations[Type]["output"]>> {
-    const operation = this.#operation();
+    const operation = (this.#readOperation ??= this.#operation());
     const receipt = await operation.execute(
       { type, input },
-      { writeStores: [], watchStores, missingValue },
+      {
+        writeStores: [],
+        watchStores,
+        missingValue,
+        ifEmpty:
+          ifEmptyStore === undefined ? undefined : { store: ifEmptyStore, value: missingValue },
+      },
     );
     receipt.assertCurrent();
     return receipt;
@@ -270,8 +278,15 @@ export class ReefTrustStore {
   }
 
   async overdueOutboundDeliveries(olderThanMs: number, now = Date.now()) {
+    // Deliveries arriving after the empty read are picked up by the next periodic reconciliation.
     return (
-      await this.#read("overdueDeliveries", { prefix: this.#prefix, olderThanMs, now }, [], [0, 1])
+      await this.#read(
+        "overdueDeliveries",
+        { prefix: this.#prefix, olderThanMs, now },
+        [],
+        [0, 1],
+        1,
+      )
     ).value;
   }
 
@@ -292,10 +307,10 @@ export class ReefTrustStore {
   }
 
   async pendingOutboundRejections(): Promise<ReefDeliveryRejection[]> {
-    const operation = this.#operation();
+    const operation = (this.#readOperation ??= this.#operation());
     const receipt = await operation.execute(
       { type: "pendingRejections", input: { prefix: this.#prefix } },
-      { writeStores: [], missingValue: [], watchStores: [0, 1] },
+      { writeStores: [], missingValue: [], watchStores: [0, 1], ifEmpty: { store: 1, value: [] } },
     );
     receipt.assertCurrent();
     return receipt.value.map((entry) =>

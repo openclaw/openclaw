@@ -18,6 +18,7 @@ import {
   makeTrackedTempDir,
   mkdirSafeDir,
 } from "./test-helpers/fs-fixtures.js";
+import { mockLinuxMountInfo } from "./test-helpers/linux-mountinfo.js";
 
 vi.mock("./bundled-dir.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./bundled-dir.js")>();
@@ -110,20 +111,6 @@ function writeManifest(pluginDir: string, id: string, requiresPlugins?: string[]
 function writeEntry(filePath: string, source = "export default function () {}") {
   mkdirSafe(path.dirname(filePath));
   fs.writeFileSync(filePath, source, "utf-8");
-}
-
-function mockLinuxMountInfo(mountPoints: readonly string[]) {
-  const originalReadFileSync = fs.readFileSync;
-  return vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) => {
-    if (filePath === "/proc/self/mountinfo") {
-      return mountPoints
-        .map(
-          (mountPoint, index) => `${100 + index} 99 0:${index} / ${mountPoint} rw - tmpfs tmpfs rw`,
-        )
-        .join("\n");
-    }
-    return originalReadFileSync(filePath, options as never) as never;
-  });
 }
 
 function createPlugin(

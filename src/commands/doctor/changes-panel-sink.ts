@@ -20,6 +20,9 @@ export function createDoctorChangesPanelSink(shouldRepair: boolean) {
       }
       note(message, "Doctor changes preview");
     },
-    drain: () => pending.splice(0),
+    drain: (finalChanges?: readonly string[]) => [
+      ...pending.splice(0),
+      ...(finalChanges?.length ? [finalChanges.join("\n")] : []),
+    ],
   };
 }

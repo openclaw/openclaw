@@ -1,5 +1,4 @@
 // Curated policies above the schema-backed security and approvals editor.
-import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -15,39 +14,9 @@ import {
 import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
 import { PROFILE_OPTIONS } from "../../lib/agents/tool-catalog.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import type { extractQuickSettingsSecurity } from "./security-model.ts";
 
 registerEnglishCatalog(registerPreferencesEnglish);
-
-export function extractQuickSettingsSecurity(root: Record<string, unknown>) {
-  const gateway = asConfigRecord(root.gateway);
-  const auth = asConfigRecord(gateway?.auth);
-  const tools = asConfigRecord(root.tools);
-  const exec = asConfigRecord(tools?.exec) ?? {};
-  const browser = asConfigRecord(root.browser);
-  let gatewayAuth = "unknown";
-  if (auth) {
-    const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
-    gatewayAuth = mode
-      ? mode
-      : auth.password
-        ? "password"
-        : auth.token
-          ? "token"
-          : auth.trustedProxy
-            ? "trusted-proxy"
-            : "none";
-  }
-  const profile = tools?.profile;
-  const security = exec.security;
-  return {
-    gatewayAuth,
-    execPolicy: typeof security === "string" && security.trim() ? security.trim() : "allowlist",
-    browserEnabled: browser?.enabled !== false,
-    browserEnabledOverridden: browser !== null && Object.hasOwn(browser, "enabled"),
-    toolProfile: typeof profile === "string" ? profile.trim() : "",
-    toolProfileOverridden: tools !== null && Object.hasOwn(tools, "profile"),
-  };
-}
 
 export type SecurityViewProps = {
   security: ReturnType<typeof extractQuickSettingsSecurity>;

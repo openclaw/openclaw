@@ -29,6 +29,7 @@ const meta = (id = "source", provider = "native-a") => ({
 });
 const encode = (records: unknown[]) =>
   Buffer.from(records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+const compressedMeta = (provider: string) => zstdCompressSync(encode([meta("source", provider)]));
 async function rolloutFixture(
   payload: Record<string, unknown> = meta().payload,
   compressed = false,
@@ -95,39 +96,30 @@ describe("bounded native rollout metadata", () => {
 
   it("prefers the exact plain file", async () => {
     const f = await rolloutFixture(meta("source", "plain").payload);
-    await fs.writeFile(
-      `${f.rollout}.zst`,
-      zstdCompressSync(encode([meta("source", "compressed")])),
-    );
+    await fs.writeFile(`${f.rollout}.zst`, compressedMeta("compressed"));
     expect((await f.read()).model_provider).toBe("plain");
   });
 
-  it.each(["wrong identity", "incomplete header", "hardlink", "symlink", "outside root"])(
+  it.each(["wrong identity", "incomplete header", "hardlink", "symlink", "outside root"] as const)(
     "fails closed for %s without selecting a fallback",
     async (fault) => {
       const f = await rolloutFixture();
-      await fs.writeFile(
-        `${f.rollout}.zst`,
-        zstdCompressSync(encode([meta("source", "fallback")])),
-      );
-      if (fault === "wrong identity") {
-        await f.write(encode([meta("wrong")]));
-      }
-      if (fault === "incomplete header") {
-        await f.write(Buffer.from('{"type":'));
-      }
-      if (fault === "hardlink") {
-        await fs.link(f.rollout, `${f.rollout}.link`);
-      }
-      if (fault === "symlink") {
-        await fs.rename(f.rollout, `${f.rollout}.real`);
-        await fs.symlink(`${f.rollout}.real`, f.rollout);
-      }
+      await fs.writeFile(`${f.rollout}.zst`, compressedMeta("fallback"));
+      const faults = {
+        "wrong identity": () => f.write(encode([meta("wrong")])),
+        "incomplete header": () => f.write(Buffer.from('{"type":')),
+        hardlink: () => fs.link(f.rollout, `${f.rollout}.link`),
+        symlink: async () => {
+          await fs.rename(f.rollout, `${f.rollout}.real`);
+          await fs.symlink(`${f.rollout}.real`, f.rollout);
+        },
+      };
       if (fault === "outside root") {
         const child = path.join(f.root, "child");
         await fs.mkdir(child);
         await expect(readCodexSessionMeta(child, f.rollout, "source")).resolves.toBeUndefined();
       } else {
+        await faults[fault]();
         await expect(f.read()).rejects.toThrow();
       }
     },
@@ -321,19 +313,14 @@ describe("Codex exact local eligibility", () => {
 
   it("bounds stalled ownership lookup and prevents native reads after its deadline", async () => {
     const f = await localEligibilityFixture(() => Date.now(), 1_000);
-    let release!: (managed: boolean) => void;
-    f.managedThreads.has.mockImplementation(
-      () =>
-        new Promise<boolean>((resolve) => {
-          release = resolve;
-        }),
-    );
+    const ownership = Promise.withResolvers<boolean>();
+    f.managedThreads.has.mockReturnValue(ownership.promise);
     vi.useFakeTimers();
     try {
       const result = f.reject();
       await vi.advanceTimersByTimeAsync(1_000);
       await result;
-      release(false);
+      ownership.resolve(false);
       await vi.advanceTimersByTimeAsync(0);
       expect(pinnedConnectionMocks.request).not.toHaveBeenCalled();
     } finally {
@@ -401,9 +388,6 @@ describe("Codex exact local eligibility", () => {
         method: "thread/read",
         requestParams: { threadId: f.thread.id, includeTurns: false },
       });
-      expect(
-        pinnedConnectionMocks.request.mock.calls.filter(([r]) => r.method === "thread/read"),
-      ).toHaveLength(1);
       expect(f.managedThreads.snapshot).not.toHaveBeenCalled();
     },
   );

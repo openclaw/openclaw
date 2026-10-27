@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as diskSpace from "../../infra/disk-space.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -23,14 +24,18 @@ async function git(root: string, ...args: string[]): Promise<string> {
   return result.stdout.trim();
 }
 
-it.each([
+const snapshotCases = [
   { current: true, runtimeReady: true, noOp: true, reportingFails: false },
   { current: false, runtimeReady: true, noOp: false, reportingFails: false },
   { current: true, runtimeReady: false, noOp: false, reportingFails: false },
   { current: false, runtimeReady: true, noOp: false, reportingFails: true },
+];
+it.each([
+  ...snapshotCases.map((entry) => Object.assign({ backupShortfall: false }, entry)),
+  { current: false, runtimeReady: true, noOp: false, reportingFails: false, backupShortfall: true },
 ])(
-  "checks snapshot space after the Git no-op decision (current=$current, runtimeReady=$runtimeReady, reportingFails=$reportingFails)",
-  async ({ current, runtimeReady, noOp, reportingFails }) => {
+  "checks snapshot space after the Git no-op decision (current=$current, runtimeReady=$runtimeReady, reportingFails=$reportingFails, backupShortfall=$backupShortfall)",
+  async ({ current, runtimeReady, noOp, reportingFails, backupShortfall }) => {
     await withTestDir({ prefix: "git-update-snapshot-" }, async (base) => {
       const root = path.join(base, "checkout");
       const stateDir = path.join(base, "state");
@@ -66,10 +71,20 @@ it.each([
         target = await git(root, "rev-parse", "HEAD");
         await git(root, "checkout", "--detach", before);
       }
+      if (backupShortfall) {
+        const file = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        using db = openNodeSqliteDatabase(file);
+        db.exec(
+          "CREATE TABLE evidence(value BLOB); INSERT INTO evidence VALUES(zeroblob(16777216))",
+        );
+      }
       const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
         targetPath,
         checkedPath: targetPath,
-        availableBytes: 0,
+        availableBytes: backupShortfall
+          ? (targetPath === path.join(root, ".artifacts") ? 100 : 160) * 1024 ** 2
+          : 0,
         totalBytes: 1024 ** 3,
       }));
       const runCommand = processRunner.runCommandWithTimeout;
@@ -162,7 +177,9 @@ it.each([
           [candidateCommand, beforeGitMutation, validateCandidate].map((fn) => fn.mock.calls),
         ).toEqual([[], [], []]);
         expect(await git(root, "rev-parse", "HEAD")).toBe(before);
-        expect(await fs.readdir(stateDir)).toEqual(["openclaw.json"]);
+        expect((await fs.readdir(stateDir)).toSorted()).toEqual(
+          backupShortfall ? ["agents", "openclaw.json"] : ["openclaw.json"],
+        );
       } finally {
         process.argv = originalArgv;
       }

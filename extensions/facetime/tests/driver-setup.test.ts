@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import { installFaceTimeDriver, uninstallFaceTimeDriver } from "../src/driver-setup.js";
 
 describe("FaceTime driver setup", () => {
@@ -20,23 +21,9 @@ describe("FaceTime driver setup", () => {
   ])("reports the driver failure: $expected", async ({ install, stderr, stdout, expected }) => {
     const runCommandWithTimeout = vi
       .fn<Parameters<typeof installFaceTimeDriver>[0]["runCommandWithTimeout"]>()
-      .mockResolvedValue({
-        code: 7,
-        stdout,
-        stderr,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      });
+      .mockResolvedValue(commandResult({ code: 7, stdout, stderr }));
     if (install) {
-      runCommandWithTimeout.mockResolvedValueOnce({
-        code: 0,
-        stdout: "missing\n",
-        stderr: "",
-        signal: null,
-        killed: false,
-        termination: "exit",
-      });
+      runCommandWithTimeout.mockResolvedValueOnce(commandResult({ stdout: "missing\n" }));
     }
     const operation = install ? installFaceTimeDriver : uninstallFaceTimeDriver;
     await expect(operation({ pluginRoot: "/tmp/facetime", runCommandWithTimeout })).rejects.toThrow(

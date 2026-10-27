@@ -117,6 +117,8 @@ export type SessionWorkspaceListResult = ProtocolSessionsFilesListResult & {
   artifacts?: ProtocolArtifactSummary[];
 };
 
+export type CyberAccessProgram = NonNullable<GatewayWireSessionRow["cyberAccessProgram"]>;
+
 export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "updatedAt"> &
   Pick<SessionRow, "archivedBy" | "updatedAt"> & {
     /** Transient UI-owned Swarm note overlays, not persisted session fields. */
@@ -162,6 +164,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   contextWindow?: string;
   thinkingLevel?: string;
   fastMode?: FastMode;
+  cyberAccessProgram?: CyberAccessProgram;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;

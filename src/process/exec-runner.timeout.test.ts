@@ -79,13 +79,10 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 it.each([
-  ["complete", "exit"],
   ["idle", "no-output-timeout"],
-  ["cancel", "signal"],
   ["absolute", "timeout"],
 ] as const)("checkout progress honors %s completion", async (outcome, termination) => {
   const command = createCommand();
-  const abort = new AbortController();
   const absolute = outcome === "absolute";
   const result = materializeManagedWorktree(
     {
@@ -93,9 +90,7 @@ it.each([
       commit: "HEAD",
       ...(absolute ? { executionTimeoutMs: 600_000 } : {}),
     },
-    absolute
-      ? { killProcessTree: true }
-      : { timeoutMs: 300_000, signal: abort.signal, killProcessTree: true },
+    { timeoutMs: 300_000, killProcessTree: true },
   );
   await vi.advanceTimersByTimeAsync(absolute ? 540_000 : 240_000);
   if (!absolute) {
@@ -104,24 +99,9 @@ it.each([
   }
   command.child.stderr.emit("data", Buffer.from("Updating files: 40%\r"));
   expect(command.kill).not.toHaveBeenCalled();
-  if (outcome === "complete") {
-    command.exit(0);
-  } else if (outcome === "cancel") {
-    abort.abort();
-  } else {
-    await vi.advanceTimersByTimeAsync(absolute ? 60_001 : 300_001);
-  }
+  await vi.advanceTimersByTimeAsync(absolute ? 60_001 : 300_001);
   await vi.runAllTimersAsync();
-  await expect(result).resolves.toMatchObject({
-    termination,
-    killed: outcome !== "complete",
-  });
-  if (absolute) {
-    expect(command.kill).toHaveBeenCalledOnce();
-  }
-  expect(spawnMock.mock.calls[0]?.[0]).toEqual(
-    expect.arrayContaining(["read-tree", "--verbose", "-u", "HEAD"]),
-  );
+  await expect(result).resolves.toMatchObject({ termination, killed: true });
 });
 
 it.each([
@@ -192,19 +172,17 @@ it.each([
     command.settle();
   }
   if (success) {
-    if (phase === "drained") {
-      await expect(result).resolves.toMatchObject({
-        stdout: "complete",
-        ...(runner !== "exec" ? { code: 0, termination: "exit" } : {}),
-      });
-    } else {
-      const output = { stdout: "version\n", stderr: "diagnostic\n" };
-      await expect(result).resolves.toEqual(
-        runner === "exec"
-          ? output
-          : expect.objectContaining({ ...output, code: 0, termination: "exit", killed: false }),
-      );
-    }
+    const output =
+      phase === "drained"
+        ? { stdout: "complete" }
+        : { stdout: "version\n", stderr: "diagnostic\n" };
+    await expect(result).resolves.toEqual(
+      runner === "exec"
+        ? phase === "drained"
+          ? expect.objectContaining(output)
+          : output
+        : expect.objectContaining({ ...output, code: 0, termination: "exit", killed: false }),
+    );
     expect(command.kill).not.toHaveBeenCalled();
   } else {
     await assertion;

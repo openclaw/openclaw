@@ -117,14 +117,9 @@ function parseRecords(records: ChannelIngressQueueRecord<TelegramSpooledUpdatePa
         payload.version === TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION &&
         resolveTelegramUpdateId({ update_id: payload.updateId }) !== null,
     )
-    .map(({ payload, attempts, lastAttemptAt, lastError }) =>
+    .map(({ payload: { updateId, update, receivedAt }, attempts, lastAttemptAt, lastError }) =>
       Object.assign(
-        {
-          updateId: payload.updateId,
-          update: payload.update,
-          receivedAt: payload.receivedAt,
-          attempts,
-        },
+        { updateId, update, receivedAt, attempts },
         lastAttemptAt === undefined ? {} : { lastAttemptAt },
         lastError === undefined ? {} : { lastError },
       ),
@@ -132,11 +127,7 @@ function parseRecords(records: ChannelIngressQueueRecord<TelegramSpooledUpdatePa
     .toSorted((a, b) => a.updateId - b.updateId);
 }
 
-export async function listTelegramSpooledUpdates(
-  params: QueueScope & {
-    limit?: number | "all";
-  },
-) {
+export async function listTelegramSpooledUpdates(params: QueueScope & { limit?: number | "all" }) {
   const records = await openTelegramIngressQueue(params).listPending({
     limit: params.limit ?? 100,
     orderBy: "id",

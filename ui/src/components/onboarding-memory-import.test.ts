@@ -77,9 +77,14 @@ function createApplyResult(providerId: string, migrated = 1, skipped = 0) {
   };
 }
 
-function successfulRequest() {
-  return vi.fn(async (method: string) =>
-    method === "migrations.memory.plan" ? createPlan() : createApplyResult("codex"),
+function successfulRequest(
+  providerIds = ["codex"],
+  apply = (providerId: string) => Promise.resolve(createApplyResult(providerId)),
+) {
+  return vi.fn(async (method: string, params?: { providerId?: string }) =>
+    method === "migrations.memory.plan"
+      ? createPlan(providerIds)
+      : await apply(params?.providerId ?? "unknown"),
   );
 }
 
@@ -156,6 +161,12 @@ async function mount(
   element.active = active;
   mountSolid(() => element);
   await element.updateComplete;
+  return element;
+}
+
+async function startImport(request: ReturnType<typeof vi.fn>) {
+  const element = await mount(createContext(request));
+  (await waitForAction(element)).click();
   return element;
 }
 
@@ -285,18 +296,12 @@ describe("OnboardingMemoryImport", () => {
   });
 
   it("sends frozen provider plans with fresh idempotency keys", async () => {
-    const request = vi.fn(async (method: string, params?: { providerId?: string }) => {
-      if (method === "migrations.memory.plan") {
-        return createPlan(["codex", "claude"]);
-      }
-      return createApplyResult(params?.providerId ?? "unknown");
-    });
+    const request = successfulRequest(["codex", "claude"]);
     const randomUuid = vi
       .spyOn(globalThis.crypto, "randomUUID")
       .mockReturnValueOnce("00000000-0000-4000-8000-000000000001")
       .mockReturnValueOnce("00000000-0000-4000-8000-000000000002");
-    const element = await mount(createContext(request));
-    (await waitForAction(element)).click();
+    await startImport(request);
 
     await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
     const applyCalls = request.mock.calls.filter(
@@ -317,11 +322,7 @@ describe("OnboardingMemoryImport", () => {
 
   it("uses same-turn selection and admits only one import while completion is pending", async () => {
     const pendingApply = createDeferred<ReturnType<typeof createApplyResult>>();
-    const request = vi.fn(async (method: string) =>
-      method === "migrations.memory.plan"
-        ? createPlan(["codex", "claude"])
-        : await pendingApply.promise,
-    );
+    const request = successfulRequest(["codex", "claude"], () => pendingApply.promise);
     const element = await mount(createContext(request));
     const button = await waitForAction(element);
     const codex = element.querySelector<HTMLInputElement>("[data-provider-id='codex'] input")!;
@@ -373,28 +374,21 @@ describe("OnboardingMemoryImport", () => {
   });
 
   it("shows partial apply failures inline", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "migrations.memory.plan") {
-        return createPlan();
-      }
+    const request = successfulRequest(undefined, async () => {
       const result = createApplyResult("codex");
       result.summary.errors = 1;
       result.summary.total = 2;
       return result;
     });
-    const element = await mount(createContext(request));
-    (await waitForAction(element)).click();
+    const element = await startImport(request);
     await waitForSolid(() => expect(element.textContent).toContain("1 failed"));
     expect(element.textContent).toContain("Migrated 1");
   });
 
   it("restores pending import results after reactivation without exposing them to another gateway", async () => {
     const pendingApply = createDeferred<ReturnType<typeof createApplyResult>>();
-    const request = vi.fn(async (method: string) =>
-      method === "migrations.memory.plan" ? createPlan() : await pendingApply.promise,
-    );
-    const element = await mount(createContext(request));
-    (await waitForAction(element)).click();
+    const request = successfulRequest(undefined, () => pendingApply.promise);
+    const element = await startImport(request);
     await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
     element.active = false;
     await element.updateComplete;
@@ -412,16 +406,10 @@ describe("OnboardingMemoryImport", () => {
 
   it("shows a completed provider while the next import is pending", async () => {
     const pendingApply = createDeferred<ReturnType<typeof createApplyResult>>();
-    const request = vi.fn(async (method: string, params?: { providerId?: string }) => {
-      if (method === "migrations.memory.plan") {
-        return createPlan(["codex", "claude"]);
-      }
-      return params?.providerId === "claude"
-        ? await pendingApply.promise
-        : createApplyResult("codex");
-    });
-    const element = await mount(createContext(request));
-    (await waitForAction(element)).click();
+    const request = successfulRequest(["codex", "claude"], async (providerId) =>
+      providerId === "claude" ? await pendingApply.promise : createApplyResult("codex"),
+    );
+    const element = await startImport(request);
     try {
       await waitForSolid(() => {
         expect(request).toHaveBeenCalledTimes(3);
@@ -452,21 +440,17 @@ describe("OnboardingMemoryImport", () => {
   });
 
   it("continues with later providers after a provider error", async () => {
-    const request = vi.fn(async (method: string, params?: { providerId?: string }) => {
-      if (method === "migrations.memory.plan") {
-        return createPlan(["codex", "claude"]);
-      }
-      if (params?.providerId === "codex") {
+    const request = successfulRequest(["codex", "claude"], async (providerId) => {
+      if (providerId === "codex") {
         throw new Error("Codex import unavailable: OPENAI_API_KEY=sk-1234567890abcdef");
       }
       return createApplyResult("claude", 1, 0);
     });
-    const element = await mount(createContext(request));
-    (await waitForAction(element)).click();
+    const element = await startImport(request);
     await waitForAction(element, "continue");
     const applyProviders = request.mock.calls
       .filter(([method]) => method === "migrations.memory.apply")
-      .map(([, params]) => (params as { providerId: string }).providerId);
+      .map(([, params]) => params?.providerId);
     expect(applyProviders).toEqual(["codex", "claude"]);
     expect(element.textContent).toContain("Codex import unavailable: OPENAI_API_KEY=sk-123...cdef");
     expect(element.textContent).not.toContain("sk-1234567890abcdef");

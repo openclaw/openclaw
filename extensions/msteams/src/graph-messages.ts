@@ -17,11 +17,6 @@ import {
 } from "./graph.js";
 import { getMSTeamsReactionEmoji, resolveMSTeamsReactionEmoji } from "./reaction-types.js";
 
-type GraphPinnedMessage = {
-  id?: string;
-  message?: GraphMessage;
-};
-
 function stripTargetPrefix(raw: string): string {
   return raw
     .trim()
@@ -194,7 +189,10 @@ export async function listPinsMSTeams(params: {
   to: string;
 }) {
   const { token, basePath } = await resolveGraphPinContext(params, "list");
-  const { items } = await fetchAllGraphPages<GraphPinnedMessage>({
+  const { items } = await fetchAllGraphPages<{
+    id?: string;
+    message?: GraphMessage;
+  }>({
     token,
     path: `${basePath}/pinnedMessages?$expand=message`,
     maxPages: LIST_PINS_MAX_PAGES,
@@ -209,27 +207,8 @@ export async function listPinsMSTeams(params: {
   };
 }
 
-type GraphReaction = {
-  reactionType?: string;
-  user?: { user?: { id?: string; displayName?: string | null } | null } | null;
-  createdDateTime?: string;
-};
-
-type GraphMessageWithReactions = GraphMessage & {
-  reactions?: GraphReaction[];
-};
-
 type ReactMessageMSTeamsParams = MSTeamsMessageTarget & {
   reactionType: string;
-};
-
-type ReactionSummary = {
-  reactionType: string;
-  /** Display name for the reaction (matches reactionType for known types). */
-  name: string;
-  emoji?: string;
-  count: number;
-  users: Array<{ id: string; displayName?: string }>;
 };
 
 // Graph reaction writes use beta and prefer delegated auth, falling back to
@@ -265,7 +244,15 @@ export function unreactMessageMSTeams(params: ReactMessageMSTeamsParams): Promis
 export async function listReactionsMSTeams(params: MSTeamsMessageTarget) {
   const { token, ...conv } = await resolveGraphMessageContext(params);
   const path = resolveMessagePath(conv, params);
-  const msg = await fetchGraphJson<GraphMessageWithReactions>({ token, path });
+  const msg = await fetchGraphJson<
+    GraphMessage & {
+      reactions?: {
+        reactionType?: string;
+        user?: { user?: { id?: string; displayName?: string | null } | null } | null;
+        createdDateTime?: string;
+      }[];
+    }
+  >({ token, path });
 
   const grouped = new Map<
     string,
@@ -289,7 +276,14 @@ export async function listReactionsMSTeams(params: MSTeamsMessageTarget) {
     }
   }
 
-  const reactions: ReactionSummary[] = Array.from(grouped.entries()).map(([type, group]) => ({
+  const reactions: {
+    reactionType: string;
+    /** Display name for the reaction (matches reactionType for known types). */
+    name: string;
+    emoji?: string;
+    count: number;
+    users: Array<{ id: string; displayName?: string }>;
+  }[] = Array.from(grouped.entries()).map(([type, group]) => ({
     reactionType: type,
     name: type,
     emoji: getMSTeamsReactionEmoji(type),

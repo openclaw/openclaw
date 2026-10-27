@@ -804,6 +804,10 @@
     "target": "Neon AI Gateway"
   },
   {
+    "source": "Liquid Inference",
+    "target": "Liquid Inference"
+  },
+  {
     "source": "Mistral",
     "target": "Mistral"
   },
@@ -5158,5 +5162,21 @@
   {
     "source": "Runtime compatibility lint",
     "target": "运行时兼容性静态检查"
+  },
+  {
+    "source": "Liquid AI",
+    "target": "Liquid AI"
+  },
+  {
+    "source": "Liquid AI plugin reference",
+    "target": "Liquid AI 插件参考"
+  },
+  {
+    "source": "liquid-ai",
+    "target": "liquid-ai"
+  },
+  {
+    "source": "Liquid AI (Decision models)",
+    "target": "Liquid AI（决策模型）"
   }
 ]

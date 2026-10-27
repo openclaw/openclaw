@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import * as extraParamsRuntime from "../../agents/embedded-agent-runner/extra-params.js";
 import { createOpenAIResponsesTransportStreamFn } from "../../agents/openai-transport-stream.js";
@@ -14,7 +15,6 @@ const { AUTH_MARKER, MODEL, PROVIDER, SESSION_ID, config, logicalModel, params, 
   fixture;
 const transport = vi.hoisted(() => ({
   requests: [] as Record<string, unknown>[],
-  echo: "ultrafast",
 }));
 vi.mock("openai", () => ({
   default: class {
@@ -30,7 +30,7 @@ vi.mock("openai", () => ({
                 response: {
                   id: "resp_worker_tier",
                   status: "completed",
-                  service_tier: transport.echo,
+                  service_tier: "priority",
                   output: [],
                   usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
                 },
@@ -82,18 +82,11 @@ it("uses session speed and publishes a downgrade for a direct credential", async
     baseUrl: model.baseUrl,
   };
   transport.requests.length = 0;
-  for (const echo of ["priority", "priority", "ultrafast"]) {
-    transport.echo = echo;
-    await complete(runtime);
-    expect(transport.requests.at(-1)?.service_tier).toBe("ultrafast");
-    expect(accountCatalog.readServiceTierObservations(route)).toEqual(
-      echo === "ultrafast" ? [] : [{ requestedTier: "ultrafast", responseTier: echo }],
-    );
-  }
-  expect(runtime.prepareModel.mock.calls[0]?.[0].profileId).toBeUndefined();
-  expect(
-    accountCatalog.readServiceTierObservations({ ...route, identityKey: "profile:openai:other" }),
-  ).toEqual([]);
+  await complete(runtime);
+  expect(transport.requests.at(-1)?.service_tier).toBe("ultrafast");
+  expect(accountCatalog.readServiceTierObservations(route)).toEqual([
+    { requestedTier: "ultrafast", responseTier: "priority" },
+  ]);
   for (const fastMode of [false, true]) {
     runtime.readPromptCacheContext.mockReturnValue({ boundaryCount: 0, fastMode });
     const inferenceRequest = request();
@@ -118,10 +111,7 @@ it("uses the shared Auto deadline across repeated worker inference requests", as
     vi.setSystemTime(now);
     await complete(runtime);
     const fastMode = runtime.applyStreamPolicy.mock.calls.at(-1)?.[4]?.fastMode;
-    expect(typeof fastMode).toBe("function");
-    if (typeof fastMode !== "function") {
-      throw new Error("Auto mode did not retain its elapsed-time policy");
-    }
+    assert(typeof fastMode === "function", "Auto mode must retain its elapsed-time policy");
     vi.setSystemTime(now);
     expect(fastMode()).toBe(enabled);
   }

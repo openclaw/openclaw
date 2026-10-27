@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { fstatSync, renameSync } from "node:fs";
+import fs, { fstatSync, renameSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, MessageChannel, type MessagePort, Worker } from "node:worker_threads";
@@ -14,12 +14,19 @@ import { runPostgresTransactionSync } from "./postgres-sync/transaction.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import type { PostgresSqlConnection } from "./sql-connection.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
-import { readSqliteDatabaseAdmissionFact as readFact } from "./sqlite-database-admission-record.js";
+import {
+  admitSqliteDatabaseFactValue,
+  publishSqliteDatabaseFact,
+  readSqliteDatabaseFactRevision,
+  readSqliteDatabaseAdmissionFact as readFact,
+  SqliteDatabaseAdmissionRegistry,
+} from "./sqlite-database-admission-record.js";
 import {
   beginSqliteDatabaseAdmissionOperation as beginOperation,
   discardSqliteDatabaseTransactionAdmissions as discardFacts,
   getSqliteDatabaseAdmission as getFact,
   getOrLoadSqliteDatabaseAdmissionForPath as loadFact,
+  prepareSqliteDatabaseAdmissionForPath as prepareFact,
   hasPendingSqliteDatabaseSchemaMutation as schemaDirty,
   invalidateLocalSqliteSchemaAdmissions as invalidateSchema,
   publishSqliteDatabaseAdmission as publishFact,
@@ -43,7 +50,9 @@ import {
   revokeSqliteDatabaseAdmissionsForPath as revokePath,
   trackSqliteDatabaseAdmissionWorker as trackWorker,
   withSqliteDatabaseAdmissionExchange as withExchange,
+  withSqliteDatabaseWriteScope,
 } from "./sqlite-database-admission.js";
+import { withSqlitePreparedNativeMutation } from "./sqlite-native-observer.js";
 import {
   stageSqliteTransactionState,
   withSqlitePostCommitPublications as postCommit,
@@ -123,6 +132,37 @@ function workerOptions(location: string, port: MessagePort, extra: Record<string
 function recordsFor(location: string) {
   return captureAdmissions().filter((record) => record.location === location);
 }
+
+it("worker release leaves unrelated receipt scopes unvisited", () => {
+  using affected = databaseFixture("sqlite-release-affected-");
+  using unrelated = databaseFixture("sqlite-release-unrelated-");
+  scopedToken(affected.database, "affected-session");
+  scopedToken(unrelated.database, "unrelated-session");
+  const registry = new SqliteDatabaseAdmissionRegistry();
+  registry.install([...recordsFor(affected.location), ...recordsFor(unrelated.location)]);
+  const record = registry.forLocation(affected.location)!;
+  const sibling = registry.forLocation(unrelated.location)!;
+  const owner = 123456;
+  const references = new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT);
+  Atomics.store(new Int32Array(references), 0, 1);
+  record.references.set(owner, references);
+  registry.publish(record);
+  const stale = structuredClone(registry.capture());
+  const visits = vi.spyOn(sibling.writeScopes, "forEach");
+  try {
+    registry.releaseWorker(owner + 1);
+    registry.releaseWorker(owner);
+    expect(visits).not.toHaveBeenCalled();
+    expect(Atomics.load(new Int32Array(references), 0)).toBe(-1);
+    expect(record.references.has(owner)).toBe(false);
+    registry.install(stale);
+    expect(record.references.has(owner)).toBe(false);
+    expect(registry.forLocation(affected.location)).toBe(record);
+    expect(registry.forLocation(unrelated.location)).toBe(sibling);
+  } finally {
+    visits.mockRestore();
+  }
+});
 
 it("keeps cold pinned receipts current across physical-fact reads until release", () => {
   using fixture = databaseFixture("sqlite-admission-cold-pins-");
@@ -226,6 +266,21 @@ it("retires the final closed handle's facts while preserving open siblings and d
   using second = openNodeSqliteDatabase(location);
   admitSqliteSchema(second);
   const original = recordsFor(location)[0]!;
+  {
+    using stat = vi.spyOn(fs, "statSync");
+    using fstat = vi.spyOn(fs, "fstatSync");
+    using realpath = vi.spyOn(fs.realpathSync, "native");
+    using open = vi.spyOn(fs, "openSync");
+    using read = vi.spyOn(fs, "readFileSync");
+    using lstat = vi.spyOn(fs, "lstatSync");
+    retainLocation(location, original.physicalIdentity);
+    retainLocation(location, original.physicalIdentity);
+    expect(recordsFor(location)[0]?.generationId).toBe(original.generationId);
+    expect(recordsFor(location)[0]?.descriptor).toBe(original.descriptor);
+    for (const probe of [stat, fstat, realpath, open, read, lstat]) {
+      expect(probe).not.toHaveBeenCalled();
+    }
+  }
   const stale = structuredClone([original]);
   publishFact(first, key, "connection-scoped");
   first.close();
@@ -246,16 +301,15 @@ it("retires the final closed handle's facts while preserving open siblings and d
   installAdmissions(stale);
   expect(recordsFor(location)).toEqual([]);
 
-  first.open();
-  expect(getFact(first, key)).toBeUndefined();
-  expect(schemaFacts(first)?.admissionId).toBe(admittedSchema?.admissionId);
-  admitSqliteSchema(first);
-  expect(first.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
-  expect(schemaFacts(first)?.tables.has("proof")).toBe(true);
+  using reopened = openNodeSqliteDatabase(location);
+  expect(schemaFacts(reopened)?.admissionId).toBe(admittedSchema?.admissionId);
+  expect(getFact(reopened, key)).toBeUndefined();
+  expect(reopened.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
+  expect(schemaFacts(reopened)?.tables.has("proof")).toBe(true);
   const readmitted = recordsFor(location)[0]!;
   expect(readmitted.generationId).not.toBe(original.generationId);
   expect(readmitted.descriptor).toBe(original.descriptor);
-  first.close();
+  reopened.close();
   expect(recordsFor(location)).toEqual([]);
   retireAdmission(location);
   expect(() => fstatSync(original.descriptor)).toThrow();
@@ -293,6 +347,42 @@ it("revokes retained validation when corruption is reported after native close",
   expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
 });
 
+it("prepares the actual autocommit receipt before one scoped statement and publishes it after settlement", () => {
+  using fixture = databaseFixture("sqlite-prepared-receipt-");
+  const { database, location } = fixture;
+  const before = scopedToken(database, "entry");
+  const statement = database.prepare("INSERT INTO proof VALUES (?)");
+  let pending: string | undefined;
+  let pendingDatabase: string | undefined;
+  let installed: { scoped: string | undefined; database: string | undefined } | undefined;
+  postCommit(database, () =>
+    withSqliteDatabaseWriteScope(database, ["entry"], () =>
+      withSqlitePreparedNativeMutation(
+        database,
+        () => {
+          expect(database.isTransaction).toBe(false);
+          pending = pendingScopedToken(database, "entry");
+          pendingDatabase = pendingToken(database);
+          stageSqliteTransactionState(database, {
+            commit: () => {
+              installed = {
+                scoped: scopedToken(database, "entry"),
+                database: pathToken(location),
+              };
+            },
+          });
+        },
+        () => statement.run(43),
+      ),
+    ),
+  );
+  expect(installed).toEqual({ scoped: pending, database: pendingDatabase });
+  expect(pending).not.toBe(before);
+  expect(pendingDatabase).toBeTypeOf("string");
+  expect(pendingToken(database)).toBeUndefined();
+  expect(database.prepare("SELECT value FROM proof").all()).toEqual([{ value: 42 }, { value: 43 }]);
+});
+
 it("keeps committed and pending row-cache tokens distinct across readmission", () => {
   using fixture = databaseFixture("sqlite-admission-tokens-");
   const { location, database } = fixture;
@@ -316,6 +406,32 @@ it("keeps committed and pending row-cache tokens distinct across readmission", (
     previous = committed;
     database.close();
   }
+});
+
+it("keeps the prior prepared receipt when a competing writer refuses the native statement", () => {
+  using fixture = databaseFixture("sqlite-prepared-busy-");
+  const { database, location } = fixture;
+  using peer = openNodeSqliteDatabase(location);
+  database.exec("PRAGMA busy_timeout=0");
+  peer.exec("BEGIN IMMEDIATE");
+  const before = scopedToken(database, "entry");
+  const beforeDatabase = pathToken(location);
+  const statement = database.prepare("INSERT INTO proof VALUES (?)");
+  expect(() =>
+    postCommit(database, () =>
+      withSqliteDatabaseWriteScope(database, ["entry"], () =>
+        withSqlitePreparedNativeMutation(
+          database,
+          () => {},
+          () => statement.run(43),
+        ),
+      ),
+    ),
+  ).toThrow("database is locked");
+  expect(scopedToken(database, "entry")).toBe(before);
+  expect(pathToken(location)).toBe(beforeDatabase);
+  expect(database.prepare("SELECT value FROM proof").all()).toEqual([{ value: 42 }]);
+  peer.exec("ROLLBACK");
 });
 
 it("releases a connection reference when initial admission exchange fails", () => {
@@ -621,22 +737,58 @@ it.each([false, true])(
   },
 );
 
-it("path revocation invalidates scoped receipts and admission facts with a live handle", () => {
-  using fixture = databaseFixture("sqlite-admission-path-revocation-");
-  const { database, location } = fixture;
-  const beforeRevocation = scopedToken(database, "proof");
-  publishFact(database, key, "healthy");
-  publishFact(database, schemaKey, "admitted");
-
-  revokePath(location);
-
-  expect(scopedToken(database, "proof")).not.toBe(beforeRevocation);
-  expect(getFact(database, key)).toBeUndefined();
-  expect(getFact(database, schemaKey)).toBeUndefined();
-});
-
 const key = { name: "test.engine-admission", read: (value: unknown) => value };
 const schemaKey = { ...key, name: "test.engine-schema-admission", schemaDependent: true };
+
+it("prepared facts follow a worker whose snapshot predates the host seed", () => {
+  using fixture = databaseFixture("sqlite-prepared-publication-");
+  const { database, location } = fixture;
+  const worker = new SqliteDatabaseAdmissionRegistry();
+  worker.install(structuredClone(recordsFor(location)));
+  const workerRecord = worker.forLocation(location)!;
+  publishFact(database, schemaKey, "host seed");
+  const read = prepareFact(location, schemaKey);
+  expect(read()).toBe("host seed");
+  publishSqliteDatabaseFact(
+    workerRecord,
+    schemaKey,
+    admitSqliteDatabaseFactValue(schemaKey, "worker replacement"),
+    readSqliteDatabaseFactRevision(workerRecord, true),
+    "worker-publication",
+  );
+  worker.publish(workerRecord);
+  installAdmissions(worker.capture());
+  expect(getFact(database, schemaKey)).toBe("worker replacement");
+  expect(read()).toBe("worker replacement");
+});
+
+it.each([
+  [key, false],
+  [schemaKey, true],
+] as const)("prepared facts follow publication and revocation (%j)", (factKey, schemaDependent) => {
+  using fixture = databaseFixture("sqlite-prepared-admission-");
+  const { database, location } = fixture;
+  const read = prepareFact(location, factKey);
+  expect(read()).toBeUndefined();
+  publishFact(database, factKey, "first");
+  expect(read()).toBe("first");
+  publishFact(database, factKey, "replacement");
+  expect(read()).toBe("replacement");
+  const beforeRevocation = scopedToken(database, "proof");
+  revokePath(location);
+  expect(scopedToken(database, "proof")).not.toBe(beforeRevocation);
+  expect(getFact(database, factKey)).toBeUndefined();
+  expect(read()).toBeUndefined();
+  publishFact(database, factKey, "recovered");
+  expect(read()).toBe("recovered");
+  publishSchema(database);
+  expect(read()).toBe(schemaDependent ? undefined : "recovered");
+  publishFact(database, factKey, "new-schema");
+  expect(read()).toBe("new-schema");
+  database.close();
+  retireAdmission(location);
+  expect(read()).toBeUndefined();
+});
 
 it.each(["committed", "native", "sqlite-transaction", "postgres-transaction"] as const)(
   "decodes admission values once at publication (%s)",

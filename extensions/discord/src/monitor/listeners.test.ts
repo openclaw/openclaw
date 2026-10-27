@@ -13,6 +13,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPresenceStore as cooldownStore } from "../../../test-support/presence-store.js";
 import { Client } from "../internal/discord.js";
 import { DiscordPresenceGuildDeleteListener, DiscordPresenceListener } from "./listeners.js";
 import { createDiscordLivePolicyReader, type DiscordLivePolicy } from "./live-policy.js";
@@ -125,29 +126,6 @@ function guildSnapshot(
 
 function presenceClient(fetchUser = async () => ({ bot: false })): Client {
   return { fetchUser: vi.fn(fetchUser) } as unknown as Client;
-}
-
-function cooldownStore(values = new Map<string, number>()) {
-  return {
-    register: async (key, value) => void values.set(key, value),
-    registerIfAbsent: async (key, value) => {
-      if (values.has(key)) {
-        return false;
-      }
-      values.set(key, value);
-      return true;
-    },
-    lookup: async (key) => values.get(key),
-    consume: async (key) => {
-      const value = values.get(key);
-      values.delete(key);
-      return value;
-    },
-    delete: async (key) => values.delete(key),
-    deleteIfEqual: async (key, expected) => values.get(key) === expected && values.delete(key),
-    entries: async () => [...values].map(([key, value]) => ({ key, value, createdAt: value })),
-    clear: async () => values.clear(),
-  } satisfies PluginStateKeyedStore<number>;
 }
 
 type PresenceListenerParams = ConstructorParameters<typeof DiscordPresenceListener>[0];

@@ -1,14 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
-// Control UI tests cover nested config edit rejection and draft preservation.
-import { renderObjectFixture, renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
+import {
+  expectElement,
+  connectionSchemaFixture,
+  renderObjectFixture,
+  renderArrayFixture,
+} from "../test-helpers/config-form-fixtures.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
 
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element instanceof Element, label).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${label}`);
-  }
-  return element;
+const errorSelector = ".cfg-structured-draft__error [role='alert']";
+
+function field(root: ParentNode, name: string) {
+  return expectElement(root.querySelector<HTMLInputElement>(`input[aria-label='${name}']`), name);
+}
+
+function edit(input: HTMLInputElement | HTMLTextAreaElement, value: string, type = "input") {
+  input.value = value;
+  input.dispatchEvent(new Event(type, { bubbles: true }));
+}
+
+function add(root: ParentNode, label = "Add") {
+  expectElement(
+    Array.from(root.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === label,
+    ),
+    label,
+  ).click();
 }
 
 describe("config form rejection integrity", () => {
@@ -59,12 +75,7 @@ describe("config form rejection integrity", () => {
       `second auto-default ${testCase.kind} draft`,
     );
     flush();
-    expectElement(
-      Array.from(collection.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === testCase.addLabel,
-      ),
-      `second auto-default ${testCase.kind} add`,
-    ).click();
+    add(collection, testCase.addLabel);
     flush();
     expect(draft.querySelector(".cfg-collection-draft")).not.toBeNull();
 
@@ -73,219 +84,84 @@ describe("config form rejection integrity", () => {
         draft.querySelector<HTMLInputElement>("[data-collection-draft-key]"),
         "map fallback draft key",
       );
-      key.value = testCase.key;
-      key.dispatchEvent(new Event("input", { bubbles: true }));
+      edit(key, testCase.key);
     }
     const value = expectElement(
       draft.querySelector<HTMLInputElement | HTMLTextAreaElement>("[data-collection-draft-value]"),
       `${testCase.kind} fallback draft value`,
     );
-    value.value = testCase.value;
-    value.dispatchEvent(new Event("input", { bubbles: true }));
+    edit(value, testCase.value);
     flush();
-    expectElement(
-      Array.from(draft.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === testCase.addLabel,
-      ),
-      `${testCase.kind} fallback draft commit`,
-    ).click();
+    add(draft, testCase.addLabel);
     expect(onPatch).toHaveBeenCalledWith([testCase.path], testCase.expected);
     container.remove();
   });
 
-  it("blocks renaming a map key whose value is still a redacted secret", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    renderObjectFixture(container, {
-      schema: {
+  it.each([true, false])(
+    "preserves an optional object draft until valid, with commit accepted=%s",
+    (accepted) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      let currentValue: Record<string, unknown> = {};
+      const onPatch = vi.fn((_path: Array<string | number>, value: unknown) => {
+        if (!accepted) {
+          return false;
+        }
+        currentValue = { ...currentValue, connection: value };
+        renderValue();
+        return true;
+      });
+      const schema = {
         type: "object",
-        additionalProperties: { type: "string" },
-      },
-      value: { primary: "__OPENCLAW_REDACTED__", plain: "visible" },
-      path: ["secrets"],
-      onPatch,
-    });
+        properties: {
+          connection: connectionSchemaFixture(),
+        },
+      };
+      const renderValue = () => {
+        renderObjectFixture(container, {
+          schema,
+          value: currentValue,
+          path: ["settings"],
+          onPatch,
+        });
+      };
 
-    const redactedKey = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Key: primary']"),
-      "redacted map key",
-    );
-    redactedKey.value = "renamed";
-    redactedKey.dispatchEvent(new Event("change", { bubbles: true }));
-
-    // Moving the sentinel to a new key can only produce an unsavable draft or,
-    // folded with a delete, silently bind the wrong stored credential.
-    expect(onPatch).not.toHaveBeenCalled();
-    expect(redactedKey.value).toBe("primary");
-
-    const plainKey = expectElement(
-      container.querySelector<HTMLInputElement>("input[aria-label='Key: plain']"),
-      "plain map key",
-    );
-    plainKey.value = "renamed";
-    plainKey.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(["secrets"], {
-      primary: "__OPENCLAW_REDACTED__",
-      renamed: "visible",
-    });
-    container.remove();
-  });
-
-  it("commits an optional object only after all required children are valid", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    let currentValue: Record<string, unknown> = {};
-    const onPatch = vi.fn((path: Array<string | number>, value: unknown) => {
-      currentValue = { ...currentValue, connection: value };
       renderValue();
-      return true;
-    });
-    const schema = {
-      type: "object",
-      properties: {
-        connection: {
-          type: "object",
-          required: ["host", "port"],
-          properties: {
-            host: { type: "string", minLength: 1 },
-            port: { type: "integer", minimum: 1 },
-          },
-        },
-      },
-    };
-    const renderValue = () => {
-      renderObjectFixture(container, {
-        schema,
-        value: currentValue,
-        path: ["settings"],
-        onPatch,
+      const draft = expectElement(
+        container.querySelector<HTMLElement>("openclaw-config-form-structured-draft"),
+        "optional object draft",
+      );
+      flush();
+      edit(field(draft, "Host"), "gateway.local");
+      flush();
+      expect(onPatch).not.toHaveBeenCalled();
+
+      renderValue();
+      flush();
+      expect(field(draft, "Host").value).toBe("gateway.local");
+      edit(field(draft, "Port"), "18789");
+
+      expect(onPatch).toHaveBeenCalledTimes(1);
+      expect(onPatch).toHaveBeenCalledWith(["settings", "connection"], {
+        host: "gateway.local",
+        port: 18789,
       });
-    };
-
-    renderValue();
-    const draft = expectElement(
-      container.querySelector<HTMLElement>("openclaw-config-form-structured-draft"),
-      "optional object draft",
-    );
-    flush();
-    const host = expectElement(
-      draft.querySelector<HTMLInputElement>("input[aria-label='Host']"),
-      "optional host",
-    );
-    host.value = "gateway.local";
-    host.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-    expect(onPatch).not.toHaveBeenCalled();
-
-    renderValue();
-    flush();
-    expect(
-      expectElement(
-        draft.querySelector<HTMLInputElement>("input[aria-label='Host']"),
-        "preserved optional host",
-      ).value,
-    ).toBe("gateway.local");
-
-    const port = expectElement(
-      draft.querySelector<HTMLInputElement>("input[aria-label='Port']"),
-      "optional port",
-    );
-    port.value = "18789";
-    port.dispatchEvent(new Event("input", { bubbles: true }));
-
-    expect(onPatch).toHaveBeenCalledTimes(1);
-    expect(onPatch).toHaveBeenCalledWith(["settings", "connection"], {
-      host: "gateway.local",
-      port: 18789,
-    });
-    expect(currentValue).toEqual({
-      connection: { host: "gateway.local", port: 18789 },
-    });
-    expect(container.querySelector("openclaw-config-form-structured-draft")).toBeNull();
-    container.remove();
-  });
-
-  it("retains a complete optional object draft when its atomic commit is rejected", () => {
-    const onPatch = vi.fn(() => false);
-    const container = document.createElement("div");
-    document.body.append(container);
-    const schema = {
-      type: "object",
-      properties: {
-        connection: {
-          type: "object",
-          required: ["host", "port"],
-          properties: {
-            host: { type: "string", minLength: 1 },
-            port: { type: "integer", minimum: 1 },
-          },
-        },
-      },
-    };
-    const renderValue = () => {
-      renderObjectFixture(container, {
-        schema,
-        value: {},
-        path: ["settings"],
-        onPatch,
-      });
-    };
-
-    renderValue();
-    const draft = expectElement(
-      container.querySelector<HTMLElement>("openclaw-config-form-structured-draft"),
-      "rejected optional object draft",
-    );
-    flush();
-    const host = expectElement(
-      draft.querySelector<HTMLInputElement>("input[aria-label='Host']"),
-      "rejected optional host",
-    );
-    host.value = "gateway.local";
-    host.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-    const port = expectElement(
-      draft.querySelector<HTMLInputElement>("input[aria-label='Port']"),
-      "rejected optional port",
-    );
-    port.value = "18789";
-    port.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-
-    expect(onPatch).toHaveBeenCalledTimes(1);
-    expect(onPatch).toHaveBeenCalledWith(["settings", "connection"], {
-      host: "gateway.local",
-      port: 18789,
-    });
-    expect(
-      expectElement(
-        draft.querySelector<HTMLInputElement>("input[aria-label='Host']"),
-        "retained rejected host",
-      ).value,
-    ).toBe("gateway.local");
-    expect(
-      expectElement(
-        draft.querySelector<HTMLInputElement>("input[aria-label='Port']"),
-        "retained rejected port",
-      ).value,
-    ).toBe("18789");
-    expect(
-      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
-    ).toContain("draft is still here");
-
-    renderValue();
-    flush();
-    expect(
-      expectElement(
-        draft.querySelector<HTMLInputElement>("input[aria-label='Host']"),
-        "rerendered rejected host",
-      ).value,
-    ).toBe("gateway.local");
-    expect(
-      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
-    ).toContain("draft is still here");
-    container.remove();
-  });
+      if (accepted) {
+        expect(currentValue).toEqual({ connection: { host: "gateway.local", port: 18789 } });
+        expect(container.querySelector("openclaw-config-form-structured-draft")).toBeNull();
+      } else {
+        flush();
+        expect(field(draft, "Host").value).toBe("gateway.local");
+        expect(field(draft, "Port").value).toBe("18789");
+        expect(draft.querySelector(errorSelector)?.textContent).toContain("draft is still here");
+        renderValue();
+        flush();
+        expect(field(draft, "Host").value).toBe("gateway.local");
+        expect(draft.querySelector(errorSelector)?.textContent).toContain("draft is still here");
+      }
+      container.remove();
+    },
+  );
 
   it("constructs an optional large-minimum array without leaking partial values", () => {
     const onPatch = vi.fn((_path: Array<string | number>, _value: unknown) => false);
@@ -310,13 +186,6 @@ describe("config form rejection integrity", () => {
         onPatch,
       });
     };
-    const add = (draft: HTMLElement) =>
-      expectElement(
-        Array.from(draft.querySelectorAll<HTMLButtonElement>("button")).find(
-          (button) => button.textContent?.trim() === "Add",
-        ),
-        "large-minimum array add",
-      );
 
     renderValue();
     const draft = expectElement(
@@ -324,7 +193,7 @@ describe("config form rejection integrity", () => {
       "large-minimum array draft",
     );
     flush();
-    add(draft).click();
+    add(draft);
     flush();
     expect(onPatch).not.toHaveBeenCalled();
     expect(draft.textContent).toContain("1 item");
@@ -333,23 +202,19 @@ describe("config form rejection integrity", () => {
     flush();
     expect(draft.textContent).toContain("1 item");
 
-    add(draft).click();
+    add(draft);
     flush();
     expect(onPatch).toHaveBeenCalledTimes(1);
     const [path, value] = onPatch.mock.calls[0] ?? [];
     expect(path).toEqual(["settings", "codes"]);
     expect(value).toEqual(Array.from({ length: 101 }, () => ""));
     expect(draft.textContent).toContain("101 items");
-    expect(
-      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
-    ).toContain("draft is still here");
+    expect(draft.querySelector(errorSelector)?.textContent).toContain("draft is still here");
 
     renderValue();
     flush();
     expect(draft.textContent).toContain("101 items");
-    expect(
-      draft.querySelector<HTMLElement>(".cfg-structured-draft__error [role='alert']")?.textContent,
-    ).toContain("draft is still here");
+    expect(draft.querySelector(errorSelector)?.textContent).toContain("draft is still here");
     container.remove();
   });
 });

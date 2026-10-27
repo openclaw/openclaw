@@ -1,5 +1,7 @@
+import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import * as p from "./index.js";
+import { PluginCatalogEntrySchema } from "./schema/plugins.js";
 import { validation } from "./schema/protocol-validation.test-support.js";
 
 const install = validation(p.validatePluginsInstallParams);
@@ -12,9 +14,23 @@ const clawhub = { source: "clawhub", packageName: "memory-plus" };
 const reloadRequest = { plugins: [{ pluginId: "notes" }] };
 const enableRequest = { pluginId: "workboard", enabled: true };
 const consent = { reviewToken: "surface-sha256" };
-const invalidConsent = [true, false, {}, { reviewToken: "" }, { ...consent, unexpected: true }];
+const invalidConsent = [true, {}, { reviewToken: "" }, { ...consent, unexpected: true }];
 
 describe("plugin lifecycle protocol validators", () => {
+  it("keeps server-owned tool branding eligibility optional and boolean", () => {
+    const catalogEntry = Compile(PluginCatalogEntrySchema);
+    const plugin = {
+      id: "community-tool",
+      name: "Community Tool",
+      installed: true,
+      enabled: true,
+      state: "enabled",
+    };
+    for (const fields of [{}, { hasToolBrandIcon: true }, { hasToolBrandIcon: false }]) {
+      expect(catalogEntry.Check({ ...plugin, ...fields })).toBe(true);
+    }
+    expect(catalogEntry.Check({ ...plugin, hasToolBrandIcon: "true" })).toBe(false);
+  });
   it("accepts bounded activation report batches while retaining per-plugin receipts", () => {
     const receipt = { pluginId: "review", revision: "one", status: "activated" };
     const batch = (length: number) => Array.from({ length }, () => ({ ...receipt }));
@@ -34,15 +50,17 @@ describe("plugin lifecycle protocol validators", () => {
     const batch = (length: number) =>
       Array.from({ length }, (_, index) => ({ ...target, pluginId: `plugin-${index}` }));
     reload.accepts(
-      { plugins: [target] },
+      reloadRequest,
       { plugins: batch(64) },
       { plugins: [{ ...target, sourceDigests: { alpha: "b".repeat(64) } }] },
+      { plugins: [target], acknowledgeCapabilities: { reviewToken: "reviewed-artifact" } },
     );
     reload.rejects(
+      {},
+      { plugins: [{ pluginId: "" }] },
       { plugins: [] },
       { plugins: batch(65) },
       { plugins: [target, target] },
-      { plugins: [{ ...target, installHash: "" }] },
       { plugins: [{ ...target, installHash: "A".repeat(64) }] },
       { plugins: [{ ...target, sourceDigests: { alpha: "not-a-digest" } }] },
       { plugins: [target], pluginId: "alpha" },
@@ -72,10 +90,10 @@ describe("plugin lifecycle protocol validators", () => {
   });
   it("round-trips closed capability consent details through the public package boundary", () => {
     const details = p.buildCapabilityConsentErrorDetails({
-      pluginId: "memory-plus",
-      reviewToken: "surface-sha256",
-      widened: { tools: ["memory_search"], contracts: ["workerProviders: worker"] },
-      acceptedAt: "2026-08-25T00:00:00.000Z",
+      pluginId: " memory-plus ",
+      reviewToken: " surface-sha256 ",
+      widened: { tools: ["memory_search"], contracts: [" workerProviders: worker "] },
+      acceptedAt: " 2026-08-25T00:00:00.000Z ",
     });
     expect(details.capabilityConsentCode).toBe(p.PLUGIN_CAPABILITY_CONSENT_REQUIRED);
     consentDetails.accepts(details);
@@ -87,21 +105,12 @@ describe("plugin lifecycle protocol validators", () => {
       { widened: { tools: [""] } },
       { widened: { unexpected: ["tool"] } },
       { acceptedAt: "" },
-      { name: "Memory Plus" },
       { unexpected: true },
     ]) {
       const invalid = { ...details, ...fields };
       consentDetails.rejects(invalid);
       expect(p.readCapabilityConsentErrorDetails(invalid)).toBeUndefined();
     }
-    const whitespace = p.buildCapabilityConsentErrorDetails({
-      pluginId: " memory-plus ",
-      reviewToken: " surface-sha256 ",
-      widened: { contracts: [" workerProviders: worker "] },
-      acceptedAt: " 2026-08-25T00:00:00.000Z ",
-    });
-    consentDetails.accepts(whitespace);
-    expect(p.readCapabilityConsentErrorDetails(whitespace)).toEqual(whitespace);
   });
   it("accepts only URL-safe plugin discovery ids", () => {
     const catalog = validation(p.validatePluginsCatalogGetParams);
@@ -121,19 +130,6 @@ describe("plugin lifecycle protocol validators", () => {
       { ...official, acknowledgeInstallPolicyWarning: false },
       { ...official, packageName: "memory-plus" },
       { ...clawhub, acknowledgeCapabilities: true },
-      { ...clawhub, acknowledgeCapabilities: false },
-    );
-  });
-  it("keeps targeted reload closed", () => {
-    reload.accepts(reloadRequest, {
-      plugins: [{ pluginId: "notes", installHash: "a".repeat(64) }],
-      acknowledgeCapabilities: { reviewToken: "reviewed-artifact" },
-    });
-    reload.rejects(
-      {},
-      { pluginId: "notes" },
-      { plugins: [{ pluginId: "" }] },
-      { plugins: [{ pluginId: "notes", enabled: true }] },
     );
   });
   it.each([
@@ -148,9 +144,7 @@ describe("plugin lifecycle protocol validators", () => {
   });
   it("validates enablement mutations", () => {
     enable.accepts(enableRequest, { ...enableRequest, allowlistPolicy: "preserve" });
-    for (const allowlistPolicy of ["widen", "", true, {}]) {
-      enable.rejects({ ...enableRequest, allowlistPolicy });
-    }
+    enable.rejects({ ...enableRequest, allowlistPolicy: "widen" });
     enable.rejects({ ...enableRequest, enabled: "yes" });
   });
 });

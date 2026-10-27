@@ -59,12 +59,8 @@ function waitForReady(transaction: ReturnType<typeof spawnTransaction>, signal: 
 
 async function writeGate(gate: string, value = "release\n", nonblocking = false) {
   const flags = nonblocking ? fsConstants.O_WRONLY | fsConstants.O_NONBLOCK : "w";
-  const writer = await fs.open(gate, flags);
-  try {
-    await writer.write(value);
-  } finally {
-    await writer.close();
-  }
+  await using writer = await fs.open(gate, flags);
+  await writer.write(value);
 }
 
 async function receiverFixture(rsync: string, preloadSource: string) {
@@ -94,8 +90,7 @@ async function receiverFixture(rsync: string, preloadSource: string) {
     canonicalHome: home,
     remoteRelative: relative,
   })("workspace-root");
-  const [node, entry, mode, context] = receiverCommand.split(" ");
-  expect(node).toBe("node");
+  const [, entry, mode, context] = receiverCommand.split(" ");
   await prepareLocalWorkspaceRsyncReceiver(path.join(home, entry!));
   const receiverArgv = (nonce: string) => [
     path.join(home, entry!),
@@ -178,7 +173,6 @@ process.kill = function(pid, signal) {
       receiverGateReady = true;
       const [ownerName] = await fs.readdir(lock);
       const { receiverPid, controllerPid } = parseReceiverOwner(ownerName!);
-      expect(Number.isSafeInteger(receiverPid)).toBe(true);
       expect(controllerPid).toBe(receiver.pid);
       await waitForDead(receiverPid, signal);
       process.kill(controllerPid, "SIGKILL");

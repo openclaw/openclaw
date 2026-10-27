@@ -19,6 +19,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { formatCompletionRoute } from "../../lib/model-runtime-label.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionObserverModelSelection } from "./session-observer-settings.ts";
+import { ConfigReadStatus } from "./view-readiness.tsx";
 import type { ConfigProps } from "./view-types.ts";
 
 const AUTO_VALUE = "__openclaw_observer_auto__";
@@ -129,20 +130,27 @@ export function SessionObserverSettings(props: { config: ConfigProps }) {
     void setCompletion(Promise.resolve().then(() => present(view, pending, retired, edit)));
   }
   const disabled = () =>
-    presentation().saving() !== null || props.config.sessionObserverDisabled === true;
+    !props.config.configLoaded ||
+    props.config.loading ||
+    presentation().saving() !== null ||
+    props.config.sessionObserverDisabled === true;
   return (
     <>
       <div class="settings-section__header settings-section__header--subsection">
         <h3 class="settings-section__heading">{t("configView.sessionObserver.title")}</h3>
       </div>
       <p class="settings-section__desc">{t("configView.sessionObserver.hint")}</p>
+      <ConfigReadStatus config={props.config} />
       <div class="settings-group">
         <SettingsToggleRow
           title={t("configView.sessionObserver.toggle")}
           description={t("configView.sessionObserver.toggleHint")}
           checked={presentation().values.enabled}
           disabled={
-            props.config.sessionObserverDisabled === true || presentation().saving() === "model"
+            !props.config.configLoaded ||
+            props.config.loading ||
+            props.config.sessionObserverDisabled === true ||
+            presentation().saving() === "model"
           }
           saving={presentation().saving() === "enabled"}
           onChange={(enabled) => submit({ enabled })}

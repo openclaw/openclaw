@@ -53,7 +53,7 @@ it.skipIf(!connection)(
     seedPortSqlite(
       sourcePath,
       `${metadata.sqlite};
-      INSERT INTO workboard_schema_migrations VALUES ('schema-3', 1);
+      INSERT INTO workboard_schema_migrations VALUES ('schema-${metadata.version}', 1);
       INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('board', 'private-payload', 1, 1)`,
     );
     const original = await hash(sourcePath);
@@ -112,7 +112,11 @@ it.skipIf(!connection)(
       await client.query(originalIndex);
       const resumed = await stageAt("resumed.sqlite", true);
       expect(resumed.verification).toEqual(copied.verification);
-      expect(await run({ ...stage, resume: true })).toEqual(copied);
+      // Reusing a verified anchor performs no copy or statistics refresh on this attempt.
+      expect(await run({ ...stage, resume: true })).toEqual({
+        descriptorHash: copied.descriptorHash,
+        verification: copied.verification,
+      });
       expect(await hash(sourcePath)).toBe(original);
       expect(await hash(targetPath)).toBe(anchor);
     } finally {

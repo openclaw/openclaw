@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createStandaloneNativeAdapter } from "../../scripts/lib/bun-standalone-native.mjs";
 import { planStandaloneRuntime } from "../../scripts/lib/bun-standalone-sidecar.mjs";
 import { standaloneModuleGraphSha256 } from "../../scripts/lib/bun-standalone-support.mjs";
-import { prepareStandaloneWasm } from "../../scripts/lib/bun-standalone-wasm.mjs";
+import {
+  prepareStandaloneWasm,
+  standaloneWasmImport,
+} from "../../scripts/lib/bun-standalone-wasm.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -55,7 +58,7 @@ describe("standalone WebAssembly registration", () => {
       if (!registrationPath) {
         throw new Error("missing WASM registration");
       }
-      fs.writeFileSync(entry, `import ${JSON.stringify(registrationPath)};\n`);
+      fs.writeFileSync(entry, standaloneWasmImport(entry, registrationPath));
       return standaloneModuleGraphSha256(outputRoot, [entry]);
     };
     const before = fingerprint();
@@ -63,6 +66,29 @@ describe("standalone WebAssembly registration", () => {
     changedBytes[changedBytes.length - 2] = 43;
     fs.writeFileSync(source, changedBytes);
     expect(fingerprint()).not.toBe(before);
+  });
+
+  it("keeps the registered graph identical across independent build roots", () => {
+    const copies = [fixture(), fixture()].map(({ outputRoot, write }) => {
+      const source = write("dist/quickjs.wasm", moduleBytes);
+      const { registrationPath } = prepareStandaloneWasm({
+        resources: [{ source, destination: "dist/quickjs.wasm" }],
+        outputRoot,
+        parse,
+      });
+      if (!registrationPath) {
+        throw new Error("missing WASM registration");
+      }
+      const entry = path.join(outputRoot, "nested/entry.js");
+      fs.mkdirSync(path.dirname(entry));
+      fs.writeFileSync(entry, standaloneWasmImport(entry, registrationPath));
+      return {
+        hash: standaloneModuleGraphSha256(outputRoot, [entry]),
+        source: fs.readFileSync(entry, "utf8"),
+      };
+    });
+    expect(copies[0]?.source).toMatch(/^import "\.\.\/standalone-wasm-/);
+    expect(copies[1]).toEqual(copies[0]);
   });
 
   it("imports the retained engine and .so extension once by exact byte identity", async () => {

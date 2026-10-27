@@ -11,6 +11,7 @@ import {
 } from "../sqlite-database-admission.js";
 import { prepareAdmittedPostgresBridge } from "./bridge-prestart.js";
 import type { PostgresPhysicalFacts } from "./physical-facts.js";
+import { createSqliteFamilyEngines } from "./selection-fixture.test-support.js";
 import type { DatabaseEngineSelection } from "./types.js";
 
 const transport = vi.hoisted(() => ({ prepare: vi.fn() }));
@@ -21,16 +22,7 @@ vi.mock("../postgres-sync/bridge-prestart.js", async (importOriginal) => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const selection: DatabaseEngineSelection = {
-  effectiveEngines: {
-    state: "sqlite",
-    agent: "sqlite",
-    workboard: "sqlite",
-    logbook: "sqlite",
-    "team-reports": "postgres",
-    quarantine: "sqlite",
-    "managed-update": "sqlite",
-    "package-activation": "sqlite",
-  },
+  effectiveEngines: createSqliteFamilyEngines({ "team-reports": "postgres" }),
   postgres: { connection: "postgresql://fixture.invalid/db", schemaPrefix: "fixture" },
 };
 const facts: PostgresPhysicalFacts = {

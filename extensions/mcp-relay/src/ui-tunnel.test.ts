@@ -110,23 +110,13 @@ describe("Control UI relay tunnel", () => {
         ["Cookie", "__Host-oc_ui=secret; asset=ok"],
         ["Connection", "x-hop"],
         ["x-hop", "drop"],
-        ...[
-          "Host",
-          "Upgrade",
-          "Keep-Alive",
-          "TE",
-          "Trailer",
-          "Transfer-Encoding",
-          "Proxy-Authorization",
-          "Content-Length",
-          "Forwarded",
-          "X-Forwarded-For",
-          "X-Real-IP",
-          "True-Client-IP",
-          "Cdn-Loop",
-          "CF-Connecting-IP",
-          "X-Relay-Secret",
-        ].map((name) => [name, "drop"]),
+        ...(
+          "Host Upgrade Keep-Alive TE Trailer Transfer-Encoding Proxy-Authorization " +
+          "Content-Length Forwarded X-Forwarded-For X-Real-IP True-Client-IP Cdn-Loop " +
+          "CF-Connecting-IP X-Relay-Secret"
+        )
+          .split(" ")
+          .map((name) => [name, "drop"]),
       ],
     });
     await f.receive({

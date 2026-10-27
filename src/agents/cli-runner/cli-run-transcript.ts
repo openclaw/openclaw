@@ -11,8 +11,8 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.types.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
@@ -159,6 +159,8 @@ export async function persistCliAssistantTranscript(params: {
   turnUsage?: CliUsage;
   stopReason: StopReason;
   yielded?: true;
+  /** The native Claude row this message mirrors; the history merge joins them by it. */
+  nativeIdentity?: { cliSessionId: string; externalId: string };
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -199,6 +201,7 @@ export async function persistCliAssistantTranscript(params: {
         const message = runAgentHarnessBeforeMessageWriteHook({
           ...write,
           message: projectAgentHarnessTranscriptMessageForDisplay({
+            runId: runParams.runId,
             hidden: runParams.privateCompletion === true,
             inputProvenance: runParams.inputProvenance,
             message: write.message,
@@ -207,6 +210,7 @@ export async function persistCliAssistantTranscript(params: {
         });
         return message
           ? projectAgentHarnessTranscriptMessageForDisplay({
+              runId: runParams.runId,
               hidden: runParams.privateCompletion === true,
               inputProvenance: runParams.inputProvenance,
               message,
@@ -214,6 +218,9 @@ export async function persistCliAssistantTranscript(params: {
           : null;
       },
       message: {
+        ...(params.nativeIdentity
+          ? { __openclaw: { importedFrom: "claude-cli", ...params.nativeIdentity } }
+          : {}),
         ...buildAssistantMessage({
           model: {
             api: "cli",

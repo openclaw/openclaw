@@ -220,6 +220,7 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify([step, ...Object.valu
   fs.chmodSync(oxlintPath, 0o755);
   const env = makeEnv({
     CAPTURE_PATH: capturePath,
+    OPENCLAW_LINT_TOOL: "oxlint",
     OPENCLAW_OXLINT_SKIP_PREPARE: undefined,
     ...noGoEnv,
   });

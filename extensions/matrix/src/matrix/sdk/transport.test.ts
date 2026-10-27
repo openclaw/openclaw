@@ -2,21 +2,7 @@ import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { createMatrixGuardedFetch, performMatrixRequest } from "./transport.js";
-
-const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-
-function clearTestUndiciRuntimeDepsOverride(): void {
-  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
-}
-
-function stubRuntimeFetch(fetchImpl: typeof fetch): void {
-  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-    Agent: function MockAgent() {},
-    EnvHttpProxyAgent: function MockEnvHttpProxyAgent() {},
-    ProxyAgent: function MockProxyAgent() {},
-    fetch: fetchImpl,
-  };
-}
+import { clearTestUndiciRuntimeDepsOverride, stubRuntimeFetch } from "./undici.test-support.js";
 
 function requestMatrix(overrides: Partial<Parameters<typeof performMatrixRequest>[0]> = {}) {
   return performMatrixRequest({

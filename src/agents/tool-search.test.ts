@@ -11,6 +11,7 @@ import {
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { catalogTool, staticRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
@@ -23,6 +24,7 @@ import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-to
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { createPromptBuildToolPolicy } from "./embedded-agent-runner/run/attempt-prompt-support.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import { formatToolExecutionErrorMessage } from "./tool-result-error.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
@@ -151,22 +153,8 @@ function blockToolCalls(blockReason: string) {
   );
 }
 
-function fakeTool(name: string, description: string): AnyAgentTool {
-  return {
-    name,
-    label: name,
-    description,
-    parameters: { type: "object", properties: { value: { type: "string" } } },
-    execute: vi.fn(async (_toolCallId, input) => jsonResult({ name, input })),
-  };
-}
-
 function structuredControlStubs(): AnyAgentTool[] {
-  return [
-    fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
-    fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
-    fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
-  ];
+  return controlNames.map((name) => fakeTool(name, name));
 }
 
 function pluginTool(name: string, description: string, pluginId = "fake-catalog"): AnyAgentTool {
@@ -518,7 +506,7 @@ describe("Tool Search", () => {
     "keeps gateway guidance consistent across surfaces with delegation denied=%s",
     (denyOpenClaw) => {
       const expected =
-        "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell." +
+        "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup. Use runtime-owned actions." +
         (denyOpenClaw ? "" : " Other system changes: use openclaw tool.");
       const authorizedTools = filterToolsByPolicy(
         [createGatewayTool(), ...createOpenClawDelegateToolsForRun({ sessionAgentId: "main" })],
@@ -615,12 +603,9 @@ describe("Tool Search", () => {
   it("preserves trusted output schemas through normalization, discovery, and execution", async () => {
     const target = pluginTool("orchard_shipments", "List orchard shipments");
     target.outputSchema = Type.Array(
-      Type.Object(
-        { id: Type.String(), paid: Type.Boolean(), tons: Type.Number() },
-        { additionalProperties: false },
-      ),
+      Type.Object({ id: Type.String() }, { additionalProperties: false }),
     );
-    target.execute = vi.fn(async () => jsonResult([{ id: "H-1", paid: false, tons: 14 }]));
+    target.execute = vi.fn(async () => jsonResult([{ id: "H-1" }]));
     const normalized = normalizeAgentRuntimeTools({
       tools: [target],
       provider: "openai",
@@ -637,14 +622,14 @@ describe("Tool Search", () => {
     await expect(runtime.search("orchard shipments")).resolves.toContainEqual(
       expect.objectContaining({
         name: "orchard_shipments",
-        output: "Array<{ id: string; paid: boolean; tons: number }>",
+        output: "Array<{ id: string }>",
       }),
     );
     await expect(runtime.describe("orchard_shipments")).resolves.toMatchObject({
       outputSchema: { type: "array" },
     });
     const result = await runtime.callValue("orchard_shipments");
-    expect(result).toEqual([{ id: "H-1", paid: false, tons: 14 }]);
+    expect(result).toEqual([{ id: "H-1" }]);
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen((result as unknown[])[0])).toBe(true);
   });
@@ -1385,28 +1370,22 @@ describe("Tool Search", () => {
         },
       },
       tools: [
-        {
-          serverName: "remote-demo",
+        catalogTool("remote-demo", "echo", {
           safeServerName: "remoteDemo",
-          toolName: "echo",
           description: "Reuse a remote capability",
           fallbackDescription: "Reuse a remote capability",
           inputSchema: { type: "object", properties: { value: { type: "string" } } },
-        },
+        }),
       ],
     } satisfies McpToolCatalog;
-    const mcpRuntime = {
+    const mcpRuntime = staticRuntime({
       sessionId,
       workspaceDir: "/tmp",
       configFingerprint: "retained-catalog",
-      createdAt: 0,
-      lastUsedAt: 0,
-      markUsed: () => {},
       getCatalog: async () => retainedCatalog,
       peekCatalog: () => retainedCatalog,
       callTool: vi.fn(async () => ({ content: [{ type: "text" as const, text: "echo" }] })),
-      dispose: async () => {},
-    } satisfies SessionMcpRuntime;
+    }) satisfies SessionMcpRuntime;
 
     const firstMaterialized = await materializeBundleMcpToolsForRun({ runtime: mcpRuntime });
     const secondMaterialized = await materializeBundleMcpToolsForRun({ runtime: mcpRuntime });

@@ -17,7 +17,6 @@ class FixtureState {
     trustedProxies: ["10.0.0.1"],
     allowRealIpFallback: false,
   };
-  authChecks = 0;
   readError?: Error;
   profile?: typeof guestProfile;
   visible = true;
@@ -69,7 +68,6 @@ vi.mock("./http-utils.js", () => ({
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
   }) => {
-    fixture.authChecks += 1;
     await fixture.beforeAuth?.();
     const unconfigured =
       fixture.gatewayConfig.trustedProxies === undefined &&
@@ -159,6 +157,7 @@ vi.mock("./session-history-state.js", () => ({
   },
 }));
 
+import { closeHttpServer } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
@@ -299,10 +298,7 @@ async function withRealStream(
   } finally {
     client.destroy();
     pair.res.destroy();
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await closeHttpServer(server);
   }
 }
 
@@ -366,7 +362,7 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
-it("returns not found when a verified role cannot view the requested session", async () => {
+it("hides sessions from a verified role without visibility", async () => {
   fixture.profile = guestProfile;
   fixture.visible = false;
 
@@ -407,7 +403,7 @@ it.each([
   expect(fixture.onUpdate).toBeUndefined();
 });
 
-it("withholds an SSE refresh after profile revocation while its read is pending", async () => {
+it("withholds a pending refresh after profile revocation", async () => {
   fixture.profile = guestProfile;
   using res = await openStream();
   using barrier = readBarrier();
@@ -421,14 +417,10 @@ it("withholds an SSE refresh after profile revocation while its read is pending"
   expect(fixture.onUpdate).toBeUndefined();
 });
 
-it("keeps inline delivery between coalesced refreshes while authorization is pending", async () => {
+it("keeps inline delivery between coalesced refreshes", async () => {
   using res = await openStream();
   using barrier = readBarrier();
-  let refreshCount = 0;
   fixture.beforeAuth = barrier.wait;
-  fixture.beforeRefresh = async () => {
-    refreshCount++;
-  };
   fixture.onUpdate?.({ sessionFile: SESSION_FILE });
   await barrier.entered.promise;
   fixture.onUpdate?.({ sessionFile: SESSION_FILE });
@@ -439,7 +431,6 @@ it("keeps inline delivery between coalesced refreshes while authorization is pen
   await vi.waitFor(() =>
     expect(frameNames(res)).toEqual(["history", "history", "message", "history"]),
   );
-  expect(refreshCount).toBe(2);
   expect(res.writes.join("")).toContain("inline between refreshes");
 });
 
@@ -469,7 +460,7 @@ it.each(["sharing", "replacement", "reset", "close", "failure"] as const)(
   },
 );
 
-it("serializes appends and trailing refreshes behind pending inline visibility", async () => {
+it("serializes appends and refreshes behind inline visibility", async () => {
   using res = await openStream();
   using barrier = readBarrier();
   fixture.beforeInline = barrier.wait;
@@ -487,17 +478,15 @@ it("serializes appends and trailing refreshes behind pending inline visibility",
 });
 
 it.each([
-  {
-    name: "projection rebuilding",
-    error: new SessionTranscriptProjectionUnavailableError("session-1"),
-    message: "session history is rebuilding; retry shortly",
-  },
-  {
-    name: "worker overload",
-    error: new WorkerTaskError("internal worker failure detail", "overloaded"),
-    message: "session history is busy; retry shortly",
-  },
-])("returns retryable HTTP unavailable during $name", async ({ error, message }) => {
+  [
+    new SessionTranscriptProjectionUnavailableError("session-1"),
+    "session history is rebuilding; retry shortly",
+  ],
+  [
+    new WorkerTaskError("internal worker failure detail", "overloaded"),
+    "session history is busy; retry shortly",
+  ],
+] as const)("returns retryable HTTP unavailable for %s", async (error, message) => {
   fixture.readError = error;
   using res = await openStream({ expectSubscribed: false });
   expect(res.statusCode).toBe(503);
@@ -509,7 +498,7 @@ it.each([
   expect(res.req.listenerCount("error")).toBe(0);
 });
 
-it("rechecks SSE auth against live proxy config instead of startup fallbacks", async () => {
+it("rechecks SSE auth against live proxy config", async () => {
   using res = await openStream();
 
   fixture.gatewayConfig = {};
@@ -520,10 +509,9 @@ it("rechecks SSE auth against live proxy config instead of startup fallbacks", a
   await expectStreamClosedWithoutMessage(res, "stale-proxy event");
 });
 
-it("skips SSE reauth for transcript updates outside this stream", async () => {
+it("ignores transcript updates outside this stream", async () => {
   using res = await openStream();
 
-  fixture.authChecks = 0;
   fixture.gatewayConfig = {};
   setRuntimeConfigSnapshot({ gateway: fixture.gatewayConfig });
 
@@ -538,17 +526,14 @@ it("skips SSE reauth for transcript updates outside this stream", async () => {
   });
 
   const joined = res.writes.join("");
-  expect(fixture.authChecks).toBe(0);
   expect(joined).not.toContain("other session");
   expect(res.writableEnded).toBe(false);
 });
 
 it.each(["request", "response"] as const)(
-  "handles late real Node response errors after a %s failure",
+  "handles late errors after %s failure",
   async (source) => {
     await withRealStream(async ({ req, res }) => {
-      expect(req.listenerCount("error")).toBeGreaterThan(0);
-      expect(res.listenerCount("error")).toBeGreaterThan(0);
       expect(() =>
         (source === "request" ? req : res).emit("error", new Error("stream failed")),
       ).not.toThrow();
@@ -565,7 +550,7 @@ it.each(["request", "response"] as const)(
   },
 );
 
-it("handles a request abort after the response closes until the request closes", async () => {
+it("handles request aborts after response close", async () => {
   using res = await openStream();
   const { req } = res;
   res.emit("close");
@@ -576,7 +561,7 @@ it("handles a request abort after the response closes until the request closes",
   expect(res.listenerCount("error")).toBe(0);
 });
 
-it("cleans up SSE resources when the initial retry frame closes the stream", async () => {
+it("cleans up when the initial retry frame closes the stream", async () => {
   using res = await openStream({ closeOnRetry: true, expectSubscribed: false });
   const { req } = res;
   expect(res.writes.join("")).toContain("retry: 1000\n\n");

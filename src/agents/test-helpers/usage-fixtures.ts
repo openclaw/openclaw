@@ -1,8 +1,9 @@
 /**
  * Shared usage fixtures for agent tests.
  *
- * Message fixtures reuse this zero-usage object when a test only cares about
- * message shape and not token accounting.
+ * Message builders call the factory so transcript ownership cannot freeze usage
+ * belonging to another message. The shared constant remains for explicit,
+ * read-only alias fixtures.
  */
 import type { Usage } from "openclaw/plugin-sdk/llm";
 
@@ -28,5 +29,9 @@ export function createUsageFixture(input: number, output: number, totalTokens: n
   return { ...createZeroUsageFixture(), input, output, totalTokens };
 }
 
-/** Usage fixture with every token and cost counter set to zero. */
+/** Shared read-only zero usage for tests that deliberately alias one fixture. */
 export const ZERO_USAGE_FIXTURE: Usage = createZeroUsageFixture();
+
+export function createRuntimeLlmUsageFixture() {
+  return { input: 11, output: 7, cacheRead: 5, cacheWrite: 2, total: 25, cost: { total: 0.0042 } };
+}

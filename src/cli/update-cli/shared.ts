@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   isStandaloneRuntimeExecutable,
@@ -14,6 +15,7 @@ import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
 import {
@@ -545,7 +547,7 @@ export async function tryWriteCompletionCache(
   timeoutMs = COMPLETION_CACHE_WRITE_TIMEOUT_MS,
   nodeRunner = resolveNodeRunner(),
 ): Promise<"completed" | "failed" | "skipped"> {
-  const binPath = path.join(root, "openclaw.mjs");
+  const binPath = fileURLToPath(resolveExternalPackageRuntimeEntrypointUrl("cliLauncher", root));
   const standalone = isStandaloneRuntimeExecutable(nodeRunner);
   if (!standalone && !(await pathExists(binPath))) {
     return "skipped";

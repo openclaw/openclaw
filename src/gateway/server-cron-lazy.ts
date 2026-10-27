@@ -3,12 +3,12 @@ import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createLazyPromiseLoader, createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
-import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type {
-  buildGatewayCronService,
+  GatewayCronServiceContract,
   GatewayCronExitWatcherHandoff,
   GatewayCronState,
-} from "./server-cron.js";
+} from "./server-cron-contract.js";
+import type { buildGatewayCronService } from "./server-cron.js";
 
 /** Creates a cron state proxy that imports the real cron service on first use. */
 export function createLazyGatewayCronState(
@@ -146,8 +146,18 @@ export function createLazyGatewayCronState(
     waitForManualRun: bindCron((state) => state.cron.waitForManualRun.bind(state.cron)),
     readEventSources: bindCron((state) => state.cron.readEventSources.bind(state.cron)),
     runEvent: bindCron((state) => state.cron.runEvent.bind(state.cron)),
+    getStoreKey() {
+      const storeKey = loaded?.cron.getStoreKey?.();
+      if (!storeKey) {
+        throw new Error("Cron store is not prepared; read cron jobs first");
+      }
+      return storeKey;
+    },
     getJob(id) {
       return loaded?.cron.getJob(id);
+    },
+    getLoadedJobs() {
+      return loaded?.cron.getLoadedJobs();
     },
     readJob: bindCron((state) => state.cron.readJob.bind(state.cron)),
     async readScratch(id, options) {
@@ -176,6 +186,9 @@ export function createLazyGatewayCronState(
 
   return {
     cron,
+    get readHeartbeatSummary() {
+      return loaded?.readHeartbeatSummary;
+    },
     deferHookWake: async (opts) => {
       const generation = lifecycleGeneration;
       const commitGuard = () => {

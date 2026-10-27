@@ -1,6 +1,8 @@
 import { expect, vi } from "vitest";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayRequestEntryLifetime } from "../server-request-entry.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import type { GatewayRequestOptions } from "./types.js";
 
 export function profileRequest(
@@ -21,23 +23,17 @@ export function profileRequest(
 ) {
   const respond = vi.fn();
   const pending = handleGatewayRequest({
-    req: {
-      type: "req",
-      id: "profile",
-      method: options.method ?? "diagnostics.cpuProfile",
-      params: options.params,
-    },
+    req: gatewayRequest("profile", options.method ?? "diagnostics.cpuProfile", options.params),
     respond,
     client: {
       connId: "profile-client",
       connectionSignal: options.connection?.signal,
-      connect: {
-        role: options.role ?? "operator",
-        scopes: options.scopes ?? ["operator.admin"],
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: "test", version: "1", platform: "test", mode: "test" },
-      },
+      connect: gatewayConnect(
+        options.scopes ?? ["operator.admin"],
+        { id: "test", version: "1", mode: "test" },
+        1,
+        options.role ?? "operator",
+      ),
     } as GatewayRequestOptions["client"],
     isWebchatConnect: () => false,
     context: {

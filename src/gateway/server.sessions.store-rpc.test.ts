@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 /**
  * Gateway session store RPC tests.
  */
@@ -695,15 +696,12 @@ test("write-scoped operators manage chat organization but not admin session sett
           baseUrl: "https://openai.invalid/v1",
           agentRuntime: { id: "openclaw" },
           models: [
-            {
-              id: "gpt-test-a",
+            modelDefinition("gpt-test-a", {
               name: "A",
               reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 32768,
               maxTokens: 2048,
-            },
+            }),
           ],
         },
       },

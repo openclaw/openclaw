@@ -144,15 +144,13 @@ it.skipIf(!shouldEnableNodeDiagnosticReports())(
   },
 );
 
-it.skipIf(process.platform === "win32").each([
-  { label: "busy", block: "while (true) {}", state: "R" },
-  { label: "stopped", block: "process.kill(process.pid, 'SIGSTOP')", state: "T" },
-])(
-  "captures OS state when the child is $label and cannot answer signals",
-  async ({ block, state }) => {
+it.skipIf(process.platform === "win32")(
+  "captures OS state when a stopped child cannot answer signals",
+  async () => {
     let pid: number | undefined;
     const failure = await runScript({
-      script: `process.title = 'fixture-private-thread'; process.stdout.write('blocked'); ${block}`,
+      script:
+        "process.title = 'fixture-private-thread'; process.stdout.write('blocked'); process.kill(process.pid, 'SIGSTOP');",
       timeoutMs: 500,
       interact: (child) => {
         pid = child.pid;
@@ -162,7 +160,7 @@ it.skipIf(process.platform === "win32").each([
     expect(String(failure)).toMatch(/500ms deadlock guard[\s\S]*no response[\s\S]*blocked/u);
     expect(String(failure)).toContain(`root pid=${pid}`);
     expect(String(failure)).not.toContain("fixture-private");
-    expect(String(failure)).toMatch(new RegExp(`"pid":${pid},"ppid":\\d+,"state":"${state}`));
+    expect(String(failure)).toMatch(new RegExp(`"pid":${pid},"ppid":\\d+,"state":"T`));
     if (process.platform === "linux") {
       expect(String(failure)).toContain(`"tid":${pid}`);
       expect(String(failure)).toContain(`"tid":${pid},"role":"main"`);

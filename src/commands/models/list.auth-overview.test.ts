@@ -33,11 +33,6 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
     Object.keys(store.profiles).filter((id) => store.profiles[id]?.provider === provider),
 }));
 
-// mock-isolation: host cooldown state must not change synthetic auth overview results.
-vi.mock("../../agents/auth-profiles/usage.js", () => ({
-  resolveProfileUnusableUntilForDisplay: () => undefined,
-}));
-
 type OverviewParams = Parameters<typeof resolveProviderAuthOverview>[0];
 function resolveOverview(
   provider: string,
@@ -68,7 +63,6 @@ it("labels token profiles that only have tokenRef", () => {
       tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
     },
   });
-
   expect(result.profiles.labels[0]).toContain("token:ref(env:GITHUB_TOKEN)");
 });
 
@@ -112,7 +106,6 @@ it.each([
       apiKey: "configured-key",
     }),
   );
-
   expect(result.effective.kind).toBe(kind);
 });
 

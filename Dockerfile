@@ -18,7 +18,7 @@ ARG OPENCLAW_NODE_TRIXIE_SLIM_IMAGE="docker.io/library/node:24.22.1-trixie-slim@
 ARG OPENCLAW_NODE_TRIXIE_SLIM_DIGEST="sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea"
 # Keep in sync with .github/actions/setup-node-env/action.yml and seed-bun-from-image.mjs.
 # To update: docker buildx imagetools inspect docker.io/oven/bun:<version> and use the manifest-list digest.
-ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.3@sha256:ec06c3b6cea04192ae6770c434f668ca41d343ad19fa6472216c7b48be39c598"
+ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d"
 
 # Base images are pinned to SHA256 digests for reproducible builds.
 # Dependabot refreshes these reviewed base snapshots; runtime stages apply
@@ -68,6 +68,9 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY node-version.mjs ./
 COPY node-sqlite.mjs ./
+COPY node-sqlite-capabilities.mjs ./
+COPY runtime-process-bootstrap.generated.mjs ./
+COPY runtime-process-scripts.generated.mjs ./
 COPY node-runtime-update.mjs ./
 COPY node-runtime-recovery.mjs ./
 COPY cli-parent-lifetime.mjs ./
@@ -86,6 +89,8 @@ COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
 COPY scripts/lib/javascript-statements.mjs ./scripts/lib/javascript-statements.mjs
 COPY scripts/lib/package-lifecycle-marker.mjs ./scripts/lib/package-lifecycle-marker.mjs
 COPY scripts/lib/fs-safe-prebuild.mjs ./scripts/lib/fs-safe-prebuild.mjs
+COPY scripts/lib/fs-safe-npm-cli-preload.generated.mjs ./scripts/lib/fs-safe-npm-cli-preload.generated.mjs
+COPY scripts/lib/fs-safe-npm-cli-protocol.mjs ./scripts/lib/fs-safe-npm-cli-protocol.mjs
 COPY scripts/docker/verify-fs-safe-native.mjs ./scripts/docker/verify-fs-safe-native.mjs
 COPY scripts/docker/verify-native-addons.sh ./scripts/docker/verify-native-addons.sh
 
@@ -282,6 +287,9 @@ COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .
 COPY --from=runtime-assets --chown=node:node /app/patches ./patches
 COPY --from=runtime-assets --chown=node:node /app/node-version.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-sqlite.mjs .
+COPY --from=runtime-assets --chown=node:node /app/node-sqlite-capabilities.mjs .
+COPY --from=runtime-assets --chown=node:node /app/runtime-process-bootstrap.generated.mjs .
+COPY --from=runtime-assets --chown=node:node /app/runtime-process-scripts.generated.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-runtime-update.mjs .
 COPY --from=runtime-assets --chown=node:node /app/node-runtime-recovery.mjs .
 COPY --from=runtime-assets --chown=node:node /app/cli-parent-lifetime.mjs .

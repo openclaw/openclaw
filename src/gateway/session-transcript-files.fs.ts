@@ -374,8 +374,9 @@ async function ignoreMissingArchivePath<T>(operation: () => Promise<T>, fallback
 // listing per reason would multiply READDIR load on networked filesystems.
 export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
-  rules: SessionArchiveCleanupRule[];
+  rules: readonly SessionArchiveCleanupRule[];
   nowMs?: number;
+  removeFile?: (filePath: string) => Promise<void>;
 }): Promise<void> {
   const rules = opts.rules.filter(
     (rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0,
@@ -398,7 +399,10 @@ export async function cleanupArchivedSessionTranscripts(opts: {
           const fullPath = path.join(dir, entry);
           const stat = await ignoreMissingArchivePath(() => fs.promises.stat(fullPath), null);
           if (stat?.isFile()) {
-            await ignoreMissingArchivePath(() => fs.promises.rm(fullPath), undefined);
+            await ignoreMissingArchivePath(
+              () => opts.removeFile?.(fullPath) ?? fs.promises.rm(fullPath),
+              undefined,
+            );
           }
         }
         // An archive name carries exactly one `.{reason}.{timestamp}` suffix,

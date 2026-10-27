@@ -38,6 +38,7 @@ import {
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir as reconcile } from "./session-transcript-reconcile.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 import {
   createTranscriptEventInserter,
   prepareTranscriptPayloadForReuse,
@@ -68,18 +69,11 @@ async function createFixture() {
     { agentId: "main", sessionId: sourceSessionId, sessionKey: sourceKey, storePath },
     [
       { type: "session", version: 3, id: sourceSessionId, cwd: root },
-      {
-        type: "message",
-        id: "user-1",
-        parentId: null,
-        message: { role: "user", content: "finish this" },
-      },
-      {
-        type: "message",
-        id: "side-branch",
-        parentId: "user-1",
-        message: { role: "assistant", content: "preserve the whole transcript" },
-      },
+      messageEvent("user-1", null, { role: "user", content: "finish this" }),
+      messageEvent("side-branch", "user-1", {
+        role: "assistant",
+        content: "preserve the whole transcript",
+      }),
       { type: "leaf", id: "leaf-1", parentId: "side-branch", targetId: "user-1" },
     ],
   );
@@ -98,6 +92,13 @@ async function createFixture() {
     successorEntry: { sessionId, updatedAt: 20 },
   });
   return { root, sourceKey, successorKey, scope, recoveryParams };
+}
+
+function expectUnrecovered(fixture: Awaited<ReturnType<typeof createFixture>>) {
+  const source = readEntry(fixture.scope());
+  expect(source).toMatchObject({ pinnedAt: 5, mainRestartRecovery: { revision: 4 } });
+  expect(source?.archivedAt).toBeUndefined();
+  expect(readEntry(fixture.scope(fixture.successorKey))).toBeUndefined();
 }
 
 describe("recoverSessionEntryFromRestartTombstone", () => {
@@ -264,12 +265,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
     );
 
     await expect(recover(fixture.recoveryParams())).rejects.toThrow(/JSON/);
-    expect(readEntry(fixture.scope())).toMatchObject({
-      pinnedAt: 5,
-      mainRestartRecovery: { revision: 4 },
-    });
-    expect(readEntry(fixture.scope())?.archivedAt).toBeUndefined();
-    expect(readEntry(fixture.scope(fixture.successorKey))).toBeUndefined();
+    expectUnrecovered(fixture);
     expect(
       readTranscriptStatsSync({
         ...fixture.scope(fixture.successorKey),
@@ -291,8 +287,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       expected: { ...fixture.recoveryParams().expected, ...expected },
     });
     expect(result).toEqual({ status: "conflict", reason: "source-changed" });
-    expect(readEntry(fixture.scope(fixture.sourceKey))?.archivedAt).toBeUndefined();
-    expect(readEntry(fixture.scope(fixture.successorKey))).toBeUndefined();
+    expectUnrecovered(fixture);
   });
 
   it.each(["transaction", "commit"] as const)(
@@ -325,11 +320,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
         stop();
         intercepted.mockRestore();
       }
-      expect(readEntry(fixture.scope(fixture.sourceKey))).toMatchObject({
-        pinnedAt: 5,
-        mainRestartRecovery: { revision: 4 },
-      });
-      expect(readEntry(fixture.scope(fixture.successorKey))).toBeUndefined();
+      expectUnrecovered(fixture);
       expect(
         await readEvents({
           ...fixture.scope(fixture.successorKey),
@@ -479,7 +470,14 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       }
       await closing;
       if (retireOwner) {
-        captures.forEach((capture) => expect(capture).not.toHaveBeenCalled());
+        // Other fixtures can still reconcile until the file's afterAll cleanup.
+        captures.forEach((capture) => {
+          expect(
+            capture.mock.calls.filter(
+              ([options]) => resolvePath(options) === resolvePath(databaseOptions),
+            ),
+          ).toEqual([]);
+        });
       }
       restoreCaptures();
       expect(readEntry(fixture.scope(fixture.successorKey))).toMatchObject(params.successorEntry);

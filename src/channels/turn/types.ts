@@ -326,13 +326,13 @@ export type AssembledChannelTurn = ChannelTurnContext & {
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
 };
 
-type PreparedChannelTurnDispatchSkipReason = "botLoopProtection" | "observeOnly" | "outboundEcho";
-
 type PreparedChannelTurnDispatchLifecycle = {
   /** Exact adoption lifecycle captured by runDispatch, or undefined for non-durable turns. */
   turnAdoptionLifecycle: TurnAdoptionLifecycle | undefined;
   /** Releases resources that runDispatch would otherwise settle when dispatch is skipped. */
-  onDispatchSkipped: (reason: PreparedChannelTurnDispatchSkipReason) => void | Promise<void>;
+  onDispatchSkipped: (
+    reason: "botLoopProtection" | "observeOnly" | "outboundEcho",
+  ) => void | Promise<void>;
 };
 
 export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = ChannelTurnContext & {
@@ -367,18 +367,14 @@ export type ChannelTurnPlan<
   }
 >;
 
-type PreparedChannelTurnPlan<TDispatchResult = DispatchFromConfigResult> = RoutedChannelTurn<
-  InboundPreparedChannelTurn<TDispatchResult>
-> & {
-  cfg: OpenClawConfig;
-};
-
 export type ChannelTurnResolved<
   TDispatchResult = DispatchFromConfigResult,
   TDelivery extends ChannelTurnDeliveryAdapter = ChannelCoreManagedTurnDeliveryAdapter,
 > =
   | ChannelTurnPlan<TDelivery>
-  | PreparedChannelTurnPlan<TDispatchResult>
+  | (RoutedChannelTurn<InboundPreparedChannelTurn<TDispatchResult>> & {
+      cfg: OpenClawConfig;
+    })
   | AssembledChannelTurn
   | InboundPreparedChannelTurn<TDispatchResult>;
 
@@ -420,25 +416,6 @@ export type DispatchedChannelTurnResult<TDispatchResult = DispatchFromConfigResu
   dispatchResult: TDispatchResult;
 };
 
-type ChannelTurnAdapter<
-  TRaw,
-  TDispatchResult = DispatchFromConfigResult,
-  TDelivery extends ChannelTurnDeliveryAdapter = ChannelCoreManagedTurnDeliveryAdapter,
-> = {
-  ingest: (raw: TRaw) => MaybePromise<NormalizedTurnInput | null>;
-  classify?: (input: NormalizedTurnInput) => MaybePromise<ChannelEventClass>;
-  preflight?: (
-    input: NormalizedTurnInput,
-    eventClass: ChannelEventClass,
-  ) => MaybePromise<PreflightFacts | ChannelTurnAdmission | null | undefined>;
-  resolveTurn: (
-    input: NormalizedTurnInput,
-    eventClass: ChannelEventClass,
-    preflight: PreflightFacts,
-  ) => MaybePromise<ChannelTurnResolved<TDispatchResult, TDelivery>>;
-  onFinalize?: (result: ChannelTurnResult<TDispatchResult>) => Promise<void> | void;
-};
-
 export type RunChannelTurnParams<
   TRaw,
   TDispatchResult = DispatchFromConfigResult,
@@ -447,7 +424,20 @@ export type RunChannelTurnParams<
   channel: string;
   accountId?: string;
   raw: TRaw;
-  adapter: ChannelTurnAdapter<TRaw, TDispatchResult, TDelivery>;
+  adapter: {
+    ingest: (raw: TRaw) => MaybePromise<NormalizedTurnInput | null>;
+    classify?: (input: NormalizedTurnInput) => MaybePromise<ChannelEventClass>;
+    preflight?: (
+      input: NormalizedTurnInput,
+      eventClass: ChannelEventClass,
+    ) => MaybePromise<PreflightFacts | ChannelTurnAdmission | null | undefined>;
+    resolveTurn: (
+      input: NormalizedTurnInput,
+      eventClass: ChannelEventClass,
+      preflight: PreflightFacts,
+    ) => MaybePromise<ChannelTurnResolved<TDispatchResult, TDelivery>>;
+    onFinalize?: (result: ChannelTurnResult<TDispatchResult>) => Promise<void> | void;
+  };
   log?: (event: ChannelTurnLogEvent) => void;
   /** Canonical adoption lifecycle for this turn. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;

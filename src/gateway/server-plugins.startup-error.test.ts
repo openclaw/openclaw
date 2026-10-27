@@ -41,6 +41,8 @@ vi.doUnmock("../plugins/loader.js");
 installGatewayTestHooks({ scope: "suite" });
 installInstanceBindingConfigIo();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const probeId = "instance-binding-probe";
+const brokenId = "startup-broken";
 
 it.each(["module-load", "entry-open"] as const)(
   "keeps %s startup errors diagnostic while healthy plugins reload and disable",
@@ -48,24 +50,20 @@ it.each(["module-load", "entry-open"] as const)(
   async (failureKind) => {
     const coordinator = installInstanceBindingProbeCoordinator({ reportReloadSettlement: true });
     const bundledRoot = tempDirs.make("openclaw-startup-error-");
-    // External code has captured source generations; bundled JS intentionally
-    // keeps process module identity and cannot model a changed candidate file.
+    // External source generations can change; bundled JS keeps process module identity.
     const healthyRoot = tempDirs.make("openclaw-startup-healthy-");
     await writeInstanceBindingProbePlugin(healthyRoot, coordinator.channelName);
-    const healthyPlugin = path.join(healthyRoot, "instance-binding-probe");
-    const brokenDir = path.join(
-      failureKind === "entry-open" ? healthyRoot : bundledRoot,
-      "startup-broken",
-    );
+    const healthyPlugin = path.join(healthyRoot, probeId);
+    const brokenDir = path.join(failureKind === "entry-open" ? healthyRoot : bundledRoot, brokenId);
     const brokenEntry = path.join(brokenDir, "index.js");
     await fs.mkdir(brokenDir);
     await writeJson(path.join(brokenDir, "package.json"), {
-      name: "startup-broken",
+      name: brokenId,
       type: "commonjs",
       openclaw: { extensions: ["./index.js"] },
     });
     await writeJson(path.join(brokenDir, "openclaw.plugin.json"), {
-      id: "startup-broken",
+      id: brokenId,
       activation: { onStartup: true },
       configSchema: { type: "object" },
     });
@@ -80,8 +78,7 @@ it.each(["module-load", "entry-open"] as const)(
           options.absolutePath === brokenEntry &&
           options.boundaryLabel === "plugin root"
         ) {
-          // Discovery has admitted metadata. Change the real inode only during
-          // the import boundary check, then leave later metadata reads valid.
+          // Change the inode only at the import boundary, after metadata admission.
           injected = true;
           const alias = path.join(healthyRoot, "entry-alias.js");
           linkSync(options.absolutePath, alias);
@@ -97,11 +94,11 @@ it.each(["module-load", "entry-open"] as const)(
     }
     await writeJson(configurePluginGateway(bundledRoot), {
       plugins: {
-        allow: ["startup-broken", "instance-binding-probe"],
+        allow: [brokenId, probeId],
         load: { paths: [healthyPlugin, ...(failureKind === "entry-open" ? [brokenDir] : [])] },
         entries: {
-          "startup-broken": { enabled: true },
-          "instance-binding-probe": { enabled: true },
+          [brokenId]: { enabled: true },
+          [probeId]: { enabled: true },
         },
       },
     });
@@ -118,6 +115,15 @@ it.each(["module-load", "entry-open"] as const)(
         expect(result.ok, result.error?.message).toBe(true);
         return result.payload;
       };
+      const rejectReload = async (pluginId: string, error: string) => {
+        const result = await reloadPlugin(connected, pluginId);
+        expect(result).toMatchObject({
+          ok: false,
+          error: { details: { runtime: { committed: false, phase: "activate" } } },
+        });
+        expect(result.error?.message).toContain(error);
+        return result;
+      };
       const expectHandler = (method: string, handler: unknown) =>
         expect(getActivePluginRegistry()?.gatewayHandlers[method]).toBe(handler);
       const waitForReloadSettlement = () =>
@@ -125,7 +131,7 @@ it.each(["module-load", "entry-open"] as const)(
       await waitForReloadSettlement();
       const initial = getActivePluginRegistry();
       assert(initial);
-      const broken = initial.plugins.find((record) => record.id === "startup-broken");
+      const broken = initial.plugins.find((record) => record.id === brokenId);
       expect(broken).toMatchObject({
         status: "error",
         error: expect.stringContaining(
@@ -136,27 +142,27 @@ it.each(["module-load", "entry-open"] as const)(
       if (failureKind === "entry-open") {
         expect(getPluginInstance(broken)).toBeUndefined();
       }
-      const diagnostics = initial.diagnostics.filter(
-        (entry) => entry.pluginId === "startup-broken",
-      );
+      const diagnostics = initial.diagnostics.filter((entry) => entry.pluginId === brokenId);
       expect(diagnostics.length).toBeGreaterThan(0);
-      const expectBrokenRetained = () => {
+      const expectBrokenRetained = (previous?: typeof initial) => {
         const registry = getActivePluginRegistry();
-        expect(registry?.plugins.find((record) => record.id === "startup-broken")).toBe(broken);
-        expect(
-          registry?.diagnostics.filter((entry) => entry.pluginId === "startup-broken"),
-        ).toEqual(diagnostics);
+        assert(registry);
+        if (previous) {
+          expect(registry).not.toBe(previous);
+        }
+        expect(registry.plugins.find((record) => record.id === brokenId)).toBe(broken);
+        expect(registry.diagnostics.filter((entry) => entry.pluginId === brokenId)).toEqual(
+          diagnostics,
+        );
+        return registry;
       };
       const before = await probe();
       const reload = await reloadPlugin(socket);
       expect(reload, reload.error?.message).toMatchObject({
         ok: true,
-        payload: { restartRequired: false, runtime: { pluginIds: ["instance-binding-probe"] } },
+        payload: { restartRequired: false, runtime: { pluginIds: [probeId] } },
       });
-      const current = getActivePluginRegistry();
-      assert(current);
-      expect(current).not.toBe(initial);
-      expectBrokenRetained();
+      const current = expectBrokenRetained(initial);
       const after = await probe();
       expect(after?.registryId).not.toBe(before?.registryId);
 
@@ -167,17 +173,9 @@ it.each(["module-load", "entry-open"] as const)(
         path.join(healthyPlugin, "index.js"),
         'throw new Error("new candidate failure");',
       );
-      const rejected = await reloadPlugin(socket);
-      const activationFailure = {
-        ok: false,
-        error: { details: { runtime: { committed: false, phase: "activate" } } },
-      };
-      expect(rejected).toMatchObject(activationFailure);
-      expect(rejected.error?.message).toContain("new candidate failure");
-      expect(rejected.error?.message).not.toContain("startup-broken");
-      const recovered = getActivePluginRegistry();
-      expect(recovered).not.toBe(current);
-      expectBrokenRetained();
+      const rejected = await rejectReload(probeId, "new candidate failure");
+      expect(rejected.error?.message).not.toContain(brokenId);
+      const recovered = expectBrokenRetained(current);
       const retained = await probe();
       expect(retained?.registryId).not.toBe(after?.registryId);
       expect(retained).toMatchObject({
@@ -188,8 +186,7 @@ it.each(["module-load", "entry-open"] as const)(
 
       const registrationsBeforeRepair = coordinator.runtimes.length;
       if (failureKind === "entry-open") {
-        // Repair the entry, then fail B activation. Reexecuting these current files
-        // as C would succeed, concealing that no old runnable source was captured.
+        // A repaired C would succeed, concealing the absence of captured A source.
         await fs.unlink(brokenEntry);
         await fs.writeFile(
           brokenEntry,
@@ -206,10 +203,9 @@ it.each(["module-load", "entry-open"] as const)(
           } };`,
         );
       }
-      const retryBroken = await reloadPlugin(socket, "startup-broken");
-      expect(retryBroken).toMatchObject(activationFailure);
-      expect(retryBroken.error?.message).toContain(
-        failureKind === "module-load" ? "startup-broken" : "repaired candidate activation failed",
+      await rejectReload(
+        brokenId,
+        failureKind === "module-load" ? brokenId : "repaired candidate activation failed",
       );
       if (failureKind === "entry-open") {
         expect(coordinator.runtimes).toHaveLength(registrationsBeforeRepair + 1);
@@ -224,7 +220,7 @@ it.each(["module-load", "entry-open"] as const)(
 
       await waitForReloadSettlement();
       const disabled = await rpcReq(socket, "plugins.setEnabled", {
-        pluginId: "instance-binding-probe",
+        pluginId: probeId,
         enabled: false,
       });
       expect(disabled, disabled.error?.message).toMatchObject({

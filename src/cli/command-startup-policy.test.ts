@@ -1,5 +1,4 @@
-import { describe, expect, it } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import { afterEach, expect, it, vi } from "vitest";
 import { resolveCliStartupPolicy } from "./command-startup-policy.js";
 
 function resolvePolicy(
@@ -12,114 +11,60 @@ function resolvePolicy(
     ...params,
   });
 }
+afterEach(() => vi.unstubAllEnvs());
 
-describe("command-startup-policy", () => {
-  it("leaves reset config and state preparation to onboarding", () => {
-    expect(resolvePolicy("onboard").skipConfigGuard).toBe(false);
-    for (const command of ["onboard", "setup"]) {
-      for (const params of [
-        { argv: ["node", "openclaw", command, "--reset"] },
-        { options: { reset: true } },
-      ]) {
-        expect(resolvePolicy(command, params)).toMatchObject({
-          skipConfigGuard: true,
-          validateConfigOnly: true,
-          loadPlugins: false,
-        });
-      }
+it("leaves reset config and state preparation to onboarding", () => {
+  expect(resolvePolicy("onboard").skipConfigGuard).toBe(false);
+  for (const command of ["onboard", "setup"]) {
+    for (const params of [
+      { argv: ["node", "openclaw", command, "--reset"] },
+      { options: { reset: true } },
+    ]) {
+      expect(resolvePolicy(command, params)).toMatchObject({
+        skipConfigGuard: true,
+        validateConfigOnly: true,
+        loadPlugins: false,
+      });
     }
-  });
+  }
+});
 
-  it.each(["gateway"])("defers only %s installs with a runtime expectation", (parent) => {
-    const command = `${parent} install`;
-    expect(resolvePolicy(command).skipConfigGuard).toBe(false);
-    expect(
-      resolvePolicy(command, {
-        options: { expectedRuntimePin: "{}" },
-        jsonOutputMode: true,
-      }).skipConfigGuard,
-    ).toBe(true);
-  });
+it("defers gateway installs with a runtime expectation", () => {
+  expect(resolvePolicy("gateway install").skipConfigGuard).toBe(false);
+  expect(
+    resolvePolicy("gateway install", {
+      options: { expectedRuntimePin: "{}" },
+      jsonOutputMode: true,
+    }).skipConfigGuard,
+  ).toBe(true);
+});
 
-  it("resolves config guard policy for Commander and invocation-aware commands", () => {
-    const paths = [
-      "backup create|database|config|config file|config validate|config schema",
-      "config set|config patch|config unset|docs|reset|uninstall|agent exec",
-      "status|node status|triage|agents bindings|agents add|agents team create|approvals pending",
-      "skills|skills list|skills check|skills info|skills search|hooks|hooks list|hooks info|hooks check",
-      "memory search|memory status|gateway stop|gateway recover-lock|gateway restart|gateway uninstall",
-      "daemon stop|daemon restart|daemon uninstall|gateway diagnostics export",
-      "gateway stability|gateway usage-cost|gateway call",
-    ].flatMap((group) => group.split("|"));
-    for (const command of paths) {
-      expect(resolvePolicy(command).skipConfigGuard, command).toBe(true);
-    }
-    expect(
-      resolvePolicy("agent", {
-        argv: ["node", "openclaw", "agent"],
-      }).skipConfigGuard,
-    ).toBe(true);
-    expect(
-      resolvePolicy("agent", {
-        argv: ["node", "openclaw", "agent", "--local"],
-      }).skipConfigGuard,
-    ).toBe(false);
-    for (const flag of ["--index", "--fix"]) {
-      expect(
-        resolvePolicy("memory status", {
-          argv: ["node", "openclaw", "memory", "status", flag],
-        }).skipConfigGuard,
-      ).toBe(false);
-    }
-  });
-  it("uses process env banner suppression when startup env is omitted", () => {
-    const originalEnv = captureEnv(["OPENCLAW_HIDE_BANNER"]);
-    try {
-      process.env.OPENCLAW_HIDE_BANNER = "1";
+it("maps the static skip policy to config admission", () => {
+  expect(resolvePolicy("config file").skipConfigGuard).toBe(true);
+});
+it("uses process env banner suppression when startup env is omitted", () => {
+  vi.stubEnv("OPENCLAW_HIDE_BANNER", "1");
+  expect(resolvePolicy("status").hideBanner).toBe(true);
+  expect(resolvePolicy("status", { env: {} }).hideBanner).toBe(false);
+});
 
-      expect(resolvePolicy("status").hideBanner).toBe(true);
-      expect(resolvePolicy("status", { env: {} }).hideBanner).toBe(false);
-    } finally {
-      originalEnv.restore();
-    }
+it("reserves stdout for the node worker protocol", () => {
+  expect(resolvePolicy("node worker")).toMatchObject({
+    hideBanner: true,
+    loadPlugins: false,
+    suppressDoctorStdout: true,
+    validateConfigOnly: true,
+    skipConfigGuard: false,
   });
+  expect(resolvePolicy("node run").validateConfigOnly).toBeUndefined();
+});
 
-  it("reserves stdout for the browser native-host protocol", () => {
-    expect(resolvePolicy("browser extension native-host")).toMatchObject({
-      skipConfigGuard: true,
-      loadPlugins: false,
-      hideBanner: true,
-      suppressDoctorStdout: true,
-    });
-  });
-
-  it("reserves stdout for the node worker protocol", () => {
-    expect(resolvePolicy("node worker")).toMatchObject({
-      hideBanner: true,
-      loadPlugins: false,
-      suppressDoctorStdout: true,
-      validateConfigOnly: true,
-      skipConfigGuard: false,
-    });
-    expect(resolvePolicy("node run").validateConfigOnly).toBeUndefined();
-  });
-
-  it("isolates cloud worker startup", () => {
-    expect(resolvePolicy("worker")).toMatchObject({
-      skipConfigGuard: true,
-      hideBanner: true,
-      loadPlugins: false,
-      suppressDoctorStdout: true,
-    });
-  });
-
-  it.each([
-    ["mcp serve", true],
-    ["acp", true],
-    ["mcp list", false],
-    ["acp client", false],
-    ["status", false],
-  ] as const)("reserves stdout only for protocol command %s: %s", (command, suppressed) => {
-    expect(resolvePolicy(command).suppressDoctorStdout).toBe(suppressed);
-  });
+it.each([
+  ["mcp serve", true],
+  ["acp", true],
+  ["mcp list", false],
+  ["acp client", false],
+  ["status", false],
+] as const)("reserves stdout only for protocol command %s: %s", (command, suppressed) => {
+  expect(resolvePolicy(command).suppressDoctorStdout).toBe(suppressed);
 });

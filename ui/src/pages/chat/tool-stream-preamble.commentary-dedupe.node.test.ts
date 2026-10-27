@@ -1,11 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { projectInFlightRunSnapshot } from "../../../../src/gateway/chat-inflight-snapshot.js";
 import { createChatRunState } from "../../../../src/gateway/server-chat-state.js";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { isHiddenAssistantStreamText as isHiddenStreamText } from "../../lib/chat/message-visibility.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
-import { activeHistory, createState, renderedText } from "./chat-history.inflight.test-support.ts";
-import { loadChatHistory } from "./chat-history.ts";
+import { activeHistory, createState } from "./chat-history.inflight.test-support.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { visibleAssistantStreamParts } from "./stream-reconciliation.ts";
 import { TOOL_STREAM_TEST_NOW, useToolStreamFakeTimers } from "./tool-stream.test-helpers.ts";
@@ -19,8 +17,7 @@ const assistant = (text: string) => ({ role: "assistant", content: [{ type: "tex
 function commentaryHarness() {
   useToolStreamFakeTimers();
   const gateway = createChatRunState();
-  const history = activeHistory(RUN_ID);
-  const host = createState(history);
+  const host = createState(activeHistory(RUN_ID));
   host.chatRunId = RUN_ID;
   let seq = 0;
   let messageSeq = 0;
@@ -69,7 +66,6 @@ function commentaryHarness() {
       { kind: "live", activeRunId: RUN_ID },
     );
     deliver();
-    (history.messages ??= []).push(durable);
     return durable;
   };
   const tool = () =>
@@ -78,40 +74,13 @@ function commentaryHarness() {
     visibleAssistantStreamParts(host, { includeCurrent: true, isHiddenStreamText });
   const expectParts = (...expected: [string, string | undefined][]) =>
     expect(parts().map((part) => [part.text.trim(), part.itemId])).toEqual(expected);
-  const reconnect = async () => {
-    history.inFlightRun = projectInFlightRunSnapshot({ chatRunState: gateway, runId: RUN_ID });
-    const restored = createState(history);
-    await loadChatHistory(restored);
-    return restored;
-  };
-  return { host, stream, preamble, persist, tool, expectParts, reconnect };
+  return { host, stream, preamble, persist, tool, expectParts };
 }
 
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
 });
-
-it.each(["history-first", "delta-first", "reconnect"] as const)(
-  "keeps persisted commentary once when the identified delta is %s",
-  async (order) => {
-    const earlier = "An earlier observation remains visible.";
-    const text = "The saved commentary should appear once.";
-    const later = "The next identified item remains visible.";
-    const h = commentaryHarness();
-    h.stream("earlier", earlier);
-    if (order === "history-first") {
-      h.persist("commentary-1", text);
-    }
-    h.stream("commentary-1", text);
-    if (order !== "history-first") {
-      h.persist("commentary-1", text);
-    }
-    h.stream("commentary-2", later);
-    const displayed = order === "reconnect" ? await h.reconnect() : h.host;
-    expect(renderedText(displayed)).toEqual([text, `${earlier}\n\n${later}`]);
-  },
-);
 
 it("does not let stale item identity prune a newer unscoped append", () => {
   const h = commentaryHarness();

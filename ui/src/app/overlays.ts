@@ -4,6 +4,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
 import { registerListener } from "../../../src/shared/listeners.js";
+import type { NodeListNode } from "../../../src/shared/node-list-types.js";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { showToast } from "../lib/toast.ts";
@@ -19,7 +20,7 @@ import {
 } from "./exec-approval.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-import { readGatewayOperatorAccess } from "./operator-access.ts";
+import { hasOperatorReadAccess, readGatewayOperatorAccess } from "./operator-access.ts";
 import {
   createOverlayApprovalRefresher,
   readOverlayOperatorAccessTransition,
@@ -54,6 +55,16 @@ export function createApplicationOverlays(
   let connectedSource: NonNullable<typeof activeClient> | null = null; // Retries start a new source epoch.
   let connectedEpoch = 0;
   let operatorAccess = readGatewayOperatorAccess(gateway.snapshot);
+  const approvalNodeNames = new Map<string, string>();
+  const attemptedNodeIds = new Set<string>();
+  let nodeNameRequest: object | null = null;
+  const nodeAccessKey = (state: ApplicationGateway["snapshot"]) =>
+    JSON.stringify([
+      state.hello?.auth?.role,
+      state.hello?.auth?.scopes,
+      state.hello?.auth?.sessionCap,
+    ]);
+  let nodeNamesAccess = nodeAccessKey(gateway.snapshot);
   let approvalAccessGeneration = 0;
   let approvalGrantGeneration = 0;
   let approvalDecision: {
@@ -74,6 +85,7 @@ export function createApplicationOverlays(
   };
 
   function publish() {
+    refreshApprovalNodeNames();
     snapshot = {
       ...snapshot,
       ...updates.snapshot,
@@ -83,6 +95,7 @@ export function createApplicationOverlays(
         gateway.snapshot.phase === "connected" &&
         readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals,
       approvalErrors: new Map(promptState.execApprovalErrors),
+      approvalNodeNames: new Map(approvalNodeNames),
       ...(pairing ? pairing.runtime.readDevicePairSetupSnapshot(pairing.state) : {}),
     };
     for (const listener of listeners) {
@@ -104,6 +117,62 @@ export function createApplicationOverlays(
     gateway.snapshot.client === client &&
     gateway.snapshot.phase === "connected";
 
+  function refreshApprovalNodeNames() {
+    const nodeIds = new Set(
+      promptState.execApprovalQueue.flatMap(({ request }) =>
+        request.host === "node" && request.nodeId ? [request.nodeId] : [],
+      ),
+    );
+    for (const id of attemptedNodeIds) {
+      if (!nodeIds.has(id)) {
+        attemptedNodeIds.delete(id);
+      }
+    }
+    for (const id of approvalNodeNames.keys()) {
+      if (!nodeIds.has(id)) {
+        approvalNodeNames.delete(id);
+      }
+    }
+    const client = activeClient;
+    if (
+      nodeNameRequest ||
+      !client ||
+      !isCurrentClient(client) ||
+      !operatorAccess.canReviewApprovals ||
+      !hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null) ||
+      !Array.from(nodeIds).some((id) => !attemptedNodeIds.has(id))
+    ) {
+      return;
+    }
+    for (const id of nodeIds) {
+      attemptedNodeIds.add(id);
+    }
+    const operation = {};
+    nodeNameRequest = operation;
+    // One shared lookup per newly encountered set, scoped to this connection's access.
+    // Missing names and failed reads retain the ID fallback without retrying on renders.
+    void client
+      .request<{ nodes: NodeListNode[] }>("node.list", {})
+      .then((result) => {
+        if (nodeNameRequest !== operation || !isCurrentClient(client)) {
+          return;
+        }
+        for (const node of result.nodes) {
+          const name = node.displayName?.trim();
+          if (nodeIds.has(node.nodeId) && name) {
+            approvalNodeNames.set(node.nodeId, name);
+          }
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (nodeNameRequest === operation) {
+          nodeNameRequest = null;
+          publish();
+        }
+      });
+  }
+
   const refreshApprovals = createOverlayApprovalRefresher({
     gateway,
     state: promptState,
@@ -124,6 +193,14 @@ export function createApplicationOverlays(
     const nextConnectedSource = connected ? next.client : null;
     const connectedSourceChanged = connectedSource !== nextConnectedSource || identityChanged;
     const accessTransition = readOverlayOperatorAccessTransition(operatorAccess, next);
+    const nextNodeNamesAccess = nodeAccessKey(next);
+    const nodeAccessChanged = nodeNamesAccess !== nextNodeNamesAccess;
+    if (connectedSourceChanged || nodeAccessChanged) {
+      nodeNameRequest = null;
+      approvalNodeNames.clear();
+      attemptedNodeIds.clear();
+    }
+    nodeNamesAccess = nextNodeNamesAccess;
     if (connectedSourceChanged || accessTransition.reviewChanged) {
       refreshApprovals.cancel();
     }
@@ -207,6 +284,9 @@ export function createApplicationOverlays(
       void runConnectionBootstrap("approvals", () =>
         refreshApprovals.refresh(connectedClient, connectedEpoch, approvalAccessGeneration),
       ).catch(() => undefined);
+    }
+    if (connectedSourceChanged || nodeAccessChanged) {
+      publish();
     }
   };
   // Revoke approval and pairing authority during the Gateway receipt, before views run.
@@ -409,6 +489,9 @@ export function createApplicationOverlays(
     },
     dispose() {
       disposed = true;
+      nodeNameRequest = null;
+      approvalNodeNames.clear();
+      attemptedNodeIds.clear();
       approvalDecision = null;
       refreshApprovals.cancel();
       updates.dispose();

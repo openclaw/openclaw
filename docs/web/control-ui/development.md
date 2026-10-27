@@ -158,6 +158,18 @@ proxy, without stopping the Gateway or deleting either application's state.
 Without `OPENCLAW_UI_DEV_GATEWAY_URL`, `pnpm ui:dev` retains its existing
 standalone connection behavior. This setting does not affect `pnpm ui:build`.
 
+### First paint
+
+The document contains a data-free loading frame before the application bundle runs.
+Its critical geometry lives in `ui/index.html` and is shared with the Solid
+connection fallback. The existing inline theme bootstrap selects the palette
+before this frame paints. The entry stylesheet downloads at preload priority
+without blocking the frame; the application waits for that sheet before mounting
+and replaces the static children in the same task as its first render.
+
+This frame contains no saved conversation or interactive controls. Earlier display
+of a retained transcript is a separate [design proposal](/reference/control-ui-warm-transcript-design).
+
 ### Measure cold HTTP delivery
 
 The cold-load benchmark normally serves the production build through Vite

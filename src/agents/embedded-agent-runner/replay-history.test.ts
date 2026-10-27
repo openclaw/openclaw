@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { convertMessages } from "../../../packages/ai/src/openai-completions-messages.js";
 import { transformMessages } from "../../../packages/ai/src/transcript-transform.js";
 import { resolveOpenAICompletionsCompat } from "../../../packages/ai/src/transports/openai-completions-compat.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
+import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
@@ -93,16 +95,6 @@ function hiddenAssistant(
     }),
   });
 }
-function toolResult(tool: { id: string; name: string }, timestamp: number): AgentMessage {
-  return {
-    role: "toolResult",
-    toolCallId: tool.id,
-    toolName: tool.name,
-    content: [textBlock("file contents")],
-    isError: false,
-    timestamp,
-  };
-}
 function completionsModel() {
   return makeProviderModelFixture<"openai-completions">({
     id: "test-model",
@@ -156,7 +148,7 @@ describe("normalizeAssistantReplayContent", () => {
     const messages: AgentMessage[] = [
       user("Read the file internally."),
       hiddenCall,
-      toolResult(toolCall, 1),
+      makeTextToolResult(toolCall.id, toolCall.name, "file contents", false, 1),
       hiddenAnswer,
       user("What did the file contain?"),
     ];
@@ -201,7 +193,12 @@ describe("normalizeAssistantReplayContent", () => {
         stopReason,
         timestamp: 1,
       };
-      const messages: AgentMessage[] = [source, toolResult(completed, 2)];
+      const messages: AgentMessage[] = [
+        source,
+        makeTextToolResult(completed.id, completed.name, "file contents", false, 2),
+      ];
+      normalizeTranscriptJsonValue({ message: source }, "entry");
+      expect(normalize([source])).toEqual([]);
       const normalized = normalize(messages);
       const replay = transformMessages(providerMessages(normalized), model);
       expect(replay).toHaveLength(2);
@@ -214,6 +211,21 @@ describe("normalizeAssistantReplayContent", () => {
       ]);
     },
   );
+
+  it("reuses immutable message normalization while new and mutable content is still sanitized", () => {
+    const source = assistant([textBlock("answer"), { type: "audio", data: "managed" }], "stop");
+    normalizeTranscriptJsonValue({ message: source }, "entry");
+    const first = normalize([source]).find((message) => message.role === "assistant");
+    expect(first?.content).toEqual([textBlock("answer")]);
+    const tail = assistant([textBlock("new answer"), { type: "audio", data: "managed" }], "stop");
+    const next = normalize([source, tail]);
+    expect(next[0]).toBe(first);
+    expect(next[1]).toHaveProperty("content", [textBlock("new answer")]);
+    expect(Object.isFrozen(first?.content)).toBe(true);
+    tail.content = [textBlock("edited")];
+    expect(normalize([source, tail])[1]).toHaveProperty("content", [textBlock("edited")]);
+    expect(source.content).toEqual([textBlock("answer"), { type: "audio", data: "managed" }]);
+  });
 
   it.each([false, true])(
     "replays speech-only assistant content without changing the transcript (empty block: %s)",
@@ -581,6 +593,10 @@ describe("normalizeAssistantReplayContent", () => {
           } as unknown as AgentMessage);
     const input =
       kind === "bare" ? [user("hello"), realReply, mirror] : [user("hello"), mirror, realReply];
+    normalizeTranscriptJsonValue({ message: mirror }, "entry");
+    if (kind === "bare") {
+      expect(normalize([mirror])).toEqual([mirror]);
+    }
     expect(normalize(input)).toEqual([expect.objectContaining({ role: "user" }), realReply]);
   });
 

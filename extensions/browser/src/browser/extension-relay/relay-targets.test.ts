@@ -288,7 +288,7 @@ describe("logical Target interests", () => {
     },
   );
 
-  it("routes non-flat child commands by targetId through the same logical owner", async () => {
+  it("routes non-flat child commands by targetId and flat descendants through their ancestor", async () => {
     const child = await attachChild(false);
     expect(child).not.toBe("child");
     await sendChild({ targetId: "target-child" }, { id: 71, method: "Runtime.evaluate" });
@@ -299,6 +299,29 @@ describe("logical Target interests", () => {
       }),
     );
     expect(f.commands("Runtime.evaluate").at(-1)?.sessionId).toBe("child");
+    await sendChild(
+      { sessionId: child },
+      { id: 101, method: "Target.setAutoAttach", params: enabled },
+    );
+    await flush();
+    f.child("grandchild", "child");
+    const nested = c
+      .frames("Target.receivedMessageFromTarget")
+      .map((frame) => JSON.parse(String(asOptionalRecord(frame.params)?.message)));
+    const grandchild = nested.find((frame) => frame.method === "Target.attachedToTarget")?.params
+      .sessionId;
+    expect(typeof grandchild).toBe("string");
+    await sendChild(
+      { sessionId: child },
+      { id: 102, sessionId: grandchild, method: "Runtime.evaluate" },
+    );
+    await flush();
+    expect.soft(f.commands("Runtime.evaluate").at(-1)?.sessionId).toBe("grandchild");
+    expectChildMessage(c, root, child, {
+      id: 102,
+      result: { ok: true, echoed: "Runtime.evaluate" },
+      sessionId: grandchild,
+    });
   });
   it("projects and updates child metadata only for interested parents", async () => {
     const parent = await c.alias();
@@ -359,33 +382,6 @@ describe("logical Target interests", () => {
     expect(fresh).not.toBe(old);
     expect(await error("Runtime.evaluate", old)).toBeDefined();
     expect(await error("Runtime.evaluate", fresh)).toBeUndefined();
-  });
-
-  it("routes a flat descendant through its non-flat ancestor transport", async () => {
-    const child = await attachChild(false);
-    await sendChild(
-      { sessionId: child },
-      { id: 101, method: "Target.setAutoAttach", params: enabled },
-    );
-    await flush();
-    f.child("grandchild", "child");
-    const nested = c
-      .frames("Target.receivedMessageFromTarget")
-      .map((frame) => JSON.parse(String(asOptionalRecord(frame.params)?.message)));
-    const grandchild = nested.find((frame) => frame.method === "Target.attachedToTarget")?.params
-      .sessionId;
-    expect(typeof grandchild).toBe("string");
-    await sendChild(
-      { sessionId: child },
-      { id: 102, sessionId: grandchild, method: "Runtime.evaluate" },
-    );
-    await flush();
-    expect.soft(f.commands("Runtime.evaluate").at(-1)?.sessionId).toBe("grandchild");
-    expectChildMessage(c, root, child, {
-      id: 102,
-      result: { ok: true, echoed: "Runtime.evaluate" },
-      sessionId: grandchild,
-    });
   });
 
   it("does not detach an already-closed child after held Fetch cleanup finishes", async () => {

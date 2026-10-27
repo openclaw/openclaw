@@ -3,10 +3,6 @@ import type { Server } from "node:http";
 import { expect, it } from "vitest";
 import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import {
-  buildControlUiCspHeader,
-  computeInlineScriptHashes,
-} from "../../../src/gateway/control-ui-csp.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import {
   closeHttpServer,
@@ -18,6 +14,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { selectFileAction } from "./chat-file-actions.test-support.ts";
+import { fulfillWithControlUiCsp } from "./control-ui-csp.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -160,20 +157,9 @@ suite.define(() => {
             });
             // Exercise the production app CSP, not a srcdoc demo that accidentally
             // permits scripts only because a dev server omitted the app policy.
-            await page.route(`${suite.server.baseUrl}chat`, async (route) => {
-              const response = await route.fetch();
-              const body = await response.text();
-              await route.fulfill({
-                response,
-                body,
-                headers: {
-                  ...response.headers(),
-                  "Content-Security-Policy": buildControlUiCspHeader({
-                    inlineScriptHashes: computeInlineScriptHashes(body),
-                  }),
-                },
-              });
-            });
+            await page.route(`${suite.server.baseUrl}chat`, (route) =>
+              fulfillWithControlUiCsp(route, "Content-Security-Policy"),
+            );
             if (mode === "strict") {
               await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, async (route) => {
                 await route.fulfill({
@@ -182,7 +168,7 @@ suite.define(() => {
               });
             }
             await page.goto(`${suite.server.baseUrl}chat`);
-            await gateway.waitForRequest("chat.startup");
+            await gateway.waitForRequest("sessions.messages.subscribe");
             await page
               .locator('a.markdown-file-link[data-file-path="page.html"]')
               .filter({ hasText: /^page$/ })

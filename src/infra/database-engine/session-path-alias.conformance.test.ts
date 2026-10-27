@@ -14,6 +14,7 @@ import { createDirectChatContext } from "../../gateway/server-chat.agent-events.
 import { successfulChatTurn } from "../../gateway/server-methods/chat-send-authority.test-support.js";
 import { handleChatSend } from "../../gateway/server-methods/chat-send-handler.js";
 import type { GatewayClient, RespondFn } from "../../gateway/server-methods/types.js";
+import { createOperatorWsClient } from "../../gateway/server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { disposeSessionReadContexts } from "../../gateway/session-read-contexts.test-support.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
@@ -80,21 +81,11 @@ for (const engine of ["sqlite", "postgres"] as const) {
             database: stateDatabase,
           }),
         });
-        const client: GatewayClient = {
+        const client: GatewayClient = createOperatorWsClient({
           connId: "state-alias-client",
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            role: "operator",
-            scopes: ["operator.read", "operator.write", "operator.admin"],
-            client: {
-              id: "openclaw-control-ui",
-              version: "test",
-              platform: "web",
-              mode: "webchat",
-            },
-          },
-        };
+          scopes: ["operator.read", "operator.write", "operator.admin"],
+          clientInfo: { id: "openclaw-control-ui", mode: "webchat" },
+        });
         const params = {
           sessionKey: scope.sessionKey,
           message: "Persist this input through the state directory alias.",
@@ -138,15 +129,12 @@ for (const engine of ["sqlite", "postgres"] as const) {
             expect.objectContaining({ runId: params.idempotencyKey, state: "final" }),
             expect.anything(),
           );
-          expect(runtime.execute).toHaveBeenCalledOnce();
           const entry = expectDefined(await readSessionEntryInWorker(scope), "created session");
           const createdScope = { ...scope, sessionId: entry.sessionId };
-          expect(await loadTranscriptEvents(createdScope)).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                message: expect.objectContaining({ role: "user", content: params.message }),
-              }),
-            ]),
+          expect(await loadTranscriptEvents(createdScope)).toContainEqual(
+            expect.objectContaining({
+              message: expect.objectContaining({ role: "user", content: params.message }),
+            }),
           );
           expect(await listSessionPendingInputs(createdScope)).toMatchObject({ total: 0 });
         } finally {

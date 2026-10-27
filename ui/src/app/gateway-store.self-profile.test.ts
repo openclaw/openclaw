@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { UserProfile } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { makeChatHost } from "../pages/chat/chat-host.test-support.ts";
 import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
 import { installOutboxBrowserStorage } from "../pages/chat/outbox-browser.test-support.ts";

@@ -11,6 +11,7 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import type { SessionGateway } from "../lib/sessions/session-capability.ts";
+import { createFrameClock } from "../test-helpers/animation-frame-clock.ts";
 import { createSessionDataHost } from "./session-data-controller.test-support.ts";
 import { SessionDataOwner } from "./session-data.ts";
 
@@ -224,19 +225,12 @@ describe("filtered sidebar session event refresh", () => {
     async (statusFilter) => {
       const { controller, notify, publishPresence, disconnectHost } =
         createFilteredSessionController(statusFilter, 300, true);
-      const frames = new Map<number, FrameRequestCallback>();
-      let frameId = 0;
-      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-        frames.set(++frameId, callback);
-        return frameId;
-      });
-      vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+      const framesClock = createFrameClock();
+
+      vi.stubGlobal("requestAnimationFrame", framesClock.request);
+      vi.stubGlobal("cancelAnimationFrame", framesClock.cancel);
       const flushFrame = () => {
-        const pending = [...frames.values()];
-        frames.clear();
-        for (const callback of pending) {
-          callback(0);
-        }
+        framesClock.flush(0);
       };
       controller.connect();
       await controller.refreshSidebarSessions();

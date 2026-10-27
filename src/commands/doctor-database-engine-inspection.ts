@@ -1,3 +1,5 @@
+import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
+import { getPostgresPool } from "../infra/postgres-sync/pool.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -15,6 +17,9 @@ export type {
 export async function inspectDoctorDatabaseEngines(
   input: DoctorDatabaseEngineInspectionInput,
 ): Promise<DoctorDatabaseEngineInspection> {
+  if (Object.values(resolveDatabaseFamilyEngines(input.config)).includes("postgres")) {
+    getPostgresPool();
+  }
   const pool = new WorkerTaskPool<
     DoctorDatabaseEngineInspectionInput,
     DoctorDatabaseEngineInspection

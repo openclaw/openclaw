@@ -322,12 +322,7 @@ describe("matrix thread bindings", () => {
       accountId: "ops",
       threadId: "$thread",
     });
-    const resolved = getSessionBindingService().resolveByConversation({
-      channel: "matrix",
-      accountId: "ops",
-      conversationId: "$thread",
-      parentConversationId: "!room:example",
-    });
+    const resolved = getSessionBindingService().resolveByConversation(currentThreadConversation());
     expect(resolved?.bindingId).toBe(binding.bindingId);
     expect(resolved?.targetSessionKey).toBe("agent:molty:subagent:child");
     expect(binding.metadata?.agentId).toBe("molty");
@@ -346,23 +341,13 @@ describe("matrix thread bindings", () => {
       await getSessionBindingService().bind({
         targetSessionKey: "agent:ops:subagent:first",
         targetKind: "subagent",
-        conversation: {
-          channel: "matrix",
-          accountId: "ops",
-          conversationId: "$thread-1",
-          parentConversationId: "!room:example",
-        },
+        conversation: currentThreadConversation({ conversationId: "$thread-1" }),
         placement: "current",
       });
       await getSessionBindingService().bind({
         targetSessionKey: "agent:ops:subagent:second",
         targetKind: "subagent",
-        conversation: {
-          channel: "matrix",
-          accountId: "ops",
-          conversationId: "$thread-2",
-          parentConversationId: "!room:example",
-        },
+        conversation: currentThreadConversation({ conversationId: "$thread-2" }),
         placement: "current",
       });
 
@@ -425,12 +410,7 @@ describe("matrix thread bindings", () => {
     await createBindingManager({ auth: rotatedAuth });
 
     expect(
-      getSessionBindingService().resolveByConversation({
-        channel: "matrix",
-        accountId: "ops",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      }),
+      getSessionBindingService().resolveByConversation(currentThreadConversation()),
     ).toBeNull();
 
     const initialBindingsPath = path.join(initialStoragePaths.rootDir, "thread-bindings.json");
@@ -478,12 +458,8 @@ describe("matrix thread bindings", () => {
     await createBindingManager({ auth: rotatedAuth });
 
     expect(
-      getSessionBindingService().resolveByConversation({
-        channel: "matrix",
-        accountId: "ops",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      })?.targetSessionKey,
+      getSessionBindingService().resolveByConversation(currentThreadConversation())
+        ?.targetSessionKey,
     ).toBe("agent:ops:subagent:child");
 
     const rotatedBindingsPath = path.join(
@@ -517,12 +493,7 @@ describe("matrix thread bindings", () => {
     expect(replacementManager).not.toBe(initialManager);
     expect(replacementManager.listBindings()).toStrictEqual([]);
     expect(
-      getSessionBindingService().resolveByConversation({
-        channel: "matrix",
-        accountId: "ops",
-        conversationId: "$thread",
-        parentConversationId: "!room:example",
-      }),
+      getSessionBindingService().resolveByConversation(currentThreadConversation()),
     ).toBeNull();
 
     await bindCurrentThread({

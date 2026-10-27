@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useSubagentRestartRecoveryFixture } from "./subagent-restart-recovery.test-support.js";
+import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
 import {
@@ -15,6 +16,66 @@ import { addSubagentRunForTests, testing } from "./subagent-registry.test-helper
 describe("accepted subagent restart recovery", () => {
   const fixture = useSubagentRestartRecoveryFixture({ reuseDatabaseWorkers: true });
   const { childFixture } = createRecoverySessions(fixture);
+
+  it.each(["interrupted", "terminal"] as const)(
+    "records a failed worker placement from %s once across two registry restarts",
+    async (status) => {
+      const child = childFixture("failed-placement");
+      const now = Date.now();
+      const reason = "Worker setup failed. Repair the provider error, then restart the worker.";
+      const storePath = await child.write({ abortedLastRun: true, updatedAt: now });
+      await patchSessionEntryCore({ storePath, sessionKey: child.childSessionKey }, (entry) => ({
+        ...entry,
+        status: "interrupted",
+        lifecycleRunId: child.runId,
+        lastRunId: child.runId,
+      }));
+      const record = child.run({
+        ...(status === "terminal"
+          ? {
+              terminalOwner: "interrupted-recovery" as const,
+              endedReason: "subagent-error" as const,
+            }
+          : {}),
+        execution: {
+          ...(status === "terminal"
+            ? { status, endedAt: now, outcome: { status: "error" as const, error: reason } }
+            : { status, interruptionReason: "gateway-restart" as const }),
+          startedAt: now - 1_000,
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        },
+      });
+      await prepareSubagentRecoveryFixture(record, { stateDir: fixture.stateDir });
+      await addSubagentRunForTests(record);
+      const release = vi.fn();
+      const preparePlacement = vi
+        .spyOn(fixture.gatewayRuntime, "prepareFailedWorkerPlacement")
+        .mockReset()
+        .mockResolvedValue({ reason, isCurrent: () => true, release });
+
+      await fixture.settle();
+      await restartRegistry(fixture);
+      await testing.sweepOnceForTests();
+      await fixture.settle();
+      const settled = loadSubagentRegistryFromSqlite().get(child.runId);
+      expect(settled).toMatchObject({
+        execution: { status: "terminal", outcome: { status: "error", error: reason } },
+      });
+      expect(child.read()).toMatchObject({ status: "failed", lastRunError: reason });
+      expect(child.read()?.abortedLastRun).toBeUndefined();
+      expect(preparePlacement).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+
+      await restartRegistry(fixture);
+      await testing.sweepOnceForTests();
+      await fixture.settle();
+      expect(loadSubagentRegistryFromSqlite().get(child.runId)?.execution).toEqual(
+        settled?.execution,
+      );
+      expect(preparePlacement).toHaveBeenCalledOnce();
+      expect(fixture.dispatchAgent).not.toHaveBeenCalled();
+    },
+  );
 
   it("settles an accepted child without a lifecycle run at boot and promptly notifies its requester", async () => {
     const child = childFixture("accepted-before-crash");

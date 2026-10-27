@@ -123,6 +123,21 @@ it("retires retained callbacks and disposes exactly once on runtime shutdown", a
   expect(f.request).not.toHaveBeenCalled();
   expect(f.navigate).not.toHaveBeenCalled();
 });
+it("retires an inactive placement before its rendered component is disposed", async () => {
+  const f = fixture();
+  await waitForSolid(() => expect(f.contexts).toHaveLength(1));
+  const old = f.contexts[0]!;
+  f.retire();
+  expect(old.signal.aborted).toBe(true);
+  expect(f.viewDisposers[0]).toHaveBeenCalledOnce();
+  expect(f.assetDisposers[0]).toHaveBeenCalledOnce();
+  f.notify();
+  await waitForSolid(() => expect(f.assetDisposers).toHaveLength(1));
+  await expect(old.request("doctor.memory.status")).rejects.toThrow();
+  expect(() => old.navigate("settings")).toThrow();
+  f.unmount();
+  expect(f.viewDisposers[0]).toHaveBeenCalledOnce();
+});
 const snapshotChanges: Record<string, Partial<ControlUiSettingsSnapshot>> = {
   agent: { agentId: "writer" },
   engine: { engine: { kind: "pinned", id: "custom-memory", availability: "unknown" } },

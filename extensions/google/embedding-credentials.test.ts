@@ -36,46 +36,38 @@ it.each([
   });
   expect(fetch).not.toHaveBeenCalled();
 });
-import { once } from "node:events";
-import { createServer, type IncomingHttpHeaders } from "node:http";
-import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
+import type { IncomingHttpHeaders } from "node:http";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 
 it("keeps an empty remote override from inheriting Google's billing header", async () => {
-  const claim = await acquireTestPortBlock({ offsets: [0] });
   const requests: IncomingHttpHeaders[] = [];
-  const server = createServer((request, response) => {
-    request.resume();
-    requests.push(request.headers);
-    response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify({ embedding: { values: [1, 0] } }));
-  });
-  try {
-    server.listen(claim.port, "127.0.0.1");
-    await once(server, "listening");
-    const baseUrl = `http://127.0.0.1:${claim.port}/v1beta`;
-    const { provider } = await createGeminiEmbeddingProvider({
-      config: createModelProviderConfig({
-        google: {
-          baseUrl,
-          headers: { "x-goog-user-project": "provider-project" },
-          models: [],
-        },
-      }),
-      provider: "gemini",
-      model: "gemini-embedding-001",
-      fallback: "none",
-      remote: { apiKey: "synthetic-key", headers: { "x-goog-user-project": "" } },
-    });
-    await expect(provider.embed("synthetic query", { inputType: "query" })).resolves.toEqual([
-      1, 0,
-    ]);
-    expect(requests).toMatchObject([{ "x-goog-user-project": "" }]);
-  } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-    await claim.release();
-  }
+  await withServer(
+    (request, response) => {
+      request.resume();
+      requests.push(request.headers);
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ embedding: { values: [1, 0] } }));
+    },
+    async (origin) => {
+      const baseUrl = `${origin}/v1beta`;
+      const { provider } = await createGeminiEmbeddingProvider({
+        config: createModelProviderConfig({
+          google: {
+            baseUrl,
+            headers: { "x-goog-user-project": "provider-project" },
+            models: [],
+          },
+        }),
+        provider: "gemini",
+        model: "gemini-embedding-001",
+        fallback: "none",
+        remote: { apiKey: "synthetic-key", headers: { "x-goog-user-project": "" } },
+      });
+      await expect(provider.embed("synthetic query", { inputType: "query" })).resolves.toEqual([
+        1, 0,
+      ]);
+      expect(requests).toMatchObject([{ "x-goog-user-project": "" }]);
+    },
+  );
 });

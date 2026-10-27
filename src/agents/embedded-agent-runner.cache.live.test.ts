@@ -24,7 +24,8 @@ import { compactEmbeddedAgentSessionOnDemand } from "./embedded-agent-runner/com
 import type { beginPromptCacheObservation } from "./embedded-agent-runner/prompt-cache-observability.js";
 import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
 import {
-  buildAssistantHistoryTurn as buildTypedAssistantHistoryTurn,
+  resolveLiveCacheModel,
+  buildAssistantHistoryTurn as makeAssistantHistoryTurn,
   buildStableCachePrefix,
   completeSimpleWithLiveTimeout,
   computeCacheHitRate,
@@ -34,7 +35,7 @@ import {
   resolveLiveDirectModel,
   withLiveCacheHeartbeat,
 } from "./live-cache-test-support.js";
-import { useLiveTestRuntimeConfig } from "./live-test-helpers.js";
+import { createSingleUserPromptMessage, useLiveTestRuntimeConfig } from "./live-test-helpers.js";
 
 const describeCacheLive = LIVE_CACHE_TEST_ENABLED ? describe : describe.skip;
 
@@ -90,13 +91,6 @@ let liveCacheTraceFile: string | undefined;
 let previousCacheTraceEnv: ReturnType<typeof captureEnv> | undefined;
 
 type UserContent = Extract<Message, { role: "user" }>["content"];
-
-function makeAssistantHistoryTurn(
-  text: string,
-  model?: Awaited<ReturnType<typeof resolveLiveDirectModel>>["model"],
-): Message {
-  return buildTypedAssistantHistoryTurn(text, model);
-}
 
 function makeUserHistoryTurn(content: UserContent): Message {
   return {
@@ -379,13 +373,7 @@ async function runToolOnlyTurn(params: {
       params.model,
       {
         systemPrompt: params.systemPrompt,
-        messages: [
-          {
-            role: "user",
-            content: prompt,
-            timestamp: Date.now(),
-          },
-        ],
+        messages: createSingleUserPromptMessage(prompt),
         tools: [params.tool],
       },
       {
@@ -459,21 +447,13 @@ async function runToolCacheProbe(params: DirectCacheProbeParams): Promise<CacheR
     {
       systemPrompt: prefix,
       messages: [
-        {
-          role: "user",
-          content: toolTurn.prompt,
-          timestamp: Date.now(),
-        },
+        makeUserHistoryTurn(toolTurn.prompt),
         toolTurn.response,
         buildToolResultMessage(toolTurn.toolCall.id, NOOP_TOOL.name, "ok"),
         makeAssistantHistoryTurn("TOOL HISTORY ACKNOWLEDGED", params.model),
         makeUserHistoryTurn("Keep the tool output stable in history."),
         makeAssistantHistoryTurn("TOOL HISTORY PRESERVED", params.model),
-        {
-          role: "user",
-          content: `Reply with exactly CACHE-OK ${params.suffix}.`,
-          timestamp: Date.now(),
-        },
+        makeUserHistoryTurn(`Reply with exactly CACHE-OK ${params.suffix}.`),
       ],
       tools: [NOOP_TOOL],
     },
@@ -496,13 +476,7 @@ async function runTextCacheProbe(params: DirectCacheProbeParams): Promise<CacheR
     params.model,
     {
       systemPrompt: params.providerTag === "openai" ? OPENAI_PREFIX : ANTHROPIC_PREFIX,
-      messages: [
-        {
-          role: "user",
-          content: `Reply with exactly CACHE-OK ${params.suffix}.`,
-          timestamp: Date.now(),
-        },
-      ],
+      messages: createSingleUserPromptMessage(`Reply with exactly CACHE-OK ${params.suffix}.`),
     },
     {
       apiKey: params.apiKey,
@@ -600,12 +574,7 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     let fixture: Awaited<ReturnType<typeof resolveLiveDirectModel>>;
 
     beforeAll(async () => {
-      fixture = await resolveLiveDirectModel({
-        provider: "openai",
-        api: "openai-responses",
-        envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
-        preferredModelIds: ["gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini", "gpt-5.4"],
-      });
+      fixture = await resolveLiveCacheModel("openai");
       logLiveCache(`openai model=${fixture.model.provider}/${fixture.model.id}`);
     }, 120_000);
 
@@ -870,12 +839,7 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     let fixture: Awaited<ReturnType<typeof resolveLiveDirectModel>>;
 
     beforeAll(async () => {
-      fixture = await resolveLiveDirectModel({
-        provider: "anthropic",
-        api: "anthropic-messages",
-        envVar: "OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL",
-        preferredModelIds: ["claude-sonnet-5", "claude-haiku-4-5"],
-      });
+      fixture = await resolveLiveCacheModel("anthropic");
       logLiveCache(`anthropic model=${fixture.model.provider}/${fixture.model.id}`);
     }, 120_000);
 

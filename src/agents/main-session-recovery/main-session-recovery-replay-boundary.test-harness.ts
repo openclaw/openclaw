@@ -10,6 +10,7 @@ import {
   codeModeCheckpointMessage,
   makeToolResultMessage,
   makeUserMessage,
+  toolCall,
 } from "./main-session-restart-recovery-transcript.test-support.js";
 
 type ReplayBoundaryRecoveryFixture = {
@@ -59,14 +60,7 @@ export function registerReplayBoundaryRecoveryCases(harness: ReplayBoundaryRecov
           content:
             "[System] Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. Continue from the existing transcript and finish the interrupted response.",
         },
-        createAssistantToolCallMessage([
-          {
-            type: "toolCall",
-            id: "call-read-1",
-            name: "read",
-            arguments: { path: "README.md" },
-          },
-        ]),
+        createAssistantToolCallMessage([toolCall("call-read-1", "read", { path: "README.md" })]),
         {
           role: "toolResult",
           toolName: "read",

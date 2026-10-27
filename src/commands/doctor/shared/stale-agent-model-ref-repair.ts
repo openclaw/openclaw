@@ -18,6 +18,7 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { collectConfiguredProviderSelectionIds } from "./configured-provider-selection-ids.js";
+import { prepareModelReplacementConfig } from "./model-replacement-config.js";
 import {
   createRetiredModelRefRepairResolver,
   repairRetiredConfigModelRefs,
@@ -33,6 +34,7 @@ type StaleAgentModelRefRepair = {
 type RepairOptions = {
   env?: NodeJS.ProcessEnv;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  modelReplacements?: readonly import("./model-replacement.js").DoctorModelReplacement[];
 };
 
 const DEFAULT_MODEL_REF = `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
@@ -450,10 +452,14 @@ export function repairStaleAgentModelRefs(
     });
   }
 
+  const prepared = prepareModelReplacementConfig(config, options.modelReplacements ?? []);
+  changes.push(...prepared.changes);
   const retired = repairRetiredConfigModelRefs(
-    config,
+    prepared.config,
     createRetiredModelRefRepairResolver({
-      cfg: config,
+      modelReplacements: options.modelReplacements,
+      cfg: prepared.config,
+      retiredModelRefConfig: config,
       env,
       metadataSnapshot: options.pluginMetadataSnapshot,
       warnings,
@@ -465,7 +471,7 @@ export function repairStaleAgentModelRefs(
     config: changes.length > 0 ? retired.config : cfg,
     changes,
     warnings,
-    ...(retired.changes.length > 0
+    ...(retired.changes.length > 0 || prepared.changes.length > 0
       ? { retiredModelRefConfig: { agents: config.agents, models: config.models } }
       : {}),
   };

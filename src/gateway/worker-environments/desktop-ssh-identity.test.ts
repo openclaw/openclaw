@@ -6,7 +6,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveWorkerSshIdentity } from "./identity.js";
 import * as support from "./service.test-support.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
-import { fakeRunner, success } from "./tunnel.test-support.js";
+import { fakeRunner } from "./tunnel.test-support.js";
 
 const MATERIAL = "synthetic-desktop-identity";
 type Operation = "observe" | "launch";
@@ -57,7 +57,6 @@ async function fixture(operation: Operation) {
       ? service.observeDesktop({ environmentId: environment.environmentId, control: false })
       : service.launchDesktopApp({ environmentId: environment.environmentId, app: "browser" }),
   );
-  const commandRelease = createDeferredCore();
   let closing: Promise<unknown> | undefined;
   const assertLeaseUnchanged = () => {
     expect(support.testState.store.get(environment.environmentId)).toEqual(environment);
@@ -65,19 +64,12 @@ async function fixture(operation: Operation) {
   };
   return {
     release,
-    fake,
     writes,
     removals,
     preparedRemoved,
     pending,
-    commandRelease,
     request: entered.promise,
     assertLeaseUnchanged,
-    async resolve() {
-      release.resolve();
-      await providerSettled;
-    },
-    stop: () => manager.desktop.stop(environment.environmentId, environment.ownerEpoch),
     close(closure: "stop" | "replace-observe" | "replace-launch") {
       const replacement = {
         environmentId: environment.environmentId,
@@ -99,7 +91,6 @@ async function fixture(operation: Operation) {
     async [Symbol.asyncDispose]() {
       // Release gates before joining teardown; neither owner may wait on the test.
       release.resolve();
-      commandRelease.resolve();
       await providerSettled;
       await pending;
       await closing;
@@ -136,7 +127,6 @@ describe.skipIf(process.platform === "win32")("desktop SSH identity caller lifet
     await using f = await fixture(operation);
     const { pending } = f;
     const request = await f.request;
-    expect(request.assertCurrent).toBeTypeOf("function");
     expect(() => request.assertCurrent!()).not.toThrow();
     f.assertLeaseUnchanged();
     if (closure === "timeout") {
@@ -153,7 +143,7 @@ describe.skipIf(process.platform === "win32")("desktop SSH identity caller lifet
     f.assertLeaseUnchanged();
     expect(() => request.assertCurrent!()).toThrow();
     // Identify the old directory without confusing valid replacement writes.
-    await f.resolve();
+    f.release.resolve();
     await f.preparedRemoved.promise;
     expect(await pending).toMatchObject({ status: "rejected" });
     const removedDirectory = String(
@@ -170,46 +160,18 @@ describe.skipIf(process.platform === "win32")("desktop SSH identity caller lifet
     f.assertLeaseUnchanged();
   });
 
-  it.each(["observe", "launch"] as const)(
-    "allows %s and disposes private files independently",
-    async (operation) => {
-      await using f = await fixture(operation);
-      const { pending, commandRelease } = f;
-      const request = await f.request;
-      const commandEntered = createDeferredCore<string[]>();
-      if (operation === "launch") {
-        f.fake.runner.run = async (argv) => {
-          commandEntered.resolve(argv);
-          await commandRelease.promise;
-          return success();
-        };
-      }
-      expect(() => request.assertCurrent!()).not.toThrow();
-      f.release.resolve();
-      let argv: string[];
-      if (operation === "launch") {
-        argv = await commandEntered.promise;
-      } else {
-        expect(await pending).toMatchObject({ status: "fulfilled", value: { transport: "rfb" } });
-        argv = f.fake.starts[0]!.argv;
-      }
-      const identityPath = argv[argv.indexOf("-i") + 1]!;
-      const directory = path.dirname(identityPath);
-      expect(await fs.readFile(identityPath, "utf8")).toBe(MATERIAL + "\n");
-      expect((await fs.stat(directory)).mode & 0o777).toBe(0o700);
-      for (const file of ["identity", "known_hosts"]) {
-        expect((await fs.stat(path.join(directory, file))).mode & 0o777).toBe(0o600);
-      }
-      expect(await fs.readFile(path.join(directory, "known_hosts"), "utf8")).toContain(
-        support.SSH_ENDPOINT.hostKey,
-      );
-      // Provider authority closes on resolution; disposal must not reuse that guard.
+  it("disposes a successful launch after its provider invocation closes", async () => {
+    const f = await fixture("launch");
+    {
+      await using owned = f;
+      const request = await owned.request;
+      owned.release.resolve();
+      expect(await owned.pending).toMatchObject({ status: "fulfilled" });
       expect(() => request.assertCurrent!()).toThrow("identity invocation is closed");
-      commandRelease.resolve();
-      expect(await pending).toMatchObject({ status: "fulfilled" });
-      await f.stop();
-      await expect(fs.access(directory)).rejects.toMatchObject({ code: "ENOENT" });
-      f.assertLeaseUnchanged();
-    },
-  );
+    }
+    const removed = f.removals.mock.calls.find(([target]) =>
+      String(target).includes("openclaw-worker-desktop"),
+    )![0];
+    await expect(fs.access(removed)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });

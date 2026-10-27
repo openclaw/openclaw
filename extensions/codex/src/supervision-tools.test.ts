@@ -50,6 +50,15 @@ function createEndpointRequest(handler: EndpointRequestHandler): EndpointRequest
   return async <T>(...args: Parameters<EndpointRequest>) => (await handler(...args)) as T;
 }
 
+function requestMethod(method: string, respond: () => unknown): EndpointRequest {
+  return createEndpointRequest((_endpoint, actual) => {
+    if (actual !== method) {
+      throw new Error(`unexpected method: ${actual}`);
+    }
+    return respond();
+  });
+}
+
 function storedPages(page: () => unknown): EndpointRequest {
   return createEndpointRequest(async (_endpoint, method) => {
     if (method === "thread/loaded/list") {
@@ -151,11 +160,8 @@ function mutateDuringRead(
   thread: Record<string, unknown> = idleThread(),
 ) {
   const methods: string[] = [];
-  const request = createEndpointRequest(async (_endpoint, method) => {
-    methods.push(method);
-    if (method !== "thread/read") {
-      throw new Error(`unexpected method: ${method}`);
-    }
+  const request = requestMethod("thread/read", () => {
+    methods.push("thread/read");
     mutate();
     return { thread };
   });
@@ -284,8 +290,10 @@ describe("Codex supervision compatibility tools", () => {
   it.each([false, true])(
     "preserves permitted list text and omits restricted fields (raw reads=%s)",
     async (allowRawTranscripts) => {
-      const privatePreview = "API_TOKEN = computeToken()";
-      const privateName = "Stored sk-abcdefghijklmnopqrstuv";
+      const privateFields = {
+        preview: "API_TOKEN = computeToken()",
+        name: "Stored sk-abcdefghijklmnopqrstuv",
+      };
       const privateError = "private endpoint failure detail";
       const request = createEndpointRequest(async (endpoint, method) => {
         if (endpoint.id === "broken") {
@@ -296,7 +304,7 @@ describe("Codex supervision compatibility tools", () => {
         }
         if (method === "thread/list") {
           return {
-            data: [{ ...idleThread("stored-thread"), name: privateName, preview: privatePreview }],
+            data: [{ ...idleThread("stored-thread"), ...privateFields }],
             nextCursor: null,
           };
         }
@@ -326,7 +334,7 @@ describe("Codex supervision compatibility tools", () => {
               endpointId: "healthy",
               threadId: "stored-thread",
               status: "idle",
-              ...(allowRawTranscripts ? { name: privateName, preview: privatePreview } : {}),
+              ...(allowRawTranscripts ? privateFields : {}),
             },
           ],
           errors: [
@@ -339,7 +347,7 @@ describe("Codex supervision compatibility tools", () => {
         },
       });
       const serialized = JSON.stringify(result);
-      for (const text of [privatePreview, privateName, privateError]) {
+      for (const text of [...Object.values(privateFields), privateError]) {
         if (allowRawTranscripts) {
           expect(serialized).toContain(text);
         } else {
@@ -355,17 +363,12 @@ describe("Codex supervision compatibility tools", () => {
       ...idleThread(),
       turns: [
         {
-          id: "turn-1",
-          status: "completed",
           items: [
             {
               type: "dynamicToolCall",
-              id: "call-read",
               tool: "read",
               arguments: { path: ".env", apiToken: "sk-abcdefghijklmnopqrstuv" },
-              status: "completed",
               contentItems: [{ type: "inputText", text: output }],
-              success: true,
             },
           ],
         },
@@ -518,10 +521,7 @@ describe("Codex supervision compatibility tools", () => {
   ])("rechecks $name before the next paginated request", async ({ initial, revoked, error }) => {
     let pluginConfig: unknown = { supervision: initial };
     let requestCalls = 0;
-    const request = createEndpointRequest(async (_endpoint, method) => {
-      if (method !== "thread/loaded/list") {
-        throw new Error(`unexpected method: ${method}`);
-      }
+    const request = requestMethod("thread/loaded/list", () => {
       requestCalls += 1;
       pluginConfig = { supervision: revoked };
       return { data: [], nextCursor: "next-page" };
@@ -537,10 +537,7 @@ describe("Codex supervision compatibility tools", () => {
       supervision: { enabled: true, allowRawTranscripts: true },
     };
     let requestCalls = 0;
-    const request = createEndpointRequest(async (_endpoint, method) => {
-      if (method !== "thread/read") {
-        throw new Error(`unexpected method: ${method}`);
-      }
+    const request = requestMethod("thread/read", () => {
       requestCalls += 1;
       pluginConfig = { supervision: { enabled: true, allowRawTranscripts: false } };
       throw new Error("turns not materialized yet");

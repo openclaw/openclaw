@@ -6,6 +6,7 @@ import {
   observeParentSqlite,
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -85,12 +86,8 @@ function withStateDatabase<T>(
   readOnly: boolean,
   run: (db: ReturnType<typeof openNodeSqliteDatabase>) => T,
 ) {
-  const state = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(), { readOnly });
-  try {
-    return run(state);
-  } finally {
-    state.close();
-  }
+  using state = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(), { readOnly });
+  return run(state);
 }
 const readMetadata = (sqlitePath: string) =>
   withStateDatabase(true, (state) => ({
@@ -164,7 +161,9 @@ it.each([false, true])(
         }
       }
     }
-    const filesBefore = fs.readdirSync(stateDir, { recursive: true });
+    const filesBefore = listDirectoryTreeStrictSync(stateDir).map(
+      (walkEntry) => walkEntry.relativePath,
+    );
 
     const result = await cleanup({ dryRun: true, fixMissing: true });
 
@@ -191,6 +190,8 @@ it.each([false, true])(
       observer.restore();
     }
     expect(fs.existsSync(storePath)).toBe(false);
-    expect(fs.readdirSync(stateDir, { recursive: true })).toEqual(filesBefore);
+    expect(
+      listDirectoryTreeStrictSync(stateDir).map((walkEntry) => walkEntry.relativePath),
+    ).toEqual(filesBefore);
   },
 );

@@ -20,7 +20,7 @@ export function createCronSourceIdentity(): string {
   return randomUUID();
 }
 
-export function cronSourceScheduleKey(
+function cronSourceScheduleKey(
   schedule: CronSchedule,
   streamSandbox?: CronStoredJob["streamSandbox"],
 ): string | undefined {

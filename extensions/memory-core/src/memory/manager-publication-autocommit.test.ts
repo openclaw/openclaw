@@ -180,25 +180,12 @@ it("publishes one revision per source batch and rolls back both rows and revisio
 
 it("retains the cache count across writes and reloads after rollback or an unscoped clear", () => {
   using fixture = createPublication({ cacheEnabled: true });
-  const { db, backend, expectResult } = fixture;
+  const { db, backend, expectResult, writeCache: write } = fixture;
   db.exec(`CREATE TEMP TRIGGER reject_cache_fixture BEFORE INSERT ON memory_embedding_cache
     WHEN NEW.hash = 'fail' BEGIN SELECT RAISE(ABORT, 'fixture refusal'); END`);
   const sql = observeHostDataSql();
   const counts = () =>
     sql.queries.filter((query) => /select count\(\*\).*memory_embedding_cache/i.test(query)).length;
-  const write = (hashes: string[], maxEntries = 10) =>
-    backend.execute({
-      type: "cache.write.inline",
-      input: {
-        header: {
-          agentId: "main",
-          provider: { id: "test", model: "test" },
-          providerKey: "test",
-          maxEntries,
-        },
-        entries: hashes.map((hash) => ({ hash, embedding: [1] })),
-      },
-    });
   const prune = (maxEntries: number) =>
     backend.execute({ type: "cache.prune", input: { maxEntries } });
   const hashes = () => db.prepare("SELECT hash FROM memory_embedding_cache ORDER BY hash").all();
@@ -244,9 +231,41 @@ it("retains the cache count across writes and reloads after rollback or an unsco
   }
 });
 
+it.each(["cold", "invalidated"])(
+  "recounts the %s cache once inside each mandatory prune",
+  (initial) => {
+    using fixture = createPublication({ cacheEnabled: true });
+    const { db, backend, writeCache: write } = fixture;
+    if (initial === "invalidated") {
+      expect(write(["old"])).toMatchObject({ ok: true });
+      db.exec("DELETE FROM memory_embedding_cache");
+    }
+    let executedCounts = 0;
+    const sql = observeHostDataSql((query, database) => {
+      if (database === undefined && /select count\(\*\).*memory_embedding_cache/i.test(query)) {
+        executedCounts += 1;
+      }
+    });
+    const prune = () =>
+      backend.execute({ type: "cache.prune", input: { maxEntries: 2, recount: true } });
+    try {
+      expect(prune()).toMatchObject({ ok: true, value: false });
+      expect(executedCounts).toBe(1);
+      expect(write(["current"])).toMatchObject({ ok: true });
+      expect(prune()).toMatchObject({ ok: true, value: false });
+      expect(executedCounts).toBe(2);
+      expect(db.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([
+        { hash: "current" },
+      ]);
+    } finally {
+      sql.restore();
+    }
+  },
+);
+
 it("reuses exact cache counts through capacity writes and bounded prune batches", () => {
   using fixture = createPublication({ cacheEnabled: true });
-  const { db, backend } = fixture;
+  const { db, backend, writeCache: write } = fixture;
   let executedCounts = 0;
   const sql = observeHostDataSql((query, database) => {
     // Prepare callbacks carry a database; only native statement executions omit it.
@@ -254,19 +273,6 @@ it("reuses exact cache counts through capacity writes and bounded prune batches"
       executedCounts += 1;
     }
   });
-  const write = (hashes: string[], maxEntries: number) =>
-    backend.execute({
-      type: "cache.write.inline",
-      input: {
-        header: {
-          agentId: "main",
-          provider: { id: "test", model: "test" },
-          providerKey: "test",
-          maxEntries,
-        },
-        entries: hashes.map((hash) => ({ hash, embedding: [1] })),
-      },
-    });
   const prune = (maxEntries: number) =>
     backend.execute({ type: "cache.prune", input: { maxEntries } });
   try {
@@ -300,11 +306,14 @@ it("reuses exact cache counts through capacity writes and bounded prune batches"
     });
     const reseededCounts = executedCounts;
     expect(reseededCounts).toBe(admittedCounts + 2);
-    expect(prune(2)).toMatchObject({ ok: true, value: true });
-    expect(prune(2)).toMatchObject({ ok: true, value: true });
-    expect(prune(2)).toMatchObject({ ok: true, value: true });
-    expect(prune(2)).toMatchObject({ ok: true, value: false });
+    const recount = () =>
+      backend.execute({ type: "cache.prune", input: { maxEntries: 2, recount: true } });
+    expect(recount()).toMatchObject({ ok: true, value: true });
+    expect(recount()).toMatchObject({ ok: true, value: true });
+    expect(recount()).toMatchObject({ ok: true, value: true });
     expect(executedCounts).toBe(reseededCounts);
+    expect(recount()).toMatchObject({ ok: true, value: false });
+    expect(executedCounts).toBe(reseededCounts + 1);
     expect(db.prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache").get()).toEqual({
       count: 2,
     });

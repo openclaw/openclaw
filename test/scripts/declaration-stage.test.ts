@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { publishStagedDeclarations } from "../../scripts/lib/declaration-stage.mts";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
@@ -211,9 +212,15 @@ describe("canonical declaration stage", () => {
   );
   it("does not publish on missing entry", async () => {
     const { dist, invocation, publish, read } = fixture();
-    const before = fs.readdirSync(dist, { recursive: true }).map(String).toSorted();
+    const before = listDirectoryTreeStrictSync(dist)
+      .map((entry) => entry.relativePath)
+      .toSorted();
     await expect(publish([invocation({})])).rejects.toThrow("Missing canonical declaration");
-    expect(fs.readdirSync(dist, { recursive: true }).map(String).toSorted()).toEqual(before);
+    expect(
+      listDirectoryTreeStrictSync(dist)
+        .map((entry) => entry.relativePath)
+        .toSorted(),
+    ).toEqual(before);
     expect(read("plugin-sdk/obsolete.d.ts")).toBe("old");
   });
 

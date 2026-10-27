@@ -124,7 +124,8 @@ export function prepareConversationCapabilityProfile(params: ConversationCapabil
   return withPreparedSessionCapabilityRead(() => resolveConversationCapabilityProfile(params));
 }
 
-export function resolveConversationCapabilityProfile(params: ConversationCapabilityProfileParams) {
+/** Resolve live tool policy without constructing descriptive catalog metadata. */
+export function resolveConversationCapabilityPolicy(params: ConversationCapabilityProfileParams) {
   const messageProvider = params.messageProvider;
   const senderIsOwner = params.senderIsOwner;
   const effective = resolveEffectiveToolPolicy(params);
@@ -217,13 +218,48 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
   ];
 
   return {
+    ...effective,
+    sessionKey: params.sessionKey,
+    subagentSessionKey,
+    trustedGroup,
+    profilePolicy,
+    providerProfilePolicy,
+    profileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.profileAlsoAllow),
+    providerProfileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.providerProfileAlsoAllow),
+    groupPolicy,
+    senderPolicy,
+    sandboxPolicy: sandboxToolPolicy,
+    sandboxSessionRenameOnly,
+    subagentPolicy,
+    inheritedToolPolicy,
+    sessionInheritedToolPolicy,
+    inheritedToolPolicyForSpawn,
+    delegatedToolPolicy: requesterPolicies.delegatedToolPolicy,
+    inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
+    delegated: requesterPolicies.delegated,
+    requesterPolicySource: requesterPolicies.requesterPolicySource,
+    runtimeToolPolicyForInheritance,
+    inheritancePolicies,
+    explicitToolAllowlist: collectExplicitAllowlist(explicitToolAllowlistPolicies),
+    explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
+    explicitToolDenylist: collectExplicitDenylist(explicitToolAllowlistPolicies),
+    runtimePluginToolGrant: params.runtimePluginToolGrant,
+  };
+}
+
+export function resolveConversationCapabilityProfile(params: ConversationCapabilityProfileParams) {
+  const policy = resolveConversationCapabilityPolicy(params);
+  const { trustedGroup } = policy;
+  const trustedGroupChannel = trustedGroup.dropped ? null : params.groupChannel;
+  const trustedGroupSpace = trustedGroup.dropped ? null : params.groupSpace;
+  return {
     requesterOrigin: captureRequesterOrigin({
       ...params,
       groupId: trustedGroup.groupId,
       groupChannel: trustedGroupChannel,
       groupSpace: trustedGroupSpace,
     }),
-    agentId: effective.agentId,
+    agentId: policy.agentId,
     serviceIdentity: {
       accountId: params.agentAccountId,
     },
@@ -236,7 +272,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       policySessionKey: params.sessionKey,
       runSessionKey: params.runSessionKey,
       sessionId: params.sessionId,
-      messageProvider,
+      messageProvider: params.messageProvider,
       messageChannel: params.messageChannel,
       questionInputMode: resolveConversationQuestionInputMode(params),
       groupId: trustedGroup.groupId,
@@ -245,7 +281,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       spawnedBy: params.spawnedBy,
     },
     sender: {
-      isOwner: senderIsOwner,
+      isOwner: params.senderIsOwner,
     },
     workspace: {
       workspaceRoot: resolveWorkspaceRoot(params.workspaceDir),
@@ -254,34 +290,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
         ? resolveWorkspaceRoot(params.spawnWorkspaceDir)
         : undefined,
     },
-    policy: {
-      ...effective,
-      sessionKey: params.sessionKey,
-      subagentSessionKey,
-      trustedGroup,
-      profilePolicy,
-      providerProfilePolicy,
-      profileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.profileAlsoAllow),
-      providerProfileAlsoAllow: mergeRuntimeToolAlsoAllowlist(effective.providerProfileAlsoAllow),
-      groupPolicy,
-      senderPolicy,
-      sandboxPolicy: sandboxToolPolicy,
-      sandboxSessionRenameOnly,
-      subagentPolicy,
-      inheritedToolPolicy,
-      sessionInheritedToolPolicy,
-      inheritedToolPolicyForSpawn,
-      delegatedToolPolicy: requesterPolicies.delegatedToolPolicy,
-      inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
-      delegated: requesterPolicies.delegated,
-      requesterPolicySource: requesterPolicies.requesterPolicySource,
-      runtimeToolPolicyForInheritance,
-      inheritancePolicies,
-      explicitToolAllowlist: collectExplicitAllowlist(explicitToolAllowlistPolicies),
-      explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
-      explicitToolDenylist: collectExplicitDenylist(explicitToolAllowlistPolicies),
-      runtimePluginToolGrant: params.runtimePluginToolGrant,
-    },
+    policy,
   };
 }
 

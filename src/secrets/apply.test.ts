@@ -180,10 +180,7 @@ describe("secrets apply", () => {
   const project = (plan: SecretsApplyPlan) =>
     applyTesting.projectConfigForTest({ plan, env: fixture.env });
   const scrubPlan = () =>
-    createPlan({
-      targets: [createOpenAiProviderTarget()],
-      options: SCRUB_OPTIONS,
-    });
+    createPlan({ targets: [createOpenAiProviderTarget()], options: SCRUB_OPTIONS });
   const writeConfig = (config: unknown) => writeJsonFile(fixture.configPath, config);
   const writeStore = (store: unknown) => writeJsonFile(fixture.authStorePath, store);
   const writeProfiles = (profiles: Record<string, unknown>) =>
@@ -211,6 +208,8 @@ describe("secrets apply", () => {
     await writeJsonFile(resolveAuthProfileDatabasePath(agentDir), store);
     return store;
   };
+  const mutationRevision = (agentDir: string) =>
+    getRuntimeAuthProfileStoreCredentialMutationToken(agentDir).revision;
 
   async function configureAgents(firstAgentDir: string, secondAgentDir: string) {
     const entries = { first: { agentDir: firstAgentDir }, second: { agentDir: secondAgentDir } };
@@ -476,30 +475,23 @@ describe("secrets apply", () => {
     await configureAgents(firstAgentDir, secondAgentDir);
     const firstState = { version: 1 as const, order: { openai: ["openai:preexisting"] } };
     registerResolvedAgentDir({ agentId: "first", agentDir: firstAgentDir, env: fixture.env });
-    const firstDatabase = openOpenClawAgentDatabase({
-      agentId: "first",
-      path: firstStorePath,
-    });
+    const firstDatabase = openOpenClawAgentDatabase({ agentId: "first", path: firstStorePath });
     writePersistedAuthProfileStateRaw(firstState, firstAgentDir, firstDatabase);
     replaceRuntimeAuthProfileStoreSnapshots([
       { agentDir: firstAgentDir, store: { profiles: {}, ...firstState } },
     ]);
-    const firstMutationRevision =
-      getRuntimeAuthProfileStoreCredentialMutationToken(firstAgentDir).revision;
+    const firstMutationRevision = mutationRevision(firstAgentDir);
     const plan = failSecondAgentWrite(secondAgentDir, "injected second auth store failure");
 
     await expect(apply(plan)).rejects.toThrow("injected second auth store failure");
 
     expect(await fs.stat(firstStorePath)).toBeDefined();
-    expect(readPersistedAuthProfileStoreRaw(firstAgentDir)).toBeNull();
-    expect(readPersistedAuthProfileStateRaw(firstAgentDir)).toEqual(firstState);
+    expect(persisted(firstAgentDir)).toEqual({ credentials: null, state: firstState });
     expect(getRuntimeAuthProfileStoreSnapshot(firstAgentDir)).toMatchObject({
       profiles: {},
       order: firstState.order,
     });
-    expect(
-      getRuntimeAuthProfileStoreCredentialMutationToken(firstAgentDir).revision,
-    ).toBeGreaterThan(firstMutationRevision);
+    expect(mutationRevision(firstAgentDir)).toBeGreaterThan(firstMutationRevision);
   });
 
   it.each(["credentials", "state"] as const)(
@@ -552,34 +544,27 @@ describe("secrets apply", () => {
   );
 
   it("preserves unrelated oauth profiles while applying auth-profile key ref targets", async () => {
-    await writeStore({
-      version: 1,
-      profiles: {
-        "openai:static": apiKey("sk-openai-static"), // pragma: allowlist secret
-        "openai:sidecar": {
-          type: "oauth",
-          provider: "openai",
-          oauthRef: { id: "codex-sidecar-ref", provider: "openai" },
-          email: "codex@example.invalid",
-        },
-        "anthropic:claude-cli": { provider: "claude-cli", type: "oauth" },
+    const profiles = {
+      "openai:static": apiKey("sk-openai-static"), // pragma: allowlist secret
+      "openai:sidecar": {
+        type: "oauth",
+        provider: "openai",
+        oauthRef: { id: "codex-sidecar-ref", provider: "openai" },
+        email: "codex@example.invalid",
       },
-      order: {
-        openai: ["openai:sidecar", "openai:static"],
-        "claude-cli": ["anthropic:claude-cli"],
-      },
-      lastGood: {
-        openai: "openai:sidecar",
-        "claude-cli": "anthropic:claude-cli",
-      },
-    });
-    const plan = targetPlan(createAuthTarget("main", "openai:static"));
-
-    expect((await apply(plan)).changed).toBe(true);
+      "anthropic:claude-cli": { provider: "claude-cli", type: "oauth" },
+    };
+    const order = {
+      openai: ["openai:sidecar", "openai:static"],
+      "claude-cli": ["anthropic:claude-cli"],
+    };
+    const lastGood = { openai: "openai:sidecar", "claude-cli": "anthropic:claude-cli" };
+    await writeStore({ version: 1, profiles, order, lastGood });
+    expect((await apply(targetPlan(createAuthTarget("main", "openai:static")))).changed).toBe(true);
     const store = await readAuthStore(fixture);
     expect(store).toMatchObject({
-      order: { openai: ["openai:sidecar", "openai:static"] },
-      lastGood: { "claude-cli": "anthropic:claude-cli" },
+      order: { openai: order.openai },
+      lastGood: { "claude-cli": lastGood["claude-cli"] },
     });
     expect(store.profiles).toEqual({
       "openai:static": { type: "api_key", provider: "openai", keyRef: OPENAI_API_KEY_ENV_REF },

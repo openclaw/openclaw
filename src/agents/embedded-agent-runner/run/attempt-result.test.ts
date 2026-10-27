@@ -5,8 +5,13 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { Agent } from "../../../plugin-sdk/agent-core.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
+import {
+  captureAgentPluginRuntimeRefresh,
+  createAgentPluginRuntimeRefresh,
+} from "../../plugin-runtime-refresh.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
@@ -18,6 +23,7 @@ import { normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
 import type { EmbeddedRunAttemptResult, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
 const TEST_OPERATIONAL_RUN_INSTANCE = { runId: "run-1" };
+type ResultOwner = Parameters<typeof completeEmbeddedAttemptResult>;
 
 type ResultInput = {
   terminal?: EmbeddedRunAttemptResult["terminal"];
@@ -29,12 +35,7 @@ type ResultInput = {
   replyOptional?: boolean;
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder;
   successfulNestedToolNames?: string[];
-  clientToolCallSlots?: Array<{
-    toolCallId: string;
-    name: string;
-    params?: Record<string, unknown>;
-    completed: boolean;
-  }>;
+  clientToolCallSlots?: ResultOwner[0]["prepared"]["sessionRuntime"]["agentSession"]["clientToolCallSlots"];
   pendingToolMediaReply?: { mediaUrls?: string[]; audioAsVoice?: boolean };
   toolAutoDeliveryMediaUrls?: string[];
   messagingToolSentMediaUrls?: string[];
@@ -44,17 +45,17 @@ type ResultInput = {
 };
 
 function createResultFixture(params: ResultInput = {}) {
-  const state: Parameters<typeof completeEmbeddedAttemptResult>[0]["state"] = {
+  const state: ResultOwner[0]["state"] = {
     terminal: params?.terminal ?? { kind: "ok" },
     beforeAgentRunBlockedBy: undefined,
     trajectoryEndRecorded: false,
   };
-  const settled: Parameters<typeof completeEmbeddedAttemptResult>[1] = createSettledStreamResult({
+  const settled: ResultOwner[1] = createSettledStreamResult({
     messagesSnapshot: params?.messagesSnapshot ?? [],
     currentAttemptCompletedAssistant: params?.currentAttemptCompletedAssistant,
     successfulNestedToolNames: params?.successfulNestedToolNames ?? [],
   });
-  const prompt: Parameters<typeof completeEmbeddedAttemptResult>[2] = {
+  const prompt: ResultOwner[2] = {
     preflightRecovery: undefined,
     contextBudgetStatus: undefined,
     yieldAborted: false,
@@ -96,6 +97,7 @@ function createResultFixture(params: ResultInput = {}) {
       bootstrap: { bootstrapPromptWarning: {} },
       systemPrompt: { systemPromptReport: undefined },
       sessionRuntime: {
+        transport: { effectiveExtraParams: {} as Record<string, unknown> },
         agentSession: {
           clientToolCallSlots: params?.clientToolCallSlots ?? [],
           hasDeliveredSourceReply: () => false,
@@ -131,18 +133,19 @@ function textAssistant(
 
 function settledToolMessages(): EmbeddedRunAttemptResult["messagesSnapshot"] {
   return [
-    {
-      role: "toolResult",
-      toolCallId: "call-read",
-      toolName: "read",
-      isError: false,
-      timestamp: 1,
-      content: [{ type: "text", text: "file contents" }],
-    },
+    { ...textToolResult("call-read", "read", "file contents"), isError: false, timestamp: 1 },
   ];
 }
 
 describe("attempt result projection", () => {
+  it("reports the effective Access setting even when it came from model configuration", () => {
+    const fixture = createResultFixture();
+    fixture.input.prepared.sessionRuntime.transport.effectiveExtraParams = {
+      accessPrograms: { cyber: "daybreak_blue" },
+    };
+    expect(completeFixture(fixture).cyberAccessProgram).toBe("daybreak_blue");
+  });
+
   it.each<[string[], string, number?]>([
     [["First part.", "Second part."], "First part.\nSecond part."],
     [["NO_RE", "PLY\nFirst part.", "Second part."], "First part.\nSecond part."],
@@ -175,32 +178,27 @@ describe("attempt result projection", () => {
     ).toMatchObject([{ text }]);
   });
 
-  it.each([
-    { name: "Write", allowedToolNames: ["write"], expected: true },
-    { name: "functions.write", allowedToolNames: ["write"], expected: true },
-    { name: "WRITE", allowedToolNames: ["Write", "wriTE"], expected: undefined },
-  ])("uses native callable-name matching for $name", ({ name, allowedToolNames, expected }) => {
-    const assistant = textAssistant(JSON.stringify({ name, arguments: { path: "proof.txt" } }));
-    expect(
-      completeResult({ currentAttemptCompletedAssistant: assistant, allowedToolNames })
-        .textToolCallAttempt,
-    ).toBe(expected);
-  });
-
   // Syntax variants belong to packages/tool-call-repair/src/attempt.test.ts.
-  it.each([false, true])(
-    "recognizes text-only terminal calls after a read (native=%s)",
-    (nativeCall) => {
-      const assistant = textAssistant('{"name":"write","arguments":{"path":"proof.txt"}}');
-      if (nativeCall) {
+  it.each<[string, string[], boolean, true | undefined]>([
+    ["Write", ["write"], false, true],
+    ["functions.write", ["write"], false, true],
+    ["WRITE", ["Write", "wriTE"], false, undefined],
+    ["write", ["write"], false, true],
+    ["write", ["write"], true, undefined],
+  ])(
+    "recognizes terminal callable %s (allowed=%j, native=%s)",
+    (name, allowedToolNames, native, expected) => {
+      const assistant = textAssistant(JSON.stringify({ name, arguments: { path: "proof.txt" } }));
+      if (native) {
         assistant.content.push({ type: "toolCall", id: "native", name: "write", arguments: {} });
       }
-      const result = completeResult({
-        currentAttemptCompletedAssistant: assistant,
-        allowedToolNames: ["write"],
-        toolMetas: [{ toolName: "read", replaySafe: true, isError: false }],
-      });
-      expect(result.textToolCallAttempt).toBe(nativeCall ? undefined : true);
+      expect(
+        completeResult({
+          currentAttemptCompletedAssistant: assistant,
+          allowedToolNames,
+          toolMetas: [{ toolName: "read", replaySafe: true, isError: false }],
+        }).textToolCallAttempt,
+      ).toBe(expected);
     },
   );
 
@@ -252,6 +250,31 @@ describe("attempt result projection", () => {
     });
     expect(result).not.toHaveProperty("beforeAgentFinalizeRevisionReason");
   });
+
+  it.each([
+    { refreshPending: true, outputs: 0 },
+    { refreshPending: false, outputs: 1 },
+  ])(
+    "reports llm_output only once a refresh no longer continues the turn: $refreshPending",
+    ({ refreshPending, outputs }) => {
+      const fixture = createResultFixture({ hasSuccessfulModelResponse: true });
+      vi.spyOn(fixture.hookRunner, "hasHooks").mockReturnValue(true);
+      const output = vi.spyOn(fixture.hookRunner, "runLlmOutput").mockResolvedValue(undefined);
+
+      // The attempt stopped at a step boundary for a pending refresh.
+      createAgentPluginRuntimeRefresh().run(() => {
+        const refresh = captureAgentPluginRuntimeRefresh();
+        refresh.bindConsumer(() => true);
+        if (refreshPending) {
+          refresh.request();
+          refresh.stopAtStep();
+        }
+        completeFixture(fixture);
+      });
+
+      expect(output).toHaveBeenCalledTimes(outputs);
+    },
+  );
 
   it("keeps current tool replay evidence separate from cumulative replay state", () => {
     const result = completeResult({ toolMetas: [{ toolName: "cron", replaySafe: false }] });
@@ -318,6 +341,7 @@ describe("attempt result projection", () => {
     }),
   };
   const truncated = failed(new Error("Stream ended without finish_reason"));
+  const commentary = "Checking the post-reboot state.";
   const afterRead = (text: string, authored = false): ResultInput => ({
     ...truncated,
     assistantTexts: authored ? [text] : [],
@@ -333,20 +357,19 @@ describe("attempt result projection", () => {
       "only pre-tool commentary",
       {
         ...truncated,
-        assistantTexts: ["Checking the post-reboot state."],
+        assistantTexts: [commentary],
         messagesSnapshot: [
-          textAssistant("Checking the post-reboot state.", {
+          textAssistant(commentary, {
             stopReason: "toolUse",
             errorMessage: undefined,
             timestamp: 1,
             content: [
-              { type: "text", text: "Checking the post-reboot state." },
+              { type: "text", text: commentary },
               { type: "toolCall", id: "call-read", name: "read", arguments: {} },
             ],
           }),
           ...settledToolMessages(),
-          textAssistant("", {
-            stopReason: "error",
+          makeAssistantMessageFixture({
             errorMessage: "Stream ended without finish_reason",
             timestamp: 3,
             content: [],
@@ -446,16 +469,30 @@ describe("trailing source progress at runtime settlement", () => {
       sessionExtras: { sessionManager } as never,
     });
     let callIndex = 0;
-    const tool = (name: string, execute: (toolCallId: string) => void) => ({
+    const tools = ["message", "read"].map((name) => ({
       name,
       label: name,
       description: name,
       parameters: Type.Object({}, { additionalProperties: true }),
       execute: async (toolCallId: string) => {
-        execute(toolCallId);
+        if (name === "message") {
+          recordEmbeddedToolReceipt(
+            sessionManager,
+            toolCallId,
+            {
+              messageDelivery: {
+                status: "settled",
+                partialDelivery: false,
+                createdThreadIds: [],
+                sourceReplyDelivered: true,
+              },
+            },
+            true,
+          );
+        }
         return { content: [{ type: "text" as const, text: "ok" }], details: {} };
       },
-    });
+    }));
     const toolSettled = new Map<string, ReturnType<typeof createDeferred<void>>>();
     const settledFor = (toolCallId: string) => {
       const settled = toolSettled.get(toolCallId) ?? createDeferred();
@@ -465,24 +502,7 @@ describe("trailing source progress at runtime settlement", () => {
     const agent = new Agent({
       initialState: {
         model: testModel,
-        tools: [
-          tool("message", (toolCallId) =>
-            recordEmbeddedToolReceipt(
-              sessionManager,
-              toolCallId,
-              {
-                messageDelivery: {
-                  status: "settled",
-                  partialDelivery: false,
-                  createdThreadIds: [],
-                  sourceReplyDelivered: true,
-                },
-              },
-              true,
-            ),
-          ),
-          tool("read", () => {}),
-        ],
+        tools,
       },
       streamFn: () => {
         const call = calls[callIndex++] ?? {};

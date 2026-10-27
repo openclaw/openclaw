@@ -1,16 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { resolveCreateTarget, routeKey, routeKeyFromSearch } from "./catalog-target.ts";
+import { createNewSessionRouteData } from "./location.test-support.ts";
 
 describe("new-session catalog target", () => {
   it("isolates model-specific drafts while retaining ordinary draft storage keys", () => {
-    const plain = {
-      agentId: "main",
-      requestedAgentId: "main",
-      catalogId: "",
-      catalogLabel: "",
-      startTerminal: false,
-    };
+    const plain = createNewSessionRouteData();
     const first = { ...plain, requestedModel: "example/first" };
     const second = { ...plain, requestedModel: "example/second" };
     expect(routeKey(plain)).toBe('["main","",""]');

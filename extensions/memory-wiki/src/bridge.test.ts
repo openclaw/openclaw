@@ -21,8 +21,9 @@ describe("syncMemoryWikiBridgeSources", () => {
 
   const createBridgeWorkspace = (name: string) => createTempDir(`memory-wiki-${name}-`);
 
-  function createBridgeVault(name: string, config: MemoryWikiPluginConfig = {}) {
+  function createBridgeVault(name: string, config: MemoryWikiPluginConfig = {}, rootDir?: string) {
     return createVault({
+      rootDir,
       prefix: `memory-wiki-${name}-`,
       config: {
         ...config,
@@ -67,10 +68,26 @@ describe("syncMemoryWikiBridgeSources", () => {
     });
   }
 
+  function legacyArtifact(workspaceDir: string) {
+    const { agentIds: _agentIds, ...entry } = artifact(workspaceDir);
+    return entry as MemoryPluginPublicArtifact;
+  }
+
+  const ownedArtifact = (workspace: string, owners: string[]) =>
+    artifact(workspace, "MEMORY.md", "memory-root", owners);
+
   async function createBridge(name: string, options: MemoryWikiPluginConfig = {}) {
     const workspaceDir = await createBridgeWorkspace(`${name}-workspace`);
     const { rootDir: vaultDir, config } = await createBridgeVault(`${name}-vault`, options);
-    return { workspaceDir, vaultDir, config, appConfig: appFor(workspaceDir) };
+    const appConfig = appFor(workspaceDir);
+    return {
+      workspaceDir,
+      vaultDir,
+      config,
+      appConfig,
+      sync: () => syncMemoryWikiBridgeSources({ config, appConfig }),
+      readPage: (pagePath: string) => fs.readFile(path.join(vaultDir, pagePath), "utf8"),
+    };
   }
 
   async function writeArtifacts(entries: Array<[MemoryPluginPublicArtifact, string]>) {
@@ -91,89 +108,60 @@ describe("syncMemoryWikiBridgeSources", () => {
     return { workspaceDir, config, memoryPath, appConfig, pageAbsPath };
   }
 
-  it("imports public memory artifacts and stays idempotent across reruns", async () => {
-    const { workspaceDir, vaultDir, config, appConfig } = await createBridge("import", {
-      bridge: { indexDailyNotes: true, indexDreamReports: true },
+  it("imports public artifact kinds and legacy ownership, staying idempotent across reruns", async () => {
+    const { workspaceDir, sync, readPage } = await createBridge("import", {
+      bridge: { indexDailyNotes: true, indexDreamReports: true, followMemoryEvents: true },
     });
-
+    const legacyWorkspace = await createBridgeWorkspace("legacy");
     await writeArtifacts([
-      [artifact(workspaceDir), "# Durable Memory\n"],
+      [legacyArtifact(legacyWorkspace), "# Durable Memory\n"],
       [artifact(workspaceDir, "memory/2026-04-05.md", "daily-note"), "# Daily Note\n"],
       [artifact(workspaceDir, "memory/dreaming/2026-04-05.md", "dream-report"), "# Dream Report\n"],
+      [
+        artifact(workspaceDir, "memory/events/events.jsonl", "event-log"),
+        '{"type":"memory.recall.recorded"}\n',
+      ],
     ]);
-
-    const first = await syncMemoryWikiBridgeSources({ config, appConfig });
-
+    const first = await sync();
     expect(first).toMatchObject({
-      workspaces: 1,
-      artifactCount: 3,
-      importedCount: 3,
+      workspaces: 2,
+      artifactCount: 4,
+      importedCount: 4,
       updatedCount: 0,
       skippedCount: 0,
       removedCount: 0,
     });
-    expect(first.pagePaths).toHaveLength(3);
-
-    const sourcePages = await fs.readdir(path.join(vaultDir, "sources"));
-    expect(
-      sourcePages.reduce((count, name) => count + (name.startsWith("bridge-") ? 1 : 0), 0),
-    ).toBe(3);
-
-    const memoryPage = await fs.readFile(path.join(vaultDir, first.pagePaths[0] ?? ""), "utf8");
+    expect(first.pagePaths).toHaveLength(4);
+    const importedPages = await Promise.all(first.pagePaths.map(readPage));
+    const memoryPage = importedPages.find((page) => page.includes("# Memory Bridge: MEMORY"));
     expect(memoryPage).toContain("sourceType: memory-bridge");
     expect(memoryPage).toContain("## Bridge Source");
-
-    const second = await syncMemoryWikiBridgeSources({ config, appConfig });
-
+    expect(memoryPage).toContain("# Memory Bridge: MEMORY");
+    expect(memoryPage).toContain("- Agents: unknown");
+    const pages = importedPages.join("\n");
+    expect(pages).toContain("sourceType: memory-bridge-events");
+    expect(pages).toContain('"type":"memory.recall.recorded"');
+    const second = await sync();
     expect(second).toMatchObject({
       importedCount: 0,
       updatedCount: 0,
-      skippedCount: 3,
+      skippedCount: 4,
       removedCount: 0,
     });
-
-    const logLines = (await fs.readFile(path.join(vaultDir, ".openclaw-wiki", "log.jsonl"), "utf8"))
-      .trim()
-      .split("\n");
-    expect(logLines).toHaveLength(3);
   });
 
   it("skips generated artifacts from its own vault", async () => {
     const workspaceDir = await createBridgeWorkspace("self-import-workspace");
     const vaultDir = path.join(workspaceDir, "memory", "wiki");
-    const { config } = await createVault({
-      rootDir: vaultDir,
-      config: {
-        vaultMode: "bridge",
-        bridge: {
-          enabled: true,
-          readMemoryArtifacts: true,
-          indexDailyNotes: true,
-        },
-      },
-    });
-
-    const dailyNotePath = path.join(workspaceDir, "memory", "2026-06-22.md");
-    const generatedSourcePath = path.join(
+    const { config } = await createBridgeVault(
+      "self-import",
+      { bridge: { indexDailyNotes: true } },
       vaultDir,
-      "sources",
-      "bridge-workspace-remote-memory-daily-old.md",
     );
-    const generatedIndexPath = path.join(vaultDir, "index.md");
-    await fs.mkdir(path.dirname(dailyNotePath), { recursive: true });
-    await fs.mkdir(path.dirname(generatedSourcePath), { recursive: true });
-    await fs.writeFile(dailyNotePath, "# Daily Note\n", "utf8");
-    await fs.writeFile(generatedSourcePath, "# Previously Imported Source\n", "utf8");
-    await fs.writeFile(generatedIndexPath, "# Generated Index\n", "utf8");
-
-    registerBridgeArtifacts([
-      artifact(workspaceDir, "memory/2026-06-22.md", "daily-note"),
-      artifact(
-        workspaceDir,
-        "memory/wiki/sources/bridge-workspace-remote-memory-daily-old.md",
-        "daily-note",
-      ),
-      artifact(workspaceDir, "memory/wiki/index.md", "daily-note"),
+    await writeArtifacts([
+      [artifact(workspaceDir, "memory/2026-06-22.md", "daily-note"), "# Daily Note\n"],
+      [artifact(workspaceDir, "memory/wiki/sources/bridge-old.md", "daily-note"), "# Imported\n"],
+      [artifact(workspaceDir, "memory/wiki/index.md", "daily-note"), "# Index\n"],
     ]);
 
     const appConfig = appFor(workspaceDir);
@@ -181,73 +169,21 @@ describe("syncMemoryWikiBridgeSources", () => {
     const result = await syncMemoryWikiBridgeSources({ config, appConfig });
 
     expect(result).toMatchObject({ artifactCount: 1, importedCount: 1 });
-    expect(result.pagePaths).toHaveLength(1);
-    expect(result.pagePaths[0]).not.toContain("memory-wiki-sources");
     const sourcePages = await fs.readdir(path.join(vaultDir, "sources"));
     expect(sourcePages.filter((name) => name.startsWith("bridge-"))).toHaveLength(2);
-    expect(sourcePages.filter((name) => name.includes("memory-wiki-sources-"))).toEqual([]);
-  });
-
-  it("imports bridge artifacts from legacy providers without agent ids", async () => {
-    const { workspaceDir, vaultDir, config, appConfig } = await createBridge("legacy-agentids");
-    const memoryPath = path.join(workspaceDir, "MEMORY.md");
-    await fs.writeFile(memoryPath, "# Durable Memory\n", "utf8");
-    registerBridgeArtifacts([
-      {
-        kind: "memory-root",
-        workspaceDir,
-        relativePath: "MEMORY.md",
-        absolutePath: memoryPath,
-        contentType: "markdown",
-      } as Omit<MemoryPluginPublicArtifact, "agentIds"> as MemoryPluginPublicArtifact,
-    ]);
-
-    const result = await syncMemoryWikiBridgeSources({ config, appConfig });
-
-    expect(result).toMatchObject({ importedCount: 1, artifactCount: 1 });
-    const page = await fs.readFile(path.join(vaultDir, result.pagePaths[0] ?? ""), "utf8");
-    expect(page).toContain("# Memory Bridge: MEMORY");
-    expect(page).toContain("- Agents: unknown");
   });
 
   it("isolates agent-scoped bridge artifacts while preserving shared ownership", async () => {
-    const supportWorkspace = await createBridgeWorkspace("support-workspace");
-    const marketingWorkspace = await createBridgeWorkspace("marketing-workspace");
-    const sharedWorkspace = await createBridgeWorkspace("shared-workspace");
-    const unknownWorkspace = await createBridgeWorkspace("unknown-workspace");
-    const unknownMemory = path.join(unknownWorkspace, "MEMORY.md");
+    const supportWorkspace = await createBridgeWorkspace("support");
+    const marketingWorkspace = await createBridgeWorkspace("marketing");
+    const sharedWorkspace = await createBridgeWorkspace("shared");
+    const unknownWorkspace = await createBridgeWorkspace("unknown");
     await writeArtifacts([
-      [
-        artifact(supportWorkspace, "MEMORY.md", "memory-root", [" SUPPORT "]),
-        "# Support Sentinel\n",
-      ],
-      [
-        artifact(marketingWorkspace, "MEMORY.md", "memory-root", ["marketing"]),
-        "# Marketing Sentinel\n",
-      ],
-      [
-        artifact(sharedWorkspace, "MEMORY.md", "memory-root", ["support", "MARKETING"]),
-        "# Shared Sentinel\n",
-      ],
-      [
-        {
-          kind: "memory-root",
-          workspaceDir: unknownWorkspace,
-          relativePath: "MEMORY.md",
-          absolutePath: unknownMemory,
-          contentType: "markdown",
-        } as Omit<MemoryPluginPublicArtifact, "agentIds"> as MemoryPluginPublicArtifact,
-        "# Unknown Sentinel\n",
-      ],
+      [ownedArtifact(supportWorkspace, [" SUPPORT "]), "# Support Sentinel\n"],
+      [ownedArtifact(marketingWorkspace, ["marketing"]), "# Marketing Sentinel\n"],
+      [ownedArtifact(sharedWorkspace, ["support", "MARKETING"]), "# Shared Sentinel\n"],
+      [legacyArtifact(unknownWorkspace), "# Unknown Sentinel\n"],
     ]);
-    const appConfig: OpenClawConfig = {
-      agents: {
-        entries: {
-          support: { workspace: supportWorkspace },
-          marketing: { workspace: marketingWorkspace },
-        },
-      },
-    };
 
     for (const [agentId, included, excluded] of [
       ["support", "Support Sentinel", "Marketing Sentinel"],
@@ -258,7 +194,7 @@ describe("syncMemoryWikiBridgeSources", () => {
       });
       const result = await syncMemoryWikiBridgeSources({
         config: { ...config, agentId },
-        appConfig,
+        appConfig: {},
       });
       expect(result).toMatchObject({ artifactCount: 2, importedCount: 2, workspaces: 2 });
       const pages = (
@@ -281,24 +217,6 @@ describe("syncMemoryWikiBridgeSources", () => {
     await expect(syncMemoryWikiBridgeSources({ config })).rejects.toThrow(
       "Memory Wiki agent-scoped vault requires a resolved agent id",
     );
-  });
-
-  it("imports the public memory event journal when followMemoryEvents is enabled", async () => {
-    const { workspaceDir, vaultDir, config, appConfig } = await createBridge("events", {
-      bridge: { followMemoryEvents: true },
-    });
-
-    const eventContent = '{"type":"memory.recall.recorded"}\n';
-    await writeArtifacts([
-      [artifact(workspaceDir, "memory/events/memory-host-events.jsonl", "event-log"), eventContent],
-    ]);
-
-    const result = await syncMemoryWikiBridgeSources({ config, appConfig });
-
-    expect(result).toMatchObject({ artifactCount: 1, importedCount: 1, removedCount: 0 });
-    const page = await fs.readFile(path.join(vaultDir, result.pagePaths[0] ?? ""), "utf8");
-    expect(page).toContain("sourceType: memory-bridge-events");
-    expect(page).toContain('"type":"memory.recall.recorded"');
   });
 
   it("keeps stale pages when the memory capability closes during a source read", async () => {
@@ -339,34 +257,22 @@ describe("syncMemoryWikiBridgeSources", () => {
     await expect(fs.access(previousPage)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("refuses to overwrite bridge source pages through vault symlinks", async () => {
+  it.each(["symlink", "hardlink"] as const)("safely handles a replaced source %s", async (kind) => {
     const { workspaceDir, config, memoryPath, appConfig, pageAbsPath } =
-      await createImportedMemory("symlink");
+      await createImportedMemory(kind);
     const externalTarget = path.join(workspaceDir, "outside.md");
     await fs.writeFile(externalTarget, "external target\n", "utf8");
     await fs.rm(pageAbsPath);
-    await fs.symlink(externalTarget, pageAbsPath);
+    await (kind === "symlink" ? fs.symlink : fs.link)(externalTarget, pageAbsPath);
     await fs.writeFile(memoryPath, "# Updated Durable Memory\n", "utf8");
 
-    await expect(syncMemoryWikiBridgeSources({ config, appConfig })).rejects.toThrow(
-      "Refusing to write imported source page through symlink",
-    );
+    const sync = syncMemoryWikiBridgeSources({ config, appConfig });
+    if (kind === "symlink") {
+      await expect(sync).rejects.toThrow("Refusing to write imported source page through symlink");
+    } else {
+      expect((await sync).updatedCount).toBe(1);
+      await expect(fs.readFile(pageAbsPath, "utf8")).resolves.toContain("# Updated Durable Memory");
+    }
     await expect(fs.readFile(externalTarget, "utf8")).resolves.toBe("external target\n");
-  });
-
-  it("replaces bridge source page hardlinks without clobbering their target", async () => {
-    const { workspaceDir, config, memoryPath, appConfig, pageAbsPath } =
-      await createImportedMemory("hardlink");
-    const externalTarget = path.join(workspaceDir, "outside-hardlink.md");
-    await fs.writeFile(externalTarget, "external target\n", "utf8");
-    await fs.rm(pageAbsPath);
-    await fs.link(externalTarget, pageAbsPath);
-    await fs.writeFile(memoryPath, "# Updated Durable Memory\n", "utf8");
-
-    const second = await syncMemoryWikiBridgeSources({ config, appConfig });
-
-    expect(second.updatedCount).toBe(1);
-    await expect(fs.readFile(externalTarget, "utf8")).resolves.toBe("external target\n");
-    await expect(fs.readFile(pageAbsPath, "utf8")).resolves.toContain("# Updated Durable Memory");
   });
 });

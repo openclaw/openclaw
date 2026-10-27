@@ -39,13 +39,13 @@ const objectPattern = /^[a-f0-9]{40}$/;
 const gitNullPath = process.platform === "win32" ? "NUL" : "/dev/null";
 const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_ATTR_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: gitNullPath, GIT_CONFIG_SYSTEM: gitNullPath,
-  ...${JSON.stringify(gitMaintenanceEnvironment())} };
+  ${JSON.stringify(gitMaintenanceEnvironment()).slice(1, -1)} };
 function git(args, options = {}) {
   const result = spawnSync("git", ["-c", "core.hooksPath=" + gitNullPath, "-c",
     "core.fsmonitor=false", "-c", "core.attributesFile=" + gitNullPath, ...args], {
     cwd, env, timeout: 60000, maxBuffer: maxFile + 1, ...options,
   });
-  if (result.error || result.status !== 0) throw Error("Publication snapshot Git command failed");
+  if (result.error || result.status !== 0) throw new Error("Publication snapshot Git command failed");
   return result.stdout;
 }
 function text(args) { return git(args).toString("utf8").trim(); }
@@ -54,24 +54,24 @@ function noFilters(raw) {
     const fields = line.trimStart().split(/[\t ]+/);
     if (fields[0] && !fields[0].startsWith("#") &&
       fields.slice(1).some((field) => /^(?:-|!)?filter(?:=|$)/.test(field))) {
-      throw Error("Publication snapshot uses an unsupported Git clean filter");
+      throw new Error("Publication snapshot uses an unsupported Git clean filter");
     }
   }
 }
-if (!objectPattern.test(baseCommit)) throw Error("Publication snapshot base commit is invalid");
+if (!objectPattern.test(baseCommit)) throw new Error("Publication snapshot base commit is invalid");
 const relativeOutput = path.relative(path.resolve(cwd), path.resolve(output));
 if (!relativeOutput.startsWith(".." + path.sep) && !path.isAbsolute(relativeOutput)) {
-  throw Error("Publication snapshot output must be outside the workspace");
+  throw new Error("Publication snapshot output must be outside the workspace");
 }
 ${GITHUB_PUBLICATION_CONFIG_GUARD.script}
 if (text(["for-each-ref", "--count=1", "--format=%(refname)", "refs/replace"])) {
-  throw Error("Publication snapshot has unsupported Git replacement metadata");
+  throw new Error("Publication snapshot has unsupported Git replacement metadata");
 }
 for (const name of ["info/grafts", "info/attributes"]) {
   const file = path.resolve(cwd, text(["rev-parse", "--git-path", name]));
   if (!fs.existsSync(file)) continue;
   const bytes = fs.readFileSync(file);
-  if (name === "info/grafts" && bytes.length) throw Error("Publication snapshot has Git grafts");
+  if (name === "info/grafts" && bytes.length) throw new Error("Publication snapshot has Git grafts");
   if (name === "info/attributes") noFilters(bytes);
 }
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-publication-index-"));
@@ -96,12 +96,12 @@ try {
     const tab = entry.indexOf("\t");
     const name = entry.slice(tab + 1).toLowerCase();
     if (tab < 0 || (name !== ".gitattributes" && !name.endsWith("/.gitattributes"))) continue;
-    if (++attributeCount > 1024) throw Error("Publication snapshot has too many attribute files");
+    if (++attributeCount > 1024) throw new Error("Publication snapshot has too many attribute files");
     noFilters(git(["cat-file", "blob", entry.slice(0, tab).split(" ")[2]]));
   }
   const raw = git(["diff-tree", "--no-commit-id", "--raw", "-r", "-z", "--no-renames", baseTree, workspaceTree]);
   const decoded = raw.toString("utf8");
-  if (!Buffer.from(decoded, "utf8").equals(raw)) throw Error("Publication snapshot paths must be UTF-8");
+  if (!Buffer.from(decoded, "utf8").equals(raw)) throw new Error("Publication snapshot paths must be UTF-8");
   const fields = decoded.split("\0");
   const entries = [];
   const blobs = new Set();
@@ -113,16 +113,16 @@ try {
     const mode = deleted ? oldMode : newMode;
     const sha = deleted ? null : newSha;
     if (!["100644", "100755", "120000", "160000"].includes(mode) ||
-      (sha !== null && !objectPattern.test(sha))) throw Error("Publication snapshot entry is invalid");
+      (sha !== null && !objectPattern.test(sha))) throw new Error("Publication snapshot entry is invalid");
     entries.push({ path: fields[i + 1], mode, sha });
-    if (entries.length > maxEntries) throw Error("Publication snapshot has too many changes");
+    if (entries.length > maxEntries) throw new Error("Publication snapshot has too many changes");
     if (!sha || mode === "160000" || blobs.has(sha)) continue;
     const size = Number(text(["cat-file", "-s", sha]));
     if (!Number.isSafeInteger(size) || size < 0 || size > maxFile || total + size > maxTotal) {
-      throw Error("Publication snapshot exceeds its byte budget");
+      throw new Error("Publication snapshot exceeds its byte budget");
     }
     const bytes = git(["cat-file", "blob", sha]);
-    if (bytes.length !== size) throw Error("Publication snapshot blob changed");
+    if (bytes.length !== size) throw new Error("Publication snapshot blob changed");
     total += size;
     fs.writeFileSync(path.join(output, "blobs", sha), bytes, { mode: 0o600, flag: "wx" });
     blobs.add(sha);

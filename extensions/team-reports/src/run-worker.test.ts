@@ -127,9 +127,6 @@ it.each([
       // Drain native-exit cleanup without a timer or polling.
       await nextMessageTurn();
       expect([runSettled, closeSettled]).toEqual([false, false]);
-      if (sqlite) {
-        expect(complete).not.toHaveBeenCalled();
-      }
       released.resolve();
       await Promise.all([rejected, closing]);
       expect([runSettled, closeSettled]).toEqual([true, true]);

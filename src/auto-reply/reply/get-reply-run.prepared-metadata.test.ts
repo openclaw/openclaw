@@ -8,7 +8,6 @@ import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/genera
 import { runPreparedReply } from "./get-reply-run.js";
 import { baseParams } from "./get-reply-run.test-support.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
-import { expectCallCounts } from "./reply-contract.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   acquireRuntime: vi.fn(),
@@ -37,7 +36,6 @@ it("keeps the admitted Gateway generation active through a different reply works
   const workspaceDir = "/tmp/openclaw-reply-workspace";
   const gatewayWorkspaceDir = "/tmp/openclaw-configured-workspace";
   const agent = { agentId: "main", agentDir: "/tmp/openclaw-reply-agent" };
-  const model = { provider: "selected", model: "model" };
   const metadataSnapshot = {
     index: { plugins: [] },
     policyHash: resolveInstalledPluginIndexPolicyHash(config),
@@ -49,12 +47,7 @@ it("keeps the admitted Gateway generation active through a different reply works
   };
   const release = vi.fn(async () => {});
   const selectedGeneration = { ...pluginGeneration, pluginRegistry: { selected: true } };
-  mocks.prepareContext.mockResolvedValue({
-    kind: "ready",
-    params: { cfg: config, ...model },
-    thinkingRuntime: "selected-harness",
-    workspaceDir,
-  });
+  mocks.prepareContext.mockResolvedValue({ kind: "ready", workspaceDir });
   mocks.acquireRuntime.mockImplementation(async (_input, options) => ({
     snapshot: {
       config,
@@ -77,16 +70,6 @@ it("keeps the admitted Gateway generation active through a different reply works
   };
   mocks.prepareAdmission.mockImplementation(() => inSelectedScope({ kind: "ready" }));
   mocks.execute.mockImplementation(() => inSelectedScope({ text: "ok" }));
-  const preparedInput = baseParams({
-    cfg: config,
-    sessionCtx: {},
-    ctx: {},
-    agentId: agent.agentId,
-    sessionKey: "fixture-session",
-    workspaceDir,
-    ...model,
-  });
-
   const run = bindPreparedReplyDispatchRuntime(
     {
       ...agent,
@@ -94,23 +77,23 @@ it("keeps the admitted Gateway generation active through a different reply works
       config,
       pluginGeneration,
     } as never,
-    () => runPreparedReply(preparedInput),
+    () =>
+      runPreparedReply(
+        baseParams({
+          cfg: config,
+          sessionCtx: {},
+          ctx: {},
+          agentId: agent.agentId,
+          sessionKey: "fixture-session",
+          workspaceDir,
+        }),
+      ),
   );
 
   await expect(run()).resolves.toEqual({ text: "ok" });
-  expect(mocks.acquireRuntime).toHaveBeenCalledWith(
-    {
-      config,
-      ...agent,
-      allowGatewaySubagentBinding: true,
-      workspaceDir,
-      runtimePluginSelections: [
-        { provider: "selected", modelId: "model", runtime: "selected-harness" },
-      ],
-    },
-    { catalogMode: "static", pluginGeneration },
-  );
-  expectCallCounts(1, mocks.prepareAdmission, mocks.execute, release);
+  expect(mocks.acquireRuntime.mock.calls[0]?.[0].allowGatewaySubagentBinding).toBe(true);
+  expect(mocks.prepareAdmission).toHaveBeenCalled();
+  expect(release).toHaveBeenCalledOnce();
   expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
   expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
   expect(getPreparedModelRuntimePluginGeneration()).toBeUndefined();

@@ -20,6 +20,7 @@ import {
   listSessionTranscriptInstances,
 } from "../config/sessions/session-history-read.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { assertOpenClawAgentCurrentRuntimeSchema } from "../state/openclaw-agent-db-schema-helpers.js";
@@ -120,7 +121,7 @@ function snapshotDatabase(filename: string) {
 }
 
 async function snapshotFiles(root: string) {
-  const entries = await fs.readdir(root, { recursive: true, withFileTypes: true });
+  const entries = (await listDirectoryTreeStrict(root)).map((walkEntry) => walkEntry.dirent);
   return await Promise.all(
     entries
       // Read-only WAL access may create coordination sidecars without changing committed state.

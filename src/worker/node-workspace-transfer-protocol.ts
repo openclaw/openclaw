@@ -51,11 +51,16 @@ const git = (args) => cp.spawnSync("git", ["-C", root, ...args], {encoding:"utf8
       child.kill("SIGKILL");
       await exit.catch(() => {});
       fs.rmSync(packPath, {force:true});
-      unavailableReason = String(error.message).slice(0, 512);
+      unavailableReason = (error instanceof Error ? error.message : String(error)).slice(0, 512);
     }
   }
   process.stdout.write(JSON.stringify({baseCommit, headCommit, descendsFromBase, unavailableReason}));
-})().catch(error => { console.error(error.message); process.exitCode = 1; });
+})().catch(reportFailure);
+/** @param {unknown} error */
+function reportFailure(error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+}
 `;
 
 export const NODE_WORKSPACE_TRANSFER_ERROR_CODE = "WORKSPACE_TRANSFER_FAILED";

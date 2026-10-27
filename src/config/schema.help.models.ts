@@ -225,10 +225,18 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     'Selects the embedding backend used to build/query memory vectors. Defaults to "openai"; set "openai-compatible", "gemini", "voyage", "mistral", "bedrock", "deepinfra", "github-copilot", "lmstudio", "ollama", or "local" when you want a different backend.',
   "memory.search.model":
     "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
+  "memory.search.inputFormat":
+    'Optional paired literal text prefixes for embedding queries and documents, such as { query: "query: ", document: "passage: " }. Replaces automatic model formatting, including for model aliases. Both strings are required; spaces and newlines are preserved, and empty strings select raw text. A non-empty queryInstruction takes precedence for queries. Changing the document prefix requires a reindex.',
+  "memory.search.inputFormat.query":
+    "Literal prefix for query embeddings. Used unless a non-empty queryInstruction is set; an empty string disables automatic query formatting.",
+  "memory.search.inputFormat.document":
+    "Literal prefix for document embeddings. An empty string selects raw document text. Changing this prefix changes index and embedding-cache identity and requires a reindex.",
   "memory.search.inputType":
     "Use this optional provider-specific `input_type` value only when the same label should apply to both query and document embedding requests. For asymmetric providers, prefer queryInputType and documentInputType.",
   "memory.search.queryInputType":
     "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
+  "memory.search.queryInstruction":
+    'Optional literal prefix for query embeddings, such as "search_query: ". Include required spaces or newlines. Non-empty values replace inputFormat.query and automatic query formatting; unset or empty values use inputFormat.query when set, otherwise provider defaults. Documents and index identity are unchanged, so no reindex is needed. An empty per-agent override clears the inherited instruction.',
   "memory.search.documentInputType":
     "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
   "memory.search.outputDimensionality":

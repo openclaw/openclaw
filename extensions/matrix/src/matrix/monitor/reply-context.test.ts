@@ -45,6 +45,12 @@ async function resolveReplyBody(event: MatrixRawEvent, kind: "reply" | "thread" 
 }
 
 describe("matrix reply and thread context", () => {
+  it("summarizes a remote event with an Object.prototype msgtype as plain text", async () => {
+    expect(
+      await resolveReplyBody(message("hello", "@mallory:example.org", "$evt", "toString")),
+    ).toBe("hello");
+  });
+
   it.each(bundledReplacementContentCases.filter(({ name }) => name !== "text"))(
     "uses the latest bundled $name when quoting an edited message",
     async ({ options, expected }) => {

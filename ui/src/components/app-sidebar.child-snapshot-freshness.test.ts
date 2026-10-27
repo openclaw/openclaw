@@ -105,6 +105,81 @@ async function mountParent() {
   return { harness, sidebar, data, publishChildChanged, expand, retry };
 }
 
+it.each(["loaded", "unloaded", "off-page"] as const)(
+  "retains child rendering and observations when grouped (%s)",
+  async (initial) => {
+    let currentChild = { ...child, sessionId: "child-session" };
+    const childList = vi.fn(() => result([currentChild]));
+    const parent = { ...parentRow, sessionId: "parent-session" };
+    const request = childRequest(parent, childList);
+    const mounted = await mountRoster((...args) => {
+      const [method, params] = args;
+      if (initial === "off-page") {
+        if (method === "sessions.list" && !(params as { spawnedBy?: string }).spawnedBy) {
+          return result([]);
+        }
+        if (method === "sessions.describe") {
+          return { session: (params as { key: string }).key === parentKey ? parent : null };
+        }
+      }
+      return request(...args);
+    });
+    const appearances = initial === "off-page" ? 1 : 2;
+    const { sidebar, context, harness } = mounted;
+    const renderedChildren = () => sidebar.querySelectorAll(`[data-session-key="${childKey}"]`);
+    try {
+      if (initial === "loaded") {
+        expandCollapsed(sidebar);
+        await waitForFast(() => expect(renderedChildren()).toHaveLength(1));
+      }
+      context.navigation.update({
+        personalSessionGroups: [{ id: "focus", label: "Focus", sessionKeys: [parentKey] }],
+      });
+      await settleLitElement(sidebar);
+      if (initial !== "loaded") {
+        const group = sidebar.querySelector('[data-personal-session-group="focus"]')!;
+        await waitForFast(() =>
+          expect(group.querySelector("[data-child-session-toggle]")).not.toBeNull(),
+        );
+        group.querySelector<HTMLButtonElement>("[data-child-session-toggle]")!.click();
+      }
+      await waitForFast(() => expect(renderedChildren()).toHaveLength(appearances));
+      expect(childList).toHaveBeenCalledTimes(1);
+
+      vi.useFakeTimers();
+      currentChild = { ...currentChild, label: "Updated grouped child", updatedAt: 20 };
+      harness.publishEvent("sessions.changed", {
+        sessionKey: childKey,
+        agentId: "worker",
+        reason: "patch",
+        spawnedBy: parentKey,
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await settleLitElement(sidebar);
+      expect(childList).toHaveBeenCalledTimes(2);
+      expect([...renderedChildren()].map((row) => row.textContent)).toEqual(
+        Array.from({ length: appearances }, () => expect.stringContaining("Updated grouped child")),
+      );
+      vi.useRealTimers();
+
+      sidebar
+        .querySelector<HTMLButtonElement>(
+          '[data-personal-session-group="focus"] .sidebar-session-group-toggle',
+        )!
+        .click();
+      await settleLitElement(sidebar);
+      expect(renderedChildren()).toHaveLength(appearances - 1);
+      context.navigation.update({ personalSessionGroups: [] });
+      await settleLitElement(sidebar);
+      expect(renderedChildren()).toHaveLength(appearances - 1);
+      expect(childList).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      disposeRoster(mounted);
+    }
+  },
+);
+
 it("hydrates a connection replacement while an old child page is pending", async () => {
   const children = Array.from({ length: 101 }, (_, index) => ({
     ...child,

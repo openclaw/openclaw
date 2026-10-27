@@ -4,6 +4,7 @@ read_when:
   - The Discord bot does not reply in a guild channel or DM
   - Discord gateway timeouts, duplicate replies, or bot-to-bot loops appear
   - Voice speech-to-text drops with a decryption failure
+  - The Discord plugin fails during register with ERR_MODULE_NOT_FOUND
 title: "Discord troubleshooting"
 sidebarTitle: "Troubleshooting"
 ---
@@ -20,6 +21,17 @@ does not by itself establish that an account restarted.
 ## Troubleshooting
 
 <AccordionGroup>
+  <Accordion title="Plugin fails during register with ERR_MODULE_NOT_FOUND">
+    On OpenClaw 2026.9.33 and later, the Discord channel can fail to start on every Gateway restart with a log line like:
+
+```text
+plugin failed during register: runtime dependencies are missing for externally distributed plugin discord; reinstall or update the plugin package, then restart the Gateway. (Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'mdast-util-to-string' imported from .../plugin-captures/.../node_modules/@openclaw/discord/node_modules/mdast-util-from-markdown/lib/index.js)
+```
+
+    Reinstalling the plugin does not fix it. This happens when the Gateway's Node process runs with `--preserve-symlinks` or `NODE_PRESERVE_SYMLINKS=1`. Remove the flag from the Gateway service, then restart the Gateway. See [Nested dependency missing under preserve-symlinks](/plugins/dependency-resolution#nested-dependency-missing-under-preserve-symlinks) for how to check the service and apply the workaround.
+
+  </Accordion>
+
   <Accordion title="Used disallowed intents or bot sees no guild messages">
 
     - enable Message Content Intent

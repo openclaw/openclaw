@@ -208,8 +208,9 @@ suite.define(() => {
     async ({ action, label, value }) => {
       await withClipboardPage(createControlUiE2eContextOptions(), async (page) => {
         const gateway = await installMockGateway(page, {
-          workspace: "/workspace",
+          workspace: "/default-workspace",
           workspaceGit: true,
+          sessions: [{ key: "agent:main:main", kind: "direct", spawnedCwd: "/workspace" }],
           methodResponses: {
             "worktrees.branches": { headBranch: "feature/clipboard" },
           },

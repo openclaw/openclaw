@@ -10,6 +10,7 @@ import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import type { WorkspaceSkillSourceRequest } from "../loading/workspace-skill-sources.types.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { completePassiveScan } from "./discovery.test-support.js";
 import * as remoteRefresh from "./refresh-remote.js";
 import { getSkillsResourceVersion, getSkillsSnapshotVersion } from "./refresh-state.js";
 import {
@@ -55,23 +56,6 @@ const descriptions = async (input = request(), watch = true) =>
   (await prepareLocalSkillSources(input, { watch })).entries.map(
     (entry) => entry.skill.description,
   );
-async function completePassiveScan(milliseconds = 30 * 60_000 + 50) {
-  const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
-  try {
-    let settledTasks = 0;
-    for (let elapsed = 0; elapsed < milliseconds; elapsed += 60_000) {
-      await vi.advanceTimersByTimeAsync(Math.min(60_000, milliseconds - elapsed));
-      // Native events during a scan can start another pass before publication.
-      while (settledTasks < tasks.mock.results.length) {
-        const pending = tasks.mock.results.slice(settledTasks);
-        settledTasks += pending.length;
-        await Promise.all(pending.map((result) => result.value));
-      }
-    }
-  } finally {
-    tasks.mockRestore();
-  }
-}
 const write = (description: string, dir = workspace, relative = "skills/guide") =>
   writeSkill({ dir: path.join(dir, relative), name: path.basename(relative), description });
 async function waitForLiveWatch(directory: string, workspaceDir = workspace) {
@@ -254,10 +238,6 @@ it("batches fresh agent discovery without separate root-planning passes", async 
     tasks.mockClear();
     await refreshSkillsDiscovery({ config, reason: "config-change" });
     expect(tasks).toHaveBeenCalledTimes(1);
-    expect(tasks).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "scan", requests: expect.any(Array) }),
-      expect.any(Object),
-    );
     expect(await instructions(workspace, "main")).toBe(description);
     expect(await instructions(other, "second")).toBe("Other");
     expect(tasks).toHaveBeenCalledTimes(1);

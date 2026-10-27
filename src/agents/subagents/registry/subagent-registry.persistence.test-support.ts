@@ -14,6 +14,7 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { operatorRecoverySnapshotFixture } from "../../../gateway/server/client-fixtures.test-support.js";
 import {
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
@@ -71,23 +72,11 @@ export async function prepareSubagentRecoveryFixture(
     sessionId,
     lifecycleRevision,
     sourceRunId: run.requesterTurnRunId ?? "recovery-requester-turn",
-    snapshot: {
-      profileId: "registry-bookkeeping-operator",
-      scopes: ["operator.write"],
-      assignedRole: null,
-      githubLogin: null,
-      grant: null,
-      aliasBindingIds: [],
-      authPolicy: {
-        generation: "",
-        grantGeneration: "registry-bookkeeping-policy",
-        role: "operator",
-        authMethod: "token",
-      },
-      controlUiAdmin: false,
-      localOperator: false,
-      sourceIngress: "internal",
-    },
+    snapshot: operatorRecoverySnapshotFixture(
+      "registry-bookkeeping-operator",
+      "registry-bookkeeping-policy",
+      { scopes: ["operator.write"] },
+    ),
   };
   Object.assign(run, {
     requesterAgentId: agentId,

@@ -25,8 +25,9 @@ import type { PortalReachability } from "./portal-reachability.ts";
 const probePortalReachable = vi.hoisted(() => vi.fn<() => Promise<PortalReachability>>());
 vi.mock("./portal-reachability.ts", () => ({ probePortalReachable }));
 
-import type { PortalsPageProps } from "./portals-page.tsx";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import "./portals-page.tsx";
+import type { PortalsPageProps } from "./portals-page.tsx";
 
 const portal = {
   id: "p3000",
@@ -323,11 +324,7 @@ it("refreshes the embedded frame and keeps Portal actions scoped across desktop 
     );
     await waitForSolid(() => expect(page.querySelector("iframe")).toBeNull());
   } finally {
-    if (clipboard) {
-      Object.defineProperty(navigator, "clipboard", clipboard);
-    } else {
-      Reflect.deleteProperty(navigator, "clipboard");
-    }
+    restorePropertyDescriptor(navigator, "clipboard", clipboard);
   }
 });
 

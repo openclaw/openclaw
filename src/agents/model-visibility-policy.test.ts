@@ -1,6 +1,7 @@
 // Explicit model policy tests keep catalog metadata separate from override restrictions.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import { getModelRefStatus } from "./model-selection-resolve.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
@@ -125,6 +126,22 @@ describe("explicit model visibility policy", () => {
     expect(policy.retainedKeys).toEqual(
       new Set(['["openai","gpt-5.5"]', '["external","sensitive"]']),
     );
+  });
+
+  it("warns when a wildcard policy substitutes the configured default", async () => {
+    const capture = createWarnLogCapture("model-policy-fallback");
+    try {
+      const policy = createPolicy({
+        agents: { defaults: { model: "external/sensitive", modelPolicy: { allow: ["openai/*"] } } },
+      });
+      const requested = { provider: "external", model: "sensitive" };
+      expect(policy.resolveSelection(requested)).toEqual({ provider: "openai", model: "gpt-5.5" });
+      expect(policy.allows(requested)).toBe(false);
+      expect(await capture.findText("Falling back to")).toContain('"external/sensitive"');
+      expect(await capture.findText("Falling back to")).toContain('"openai/gpt-5.5"');
+    } finally {
+      capture.cleanup();
+    }
   });
 
   it("retains the selected default identity after manifest alias resolution", () => {

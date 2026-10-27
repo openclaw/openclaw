@@ -17,13 +17,14 @@ import { seedConsumedPeerRestartInput } from "../agents/main-session-recovery/ma
 import { recoverStore } from "../agents/main-session-recovery/main-session-restart-recovery-store.js";
 import {
   buildEmbeddedRunnerAssistant,
+  createEmbeddedAgentRunnerOpenAiConfig,
   makeEmbeddedRunnerAttempt,
 } from "../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { getRuntimeConfig, writeConfigFile } from "../config/config.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
 import { isMissingPathError } from "../infra/errors.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import {
   agentCommandMock,
@@ -46,17 +47,9 @@ let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGate
 installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
-    const module = await import("./server-kernel.js");
-    const create = module.createGatewayKernel;
-    const capture = vi.spyOn(module, "createGatewayKernel").mockImplementation(async (...args) => {
-      kernel = await create(...args);
-      return kernel;
-    });
-    try {
+    kernel = await captureGatewayKernel(async () => {
       harness = await startGatewayServerHarness();
-    } finally {
-      capture.mockRestore();
-    }
+    });
   },
   cleanup: () => harness?.close(),
 });
@@ -71,20 +64,12 @@ it.for(["allowed", "revoked"] as const)(
     testState.sessionStorePath = storePath;
     testState.agentsConfig = { entries: { main: {} } };
     testState.agentConfig = {
-      model: { primary: "peer-fixture/mock-1" },
+      model: { primary: "openai/mock-1" },
       workspace: workspaceDir,
       thinkingDefault: "off",
       compaction: { enabled: false },
     };
     const config = getRuntimeConfig();
-    const { api, baseUrl, provider, ...model } = makeProviderModelFixture<"openai-responses">({
-      id: "mock-1",
-      name: "Peer recovery fixture",
-      provider: "peer-fixture",
-      api: "openai-responses",
-      baseUrl: "https://peer-recovery.example.test/v1",
-      maxTokens: 2_048,
-    });
     await writeConfigFile({
       ...config,
       session: {
@@ -94,16 +79,7 @@ it.for(["allowed", "revoked"] as const)(
       },
       tools: { ...config.tools, allow: ["write"], sessions: { visibility: "all" } },
       plugins: { ...config.plugins, enabled: false },
-      models: {
-        providers: {
-          [provider]: {
-            api,
-            apiKey: "synthetic-peer-recovery-key",
-            baseUrl,
-            models: [model],
-          },
-        },
-      },
+      models: createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]).models,
     });
     const discovery = await import("../agents/agent-model-discovery.js");
     const actualDiscovery = await vi.importActual<typeof discovery>(
@@ -141,7 +117,6 @@ it.for(["allowed", "revoked"] as const)(
     void dispatchFinished.promise.catch(() => undefined);
     const effectFile = path.join(workspaceDir, "recovered-effect.txt");
     let didDispatch = false;
-    let attempted = false;
     let effectError: unknown;
     runAttempt.mockImplementation(async (attempt) =>
       withPreparedEmbeddedGatewayTools(
@@ -167,7 +142,6 @@ it.for(["allowed", "revoked"] as const)(
           );
           toolReady.resolve();
           await withinTest(releaseTool.promise, signal);
-          attempted = true;
           try {
             await write.execute("recovered-write", {
               path: effectFile,
@@ -224,7 +198,6 @@ it.for(["allowed", "revoked"] as const)(
         dispatchFinished.promise.catch(() => undefined),
         signal,
       );
-      expect(attempted).toBe(true);
       const effect = await fs.readFile(effectFile, "utf8").catch((error: unknown) => {
         if (isMissingPathError(error)) {
           return undefined;

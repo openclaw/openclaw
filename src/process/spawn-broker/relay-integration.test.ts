@@ -6,7 +6,9 @@ import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { spawnProcess } from "../spawn-utils.js";
+import { bindInheritedNativeProcessOwner } from "../supervisor/inherited-process-lineage.js";
 import { createServiceChildRelayAdapter } from "../supervisor/service-child-relay-host.js";
+import { prepareServiceChildRelay } from "../supervisor/service-child-relay-preparation.js";
 import { createProcessSupervisor } from "../supervisor/supervisor.js";
 import type { ProcessExtinctionResult } from "../supervisor/types.js";
 import { BrokerChild } from "./child.js";
@@ -94,3 +96,73 @@ it("launches the stable Homebrew Node after an upgrade removed the running Cella
     expect(spawnProcess).toHaveBeenLastCalledWith(stableNode, [workerPath], expect.any(Object));
   });
 });
+
+it("keeps an embedded relay out of its downloaded worker's generic runtime mode", () => {
+  const workerUrl = pathToFileURL(path.resolve("runtime/dist/service-child-relay.mjs"));
+  const env = { BUN_BE_BUN: "1", HOME: "/synthetic-worker-home" };
+  vi.stubGlobal(
+    "__openclawStandaloneIsEmbeddedModule",
+    (filename: string) => filename === path.resolve("runtime/dist/service-child-relay.mjs"),
+  );
+  vi.mocked(spawnProcess).mockReturnValue(new ChildProcess());
+  try {
+    spawnServiceChildRelay({ workerUrl, stdio: "ignore", env, detached: false });
+    expect(vi.mocked(spawnProcess).mock.lastCall?.[2]?.env).toEqual({
+      HOME: "/synthetic-worker-home",
+    });
+    expect(env.BUN_BE_BUN).toBe("1");
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("dispatches a direct native owner without generic mode or image inventory", () => {
+  const workerUrl = pathToFileURL(path.resolve("runtime/dist/native-anchor.mjs"));
+  const env = { BUN_BE_BUN: "1", HOME: "/synthetic-worker-home" };
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const release = bindInheritedNativeProcessOwner(workerUrl.href);
+  vi.stubGlobal("__openclawStandaloneIsEmbeddedModule", undefined);
+  vi.mocked(spawnProcess).mockReturnValue(new ChildProcess());
+  try {
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    using preparation = prepareServiceChildRelay({
+      command: "synthetic-command",
+      args: [],
+      stdinMode: "pipe-closed",
+      oomScoreWrapperSelected: false,
+    });
+    expect(preparation.useLinuxSubreaper).toBe(true);
+    spawnServiceChildRelay({ ...preparation.spawn, env });
+    expect(vi.mocked(spawnProcess).mock.lastCall?.[2]?.env).toEqual({
+      HOME: "/synthetic-worker-home",
+    });
+    expect(env.BUN_BE_BUN).toBe("1");
+  } finally {
+    release();
+    Object.defineProperty(process, "platform", platform);
+    vi.unstubAllGlobals();
+  }
+});
+
+it.each([undefined, "file:///different/native-anchor.mjs"])(
+  "retains generic mode without authority for the selected entry (%s)",
+  (nativeProcessOwner) => {
+    const workerUrl = pathToFileURL(path.resolve("downloaded-worker.mjs"));
+    const env = { BUN_BE_BUN: "1", HOME: "/synthetic-worker-home" };
+    vi.stubGlobal("__openclawStandaloneIsEmbeddedModule", undefined);
+    vi.mocked(spawnProcess).mockReturnValue(new ChildProcess());
+    try {
+      const input = {
+        workerUrl,
+        stdio: "ignore" as const,
+        env,
+        detached: false,
+        nativeProcessOwner,
+      };
+      spawnServiceChildRelay(input);
+      expect(vi.mocked(spawnProcess).mock.lastCall?.[2]?.env).toEqual(env);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  },
+);

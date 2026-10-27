@@ -12,6 +12,7 @@ import { GatewayConnectionWork } from "../../server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import { gatewayTestTextTransport } from "../connection-transport.test-support.js";
+import { createGatewaySnapshotFixture } from "../health-state.test-support.js";
 import { createAdmissionHandler } from "./message-handler.admission.test-support.js";
 
 const { loadConfigMock, upsertPresenceMock } = vi.hoisted(() => ({
@@ -31,19 +32,9 @@ vi.mock("../../../infra/system-presence.js", () => ({
   upsertPresence: upsertPresenceMock,
   listSystemPresence: vi.fn(() => []),
 }));
-vi.mock("../health-state.js", () => ({
-  buildGatewaySnapshot: vi.fn(() => ({
-    presence: [],
-    health: {},
-    stateVersion: { presence: 1, health: 1 },
-    uptimeMs: 1,
-    sessionDefaults: {
-      defaultAgentId: "main",
-      mainKey: "main",
-      mainSessionKey: "main",
-      scope: "per-sender",
-    },
-  })),
+vi.mock("../health-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../health-state.js")>()),
+  buildGatewaySnapshot: vi.fn(() => createGatewaySnapshotFixture()),
   getHealthCache: vi.fn(() => null),
   getHealthVersion: vi.fn(() => 1),
 }));
@@ -126,7 +117,7 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
     get client() {
       return handler.getClient();
     },
-    sendConnect: () => sendConnect("connect-1", connectParams),
+    sendConnect: (scopes: unknown = []) => sendConnect("connect-1", { ...connectParams, scopes }),
     sendWorkerConnect: () => sendConnect("worker-connect", { role: "worker" }),
     sendStartupNodeConnect: () =>
       sendConnect("startup-node-connect", {
@@ -163,6 +154,25 @@ afterEach(async () => {
 });
 
 describe("WebSocket connect suspension admission", () => {
+  it.each(["operator.admin", "xoperator.adminx"])(
+    "rejects non-array scopes %s before admitting the client",
+    async (scopes) => {
+      const harness = attachHarness();
+      harness.sendConnect(scopes);
+
+      await vi.waitFor(() => expect(harness.close).toHaveBeenCalled());
+      expect(harness.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "connect-1",
+          ok: false,
+          error: expect.objectContaining({ code: "INVALID_REQUEST" }),
+        }),
+      );
+      expect(harness.client).toBeNull();
+      expect(harness.setClient).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects a validated connect while suspension is preparing before session mutations", async () => {
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension).not.toBeNull();

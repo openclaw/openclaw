@@ -47,6 +47,22 @@ function createTerminalReceipt() {
   };
 }
 
+function createTerminalSendInput(toolCallId: string): Parameters<typeof runMessageAction>[0] {
+  return {
+    cfg: createEnabledMessageActionConfig("gatewaychat"),
+    action: "send",
+    params: { channel: "gatewaychat", target: "user-123", message: "terminal answer" },
+    sourceReplyFinal: true,
+    sourceReplyToolCallId: toolCallId,
+    gateway: {
+      terminalSourceReplyReceiptOwner: "caller",
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+    },
+    dryRun: false,
+  };
+}
+
 describe("runMessageAction plugin dispatch", () => {
   beforeEach(() => {
     resetMessageActionRunnerMocks();
@@ -135,19 +151,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
       });
 
-      const result = await runMessageAction({
-        cfg: createEnabledMessageActionConfig("gatewaychat"),
-        action: "send",
-        params: { channel: "gatewaychat", target: "user-123", message: "terminal answer" },
-        sourceReplyFinal: true,
-        sourceReplyToolCallId: "message-call-1",
-        gateway: {
-          terminalSourceReplyReceiptOwner: "caller",
-          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-          mode: GATEWAY_CLIENT_MODES.BACKEND,
-        },
-        dryRun: false,
-      });
+      const result = await runMessageAction(createTerminalSendInput("message-call-1"));
 
       expect(result).toMatchObject({
         payload: {
@@ -203,21 +207,9 @@ describe("runMessageAction plugin dispatch", () => {
       });
       mocks.callGatewayLeastPrivilege.mockRejectedValue(rejection);
 
-      await expect(
-        runMessageAction({
-          cfg: createEnabledMessageActionConfig("gatewaychat"),
-          action: "send",
-          params: { channel: "gatewaychat", target: "user-123", message: "terminal answer" },
-          sourceReplyFinal: true,
-          sourceReplyToolCallId: receipt.toolCallId,
-          gateway: {
-            terminalSourceReplyReceiptOwner: "caller",
-            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-            mode: GATEWAY_CLIENT_MODES.BACKEND,
-          },
-          dryRun: false,
-        }),
-      ).rejects.toBe(rejection);
+      await expect(runMessageAction(createTerminalSendInput(receipt.toolCallId))).rejects.toBe(
+        rejection,
+      );
       expect(mocks.cancelTerminalSourceReplyDelivery).toHaveBeenCalledWith(receipt);
       expect(mocks.reconcileTerminalSourceReplyDelivery).not.toHaveBeenCalled();
     });
@@ -234,21 +226,9 @@ describe("runMessageAction plugin dispatch", () => {
       });
       mocks.callGatewayLeastPrivilege.mockRejectedValue(rejection);
 
-      await expect(
-        runMessageAction({
-          cfg: createEnabledMessageActionConfig("gatewaychat"),
-          action: "send",
-          params: { channel: "gatewaychat", target: "user-123", message: "terminal answer" },
-          sourceReplyFinal: true,
-          sourceReplyToolCallId: receipt.toolCallId,
-          gateway: {
-            terminalSourceReplyReceiptOwner: "caller",
-            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-            mode: GATEWAY_CLIENT_MODES.BACKEND,
-          },
-          dryRun: false,
-        }),
-      ).rejects.toBe(rejection);
+      await expect(runMessageAction(createTerminalSendInput(receipt.toolCallId))).rejects.toBe(
+        rejection,
+      );
       expect(mocks.cancelTerminalSourceReplyDelivery).toHaveBeenCalledWith(receipt);
     });
 
@@ -262,21 +242,9 @@ describe("runMessageAction plugin dispatch", () => {
       });
       mocks.callGatewayLeastPrivilege.mockRejectedValue(rejection);
 
-      await expect(
-        runMessageAction({
-          cfg: createEnabledMessageActionConfig("gatewaychat"),
-          action: "send",
-          params: { channel: "gatewaychat", target: "user-123", message: "terminal answer" },
-          sourceReplyFinal: true,
-          sourceReplyToolCallId: "message-call-1",
-          gateway: {
-            terminalSourceReplyReceiptOwner: "caller",
-            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-            mode: GATEWAY_CLIENT_MODES.BACKEND,
-          },
-          dryRun: false,
-        }),
-      ).rejects.toBe(rejection);
+      await expect(runMessageAction(createTerminalSendInput("message-call-1"))).rejects.toBe(
+        rejection,
+      );
       expect(mocks.cancelTerminalSourceReplyDelivery).not.toHaveBeenCalled();
     });
 
@@ -298,21 +266,9 @@ describe("runMessageAction plugin dispatch", () => {
         .mockRejectedValueOnce(timeout)
         .mockRejectedValueOnce(rejection);
 
-      await expect(
-        runMessageAction({
-          cfg: createEnabledMessageActionConfig("gatewaychat"),
-          action: "send",
-          params: { channel: "gatewaychat", target: "user-123", message: "terminal answer" },
-          sourceReplyFinal: true,
-          sourceReplyToolCallId: receipt.toolCallId,
-          gateway: {
-            terminalSourceReplyReceiptOwner: "caller",
-            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-            mode: GATEWAY_CLIENT_MODES.BACKEND,
-          },
-          dryRun: false,
-        }),
-      ).rejects.toBe(rejection);
+      await expect(runMessageAction(createTerminalSendInput(receipt.toolCallId))).rejects.toBe(
+        rejection,
+      );
 
       expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledTimes(2);
       expect(mocks.cancelTerminalSourceReplyDelivery).not.toHaveBeenCalled();
@@ -332,19 +288,7 @@ describe("runMessageAction plugin dispatch", () => {
         .mockRejectedValueOnce(timeout)
         .mockResolvedValueOnce(failedPayload);
 
-      await runMessageAction({
-        cfg: createEnabledMessageActionConfig("gatewaychat"),
-        action: "send",
-        params: { channel: "gatewaychat", target: "user-123", message: "terminal answer" },
-        sourceReplyFinal: true,
-        sourceReplyToolCallId: receipt.toolCallId,
-        gateway: {
-          terminalSourceReplyReceiptOwner: "caller",
-          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-          mode: GATEWAY_CLIENT_MODES.BACKEND,
-        },
-        dryRun: false,
-      });
+      await runMessageAction(createTerminalSendInput(receipt.toolCallId));
 
       expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledTimes(2);
       expect(mocks.reconcileTerminalSourceReplyDelivery).toHaveBeenCalledWith({

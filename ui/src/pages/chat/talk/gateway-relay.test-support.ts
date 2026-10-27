@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { GatewayPendingRequests } from "../../../../../packages/gateway-client/src/pending-request.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
+import { consultRunResult } from "./consult.test-support.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./gateway-relay.ts";
 import {
   createPcmAudioContext,
@@ -9,9 +10,9 @@ import {
   type MockAudioProcessor,
   type MockAudioSink,
 } from "./input.test-support.ts";
+import { createGatewayRelaySession } from "./session.test-support.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-  type RealtimeTalkGatewayRelaySessionResult,
   type RealtimeTalkTransportContext,
 } from "./shared.ts";
 
@@ -60,20 +61,6 @@ export class MockAudioContext extends createPcmAudioContext(
   }
 }
 
-export function createSession(): RealtimeTalkGatewayRelaySessionResult {
-  return {
-    provider: "openai",
-    transport: "gateway-relay",
-    relaySessionId: "relay-1",
-    audio: {
-      inputEncoding: "pcm16",
-      inputSampleRateHz: 24000,
-      outputEncoding: "pcm16",
-      outputSampleRateHz: 24000,
-    },
-  };
-}
-
 export function defaultRelayResponse(method: string, supportsBargeIn?: boolean) {
   return method === "talk.catalog"
     ? { realtime: { providers: [{ id: "openai", supportsBargeIn }] } }
@@ -99,12 +86,7 @@ export function createConsultClient() {
   const client = createClient();
   vi.mocked(client["request"]).mockImplementation(async (method) => {
     if (method === "talk.client.toolCall") {
-      return {
-        runId: "run-1",
-        idempotencyKey: "run-1",
-        agentId: "main",
-        agentSessionKey: "agent:main:main",
-      };
+      return consultRunResult();
     }
     return defaultRelayResponse(method);
   });
@@ -128,11 +110,14 @@ export function createAudioAppendClient(client = createClient()) {
   };
 }
 
-export async function createTransport(overrides: Partial<RealtimeTalkTransportContext> = {}) {
-  return new GatewayRelayRealtimeTalkTransport(createSession(), {
+export async function createTransport(
+  overrides: Partial<RealtimeTalkTransportContext> = {},
+  session = createGatewayRelaySession(),
+) {
+  return new GatewayRelayRealtimeTalkTransport(session, {
     input: await prepareRealtimeTalkTestInput(),
     callbacks: {},
-    client: createClient(),
+    client: overrides.client ?? createClient(),
     sessionKey: "main",
     ...overrides,
   });

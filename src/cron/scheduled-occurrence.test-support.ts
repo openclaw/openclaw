@@ -11,7 +11,6 @@ export const TEST_SCHEDULED_EXECUTION = TEST_SCHEDULED_OCCURRENCE.mint({
   agentId: "main",
   runId: "test-run",
   runSessionKey: "agent:main:cron:test",
-  operatorAuthorityRestored: false,
 });
 
 /** Scheduled session-turn fields for tests that start the turn below the cron service. */

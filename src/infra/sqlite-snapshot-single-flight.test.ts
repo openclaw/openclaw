@@ -19,13 +19,7 @@ function createSnapshot(
   return { location, cleanup, cleanupAsync };
 }
 
-function completed<T>(value: T) {
-  const retained = createRetainedOperation<T>(() => {});
-  retained.resolve(value);
-  return retained.operation;
-}
-
-it("does not replay a synchronously refused producer even if a second attempt could succeed", () => {
+it("does not replay a synchronously refused producer", () => {
   const failure = new Error("snapshot producer admission refused");
   let attempts = 0;
   const pending = startSingleFlightSqliteSnapshot(
@@ -33,16 +27,7 @@ it("does not replay a synchronously refused producer even if a second attempt co
     "retained-test",
     () => {
       attempts++;
-      if (attempts === 1) {
-        throw failure;
-      }
-      return {
-        ...completed<PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation>({
-          ...createSnapshot("untracked-second-snapshot.sqlite"),
-          startCleanup: () => completed(true),
-        }),
-        startClose: () => completed(undefined),
-      };
+      throw failure;
     },
   );
   pending.service();

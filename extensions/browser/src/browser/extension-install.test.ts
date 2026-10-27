@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   useInstallFixture,
+  withAdvancingInstallClock,
   chromeProductRoots,
   stableChromeExtensionDir,
   browserExtensionStatus,
@@ -88,16 +89,9 @@ describe("native host registration", () => {
     const value = await fixture();
     const root = chromeProductRoots(value.deps)[0]!;
     await fs.mkdir(root.userDataDir, { recursive: true, mode: 0o700 });
-    let now = 0;
     const status = await value.install({
       browserProfile: "work",
-      deps: {
-        ...value.deps,
-        now: () => now,
-        sleep: async (ms) => {
-          now += ms;
-        },
-      },
+      deps: withAdvancingInstallClock(value.deps),
     });
     const registration = status.registrations.find((entry) => entry.product === root.product);
     expect(registration).toMatchObject({ state: "owned" });
@@ -114,15 +108,8 @@ describe("native host registration", () => {
 
   it("guides first-time setup when no browser user-data directory exists", async () => {
     const value = await fixture();
-    let now = 0;
     const status = await value.install({
-      deps: {
-        ...value.deps,
-        now: () => now,
-        sleep: async (ms) => {
-          now += ms;
-        },
-      },
+      deps: withAdvancingInstallClock(value.deps),
     });
 
     expect(status.manualSetupRequired).toBe(true);

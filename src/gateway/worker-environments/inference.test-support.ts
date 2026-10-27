@@ -1,4 +1,3 @@
-import { vi } from "vitest";
 import type {
   WorkerInferenceStartParams,
   WorkerInferenceTerminalFrame,
@@ -11,10 +10,7 @@ import { createWorkerConnectionIdentity } from "./connection-identity.test-suppo
 import type { WorkerInferenceStore } from "./inference-store.js";
 import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
 
-export const waitForFast = <T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) => vi.waitFor(callback, { interval: 1, ...options });
+export { waitForFast } from "../../../test/helpers/vitest-wait.js";
 
 export const REQUEST: WorkerInferenceStartParams = {
   runEpoch: 3,
@@ -104,6 +100,19 @@ export const terminalFrames = (frames: Parameters<WorkerInferenceSink["send"]>[0
   frames.filter(
     (frame): frame is WorkerInferenceTerminalFrame => frame.event === "worker.inference.terminal",
   );
+
+export function startInference(
+  instance: Manager,
+  overrides: Partial<Parameters<Manager["start"]>[0]> = {},
+) {
+  return instance.start({
+    identity: IDENTITY,
+    request: REQUEST,
+    sessionTarget: SESSION_TARGET,
+    sink: overrides.sink ?? createSink().sink,
+    ...overrides,
+  });
+}
 
 export async function accept(manager: Manager, overrides: StartOverrides = {}, launch = true) {
   const result = await manager.start({

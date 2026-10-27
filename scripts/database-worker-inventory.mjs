@@ -42,14 +42,6 @@ const reviewed = new Map([
     },
   ],
   [
-    "src/infra/client-credential-native-tokens.ts",
-    {
-      tier: "T3",
-      evidence:
-        "Only client-credential-operations.ts calls scoped-token claim/clear. Runtime operations enter client-credential.worker.ts; synchronous consumers are offline Doctor/CLI migration and verified restore.",
-    },
-  ],
-  [
     "src/infra/client-credential-operations.ts",
     {
       tier: "T3",
@@ -804,7 +796,7 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/config/sessions/session-accessor.sqlite-entry.ts",
+    "src/config/sessions/session-accessor.sqlite-entry-replace.ts",
     [
       {
         tier: "W",
@@ -1460,7 +1452,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["replaceSqliteTranscriptEventsInTransaction"],
         evidence:
-          "Full replacement runs only inside worker write transactions: session-manual-compact-mutation.worker.ts:43, session-message-rewrite.worker.ts:371, session-manager-maintenance.worker.ts:46 through session-accessor.sqlite-transcript-write.ts:131, and runNativeTranscriptWriteLock.replaceEvents (reviewed W); doctor-session-transcript-headers.ts:195 is a Doctor one-shot. Append and other operations in this mixed module stay T1.",
+          "Full replacement runs only inside worker write transactions: session-manual-compact.worker.ts:59, session-message-rewrite.worker.ts:371, session-manager-maintenance.worker.ts:46 through session-accessor.sqlite-transcript-write.ts:131, and runNativeTranscriptWriteLock.replaceEvents (reviewed W); doctor-session-transcript-headers.ts:195 is a Doctor one-shot. Append and other operations in this mixed module stay T1.",
       },
     ],
   ],
@@ -2263,13 +2255,13 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/config/sessions/session-cold-storage-backup.ts",
+    "src/config/sessions/session-cold-storage-backup.worker.ts",
     [
       {
-        tier: "T3",
-        operations: ["embedSessionColdArchivesInSnapshot"],
+        tier: "W",
+        operations: ["embedSessionColdArchivesInSnapshotInWorker"],
         evidence:
-          "infra/backup-sqlite-snapshot.ts:292 via backup-create.ts:320,332,352; snapshot/openclaw-snapshot-copy.ts:72 via local-repository.ts:148 and git-backup.ts:310. Roots are commands/backup.ts:52, backup-sqlite.ts:80, backup-git.ts:131, Doctor/update backup and developer reliability scripts; SQL targets a temporary snapshot.",
+          "Only session-accessor.sqlite-archive.worker.ts cold-embed-snapshot dispatch and snapshot/database-backup-core.worker.ts PostgreSQL export call this kernel. The host facade awaits the existing archive worker, including the public SDK deleteSessionEntry backupDir path; SQL targets the retained private snapshot.",
       },
     ],
   ],
@@ -2581,11 +2573,12 @@ const reviewedOperations = new Map([
         tier: "T3",
         operations: [
           "repairAcpSessionMetaKeysForDoctor",
+          "repairAcpSessionMetaKeysForDoctor.validate",
           "inspectAcpSessionClaimsForDoctor",
           "updateAcpSessionIdentityForDoctor",
         ],
         evidence:
-          "Doctor repair: src/commands/doctor-session-transcripts.ts:318. Plugin Doctor context: src/infra/state-migrations.plugin-doctor-context.ts:403,463, constructed by state-migrations.plugin-doctor.ts:200,325.",
+          "Doctor repair, including the synchronous createVerifiedSqliteSnapshot validation callback: src/commands/doctor-session-transcripts.ts:318. Plugin Doctor context: src/infra/state-migrations.plugin-doctor-context.ts:403,463, constructed by state-migrations.plugin-doctor.ts:200,325.",
       },
     ],
   ],
@@ -2699,9 +2692,18 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["readScratchStateFromDatabase", "readHeartbeatMonitorScratchFromDatabase"],
+        operations: ["readScratchStateFromDatabase"],
         evidence:
-          "Native maintenance reads: Doctor scratch migration, task scratch, and scratch preflight call readScratchStateFromDatabase, directly or through scratch-store.ts. Worker snapshots, including the private legacy-heartbeat selector, enter through src/cron/store/read-command.ts.",
+          "Native maintenance reads: Doctor scratch migration, task scratch, and scratch preflight call readScratchStateFromDatabase, directly or through scratch-store.ts.",
+      },
+      {
+        tier: "W",
+        operations: [
+          "readCronScratchSnapshotInDatabase",
+          "readHeartbeatMonitorScratchFromDatabase",
+        ],
+        evidence:
+          "Only cron/store/read-command.ts calls the snapshot through openclaw-state-read-handlers.ts in openclaw-state-read.worker.ts. The private heartbeat reader is called only by that snapshot; host callers dispatch cron.scratch through scratch-read.ts.",
       },
     ],
   ],
@@ -3494,7 +3496,8 @@ const workerModules = new Set([
   "src/gateway/worker-environments/placement-move-intent.ts", // Move reads and mutations run only in placement lifecycle, turn-claim, and projection workers.
   "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
-  "src/gateway/worker-environments/local-workspace-manifest-scan.ts", // Only openclaw-state-read.worker.ts executes its row snapshot and filesystem scan; host imports are types.
+  "src/gateway/worker-environments/local-workspace-manifest-scan.ts", // State-read workers capture rows; Git workspace workers compute manifests from detached snapshots. Host imports are types.
+  "src/gateway/worker-environments/local-workspace-cas.kernel.ts", // Shared-state read/manifest workers traverse immutable content; local-workspace-store.worker.ts alone prepares, prunes, and sweeps it.
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
   "src/skills/library/read.kernel.ts", // Only openclaw-state-read-operation-registry.ts imports this worker operation table.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
@@ -3509,6 +3512,7 @@ const workerModules = new Set([
 
   "extensions/memory-core/src/memory/manager-index-metadata.ts", // Only the SQLite/PostgreSQL publication worker adapters write metadata and promote legacy cache identities.
   "extensions/memory-core/src/memory/manager-embedding-cache.ts", // Cache SQL, including iterator reads, is called only by manager-publication.worker.ts.
+  "extensions/memory-core/src/memory/manager-rebuild-embeddings.ts", // Only manager-index-read.ts calls this lookup, from manager-search.worker.ts, manager-publication.worker.ts, or its worker-bound manager-publication-postgres.ts adapter.
   "extensions/memory-core/src/memory/manager-chunk-writer.ts", // Only manager-source-index-kernel.ts calls this writer, from manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-retrieval-read.ts", // Search and publication workers own all SQL; host imports are types or the metadata key.
@@ -3516,6 +3520,14 @@ const workerModules = new Set([
   "extensions/memory-core/src/memory/manager-search-postgres.ts", // Only manager-search.worker.ts calls this PostgreSQL query adapter with its admitted worker connection; conformance calls the same internal entry.
   "extensions/memory-core/src/memory/manager-vector-rebuild-state.ts", // Retrieval, source-index and database-publication kernels run in the search/publication workers; the host consumes published vector facts.
 
+  "extensions/knowledge/src/identity-store.ts", // Only StorageBase (storage-worker.ts via storage-host.ts) and StoreRegistry (registry-worker.ts via registry-host.ts) open this store.
+  "extensions/knowledge/src/recent-activity.ts", // recentActivity runs only in KnowledgeStorage inside storage-worker.ts.
+  "extensions/knowledge/src/registry-schema.ts", // Only StoreRegistry, constructed by registry-host.ts in registry-worker.ts, admits this schema.
+  "extensions/knowledge/src/retrieval.ts", // Index SQL runs only in KnowledgeStorage inside storage-worker.ts; other imports use the pure eligible/exactLookup helpers.
+  "extensions/knowledge/src/storage-base.ts", // Base of KnowledgeStorage, constructed only by storage-host.ts in storage-worker.ts.
+  "extensions/knowledge/src/storage-journal.ts", // Layer of KnowledgeStorage, constructed only by storage-host.ts in storage-worker.ts.
+  "extensions/knowledge/src/storage-schema.ts", // Called only by identity-store.ts and store-registry.ts schema admission inside the storage and registry workers.
+  "extensions/knowledge/src/store-registry.ts", // StoreRegistry is constructed only by registry-host.ts in registry-worker.ts; main-thread imports are types and bindingState.
   "extensions/team-reports/src/store-database.ts", // Only store.worker.ts and offline port workers admit this schema.
   "extensions/workboard/src/sqlite-store-kernel.ts", // Workboard SQLite worker backend factory only.
   "extensions/workboard/src/sqlite-store-sessions-board.ts", // Workboard worker kernel sessions-board store only.
@@ -3542,12 +3554,15 @@ const workerModules = new Set([
   "src/channels/message/ingress-queue-health.kernel.ts",
   "src/channels/message/ingress-queue.kernel.ts",
 
+  "src/config/sessions/session-accessor.sqlite-archive.worker.ts", // The archive owner starts this native worker; cold-prepare callbacks stay inside its read-only scope and private-port dispatcher.
   "src/config/sessions/session-accessor.sqlite-archive-selection.ts", // Archive worker read-page selection only.
   "src/config/sessions/session-accessor.sqlite-mutation-worker.runtime.ts",
   "src/config/sessions/session-accessor.sqlite-summary.ts", // Only session-transcript.worker.ts dispatches the summary kernel at runtime.
   "src/config/sessions/session-accessor.sqlite-transcript-binding.ts", // History worker transcript-binding reader only.
-  "src/config/sessions/session-cold-storage-selection.ts", // Cold preparation and mutation kernels in session-cold-storage-worker.ts only.
-  "src/config/sessions/session-cold-storage-worker.ts", // Archive worker cold-prepare and cold-mutate dispatchers only.
+  "src/config/sessions/session-cold-storage-selection.ts", // Archive-worker preparation and cold-mutation kernels only.
+  "src/config/sessions/session-cold-storage-worker.ts", // Archive-worker cold-mutate dispatcher only.
+  "src/config/sessions/session-cold-storage-read.worker.ts", // Transcript/history workers dispatch cold probes; verified-chunk reads stay in their read snapshots.
+  "src/config/sessions/session-transcript-hydration.worker.ts", // Only session-transcript-hydration-read.worker.ts dispatches hydration; cold records stream inside that worker.
   "src/config/sessions/session-membership-facts.ts", // Transcript worker session-membership-facts dispatcher only.
 
   "src/cron/store/run-history.kernel.ts", // Cron read worker and shared-state Cron dispatch own history SQL.
@@ -3626,6 +3641,10 @@ const exceptionModules = new Set([
   "src/infra/sqlite-staging-token.ts", // acquireSqliteStagingToken holds the private snapshot admission/retirement lock through native transactions.
 ]);
 const cliModules = new Map([
+  [
+    "scripts/perf/session-cold-selection.ts",
+    "Explicit developer-only benchmark of cold preparation and mutation on synthetic state; no runtime imports or Gateway callers",
+  ],
   [
     "src/claws/provenance-adopted.ts",
     "Only claws migrate/remove CLI one-shots call these writers via migrate.ts and lifecycle-adopted-removal.ts; no Gateway caller",

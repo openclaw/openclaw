@@ -147,20 +147,22 @@ export const buildTelegramMessageContext = async ({
       : undefined;
   const replyThreadId = threadSpec.id;
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
-  let topicName: string | undefined;
-  let isBotOwnedThread = false;
-  if (isForum && resolvedThreadId != null) {
+  const resolveTopicMetadata = async (threadId: number, direct = false) => {
     const topicRuntime = await loadTelegramMessageContextSessionRuntime(sessionRuntime);
-    const topicNameCacheScope = topicRuntime.resolveStorePath(cfg.session?.store, {
+    let scope = topicRuntime.resolveStorePath(cfg.session?.store, {
       agentId:
         ownerAgentId?.trim() ||
         resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId }),
     });
-    const topic = await resolveTelegramForumTopicMetadata({
-      msg,
-      threadId: resolvedThreadId,
-      scope: topicNameCacheScope,
-    });
+    if (direct) {
+      scope = resolveTelegramDirectTopicNameCacheScope(scope, account.accountId);
+    }
+    return resolveTelegramForumTopicMetadata({ msg, threadId, scope });
+  };
+  let topicName: string | undefined;
+  let isBotOwnedThread = false;
+  if (isForum && resolvedThreadId != null) {
+    const topic = await resolveTopicMetadata(resolvedThreadId);
     topicName = topic.topicName;
     isBotOwnedThread = primaryCtx.me?.id !== undefined && topic.creatorUserId === primaryCtx.me.id;
   }
@@ -306,17 +308,7 @@ export const buildTelegramMessageContext = async ({
     dmThreadId != null &&
     (msg.is_topic_message === true || isTelegramForumTopicTitleUpdate(msg))
   ) {
-    const topicRuntime = await loadTelegramMessageContextSessionRuntime(sessionRuntime);
-    const topicNameCacheScope = topicRuntime.resolveStorePath(cfg.session?.store, {
-      agentId:
-        ownerAgentId?.trim() ||
-        resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId }),
-    });
-    const topic = await resolveTelegramForumTopicMetadata({
-      msg,
-      threadId: dmThreadId,
-      scope: resolveTelegramDirectTopicNameCacheScope(topicNameCacheScope, account.accountId),
-    });
+    const topic = await resolveTopicMetadata(dmThreadId, true);
     topicName = topic.topicName;
   }
 

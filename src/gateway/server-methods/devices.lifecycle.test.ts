@@ -7,7 +7,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import { captureNodeWakeLifecycle, releaseNodeWakeLifecycle } from "../node-wake-state.js";
-import { getNodeWakeStateSnapshot } from "../node-wake-state.test-support.js";
+import { getNodeWakeStateSnapshot, seedNodeWakeState } from "../node-wake-state.test-support.js";
 import { registerGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { bindDeviceWorkerReconciliation } from "../worker-environments/device-provider.js";
 import {
@@ -19,7 +19,6 @@ import {
   mockRotateOperatorTokenSuccess,
   expectDeviceError,
   captureSecurityEvents,
-  seedNodeWakeState,
   resetDeviceHandlerTestState,
   invokeDevice,
   expectPrivate,

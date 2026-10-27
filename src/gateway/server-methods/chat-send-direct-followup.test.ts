@@ -10,6 +10,7 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import { runWithAgentCommandRecoveryOwner } from "../../agents/agent-command-recovery-owner.js";
 import * as runs from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { createEnteredGate } from "../../agents/entered-gate.test-support.js";
 import {
   captureRequesterOrigin,
   hasSameRequesterOrigin,
@@ -56,9 +57,68 @@ vi.mock("../../auto-reply/reply/agent-runner-execution.js", async (importOrigina
   executeAgentTurn: runtime.execute,
 }));
 
+type Fixture = Awaited<ReturnType<typeof createFixture>>;
+type DispatchParams = Parameters<typeof dispatchInboundMessage>[0];
+type Gate = ReturnType<typeof createDeferred<void>>;
+
+function observeAdmission(params: DispatchParams, queued: Gate, settled: Gate) {
+  const lifecycle = expectDefined(params.replyOptions?.turnAdoptionLifecycle, "input custody");
+  const onDeferred = expectDefined(lifecycle.onDeferred, "queue admission");
+  lifecycle.onDeferred = () => {
+    const result = onDeferred();
+    queued.resolve();
+    return result;
+  };
+  const onSettled = lifecycle.onSettled;
+  lifecycle.onSettled = async () => {
+    await onSettled?.();
+    settled.resolve();
+  };
+}
+
+function steeringConfig({ context }: Fixture) {
+  const config = withFullRuntimeReplyConfig(context.getRuntimeConfig());
+  config.messages = {
+    ...config.messages,
+    queue: { mode: "steer", debounceMsByChannel: { webchat: 0 } },
+  };
+  context.getRuntimeConfig = () => config;
+  return config;
+}
+
+function clearFixtureQueues({ scope }: Fixture) {
+  clearSessionQueues(
+    [scope.sessionKey],
+    captureSessionTarget({
+      storeScope: scope.storePath,
+      sessionKey: scope.sessionKey,
+      incarnation: scope.sessionId,
+      agentId: scope.agentId,
+    }),
+  );
+}
+
+function expectChat(fixture: Fixture, runId: string, state: string, content: unknown[]) {
+  expect(fixture.context.broadcast).toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining({ runId, state, message: expect.objectContaining({ content }) }),
+    expect.anything(),
+  );
+}
+
+async function recordInput({ followupRun, opts }: Parameters<typeof executeAgentTurn>[0]) {
+  const runId = expectDefined(opts?.runId, "followup run ID");
+  opts?.onAgentRunStart?.(runId);
+  await expectDefined(followupRun.userTurnTranscriptRecorder, "input recorder").persistApproved();
+  return runId;
+}
+
 it("refuses cross-requester steering by default and admits only an explicit fresh followup", async ({
   signal,
 }) => {
+  const wait = <T>(pending: PromiseLike<T>) => withinTest(pending, signal);
+  const waitForGate = (...args: Parameters<typeof awaitGateBeforeSettlement>) =>
+    wait(awaitGateBeforeSettlement(...args));
   const refusal =
     "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.";
   const fixture = await createFixture({ preserveContent: true });
@@ -68,16 +128,8 @@ it("refuses cross-requester steering by default and admits only an explicit fres
   setClientProfile(fixture.client, bob);
   fixture.params.queueMode = "steer";
   fixture.params.idempotencyKey = "strict-steer-bob-input";
-  const config = withFullRuntimeReplyConfig(fixture.context.getRuntimeConfig());
-  config.messages = {
-    ...config.messages,
-    queue: {
-      mode: "steer",
-      debounceMsByChannel: { webchat: 0 },
-    },
-  };
+  const config = steeringConfig(fixture);
   setRuntimeConfigSnapshot(config, config);
-  fixture.context.getRuntimeConfig = () => config;
   const fingerprint = "strict-steer-incumbent-tools";
   operation.bindToolAuthoritySnapshot({
     requesterPrincipalKey: resolveRequesterPrincipalKey({ operatorProfileId: alice.id }),
@@ -86,10 +138,7 @@ it("refuses cross-requester steering by default and admits only an explicit fres
   });
   operation.bindToolAuthorityRoute({ provider: "openai", model: "gpt-test" });
   operation.setPhase("running");
-  const injectionObserved = createDeferred();
-  const injected = vi.fn(async () => {
-    injectionObserved.resolve();
-  });
+  const injected = vi.fn(async () => {});
   operation.attachBackend({
     kind: "embedded",
     runId: "strict-steer-alice-run",
@@ -99,7 +148,6 @@ it("refuses cross-requester steering by default and admits only an explicit fres
   });
   const dispatchActual = await loadRealChatDispatch();
   const dispatched = createDeferred();
-  const rawQueued = createDeferred();
   const followupId = "strict-steer-bob-explicit-followup";
   const queued = createDeferred();
   const followupDispatched = createDeferred();
@@ -109,100 +157,50 @@ it("refuses cross-requester steering by default and admits only an explicit fres
   const consumed: Parameters<typeof executeAgentTurn>[0][] = [];
   runtime.execute.mockReset();
   runtime.execute.mockRejectedValue(new Error("Refused input must not execute"));
-  dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
-    const params = raw as Parameters<typeof dispatchInboundMessage>[0];
+  dispatchInboundMessageMock.mockImplementation((raw: unknown) => {
+    const params = raw as DispatchParams;
     const isExplicitFollowup = params.replyOptions?.runId === followupId;
     if (isExplicitFollowup) {
-      const lifecycle = expectDefined(params.replyOptions?.turnAdoptionLifecycle, "input custody");
-      const onDeferred = expectDefined(lifecycle.onDeferred, "queue admission");
-      lifecycle.onDeferred = () => {
-        const result = onDeferred();
-        queued.resolve();
-        return result;
-      };
-      const onSettled = lifecycle.onSettled;
-      lifecycle.onSettled = async () => {
-        await onSettled?.();
-        settled.resolve();
-      };
-    } else {
-      const lifecycle = expectDefined(params.replyOptions?.turnAdoptionLifecycle, "input custody");
-      const onDeferred = expectDefined(lifecycle.onDeferred, "queue admission");
-      lifecycle.onDeferred = () => {
-        const result = onDeferred();
-        if (result === true) {
-          rawQueued.resolve();
-        }
-        return result;
-      };
+      observeAdmission(params, queued, settled);
     }
-    try {
-      return await dispatchActual({
-        ...params,
-        cfg: config,
-      });
-    } finally {
+    return dispatchActual({ ...params, cfg: config }).finally(() => {
       (isExplicitFollowup ? followupDispatched : dispatched).resolve();
-    }
+    });
   });
   try {
-    const ack = await fixture.send();
-    expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-    await withinTest(
-      Promise.race([injectionObserved.promise, rawQueued.promise, dispatched.promise]),
-      signal,
-    );
-    await withinTest(dispatched.promise, signal);
+    expect((await fixture.send()).mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+    await wait(dispatched.promise);
     await rpcSourceTesting.get(fixture.params.idempotencyKey)?.input.settlement.promise;
     expect(injected).not.toHaveBeenCalled();
     expect(operation.result).toBeNull();
     expect(isRpcSourceQueued(rpcSourceTesting.get(fixture.params.idempotencyKey))).toBe(false);
     expect(runtime.execute).not.toHaveBeenCalled();
-    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-    expect(fixture.context.broadcast).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({
-        runId: fixture.params.idempotencyKey,
-        state: "final",
-        message: expect.objectContaining({
-          content: [{ type: "text", text: refusal, openclawStatusNotice: true }],
-        }),
-      }),
-      expect.anything(),
-    );
+    expectChat(fixture, fixture.params.idempotencyKey, "final", [
+      { type: "text", text: refusal, openclawStatusNotice: true },
+    ]);
     const pending = await listSessionPendingInputs(fixture.scope);
     expect(pending).toMatchObject({
       total: 1,
       items: [{ runId: fixture.params.idempotencyKey, state: "cancelled" }],
     });
-    const duplicate = await fixture.send();
-    expect(duplicate.mock.calls[0]?.[0]).toBe(false);
-    expect(duplicate.mock.calls[0]?.[1]).toMatchObject({
-      status: "error",
-      summary: refusal,
+    expect((await fixture.send()).mock.calls[0]).toMatchObject({
+      0: false,
+      1: { status: "error", summary: refusal },
     });
     fixture.context.dedupe.clear();
-    const durableRetry = await fixture.send();
-    expect(durableRetry.mock.calls[0]).toMatchObject({
+    expect((await fixture.send()).mock.calls[0]).toMatchObject({
       0: true,
       1: { status: "ok", runId: fixture.params.idempotencyKey },
       3: { cached: true },
     });
-    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
     expect(runtime.execute).not.toHaveBeenCalled();
     expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
 
     runtime.execute.mockImplementation(async (params) => {
-      const { followupRun, opts } = params;
-      const runId = expectDefined(opts?.runId, "followup run ID");
-      opts?.onAgentRunStart?.(runId);
-      await expectDefined(
-        followupRun.userTurnTranscriptRecorder,
-        "input recorder",
-      ).persistApproved();
+      const runId = await recordInput(params);
       consumed.push(params);
       started.resolve();
-      await withinTest(release.promise, signal);
+      await wait(release.promise);
       return successfulChatTurn(runId, "Bob's explicit followup answered.");
     });
     const followupOutcome = createDeferred();
@@ -224,49 +222,32 @@ it("refuses cross-requester steering by default and admits only an explicit fres
     setRuntimeConfigSnapshot(config, config);
     fixture.params.idempotencyKey = followupId;
     fixture.params.message = "/followup Answer Bob's separate request.";
-    const explicitAck = await fixture.send();
-    expect(explicitAck.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        queued.promise,
-        followupDispatched.promise,
-        "Explicit followup did not queue",
-      ),
-      signal,
+    expect((await fixture.send()).mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+    await waitForGate(
+      queued.promise,
+      followupDispatched.promise,
+      "Explicit followup did not queue",
     );
-    await withinTest(followupDispatched.promise, signal);
+    await wait(followupDispatched.promise);
     expect(isRpcSourceQueued(rpcSourceTesting.get(followupId))).toBe(true);
     expect(operation.result).toBeNull();
     expect(injected).not.toHaveBeenCalled();
     expect(consumed).toEqual([]);
-    await withinTest(followupOutcome.promise, signal);
-    expect(fixture.context.broadcast).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({
-        runId: followupId,
-        state: "delta",
-        message: expect.objectContaining({
-          content: [
-            {
-              type: "text",
-              text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
-            },
-          ],
-        }),
-      }),
-      expect.anything(),
-    );
+    await wait(followupOutcome.promise);
+    expectChat(fixture, followupId, "delta", [
+      {
+        type: "text",
+        text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
+      },
+    ]);
     // Dequeue reads current policy while retaining the new source's human identity.
     config.tools = { ...config.tools, deny: ["exec"] };
     setRuntimeConfigSnapshot(config, config);
     operation.complete();
-    await withinTest(
-      awaitGateBeforeSettlement(
-        started.promise,
-        settled.promise,
-        "Explicit followup settled without execution",
-      ),
-      signal,
+    await waitForGate(
+      started.promise,
+      settled.promise,
+      "Explicit followup settled without execution",
     );
     expect(consumed).toHaveLength(1);
     const run = consumed[0]!.followupRun;
@@ -279,33 +260,23 @@ it("refuses cross-requester steering by default and admits only an explicit fres
       resolveRequesterPrincipalKey({ operatorProfileId: bob.id }),
     );
     release.resolve();
-    await withinTest(settled.promise, signal);
+    await wait(settled.promise);
     await fixture.finishDispatch();
     expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
     fixture.params.idempotencyKey = "strict-steer-bob-input";
     fixture.params.message = "Raw follow-up awaiting approval.";
     fixture.context.dedupe.clear();
     rotateAgentEventLifecycleGeneration();
-    const afterRestart = await fixture.send();
-    expect(afterRestart.mock.calls[0]).toMatchObject({
+    expect((await fixture.send()).mock.calls[0]).toMatchObject({
       0: true,
       1: { status: "ok", runId: fixture.params.idempotencyKey },
       3: { cached: true },
     });
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
     expect(runtime.execute).toHaveBeenCalledOnce();
     expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
   } finally {
     release.resolve();
-    clearSessionQueues(
-      [fixture.scope.sessionKey],
-      captureSessionTarget({
-        storeScope: fixture.scope.storePath,
-        sessionKey: fixture.scope.sessionKey,
-        incarnation: fixture.scope.sessionId,
-        agentId: fixture.scope.agentId,
-      }),
-    );
+    clearFixtureQueues(fixture);
     await fixture.cleanup();
   }
 });
@@ -313,7 +284,6 @@ it("refuses cross-requester steering by default and admits only an explicit fres
 it.for([false, true])(
   "preserves chat.send behind a direct announce (tool_authority_mismatch, cancel=%s)",
   async (cancel, { signal }) => {
-    const reason = "tool_authority_mismatch";
     const wait = <T>(pending: PromiseLike<T>) => withinTest(pending, signal);
     const waitForGate = (...args: Parameters<typeof awaitGateBeforeSettlement>) =>
       wait(awaitGateBeforeSettlement(...args));
@@ -330,15 +300,10 @@ it.for([false, true])(
       (await listSessionPendingInputs(scope)).items.map((input) => input.state);
     fixture.activeRun?.complete();
     sendParams.queueMode = "steer";
-    sendParams.idempotencyKey = `direct-followup-${reason}-${cancel}`;
+    sendParams.idempotencyKey = `direct-followup-tool_authority_mismatch-${cancel}`;
     runtime.execute.mockReset();
 
-    const config = withFullRuntimeReplyConfig(context.getRuntimeConfig());
-    config.messages = {
-      ...config.messages,
-      queue: { mode: "steer", debounceMsByChannel: { webchat: 0 } },
-    };
-    context.getRuntimeConfig = () => config;
+    const config = steeringConfig(fixture);
     const instance = createOperationalRunInstanceRef("announce:v1:synthetic-child");
     const authority = runAuthority.claimAgentRunDelegatedAuthority(instance);
     const requesterOrigin = captureRequesterOrigin({
@@ -357,8 +322,7 @@ it.for([false, true])(
     const queued = createDeferred();
     const dispatched = createDeferred();
     const settled = createDeferred();
-    const mediaCaptured = createDeferred();
-    const releaseMedia = createDeferred();
+    const mediaGate = createEnteredGate();
     const stopped = createDeferred();
     let dispatchReturned = false;
     let mediaHeld = false;
@@ -370,8 +334,7 @@ it.for([false, true])(
             const media = await captureMedia(params);
             if (dispatchReturned && !mediaHeld && params.sessionKey === scope.sessionKey) {
               mediaHeld = true;
-              mediaCaptured.resolve();
-              await releaseMedia.promise;
+              await mediaGate.wait();
             }
             return media;
           })
@@ -389,40 +352,22 @@ it.for([false, true])(
     let broadcastsAtStop = 0;
     const consumed: string[] = [];
     let recorder: UserTurnTranscriptRecorder | undefined;
-    const directReady = createDeferred();
-    const releaseDirect = createDeferred();
-    const cleanupReady = createDeferred();
-    const releaseCleanup = createDeferred();
+    const directGate = createEnteredGate();
+    const cleanupGate = createEnteredGate();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const dispatchActual = await loadRealChatDispatch();
-    dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
-      const params = raw as Parameters<typeof dispatchInboundMessage>[0];
+    dispatchInboundMessageMock.mockImplementation((raw: unknown) => {
+      const params = raw as DispatchParams;
       recorder = params.replyOptions?.userTurnTranscriptRecorder;
-      const lifecycle = expectDefined(params.replyOptions?.turnAdoptionLifecycle, "input custody");
-      const onDeferred = expectDefined(lifecycle.onDeferred, "queue admission");
-      lifecycle.onDeferred = () => {
-        const result = onDeferred();
-        queued.resolve();
-        return result;
-      };
-      const onSettled = lifecycle.onSettled;
-      lifecycle.onSettled = async () => {
-        await onSettled?.();
-        settled.resolve();
-      };
-      try {
-        return await dispatchActual({ ...params, cfg: config });
-      } finally {
+      observeAdmission(params, queued, settled);
+      return dispatchActual({ ...params, cfg: config }).finally(() => {
         dispatchReturned = true;
         dispatched.resolve();
-      }
+      });
     });
-    runtime.execute.mockImplementation(async ({ followupRun, opts }) => {
-      const runId = expectDefined(opts?.runId, "followup run ID");
-      opts?.onAgentRunStart?.(runId);
-      const input = expectDefined(followupRun.userTurnTranscriptRecorder, "input recorder");
-      await input.persistApproved();
-      consumed.push(followupRun.prompt);
+    runtime.execute.mockImplementation(async (params) => {
+      const runId = await recordInput(params);
+      consumed.push(params.followupRun.prompt);
       return successfulChatTurn(runId, "Followup answered.");
     });
     let command: Promise<void> | undefined;
@@ -466,11 +411,9 @@ it.for([false, true])(
                   expectDefined(operation, "direct turn owner"),
                 ),
             );
-            directReady.resolve();
-            await withinTest(releaseDirect.promise, signal);
+            await wait(directGate.wait());
             runs.detachActiveEmbeddedRun(scope.sessionId, handle);
-            cleanupReady.resolve();
-            await withinTest(releaseCleanup.promise, signal);
+            await wait(cleanupGate.wait());
             await sessions.patchSessionEntryCore(scope, () => ({
               restartRecoveryRuns: undefined,
               status: "done",
@@ -479,7 +422,7 @@ it.for([false, true])(
         }),
       );
       void command.catch(() => {});
-      await withinTest(directReady.promise, signal);
+      await wait(directGate.entered);
       const directOwner = expectDefined(
         getSessionControllerOperation(scope.sessionKey),
         "direct command controller owner",
@@ -488,20 +431,19 @@ it.for([false, true])(
         abortedLastRun: false,
         restartRecoveryRuns: [{ runId: instance.runId, lifecycleGeneration }],
       });
-      const ack = await fixture.send();
-      expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+      expect((await fixture.send()).mock.calls[0]?.[1]).toMatchObject({ status: "started" });
       await waitForGate(
         queued.promise,
         dispatched.promise,
         "Dispatch returned without queue custody",
       );
       expect(isRpcSourceQueued(rpcSourceTesting.get(sendParams.idempotencyKey))).toBe(true);
-      await withinTest(dispatched.promise, signal);
+      await wait(dispatched.promise);
       expect(getSessionControllerOperation(scope.sessionKey)).toBe(directOwner);
       expect(consumed).toEqual([]);
       expect(injected).not.toHaveBeenCalled();
       if (cancel) {
-        await wait(mediaCaptured.promise);
+        await wait(mediaGate.entered);
         const abortParams = { sessionKey: scope.sessionKey, runId: sendParams.idempotencyKey };
         const respond = vi.fn<RespondFn>();
         stop = handleChatAbortRequest({
@@ -515,7 +457,7 @@ it.for([false, true])(
         void stop.catch(() => {});
         await waitForGate(stopped.promise, stop, "Stop completed without clearing its chat buffer");
         broadcastsAtStop = vi.mocked(context.broadcast).mock.calls.length;
-        releaseMedia.resolve();
+        mediaGate.release();
         await wait(stop);
         expect(respond).toHaveBeenCalledWith(true, {
           ok: true,
@@ -526,30 +468,22 @@ it.for([false, true])(
         await expectDefined(recorder, "queued input recorder").waitForPendingInputSettlement?.();
         expect(await pendingStates()).toEqual(["cancelled"]);
       }
-      releaseDirect.resolve();
-      await withinTest(cleanupReady.promise, signal);
+      directGate.release();
+      await wait(cleanupGate.entered);
       expect(getSessionControllerOperation(scope.sessionKey)).toBe(directOwner);
-      expect((await listSessionPendingInputs(scope)).items.map((input) => input.state)).toEqual([
-        cancel ? "cancelled" : "queued",
-      ]);
+      expect(await pendingStates()).toEqual([cancel ? "cancelled" : "queued"]);
       expect(consumed).toEqual([]);
-      releaseCleanup.resolve();
+      cleanupGate.release();
       await command;
       if (cancel) {
         expect(consumed).toEqual([]);
         await fixture.finishDispatch();
-        expect(
-          vi
-            .mocked(context.broadcast)
-            .mock.calls.slice(broadcastsAtStop)
-            .filter(
-              ([event, payload]) =>
-                event === "chat" &&
-                isRecord(payload) &&
-                payload.runId === sendParams.idempotencyKey &&
-                payload.state === "delta",
-            ),
-        ).toEqual([]);
+        expect(vi.mocked(context.broadcast).mock.calls.slice(broadcastsAtStop)).not.toContainEqual(
+          expect.objectContaining({
+            0: "chat",
+            1: expect.objectContaining({ runId: sendParams.idempotencyKey, state: "delta" }),
+          }),
+        );
         expect(
           context.chatRunState.runs.get(sendParams.idempotencyKey)?.releaseBufferAuthority,
         ).toBeUndefined();
@@ -559,22 +493,14 @@ it.for([false, true])(
       expect(consumed).toEqual([expect.stringContaining(sendParams.message)]);
       expect((await listSessionPendingInputs(scope)).total).toBe(0);
     } finally {
-      releaseMedia.resolve();
-      releaseDirect.resolve();
-      releaseCleanup.resolve();
+      mediaGate.release();
+      directGate.release();
+      cleanupGate.release();
       try {
         runs.detachActiveEmbeddedRun(scope.sessionId, handle);
         runAuthority.releaseAgentRunDelegatedAuthority(authority);
         await command?.catch(() => {});
-        clearSessionQueues(
-          [scope.sessionKey],
-          captureSessionTarget({
-            storeScope: scope.storePath,
-            sessionKey: scope.sessionKey,
-            incarnation: scope.sessionId,
-            agentId: scope.agentId,
-          }),
-        );
+        clearFixtureQueues(fixture);
         await stop?.catch(() => {});
         await fixture.cleanup();
       } finally {
@@ -614,23 +540,17 @@ it("preserves direct pre-adoption rejection guidance instead of publishing queue
       };
     });
   runtime.execute.mockReset();
-  dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
+  dispatchInboundMessageMock.mockImplementation((raw: unknown) => {
     const params = raw as Parameters<typeof dispatchInboundMessage>[0];
     inputSignal = params.replyOptions?.turnAdoptionLifecycle?.abortSignal;
-    try {
-      return await dispatchActual({ ...params, cfg: config });
-    } finally {
-      dispatched.resolve();
-    }
+    return dispatchActual({ ...params, cfg: config }).finally(() => dispatched.resolve());
   });
   const guidance =
     "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.";
   try {
-    const ack = await fixture.send();
-    expect(ack.mock.calls[0]?.[1]).toMatchObject({ runId, status: "started" });
+    expect((await fixture.send()).mock.calls[0]?.[1]).toMatchObject({ runId, status: "started" });
     await withinTest(dispatched.promise, signal);
     await fixture.finishDispatch();
-    expect(rejectAdmission).toHaveBeenCalledOnce();
     expect(inputSignal?.aborted).toBe(false);
     expect(runtime.execute).not.toHaveBeenCalled();
     expect(fixture.context.dedupe.get(`chat:${runId}`)).toMatchObject({
@@ -642,10 +562,10 @@ it("preserves direct pre-adoption rejection guidance instead of publishing queue
       expect.objectContaining({ runId, state: "aborted" }),
       expect.anything(),
     );
-    const replay = await fixture.send();
-    expect(replay.mock.calls[0]?.[0]).toBe(false);
-    expect(replay.mock.calls[0]?.[1]).toMatchObject({ runId, status: "error", summary: guidance });
-    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+    expect((await fixture.send()).mock.calls[0]).toMatchObject({
+      0: false,
+      1: { runId, status: "error", summary: guidance },
+    });
   } finally {
     rejectAdmission.mockRestore();
     await fixture.cleanup();

@@ -1,5 +1,6 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import { scanDoctorSessionEntriesTolerant } from "../config/sessions/session-accessor.js";
+import { SESSION_ENTRY_NUMERIC_FIELDS } from "../config/sessions/session-entry-numeric-snapshot.js";
 import {
   hasLegacySessionEntryState,
   hasLegacySessionProviderState,
@@ -37,7 +38,10 @@ import {
   rewriteDoctorSessionEntries,
   scanDoctorSessionEntryRecords,
 } from "./doctor/shared/session-entry-rewrite.js";
-import { migrateLegacySessionEntryState } from "./doctor/shared/session-entry-shape.js";
+import {
+  migrateLegacySessionEntryState,
+  type SessionEntryStateRepair,
+} from "./doctor/shared/session-entry-shape.js";
 
 export type SessionDeliveryStateRepairReport = ReturnType<typeof repairCanonicalSessionEntries>;
 
@@ -83,7 +87,7 @@ type PreparedSessionEntryRepairParams =
         entry: Record<string, unknown>,
         sessionKey: string,
         updatedAt: number,
-      ) => Record<string, unknown>;
+      ) => SessionEntryStateRepair;
       deferSchemaRepair?: boolean;
       deferToMediaPreparation?: boolean;
     });
@@ -217,6 +221,13 @@ export function repairCanonicalSessionEntries(
   };
 }
 
+function needsLegacySessionEntryRepair(entry: Record<string, unknown>): boolean {
+  return (
+    hasLegacySessionEntryState(entry) ||
+    SESSION_ENTRY_NUMERIC_FIELDS.some((field) => typeof entry[field] === "string")
+  );
+}
+
 /** Raw repair and its backup precede all canonical session readers. */
 export async function repairLegacySessionEntryStates(params: {
   apply: boolean;
@@ -237,15 +248,18 @@ export async function repairLegacySessionEntryStates(params: {
     const plan = prepareSessionEntryRepairs({
       ...params,
       source: "raw",
-      rawNeedsRepair: hasLegacySessionEntryState,
+      rawNeedsRepair: needsLegacySessionEntryRepair,
       rawTransform: (entry, sessionKey, updatedAt) => {
-        if (!hasLegacySessionEntryState(entry)) {
-          return entry;
+        if (!needsLegacySessionEntryRepair(entry)) {
+          return { entry };
         }
         const next = migrateLegacySessionEntryState(entry, updatedAt, sessionKey);
-        return hasLegacySessionProviderState(entry)
-          ? normalizeLegacySessionEntryDelivery(next)
-          : next;
+        return {
+          ...next,
+          entry: hasLegacySessionProviderState(entry)
+            ? normalizeLegacySessionEntryDelivery(next.entry)
+            : next.entry,
+        };
       },
       updateDeliveryProjection: true,
     });

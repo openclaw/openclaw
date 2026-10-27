@@ -2,7 +2,7 @@ import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
+import { findCodeRegions, isInsideCode } from "../shared/text/code-ranges.js";
 
 type CanvasSurface = "assistant_message" | "node_panel";
 type CanvasSandbox = "strict" | "scripts";

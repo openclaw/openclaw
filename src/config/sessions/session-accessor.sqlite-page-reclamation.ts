@@ -89,6 +89,7 @@ export async function withSqliteSessionPageReclamation<T>(
     databaseOptions: ReclamationDatabaseOptions,
     archives: SessionArchivePruningOperations,
   ) => Promise<T>,
+  assertCallerCurrent?: () => void,
 ): Promise<T> {
   if (
     captureSessionActorStorageOwner(
@@ -105,7 +106,12 @@ export async function withSqliteSessionPageReclamation<T>(
   if (physical && !physical.key.startsWith("file:")) {
     throw new Error("SQLite archive pruning requires its existing database");
   }
-  return withSqliteMutationWorkerLifetime(options, async ({ assertCurrent, signal }) => {
+  return withSqliteMutationWorkerLifetime(options, async (lifetime) => {
+    const { signal } = lifetime;
+    const assertCurrent = () => {
+      lifetime.assertCurrent();
+      assertCallerCurrent?.();
+    };
     const withArchiveWriter = <Value>(
       databaseOptions: ReclamationDatabaseOptions,
       assertWriterCurrent: () => void,

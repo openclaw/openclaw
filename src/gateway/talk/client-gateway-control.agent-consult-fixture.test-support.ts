@@ -9,7 +9,7 @@ import {
   mocks,
   type ConsultParams,
 } from "./client-gateway-control.agent-consult.test-support.js";
-import type { TalkAgentConsultAuthority } from "./client-gateway-control.js";
+import type { TalkAgentConsultAuthority } from "./client-tool-authority.js";
 
 export function createConsultRunner(
   overrides: Partial<Parameters<typeof createTalkClientAgentConsultRunner>[0]> = {},

@@ -27,7 +27,7 @@ export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToo
 
 const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>();
 
-export type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
+type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
 
 const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();
 const toolTurnInputScopeByHook = new WeakMap<InternalToolTurnCompletionHook, object>();

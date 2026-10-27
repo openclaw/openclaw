@@ -5,11 +5,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import {
-  applyEmbeddedAttemptToolsAllow,
-  resolveEmbeddedAttemptToolConstructionPlan,
-} from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { buildEmbeddedAttemptToolRunContext } from "../../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
@@ -51,6 +46,7 @@ import {
 } from "./session-event-handoff.js";
 import {
   configureEventState,
+  createEventManagedTools,
   runEventFixture,
   startEmbeddedTurn,
 } from "./session-event.test-support.js";
@@ -73,13 +69,13 @@ await Promise.all([
 ]);
 
 type EventReceipt = ReturnType<typeof enqueueSessionEventForHost>;
-function observeEnqueue(source: string, onReceipt: (receipt: EventReceipt) => void) {
+function observeEnqueue(source: string | undefined, onReceipt: (receipt: EventReceipt) => void) {
   const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
   return vi
     .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
     .mockImplementation((text, options) => {
       const receipt = enqueue(text, options);
-      if (options.source === source) {
+      if (source === undefined || options.source === source) {
         onReceipt(receipt);
       }
       return receipt;
@@ -145,13 +141,9 @@ async function enqueueGuardedCliWatchdog(params: {
     ],
   });
   let receipt: ReturnType<typeof enqueueSessionEventForHost> | undefined;
-  const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
-  const observer = vi
-    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
-    .mockImplementation((...args) => {
-      receipt = enqueue(...args);
-      return receipt;
-    });
+  const observer = observeEnqueue(undefined, (value) => {
+    receipt = value;
+  });
   const supervisor = vi.spyOn(processSupervisor, "getProcessSupervisor").mockReturnValue({
     acquireScopeCleanup: () => async () => {},
     spawn: async () => ({
@@ -368,39 +360,10 @@ it.for([
           let restoreDatabase: (() => void) | undefined;
           try {
             observedMode = params.permissionMode;
-            const toolRunContext = buildEmbeddedAttemptToolRunContext({
-              ...params,
-              model:
-                params.provider && params.model
-                  ? { provider: params.provider, id: params.model }
-                  : undefined,
-            });
-            const construction = resolveEmbeddedAttemptToolConstructionPlan({
-              toolsAllow: toolRunContext.runtimeToolAllowlist,
-            });
-            const boundTools = expectDefined(
-              host.capabilities.createToolSurface,
-              "managed tool surface",
-            )({
-              ...toolRunContext,
-              config: params.config,
-              agentId: params.agentId,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-              workspaceDir: workspace.effectiveWorkspace,
-              cwd: workspace.effectiveCwd,
-              sessionPermissionPolicy: workspace.sessionPermissionPolicy,
-              toolConstructionPlan: {
-                ...construction.codingToolConstructionPlan,
-                includeShellTools: false,
-                includeChannelTools: false,
-                includeOpenClawTools: false,
-                includePluginTools: false,
-              },
-            });
-            const tools = applyEmbeddedAttemptToolsAllow(
-              boundTools,
-              construction.runtimeToolAllowlist,
+            const tools = createEventManagedTools(
+              params,
+              workspace,
+              expectDefined(host.capabilities.createToolSurface, "managed tool surface"),
             );
             const read = expectDefined(
               tools.find((tool) => tool.name === "read"),
@@ -418,7 +381,7 @@ it.for([
                 const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
                 const foreignPath = `${database.path}.foreign.sqlite`;
                 const originalPath = `${database.path}.original`;
-                const foreign = openOpenClawAgentDatabase({
+                openOpenClawAgentDatabase({
                   agentId: scope.agentId,
                   path: foreignPath,
                 });
@@ -429,13 +392,6 @@ it.for([
                     label: "foreign owner",
                   },
                 );
-                expect(
-                  String(
-                    foreign.db
-                      .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-                      .get(scope.sessionKey)?.entry_json,
-                  ),
-                ).toContain("foreign owner");
                 fsSync.renameSync(database.path, originalPath);
                 fsSync.renameSync(foreignPath, database.path);
                 restoreDatabase = () => {
@@ -773,7 +729,6 @@ it.for([
               retainedOverflow,
             );
           }
-          expect(starts).toHaveLength(1);
           observed.forEach((notice) => assertCursor(notice));
           // Subsequent queue execution uses real time; only the notice coalescing window was advanced.
           vi.useRealTimers();

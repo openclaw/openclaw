@@ -167,6 +167,46 @@ it.each(["browser", "cli"] as const)(
   },
 );
 
+it.each([true, false])(
+  "keeps GitHub definitions and the catalog across operator and wake turns (publication=%s)",
+  async (githubPublicationAvailable) => {
+    const render = (options: ToolOptions) => {
+      const tools = createOpenClawCodingTools({ ...options, githubPublicationAvailable }).filter(
+        (tool) => tool.name.startsWith("github_"),
+      );
+      expect(tools.some((tool) => tool.name === "github_publish")).toBe(true);
+      const catalogRef = createToolSearchCatalogRef();
+      const ctx = { config, catalogRef };
+      onTestFinished(() => clearToolSearchCatalog(ctx));
+      const compacted = applyCodeModeCatalog({
+        ...ctx,
+        tools: [...createCodeModeTools(ctx), ...tools],
+      });
+      return {
+        definitions: surface(tools),
+        compacted: surface(compacted.tools),
+        prompt: buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []),
+      };
+    };
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "prefix-operator",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+    });
+    const expected = await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: session.sessionKey!, operatorAuthority },
+      () => render(userTurn),
+    );
+    for (const sourceTool of ["subagent_announce", "subagent_settle"]) {
+      expect(render(completionTurn(sourceTool))).toEqual(expected);
+    }
+    expect(render({ ...session, trigger: "cron", jobId: "scheduled-continuation" })).toEqual(
+      expected,
+    );
+    expect(render({ ...session, trigger: "heartbeat" })).toEqual(expected);
+  },
+);
+
 it("refuses a wake-turn screen call without a requesting UI through the execution gate", async () => {
   const { wake } = await webchatSession();
   for (const senderIsOwner of [false, true]) {

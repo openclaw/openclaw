@@ -21,6 +21,25 @@ const CARAPACE_STATUS_CLASS: Record<SettingsStatusKind, string> = {
   warn: "oc-status-warning",
 };
 
+export function RetryAction(props: {
+  onRetry: () => void;
+  label?: string;
+  class?: string;
+  type?: "button" | "submit" | "reset";
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      class={props.class ?? "btn btn--sm"}
+      type={props.type}
+      disabled={props.disabled}
+      onClick={() => props.onRetry()}
+    >
+      {props.label ?? t("common.retry")}
+    </button>
+  );
+}
+
 type SettingsRowProps = {
   title: JSX.Element;
   description?: JSX.Element;

@@ -7,10 +7,12 @@ import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import * as managedBinary from "./crabbox-managed-binary.js";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import {
   warmImage,
+  warmAllocation,
   warmRecord,
   warmStore,
   captureOperation,
@@ -133,14 +135,9 @@ describe("Crabbox worker doctor", () => {
       );
       await mkdir(path.dirname(binary), { recursive: true });
       await writeFile(binary, version);
-      const command = vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
-        stdout: version,
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      });
+      const command = vi
+        .spyOn(processRuntime, "runCommandWithTimeout")
+        .mockResolvedValue(commandResult({ stdout: version }));
       const install = vi.spyOn(managedBinary, "ensureManagedCrabboxBinary");
       const ctx = context({ binary: "/nonexistent/crabbox" }, { env });
       const check = captureCrabboxDoctorCheck();
@@ -230,6 +227,21 @@ describe("Crabbox warm-image doctor", () => {
                   : {}),
               });
       }
+      if (operation === "retire") {
+        record.allocations = {
+          cbx_choice_holder: warmAllocation({
+            kind: "checkpoint",
+            checkpointId: "chk_predecessor",
+          }),
+          cbx_generation_holder: warmAllocation(
+            { kind: "cold" },
+            {
+              imageGeneration: { checkpointId: "chk_predecessor", createdAtMs: 1 },
+            },
+          ),
+          cbx_unrelated: warmAllocation(),
+        };
+      }
       store.register("profile", record);
       const probe = vi.spyOn(managedBinary, "probeCrabboxVersion");
       const command = vi
@@ -261,6 +273,12 @@ describe("Crabbox warm-image doctor", () => {
           "capture attempts are skipped until `warmImages.refreshAfter`",
           "supports native checkpoints",
         ]);
+      } else if (operation === "retire") {
+        expectText(
+          findings[0]?.message,
+          ["cbx_choice_holder", "cbx_generation_holder"],
+          ["cbx_unrelated"],
+        );
       } else if (operation === "uncertain") {
         expectText(findings[0]?.fixHint, ["chk_interrupted_a", "chk_interrupted_b"]);
         expect(findings[0]?.fixHint).toContain(

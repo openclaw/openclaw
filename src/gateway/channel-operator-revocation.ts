@@ -20,9 +20,7 @@ export function createChannelOperatorRevocation(params: {
     }
   };
   const revoke = (reason: unknown) => {
-    if (!revocation.signal.aborted) {
-      revocation.abort(reason);
-    }
+    revocation.abort(reason);
     unsubscribe();
   };
   const assertCurrent = () => {

@@ -1,11 +1,14 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE } from "@openclaw/ai/diagnostics";
 import { APIError } from "openai/core/error";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
 import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -28,6 +31,7 @@ import {
   type TransportDropScenario,
 } from "./attempt-recovery.test-support.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
 vi.mock("../../../infra/backoff.js", async (importOriginal) => ({
@@ -284,7 +288,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       expect(fixture.markOwnedTranscriptRetry).toHaveBeenCalledTimes(2);
       expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
         includeToolFailureInstruction: false,
-        messages: fixture.attempt.messagesSnapshot,
+        messages: undefined,
       });
       expect(fixture.failoverRetryController.transientRetryCount).toBe(1);
       expectNoProfileFailure(fixture);
@@ -331,7 +335,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       expect(fixture.markOwnedTranscriptRetry).toHaveBeenCalledTimes(2);
       expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
         includeToolFailureInstruction: false,
-        messages: fixture.attempt.messagesSnapshot,
+        messages: undefined,
       });
       expect(fixture.failoverRetryController.transientRetryCount).toBe(1);
       expectNoProfileFailure(fixture);
@@ -442,14 +446,7 @@ describe("recoverEmbeddedRunAttempt", () => {
         precedingMessages: [
           { role: "user", content: "Send the previous result.", timestamp: 0 },
           previousAssistant,
-          {
-            role: "toolResult",
-            toolCallId: "previous_reply",
-            toolName: "message",
-            content: [{ type: "text", text: "Delivered." }],
-            isError: false,
-            timestamp: 0,
-          },
+          makeTextToolResult("previous_reply", "message", "Delivered.", false, 0),
         ],
         answerSegments: [
           { textEnd: 0, messageEnd: 1, finalMessageStart: 1, lastAssistant: previousAssistant },
@@ -615,7 +612,7 @@ describe("recoverEmbeddedRunAttempt", () => {
           data: expect.objectContaining({
             phase: "retrying",
             attempt: 2,
-            maxAttempts: 10,
+            maxAttempts: 16,
             reason: "rate_limit",
             retryAt: pacingNow + delayMs,
           }),
@@ -644,23 +641,67 @@ describe("recoverEmbeddedRunAttempt", () => {
     }
   });
 
-  it("exhausts ten rate-limited attempts before profile rotation and model failover", async () => {
+  it("exhausts sixteen rate-limited attempts with bounded history before rotation and failover", async () => {
+    await using sessionPromptState = await createEmbeddedRunSessionPromptState({
+      runParams: {
+        sessionId: "retry-retention",
+        sessionFile: "/tmp/retry-retention",
+        sessionPersistence: "detached",
+        workspaceDir: "/tmp/retry-retention",
+        prompt: "Inspect the synthetic image.",
+        runId: "retry-retention",
+        timeoutMs: 60_000,
+      },
+      sessionAgentId: "main",
+      resolvedSessionKey: "agent:main:retry-retention",
+      lifecycleGeneration: "retry-retention",
+      onInterrupt: () => {},
+    });
     const fixture = await recoverAfterTransportDrop({
       errorMessage: "429 provider rate limit",
       diagnostics: [],
       content: [],
       replaySafe: true,
+      noTools: true,
+      continueFromCurrentTranscript: sessionPromptState.continueFromCurrentTranscript,
     });
+    const histories: WeakRef<object>[] = [];
+    const retainedBytes: number[] = [];
+    const imageBytes = 128 * 1024;
+    const replaceHistory = (retry: number) => {
+      const history = {
+        role: "user" as const,
+        content: [
+          {
+            type: "image" as const,
+            mimeType: "image/png",
+            data: Buffer.alloc((imageBytes * 3) / 4, retry).toString("base64"),
+          },
+        ],
+        timestamp: retry,
+      };
+      histories.push(new WeakRef(history));
+      fixture.attempt.messagesSnapshot = [history, fixture.erroredAssistant];
+    };
     const { failoverRetryController: failover } = fixture;
     expect(fixture.recovery.action).toBe("retry");
-    for (let retry = 2; retry <= 9; retry++) {
+    for (let retry = 2; retry <= 15; retry++) {
+      replaceHistory(retry);
       expect((await fixture.recover()).action).toBe("retry");
+      // The mock observer must not itself own old recovery arguments.
+      fixture.continueFromCurrentTranscript.mockClear();
+      if (retry === 2 || retry === 8 || retry === 15) {
+        await nextTurn();
+        queryObjects(WeakRef);
+        retainedBytes.push(histories.filter((history) => history.deref()).length * imageBytes);
+      }
     }
+    expect(retainedBytes).toEqual([imageBytes, imageBytes, imageBytes]);
     expect(failover.advanceAuthProfile).not.toHaveBeenCalled();
     expect(await fixture.recover()).toEqual({ action: "proceed" });
-    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledTimes(9);
+    expect(fixture.continueFromCurrentTranscript).not.toHaveBeenCalled();
     expect(fixture.onAgentEvent.mock.calls.map(([event]) => event.data.attempt)).toEqual([
-      2, 3, 4, 5, 6, 7, 8, 9, 10,
+      2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
     ]);
     await expect(handleAssistantFailureAfterRecovery(fixture, "rate_limit")).rejects.toMatchObject({
       name: "FailoverError",
@@ -668,6 +709,31 @@ describe("recoverEmbeddedRunAttempt", () => {
       status: 429,
     });
     expect(failover.advanceAuthProfile).toHaveBeenCalledOnce();
+  });
+
+  it.each<[string, TransportDropScenario, boolean]>([
+    ["no output after settled tools", { content: [] }, true],
+    ["no output before work", { content: [], noTools: true, replaySafe: true }, true],
+    ["partial reasoning", {}, false],
+    ["a native harness thread", { content: [], pluginHarnessOwnsTransport: true }, false],
+    ["an active lifecycle item", { content: [], activeCount: 1 }, false],
+    [
+      "a thrown prompt failure",
+      { content: [], ...promptError(providerError(undefined, "429 provider rate limit")) },
+      false,
+    ],
+  ])("replays the user turn after a rate limit with %s: %s", async (_name, scenario, replays) => {
+    const fixture = await recoverAfterTransportDrop({
+      errorMessage: "Rate limit reached on tokens per min (TPM). Please try again in 25ms.",
+      diagnostics: [],
+      ...scenario,
+    });
+    expect(fixture.recovery.action).toBe("retry");
+    expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
+      includeToolFailureInstruction: false,
+      messages: scenario.pluginHarnessOwnsTransport ? fixture.attempt.messagesSnapshot : undefined,
+      ...(replays ? { replayCurrentUserTurn: true } : {}),
+    });
   });
 
   it.each<[string, TransportDropScenario]>([
@@ -728,7 +794,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(fixture.markOwnedTranscriptRetry).toHaveBeenCalledOnce();
     expect(fixture.continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
       includeToolFailureInstruction: Boolean(scenario.lastToolError),
-      messages: fixture.attempt.messagesSnapshot,
+      messages: undefined,
     });
     expectNoProfileFailure(fixture);
     expect(fixture.onAgentEvent).toHaveBeenCalledWith(

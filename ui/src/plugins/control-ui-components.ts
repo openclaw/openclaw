@@ -10,6 +10,10 @@ import type { ApplicationContext } from "../app/context.ts";
 import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { listen as listenTo } from "../lib/reactive/listener.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
+import {
+  sharedAgentIdentityProjection,
+  sharedAgentsProjection,
+} from "../lib/reactive/shared-application-projections.ts";
 
 function resolveAppearanceColor(value: string | null | undefined): string {
   const color = normalizeSessionColorValue(value ?? "");
@@ -141,7 +145,10 @@ export function createControlUiComponents(options: {
         };
       },
       undefined,
-      (context) => [context.agents, context.agentIdentity],
+      (context) => [
+        sharedAgentsProjection(context.agents),
+        sharedAgentIdentityProjection(context.agentIdentity),
+      ],
       undefined,
       (next, context) => {
         void context.agentIdentity.ensure([
@@ -233,7 +240,7 @@ export function createControlUiComponents(options: {
         };
       },
       undefined,
-      (context) => [context.agents],
+      (context) => [sharedAgentsProjection(context.agents)],
     ),
     mountSelectPicker: component(
       "openclaw-select-picker",
@@ -264,7 +271,7 @@ export function createControlUiComponents(options: {
         "prop:presented": next.presented,
       }),
       undefined,
-      (context) => [context.agents],
+      (context) => [sharedAgentsProjection(context.agents)],
     ),
     mountDashboard: component(
       "openclaw-plugin-session-dashboard",

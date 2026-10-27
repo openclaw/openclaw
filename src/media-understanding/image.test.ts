@@ -82,14 +82,14 @@ function stubProviderStream(result = vi.fn(async () => opencodeCompletion())) {
     },
   };
 }
-function requestOpencode(
-  { provider, model, baseUrl } = opencode,
-  extras: Record<string, unknown> = {},
-) {
-  mockImageModel({ provider, id: model, api: "openai-completions", baseUrl, ...extras });
-  return describeImageWithModelCore(
-    request({ provider, model }, { prompt: "Describe the image." }),
-  );
+function requestOpencode() {
+  mockImageModel({
+    provider: opencode.provider,
+    id: opencode.model,
+    api: "openai-completions",
+    baseUrl: opencode.baseUrl,
+  });
+  return describeImageWithModelCore(request(opencode));
 }
 function mockUnknownMinimax() {
   resolveModelAsyncMock.mockResolvedValue({
@@ -111,6 +111,75 @@ async function describeCn(providers: Providers, workspaceDir?: string) {
 
 describe("describeImageWithModelCore", () => {
   installImageRuntimeTestHooks({ apiKey: "test-api-key" });
+
+  it("surfaces provider errors from image-model responses", async () => {
+    mockOpenAi();
+    completeMock.mockResolvedValue({
+      ...openAiCompletion(""),
+      stopReason: "error",
+      errorMessage: "boom",
+    });
+    await expect(describeImageWithModelCore(request())).rejects.toThrow(/boom/i);
+    expect(completeMock).toHaveBeenCalledOnce();
+  });
+
+  it("returns trimmed text from image-model responses", async () => {
+    const ref = { provider: "anthropic", model: "claude-opus-4-6" };
+    mockImageModel({ provider: ref.provider, id: ref.model, api: "anthropic-messages" });
+    completeMock.mockResolvedValue(
+      imageCompletion("anthropic-messages", ref.provider, ref.model, "  hello  "),
+    );
+    await expect(describeImageWithModelCore(request(ref))).resolves.toEqual({
+      text: "hello",
+      model: ref.model,
+    });
+  });
+
+  it.each([
+    ["reasoning_content", "reasoning_content", true, 0],
+    ["Responses JSON", JSON.stringify({ id: "rs_123", type: "reasoning" }), true, 0],
+    ["Responses object", { id: "rs_456", type: "reasoning.encrypted" }, true, 0],
+    [
+      "oversized Responses JSON",
+      JSON.stringify({
+        id: "rs_123",
+        summary: [{ text: "x".repeat(2_100) }],
+        type: "reasoning",
+      }),
+      true,
+      0,
+    ],
+    ["signature after bounded block scan", "reasoning_content", false, 50],
+  ] as const)(
+    "retries image reasoning-only responses: %s",
+    async (_name, signature, retry, precedingBlocks) => {
+      mockOpenAi();
+      const completion = openAiCompletion("retry ok");
+      completeMock
+        .mockResolvedValueOnce({
+          ...completion,
+          content: [
+            ...Array.from({ length: precedingBlocks }, () => ({
+              type: "thinking",
+              thinking: "untagged",
+            })),
+            {
+              type: "thinking",
+              thinking: "  <think>private</think> maybe a cat  ",
+              thinkingSignature: signature,
+            },
+          ],
+        })
+        .mockResolvedValueOnce(completion);
+      const result = describeImageWithModelCore(request());
+      if (retry) {
+        await expect(result).resolves.toEqual({ text: "retry ok", model: openai.model });
+      } else {
+        await expect(result).rejects.toThrow(/returned no text/i);
+      }
+      expect(completeMock).toHaveBeenCalledTimes(retry ? 2 : 1);
+    },
+  );
 
   it.each([
     { modelMaxTokens: undefined, requested: undefined, expected: 4096 },
@@ -166,19 +235,6 @@ describe("describeImageWithModelCore", () => {
     const first = options(0).header;
     expect(first).toMatch(uuidPattern);
     expect(options(1).header).toBe(first);
-  });
-
-  it.each([
-    [
-      "unrelated provider",
-      { provider: "openai", model: "gpt-5-mini", baseUrl: "https://api.openai.com/v1" },
-      {},
-    ],
-    ["model-level header", opencode, { headers: { "X-OpenCode-Session": "model-session" } }],
-  ] as const)("does not inject routing identity for %s", async (_name, endpoint, extras) => {
-    const { options } = stubProviderStream();
-    await requestOpencode(endpoint, extras);
-    expect(options(0)).toEqual({ sessionId: undefined, header: undefined });
   });
 
   it("does not start another MiniMax request after caller cancellation", async () => {

@@ -41,7 +41,7 @@ export async function readSessionCommunicationLineage(
   return chain;
 }
 
-export async function matchesSessionCommunicationParent(
+async function matchesSessionCommunicationParent(
   parent: CommunicationEndpoint,
   expectedId: string | undefined,
   assertCurrent: () => void,

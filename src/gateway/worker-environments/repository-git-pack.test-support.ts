@@ -4,6 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import { afterEach, expect, vi } from "vitest";
+import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
@@ -139,9 +140,7 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
     }
   }
   const server = http.createServer(serve);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const origin = await listenLoopback(server);
   cleanups.push(
     () =>
       new Promise<void>((resolve, reject) => {
@@ -149,11 +148,7 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
         server.closeAllConnections();
       }),
   );
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Synthetic Git endpoint has no TCP address");
-  }
-  const endpoint = `http://127.0.0.1:${address.port}/remote.git`;
+  const endpoint = `${origin}/remote.git`;
   const fetches: { argv: string[]; settled: boolean; configCount: number; configKeys: string[] }[] =
     [];
   const failedDiagnostics: string[] = [];

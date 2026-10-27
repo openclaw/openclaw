@@ -20,6 +20,7 @@ import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
 } from "../plugins/loader.test-fixtures.js";
+import { cleanupNativeFixture } from "../plugins/native-resource.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
@@ -45,6 +46,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { catalogTool } from "./agent-bundle-mcp-fixture.test-support.js";
 import type { McpToolCatalog } from "./agent-bundle-mcp-types.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import * as modelCatalog from "./model-catalog.js";
@@ -382,12 +384,7 @@ module.exports = {
       }
     },
     cleanupResources: () => {
-      for (const { database } of connections) {
-        if (database.isOpen) {
-          database.close();
-        }
-      }
-      Reflect.deleteProperty(globalThis, resourceKey);
+      cleanupNativeFixture(resourceKey, connections);
     },
     failNormalization: () => fs.writeFileSync(normalizationFailure, "fail", "utf8"),
     readNormalizations: () =>
@@ -772,13 +769,10 @@ it("owns base and sandbox MCP normalization without caching", async () => {
       generatedAt: 1,
       servers: {},
       tools: [
-        {
-          serverName: "inventory",
-          safeServerName: "inventory",
-          toolName: "probe",
+        catalogTool("inventory", "probe", {
           inputSchema: Type.Object({}),
           fallbackDescription: "Synthetic inventory probe",
-        },
+        }),
       ],
     };
     warmMcp.runtime = {

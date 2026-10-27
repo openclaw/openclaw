@@ -27,11 +27,6 @@ type PostUpgradeFinding = {
   entry?: string;
 };
 
-type PostUpgradeReport = {
-  probesRun: string[];
-  findings: PostUpgradeFinding[];
-};
-
 const POST_UPGRADE_PROBE_CODES = [
   "plugin.index_unavailable",
   "plugin.entry_unresolved",
@@ -40,7 +35,7 @@ const POST_UPGRADE_PROBE_CODES = [
   "plugin.version_drift",
 ] as const;
 
-function buildReport(findings: PostUpgradeFinding[]): PostUpgradeReport {
+function buildReport(findings: PostUpgradeFinding[]) {
   return { probesRun: [...POST_UPGRADE_PROBE_CODES], findings };
 }
 

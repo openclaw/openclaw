@@ -4,6 +4,7 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import * as timers from "node:timers";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -27,14 +28,6 @@ const { parseTtsDirectives, resolveModelOverridePolicy, getResolvedSpeechProvide
 
 function asLegacyTtsConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
-}
-
-function mockCallAt(mock: { mock: { calls: Array<Array<unknown>> } }, index: number): unknown[] {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected mock call at index ${index}`);
-  }
-  return call;
 }
 
 function createOpenAiSpeechCfg(model: "tts-1" | "gpt-4o-mini-tts"): OpenClawConfig {
@@ -312,7 +305,10 @@ describe("OpenAI speech public runtime contract", () => {
 
         expect(result.success).toBe(true);
         expect(fetchMock).toHaveBeenCalledTimes(1);
-        const [, init] = mockCallAt(fetchMock, 0) as [string, RequestInit];
+        const [, init] = expectDefined(fetchMock.mock.calls[0], "speech fetch call") as [
+          string,
+          RequestInit,
+        ];
         expect(typeof init.body).toBe("string");
         const body = JSON.parse(init.body as string) as Record<string, unknown>;
         expect(body).toMatchObject({

@@ -4,11 +4,11 @@ import { createSignal, flush, onSettled } from "solid-js";
 import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { stubTargetRetainingObserver } from "../../../test-helpers/resize-observer.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-} from "../chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "../chat-application-context.test-support.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
+import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
 import {
   getSessionWorkspace,
@@ -110,17 +110,13 @@ it("keeps Files search usable during a failed owner read and retries without dup
   const first = createDeferred<List>();
   const retry = createDeferred<List>();
   const listFiles = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
-  const state: SessionWorkspaceHost = {
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
     sessionKey: "agent:main:workspace",
-    connected: true,
-    connectionEpoch: 1,
-    hello: null,
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
     client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
     sessions: createSessionCapabilityFixture({ listFiles }),
-    sidebarContent: null,
     handleOpenSidebar: () => {},
-  };
+  });
   const props = () =>
     createSessionWorkspaceProps(state, { expanded: true, presentation: "desktop" });
   const [current, setCurrent] = createSignal(props());
@@ -521,13 +517,7 @@ describe("session workspace path actions", () => {
 function setupDesktopLayout() {
   // JSDOM has no layout observation or font loading. These tests exercise the
   // workspace owner; real-browser proof owns overflow and disclosure motion.
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      disconnect() {}
-    },
-  );
+  stubTargetRetainingObserver("ResizeObserver");
   vi.stubGlobal("matchMedia", (media: string) => ({
     media,
     matches: false,
@@ -574,17 +564,13 @@ it("desktop browses lazy directories and restores activity after global search c
       },
     }),
   );
-  const state: SessionWorkspaceHost = {
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
     sessionKey: "agent:main:workspace",
-    connected: true,
-    connectionEpoch: 1,
-    hello: null,
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
     client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
     sessions: createSessionCapabilityFixture({ listFiles }),
-    sidebarContent: null,
     handleOpenSidebar: () => {},
-  };
+  });
   const props = () =>
     createSessionWorkspaceProps(state, { expanded: true, presentation: "desktop" });
   const mounted = await mountWorkspace(props());
@@ -596,6 +582,22 @@ it("desktop browses lazy directories and restores activity after global search c
     expect(listFiles.mock.calls.map(([, options]) => options?.path)).toEqual(["", "docs"]);
     expect(mounted.container.textContent).toContain(
       "Showing the first matching files. Refine the search to narrow results.",
+    );
+    const directory = getSessionWorkspace(state).directories!.docs!;
+    directory.browser = {
+      ...directory.browser!,
+      entries: [{ path: "docs/refreshed.md", name: "refreshed.md", kind: "file" }],
+    };
+    sessionWorkspaceForHost(state).publish();
+    await vi.waitFor(() => expect(button(mounted.container, "docs/refreshed.md")).not.toBeNull());
+    expect(button(mounted.container, "docs/untouched.md")).toBeNull();
+    directory.browser = {
+      ...directory.browser,
+      entries: [{ path: "docs/refreshed.md", name: "renamed.md", kind: "file" }],
+    };
+    sessionWorkspaceForHost(state).publish();
+    await vi.waitFor(() =>
+      expect(button(mounted.container, "docs/refreshed.md")?.textContent).toContain("renamed.md"),
     );
     props().onSetFilter("changed");
     flush();
@@ -749,17 +751,13 @@ it("mobile restores folder search and root groups without mixing global search r
           : [{ path: "docs", name: "docs", kind: "directory" as const }],
     },
   }));
-  const state: SessionWorkspaceHost = {
+  const state: SessionWorkspaceHost = createSessionWorkspaceHost({
     sessionKey: "agent:main:workspace",
-    connected: true,
-    connectionEpoch: 1,
-    hello: null,
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
     client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
     sessions: createSessionCapabilityFixture({ listFiles }),
-    sidebarContent: null,
     handleOpenSidebar: () => {},
-  };
+  });
   const props = () =>
     createSessionWorkspaceProps(state, { expanded: true, presentation: "mobile" });
   const mounted = await mountWorkspace(props());

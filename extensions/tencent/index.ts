@@ -4,10 +4,7 @@ import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-aut
 import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { createProviderConnectionPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
-import {
-  createPayloadPatchStreamWrapper,
-  type OpenAICompatibleThinkingLevel,
-} from "openclaw/plugin-sdk/provider-stream-shared";
+import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   buildTokenHubProvider,
   buildTokenPlanProvider,
@@ -38,17 +35,6 @@ const TENCENT_TWO_RUNG_EFFORT_MAP: Readonly<Record<string, string>> = {
   high: "high",
   xhigh: "high",
 };
-
-function resolveRequestedEffort(
-  thinkingLevel: OpenAICompatibleThinkingLevel,
-  options: StreamOptions | undefined,
-): string | undefined {
-  const raw =
-    (typeof options?.reasoningEffort === "string" && options.reasoningEffort) ||
-    options?.reasoning ||
-    thinkingLevel;
-  return raw ? raw.trim().toLowerCase() : undefined;
-}
 
 const TENCENT_PROVIDERS = [
   {
@@ -152,7 +138,13 @@ export default definePluginEntry({
           createPayloadPatchStreamWrapper(
             ctx.streamFn,
             ({ payload, options }) => {
-              const requested = resolveRequestedEffort(ctx.thinkingLevel, options);
+              const streamOptions: StreamOptions | undefined = options;
+              const raw =
+                (typeof streamOptions?.reasoningEffort === "string" &&
+                  streamOptions.reasoningEffort) ||
+                streamOptions?.reasoning ||
+                ctx.thinkingLevel;
+              const requested = raw ? raw.trim().toLowerCase() : undefined;
               const mapped =
                 requested && Object.hasOwn(TENCENT_TWO_RUNG_EFFORT_MAP, requested)
                   ? TENCENT_TWO_RUNG_EFFORT_MAP[requested]

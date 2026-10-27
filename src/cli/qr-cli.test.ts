@@ -34,14 +34,12 @@ vi.doMock("../runtime.js", async () => {
   );
 });
 // mock-isolation: QR setup resolves fixture config and secrets without host credentials.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.loadConfig,
-  loadConfig: mocks.loadConfig,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.loadConfig>) =>
-    async () =>
-      mocks.loadConfig(...args),
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "loadConfig"),
+  };
+});
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
 vi.mock("../media/qr-terminal.ts", () => ({
   renderQrTerminal: mocks.renderTerminal,
@@ -210,6 +208,24 @@ describe("registerQrCli", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it.each([
+    { profile: "", container: "", command: "openclaw" },
+    { profile: "work", container: "", command: "openclaw --profile work" },
+    { profile: "work", container: "demo", command: "openclaw --container demo" },
+  ])("prints approval hints for $command", async ({ profile, container, command }) => {
+    vi.stubEnv("OPENCLAW_PROFILE", profile);
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
+    loadConfig.mockReturnValue(createTokenGatewayConfig());
+
+    await runQr(["--no-ascii"]);
+
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `  ${command} devices list\n  ${command} devices approve <requestId>`,
+      ),
+    );
   });
 
   it.each([

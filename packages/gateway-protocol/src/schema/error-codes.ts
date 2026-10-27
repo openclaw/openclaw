@@ -118,6 +118,11 @@ export const ClawReviewRequiredErrorDetailsSchema = closedObject({
   kind: stringLiteralUnion(["plugin", "skill"]),
 });
 
+export const PendingInputNotRetiredErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.PENDING_INPUT_NOT_RETIRED),
+  inputIds: Type.Array(NonEmptyString, { minItems: 1, maxItems: 100 }),
+});
+
 /** Structured details emitted by method-level failures. */
 export const GatewayErrorDetailsSchema = Type.Union([
   CronJobNotFoundErrorDetailsSchema,
@@ -134,7 +139,9 @@ export const GatewayErrorDetailsSchema = Type.Union([
   TaskWorktreeSourceRequiredErrorDetailsSchema,
   ClawHubRiskAcknowledgementRequiredErrorDetailsSchema,
   ClawReviewRequiredErrorDetailsSchema,
+  PendingInputNotRetiredErrorDetailsSchema,
   closedObject({ code: Type.Literal(GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY) }),
+  closedObject({ code: Type.Literal(GatewayErrorDetailCodes.OPENCLAW_CONFIG_READONLY) }),
 ]);
 
 /** Builds the canonical gateway error payload while preserving optional retry metadata. */

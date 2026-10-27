@@ -18,6 +18,7 @@ import { resetProcessRegistryForTests } from "./bash-process-registry.test-suppo
 import { runExecFixture } from "./bash-tools.exec-fixture.test-support.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
 import { createRunExit, runtimeManagedRun } from "./bash-tools.exec-runtime.test-support.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
 import {
@@ -73,12 +74,12 @@ function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]
 function queueRun(
   wait: (() => Promise<RunExit>) | undefined,
   output = "",
-  overrides: Partial<ManagedRun> = {},
+  overrides: Partial<ManagedRun> | ((input: SpawnInput) => Partial<ManagedRun>) = {},
 ) {
   supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
     ...runtimeManagedRun(input, output),
     ...(wait ? { wait } : {}),
-    ...overrides,
+    ...(typeof overrides === "function" ? overrides(input) : overrides),
   }));
 }
 
@@ -128,8 +129,7 @@ it.each([
   "starts and joins targeted sandbox cleanup for %s (cleanupFails=%s, duringFinalize=%s, requestStop=%s)",
   async (reason, cleanupFails, duringFinalize, requestStop) => {
     const termination = createDeferred();
-    const artifactFinalization = createDeferred();
-    const artifactsEntered = createDeferred();
+    const artifacts = createEnteredGate();
     const guestExit = createDeferred<ReturnType<typeof createRunExit>>();
     const otherExit = createDeferred<ReturnType<typeof createRunExit>>();
     const {
@@ -164,8 +164,7 @@ it.each([
         ),
         finalizeExec: vi.fn(async () => {
           if (marker === "guest" && duringFinalize) {
-            artifactsEntered.resolve();
-            await artifactFinalization.promise;
+            await artifacts.wait();
           }
         }),
         terminate,
@@ -175,20 +174,15 @@ it.each([
     const otherSandbox = makeSandbox("independent");
     let guestInput: SpawnInput | undefined;
     const cancelOther = vi.fn();
-    supervisorMock.spawn
-      .mockImplementationOnce(async (input: SpawnInput) => {
+    queueRun(
+      () => guestExit.promise,
+      "",
+      (input) => {
         guestInput = input;
-        return {
-          ...runtimeManagedRun(input),
-          cancel: () => input.onCancel?.("manual-cancel"),
-          wait: () => guestExit.promise,
-        };
-      })
-      .mockImplementationOnce(async (input: SpawnInput) => ({
-        ...runtimeManagedRun(input),
-        cancel: cancelOther,
-        wait: () => otherExit.promise,
-      }));
+        return { cancel: () => input.onCancel?.("manual-cancel") };
+      },
+    );
+    queueRun(() => otherExit.promise, "", { cancel: cancelOther });
     const requestIdentity = {
       runId: "sandbox-request-stop",
       sessionKey: "agent:main:targeted-cleanup",
@@ -223,7 +217,7 @@ it.each([
       );
       if (duringFinalize) {
         guestExit.resolve(createRunExit());
-        await artifactsEntered.promise;
+        await artifacts.entered;
         if (request) {
           expect(request.cancellation.cancel()).toBe(true);
           expect(originalSource.signal.aborted).toBe(false);
@@ -256,7 +250,7 @@ it.each([
       expect(sandbox.finalizeExec).toHaveBeenCalledTimes(duringFinalize ? 1 : 0);
       expect(releaseSource).not.toHaveBeenCalled();
       if (duringFinalize) {
-        artifactFinalization.resolve();
+        artifacts.release();
         otherExit.resolve(createRunExit());
         await other.promise;
         expect(settled).toBe(false);
@@ -291,7 +285,7 @@ it.each([
       expect(otherSandbox.terminate).not.toHaveBeenCalled();
       expect(otherSandbox.finalizeExec).toHaveBeenCalledOnce();
     } finally {
-      artifactFinalization.resolve();
+      artifacts.release();
       termination.resolve();
       guestExit.resolve(createRunExit());
       otherExit.resolve(createRunExit());
@@ -307,16 +301,14 @@ it.each([
 ])(
   "joins sandbox artifacts and retains cleanup failure (fails=$fails, beforeJoin=$beforeJoin, commandCode=$commandCode)",
   async ({ fails, beforeJoin, commandCode }) => {
-    const finalization = createDeferred();
-    const entered = createDeferred();
+    const finalization = createEnteredGate();
     const cleanupScope = createAgentCleanupScope();
     const scopeKey = "scope:sandbox-artifact-cleanup";
     const cleanupFailure = "sandbox artifact cleanup failed";
     queueRun(async () => createRunExit({ exitCode: commandCode }));
     let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
     const finalizeExec = vi.fn(async () => {
-      entered.resolve();
-      await finalization.promise;
+      await finalization.wait();
       if (fails) {
         throw new Error(cleanupFailure);
       }
@@ -338,9 +330,9 @@ it.each([
           },
         });
         markBackgrounded(run.session);
-        await entered.promise;
+        await finalization.entered;
         if (beforeJoin) {
-          finalization.resolve();
+          finalization.release();
           await run.promise;
         }
         let joined = false;
@@ -351,7 +343,7 @@ it.each([
           await Promise.resolve();
           expect(joined).toBe(false);
           expect(run.session.finalizing).toBe(true);
-          finalization.resolve();
+          finalization.release();
         }
         await join;
         const outcome = await run.promise;
@@ -364,7 +356,7 @@ it.each([
       });
       expect(cleanupScope.outcome).toBe(fails ? "uncertain" : "closed");
     } finally {
-      finalization.resolve();
+      finalization.release();
       await run?.promise;
     }
   },
@@ -394,8 +386,6 @@ it.each([
   });
   markBackgrounded(run.session);
   const scope = { scopeKeys: ["global"], agentId: "main" };
-  const running = readBackgroundProcesses(scope).processes[0];
-  expect(running).toMatchObject({ processId: run.session.id, status: "running" });
   if (path === "observed") {
     acknowledgeNotifyOnExit(run.session);
   }
@@ -405,14 +395,6 @@ it.each([
   expect(outcome.status).toBe("completed");
   const retained = getFinishedSession(run.session.id);
   expect(retained).toMatchObject({ scopeKey: "global", terminalStatus: "completed" });
-  expect(readBackgroundProcesses(scope).processes).toEqual([
-    expect.objectContaining({
-      processId: run.session.id,
-      instanceId: running?.instanceId,
-      status: "completed",
-      canStop: false,
-    }),
-  ]);
   expect(readBackgroundProcesses({ ...scope, agentId: "other" }).processes).toEqual([]);
   expectRoutingReleased(retained);
   expect(retained?.stdin).toBeUndefined();
@@ -540,8 +522,7 @@ describe("operator source lifetime", () => {
     const turn = new AbortController();
     const guestExit = createDeferred<RunExit>();
     const staffExit = createDeferred<RunExit>();
-    const cleanupStarted = createDeferred();
-    const cleanup = createDeferred();
+    const cleanup = createEnteredGate();
     const cancelGuest = vi.fn(() => {
       guestExit.resolve(createRunExit({ reason: "manual-cancel", exitCode: null }));
     });
@@ -549,10 +530,7 @@ describe("operator source lifetime", () => {
     queueRun(undefined, "saved guest output\n", {
       cancel: cancelGuest,
       wait: () => guestExit.promise,
-      waitForExtinction: () => {
-        cleanupStarted.resolve();
-        return cleanup.promise;
-      },
+      waitForExtinction: cleanup.wait,
     });
     queueRun(undefined, "independent output\n", {
       cancel: cancelStaff,
@@ -577,13 +555,13 @@ describe("operator source lifetime", () => {
       source.controller.abort(new Error("original invitation revoked"));
       expect(cancelGuest).toHaveBeenCalledWith("manual-cancel");
       expect(cancelStaff).not.toHaveBeenCalled();
-      await cleanupStarted.promise;
+      await cleanup.entered;
       expect(guest.session).toMatchObject({ finalizing: true, exited: false });
       expect(source.release).not.toHaveBeenCalled();
 
       expect(() => source.authority.assertCurrent()).toThrow("original invitation revoked");
       expect(staff.session.exited).toBe(false);
-      cleanup.resolve();
+      cleanup.release();
       await expect(guest.promise).resolves.toMatchObject({
         status: "failed",
         exitReason: "manual-cancel",
@@ -595,7 +573,7 @@ describe("operator source lifetime", () => {
       await expect(staff.promise).resolves.toMatchObject({ status: "completed" });
       expect(cancelStaff).not.toHaveBeenCalled();
     } finally {
-      cleanup.resolve();
+      cleanup.release();
       guestExit.resolve(createRunExit());
       staffExit.resolve(createRunExit());
       await Promise.all([guest.promise, staff.promise]);

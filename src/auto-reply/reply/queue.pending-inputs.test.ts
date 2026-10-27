@@ -40,6 +40,7 @@ import {
 } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import { createReplyParams } from "./test-helpers.js";
 import { createTypingController } from "./typing.js";
 
 vi.mock("./agent-runner-execution.js", () => ({ executeAgentTurn: vi.fn() }));
@@ -180,28 +181,18 @@ describe("followup queue durable input consumption", () => {
         const run =
           entrypoint === "queued followup"
             ? createFollowupRunner(defaults)(queued)
-            : runReplyAgent({
-                ...defaults,
-                commandBody: text,
-                transcriptCommandBody: text,
-                followupRun: queued,
-                queueKey: sessionKey,
-                resolvedQueue: { mode: "interrupt" },
-                shouldSteer: false,
-                shouldFollowup: false,
-                isActive: false,
-                opts: { turnAdoptionLifecycle: queued.turnAdoptionLifecycle },
-                sessionCtx: {
-                  Provider: "telegram",
-                  MessageSid: "channel-maintenance",
-                  SessionKey: sessionKey,
-                },
-                resolvedVerboseLevel: "off",
-                isNewSession: false,
-                blockStreamingEnabled: false,
-                resolvedBlockStreamingBreak: "message_end",
-                shouldInjectGroupIntro: false,
-              });
+            : runReplyAgent(
+                createReplyParams(queued, {
+                  ...defaults,
+                  transcriptCommandBody: text,
+                  opts: { turnAdoptionLifecycle: queued.turnAdoptionLifecycle },
+                  sessionCtx: {
+                    Provider: "telegram",
+                    MessageSid: "channel-maintenance",
+                    SessionKey: sessionKey,
+                  },
+                }),
+              );
         if (entrypoint === "queued followup") {
           await expect(run).resolves.toBeUndefined();
           const result = observed.operation?.result;

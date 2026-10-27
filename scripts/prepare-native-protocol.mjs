@@ -20,11 +20,13 @@ const outputFiles = {
   ],
 };
 
-function listInputs() {
+async function listInputs() {
+  // Published packages skip source generation before loading this source-only helper.
+  const { listDirectoryTreeStrictSync } = await import("../src/infra/directory-walk.ts");
   const { directories, files } = JSON.parse(fs.readFileSync(inputManifest, "utf8"));
   const inputs = new Set(files);
   for (const directory of directories) {
-    for (const entry of fs.readdirSync(path.join(root, directory), { recursive: true })) {
+    for (const { relativePath: entry } of listDirectoryTreeStrictSync(path.join(root, directory))) {
       if (/\.(?:ts|mts|mjs|js|json)$/.test(entry) && !/\.(?:test|spec)\./.test(entry)) {
         inputs.add(path.posix.join(directory, entry.split(path.sep).join("/")));
       }
@@ -49,7 +51,7 @@ export async function prepareNativeProtocol({ language = "all", out, check = fal
   if (!["all", "swift", "kotlin"].includes(language) || (out && language === "all")) {
     throw new Error("Choose --language swift or kotlin when using --out");
   }
-  const inputs = listInputs();
+  const inputs = await listInputs();
   const inputHash = fingerprint(inputs.map((file) => path.join(root, file)));
   const languages = language === "all" ? ["swift", "kotlin"] : [language];
   let generator;

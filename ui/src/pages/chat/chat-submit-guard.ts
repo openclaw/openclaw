@@ -5,7 +5,7 @@ import {
   type StoredChatOutboxScope,
 } from "../../lib/chat/outbox-store-scope.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";

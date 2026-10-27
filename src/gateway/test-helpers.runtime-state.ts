@@ -86,16 +86,9 @@ const gatewayTestHoisted = resolveGatewayTestFileFixture(
       endWaitCalls: new Array<string>(),
       endWaiters: new Map<string, (ended: boolean) => void>(),
       resolveEndBeforeTimeoutIds: new Set<string>(),
-      compactEmbeddedAgentSession: vi.fn<CompactEmbeddedAgentSessionFn>().mockResolvedValue({
-        ok: true,
-        compacted: true,
-        result: {
-          summary: "summary",
-          firstKeptEntryId: "entry-1",
-          tokensBefore: 120,
-          tokensAfter: 80,
-        },
-      }),
+      compactEmbeddedAgentSession: vi
+        .fn<CompactEmbeddedAgentSessionFn>()
+        .mockResolvedValue(createCompactionResult()),
     },
     testTailscaleWhois: {
       ...mutableValue<TailscaleWhoisIdentity | null>(null),
@@ -138,4 +131,17 @@ export const testConfigRoot = resolveGatewayTestFileFixture(GATEWAY_TEST_CONFIG_
 export function setTestConfigRoot(root: string): void {
   testConfigRoot.value = root;
   process.env.OPENCLAW_CONFIG_PATH = path.join(root, "openclaw.json");
+}
+
+export function createCompactionResult() {
+  return {
+    ok: true as const,
+    compacted: true as const,
+    result: {
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+      tokensAfter: 80,
+    },
+  };
 }

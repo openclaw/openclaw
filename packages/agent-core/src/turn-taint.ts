@@ -26,16 +26,14 @@ export function toolResultTaintsTurn(message: ToolResultMessage): boolean {
 }
 
 export function isActiveTurnTainted(messages: readonly AgentMessage[]): boolean {
-  for (const message of messages.toReversed()) {
+  const boundary = messages.findLast((message) => {
     if (message.role === "user") {
-      return false;
-    }
-    const metadata = readTurnTaintMetadata(message);
-    if (metadata?.turnTainted === true || metadata?.resultContentSource === "network") {
       return true;
     }
-  }
-  return false;
+    const metadata = readTurnTaintMetadata(message);
+    return metadata?.turnTainted === true || metadata?.resultContentSource === "network";
+  });
+  return boundary !== undefined && boundary.role !== "user";
 }
 
 export function withAssistantTurnTaint(

@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
-import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
+import { isDeepStrictEqual } from "node:util";
+import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
@@ -8,12 +9,23 @@ import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
 } from "../config/sessions/session-actor-storage-binding.js";
+import { getProviderRegistryIndex } from "../plugins/provider-registry-index.js";
+import {
+  getPluginRegistryForContext,
+  getPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
+import { getPluginRuntimeLoadContextState } from "../plugins/runtime/load-context-state.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
-import { readSessionRowModelFacts } from "./session-row-model-facts.js";
+import { materializeSessionRowIfChanged } from "./session-row-materialization.js";
+import {
+  prepareSessionRowModelSearch,
+  readSessionRowModelFacts,
+} from "./session-row-model-facts.js";
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import { createSessionRowCapabilityReader } from "./session-row-projection-identities.js";
@@ -26,20 +38,28 @@ import {
   resolveGatewaySessionDisplayName,
   resolveGatewaySessionKind,
 } from "./session-utils-display.js";
-import { materializeSessionRow, readSessionRowInputs } from "./session-utils-row.js";
+import { readSessionRowInputs } from "./session-utils-row.js";
 import { parseGroupKey } from "./session-utils-store.js";
 
 /** Bind live projection state to the same prepared or resident source-read boundary. */
 export function createSessionRowModelFactsReader(params: {
+  rows: () => Iterable<records.Row>;
   lookup: (query: records.Lookup) => records.Row | undefined;
   dirty: ReadonlySet<string>;
+  onFactsChange: (listener: () => void) => void;
   readSourceEntry: (row: records.Row, key: string, prepared: boolean) => records.Row["storedEntry"];
   state: () => Pick<
     Parameters<typeof readSessionRowModelFacts>[0],
     "cfg" | "modelCatalog" | "rowContext"
   >;
 }) {
-  return (query: records.Lookup, metadataPrepared = false) => {
+  let searchVocabulary:
+    | { dependencies: unknown[]; matches: ReturnType<typeof prepareSessionRowModelSearch> }
+    | undefined;
+  params.onFactsChange(() => {
+    searchVocabulary = undefined;
+  });
+  const read = (query: records.Lookup, metadataPrepared = false) => {
     const row = params.lookup(query);
     if (!row?.entry) {
       throw new Error("Session changed while preparing search facts; retry the request");
@@ -60,6 +80,34 @@ export function createSessionRowModelFactsReader(params: {
         readSourceEntry: (key) => params.readSourceEntry(row, key, metadataPrepared),
       },
     });
+  };
+  return {
+    modelFacts: read,
+    modelSearchMayMatch(search: string) {
+      const state = params.state();
+      const scope = getPluginRuntimeGatewayRequestScope();
+      const registry = getPluginRuntimeGenerationRegistry() ?? getPluginRegistryForContext();
+      const dependencies = [
+        state.cfg,
+        state.modelCatalog,
+        state.rowContext,
+        readPreparedGatewayModelMetadata(state.cfg),
+        registry,
+        registry && getProviderRegistryIndex(registry.providers),
+        (scope?.pluginRegistry === registry ? scope?.declaredProviderOwners : undefined) ??
+          (registry && getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners),
+      ];
+      if (
+        !searchVocabulary ||
+        dependencies.some((value, index) => value !== searchVocabulary!.dependencies[index])
+      ) {
+        searchVocabulary = {
+          dependencies,
+          matches: prepareSessionRowModelSearch({ ...state, rows: params.rows() }),
+        };
+      }
+      return searchVocabulary.matches(search);
+    },
   };
 }
 
@@ -131,7 +179,6 @@ export function createSessionRowMaterializer(owner: {
   acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
   materialize: (
     row: records.Row,
-    agentIds: Set<string>,
     read: typeof readResidentSessionRow,
     facts?: records.PreparedSessionRowDatabaseFacts,
   ) => boolean;
@@ -145,7 +192,6 @@ export function createSessionRowMaterializer(owner: {
     const started = performance.now();
     const cfg = owner.prepare();
     withAgentRosterFactsBatch(cfg, () => {
-      const configuredAgentIds = new Set(listAgentIds(cfg));
       const activitySummaryEnabledByAgent = new Map<string, boolean>();
       const readRow: typeof readResidentSessionRow = (params) =>
         readResidentSessionRow(params, activitySummaryEnabledByAgent);
@@ -173,7 +219,7 @@ export function createSessionRowMaterializer(owner: {
           owner.forgetBackfill(id);
           continue;
         }
-        if (row && owner.materialize(row, configuredAgentIds, readRow, databaseFacts)) {
+        if (row && owner.materialize(row, readRow, databaseFacts)) {
           row.pendingDatabaseFacts = undefined;
           row.retainedDatabaseFacts = databaseFacts;
           owner.dirty.delete(id);
@@ -208,11 +254,12 @@ export function createSessionRowMaterializer(owner: {
       withAgentRosterFactsBatch(cfg, () => {
         for (const id of ids) {
           const current = owner.rows.get(id);
-          const databaseFacts = facts.get(id);
+          let databaseFacts = facts.get(id);
           const row =
             current &&
             owner.acquireEntry(
-              databaseFacts
+              databaseFacts &&
+                (current.hasBoard !== databaseFacts.hasBoard || current.unresolvedDatabaseFacts)
                 ? {
                     ...current,
                     hasBoard: databaseFacts.hasBoard,
@@ -221,6 +268,10 @@ export function createSessionRowMaterializer(owner: {
                 : current,
               databaseFacts?.entry,
             );
+          // Equal rereads keep the canonical entry; retained facets share that identity.
+          if (row?.storedEntry && databaseFacts && databaseFacts.entry !== row.storedEntry) {
+            databaseFacts = { ...databaseFacts, entry: row.storedEntry };
+          }
           if (row && databaseFacts) {
             row.preparedAcpMeta = databaseFacts.acpMeta;
             row.preparedRuntimeOwnership = databaseFacts.runtimeOwnership;
@@ -250,14 +301,16 @@ export function createSessionRowMaterializer(owner: {
 export function readResidentSessionRow(
   params: {
     row: records.Row & { entry: NonNullable<records.Row["entry"]> };
+    membership?: readonly string[];
     cfg: records.Inputs["cfg"];
     modelCatalog: records.Inputs["modelCatalog"];
     configuredAgentIds: ReadonlySet<string>;
+    revisions: { profileRevision: number; subagentRevision: number };
     context: SessionListRowContext;
     subagentInputs: SessionListRowContext["subagentRuns"]["inputs"];
     gatewayContext: Parameters<typeof readSessionRowFacts>[0]["context"];
     placementFactsReader?: Parameters<typeof readSessionRowFacts>[0]["placementFactsReader"];
-    links: SessionChildLink[];
+    links: readonly SessionChildLink[];
     readSourceEntry: (key: string) => records.Row["storedEntry"];
     databaseFacts?: records.PreparedSessionRowDatabaseFacts;
     repositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
@@ -275,7 +328,9 @@ export function readResidentSessionRow(
     throw new Error("Session rows require prepared database facts");
   }
   const { inputs, presentation } = readSessionRowInputs({
-    ...row,
+    key: row.key,
+    agentId: row.agentId,
+    entry: row.entry,
     cfg,
     preparedAcpMeta: databaseFacts.acpMeta,
     preparedRuntimeOwnership: databaseFacts.runtimeOwnership,
@@ -309,19 +364,25 @@ export function readResidentSessionRow(
     childLinks: prepared ? undefined : params.links,
   });
   inputs.subagentRunInputs = params.subagentInputs;
-  const materialized = materializeSessionRow(inputs);
+  const members = params.membership;
+  const membership =
+    members &&
+    (row.membership.size !== members.length || members.some((id) => !row.membership.has(id)))
+      ? new Set(members)
+      : row.membership;
+  const materialized = materializeSessionRowIfChanged(row, inputs, membership, params.revisions);
   // Row preparation may populate the metadata used by automatic utility policy.
   let activitySummaryEnabled: boolean | undefined;
-  if (activitySummaryEnabledByAgent && row.entry.sessionId && !row.entry.initializationPending) {
-    activitySummaryEnabled = activitySummaryEnabledByAgent.get(row.agentId);
+  if (row.entry.sessionId && !row.entry.initializationPending) {
+    activitySummaryEnabled = activitySummaryEnabledByAgent?.get(row.agentId);
     if (activitySummaryEnabled === undefined) {
       activitySummaryEnabled = Boolean(
         resolveUtilityModelRefForAgent({ cfg, agentId: row.agentId }),
       );
-      activitySummaryEnabledByAgent.set(row.agentId, activitySummaryEnabled);
+      activitySummaryEnabledByAgent?.set(row.agentId, activitySummaryEnabled);
     }
   }
-  const facts = readSessionRowFacts({
+  const factsInput = {
     cfg,
     target: row,
     entry: row.entry,
@@ -330,15 +391,18 @@ export function readResidentSessionRow(
     placementFactsReader: params.placementFactsReader,
     activitySummaryEnabled,
     databaseFacts,
-  });
+  };
+  const facts = row.facts?.matches(factsInput) ? row.facts : readSessionRowFacts(factsInput);
   row.privateSource?.assertCurrent();
   return {
     materialized,
     preparedAcpMeta: materialized.source.thinkingProjection.acpMeta ?? null,
-    fallbackModel: presentation.activeModel,
+    fallbackModel: isDeepStrictEqual(row.fallbackModel, presentation.activeModel)
+      ? row.fallbackModel
+      : presentation.activeModel,
     facts,
     hasBoard: facts.hasBoard,
-    membership: row.membership,
+    membership,
   };
 }
 
@@ -500,15 +564,12 @@ export function createSessionRowLookup(owner: {
     },
     capture(query: records.Lookup) {
       const row = owner.lookup(query);
+      // Published entries need no acquisition state; pending categories keep their identity.
+      if (!row || row.entry || row.storedEntry === undefined || row.unresolvedDatabaseFacts) {
+        return row;
+      }
       const state = owner.state();
-      // Capture retains published identity while category facts wait for reconciliation.
-      return row &&
-        row.unresolvedDatabaseFacts !== "category" &&
-        !state.topologyDirty &&
-        !row.entry &&
-        row.storedEntry !== undefined &&
-        row.unresolvedDatabaseFacts !== true &&
-        state.registryPrepared
+      return !state.topologyDirty && state.registryPrepared
         ? (owner.acquireEntry(row, row.storedEntry) ?? row)
         : row;
     },
@@ -592,37 +653,33 @@ function findSessionRowById(
 
 export function lookupSessionRow(
   query: records.Lookup,
-  owner: {
-    assertCurrent: () => void;
-    cfg: records.Inputs["cfg"];
-    rows: ReadonlyMap<string, records.Row>;
-    byKey: ReadonlyMap<string, ReadonlySet<string>>;
-    scope: ReturnType<typeof prepareSessionRowScopes> | undefined;
-    stores: ReadonlyMap<string, records.SessionRowStore>;
-  },
+  cfg: records.Inputs["cfg"],
+  rows: ReadonlyMap<string, records.Row>,
+  byKey: ReadonlyMap<string, ReadonlySet<string>>,
+  scope: ReturnType<typeof prepareSessionRowScopes> | undefined,
+  stores: ReadonlyMap<string, records.SessionRowStore>,
+  assertCurrent: () => void,
 ) {
   const { agentId } = query;
   const paths = query.storePath
-    ? (owner.scope?.physicalPaths(query.storePath, agentId) ?? [query.storePath])
+    ? (scope?.physicalPaths(query.storePath, agentId) ?? [query.storePath])
     : undefined;
   let key = query.key;
   do {
-    const candidates = owner.byKey.get(records.logicalSessionRowIdentity(agentId, key));
+    const candidates = byKey.get(records.logicalSessionRowIdentity(agentId, key));
     if (candidates?.size === 1) {
-      const row = owner.rows.get(candidates.values().next().value!);
+      const row = rows.get(candidates.values().next().value!);
       if (
         row &&
-        (paths
-          ? paths.includes(row.storeTarget.storePath)
-          : owner.stores.has(row.storeTarget.storePath))
+        (paths ? paths.includes(row.storeTarget.storePath) : stores.has(row.storeTarget.storePath))
       ) {
         return row;
       }
     } else if (candidates) {
       // Physical duplicates (including sentinels) retain the topology's store precedence.
-      for (const storePath of paths ?? owner.stores.keys()) {
+      for (const storePath of paths ?? stores.keys()) {
         for (const id of candidates) {
-          const row = owner.rows.get(id);
+          const row = rows.get(id);
           if (row?.storeTarget.storePath === storePath) {
             return row;
           }
@@ -633,14 +690,14 @@ export function lookupSessionRow(
       break;
     }
     key = resolveStoredSessionKeyForAgentStore({
-      cfg: owner.cfg,
+      cfg,
       sessionKey: key,
       agentId,
     });
     if (isIncognitoSessionKey(key)) {
       return readIncognitoSessionRow({
-        assertCurrent: owner.assertCurrent,
-        cfg: owner.cfg,
+        assertCurrent,
+        cfg,
         key,
         agentId,
         storePath: query.storePath,

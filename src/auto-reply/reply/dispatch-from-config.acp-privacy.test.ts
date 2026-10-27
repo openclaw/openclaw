@@ -4,6 +4,7 @@ import {
   acpMocks,
   hookMocks,
   mocks,
+  mockSessionStorePath,
   sessionStoreMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
@@ -44,7 +45,7 @@ it("strips split private prompt context before routing live ACP replies through 
         entry: sessionStoreMocks.currentEntry,
         acp: { agent: "codex", runtimeSessionName: "runtime:privacy", lastActivityAt: Date.now() },
       },
-      { sessionKey, storePath: "/tmp/mock-sessions.json" },
+      { sessionKey, storePath: mockSessionStorePath },
     ),
   );
   acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime });

@@ -8,7 +8,8 @@ import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { createCrustaceanSlug } from "../agents/session-slug.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
-import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
+import { withWorktreeSourceWait } from "../agents/worktrees/allocation.js";
+import type { WorktreeSourceStage, WorktreeWaitBudget } from "../agents/worktrees/types.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -17,7 +18,7 @@ import {
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
@@ -396,6 +397,7 @@ export async function prepareDashboardSessionTitle(params: {
 export async function generateWorktreeSessionTitle(
   params: SessionTitleParams & {
     onError: (error: unknown) => void;
+    waitBudget?: WorktreeWaitBudget;
   },
 ): Promise<string | undefined> {
   const scope = {
@@ -403,7 +405,8 @@ export async function generateWorktreeSessionTitle(
     sessionKey: resolveStoredSessionKeyForAgentStore(params),
     storePath: params.storePath,
   };
-  const request = maybeGenerateSessionTitle(params);
+  const { waitBudget, ...titleParams } = params;
+  const request = maybeGenerateSessionTitle(titleParams);
   try {
     await withTimeout(request, WORKTREE_SESSION_TITLE_WAIT_MS, "worktree title generation");
   } catch (error) {
@@ -422,17 +425,22 @@ export async function generateWorktreeSessionTitle(
     return resolveExplicitSessionName(current);
   };
   return params.withSource
-    ? await params.withSource((source) => readCurrent(source.assertCurrent))
+    ? await withWorktreeSourceWait(params.withSource, waitBudget, (source) =>
+        readCurrent(source.assertCurrent),
+      )
     : readCurrent();
 }
 
 export async function maybeGenerateDashboardSessionTitle(
   params: SessionTitleParams,
 ): Promise<boolean> {
-  return (
-    isDashboardSessionTitleCandidate(params) &&
-    (await maybeGenerateSessionTitle({ ...params, retryFailedJoin: true }))
-  );
+  if (!isDashboardSessionTitleCandidate(params)) {
+    return false;
+  }
+  return await maybeGenerateSessionTitle({
+    ...params,
+    retryFailedJoin: true,
+  });
 }
 
 /** Joins existing work; only the caller that persists a title returns true. */
@@ -453,6 +461,18 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     memory?.binding?.actor.assertReadable();
     memory?.authority.assertCurrent();
   };
+  const entry = await readSessionEntryReadOnlyInWorker(scope, assertMemoryCurrent);
+  if (entry?.sessionId !== params.sessionId || hasExplicitSessionName(entry)) {
+    return false;
+  }
+  const skillParams = {
+    cfg: params.cfg,
+    agentId: params.agentId,
+    entry,
+    sessionKey,
+    assertCurrent: assertMemoryCurrent,
+  };
+
   const requestTarget = {
     ...scope,
     sessionId: params.sessionId,
@@ -504,20 +524,9 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
   };
 
   const run = async () => {
-    const entry = await readSessionEntryReadOnlyInWorker(scope, assertMemoryCurrent);
-    if (hasExplicitSessionName(entry) || entry?.sessionId !== params.sessionId) {
-      return false;
-    }
-
     // Select the first usable task, not an earlier control-only turn. Carry the
     // same prepared command metadata through history selection and generation.
-    const skillCommands = await prepareTitleSkillCommands({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      entry,
-      sessionKey,
-      assertCurrent: assertMemoryCurrent,
-    });
+    const skillCommands = await prepareTitleSkillCommands(skillParams);
     const transcriptScope = {
       agentId: params.agentId,
       sessionEntry: entry,

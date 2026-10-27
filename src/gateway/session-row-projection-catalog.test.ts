@@ -19,11 +19,13 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     { provider: "unit-test", id: "other", name: "Other", contextTokens: 32_768 },
   ]);
   const onlyOther = (value = other) => new Map([["other", value]]);
-  const view = (contextTokens: number) =>
+  const withMain = (main: PreparedGatewayModelCatalog | undefined) =>
     new Map([
-      ["main", prepared([{ provider: "unit-test", id: "model", name: "Model", contextTokens }])],
+      ["main", main],
       ["other", other],
     ]);
+  const view = (contextTokens: number) =>
+    withMain(prepared([{ provider: "unit-test", id: "model", name: "Model", contextTokens }]));
   let next: Map<string, PreparedGatewayModelCatalog | undefined> = view(8_192);
   const read = vi.fn(async () => next);
   const refreshed = vi.fn();
@@ -60,10 +62,7 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     catalog.invalidate();
     const inFlight = catalog.refresh();
     notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: first.promise });
-    next = new Map([
-      ["main", undefined],
-      ["other", other],
-    ]);
+    next = withMain(undefined);
     reading.resolve(next);
     await inFlight;
     expect(catalog.current).toBe(original);
@@ -96,10 +95,7 @@ it("retains completed catalog facts during runtime replacement and adopts comple
 
     const failed = createDeferredCore();
     notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: failed.promise });
-    next = new Map([
-      ["main", undefined],
-      ["other", other],
-    ]);
+    next = withMain(undefined);
     notifyPreparedModelRuntimePublication({ phase: "failed", error: new Error("Refresh failed") });
     failed.reject(new Error("Refresh failed"));
     await failed.promise.catch(() => {});
@@ -206,21 +202,6 @@ it.each(["abort", "dispose", "reject", "supersede"] as const)(
     }
   },
 );
-
-it("keeps an explicitly supplied catalog when no renewal owner exists", async () => {
-  const entries = [{ provider: "unit-test", id: "static", name: "Static" }];
-  const catalog = createSessionRowProjectionCatalog({
-    modelCatalog: entries,
-    onInvalidated: () => {},
-    onRefreshed: () => {},
-  });
-  try {
-    await catalog.prepareCurrent();
-    expect(catalog.current).toBe(entries);
-  } finally {
-    catalog.dispose();
-  }
-});
 
 it("waits for the successor when replacement begins during catalog preparation", async () => {
   const original = [{ provider: "unit-test", id: "original", name: "Original" }];

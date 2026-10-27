@@ -269,6 +269,12 @@ export async function runGatewayLoop(params: {
     alreadyCancelledOwner?: GatewayRestartIntent["successorOwner"],
   ): Promise<void> => {
     await signals.drain();
+    if (activeRestartRequest?.restartIntent?.requireFreshProcess) {
+      gatewayLog.error(
+        "Fresh-process restart failed; the unsettled native worker cannot recover in-process. Exiting through the verified service owner.",
+      );
+      return finishLoopAfterCleanup(1);
+    }
     if (!readChildRuntimeViability().available) {
       gatewayLog.error(
         "Fresh-process restart failed; the unavailable child runtime cannot recover in-process. Restart through the service owner after repairing its runtime.",
@@ -666,6 +672,16 @@ export async function runGatewayLoop(params: {
     }
 
     const shutdownOperation = (async () => {
+      if (
+        action === "restart" &&
+        restartIntent?.requireFreshProcess &&
+        acceptedRequest.restartReason === "gateway.native-worker-unsettled"
+      ) {
+        // Native teardown may never finish. Persist this accepted restart before
+        // watchdogs can kill the process and skip its ordinary boot completion.
+        completeBoot(loopCompletion.formatRestartCompletion(acceptedRequest, false));
+        await bootCompletion;
+      }
       if (process.platform === "linux" || process.platform === "darwin") {
         if (budget.nativeStopBudget && !getManagedUpdateOwner()) {
           armForceExitTimer(budget.timeoutMs);
@@ -970,6 +986,17 @@ export async function runGatewayLoop(params: {
         eagerLifecycleRuntime.markGatewayDraining(drainReason);
         runAcceptedRequest(acceptedRequest);
         return;
+      }
+      if (
+        action === "stop" &&
+        !hostExitRequested &&
+        currentRestartRequest?.action === "restart" &&
+        !currentRestartRequest.restartIntent?.successorOwner
+      ) {
+        // A stop that lands while an in-place restart drains must not be lost:
+        // the restart's continuation exits instead of starting a new iteration.
+        hostExitRequested = true;
+        hostExitReason ??= loopCompletion.formatShutdownReason(acceptedRequest);
       }
       gatewayLog.info(
         `received ${trigger} during shutdown; ${hostExitRequested ? "finishing shutdown without restart" : "ignoring"}`,

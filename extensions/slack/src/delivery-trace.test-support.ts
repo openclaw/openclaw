@@ -6,6 +6,7 @@ import {
   type WireRecorder,
   type DeliveryTraceDispatch,
 } from "openclaw/plugin-sdk/channel-contract-testing";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expect } from "vitest";
 import { markSlackStreamsStopped } from "./streaming.js";
 
@@ -52,21 +53,15 @@ export function createSlackTsNormalizer(): TraceNormalizer {
 
 export function collectSlackWireTexts(events: readonly TraceEvent[]): string[] {
   return events.flatMap((event) => {
-    if (event.dir !== "out" || !event.data || typeof event.data !== "object") {
+    const record = asOptionalRecord(asOptionalRecord(event.data)?.payload);
+    if (event.dir !== "out" || !record) {
       return [];
     }
-    const payload = (event.data as { payload?: unknown }).payload;
-    if (!payload || typeof payload !== "object") {
-      return [];
-    }
-    const record = payload as Record<string, unknown>;
     const chunks = Array.isArray(record.chunks) ? record.chunks : [];
     return [
       record.text,
       record.markdown_text,
-      ...chunks.map((chunk: unknown) =>
-        chunk && typeof chunk === "object" ? (chunk as { text?: unknown }).text : undefined,
-      ),
+      ...chunks.map((chunk: unknown) => asOptionalRecord(chunk)?.text),
     ].filter((text): text is string => typeof text === "string" && text.length > 0);
   });
 }
@@ -222,12 +217,10 @@ export async function assertSlackProgressMentionHttpTrace(params: {
     const parsed = JSON.parse(blocks) as Array<{ text?: { text?: string } }>;
     return parsed.map((block) => block.text?.text ?? "").join("\n");
   };
-  const first = writes.find(
-    ({ method, body }) => method === "chat.postMessage" && readText(body).includes("FIRST"),
-  );
-  const second = writes.find(
-    ({ method, body }) => method === "chat.update" && readText(body).includes("SECOND"),
-  );
+  const findWrite = (api: string, marker: string) =>
+    writes.find(({ method, body }) => method === api && readText(body).includes(marker));
+  const first = findWrite("chat.postMessage", "FIRST");
+  const second = findWrite("chat.update", "SECOND");
   expect(first).toBeDefined();
   expect(second).toBeDefined();
   expect(second?.body.get("ts")).toBe(first?.ts);

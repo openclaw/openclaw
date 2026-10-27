@@ -5,7 +5,7 @@ import {
   type ErrorShape,
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { CreatedGatewaySession } from "../session-create-service.types.js";
 import {

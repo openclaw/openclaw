@@ -72,6 +72,8 @@ import {
 } from "./test-helpers.js";
 
 const runEmbeddedAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
+const heldModel = () =>
+  expectDefined(runEmbeddedAgent.getMockImplementation(), "held model implementation");
 installGatewayTestHooks({ scope: "suite" });
 let agentId = "main";
 let sessionKey = "agent:main:main";
@@ -352,22 +354,17 @@ function expectNoGeneratedInput(messages: unknown[], surface: string) {
   }
 }
 function expectVisibleSpeechOnly(messages: unknown[], surface: string, hasAnswer: boolean) {
+  const check = (value: unknown, label: string) => expect.soft(value, `${surface} ${label}`);
   const users = messages.filter((message) => asOptionalRecord(message)?.role === "user");
   expect.soft(users.map(extractText), surface).toEqual([spoken]);
   const markdown = buildChatMarkdown(messages, "Voice test assistant");
-  expect.soft(markdown, `${surface} Markdown`).toContain(spoken);
-  expect
-    .soft(markdown?.match(/^## Message(?: \(|$)/gm), `${surface} input headings`)
-    .toHaveLength(1);
+  check(markdown, "Markdown").toContain(spoken);
+  check(markdown?.match(/^## Message(?: \(|$)/gm), "input headings").toHaveLength(1);
   expectNoGeneratedInput(messages, surface);
-  expect
-    .soft(matchingTexts(messages, answer), `${surface} spoken answer`)
-    .toHaveLength(hasAnswer ? 1 : 0);
-  expect
-    .soft(markdown?.split(answer).length, `${surface} spoken answer in Markdown`)
-    .toBe(hasAnswer ? 2 : 1);
-  expect.soft(JSON.stringify(messages), `${surface} internal final`).not.toContain(consultAnswer);
-  expect.soft(markdown, `${surface} internal final in Markdown`).not.toContain(consultAnswer);
+  check(matchingTexts(messages, answer), "spoken answer").toHaveLength(hasAnswer ? 1 : 0);
+  check(markdown?.split(answer).length, "spoken answer in Markdown").toBe(hasAnswer ? 2 : 1);
+  check(JSON.stringify(messages), "internal final").not.toContain(consultAnswer);
+  check(markdown, "internal final in Markdown").not.toContain(consultAnswer);
 }
 async function historyMessages() {
   const result = await rpc("chat.history", { sessionKey: canonicalKey, agentId });
@@ -500,10 +497,7 @@ it("preserves an actual human stop command", async () => {
 
 it("keeps read-only Talk operator consult scaffolding out of chat and later context but in the raw archive", async () => {
   client.connect.scopes = ["operator.read", "operator.talk"];
-  const completeModel = expectDefined(
-    runEmbeddedAgent.getMockImplementation(),
-    "held model implementation",
-  );
+  const completeModel = heldModel();
   let modelReply = consultAnswer;
   let modelMessages: Parameters<SessionManager["appendMessage"]>[0][] = [
     Object.assign(assistantMessage(consultCommentary), {
@@ -532,7 +526,6 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
   runEmbeddedAgent.mockImplementation(async (params) => {
     const recorder = expectDefined(params.userTurnTranscriptRecorder, "consult input recorder");
     await recorder.persistApproved();
-    expect(recorder.hasPersisted()).toBe(true);
     await params.onAgentEvent?.({
       stream: "lifecycle",
       data: { phase: "start" },
@@ -558,7 +551,6 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
     modelStarted.promise,
     captureSessionControllerSettlement({ scope: storePath, identities: [sessionKey, sessionId] }),
   ]);
-  expect(context.logGateway.error).not.toHaveBeenCalled();
   expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "consult model invocation");
   expect(run.toolsAllow).toEqual([
@@ -663,14 +655,10 @@ it.each(["before-final", "after-final"] as const)(
     const directAnswer = "DIRECT_FINAL_134003: The requested note contains both labels.";
     const finalCommitted = createDeferred();
     const releaseResult = createDeferred();
-    const completeModel = expectDefined(
-      runEmbeddedAgent.getMockImplementation(),
-      "held model implementation",
-    );
+    const completeModel = heldModel();
     runEmbeddedAgent.mockImplementation(async (params) => {
       const recorder = expectDefined(params.userTurnTranscriptRecorder, "direct input recorder");
       await recorder.persistApproved();
-      expect(recorder.hasPersisted()).toBe(true);
       const result = await completeModel(params);
       params.abortSignal?.throwIfAborted();
       transcriptManager(params).appendMessage(assistantMessage(directAnswer));

@@ -8,6 +8,7 @@ import { runSessionRegistryMaintenanceForStore } from "../../config/sessions/ses
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionSendDeliveryAdmission } from "../../gateway/session-send-delivery.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   communicationEntryBinding,
   type CommunicationEndpoint,
@@ -16,6 +17,8 @@ import { sessionChanges, type SessionRowChange } from "../../sessions/session-ro
 import { createDeferredCore } from "../../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { acceptCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
+import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
 const tempDirs = useSessionStoreTempDirs(afterAll, "sessions-send-lineage-");
@@ -65,11 +68,16 @@ vi.mock("../subagents/registry/subagent-registry-read.js", async (importOriginal
   ...(await importOriginal<typeof import("../subagents/registry/subagent-registry-read.js")>()),
   getLatestLiveSubagentRunByChildSessionKey: () => state.task,
 }));
-function endpoint(name: string, entry: Partial<SessionEntry> = {}): CommunicationEndpoint {
+function endpoint(
+  name: string,
+  entry: Partial<SessionEntry> = {},
+  agentId = "main",
+  storePath = "/sessions",
+): CommunicationEndpoint {
   const row = {
-    agentId: "main",
-    sessionKey: "agent:main:" + name,
-    storePath: "/sessions",
+    agentId,
+    sessionKey: `agent:${agentId}:${name}`,
+    storePath,
     entry: { sessionId: name, updatedAt: 1, ...entry },
   };
   state.rows.set(row.sessionKey, row);
@@ -93,7 +101,7 @@ function operation(source = endpoint("source"), target = endpoint("target")) {
   const callGateway = vi.mocked(callAgentToolGatewayRequest);
   return { config: state.config, source, target, message: "exact peer message", callGateway };
 }
-function agentRequest(input: ReturnType<typeof operation>, extra: Record<string, unknown> = {}) {
+function agentRequest(input: Input, extra: Record<string, unknown> = {}) {
   return {
     method: "agent" as const,
     params: {
@@ -117,18 +125,30 @@ function expectNoApprovalOrDelivery(input: ReturnType<typeof operation>) {
   expect(state.approve).not.toHaveBeenCalled();
 }
 type Input = Parameters<typeof prepareSessionsSendCommunication>[0];
-type Gate = Awaited<ReturnType<typeof prepareSessionsSendCommunication>>;
-async function withGate(input: Input, check: (gate: Gate) => void | Promise<void>) {
+async function openGate(input: Input) {
   const gate = await prepareSessionsSendCommunication(input);
-  try {
-    await check(gate);
-  } finally {
-    gate.close();
-  }
+  return { ...gate, [Symbol.dispose]: gate.close };
 }
 async function denied(input: Input, error?: string) {
   await expect(prepareSessionsSendCommunication(input)).rejects.toThrow(error);
   expect(input.callGateway).not.toHaveBeenCalled();
+}
+async function delivered(input: Input) {
+  using gate = await openGate(input);
+  await gate.callGateway(agentRequest(input));
+  expect(input.callGateway).toHaveBeenCalledOnce();
+}
+async function deniedDispatch(input: Input, extra: Record<string, unknown>, error: string) {
+  using gate = await openGate(input);
+  await expect(gate.callGateway(agentRequest(input, extra))).rejects.toThrow(error);
+  expect(input.callGateway).not.toHaveBeenCalled();
+}
+function childOf(parent: CommunicationEndpoint, entry: Partial<SessionEntry> = {}) {
+  return endpoint("target", {
+    spawnedBy: parent.sessionKey,
+    parentSessionId: parent.entry!.sessionId,
+    ...entry,
+  });
 }
 function changed(
   input: Input,
@@ -152,44 +172,11 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 describe("sessions_send communication boundary", () => {
-  it("retains JSON-stable delivery identity for sessions without lifecycle revisions", async () => {
-    const input = operation();
-    const inputProvenance = {
-      kind: "inter_session" as const,
-      sourceTool: "sessions_send",
-      sourceSessionKey: input.source.sessionKey,
-    };
-    input.callGateway.mockImplementation(async () => {
-      const admitted = readSessionSendDeliveryAdmission({
-        agentId: "main",
-        sessionKey: input.target.sessionKey,
-        sessionId: "target",
-        runId: "saved-peer",
-      });
-      expect(admitted).toBeDefined();
-      expect(admitted!.delivery.source).not.toHaveProperty("lifecycleRevision");
-      expect(admitted!.delivery.target).not.toHaveProperty("lifecycleRevision");
-    });
-    await withGate({ ...input, inputProvenance }, async (gate) => {
-      await gate.callGateway(
-        agentRequest(input, { idempotencyKey: "saved-peer", inputProvenance }),
-      );
-      expect(input.callGateway).toHaveBeenCalledOnce();
-    });
-  });
   it.each([false, true])(
     "retains durable delivery identity for owned-task fallback=%s",
     async (ownedTask) => {
       const source = endpoint("source");
-      const target = endpoint(
-        "target",
-        ownedTask
-          ? {
-              spawnedBy: source.sessionKey,
-              parentSessionId: "source",
-            }
-          : {},
-      );
+      const target = ownedTask ? childOf(source) : endpoint("target");
       if (ownedTask) {
         state.task = {
           runId: "task",
@@ -214,23 +201,11 @@ describe("sessions_send communication boundary", () => {
         expect(admitted!.delivery.source).not.toHaveProperty("lifecycleRevision");
         expect(admitted!.delivery.target).not.toHaveProperty("lifecycleRevision");
       });
-      const gate = await prepareSessionsSendCommunication({ ...input, inputProvenance });
-      try {
-        const dispatch = ownedTask ? gate.callDurableGateway : gate.callGateway;
-        await dispatch({
-          method: "agent",
-          params: {
-            agentId: "main",
-            sessionKey: input.target.sessionKey,
-            message: input.message,
-            idempotencyKey: "saved-peer",
-            inputProvenance,
-          },
-        });
-        expect(input.callGateway).toHaveBeenCalledOnce();
-      } finally {
-        gate.close();
-      }
+      using gate = await openGate({ ...input, inputProvenance });
+      await (ownedTask ? gate.callDurableGateway : gate.callGateway)(
+        agentRequest(input, { idempotencyKey: "saved-peer", inputProvenance }),
+      );
+      expect(input.callGateway).toHaveBeenCalledOnce();
     },
   );
 
@@ -264,20 +239,29 @@ describe("sessions_send communication boundary", () => {
       request.sessionMutationCommitGuard?.();
       effect();
     });
-    await withGate(input, async (gate) => {
-      await expect(gate.callGateway(agentRequest(input))).rejects.toThrow("policy changed");
-      expect(effect).not.toHaveBeenCalled();
-    });
+    using gate = await openGate(input);
+    await expect(gate.callGateway(agentRequest(input))).rejects.toThrow("policy changed");
+    expect(effect).not.toHaveBeenCalled();
   });
 
   it.each(["send", "receive"] as const)(
-    "never %s denies same-agent peers before any prompt or delivery",
+    "never %s rejects forged task provenance before any prompt or delivery",
     async (direction) => {
       const input = operation(
         endpoint("source", direction === "send" ? neverSend : {}),
         endpoint("target", direction === "receive" ? neverReceive : {}),
       );
-      await expect(prepareSessionsSendCommunication(input)).rejects.toThrow("disabled");
+      await denied(
+        {
+          ...input,
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool: "subagent_announce",
+            sourceRole: "subagent",
+          },
+        },
+        "disabled",
+      );
       expectNoApprovalOrDelivery(input);
     },
   );
@@ -297,7 +281,7 @@ describe("sessions_send communication boundary", () => {
         communication: { send: "always" },
       }),
     );
-    await expect(prepareSessionsSendCommunication(input)).rejects.toThrow("disabled");
+    await denied(input, "disabled");
   });
   it("delivers parent and peer sends through recorded same-key rollover/recovery lineage", async () => {
     const { parent, entry: parentEntry } = await rotatedParent();
@@ -308,82 +292,59 @@ describe("sessions_send communication boundary", () => {
     for (const source of [parent, endpoint("source")]) {
       const input = operation(source, target);
       input.callGateway.mockClear();
-      await withGate(input, async (gate) => {
-        await gate.callGateway(agentRequest(input));
-        expect(input.callGateway).toHaveBeenCalledOnce();
-      });
+      await delivered(input);
     }
     parentEntry.communication = { receive: "never" };
     vi.mocked(callAgentToolGatewayRequest).mockClear();
     await denied(operation(undefined, target), "disabled");
   });
-  it.each([
-    ["main", "subagent:child", false],
-    ["worker", "subagent:child", false],
-    ["main", "cron:dispatch:run:child", false],
-    ["worker", "subagent:child", true],
-  ] as const)(
-    "keeps expired cron parents reachable until their %s/%s child is archived (archived intermediary=%s)",
-    async (childAgentId, childName, archivedIntermediary) => {
-      const expiredAt = Date.now() - 8 * 24 * 60 * 60_000;
-      const parent = endpoint("cron:dispatch:run:old", { updatedAt: expiredAt });
-      parent.storePath = path.join(tempDirs.make(), "sessions.sqlite");
-      const ancestor = archivedIntermediary
-        ? endpoint("subagent:archived", {
-            spawnedBy: parent.sessionKey,
-            parentSessionId: parent.entry!.sessionId,
-            archivedAt: Date.now(),
-          })
-        : parent;
-      ancestor.storePath = parent.storePath;
-      const target = {
-        ...endpoint(childName, {
-          updatedAt: Date.now(),
-          spawnedBy: ancestor.sessionKey,
-          parentSessionId: ancestor.entry!.sessionId,
-        }),
-        agentId: childAgentId,
-        sessionKey: `agent:${childAgentId}:${childName}`,
-        storePath:
-          childAgentId === "main"
-            ? parent.storePath
-            : path.join(tempDirs.make(), "sessions.sqlite"),
-      };
-      state.rows.set(target.sessionKey, target);
-      state.config = { tools: { agentToAgent: { enabled: true, allow: ["*"] } } };
-      await replaceSessionEntry(parent, parent.entry!);
-      expect(loadSessionEntry(parent)?.updatedAt).toBe(expiredAt);
-      if (archivedIntermediary) {
-        await replaceSessionEntry(ancestor, ancestor.entry!);
-      }
-      await replaceSessionEntry(target, target.entry!);
-      const maintain = (apply: boolean) =>
-        runSessionRegistryMaintenanceForStore({
-          agentId: "main",
-          storePath: parent.storePath,
-          childStores: [parent, ...(childAgentId === "main" ? [] : [target])],
-          apply,
-          retentionMs: 7 * 24 * 60 * 60_000,
-          runningCronJobIds: new Set(),
-        });
-      for (const apply of [false, true]) {
-        expect((await maintain(apply)).pruned).toBe(0);
-      }
-      parent.entry = loadSessionEntry(parent);
-      expect(parent.entry).toBeDefined();
-      const input = operation(undefined, target);
-      await withGate(input, async (gate) => {
-        await gate.callGateway(agentRequest(input));
-        expect(input.callGateway).toHaveBeenCalledOnce();
+  it("keeps an expired cron ancestor reachable through an archived intermediary until its cross-agent child is archived", async () => {
+    const expiredAt = Date.now() - 8 * 24 * 60 * 60_000;
+    const parent = endpoint("cron:dispatch:run:old", { updatedAt: expiredAt });
+    parent.storePath = path.join(tempDirs.make(), "sessions.sqlite");
+    const ancestor = endpoint("subagent:archived", {
+      spawnedBy: parent.sessionKey,
+      parentSessionId: parent.entry!.sessionId,
+      archivedAt: Date.now(),
+    });
+    ancestor.storePath = parent.storePath;
+    const target = endpoint(
+      "subagent:child",
+      {
+        updatedAt: Date.now(),
+        spawnedBy: ancestor.sessionKey,
+        parentSessionId: ancestor.entry!.sessionId,
+      },
+      "worker",
+      path.join(tempDirs.make(), "sessions.sqlite"),
+    );
+    state.config = { tools: { agentToAgent: { enabled: true, allow: ["*"] } } };
+    await replaceSessionEntry(parent, parent.entry!);
+    await replaceSessionEntry(ancestor, ancestor.entry!);
+    await replaceSessionEntry(target, target.entry!);
+    const maintain = (apply: boolean) =>
+      runSessionRegistryMaintenanceForStore({
+        agentId: "main",
+        storePath: parent.storePath,
+        childStores: [parent, target],
+        apply,
+        retentionMs: 7 * 24 * 60 * 60_000,
+        runningCronJobIds: new Set(),
       });
-      parent.entry!.communication = { receive: "never" };
-      input.callGateway.mockClear();
-      await denied(input, "disabled");
-      await upsertSessionEntryCore(target, { archivedAt: Date.now() });
-      expect((await maintain(true)).pruned).toBe(1);
-      expect(loadSessionEntry(parent)).toBeUndefined();
-    },
-  );
+    for (const apply of [false, true]) {
+      expect((await maintain(apply)).pruned).toBe(0);
+    }
+    parent.entry = loadSessionEntry(parent);
+    expect(parent.entry).toBeDefined();
+    const input = operation(undefined, target);
+    await delivered(input);
+    parent.entry!.communication = { receive: "never" };
+    input.callGateway.mockClear();
+    await denied(input, "disabled");
+    await upsertSessionEntryCore(target, { archivedAt: Date.now() });
+    expect((await maintain(true)).pruned).toBe(1);
+    expect(loadSessionEntry(parent)).toBeUndefined();
+  });
   it("refuses delivery when parent lineage changes during approval", async () => {
     const { parent, entry } = await rotatedParent();
     const input = operation(
@@ -404,31 +365,30 @@ describe("sessions_send communication boundary", () => {
     const input = operation();
     input.target.storePath = path.join(tempDirs.make(), "sessions.sqlite");
     await upsertSessionEntryCore(input.target, input.target.entry!);
-    await withGate(input, async (gate) => {
-      await acceptCompactionSuccessor({
-        currentTarget: { ...input.target, sessionId: "target" },
-        expectedEntry: {
-          sessionId: "target",
-          lifecycleRevision: undefined,
-          activeWriterRunId: undefined,
-        },
-        assertActive: gate.assertCurrent,
+    using gate = await openGate(input);
+    await acceptCompactionSuccessor({
+      currentTarget: { ...input.target, sessionId: "target" },
+      expectedEntry: {
+        sessionId: "target",
+        lifecycleRevision: undefined,
+        activeWriterRunId: undefined,
+      },
+      assertActive: gate.assertCurrent,
+      result: {
+        ok: true,
+        compacted: true,
         result: {
-          ok: true,
-          compacted: true,
-          result: {
-            summary: "Compacted context",
-            tokensBefore: 2,
-            tokensAfter: 1,
-            sessionId: "compacted",
-          },
+          summary: "Compacted context",
+          tokensBefore: 2,
+          tokensAfter: 1,
+          sessionId: "compacted",
         },
-        onCommitted: ({ entry }) =>
-          state.rows.set(input.target.sessionKey, { ...input.target, entry }),
-      });
-      await gate.callGateway(agentRequest(input));
-      expect(input.callGateway).toHaveBeenCalledOnce();
+      },
+      onCommitted: ({ entry }) =>
+        state.rows.set(input.target.sessionKey, { ...input.target, entry }),
     });
+    await gate.callGateway(agentRequest(input));
+    expect(input.callGateway).toHaveBeenCalledOnce();
   });
   it.each([undefined, "missing-original", "foreign-original"])(
     "refuses unconnected parent lineage (predecessor=%s) with respawn guidance",
@@ -463,24 +423,8 @@ describe("sessions_send communication boundary", () => {
   );
   it("does not request fresh consent during durable delivery recovery", async () => {
     const input = operation(endpoint("source", askSend));
-    await expect(
-      prepareSessionsSendCommunication({ ...input, allowApproval: false }),
-    ).rejects.toThrow("fresh human communication approval");
+    await denied({ ...input, allowApproval: false }, "fresh human communication approval");
     expectNoApprovalOrDelivery(input);
-  });
-  it("provenance strings cannot turn an optional peer send into task-owned work", async () => {
-    const input = operation(endpoint("source", neverSend));
-    await denied(
-      {
-        ...input,
-        inputProvenance: {
-          kind: "inter_session",
-          sourceTool: "subagent_announce",
-          sourceRole: "subagent",
-        },
-      },
-      "disabled",
-    );
   });
   it.each([
     [{}, selfOnly],
@@ -490,6 +434,7 @@ describe("sessions_send communication boundary", () => {
     const input = operation();
     state.config = current;
     await denied(input);
+    expectNoApprovalOrDelivery(input);
   });
   it("asks sender then recipient for exact content and waits for both human decisions", async () => {
     const input = operation(endpoint("source", askSend), endpoint("target", askReceive));
@@ -522,109 +467,111 @@ describe("sessions_send communication boundary", () => {
   it("rechecks temporary controller access at final admission without claiming task completion", async () => {
     const source = endpoint("source");
     const parent = endpoint("original-parent");
-    const target = endpoint("target", {
-      spawnedBy: parent.sessionKey,
-      parentSessionId: parent.entry?.sessionId,
-    });
-    state.task = {
+    const target = childOf(parent);
+    const task = createSubagentRunRecord({
       runId: "controlled-task",
+      childSessionKey: target.sessionKey,
       requesterSessionKey: source.sessionKey,
       requesterAgentId: "main",
-    };
-    await withGate({ ...operation(source, target), access: { controllerOnly: true } }, (gate) => {
-      expect(gate.ownedTask).toBe(false);
-      state.task = undefined;
-      expect(gate.assertCurrent).toThrow("controller access changed");
     });
+    subagentRuns.set(task.runId, task);
+    const claim = claimAgentRunContext(
+      task.runId,
+      { sessionKey: target.sessionKey },
+      { trackOwner: true, ownsContext: true },
+    );
+    expect(claim).toBeDefined();
+    try {
+      using gate = await openGate({
+        ...operation(source, target),
+        access: { controllerOnly: true },
+      });
+      expect(gate.ownedTask).toBe(false);
+      releaseAgentRunContext(task.runId, claim);
+      expect(gate.assertCurrent).toThrow("controller access changed");
+    } finally {
+      releaseAgentRunContext(task.runId, claim);
+      subagentRuns.delete(task.runId);
+    }
   });
 
   it("only live exact owned tasks get the guidance exception", async () => {
     const source = endpoint("source", neverSend);
-    const target = endpoint("target", {
-      ...neverReceive,
-      spawnedBy: source.sessionKey,
-      parentSessionId: "source",
-    });
+    const target = childOf(source, neverReceive);
     state.task = {
       runId: "task",
       requesterSessionKey: source.sessionKey,
       requesterAgentId: "main",
     };
-    await withGate(operation(source, target), (gate) => {
+    {
+      using gate = await openGate(operation(source, target));
       expect(gate.ownedTask).toBe(true);
       state.task = undefined;
       expect(gate.assertCurrent).toThrow("authority changed");
-    });
-    await expect(prepareSessionsSendCommunication(operation(source, target))).rejects.toThrow(
-      "disabled",
-    );
+    }
+    await denied(operation(source, target), "disabled");
   });
   it.each(["entry", "replacement"] as const)(
     "survives neutral %s metadata but keeps permission revocation sticky",
     async (kind) => {
       const input = operation();
-      await withGate(input, (gate) => {
-        const publish = (entry: SessionEntry) =>
-          changed(input, {
-            storePath: "/sessions",
-            facts:
-              kind === "entry"
-                ? {
-                    kind,
-                    previousSessionId: "target",
-                    sessionId: "target",
-                    category: null,
-                    clearMembers: false,
-                    communicationBinding: communicationEntryBinding(entry),
-                  }
-                : {
-                    kind,
-                    membership: [input.target.sessionKey, null, [], {}, entry.sessionId],
-                    lifecycleChanged: false,
-                    communicationBinding: communicationEntryBinding(entry),
-                  },
-          });
-        publish({ ...input.target.entry!, updatedAt: 9 });
-        expect(gate.assertCurrent).not.toThrow();
-        publish({ ...input.target.entry!, ...neverReceive });
-        expect(gate.assertCurrent).toThrow("changed");
-        publish(input.target.entry!);
-        expect(gate.assertCurrent).toThrow("changed");
-      });
+      using gate = await openGate(input);
+      const publish = (entry: SessionEntry) =>
+        changed(input, {
+          storePath: "/sessions",
+          facts:
+            kind === "entry"
+              ? {
+                  kind,
+                  previousSessionId: "target",
+                  sessionId: "target",
+                  category: null,
+                  clearMembers: false,
+                  communicationBinding: communicationEntryBinding(entry),
+                }
+              : {
+                  kind,
+                  membership: [input.target.sessionKey, null, [], {}, entry.sessionId],
+                  lifecycleChanged: false,
+                  communicationBinding: communicationEntryBinding(entry),
+                },
+        });
+      publish({ ...input.target.entry!, updatedAt: 9 });
+      expect(gate.assertCurrent).not.toThrow();
+      publish({ ...input.target.entry!, ...neverReceive });
+      expect(gate.assertCurrent).toThrow("changed");
+      publish(input.target.entry!);
+      expect(gate.assertCurrent).toThrow("changed");
     },
   );
-  it("ignores metadata notifications but fences unknown storage changes", async () => {
-    const input = operation();
-    await withGate(input, async (gate) => {
+  it.each(["unknown", "replacement"] as const)(
+    "ignores metadata but fences %s storage changes",
+    async (kind) => {
+      const input = operation();
+      using gate = await openGate(input);
       changed(input);
       await gate.refresh();
       expect(gate.assertCurrent).not.toThrow();
-      changed(input, { factsInvalidated: true });
+      changed(
+        input,
+        kind === "unknown"
+          ? { factsInvalidated: true }
+          : {
+              storePath: "/sessions",
+              facts: {
+                kind: "replacement",
+                membership: [input.target.sessionKey, null, [], {}, "target"],
+                lifecycleChanged: false,
+              },
+            },
+      );
       expect(gate.assertCurrent).toThrow("changed");
-    });
-  });
-
-  it("refuses a replacement without current communication facts", async () => {
-    const input = operation();
-    await withGate(input, (gate) => {
-      changed(input, {
-        storePath: "/sessions",
-        facts: {
-          kind: "replacement",
-          membership: [input.target.sessionKey, null, [], {}, "target"],
-          lifecycleChanged: false,
-        },
-      });
-      expect(gate.assertCurrent).toThrow("changed");
-    });
-  });
-  it("worker revocation and target redirection cannot pass admission", async () => {
+    },
+  );
+  it("worker revocation cannot pass admission", async () => {
     const input = operation();
     const source = vi.fn();
-    const gate = await prepareSessionsSendCommunication({ ...input, assertSourceCurrent: source });
-    await expect(
-      gate.callGateway({ method: "agent", params: { sessionKey: "agent:main:other" } }),
-    ).rejects.toThrow("redirected");
+    using gate = await openGate({ ...input, assertSourceCurrent: source });
     source.mockImplementation(() => {
       throw new Error("worker revoked");
     });
@@ -632,23 +579,20 @@ describe("sessions_send communication boundary", () => {
       gate.callGateway({ method: "agent", params: { sessionKey: input.target.sessionKey } }),
     ).rejects.toThrow("worker revoked");
     expect(input.callGateway).not.toHaveBeenCalled();
-    gate.close();
   });
   it("denies a missing configured target before creating it and binds only its approved creation", async () => {
     const missing = missingTarget();
     const input = operation(endpoint("source", neverSend), missing);
     await denied(input, "disabled");
-    await withGate(
-      {
-        ...operation(endpoint("source"), missing),
-        ensureTarget: async (assertCurrent) => {
-          assertCurrent();
-          sessionChanges.emit({ all: true, scope: { agentId: "main", topology: true } });
-          return endpoint("target");
-        },
+    using gate = await openGate({
+      ...operation(endpoint("source"), missing),
+      ensureTarget: async (assertCurrent) => {
+        assertCurrent();
+        sessionChanges.emit({ all: true, scope: { agentId: "main", topology: true } });
+        return endpoint("target");
       },
-      (gate) => expect(gate.assertCurrent).not.toThrow(),
-    );
+    });
+    expect(gate.assertCurrent).not.toThrow();
   });
 
   it("rejects an adapter changing the exact request before the host commit", async () => {
@@ -661,35 +605,21 @@ describe("sessions_send communication boundary", () => {
       request.sessionMutationCommitGuard?.();
       return undefined;
     });
-    await withGate(input, async (gate) => {
-      await expect(gate.callGateway(agentRequest(input))).rejects.toThrow("input changed");
-    });
+    using gate = await openGate(input);
+    await expect(gate.callGateway(agentRequest(input))).rejects.toThrow("input changed");
   });
 
   it("same-session source replies are not peer communication", async () => {
     const source = endpoint("source", { communication: { send: "never", receive: "never" } });
-    await withGate(operation(source, source), () => {
-      expect(state.approve).not.toHaveBeenCalled();
-    });
+    (await prepareSessionsSendCommunication(operation(source, source))).close();
+    expect(state.approve).not.toHaveBeenCalled();
   });
-  it.each(["self", "cross-agent"] as const)(
-    "always cannot override the existing %s access ceiling",
-    async (restriction) => {
-      state.config = {
-        tools: {
-          sessions: { visibility: restriction === "self" ? "self" : "all" },
-          agentToAgent: { enabled: false },
-        },
-      };
-      const input = operation();
-      if (restriction === "cross-agent") {
-        input.target = { ...input.target, agentId: "peer", sessionKey: "agent:peer:target" };
-        state.rows.set(input.target.sessionKey, input.target);
-      }
-      await expect(prepareSessionsSendCommunication(input)).rejects.toThrow();
-      expectNoApprovalOrDelivery(input);
-    },
-  );
+  it("always cannot override the disabled cross-agent access ceiling", async () => {
+    state.config = { tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: false } } };
+    const input = operation(undefined, endpoint("target", {}, "peer"));
+    await denied(input);
+    expectNoApprovalOrDelivery(input);
+  });
 
   it("rechecks config after human approval and at final dispatch", async () => {
     const input = operation(endpoint("source", askSend));
@@ -699,23 +629,20 @@ describe("sessions_send communication boundary", () => {
     await denied(input, "policy changed");
     state.config = {};
     const next = operation();
-    const gate = await prepareSessionsSendCommunication(next);
+    using gate = await openGate(next);
     state.config = selfOnly;
     await expect(gate.callGateway(agentRequest(next))).rejects.toThrow("policy changed");
     expect(next.callGateway).not.toHaveBeenCalled();
-    gate.close();
   });
 
   it.each([
     ["message", { message: "unseen" }],
     ["agentId", { agentId: "peer" }],
+    ["target", { sessionKey: "agent:main:other" }],
     ["source", { inputProvenance: { sourceSessionKey: "foreign" } }],
   ] as const)("rejects changed %s before host admission", async (_field, params) => {
     const input = operation();
-    const gate = await prepareSessionsSendCommunication(input);
-    await expect(gate.callGateway(agentRequest(input, params))).rejects.toThrow("redirected");
-    expect(input.callGateway).not.toHaveBeenCalled();
-    gate.close();
+    await deniedDispatch(input, params, "redirected");
   });
   it.each(["never", "sender-refusal"] as const)(
     "%s never creates empty target metadata",
@@ -726,12 +653,7 @@ describe("sessions_send communication boundary", () => {
       const missing = missingTarget();
       const ensureTarget = vi.fn(async () => endpoint("target"));
       state.approve.mockRejectedValueOnce(new Error("refused"));
-      await expect(
-        prepareSessionsSendCommunication({
-          ...operation(endpoint("source"), missing),
-          ensureTarget,
-        }),
-      ).rejects.toThrow();
+      await denied({ ...operation(endpoint("source"), missing), ensureTarget });
       expect(ensureTarget).not.toHaveBeenCalled();
       if (reason === "never") {
         expect(state.approve).not.toHaveBeenCalled();
@@ -741,10 +663,9 @@ describe("sessions_send communication boundary", () => {
 
   it("freezes the approved bytes independently of caller-owned option objects", async () => {
     const input = operation();
-    const gate = await prepareSessionsSendCommunication(input);
+    using gate = await openGate(input);
     input.message = "changed after approval";
     await expect(gate.callGateway(agentRequest(input))).rejects.toThrow("redirected");
     expect(input.callGateway).not.toHaveBeenCalled();
-    gate.close();
   });
 });

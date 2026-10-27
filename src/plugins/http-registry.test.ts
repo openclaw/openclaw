@@ -148,11 +148,7 @@ describe("registerPluginHttpRoute", () => {
       expectDenied(registerHttp, { ...handoffRoute, ...changed, registry });
       expect(registry.httpRoutes).toEqual([placeholder]);
       const next = createEmptyPluginRegistry();
-      registerHttp({
-        ...handoffRoute,
-        ...changed,
-        registry: next,
-      });
+      registerHttp({ ...handoffRoute, ...changed, registry: next });
       expect(() => adoptHandoffs(registry, next)).toThrow();
       expect(registry.httpRoutes).toEqual([placeholder]);
       handoff.release();
@@ -163,25 +159,19 @@ describe("registerPluginHttpRoute", () => {
   it.each([false, true])(
     "keeps sibling handoffs across successor claims (registry swap: %s)",
     (swapRegistry) => {
-      const registry = createEmptyPluginRegistry();
+      const { registry, register } = routeHarness(sharedRoute);
       const first = createLease();
       const second = createLease();
       for (const owner of [first, second]) {
-        registerLeasedRoute(registry, owner, {
-          ...sharedRoute,
-          reuseExistingSameOwner: true,
-        });
+        register({ reuseExistingSameOwner: true }, owner);
       }
       const firstHandoff = park(first);
       const secondHandoff = park(second);
       expect(registry.httpRoutes.map((entry) => entry.handoff)).toEqual([true]);
       const next = swapRegistry ? createEmptyPluginRegistry() : registry;
+      const claim = routeHarness(sharedRoute, next).register;
       const handler = vi.fn();
-      const unregister = registerHttp({
-        ...sharedRoute,
-        registry: next,
-        handler,
-      });
+      const unregister = claim({ handler });
       if (swapRegistry) {
         adoptHandoffs(registry, next);
       }
@@ -190,11 +180,7 @@ describe("registerPluginHttpRoute", () => {
       unregister();
       expect(next.httpRoutes.map((entry) => entry.handoff)).toEqual([true]);
       const secondHandler = vi.fn();
-      const unregisterSecond = registerHttp({
-        ...sharedRoute,
-        registry: next,
-        handler: secondHandler,
-      });
+      const unregisterSecond = claim({ handler: secondHandler });
       secondHandoff.release();
       expect(next.httpRoutes.map((entry) => entry.handler)).toEqual([secondHandler]);
       unregisterSecond();
@@ -228,10 +214,7 @@ describe("registerPluginHttpRoute", () => {
   });
 
   it.each([false, true])("rejects a missing path (strict: %s)", (throwOnFailure) => {
-    const { registry, logs, register } = routeHarness({
-      path: "",
-      accountId: "default",
-    });
+    const { registry, logs, register } = routeHarness({ path: "", accountId: "default" });
     const registerMissingPath = () => register({ throwOnFailure });
 
     let unregister: (() => void) | undefined;
@@ -255,10 +238,7 @@ describe("registerPluginHttpRoute", () => {
     const firstHandler = vi.fn();
     const unregisterFirst = register({ handler: firstHandler }, firstOwner);
     const unregisterSecond = register(
-      {
-        path: "/PLUGINS//SHARED/",
-        reuseExistingSameOwner: true,
-      },
+      { path: "/PLUGINS//SHARED/", reuseExistingSameOwner: true },
       secondOwner,
     );
 
@@ -300,60 +280,57 @@ describe("registerPluginHttpRoute", () => {
   );
 
   it.each([
-    { pluginId: "other", source: "shared-route" },
-    { pluginId: "demo", source: "other-route" },
-  ])("rejects route reuse by $pluginId/$source", ({ pluginId, source }) => {
-    const { registry, register } = routeHarness(sharedRoute);
-    const firstHandler = vi.fn();
-    register({ handler: firstHandler });
-
-    expectDenied(register, { pluginId, source, reuseExistingSameOwner: true }, "reuse");
-    expectRoutes(registry, { handler: firstHandler });
-  });
+    ["reuse by other plugin", "demo", "shared-route", "other", "shared-route", "reuse", false],
+    ["reuse by other source", "demo", "shared-route", "demo", "other-route", "reuse", false],
+    ["source-less to sourced", "demo", undefined, "demo", "demo-webhook", "replacement", false],
+    ["sourced to source-less", "demo", "demo-webhook", "demo", undefined, "replacement", false],
+    ["different plugin", "demo-a", undefined, "demo-b", undefined, "replacement", false],
+    ["owned to anonymous", "demo-a", undefined, undefined, undefined, "replacement", false],
+    ["anonymous to owned", undefined, undefined, "demo-a", undefined, "replacement", false],
+    [
+      "static route source",
+      "demo",
+      "/plugins/demo/index.js",
+      "demo",
+      "dynamic-route",
+      "replacement",
+      true,
+    ],
+  ] as const)(
+    "rejects route ownership changes: %s",
+    (_name, oldId, oldSource, pluginId, source, kind, staticRoute) => {
+      const handler = vi.fn();
+      const existing = { pluginId: oldId, source: oldSource };
+      const registry = staticRoute
+        ? registerStaticRoute(createPluginRecord({ id: oldId, source: oldSource }), {
+            path: "/PLUGINS//SHARED/",
+            handler,
+          })
+        : createEmptyPluginRegistry();
+      const { register } = routeHarness({ ...sharedRoute, ...existing }, registry);
+      if (!staticRoute) {
+        register({ handler });
+      }
+      expectDenied(
+        register,
+        {
+          pluginId,
+          source,
+          ...(kind === "reuse" ? { reuseExistingSameOwner: true } : { replaceExisting: true }),
+        },
+        kind,
+      );
+      expectRoutes(registry, { handler, ...existing });
+    },
+  );
 
   it("finds a canonical exact alias behind an earlier prefix overlap", () => {
-    const { registry, register } = routeHarness({
-      pluginId: "sms",
-      source: "sms-exact",
-    });
+    const { registry, register } = routeHarness({ pluginId: "sms", source: "sms-exact" });
     register({ path: "/webhooks", match: "prefix", source: "prefix" });
     register({ path: "/Webhooks/SMS/" });
-    register({
-      path: "/webhooks/sms",
-      replaceExisting: true,
-    });
+    register({ path: "/webhooks/sms", replaceExisting: true });
 
     expect(registry.httpRoutes.map((route) => route.source)).toEqual(["prefix", "sms-exact"]);
-  });
-
-  it("rejects replacement when a distinct route source owns the same plugin path", () => {
-    const record = createPluginRecord({
-      id: "mattermost",
-      source: "/plugins/mattermost/index.js",
-    });
-    const slashHandler = vi.fn();
-    const registry = registerStaticRoute(record, {
-      path: "/Mattermost//Interactions/default/",
-      handler: slashHandler,
-    });
-
-    expectDenied(
-      registerHttp,
-      {
-        path: "/mattermost/interactions/default",
-        registry,
-        pluginId: "mattermost",
-        source: "mattermost-interactions",
-        replaceExisting: true,
-      },
-      "replacement",
-    );
-
-    expectRoutes(registry, {
-      handler: slashHandler,
-      pluginId: "mattermost",
-      source: "/plugins/mattermost/index.js",
-    });
   });
 
   it.each([false, true])("preserves shipped replacement (anonymous: %s)", (anonymous) => {
@@ -384,32 +361,9 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(0);
   });
 
-  it.each([
-    ["source-less to sourced", "demo", undefined, "demo", "demo-webhook"],
-    ["sourced to source-less", "demo", "demo-webhook", "demo", undefined],
-    ["different plugin", "demo-a", undefined, "demo-b", undefined],
-    ["owned to anonymous", "demo-a", undefined, undefined, undefined],
-    ["anonymous to owned", undefined, undefined, "demo-a", undefined],
-  ])("rejects %s replacement", (_name, oldId, oldSource, pluginId, source) => {
-    const { registry, register } = routeHarness({ path: "/plugins/demo" });
-    const existing = { pluginId: oldId, source: oldSource };
-    const existingHandler = vi.fn();
-    register({
-      handler: existingHandler,
-      ...existing,
-    });
-
-    expectDenied(register, { pluginId, source, replaceExisting: true }, "replacement");
-    expectRoutes(registry, { handler: existingHandler, ...existing });
-  });
-
   it("finds a mixed-auth overlap behind an earlier same-auth prefix", () => {
     const { registry, register } = routeHarness();
-    register({
-      path: "/plugin",
-      match: "prefix",
-      pluginId: "demo-plugin",
-    });
+    register({ path: "/plugin", match: "prefix", pluginId: "demo-plugin" });
     registry.httpRoutes.push({
       path: "/plugin/secure/report",
       handler: vi.fn(),
@@ -421,107 +375,77 @@ describe("registerPluginHttpRoute", () => {
 
     expectDenied(
       register,
-      {
-        path: "/PLUGIN/secure/report/",
-        match: "exact",
-        pluginId: "demo-plugin",
-      },
+      { path: "/PLUGIN/secure/report/", match: "exact", pluginId: "demo-plugin" },
       "overlap",
     );
     expect(registry.httpRoutes).toHaveLength(2);
   });
 
-  it.each([false, true])(
-    "releases retired registry graphs captured by async resources (leased: %s)",
-    async (leased) => {
+  it.each([
+    { name: "retired HTTP", adopt: false, leased: false, withScope: withHttpRegistry },
+    { name: "leased HTTP", adopt: false, leased: true, withScope: withHttpRegistry },
+    { name: "adopted HTTP", adopt: true, leased: false, withScope: withHttpRegistry },
+    { name: "adopted Gateway", adopt: true, leased: false, withScope: withGatewayRegistry },
+  ])(
+    "collects captured registries and preserves $name authority",
+    async ({ adopt, leased, withScope }) => {
       class RetainedService {
         id = "retained-service";
         start() {}
       }
-      const lease = leased ? createPluginRuntimeCapabilityLease("retention test") : undefined;
-      const resources = Array.from({ length: 24 }, () => {
-        const registry = registryWithService(RetainedService);
-        const resource = withHttpRegistry(
-          registry,
-          () => new AsyncResource("plugin-http-retention"),
-          lease,
-        );
-        markPluginRegistryRetired(registry);
-        return resource;
-      });
       const currentRegistry = createEmptyPluginRegistry();
-      setActivePluginRegistry(currentRegistry);
+      const lease = leased ? createPluginRuntimeCapabilityLease("retention test") : undefined;
+      const captures = Array.from({ length: adopt ? 1 : 24 }, () => {
+        const registry = registryWithService(RetainedService);
+        const record = createPluginRecord({ id: "adopted-plugin" });
+        if (adopt) {
+          registry.plugins.push(record);
+        }
+        const instance = adopt ? new PluginInstance(record.id, { record, registry }) : undefined;
+        const handler = instance ? instance.wrap(() => true) : () => true;
+        const capture = () => new AsyncResource("plugin-http-retention");
+        const resource = leased
+          ? withHttpRegistry(registry, capture, lease)
+          : withScope(registry, capture);
+        if (adopt) {
+          currentRegistry.plugins.push(record);
+          markPluginRegistryActive(currentRegistry);
+        }
+        markPluginRegistryRetired(registry);
+        return { resource, instance, handler };
+      });
+      if (!adopt) {
+        setActivePluginRegistry(currentRegistry);
+      }
       try {
         // Weak references keep targets alive until the creating job ends.
         await setImmediate();
         expect(queryObjects(RetainedService)).toBe(0);
-        for (const resource of resources) {
-          expect(() =>
-            resource.runInAsyncScope(() =>
-              registerHttp({
-                path: "/retired-webhook",
-                handler: () => true,
-              }),
-            ),
-          ).toThrow("plugin HTTP route owner is no longer active");
+        for (const { resource, handler } of captures) {
+          const register = () =>
+            resource.runInAsyncScope(() => registerHttp({ path: "/captured-webhook", handler }));
+          if (adopt) {
+            const unregister = register();
+            expect(currentRegistry.httpRoutes).toEqual([
+              {
+                path: "/captured-webhook",
+                auth: "plugin",
+                match: "exact",
+                handler: expect.any(Function),
+              },
+            ]);
+            unregister();
+          } else {
+            expect(register).toThrow("plugin HTTP route owner is no longer active");
+          }
         }
         expect(currentRegistry.httpRoutes).toHaveLength(0);
       } finally {
         lease?.revoke();
-        for (const resource of resources) {
+        for (const { resource, instance } of captures) {
           resource.emitDestroy();
+          await instance?.dispose();
         }
-      }
-    },
-  );
-
-  it.each([
-    { name: "HTTP", withScope: withHttpRegistry },
-    { name: "Gateway", withScope: withGatewayRegistry },
-  ])(
-    "registers through an adopted instance after its captured $name registry is collected",
-    async ({ withScope }) => {
-      class RetainedService {
-        id = "retired-service";
-        start() {}
-      }
-      const currentRegistry = createEmptyPluginRegistry();
-      const { resource, instance, handler } = (() => {
-        const registry = registryWithService(RetainedService);
-        const record = createPluginRecord({ id: "adopted-plugin" });
-        registry.plugins.push(record);
-        const adoptedInstance = new PluginInstance(record.id, { record, registry });
-        const adoptedHandler = adoptedInstance.wrap(() => true);
-        const capturedResource = withScope(
-          registry,
-          () => new AsyncResource("plugin-http-adoption"),
-        );
-        currentRegistry.plugins.push(record);
-        markPluginRegistryActive(currentRegistry);
-        markPluginRegistryRetired(registry);
-        return { resource: capturedResource, instance: adoptedInstance, handler: adoptedHandler };
-      })();
-      try {
-        await setImmediate();
-        expect(queryObjects(RetainedService)).toBe(0);
-        const unregister = resource.runInAsyncScope(() =>
-          registerHttp({
-            path: "/adopted-webhook",
-            handler,
-          }),
-        );
-        expect(currentRegistry.httpRoutes).toEqual([
-          {
-            path: "/adopted-webhook",
-            auth: "plugin",
-            match: "exact",
-            handler: expect.any(Function),
-          },
-        ]);
-        unregister();
-      } finally {
-        resource.emitDestroy();
-        await instance.dispose();
       }
     },
   );
@@ -535,10 +459,7 @@ describe("registerPluginHttpRoute", () => {
       registry,
       () => [
         registerHttp({ path: "/leased-anonymous-webhook" }),
-        registerHttp({
-          path: "/leased-owned-webhook",
-          pluginId: "demo",
-        }),
+        registerHttp({ path: "/leased-owned-webhook", pluginId: "demo" }),
       ],
       owner.lease,
     );
@@ -637,10 +558,7 @@ describe("registerPluginHttpRoute", () => {
 
     const unregister = withHttpRegistry(
       parentRegistry,
-      () =>
-        registerLeasedRoute(nestedRegistry, child, {
-          path: "/nested-webhook",
-        }),
+      () => registerLeasedRoute(nestedRegistry, child, { path: "/nested-webhook" }),
       parent.lease,
     );
 

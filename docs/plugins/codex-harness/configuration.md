@@ -54,7 +54,12 @@ restrictions reuse the same native thread, including after a connection restart.
 Temporary restrictions, such as per-run allowlists, scheduled restrictions, or
 sender-specific restrictions, use an isolated thread where necessary and preserve
 the conversation's existing binding. A temporary first turn does not establish
-a permanent restricted binding.
+a permanent restricted binding. Verified subagent completions carrying inherited
+tool restrictions also use this temporary scope, so the next owner turn can
+resume the original thread with the unseen completion input and answer as quoted
+context. A successful owner turn covers that delta so later turns do not replay it.
+The completion still obeys its inherited restrictions;
+the child's own persistent policy is unchanged.
 
 When a managed restricted thread's creation policy changes, or an older binding
 has no saved policy fingerprint, OpenClaw creates a compatible successor and

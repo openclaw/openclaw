@@ -134,16 +134,20 @@ export function createSessionRowRefresh(
       void readExactBatch(batch);
     }
   }
-  function pendingExactRows(queries: readonly records.Lookup[]) {
+  function pendingExactRows(queries: readonly records.Lookup[], fromSelection: boolean) {
     const { cfg } = owner.state();
     const selected = new Set<string>();
     for (const query of queries) {
-      const key = resolveStoredSessionKeyForAgentStore({
-        cfg,
-        sessionKey: query.key,
-        agentId: query.agentId,
-      });
-      if (isIncognitoSessionKey(key)) {
+      if (
+        !fromSelection &&
+        isIncognitoSessionKey(
+          resolveStoredSessionKeyForAgentStore({
+            cfg,
+            sessionKey: query.key,
+            agentId: query.agentId,
+          }),
+        )
+      ) {
         continue;
       }
       const row = owner.lookup(query);
@@ -153,11 +157,14 @@ export function createSessionRowRefresh(
     }
     return selected;
   }
-  function prepareExactRows(queries: readonly records.Lookup[]): Promise<void> | undefined {
+  function prepareExactRows(
+    queries: readonly records.Lookup[],
+    fromSelection = false,
+  ): Promise<void> | undefined {
     if (owner.state().disposed) {
       return undefined;
     }
-    const selected = pendingExactRows(queries);
+    const selected = pendingExactRows(queries, fromSelection);
     if (selected.size === 0) {
       return undefined;
     }
@@ -195,7 +202,7 @@ export function createSessionRowRefresh(
       return exact.then(() => undefined);
     }
     // The bulk read may reject its facts; recheck the rows once it settles.
-    return Promise.all([exact, ...joined]).then(() => prepareExactRows(queries));
+    return Promise.all([exact, ...joined]).then(() => prepareExactRows(queries, fromSelection));
   }
   function readRows(
     selected: ReadonlySet<string>,

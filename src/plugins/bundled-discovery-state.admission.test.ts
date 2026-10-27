@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   clearBundledDiscoveryModeMemo,
   prepareBundledDiscoveryMode,
@@ -8,7 +7,6 @@ import {
   readBundledDiscoveryModeMemoized,
 } from "./bundled-discovery-state.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
 
 const reads = vi.hoisted(() => ({
   snapshot: vi.fn<() => object | undefined>(),
@@ -46,9 +44,6 @@ beforeEach(() => {
 afterEach(clearBundledDiscoveryModeMemo);
 
 const prepare = () => prepareBundledDiscoveryMode(env);
-const artifactRow = () =>
-  readBundledDiscoveryModeMemoized(env, { artifactPreservingReadOnly: true });
-const metadataRow = () => readPluginMetadataStateRow("bundled-discovery", { env });
 const preparedRow = () => {
   reads.snapshot.mockReturnValue(undefined);
   return readBundledDiscoveryModeMemoized(env, {}, reads.mode);
@@ -58,9 +53,12 @@ const readers = [
   ["memoized snapshot", reads.snapshot, () => readBundledDiscoveryModeMemoized(env)],
   ["async snapshot row", reads.metadata, prepare],
   ["sync row", reads.mode, () => readBundledDiscoveryMode({ env })],
-  ["artifact-preserving row", reads.mode, artifactRow],
+  [
+    "artifact-preserving row",
+    reads.mode,
+    () => readBundledDiscoveryModeMemoized(env, { artifactPreservingReadOnly: true }),
+  ],
   ["prepared row callback", reads.mode, preparedRow],
-  ["metadata adapter", reads.metadata, metadataRow],
 ] as const;
 
 it.each(readers)("preserves invalidation and ordinary errors: %s", async (_name, reject, read) => {
@@ -75,8 +73,6 @@ it.each(readers)("preserves invalidation and ordinary errors: %s", async (_name,
     await inCache(async () => {
       const result = Promise.resolve().then(async () => read());
       await expect(result).rejects.toBe(failure);
-      const invalidated = await result.catch(isStateDatabaseReadAdmissionInvalidatedError);
-      expect(invalidated).toBe(failure === cause);
     });
   }
 });

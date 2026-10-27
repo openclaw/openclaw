@@ -45,6 +45,7 @@ import type { SessionActorProfileIdentity } from "../session-utils-contracts.js"
 import { projectSessionPatchResult } from "../session-utils-model.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
+import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
@@ -89,7 +90,7 @@ function createSessionPatchHandler(
         request = { many: false, params };
       }
       const inputPatch = request.many ? request.params.patch : request.params;
-      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+      const scopes = client?.connect.scopes ?? [];
       if (
         (inputPatch.permissionMode === "full" ||
           inputPatch.sandboxMode !== undefined ||
@@ -124,7 +125,11 @@ function createSessionPatchHandler(
           sessionMutationAuthorization?.assertCurrent();
         }
       };
-      if (patch.model !== undefined) {
+      if (
+        patch.model !== undefined ||
+        patch.agentRuntime !== undefined ||
+        patch.cyberAccessProgram !== undefined
+      ) {
         preparingOperator = captureGatewayOperatorRunAuthority({
           client,
           context,
@@ -246,13 +251,10 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         !profile ||
         profile.kind !== "resolved"
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.FORBIDDEN,
-            "Personal session visibility requires a signed-in profile.",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.FORBIDDEN,
+          "Personal session visibility requires a signed-in profile.",
         );
         return;
       }
@@ -277,13 +279,10 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           authorizeIncognitoSessionTarget({ client, sessionKey: params.key, target }) ||
           createSessionListEntryFilter({ client, cfg })?.(target.storeKey, target.entry) === false
         ) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "Session is unavailable or changed. Refresh the session list.",
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "Session is unavailable or changed. Refresh the session list.",
           );
           return;
         }
@@ -318,10 +317,10 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           },
         );
         if (!updated) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "Session changed. Refresh the session list."),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "Session changed. Refresh the session list.",
           );
           return;
         }
@@ -344,11 +343,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         return;
       }
       const respondUnknownSession = () => {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${key}`),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, `unknown session: ${key}`);
       };
       const runtimeAgentId = normalizeOptionalString(
         client?.internal?.agentRuntimeIdentity?.agentId,
@@ -365,10 +360,10 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           ? ({ type: "human", id: humanActor.id } as const)
           : null;
       if (!assignedBy) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.FORBIDDEN, "sessions.assignOwner requires an identified caller"),
+        respondError(
+          respond,
+          ErrorCodes.FORBIDDEN,
+          "sessions.assignOwner requires an identified caller",
         );
         return;
       }
@@ -409,17 +404,14 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         const ownerIdentityById = new Map<string, SessionActorProfileIdentity | undefined>();
         const projectedOwner = projectAssignableSessionOwner(params.owner, ownerIdentityById, cfg);
         if (!projectedOwner) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `unknown session owner "${params.owner.id}". ${
-                params.owner.type === "human"
-                  ? "Human owners require a Gateway profile ID, not a channel sender ID. Select a registered person or use Assign to me in the Control UI."
-                  : "Agent owners must name a configured agent."
-              }`,
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            `unknown session owner "${params.owner.id}". ${
+              params.owner.type === "human"
+                ? "Human owners require a Gateway profile ID, not a channel sender ID. Select a registered person or use Assign to me in the Control UI."
+                : "Agent owners must name a configured agent."
+            }`,
           );
           return;
         }
@@ -525,47 +517,33 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       if (!key) {
         return;
       }
-      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-      if (!scopes.includes(ADMIN_SCOPE)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `sessions.pluginPatch requires gateway scope: ${ADMIN_SCOPE}`,
-          ),
+      if (!client?.connect.scopes?.includes(ADMIN_SCOPE)) {
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `sessions.pluginPatch requires gateway scope: ${ADMIN_SCOPE}`,
         );
         return;
       }
       const pluginId = normalizeOptionalString(params.pluginId);
       const namespace = normalizeOptionalString(params.namespace);
       if (!pluginId || !namespace) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "pluginId and namespace are required"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "pluginId and namespace are required");
         return;
       }
       if (params.unset === true && params.value !== undefined) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "sessions.pluginPatch cannot specify both unset and value",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "sessions.pluginPatch cannot specify both unset and value",
         );
         return;
       }
       if (params.value !== undefined && !isPluginJsonValue(params.value)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "sessions.pluginPatch value must be JSON-compatible",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "sessions.pluginPatch value must be JSON-compatible",
         );
         return;
       }
@@ -594,7 +572,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         assertCurrent: sessionMutationAuthorization?.assertCurrent,
       });
       if (!patched.ok) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, patched.error));
+        respondError(respond, ErrorCodes.INVALID_REQUEST, patched.error);
         return;
       }
       respond(true, { ok: true, key: patched.key, value: patched.value }, undefined);
@@ -605,7 +583,15 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       });
     },
   ),
-  "sessions.reset": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
+  "sessions.reset": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+    hasCurrentClientAuthority,
+    signal,
+  }) => {
     if (!assertValidParams(params, validateSessionsResetParams, "sessions.reset", respond)) {
       return;
     }
@@ -617,54 +603,70 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
 
     const reason = p.reason === "new" ? "new" : "reset";
     const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
-    const result = await performGatewaySessionReset({
-      key,
-      ...(p.agentId ? { agentId: p.agentId } : {}),
-      reason,
-      commandSource: "gateway:sessions.reset",
-      creation: resolveOperatorSessionCreation(client),
-      ...(client?.authenticatedUserProfile
-        ? { requestingOperatorProfileId: client.authenticatedUserProfile.profileId }
-        : {}),
-      ...(client?.internal?.operatorRoleActor
-        ? { operatorRoleActor: client.internal.operatorRoleActor }
-        : {}),
-      authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
-      armSessionDiffBaselineCapture: true,
-      workerPlacementContext: context,
-      assertAuthorizedInstance: sessionMutationAuthorization?.assertCurrent,
-      expectedSessionId: p.expectedSessionId,
-    });
-    if (!result.ok) {
-      respond(false, undefined, result.error);
-      return;
-    }
-    const deleted = "incognitoDeleted" in result;
-    respond(
-      true,
-      {
-        ok: true,
-        key: result.key,
-        ...(deleted
-          ? {
-              deleted: true,
-              ...(result.worktreePreserved ? { worktreePreserved: result.worktreePreserved } : {}),
-            }
-          : {
-              entry: {
-                ...result.entry,
-                fastMode: prepareSessionFastModePresentation(client)(result.entry.fastMode),
-              },
-              resolved: result.resolved,
-            }),
+    const captured = await captureGatewayOperatorRunAuthority({
+      client,
+      context,
+      hasCurrentClientAuthority,
+      invocationAuthority: {
+        assertCurrent: () => sessionMutationAuthorization?.assertCurrent(),
+        signal,
       },
-      undefined,
-    );
-    emitSessionsChanged(context, {
-      sessionKey: result.key,
-      agentId: result.agentId,
-      ...(deleted ? { sessionId: result.deletedSessionId } : {}),
-      reason: deleted ? "delete" : reason,
     });
+    try {
+      const result = await performGatewaySessionReset({
+        operatorAuthority: captured?.authority,
+        key,
+        ...(p.agentId ? { agentId: p.agentId } : {}),
+        reason,
+        commandSource: "gateway:sessions.reset",
+        creation: resolveOperatorSessionCreation(client),
+        ...(client?.authenticatedUserProfile
+          ? { requestingOperatorProfileId: client.authenticatedUserProfile.profileId }
+          : {}),
+        ...(client?.internal?.operatorRoleActor
+          ? { operatorRoleActor: client.internal.operatorRoleActor }
+          : {}),
+        authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
+        armSessionDiffBaselineCapture: true,
+        workerPlacementContext: context,
+        assertAuthorizedInstance: sessionMutationAuthorization?.assertCurrent,
+        expectedSessionId: p.expectedSessionId,
+      });
+      if (!result.ok) {
+        respond(false, undefined, result.error);
+        return;
+      }
+      const deleted = "incognitoDeleted" in result;
+      respond(
+        true,
+        {
+          ok: true,
+          key: result.key,
+          ...(deleted
+            ? {
+                deleted: true,
+                ...(result.worktreePreserved
+                  ? { worktreePreserved: result.worktreePreserved }
+                  : {}),
+              }
+            : {
+                entry: {
+                  ...result.entry,
+                  fastMode: prepareSessionFastModePresentation(client)(result.entry.fastMode),
+                },
+                resolved: result.resolved,
+              }),
+        },
+        undefined,
+      );
+      emitSessionsChanged(context, {
+        sessionKey: result.key,
+        agentId: result.agentId,
+        ...(deleted ? { sessionId: result.deletedSessionId } : {}),
+        reason: deleted ? "delete" : reason,
+      });
+    } finally {
+      captured?.release();
+    }
   },
 };

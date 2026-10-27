@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
@@ -11,6 +11,7 @@ import { cleanupSessionStateForTest } from "../../test-utils/session-state-clean
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
+import { cliBackendLog } from "./log.js";
 import { loadCliSessionPromptContext } from "./session-history.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -98,6 +99,32 @@ describe("Claude session gaps after a reset", () => {
       }
     } finally {
       admission.close();
+    }
+  });
+
+  it("reports withheld raw history only when a fresh Claude session starts without it", async () => {
+    const { target, params } = await createSession();
+    const warn = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
+    const load = (nativeSessionId?: string) =>
+      loadCliSessionPromptContext({
+        ...params,
+        sessionKey: target.sessionKey,
+        sessionId: target.sessionId,
+        provider: "claude-cli",
+        nativeSessionId,
+        rawTranscriptReseedReason: "auth-unknown",
+      });
+    const refusals = () =>
+      warn.mock.calls.filter(([message]) => message.startsWith("cli session history refused"));
+    try {
+      await load("native-session");
+      expect(refusals()).toHaveLength(0);
+      await load();
+      expect(refusals()).toStrictEqual([
+        ["cli session history refused across auth boundary: reason=auth-unknown"],
+      ]);
+    } finally {
+      warn.mockRestore();
     }
   });
 

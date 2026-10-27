@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import * as schemaFacts from "../infra/sqlite-schema-facts.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   borrowOpenClawStateDatabaseForAsyncRead,
@@ -12,6 +13,7 @@ import {
   retainOpenClawStateDatabaseForIndependentRead,
 } from "./openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase, runWithOpenClawStateBusyTimeout } from "./openclaw-state-db.js";
+import { prepareLeaseDatabase, resolveLeaseDatabasePath } from "./openclaw-state-lease-storage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
@@ -33,6 +35,21 @@ function fixture() {
   const pathname = path.join(tempDirs.make("shared-idle-"), "state.sqlite");
   return { pathname, open: () => openOpenClawStateDatabase({ path: pathname }) };
 }
+
+it("reuses the admitted handle for lease storage without entering a schema read scope", () => {
+  const { pathname, open } = fixture();
+  const database = open();
+  const nativeOpen = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+  const readScope = vi.spyOn(schemaFacts, "runSqliteReadOperationSync");
+  const leaseDatabase = { scope: "shared" as const, options: { path: pathname } };
+  for (let index = 0; index < 2; index++) {
+    prepareLeaseDatabase(leaseDatabase);
+    expect(resolveLeaseDatabasePath(leaseDatabase)).toBe(pathname);
+    expect(open()).toBe(database);
+  }
+  expect(nativeOpen).not.toHaveBeenCalled();
+  expect(readScope.mock.calls.filter(([db]) => db === database.db)).toHaveLength(0);
+});
 
 it.each(["path", "supplied", "busy-timeout"] as const)(
   "reuses shared-state handles until 30 minutes after their last %s acquisition",

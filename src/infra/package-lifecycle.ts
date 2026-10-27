@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
@@ -11,6 +12,8 @@ import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js"
 import { sleep } from "../utils/sleep.js";
 import { asFsSafeFileLockRoot, createFileLockManager } from "./file-lock-manager.js";
 import { root } from "./fs-safe.js";
+import { runtimeProcessExternalPackageEntrypoints } from "./runtime-process-manifest.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 
 const PACKAGE_LIFECYCLE_LOCK_RELATIVE_PATH = ".openclaw-lifecycle-lock";
@@ -63,11 +66,11 @@ export type PackageLifecycleScript = Readonly<{
 const PACKAGE_LIFECYCLE_SCRIPTS: readonly PackageLifecycleScript[] = [
   {
     name: "preinstall",
-    relativePath: path.join("scripts", "preinstall-package-manager-warning.mjs"),
+    relativePath: path.normalize(runtimeProcessExternalPackageEntrypoints.preinstall),
   },
   {
     name: "postinstall",
-    relativePath: path.join("scripts", "postinstall-bundled-plugins.mjs"),
+    relativePath: path.normalize(runtimeProcessExternalPackageEntrypoints.postinstall),
   },
 ];
 function hasErrorCode(error: unknown, code: string): boolean {
@@ -252,7 +255,9 @@ function runPackageLifecycleScript(
   script: PackageLifecycleScript,
   timeoutMs: number,
 ): void {
-  const scriptPath = path.join(packageRoot, script.relativePath);
+  const scriptPath = fileURLToPath(
+    resolveExternalPackageRuntimeEntrypointUrl(script.name, packageRoot),
+  );
   const result = spawnSync(process.execPath, [...resolveRuntimeArgs(), scriptPath], {
     cwd: packageRoot,
     env: process.env,

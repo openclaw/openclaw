@@ -4,6 +4,13 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { materializePreparedRuntimeModel } from "./materialize-model.js";
 
+const openRouterPlan = () => ({
+  providerForAuth: "openrouter",
+  authProfileProviderForAuth: "openrouter",
+  selectedAuthMode: "api-key",
+  forwardedAuthProfileId: "openrouter:default",
+});
+
 describe("Arcee OpenRouter profile materialization", () => {
   it("retains the selected default while materializing its vendor wire id", async () => {
     const plugin = await loadBundledPluginFacade<{
@@ -28,12 +35,7 @@ describe("Arcee OpenRouter profile materialization", () => {
       model,
       config: {},
       forceResolve: true,
-      plan: {
-        providerForAuth: "openrouter",
-        authProfileProviderForAuth: "openrouter",
-        selectedAuthMode: "api-key",
-        forwardedAuthProfileId: "openrouter:default",
-      },
+      plan: openRouterPlan(),
       resolveModel: async (request) => {
         expect(request.authProfileId).toBe("openrouter:default");
         return {
@@ -55,12 +57,7 @@ describe("Arcee OpenRouter profile materialization", () => {
         modelId: "trinity-large-thinking",
         config: {},
         forceResolve: true,
-        plan: {
-          providerForAuth: "openrouter",
-          authProfileProviderForAuth: "openrouter",
-          selectedAuthMode: "api-key",
-          forwardedAuthProfileId: "openrouter:default",
-        },
+        plan: openRouterPlan(),
         resolveModel: async () => ({
           model: {
             provider: "arcee",

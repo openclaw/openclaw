@@ -4,6 +4,20 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../plugins/registry-inspection.test-support.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { resolveContextEngine, type ResolveContextEngineOptions } from "./registry.js";
+
+export function resolveFixtureEngine(
+  registry: PluginRegistry,
+  id: string,
+  options?: ResolveContextEngineOptions,
+) {
+  const config = {
+    plugins: { entries: { fixture: { enabled: true } }, slots: { contextEngine: id } },
+  };
+  return withPluginRuntimeRegistryScope(registry, () => resolveContextEngine(config, options));
+}
 
 export function createRegistryFixture(
   dispose: () => void = () => {},
@@ -38,5 +52,18 @@ export function createNativeSource(
     afterClose();
   };
   const read = () => Number(database.prepare("SELECT 42 AS value").get()?.value);
-  return { ...createRegistryFixture(retire, registry, owner), database, disposed, state, read };
+  const fixture = createRegistryFixture(retire, registry, owner);
+  return {
+    ...fixture,
+    database,
+    disposed,
+    state,
+    read,
+    close: async () => {
+      await fixture.resources.release();
+      if (database.isOpen) {
+        database.close();
+      }
+    },
+  };
 }

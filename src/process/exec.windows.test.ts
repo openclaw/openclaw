@@ -226,16 +226,22 @@ describe("Windows command execution", () => {
     expect(execaMock).not.toHaveBeenCalled();
   });
 
-  it("spawns node plus npm-cli.js instead of npm.cmd when available", async () => {
-    vi.spyOn(fs, "existsSync").mockReturnValue(true);
-    vi.spyOn(process, "execPath", "get").mockReturnValue("C:\\Program Files\\nodejs\\node.exe");
-    void spawnCommand(["npm", "--version"]);
-    const [command, args, options] = requireExecaCall(0);
-    expect(path.win32.basename(command).toLowerCase()).toBe("node.exe");
-    expect(args[0]).toContain(path.join("node_modules", "npm", "bin", "npm-cli.js"));
-    expect(args[1]).toBe("--version");
-    expect(options).toMatchObject({ shell: false, windowsHide: true });
-  });
+  it.each([
+    ["npm", "npm-cli.js"],
+    ["npx", "npx-cli.js"],
+  ] as const)(
+    "spawns node plus %s's declared CLI instead of a command shim",
+    async (manager, entry) => {
+      vi.spyOn(fs, "existsSync").mockReturnValue(true);
+      vi.spyOn(process, "execPath", "get").mockReturnValue("C:\\Program Files\\nodejs\\node.exe");
+      void spawnCommand([manager, "--version"]);
+      const [command, args, options] = requireExecaCall(0);
+      expect(path.win32.basename(command).toLowerCase()).toBe("node.exe");
+      expect(args[0]).toContain(path.join("node_modules", "npm", "bin", entry));
+      expect(args[1]).toBe("--version");
+      expect(options).toMatchObject({ shell: false, windowsHide: true });
+    },
+  );
 
   it("falls back to a trusted npm.cmd wrapper when npm-cli.js is unavailable", async () => {
     vi.spyOn(fs, "existsSync").mockReturnValue(false);

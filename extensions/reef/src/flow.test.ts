@@ -17,13 +17,13 @@ import {
   config,
   createFlow,
   envelope,
+  inbox,
   peerTrust,
   resetFlowStoresForTests,
 } from "./flow.test-helpers.js";
 import { createConfiguredGuard } from "./guard.js";
 import { setReefRuntime } from "./runtime.js";
 import { ReefInboxEntryParkedError } from "./transport.js";
-import type { InboxEntry } from "./types.js";
 
 const oauthGuardModel = "gpt-5.6-terra";
 const oauthGuardResponseModel = `${oauthGuardModel}-2026-08-01`;
@@ -75,17 +75,6 @@ function oauthGuard(evidence: Record<string, unknown>, pinnedModel = oauthGuardM
     }),
   );
   return { runtime, classifier };
-}
-
-function inbox(message: NonNullable<InboxEntry["envelope"]>, seq = 1): InboxEntry {
-  return {
-    seq,
-    peer: "alice",
-    id: message.id,
-    kind: "message",
-    envelope: message,
-    ts: Math.floor(Date.now() / 1_000),
-  };
 }
 
 beforeEach(async () => {

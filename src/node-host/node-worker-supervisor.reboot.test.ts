@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { NodeWorkerCapacity } from "./node-worker-capacity.js";
@@ -17,7 +17,8 @@ import {
 import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 
 const tempDirs = useStateDatabaseTempDirs();
-function fixture(label: string, launchId: string) {
+afterEach(() => vi.restoreAllMocks());
+function fixture(label: string, launchId: string, total = 4) {
   const value = writeNodeWorkerFixture(tempDirs.make(label));
   const journal = new NodeWorkerJournalWorker({ env: value.env });
   const store = new NodeWorkerLaunchStore(journal);
@@ -27,14 +28,20 @@ function fixture(label: string, launchId: string) {
     ...testNodeWorkerLaunchIdentity(input),
     gatewayNamespace: input.gatewayNamespace,
   };
+  const snapshots: Array<{ total: number; available: number }> = [];
+  const capacity = new NodeWorkerCapacity(store, {
+    capacity: total,
+    onCapacityChanged: (snapshot) => snapshots.push(snapshot),
+  });
   return {
+    capacity,
+    snapshots,
     ...value,
     journal,
     store,
-    input,
     owner,
     claim,
-    recover(capacity: NodeWorkerCapacity) {
+    recover() {
       return createNodeWorkerLaunchRecovery({
         store,
         capacity,
@@ -42,19 +49,17 @@ function fixture(label: string, launchId: string) {
         recoveries: new Map(),
       });
     },
-    [Symbol.asyncDispose]: () => journal.drain(),
+    async [Symbol.asyncDispose]() {
+      capacity.close();
+      await journal.drain();
+    },
   };
 }
 
 describe("node worker reboot recovery", () => {
   it("reports a failed capacity refresh without losing committed completion or advertising free capacity", async () => {
-    const f = fixture("node-worker-capacity-refresh-", "refresh-failure");
-    const { root, store, owner: supervisor, claim } = f;
-    const snapshots: Array<{ total: number; available: number }> = [];
-    const capacity = new NodeWorkerCapacity(store, {
-      capacity: 1,
-      onCapacityChanged: (value) => snapshots.push(value),
-    });
+    const f = fixture("node-worker-capacity-refresh-", "refresh-failure", 1);
+    const { root, store, owner: supervisor, claim, snapshots, capacity } = f;
     const logPath = path.join(root, "capacity.log");
     setLoggerOverride({ level: "warn", consoleLevel: "silent", file: logPath });
     try {
@@ -97,28 +102,23 @@ describe("node worker reboot recovery", () => {
       await using f = fixture("node-worker-adopted-boot-", "adopted-boot");
       const { store, claim, owner } = f;
       const boot = vi.spyOn(processIdentity, "getNodeWorkerBootIdentity").mockReturnValue(recorded);
-      try {
-        await store.claim(claim, { pid: 2_147_483_647, startTime: 1 }, 4);
-        boot.mockReturnValue(current);
-        const adopted = await store.claim(claim, owner, 4);
-        expect(adopted).toMatchObject({ action: "start", receipt: { supervisor: owner } });
-        if (adopted.action === "at-capacity") {
-          throw new Error("pending adoption unexpectedly exhausted capacity");
-        }
-        expect(adopted.receipt.bootId).toBe(expected);
-        const running = await store.markRunning({
-          ...claim,
-          supervisor: owner,
-          worker: owner,
-          cleanupMode: "linux-subreaper",
-        });
-        const capacity = new NodeWorkerCapacity(store, { capacity: 4 });
-        expect(await f.recover(capacity)(running)).toMatchObject({ state: "running" });
-        expect(await store.nonterminalCount()).toBe(1);
-        capacity.close();
-      } finally {
-        boot.mockRestore();
+      await store.claim(claim, { pid: 2_147_483_647, startTime: 1 }, 4, 1_007);
+      boot.mockReturnValue(current);
+      const adopted = await store.claim(claim, owner, 4, 1_000);
+      expect(adopted).toMatchObject({ action: "start", receipt: { supervisor: owner } });
+      if (adopted.action === "at-capacity") {
+        throw new Error("pending adoption unexpectedly exhausted capacity");
       }
+      expect(adopted.receipt.bootId).toBe(expected);
+      expect(adopted.receipt.updatedAtMs).toBe(1_007);
+      const running = await store.markRunning({
+        ...claim,
+        supervisor: owner,
+        worker: owner,
+        cleanupMode: "linux-subreaper",
+      });
+      expect(await f.recover()(running)).toMatchObject({ state: "running" });
+      expect(await store.nonterminalCount()).toBe(1);
     },
   );
 
@@ -133,50 +133,41 @@ describe("node worker reboot recovery", () => {
     "$mode recovery from $recorded to $current releases capacity only for a proven reboot",
     async ({ mode, recorded, current, interrupted }) => {
       await using f = fixture("node-worker-reboot-", "reboot-launch");
-      const { store, claim, owner } = f;
+      const { store, claim, owner, capacity } = f;
       const turns = new NodeWorkerTurnStore(f.journal);
       // Reused PID/start ticks must not defeat boot identity; no real process is killed.
       const boot = vi.spyOn(processIdentity, "getNodeWorkerBootIdentity").mockReturnValue(recorded);
-      const snapshots: Array<{ total: number; available: number }> = [];
-      const capacity = new NodeWorkerCapacity(store, {
-        capacity: 4,
-        onCapacityChanged: (value) => snapshots.push(value),
+      const { snapshots } = f;
+      const recover = f.recover();
+      const created = await store.claim(claim, owner, 4);
+      expect(created).toMatchObject({
+        action: "start",
+        receipt: recorded ? { bootId: recorded } : {},
       });
-      const recover = f.recover(capacity);
-      try {
-        const created = await store.claim(claim, owner, 4);
-        expect(created).toMatchObject({
-          action: "start",
-          receipt: recorded ? { bootId: recorded } : {},
+      await turns.claim({ claim, ownerLaunchId: claim.launchId, supervisor: owner });
+      if (mode) {
+        await store.markRunning({
+          ...claim,
+          supervisor: owner,
+          worker: owner,
+          cleanupMode: mode,
         });
-        await turns.claim({ claim, ownerLaunchId: claim.launchId, supervisor: owner });
-        if (mode) {
-          await store.markRunning({
-            ...claim,
-            supervisor: owner,
-            worker: owner,
-            cleanupMode: mode,
-          });
-        }
-        boot.mockReturnValue(current);
-        await capacity.initialize(async (receipt) => {
-          await recover(receipt, false);
-        });
-        const state = interrupted ? "interrupted" : mode ? "running" : "pending";
-        expect(await store.get(claim.launchId)).toMatchObject({ state });
+      }
+      boot.mockReturnValue(current);
+      await capacity.initialize(async (receipt) => {
+        await recover(receipt, false);
+      });
+      const state = interrupted ? "interrupted" : mode ? "running" : "pending";
+      expect(await store.get(claim.launchId)).toMatchObject({ state });
+      expect(await turns.get(claim.launchId)).toMatchObject({
+        state: interrupted ? "interrupted" : "running",
+      });
+      expect(await store.nonterminalCount()).toBe(interrupted ? 0 : 1);
+      expect(snapshots.at(-1)).toEqual({ total: 4, available: interrupted ? 4 : 3 });
+      if (interrupted) {
         expect(await turns.get(claim.launchId)).toMatchObject({
-          state: interrupted ? "interrupted" : "running",
+          errorText: "node host rebooted before the worker launch completed",
         });
-        expect(await store.nonterminalCount()).toBe(interrupted ? 0 : 1);
-        expect(snapshots.at(-1)).toEqual({ total: 4, available: interrupted ? 4 : 3 });
-        if (interrupted) {
-          expect(await turns.get(claim.launchId)).toMatchObject({
-            errorText: "node host rebooted before the worker launch completed",
-          });
-        }
-      } finally {
-        boot.mockRestore();
-        capacity.close();
       }
     },
   );

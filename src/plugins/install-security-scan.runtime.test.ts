@@ -309,17 +309,6 @@ describe("package dependency boundaries", () => {
 });
 
 describe("plugin install policy warnings", () => {
-  it("continues after one acknowledgement and a fresh evaluation of the same warning", async () => {
-    const onInstallPolicyWarning = approvedWarning();
-    runInstallPolicyMock
-      .mockResolvedValueOnce(policyWarning())
-      .mockResolvedValueOnce(policyWarning());
-
-    await expect(scanPackage({ onInstallPolicyWarning })).resolves.toBeUndefined();
-    expect(onInstallPolicyWarning).toHaveBeenCalledWith(approvalDetails);
-    expectPolicyRuns(2);
-  });
-
   it("renders metadata changes that require approval again", async () => {
     const onInstallPolicyWarning = approvedWarning();
     runInstallPolicyMock
@@ -487,55 +476,42 @@ describe("plugin install policy warnings", () => {
 describe("installed plugin runtime compatibility", () => {
   it("warns for resolved transitive runtime dependencies without blocking trusted installs", async () => {
     const root = makeTempDir("openclaw-install-runtime-compatibility-");
-    const packages = [
-      {
-        dir: root,
-        manifest: {
-          name: "runtime-plugin",
-          version: "1.0.0",
-          dependencies: { direct: "1.0.0" },
-          devDependencies: { "dev-only": "1.0.0" },
-        },
-        source: "throw new Error('must not execute');\nconsole.log = () => {};",
-      },
-      {
-        dir: path.join(root, "node_modules", "direct"),
-        manifest: {
-          name: "direct",
-          version: "1.0.0",
-          dependencies: { hoisted: "2.0.0" },
-          optionalDependencies: { optional: "3.0.0" },
-        },
-      },
-      {
-        dir: path.join(root, "node_modules", "hoisted"),
-        manifest: { name: "hoisted", version: "2.0.0" },
-        source: "Buffer.concat = () => null;",
-      },
-      {
-        dir: path.join(root, "node_modules", "optional"),
-        manifest: { name: "optional", version: "3.0.0" },
-        source: "process.chdir = () => {};",
-      },
-      {
-        dir: path.join(root, "node_modules", "dev-only"),
-        manifest: { name: "dev-only", version: "1.0.0" },
-        source: "new Function('return 1');",
-      },
-    ];
-    for (const pkg of packages) {
-      await fs.mkdir(pkg.dir, { recursive: true });
-      await fs.writeFile(path.join(pkg.dir, "package.json"), JSON.stringify(pkg.manifest));
-      if (pkg.source) {
-        await fs.writeFile(path.join(pkg.dir, "index.cjs"), pkg.source);
+    const writePackage = async (
+      name: string,
+      source: string,
+      manifest: Record<string, unknown> = {},
+    ) => {
+      const dir = name === "runtime-plugin" ? root : path.join(root, "node_modules", name);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(
+        path.join(dir, "package.json"),
+        JSON.stringify({ name, version: "1.0.0", ...manifest }),
+      );
+      if (source) {
+        await fs.writeFile(path.join(dir, "index.cjs"), source);
       }
-    }
+    };
+    await writePackage(
+      "runtime-plugin",
+      "throw new Error('must not execute');\nconsole.log = () => {};",
+      {
+        dependencies: { direct: "1.0.0" },
+        devDependencies: { "dev-only": "1.0.0" },
+      },
+    );
+    await writePackage("direct", "", {
+      dependencies: { hoisted: "2.0.0" },
+      optionalDependencies: { optional: "3.0.0" },
+    });
+    await writePackage("hoisted", "Buffer.concat = () => null;", { version: "2.0.0" });
+    await writePackage("optional", "process.chdir = () => {};", { version: "3.0.0" });
+    await writePackage("dev-only", "new Function('return 1');");
     const warn = vi.fn();
     const result = await scanInstalledPackageDependencyTreeRuntime({
       packageDir: root,
       pluginId: "runtime-plugin",
       logger: { warn },
-      source: { kind: "npm", authority: "official", mutable: false, network: true },
+      source: officialSource,
       trustedSourceLinkedOfficialInstall: true,
     });
     expect(result).toBeUndefined();

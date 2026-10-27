@@ -1,14 +1,16 @@
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid as mountView } from "../../../test-helpers/mount-solid.ts";
-import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { ChatActivityHeadline } from "./chat-activity-headline.solid.tsx";
 import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
-import { WorkGroupSummary } from "./chat-message-stream-view.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 import { RawOutputToggle } from "./chat-tool-content.solid.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let userEvent: (typeof import("vitest/browser"))["userEvent"];
@@ -140,6 +142,53 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
       expect(button.matches(":focus-visible")).toBe(true);
     },
   );
+
+  it("dims live operation text until hover or keyboard focus without a tooltip", async () => {
+    container = document.body.appendChild(document.createElement("div"));
+    const view = mountView(
+      () => (
+        <ContentPresentation value={() => true}>
+          <button class="chat-inline-disclosure chat-activity-group__summary">
+            <ChatActivityHeadline
+              scope="hover-proof"
+              activity={{
+                key: "search",
+                name: "tool_search",
+                title: "Find available tools",
+                status: "running",
+              }}
+              summary="5 other operations"
+            />
+          </button>
+        </ContentPresentation>
+      ),
+      { container },
+    );
+    try {
+      const button = container.querySelector<HTMLButtonElement>("button")!;
+      const label = container.querySelector<HTMLElement>(".chat-activity-group__label")!;
+      const icon = container.querySelector<HTMLElement>(".chat-activity-group__icon")!;
+      // Isolate the state assertions from the production color transition.
+      button.style.transition = "none";
+      await userEvent.hover(document.body, { position: { x: 0, y: 0 } });
+      const resting = getComputedStyle(label).color;
+      expect(resting).toBe(getComputedStyle(button).color);
+      expect(icon.getAttribute("aria-label")).toBe("tool_search");
+      expect(button.querySelector("[title]")).toBeNull();
+      await userEvent.hover(icon);
+      const hovered = getComputedStyle(label).color;
+      expect(hovered).not.toBe(resting);
+      expect(hovered).toBe(getComputedStyle(button).color);
+      await userEvent.hover(document.body, { position: { x: 0, y: 0 } });
+      expect(getComputedStyle(label).color).toBe(resting);
+      await userEvent.tab();
+      expect(document.activeElement).toBe(button);
+      expect(button.matches(":focus-visible")).toBe(true);
+      expect(getComputedStyle(label).color).toBe(hovered);
+    } finally {
+      view.unmount();
+    }
+  });
 
   it("keeps message prose and expanded output selectable", async () => {
     container = document.body.appendChild(document.createElement("div"));

@@ -24,12 +24,29 @@ Managed inference proxy restarts do not replace an otherwise reusable native
 thread. Thread identity uses the proxy's upstream provider and routing policy, not
 its temporary loopback address. Upstream, authentication-profile, and creation-time
 policy changes still invalidate thread reuse; live requests continue through the
-current owned proxy.
+current owned proxy. Context-only projection refreshes use that same logical
+inference identity when background work retains its predecessor, rather than
+comparing the private relay URL with the logical route fingerprint.
 
 If active work still claims a native thread, OpenClaw rejects configuration
 changes that would release it without trying fallback models. Wait for that work
 to finish or stop it before retrying. The original thread and its configuration
 remain available.
+
+To diagnose a blocked reply after context refresh, set the existing
+[log file level](/gateway/logging) to `debug`. The
+`codex app-server context-engine binding changed; starting a new thread` record
+includes `backgroundRetentionReason`: `retained`, `client-mismatch`,
+`engine-policy-mismatch`, `tool-mismatch`, `not-background-only`,
+`plugin-policy-mismatch`, or `immutable-config-mismatch`. It reports the first
+failed check; later checks have not run. `retained` means preparation qualified,
+not that a successor has committed. A subsequent
+`codex app-server retained thread release blocked` record reports whether the
+physical owner still has a claim, protection, or background-only custody, and
+whether it differs from the requesting client. These diagnostic fields contain
+only fixed reason codes and booleans, not instructions or configuration contents.
+The same-client and complete-policy checks remain enforced; diagnostics do not
+make a previously refused continuation eligible.
 
 Provider-review acknowledgments must continue the reviewed native thread. If
 changed tools or runtime configuration would require a replacement thread, or
@@ -46,6 +63,10 @@ attributed assistant and tool messages, and presentation callback settlement.
 The shared settlement owner preserves callback order and joins pending
 presentation work before terminal delivery. Projection draining stays under the
 attempt cancellation and settlement deadline.
+
+After a transient provider retry, final-answer recovery uses the original
+persisted user prompt and the completed tool results. It can produce a summary
+when the native turn finishes without text, without running those tools again.
 
 The Codex adapter retains native item identities, protocol parsing, approvals,
 hook handling, and transcript provenance. Constructed messages are persisted
@@ -699,7 +720,7 @@ same child result after the parent replies.
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
 - Managed Codex app-server `0.160.0` or newer. The plugin ships
-  `@openai/codex` `0.162.1` and uses a newer stable `codex` from `PATH` only
+  `@openai/codex` `0.164.0` and uses a newer stable `codex` from `PATH` only
   after it passes a version check and an app-server handshake; see
   [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
   Explicit custom, remote, and macOS desktop-owned

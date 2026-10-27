@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import {
   ensureSidebarConversation,
   openSlot,
@@ -12,6 +13,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import { board as createBoardSnapshot } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { expectText, seedStorage } from "./sidebar-assertions.test-support.ts";
 
@@ -40,25 +42,15 @@ function seedDashboard(page: Page, key: string, extra: Record<string, unknown> =
 }
 
 function boardResponse(key: string) {
-  return {
-    sessionKey: key,
-    revision: 1,
-    tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-    widgets: [
-      {
-        name: "session-progress",
-        tabId: "main",
-        title: "Session progress",
-        contentKind: "plugin",
-        pluginKind: "session:progress",
-        sizeW: 6,
-        sizeH: 5,
-        position: 0,
-        grantState: "none",
-        revision: 1,
-      },
-    ],
-  };
+  return createBoardSnapshot(key, [
+    createBoardWidget({
+      name: "session-progress",
+      title: "Session progress",
+      contentKind: "plugin",
+      pluginKind: "session:progress",
+      sizeH: 5,
+    }),
+  ]);
 }
 
 suite.define(() => {

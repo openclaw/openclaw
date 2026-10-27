@@ -22,13 +22,18 @@ import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { ChatBoardResetConfirmation } from "./chat-board-reset-confirmation.tsx";
 import { projectChatFields } from "./chat-field-projection.ts";
+import type { ChatBoardPanelSource } from "./chat-pane-panel-source.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
-import { createPaneTestHost, getPaneTestRuntime } from "./chat-pane-runtime.test-support.ts";
+import {
+  configureGatewayBoardPane,
+  createPaneTestHost,
+  getPaneTestRuntime,
+} from "./chat-pane-runtime.test-support.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { ChatPaneStateOwner } from "./chat-pane-state-owner.ts";
-import { type ChatBoardPanel, ChatBoardResetConfirmation } from "./chat-pane-surfaces.tsx";
-import { mountBoardPanel } from "./chat-pane.test-support.ts";
+import { mountBoardPanel, type TestChatPane as Pane } from "./chat-pane.test-support.ts";
 import { createInitialChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
@@ -70,38 +75,20 @@ vi.mock("../../lib/sessions/swarm-roster.ts", async (importOriginal) => {
   return importOriginal();
 });
 
-type TestChatPane = HTMLElement & {
-  readonly element: HTMLElement;
-  boardProvider?: BoardProvider;
-  connectedClient: GatewayBrowserClient | null;
-  connectionGeneration: number;
-  context: ApplicationContext;
-  state: ChatPageHost;
-  createSession: () => Promise<boolean>;
-  paneId: string;
-  presented: boolean;
-  visuallyPresented: boolean;
-  readonly conversationPresented: boolean;
+type TestChatPane = Pane & {
   presentedChanged: (presented: boolean) => void;
-  sessionKey: string;
-  resetConfirmation: { pending: object | undefined };
-  swarm: ChatPaneRuntime["swarm"];
   routeFace: "chat" | "dashboard";
-  dashboardExpanded: boolean;
-  onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
   confirmConversationReset: () => Promise<boolean>;
   commitSidebarLayout: (layout: ChatPageHost["sidebarLayout"]) => void;
   settleResetConfirmation: (confirmed: boolean) => void;
-  prepareRender: () => void;
-  commitRender: () => void;
   handleBoardCommand: (event: BoardCommandEvent) => void;
   showDashboard: (expanded: boolean) => void;
   resolveBoardProvider: () => BoardProvider;
   resolveBoardView: () => ResolvedBoardView;
-  renderBoardPanel: (
+  boardPanelSource: (
     board: ResolvedBoardView,
     layout: ChatPageHost["sidebarLayout"],
-  ) => Parameters<typeof ChatBoardPanel>[0] | null;
+  ) => ChatBoardPanelSource | null;
   renderResetConfirmation: () => Parameters<typeof ChatBoardResetConfirmation>[0] | null;
   syncRetainedBoardSession: (board: ResolvedBoardView) => void;
   refreshSwarmRoster: () => void;
@@ -170,45 +157,8 @@ function createTestPane(
   return pane;
 }
 
-function createGatewayBoardPane(params: {
-  sessionKey: string;
-  methods?: readonly string[];
-  scopes?: readonly string[];
-  capabilities?: readonly string[];
-  lifecycleConnected?: boolean;
-}) {
-  const pane = createTestPane(undefined, params.sessionKey);
-  const snapshot = { sessionKey: params.sessionKey, revision: 1, tabs: [], widgets: [] };
-  const removeListener = vi.fn();
-  const request = vi.fn<
-    (
-      method: string,
-      params: { sessionKey: string; agentId?: string },
-    ) => Promise<BoardProvider["snapshot$"]["value"]>
-  >(async () => snapshot);
-  const addEventListener = vi.fn(() => removeListener);
-  const client = { request, addEventListener } as unknown as GatewayBrowserClient;
-  pane.state.sessionKey = params.sessionKey;
-  pane.state.client = client;
-  Reflect.set(pane, "boardProviderLifecycleConnected", params.lifecycleConnected ?? true);
-  pane.context = {
-    ...pane.context,
-    gateway: {
-      snapshot: {
-        client,
-        phase: "connected",
-        hello: {
-          ...(params.scopes ? { auth: { role: "operator", scopes: params.scopes } } : {}),
-          features: {
-            methods: params.methods ?? ["board.get"],
-            ...(params.capabilities ? { capabilities: params.capabilities } : {}),
-          },
-        },
-      },
-    },
-  } as unknown as ApplicationContext;
-  pane.context.connectionBootstrap.synchronize({ client, connected: true });
-  return { pane, snapshot, client, request, addEventListener, removeListener };
+function createGatewayBoardPane(params: Parameters<typeof configureGatewayBoardPane>[1]) {
+  return configureGatewayBoardPane(createTestPane(undefined, params.sessionKey), params);
 }
 
 function configureGatewayMainSession(pane: TestChatPane, defaultAgentId: string, mainKey: string) {
@@ -518,7 +468,7 @@ describe("chat pane board shell", () => {
     pane.connectedClient = client;
 
     const pending = pane.createSession();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(pane.resetConfirmation.pending).toBeDefined());
     pane.settleResetConfirmation(true);
 
     await expect(pending).resolves.toBe(true);
@@ -534,7 +484,7 @@ describe("chat pane board shell", () => {
     } as ApplicationContext["gateway"]["snapshot"]["hello"];
 
     const pending = pane.createSession();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(pane.resetConfirmation.pending).toBeDefined());
     pane.context.gateway.snapshot.hello = {
       auth: { role: "operator", scopes: ["operator.write"] },
       features: { methods: ["sessions.reset"] },
@@ -551,7 +501,7 @@ describe("chat pane board shell", () => {
     const { pane, sessions, reset } = resetPane();
 
     const pending = pane.createSession();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(pane.resetConfirmation.pending).toBeDefined());
     pane.state.chatRunId = "run-started-during-confirmation";
     pane.settleResetConfirmation(true);
 
@@ -564,7 +514,7 @@ describe("chat pane board shell", () => {
     const { pane, sessions } = resetPane();
 
     const pending = pane.createSession();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(pane.resetConfirmation.pending).toBeDefined());
     pane.state.sessionKey = "agent:main:other";
     pane.commitRender();
 
@@ -800,6 +750,16 @@ describe("chat pane board shell", () => {
   it("keeps the board and its iframe connected when a retained pane hides and returns", async () => {
     const pane = createTestPane();
     pane.boardProvider = createMockBoardProvider(pane.state.sessionKey);
+    const controls = document.createElement("button");
+    controls.textContent = "Dashboard controls";
+    const panelSource = pane.boardPanelSource.bind(pane);
+    pane.boardPanelSource = (board, layout) => {
+      const source = panelSource(board, layout);
+      if (source) {
+        source.controls = controls;
+      }
+      return source;
+    };
     const container = document.body.appendChild(document.createElement("div"));
     const layout = openSlot({ columns: [] }, "dashboard");
     const mounted = mountBoardPanel(pane, layout, container);
@@ -811,6 +771,7 @@ describe("chat pane board shell", () => {
         expect(container.querySelector("openclaw-board-view")?.active).toBe(true),
       );
       const board = container.querySelector("openclaw-board-view")!;
+      expect(container.contains(controls)).toBe(true);
       const frame = board.appendChild(document.createElement("iframe"));
       for (const visible of [false, true]) {
         pane.visuallyPresented = visible;
@@ -818,6 +779,7 @@ describe("chat pane board shell", () => {
         expect(container.querySelector("openclaw-board-view")).toBe(board);
         expect(frame.isConnected).toBe(true);
         expect(board.active).toBe(visible);
+        expect(container.contains(controls)).toBe(true);
       }
     } finally {
       mounted.unmount();
@@ -992,22 +954,16 @@ describe("chat pane board shell", () => {
   });
 
   it("enables MCP App pinning only when app-view and put methods are both advertised", () => {
-    const cases = [
-      { suffix: "put-only", methods: ["board.get", "board.widget.put"], expected: false },
-      { suffix: "view-only", methods: ["board.get", "board.widget.appView"], expected: false },
-      {
-        suffix: "complete",
-        methods: ["board.get", "board.widget.appView", "board.widget.put"],
-        expected: true,
-      },
-    ];
-
-    for (const testCase of cases) {
+    for (const [suffix, advertised, expected] of [
+      ["put-only", ["board.widget.put"], false],
+      ["view-only", ["board.widget.appView"], false],
+      ["complete", ["board.widget.appView", "board.widget.put"], true],
+    ] as const) {
       const { pane } = createGatewayBoardPane({
-        sessionKey: `agent:main:${testCase.suffix}`,
-        methods: testCase.methods,
+        sessionKey: `agent:main:${suffix}`,
+        methods: ["board.get", ...advertised],
       });
-      expect(pane.resolveBoardProvider().canPinMcpApps).toBe(testCase.expected);
+      expect(pane.resolveBoardProvider().canPinMcpApps).toBe(expected);
     }
   });
 
@@ -1079,17 +1035,43 @@ describe("chat pane board shell", () => {
     }
   });
 
-  it("grants board actions to a writer with approval scope", () => {
-    const { pane } = createGatewayBoardPane({
-      sessionKey: "agent:main:writer-with-approvals",
-      scopes: ["operator.read", "operator.write", "operator.approvals"],
-      methods: ["board.get", "board.widget.appView", "board.widget.put"],
-      capabilities: ["board-widget-put-canvas-doc"],
-    });
-    const provider = pane.resolveBoardProvider();
-    expect(provider.canMutate).toBe(true);
-    expect(provider.canGrant).toBe(true);
-    expect(provider.canPinWidgets).toBe(true);
-    expect(provider.canPinMcpApps).toBe(true);
-  });
+  it.each([
+    [["operator.read", "operator.write", "operator.approvals"], "owner", true, true, true],
+    [["operator.sessions.write"], "owner", true, false, false],
+    [["operator.sessions.write"], "viewer", false, false, false],
+    [["operator.sessions.read"], "owner", false, false, false],
+  ] as const)(
+    "presents board permissions for %j on a %s session",
+    async (scopes, sharingRole, canMutate, canGrant, canPinMcpApps) => {
+      const { pane } = createGatewayBoardPane({
+        sessionKey: "agent:main:writer-with-approvals",
+        scopes,
+        sharingRole,
+        methods: ["board.get", "board.update", "board.widget.appView", "board.widget.put"],
+        capabilities: ["board-widget-put-canvas-doc"],
+      });
+      const provider = pane.resolveBoardProvider();
+      try {
+        expect(pane.resolveBoardView().available).toBe(true);
+        await vi.waitFor(() => expect(provider.hasLoadedSnapshot).toBe(true));
+        expect(provider.canMutate).toBe(canMutate);
+        expect(provider.canGrant).toBe(canGrant);
+        expect(provider.canPinWidgets).toBe(canMutate);
+        expect(provider.canPinMcpApps).toBe(canPinMcpApps);
+        if (canMutate) {
+          await provider.applyOps([{ kind: "tab_create", tabId: "personal", title: "Personal" }]);
+        } else {
+          await expect(provider.applyOps([])).rejects.toThrow("unavailable");
+        }
+        if (scopes[0] === "operator.sessions.write" && sharingRole === "owner") {
+          pane.state.sessionsResult!.sessions[0]!.sharingRole = "viewer";
+          expect(pane.resolveBoardProvider()).toBe(provider);
+          expect(provider.canMutate).toBe(false);
+          await expect(provider.applyOps([])).rejects.toThrow("unavailable");
+        }
+      } finally {
+        releaseBoard(pane);
+      }
+    },
+  );
 });

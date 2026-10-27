@@ -4,10 +4,7 @@ import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { tryReadJson } from "../infra/json-files.js";
-import {
-  collectInstalledRuntimePackageGraph,
-  type InstalledRuntimePackageGraph,
-} from "./installed-package-runtime-graph.js";
+import type { InstalledRuntimePackageGraph } from "./installed-package-runtime-graph.js";
 import {
   analyzePluginRuntimeCompatibility,
   type RuntimeCompatibilityRule,
@@ -51,31 +48,6 @@ function isSourceFile(name: string): boolean {
     !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(name) &&
     !/\.d\.[cm]?ts$/u.test(name)
   );
-}
-
-export async function inspectPluginRuntimeCompatibility(params: {
-  packageDir: string;
-}): Promise<PluginRuntimeCompatibilityReport> {
-  try {
-    const graph = await collectInstalledRuntimePackageGraph(params);
-    return await scanPluginRuntimeCompatibility(graph);
-  } catch (error) {
-    return {
-      complete: false,
-      scannedPackages: 0,
-      scannedFiles: 0,
-      warnings: [
-        {
-          ruleId: "scan-incomplete",
-          packageName: path.basename(params.packageDir),
-          file: "package.json",
-          line: 1,
-          column: 1,
-          message: `Runtime dependency inspection could not finish: ${sanitizeTerminalText(error instanceof Error ? error.message : String(error))}. Inspect installed dependencies and retry.`,
-        },
-      ],
-    };
-  }
 }
 
 /** Scan only materialized package roots supplied by the install graph owner. */

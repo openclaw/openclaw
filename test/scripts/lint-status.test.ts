@@ -38,12 +38,13 @@ async function prepareScripts() {
   for (const file of collectRuntimeImportClosure(process.cwd(), sourceEntries)) {
     writeAt(root, file, fs.readFileSync(path.resolve(file)));
   }
-  for (const name of ["p-map", "@openclaw/fs-safe", "json5"]) {
+  const dependencies = { "p-map": "*", "@openclaw/fs-safe": "*", json5: "*" };
+  for (const name of Object.keys(dependencies)) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.symlinkSync(path.resolve("node_modules", name), target, "junction");
   }
-  writeAt(root, "package.json", '{"type":"module"}');
+  writeAt(root, "package.json", JSON.stringify({ type: "module", dependencies }));
   writeAt(root, "pnpm-workspace.yaml", "packages: []\n");
   writeAt(
     root,
@@ -64,6 +65,8 @@ async function prepareScripts() {
   await prepareCopiedSourceModules(
     root,
     compiled.map((name) => `scripts/${name}.mts`),
+    // This linked CommonJS dependency stays external, as it does in the real wrappers.
+    { externalModules: { json5: new URL(import.meta.resolve("json5")) } },
   );
   for (const name of compiled) {
     fs.copyFileSync(
@@ -98,7 +101,7 @@ import fs from "node:fs";
 import { waitForFile } from ${JSON.stringify(pathToFileURL(waitForFile).href)};
 const step = ${JSON.stringify(step)};
 const mode = ${JSON.stringify(step === phase ? mode : "success")};
-const shard = process.argv.includes("scripts") ? "scripts" : process.argv.includes("src") ? "core" : "extensions";
+const shard = process.argv.includes("config/oxlint/resource-safety.json") ? "scripts:resource-safety" : process.argv.includes("scripts") ? "scripts" : process.argv.includes("src") ? "core" : "extensions";
 const name = step === "oxlint" ? shard : step;
 const lock = ".artifacts/dist-artifacts.lock";
 fs.appendFileSync("steps.jsonl", JSON.stringify({ step, shard, args: process.argv.slice(2), pid: process.pid, owned: fs.existsSync(lock + "/owner.json"), claims: fs.existsSync(lock) ? fs.readdirSync(lock).filter(name => name.startsWith("child-")) : [] }) + "\\n");
@@ -164,6 +167,8 @@ process.stderr.write = (chunk, ...args) => {
   );
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    CI: "false",
+    OPENCLAW_LINT_TOOL: "oxlint",
     FIXTURE_CONTROLLER_GUARD_EXIT: phase === "controllers" && mode === "nonzero" ? "7" : "0",
     OPENCLAW_OXLINT_SHARDS_SERIAL: "1",
   };
@@ -355,7 +360,7 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
         const result = await fixture.track(
           runNodeScript(
             [path.join(root, "scripts/run-oxlint.mjs"), ...args, "--threads=1"],
-            { ...env, CI: "true", GITHUB_ACTIONS: "true" },
+            { ...env, GITHUB_ACTIONS: "true" },
             10_000,
             { cwd: root, signal, requireProcessTreeExit: true },
           ),
@@ -461,7 +466,7 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
             .filter((step) => step.step === "oxlint")
             .map((step) => step.shard)
             .toSorted(),
-        ).toEqual(["core", "extensions", "scripts"]);
+        ).toEqual(["core", "extensions", "scripts", "scripts:resource-safety"]);
       }
     }),
   );

@@ -77,12 +77,20 @@ export async function acquireDoctorGatewayMaintenanceOwner(
     waitForMaintenance?: boolean;
     runtime: RuntimeEnv;
     assertCurrent?: () => void;
+    assertAdmission?: () => void;
     deadlineMs?: number;
     signal?: AbortSignal;
   },
 ) {
   const updateRepair = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options, env));
   const waitForMaintenance = updateRepair || params.waitForMaintenance === true;
+  const assertCurrent =
+    params.assertCurrent || params.assertAdmission
+      ? () => {
+          params.assertCurrent?.();
+          params.assertAdmission?.();
+        }
+      : undefined;
   const startedAt = performance.now();
   // Installation replacement is an unsupervised restart: detection, drain,
   // then server close and process exit each retain their owner's allowance.
@@ -112,7 +120,7 @@ export async function acquireDoctorGatewayMaintenanceOwner(
         role: "sqlite-maintenance",
         allowInTests: true,
         lifecycleDeadlineMs: params.deadlineMs,
-        assertCurrent: params.assertCurrent,
+        assertCurrent,
         onWait: params.runtime.log,
       });
       if (!owner) {
@@ -140,7 +148,7 @@ export async function acquireDoctorGatewayMaintenanceOwner(
           return false;
         }
         params.signal?.throwIfAborted();
-        params.assertCurrent?.();
+        assertCurrent?.();
         const now = performance.now();
         if (transientDeadlineMs !== undefined && isTransientHolder(error)) {
           lastContention = error;
@@ -160,6 +168,7 @@ export async function acquireDoctorGatewayMaintenanceOwner(
         }
         // A delegated updater may reach Doctor before its replaced foreground
         // Gateway observes the new installation and finishes releasing state.
+        // A deadline-only check cannot authorize waiting for a delegated Gateway exit.
         if (!params.assertCurrent || now >= gatewayDeadlineMs) {
           return false;
         }

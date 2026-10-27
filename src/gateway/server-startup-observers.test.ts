@@ -54,6 +54,27 @@ function completedRecovery() {
   return { initial: settled, pending: new Map<string, Promise<void>>(), settled };
 }
 
+type ObserverOptions = Parameters<typeof runGatewayStartupObservers>[0];
+function observerOptions(overrides: Partial<ObserverOptions> = {}) {
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  return {
+    registry: createEmptyPluginRegistry(),
+    resolveGatewayContext: () => createContext(),
+    loadSubagentRegistryActivation: () => completedRecovery,
+    signal: new AbortController().signal,
+    port: 0,
+    config: {},
+    workspaceDir: "/unused",
+    getCron: () => undefined,
+    createHookRunner: async (...args: Parameters<ObserverOptions["createHookRunner"]>) =>
+      (await import("../plugins/hooks.js")).createHookRunner(...args),
+    refreshLatestUpdateRestartSentinel: async () => {},
+    log,
+    logHooks: log,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   markOrphans.mockReset();
   resumeDeletions.mockReset().mockResolvedValue(undefined);
@@ -70,9 +91,8 @@ it.each(["initial", "deletion", "delivery", "exec", "registry-load", "registry-a
     const fail = () => {
       throw error;
     };
-    let loadSubagentRegistryActivation: Parameters<
-      typeof runGatewayStartupObservers
-    >[0]["loadSubagentRegistryActivation"] = () => completedRecovery;
+    let loadSubagentRegistryActivation: ObserverOptions["loadSubagentRegistryActivation"] = () =>
+      completedRecovery;
     switch (stage) {
       case "initial": {
         const failed = Promise.reject(error);
@@ -98,26 +118,14 @@ it.each(["initial", "deletion", "delivery", "exec", "registry-load", "registry-a
     }
     const gate = new GatewayInputRecovery();
     const unlock = vi.fn(() => gate.releaseInitial());
-    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    await runGatewayStartupObservers({
-      registry: createEmptyPluginRegistry(),
-      resolveGatewayContext: () => createContext(),
+    const options = observerOptions({
       loadSubagentRegistryActivation,
-      signal: new AbortController().signal,
-      port: 0,
-      config: {},
-      workspaceDir: "/unused",
-      getCron: () => undefined,
       trackInputRecovery: (progress) => gate.track(progress),
       unlockStartupMethods: unlock,
-      createHookRunner: async (...args) =>
-        (await import("../plugins/hooks.js")).createHookRunner(...args),
-      refreshLatestUpdateRestartSentinel: async () => {},
-      log,
-      logHooks: log,
     });
+    await runGatewayStartupObservers(options);
     expect(unlock).not.toHaveBeenCalled();
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(error.message));
+    expect(options.log.warn).toHaveBeenCalledWith(expect.stringContaining(error.message));
     await expect(gate.waitForAgentInputRecovery("main")).rejects.toBe(error);
   },
 );
@@ -135,30 +143,19 @@ it("opens healthy agents after initial recovery while joining deferred recovery 
     settled: pending.promise,
   });
   const recovered = vi.fn();
-  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   let settled = false;
   const controller = new AbortController();
-  const observers = runGatewayStartupObservers({
-    registry: createEmptyPluginRegistry(),
-    resolveGatewayContext: () => createContext(),
-    loadSubagentRegistryActivation: () => completedRecovery,
-    signal: controller.signal,
-    port: 0,
-    config: {},
-    workspaceDir: "/unused",
-    getCron: () => undefined,
-    trackInputRecovery: (progress) => gate.track(progress),
-    unlockStartupMethods: () => {
-      gate.releaseInitial();
-      unlocked.resolve();
-    },
-    onSubagentRecoverySettled: recovered,
-    createHookRunner: async (...args) =>
-      (await import("../plugins/hooks.js")).createHookRunner(...args),
-    refreshLatestUpdateRestartSentinel: async () => {},
-    log,
-    logHooks: log,
-  }).then(() => {
+  const observers = runGatewayStartupObservers(
+    observerOptions({
+      signal: controller.signal,
+      trackInputRecovery: (progress) => gate.track(progress),
+      unlockStartupMethods: () => {
+        gate.releaseInitial();
+        unlocked.resolve();
+      },
+      onSubagentRecoverySettled: recovered,
+    }),
+  ).then(() => {
     settled = true;
   });
   try {
@@ -281,23 +278,15 @@ it.for(["delivery", "exec"] as const)(
       return { initial: settled, pending: new Map(), settled };
     });
     const controller = new AbortController();
-    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     let settled = false;
-    const observers = runGatewayStartupObservers({
-      registry: createEmptyPluginRegistry(),
+    const options = observerOptions({
       resolveGatewayContext,
       loadSubagentRegistryActivation: () => () => {
         activated.resolve();
         return completedRecovery();
       },
-      createHookRunner: async (...args) =>
-        (await import("../plugins/hooks.js")).createHookRunner(...args),
       refreshLatestUpdateRestartSentinel: async () => refreshed.resolve(),
       signal: controller.signal,
-      port: 0,
-      config: {},
-      workspaceDir: "/unused",
-      getCron: () => undefined,
       unlockStartupMethods: unlock,
       onSubagentRecoverySettled: recovered,
       startupTrace: {
@@ -312,9 +301,8 @@ it.for(["delivery", "exec"] as const)(
         },
       },
       isClosing: () => controller.signal.aborted,
-      log,
-      logHooks: log,
-    }).then(() => {
+    });
+    const observers = runGatewayStartupObservers(options).then(() => {
       settled = true;
     });
     try {
@@ -336,7 +324,7 @@ it.for(["delivery", "exec"] as const)(
       await observers;
       expect(unlock).toHaveBeenCalledOnce();
       expect(recovered).toHaveBeenCalledOnce();
-      expect(log.warn).not.toHaveBeenCalled();
+      expect(options.log.warn).not.toHaveBeenCalled();
     } finally {
       controller.abort();
       prepared.resolve();
@@ -364,24 +352,14 @@ it("joins recovery preparation when shutdown retires suspended startup admission
       return work;
     });
   const controller = new AbortController();
-  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const activate = vi.fn(completedRecovery);
-  const observers = runGatewayStartupObservers({
-    registry: createEmptyPluginRegistry(),
-    resolveGatewayContext: () => createContext(),
-    loadSubagentRegistryActivation: () => activate,
-    signal: controller.signal,
-    port: 0,
-    config: {},
-    workspaceDir: "/unused",
-    getCron: () => undefined,
-    isClosing: () => controller.signal.aborted,
-    createHookRunner: async (...args) =>
-      (await import("../plugins/hooks.js")).createHookRunner(...args),
-    refreshLatestUpdateRestartSentinel: async () => {},
-    log,
-    logHooks: log,
-  });
+  const observers = runGatewayStartupObservers(
+    observerOptions({
+      loadSubagentRegistryActivation: () => activate,
+      signal: controller.signal,
+      isClosing: () => controller.signal.aborted,
+    }),
+  );
   try {
     await withinTest(parked.promise, signal);
     controller.abort();

@@ -28,22 +28,18 @@ describe("memory-flush write paths (Windows drive paths)", () => {
 
   it("rejects drive-letter paths outside the retained production write boundary", async () => {
     const drivePath = "C:/temp/agent-output.txt";
-    const normalizeWindowsPath = vi.spyOn(path.win32, "normalize");
+    using normalizeWindowsPath = vi.spyOn(path.win32, "normalize");
     const writeTool = wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(root), {
       root,
       relativePath: "memory.md",
     });
 
-    try {
-      await expect(
-        writeTool.execute("windows-drive-path", {
-          path: drivePath,
-          content: "must stay outside the workspace",
-        }),
-      ).rejects.toThrow(/Memory flush writes are restricted to memory\.md/);
-      expect(normalizeWindowsPath).toHaveBeenCalledWith(drivePath);
-    } finally {
-      normalizeWindowsPath.mockRestore();
-    }
+    await expect(
+      writeTool.execute("windows-drive-path", {
+        path: drivePath,
+        content: "must stay outside the workspace",
+      }),
+    ).rejects.toThrow(/Memory flush writes are restricted to memory\.md/);
+    expect(normalizeWindowsPath).toHaveBeenCalledWith(drivePath);
   });
 });

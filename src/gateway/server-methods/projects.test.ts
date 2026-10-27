@@ -5,8 +5,10 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as githubReadIdentity from "../../agents/github-read-identity.js";
 import * as runtimeOwnership from "../../agents/harness/session-runtime-ownership.js";
+import * as worktreeGit from "../../agents/worktrees/git.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -50,6 +52,8 @@ import {
   resolveRepositoryIdentity,
   withProjectState,
 } from "./projects.test-support.js";
+
+const discoverRepository = resolveRepositoryIdentity.getMockImplementation()!;
 
 function mockGitHubFetch() {
   const fetchImpl = vi.fn<typeof fetch>().mockImplementation(
@@ -291,6 +295,7 @@ test("checkout options preserve permitted Current access without exposing paths"
     const workspace = await initializeRepository(state.root, "workspace");
     const outside = await initializeRepository(state.root, "outside");
     const project = await registerProjectRegistry({ path: outside });
+    using gitReads = vi.spyOn(worktreeGit, "runGit");
     const cfg: OpenClawConfig = {
       agents: { entries: { main: { workspace, sandbox: { mode: "off" } } } },
     };
@@ -306,6 +311,8 @@ test("checkout options preserve permitted Current access without exposing paths"
           scopes,
         ),
       ).toEqual({ ok: true, payload: { current: true, worktree: true }, error: undefined });
+      expect(gitReads).toHaveBeenCalledTimes(2);
+      gitReads.mockClear();
     }
     const params = { projectId: project.id, agentId: "main" };
     expect(await invoke("projects.checkoutOptions", params, cfg, ["operator.read"])).toMatchObject({
@@ -622,7 +629,7 @@ test.each(["unrelated creation", "activity", "visibility", "replacement"])(
       seedProjectSession("listed-project", "/projects/listed", {
         createdActor: { type: "human", source: "profile", id: profile.id },
       });
-      const stop = onSessionIdentityMutation(bumpGatewayAccessRevision);
+      using _ = { [Symbol.dispose]: onSessionIdentityMutation(bumpGatewayAccessRevision) };
       resolveRepositoryIdentity.mockImplementationOnce(async (checkoutPath) => {
         if (change === "unrelated creation") {
           seedProjectSession("unrelated", "/projects/unrelated", { updatedAt: 2 });
@@ -637,31 +644,22 @@ test.each(["unrelated creation", "activity", "visibility", "replacement"])(
                   : { updatedAt: 2, title: "Active session" },
           );
         }
-        return {
-          checkoutRoot: checkoutPath,
-          repoRoot: checkoutPath,
-          originUrl: "",
-          fingerprint: checkoutPath,
-        };
+        return discoverRepository(checkoutPath);
       });
-      try {
-        const result = await listProjects(cfg, { observed: true, profileId: profile.id });
-        if (change !== "unrelated creation" && change !== "activity") {
-          expectProjectAccessChanged(result);
-          return;
-        }
-        expect(result).toMatchObject({
-          ok: true,
-          payload: {
-            recents: [{ kind: "folder", folder: "/projects/listed" }],
-            observedProjects: [
-              { name: "listed", checkouts: [{ runnerId: "gateway", path: "/projects/listed" }] },
-            ],
-          },
-        });
-      } finally {
-        stop();
+      const result = await listProjects(cfg, { observed: true, profileId: profile.id });
+      if (change !== "unrelated creation" && change !== "activity") {
+        expectProjectAccessChanged(result);
+        return;
       }
+      expect(result).toMatchObject({
+        ok: true,
+        payload: {
+          recents: [{ kind: "folder", folder: "/projects/listed" }],
+          observedProjects: [
+            { name: "listed", checkouts: [{ runnerId: "gateway", path: "/projects/listed" }] },
+          ],
+        },
+      });
     });
   },
 );
@@ -694,12 +692,7 @@ test.each(["write scope", "session access", "registry access", "probe access"])(
       if (change === "probe access") {
         resolveRepositoryIdentity.mockImplementationOnce(async (checkoutPath) => {
           bumpGatewayAccessRevision();
-          return {
-            checkoutRoot: checkoutPath,
-            repoRoot: checkoutPath,
-            originUrl: "",
-            fingerprint: checkoutPath,
-          };
+          return discoverRepository(checkoutPath);
         });
       }
       if (change === "registry access") {
@@ -796,19 +789,13 @@ test.each([
       if (reference === "live-worktree") {
         await insertRegistryWorktree(
           process.env,
-          {
-            id: reference,
-            name: reference,
+          makeWorktreeRecord(repo, reference, {
             repoFingerprint: fingerprint,
-            repoRoot: repo,
             path: path.join(state.stateDir, "worktrees", fingerprint, reference),
             branch: `openclaw/${reference}`,
             baseRef: "main",
-            ownerKind: "session",
             ownerId: "agent:main:session",
-            createdAt: 1,
-            lastActiveAt: 1,
-          },
+          }),
           { provisionedPaths: [] },
         );
       }

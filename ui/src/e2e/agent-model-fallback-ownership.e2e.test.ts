@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { expectText } from "./activity-assertions.test-support.ts";
 import { captureUiProof } from "./chat-flow.test-support.ts";
@@ -6,7 +7,6 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent model fallback ownership",
@@ -60,7 +60,7 @@ suite.define(() => {
               },
             ],
           },
-          "config.get": configSnapshot(config, "agent-model-fallback-ownership"),
+          "config.get": sourceConfigSnapshot(config, "agent-model-fallback-ownership"),
         },
       });
 

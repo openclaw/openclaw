@@ -9,17 +9,6 @@ import { parseFeishuDriveCommentNoticeEventPayload } from "./monitor.comment.js"
 import { botOpenIds } from "./monitor.state.js";
 import { createSequentialQueue } from "./sequential-queue.js";
 
-function buildCommentNoticeQueueKey(event: {
-  notice_meta?: {
-    file_type?: string;
-    file_token?: string;
-  };
-}): string {
-  const fileType = event.notice_meta?.file_type?.trim() || "unknown";
-  const fileToken = event.notice_meta?.file_token?.trim() || "unknown";
-  return `comment-doc:${fileType}:${fileToken}`;
-}
-
 export function createFeishuDriveCommentNoticeHandler(params: {
   cfg: ClawdbotConfig;
   accountId: string;
@@ -58,7 +47,9 @@ export function createFeishuDriveCommentNoticeHandler(params: {
       error(`feishu[${accountId}]: ignoring malformed drive comment notice payload`);
       return;
     }
-    await enqueue(buildCommentNoticeQueueKey(event), async () => {
+    const fileType = event.notice_meta?.file_type?.trim() || "unknown";
+    const fileToken = event.notice_meta?.file_token?.trim() || "unknown";
+    await enqueue(`comment-doc:${fileType}:${fileToken}`, async () => {
       if (turnAdoptionLifecycle?.abortSignal.aborted) {
         await turnAdoptionLifecycle.onAbandoned();
         return;

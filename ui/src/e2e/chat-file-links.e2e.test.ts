@@ -37,22 +37,7 @@ function fileInfo<T extends object>(name: string, fields: T) {
 }
 
 suite.define(() => {
-  it("preserves domain/path text in user messages", async () => {
-    await withPage(async (page) => {
-      const text = "Please check the portal.example/service.test reference.";
-      const gateway = await installMockGateway(page, {
-        historyMessages: [{ role: "user", content: [{ type: "text", text }], timestamp: 1 }],
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const bubble = page.locator(".chat-bubble").filter({ hasText: "Please check" });
-      await bubble.waitFor({ state: "visible" });
-      expect(await bubble.textContent()).toContain(text);
-      expect(await bubble.locator("a[data-file-path]").count()).toBe(0);
-      expect(await gateway.getRequests("sessions.files.get")).toHaveLength(0);
-    });
-  });
-
-  it.each(["file", "close", "list"] as const)(
+  it.each(["close", "list"] as const)(
     "shows a file tab before completion and honors the %s intent",
     async (intent) => {
       await withPage(async (page) => {
@@ -131,7 +116,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps authored and root-distinct file targets through click and keyboard", async () => {
+  it("preserves domain text and root-distinct file targets through click and keyboard", async () => {
     const files = [
       {
         requestPath: "/workspace/src/file.ts",
@@ -145,33 +130,28 @@ suite.define(() => {
         name: "file.ts",
         marker: "export const relativeTarget = true;",
       },
-      ...["café note.md", "emoji-🌱.md", "100% ready.txt", "日本語.txt"].map((name, index) => ({
-        requestPath: `qa241-unicode/${name}`,
-        workspacePath: `qa241-unicode/${name}`,
-        name,
-        marker: `WORKSPACE_CONTENT_${index}`,
-      })),
+      {
+        requestPath: "qa241-unicode/café 日本語 emoji-🌱 100% ready.txt",
+        workspacePath: "qa241-unicode/café 日本語 emoji-🌱 100% ready.txt",
+        name: "café 日本語 emoji-🌱 100% ready.txt",
+        marker: "export const authoredTarget = true;",
+      },
     ];
     await withPage(async (page) => {
+      const text = "Please check the portal.example/service.test reference.";
       const gateway = await installMockGateway(page, {
         workspace: "/workspace",
         historyMessages: [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: [
-                  "Compare /workspace/src/file.ts:7 and `workspace/src/file.ts:7`.",
-                  ...files
-                    .slice(2)
-                    .map((file) => `[${file.name}](${encodeURI(file.requestPath)}:7)`),
-                  "See docs/README.md.",
-                ].join("\n"),
-              },
-            ],
-            timestamp: 1,
-          },
+          { role: "user", content: [{ type: "text", text }], timestamp: 0 },
+          chatMessage(
+            "assistant",
+            [
+              "Compare /workspace/src/file.ts:7 and `workspace/src/file.ts:7`.",
+              ...files.slice(2).map((file) => `[${file.name}](${encodeURI(file.requestPath)}:7)`),
+              "See docs/README.md.",
+            ].join("\n"),
+            { timestamp: 1 },
+          ),
         ],
         methodResponses: {
           "sessions.files.get": {
@@ -195,6 +175,11 @@ suite.define(() => {
       const response = await page.goto(`${suite.server.baseUrl}chat`);
       const links = page.locator(".chat-thread a.markdown-file-link");
       await links.nth(files.length).waitFor({ state: "visible" });
+      const bubble = page.locator(".chat-bubble").filter({ hasText: "Please check" });
+      await bubble.waitFor({ state: "visible" });
+      expect(await bubble.textContent()).toContain(text);
+      expect(await bubble.locator("a[data-file-path]").count()).toBe(0);
+      expect(await gateway.getRequests("sessions.files.get")).toHaveLength(0);
       const chatUrl = page.url();
       const labels = await links.evaluateAll((anchors) =>
         anchors.map((anchor) => ({
@@ -206,11 +191,11 @@ suite.define(() => {
       for (const [index, file] of files.entries()) {
         const before = (await gateway.getRequests("sessions.files.get")).length;
         const target = page.locator(`.chat-thread a[data-file-path="${file.requestPath}"]`);
-        if (index % 2 === 0) {
+        if (index === 0) {
           await target.click();
         } else {
           await target.focus();
-          await page.keyboard.press(index === 3 ? "Space" : "Enter");
+          await page.keyboard.press(index === 2 ? "Space" : "Enter");
         }
         await gateway.waitForRequest("sessions.files.get", { after: before });
         const fileView = page.locator(".sidebar-file-view");
@@ -226,28 +211,18 @@ suite.define(() => {
       expect(labels.map(({ path: targetPath, line }) => ({ path: targetPath, line }))).toEqual([
         { path: "/workspace/src/file.ts", line: "7" },
         { path: "workspace/src/file.ts", line: "7" },
-        { path: "qa241-unicode/café note.md", line: "7" },
-        { path: "qa241-unicode/emoji-🌱.md", line: "7" },
-        { path: "qa241-unicode/100% ready.txt", line: "7" },
-        { path: "qa241-unicode/日本語.txt", line: "7" },
+        { path: "qa241-unicode/café 日本語 emoji-🌱 100% ready.txt", line: "7" },
         { path: "docs/README.md", line: null },
       ]);
       expect(requests.map((request) => request.params)).toEqual([
         fileRequest("/workspace/src/file.ts"),
         fileRequest("workspace/src/file.ts"),
-        ...files.slice(2).map((file) => ({
-          agentId: "main",
-          path: file.requestPath,
-          sessionKey,
-        })),
+        fileRequest("qa241-unicode/café 日本語 emoji-🌱 100% ready.txt"),
       ]);
       expect(labels.map((label) => label.text)).toEqual([
         "/workspace/src/file.ts:7",
         "workspace/src/file.ts:7",
-        "café note.md",
-        "emoji-🌱.md",
-        "100% ready.txt",
-        "日本語.txt",
+        "café 日本語 emoji-🌱 100% ready.txt",
         "README.md",
       ]);
     });
@@ -539,8 +514,6 @@ suite.define(() => {
       "\nEnd of the full skill.";
     for (const viewport of [
       { width: 390, height: 844 },
-      { width: 768, height: 1024 },
-      { width: 1366, height: 768 },
       { width: 1440, height: 900 },
     ]) {
       await suite.withPage(
@@ -548,16 +521,11 @@ suite.define(() => {
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
             historyMessages: [
-              {
-                role: "assistant",
-                content: [
-                  {
-                    type: "text",
-                    text: "Inspect the [release-notes skill](skills/release-notes/SKILL.md).",
-                  },
-                ],
-                timestamp: 1,
-              },
+              chatMessage(
+                "assistant",
+                "Inspect the [release-notes skill](skills/release-notes/SKILL.md).",
+                { timestamp: 1 },
+              ),
             ],
             methodResponses: {
               "skills.files.get": {

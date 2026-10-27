@@ -5,6 +5,7 @@ import {
 } from "../../../config/sessions/session-source-authority.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import { isOpenClawSystemUpdateMessage } from "../../internal-runtime-context.js";
 import type { Agent, AgentMessage } from "../../runtime/index.js";
 import type { NextUserMessagePersistence } from "../../session-tool-result-guard.js";
 import { buildSessionsYieldContextMessage } from "../../sessions-yield-context.js";
@@ -25,12 +26,12 @@ import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { truncateOversizedToolResultsInMessages } from "../tool-result-truncation.js";
 import { snapshotRecentMessages } from "./attempt-context-summary.js";
-import type { UserTranscriptContext } from "./attempt-history.js";
 import {
   installModelPromptProjection,
   installRuntimeContextMessageForPrompt,
   resolveModelPromptText,
 } from "./attempt-llm-boundary.js";
+import type { UserTranscriptContext } from "./attempt-llm-boundary.types.js";
 import {
   isSessionsYieldAbortError,
   stripSessionsYieldArtifacts,
@@ -70,6 +71,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
     | "sessionId"
     | "sessionKey"
     | "skipPreparedUserTurnMessage"
+    | "suppressNextUserMessagePersistence"
     | "userTurnTranscriptRecorder"
   >;
   registration?: ActiveEmbeddedRunAttachment;
@@ -263,7 +265,9 @@ export async function submitEmbeddedAttemptPrompt(input: {
 
   // An internal prompt has no transcript recorder to capture a model-facing projection,
   // so it is submitted and persisted as the exact text the model receives.
-  const internalPrompt = attempt.skipPreparedUserTurnMessage === true;
+  const internalPrompt =
+    attempt.skipPreparedUserTurnMessage === true ||
+    (attempt.suppressNextUserMessagePersistence === true && userTurnRecorder === undefined);
   const submittedPrompt = internalPrompt
     ? resolveModelPromptText({ ...input, text: input.transcriptPrompt })
     : input.transcriptPrompt;
@@ -303,7 +307,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
     // Persist after the user (or synthetic runtime prompt), retiring unconsumed
     // context when preflight handles or rejects the prompt before the loop starts.
     const cleanupRuntimeContextMessage =
-      input.appendOnlyRuntimeContext && input.runtimeContextMessage
+      input.runtimeContextMessage &&
+      (input.appendOnlyRuntimeContext || isOpenClawSystemUpdateMessage(input.runtimeContextMessage))
         ? activeSession[agentSessionQueuePromptContext](input.runtimeContextMessage)
         : installRuntimeContextMessageForPrompt({
             session: activeSession,

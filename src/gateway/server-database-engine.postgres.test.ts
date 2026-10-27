@@ -22,20 +22,16 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
-import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
-import {
-  createGatewayWorkerEnvironmentRuntime,
-  loadGatewayWorkerEnvironmentStartupState,
-} from "./server-worker-environment-startup.js";
+import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
+import { createWorkerStartupRuntime } from "./server-worker-environment-startup.runtime.test-support.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -272,15 +268,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         expect(workers.store.list()).toEqual([]);
         expect(await workers.placementStore.listAsync()).toEqual([]);
         const registry = createEmptyPluginRegistry();
-        const runtime = await createGatewayWorkerEnvironmentRuntime({
-          scheduler: createTestGatewayScheduler(),
-          getPluginRegistry: () => registry,
-          getPortalRuntime: () => undefined,
-          resolveGatewayContext: () => undefined,
-          desktopSessionRegistry: createDesktopSessionRegistry(),
-          startup: workers,
-          log: { child: () => ({ info: () => {}, warn: () => {} }) },
-        });
+        const runtime = await createWorkerStartupRuntime(workers, () => registry);
         try {
           expect(runtime.workerEnvironmentService).toBeDefined();
         } finally {

@@ -7,9 +7,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth-provider.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createProviderConfigFixture } from "../config/runtime-snapshot.test-fixtures.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   listActiveDegradedSecretOwners,
   setActiveCredentialDegradedOwner,
@@ -254,15 +256,7 @@ describe("secrets runtime provider and media surfaces", () => {
   it("patches env shorthand model refs into the pinned runtime config", async () => {
     const config = asConfig({
       agents: { entries: { main: {} } },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "$OPENAI_API_KEY",
-            models: [],
-          },
-        },
-      },
+      models: createProviderConfigFixture("$OPENAI_API_KEY").models,
     });
     const initial = await prepareSecretsRuntimeSnapshot({
       config,
@@ -320,21 +314,15 @@ describe("secrets runtime provider and media surfaces", () => {
       await import("../config/runtime-snapshot.js");
     activateSecretsRuntimeSnapshot(initial);
 
-    let releaseFirstActivation!: () => void;
-    const firstActivationBlocked = new Promise<void>((resolve) => {
-      releaseFirstActivation = resolve;
-    });
-    let reportFirstActivationQueued!: () => void;
-    const firstActivationQueued = new Promise<void>((resolve) => {
-      reportFirstActivationQueued = resolve;
-    });
+    const firstActivationBlocked = createDeferredCore();
+    const firstActivationQueued = createDeferredCore();
     let activationCalls = 0;
     registerProviderAuthRuntimeSnapshotActivationOwner({
       runExclusive: async (operation) => {
         activationCalls += 1;
         if (activationCalls === 1) {
-          reportFirstActivationQueued();
-          await firstActivationBlocked;
+          firstActivationQueued.resolve();
+          await firstActivationBlocked.promise;
         }
         return await operation();
       },
@@ -347,13 +335,13 @@ describe("secrets runtime provider and media surfaces", () => {
     });
 
     const refresh = refreshActiveProviderAuthRuntimeSnapshot();
-    await firstActivationQueued;
+    await firstActivationQueued.promise;
     const concurrentConfig = asConfig({
       ...initial.config,
       logging: { level: "debug" },
     });
     setRuntimeConfigSnapshot(concurrentConfig, initial.sourceConfig);
-    releaseFirstActivation();
+    firstActivationBlocked.resolve();
 
     await expect(refresh).resolves.toBe(true);
     expect(activationCalls).toBe(2);
@@ -419,11 +407,7 @@ describe("secrets runtime provider and media surfaces", () => {
                 request: {
                   auth: {
                     mode: "authorization-bearer",
-                    token: {
-                      source: "env",
-                      provider: "default",
-                      id: "MEDIA_INFERRED_AUDIO_TOKEN",
-                    },
+                    token: envTokenRef("MEDIA_INFERRED_AUDIO_TOKEN"),
                   },
                 },
               },
@@ -602,8 +586,8 @@ describe("secrets runtime provider and media surfaces", () => {
     });
 
     expect(snapshot.config.models?.providers?.["llama-cpp"]?.apiKey).toEqual(missingRef);
-    expect(snapshot.degradedOwners).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ ownerId: "memory-provider:main" })]),
+    expect(snapshot.degradedOwners).not.toContainEqual(
+      expect.objectContaining({ ownerId: "memory-provider:main" }),
     );
     activateSecretsRuntimeSnapshot(snapshot);
     await expect(
@@ -653,10 +637,8 @@ describe("secrets runtime provider and media surfaces", () => {
         allowUnavailableSecretOwners: true,
       });
       expect(snapshot.config.models?.providers?.[provider]?.apiKey).toEqual(missingRef);
-      expect(snapshot.degradedOwners).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ ownerKind: "provider", ownerId: provider }),
-        ]),
+      expect(snapshot.degradedOwners).toContainEqual(
+        expect.objectContaining({ ownerKind: "provider", ownerId: provider }),
       );
       activateSecretsRuntimeSnapshot(snapshot);
       await expect(

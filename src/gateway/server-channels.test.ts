@@ -52,6 +52,7 @@ import {
   createTestPlugin,
   createTestChannelRegistry,
   createTestChannelManager,
+  createTestNativeApprovalRuntime,
   waitForAbort,
   flushMicrotasks,
   waitForMicrotaskCondition,
@@ -2959,12 +2960,7 @@ describe("server-channels auto restart", () => {
     "owns approval bootstrap and task contexts (bootstrapFails=%s)",
     async (bootstrapFails) => {
       const channelRuntime = createRuntimeChannel();
-      const nativeApprovalRuntime = {
-        request: vi.fn(),
-        requestRoute: vi.fn(),
-        routeCoordinator: {} as never,
-        subscribe: vi.fn(),
-      } as GatewayNativeApprovalRuntime;
+      const nativeApprovalRuntime = createTestNativeApprovalRuntime();
       const stopBootstrap = vi.fn(async () => {});
       if (bootstrapFails) {
         hoisted.startChannelApprovalHandlerBootstrap.mockRejectedValue(new Error("boom"));

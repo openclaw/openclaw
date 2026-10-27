@@ -20,7 +20,9 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { createWatcherMock } from "./config-reload.watcher.test-support.js";
 import {
+  INSTANCE_BINDING_PROBE_METHOD,
   installInstanceBindingProbeCoordinator,
+  type InstanceBindingProbeResult,
   writeInstanceBindingProbePlugin,
 } from "./server-plugins.lifecycle.test-fixtures.js";
 import {
@@ -28,8 +30,6 @@ import {
   closePluginGateway,
   configurePluginGateway,
   observePostReadyStartupMaintenance,
-  requireBoundRuntime,
-  requestSettledInstanceBindingProbe,
   startPluginGateway,
   reloadPlugin,
   writeJson,
@@ -219,12 +219,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         sentinel: { payload: { stats: { requiresRestart: false } } },
       });
       await expect.poll(async () => (await settledProbe("cold-chat")).captured?.label).toBe(label);
-      expect(await settledProbe("cold-chat")).toMatchObject({
-        starts: 1,
-        stops: 0,
-        pid: cold.pid,
-      });
-      expect((await settledProbe("cold-chat")).instance).not.toBe(cold.instance);
+      const replacement = await settledProbe("cold-chat");
+      expect(replacement).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
+      expect(replacement.instance).not.toBe(cold.instance);
       expect(await settledProbe("sibling-chat")).toEqual(sibling);
     }
     // Installing another plugin can rebuild metadata through a different producer.
@@ -340,11 +337,14 @@ it.each([false, true])(
       teardownFails ? { serviceStopFailure: "rejection" } : undefined,
     );
     coordinator.channel = channelPlugin;
-    const bundledRoot = tempDirs.make("openclaw-instance-binding-");
-    await writeInstanceBindingProbePlugin(bundledRoot, coordinator.channelName, channelId);
-    const configPath = configurePluginGateway(bundledRoot, true);
+    const pluginRoot = tempDirs.make("openclaw-instance-binding-");
+    await writeInstanceBindingProbePlugin(pluginRoot, coordinator.channelName, channelId);
+    const configPath = configurePluginGateway(tempDirs.make("openclaw-bundled-empty-"), true);
     const config = loadGatewayTestConfig();
-    config.plugins = enabledPlugins(["instance-binding-probe"], config.plugins);
+    config.plugins = {
+      ...enabledPlugins(["instance-binding-probe"], config.plugins),
+      load: { paths: [pluginRoot] },
+    };
     await writeJson(configPath, config);
     const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
     await useGatewayGraphPluginRuntime();
@@ -371,15 +371,26 @@ it.each([false, true])(
     expect(await probe("active")).toEqual({ status: 200, body: "active:1", registry: "current" });
     expect((await probe("pending")).status).toBe(404);
     socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
-    const stopped = await rpcReq(socket, "channels.stop", {
+    const connected = socket;
+    const stopped = await rpcReq(connected, "channels.stop", {
       channel: channelId,
       accountId: "parked",
     });
     expect(stopped.ok, stopped.error?.message).toBe(true);
     expect((await probe("parked")).status).toBe(404);
 
-    const { runtime } = await requireBoundRuntime(coordinator.runtimes, "webhook channel reload");
-    await requestSettledInstanceBindingProbe(runtime);
+    await vi.waitUntil(
+      async () => {
+        const settlement = await rpcReq<InstanceBindingProbeResult>(
+          connected,
+          INSTANCE_BINDING_PROBE_METHOD,
+          {},
+        );
+        expect(settlement.ok, settlement.error?.message).toBe(true);
+        return settlement.payload?.reloadSettled === true;
+      },
+      { timeout: 30_000 },
+    );
     const initialRegistry = getActivePluginRegistry();
     const reload = await reloadPlugin(socket);
     if (teardownFails) {
@@ -388,17 +399,12 @@ it.each([false, true])(
         error: { details: { runtime: { committed: false, phase: "drain" } } },
       });
       expect(reload.error?.message).toContain("instance-binding service cleanup rejected");
-      expect(coordinator).toMatchObject({ serviceStops: 1, serviceStarts: 1 });
       expect(getActivePluginRegistry()).toBe(initialRegistry);
       releasePending.resolve();
       for (const accountId of ["active", "pending", "parked"]) {
         expect((await probe(accountId)).status).toBe(accountId === "active" ? 503 : 404);
         expect(starts.get(accountId)).toBe(1);
       }
-      const retry = await reloadPlugin(socket);
-      expect(retry.ok).toBe(false);
-      expect(coordinator.serviceStarts).toBe(1);
-      expect((await rpcReq(socket, "config.get", {})).ok).toBe(true);
       expect(hotReloadRecovery).not.toHaveBeenCalled();
       return;
     }

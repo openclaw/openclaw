@@ -151,7 +151,9 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
         }
       }
       if (options.touchMutation !== false) {
-        touchTranscriptMutationInTransaction(database, resolved.sessionId);
+        touchTranscriptMutationInTransaction(database, resolved.sessionId, {
+          projectionReady: projectionUnchanged || rebuildSynchronously,
+        });
       }
       return generation;
     });
@@ -203,6 +205,7 @@ export function updateSqliteTranscriptEventJsonInTransaction(
       database,
       sessionId,
       readTranscriptMutationStateInTransaction(database, sessionId).updatedAt,
+      rebuildSynchronously,
     );
   });
 }

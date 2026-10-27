@@ -1431,7 +1431,7 @@ describe("prepareCliRunContext", () => {
     expect(context.contextEngine).toBeUndefined();
     expect(context.contextEngineTurnPrompt).toBeUndefined();
     expect(context.hadSessionFile).toBe(false);
-    expect(context.claudeSkillsPluginArgs).toEqual([]);
+    expect(context.claudeSkillsPlugin.args).toEqual([]);
     expect(context.preparedBackend.backend.sessionMode).toBe("none");
     expect(context.preparedBackend.backend.liveSession).toBeUndefined();
     expect(context.systemPromptReport.injectedWorkspaceFiles).toEqual([]);
@@ -3895,7 +3895,7 @@ describe("prepareCliRunContext", () => {
     // backend's raw-transcript reseed semantics for fresh-retry paths.
     // A borrowed native handle cannot authorize unverified durable history.
     expect(context.openClawHistoryPrompt).toBeUndefined();
-    expect(context.claudeSkillsPluginArgs).toEqual([]);
+    expect(context.claudeSkillsPlugin.args).toEqual([]);
     expect(context.systemPrompt).not.toContain("GATEWAY_ONLY_SKILL_PATH");
     expect(context.mcpDeliveryCapture).toBeUndefined();
     expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
@@ -3909,7 +3909,7 @@ describe("prepareCliRunContext", () => {
     expect(context.preparedBackend.secretInput?.fingerprint).toBe(
       "selected-node-token-fingerprint",
     );
-    expect(context.preparedBackend.backend.clearEnv).toEqual(
+    expect(context.preparedBackend.resetEnv).toEqual(
       expect.arrayContaining(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]),
     );
   });
@@ -4174,7 +4174,7 @@ describe("prepareCliRunContext", () => {
       sessionKey: "agent:main:main",
       runId: "native-skill-turn-one",
     });
-    const pluginDir = context.claudeSkillsPluginArgs[1];
+    const pluginDir = context.claudeSkillsPlugin.args[1];
     if (!pluginDir) {
       throw new Error("Expected materialized skill plugin");
     }
@@ -4201,7 +4201,7 @@ describe("prepareCliRunContext", () => {
         sessionKey: "agent:main:main",
         runId: "native-skill-turn-two",
       });
-      const unusedPluginDir = nextTurn.claudeSkillsPluginArgs[1];
+      const unusedPluginDir = nextTurn.claudeSkillsPlugin.args[1];
       expect(unusedPluginDir).toEqual(expect.any(String));
       expect(unusedPluginDir).not.toBe(pluginDir);
       expect(fs.existsSync(unusedPluginDir ?? "")).toBe(true);

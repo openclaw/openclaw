@@ -2,6 +2,7 @@ import { lookup } from "node:dns/promises";
 import { isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { GRAPH_HOSTS, SHAREPOINT_HOSTS } from "./microsoft-hosts.js";
 import { resolveMSTeamsSharePointUploadTimeoutMs } from "./request-timeout.js";
 import { buildUserAgent } from "./user-agent.js";
 
@@ -11,18 +12,11 @@ import { buildUserAgent } from "./user-agent.js";
  * as upload destinations in the FileConsentCard flow.
  */
 const CONSENT_UPLOAD_HOST_ALLOWLIST = [
-  "sharepoint.com",
-  "sharepoint.us",
-  "sharepoint.de",
-  "sharepoint.cn",
-  "sharepoint-df.com",
+  ...SHAREPOINT_HOSTS,
   "storage.live.com",
   "onedrive.com",
   "1drv.ms",
-  "graph.microsoft.com",
-  "graph.microsoft.us",
-  "graph.microsoft.de",
-  "graph.microsoft.cn",
+  ...GRAPH_HOSTS,
 ] as const;
 
 async function validateConsentUploadUrl(url: string): Promise<void> {
@@ -58,26 +52,17 @@ async function validateConsentUploadUrl(url: string): Promise<void> {
   }
 }
 
-interface FileConsentCardParams {
+/**
+ * Build a FileConsentCard attachment for requesting upload permission.
+ * Use this for files >= 4MB in personal (1:1) chats.
+ */
+export function buildFileConsentCard(params: {
   filename: string;
   description?: string;
   sizeInBytes: number;
   /** Custom context data to include in the card (passed back in the invoke) */
   context?: Record<string, unknown>;
-}
-
-interface FileInfoCardParams {
-  filename: string;
-  contentUrl: string;
-  uniqueId: string;
-  fileType: string;
-}
-
-/**
- * Build a FileConsentCard attachment for requesting upload permission.
- * Use this for files >= 4MB in personal (1:1) chats.
- */
-export function buildFileConsentCard(params: FileConsentCardParams) {
+}) {
   return {
     contentType: "application/vnd.microsoft.teams.card.file.consent",
     name: params.filename,
@@ -94,7 +79,12 @@ export function buildFileConsentCard(params: FileConsentCardParams) {
  * Build a FileInfoCard attachment for confirming upload completion.
  * Send this after successfully uploading the file to the consent URL.
  */
-export function buildFileInfoCard(params: FileInfoCardParams) {
+export function buildFileInfoCard(params: {
+  filename: string;
+  contentUrl: string;
+  uniqueId: string;
+  fileType: string;
+}) {
   return {
     contentType: "application/vnd.microsoft.teams.card.file.info",
     contentUrl: params.contentUrl,
@@ -114,16 +104,11 @@ interface FileConsentUploadInfo {
   fileType: string;
 }
 
-interface FileConsentResponse {
+export function parseFileConsentInvoke(activity: { name?: string; value?: unknown }): {
   action: "accept" | "decline";
   uploadInfo?: FileConsentUploadInfo;
   context?: Record<string, unknown>;
-}
-
-export function parseFileConsentInvoke(activity: {
-  name?: string;
-  value?: unknown;
-}): FileConsentResponse | null {
+} | null {
   if (activity.name !== "fileConsent/invoke") {
     return null;
   }

@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
+  preparePackageDistJavaScript,
 } from "../../scripts/lib/package-dist-imports.mjs";
+import { collectPackageRootImports } from "../../src/infra/package-root-imports.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const CHECK_SCRIPT = "scripts/check-package-dist-imports.mjs";
@@ -94,6 +96,118 @@ describe("collectPackageDistImportErrors", () => {
 });
 
 describe("collectPackageDistImports", () => {
+  it("carries raw string import specifiers without adding templates, require calls, or URLs", () => {
+    const specifiers: string[] = [];
+    collectPackageDistImports({
+      files: ["dist/index.mjs"],
+      readText: () => `import "./static.mjs?rev=1";
+export { value } from "../named.mjs";
+export * from "./all.mjs";
+import("./dynamic.mjs");
+import(\`./template.mjs\`);
+require("./native.cjs");
+new URL("./worker.mjs", import.meta.url);`,
+      onStaticImport: (specifier) => specifiers.push(specifier),
+    });
+    expect(specifiers).toEqual([
+      "./static.mjs?rev=1",
+      "../named.mjs",
+      "./all.mjs",
+      "./dynamic.mjs",
+    ]);
+  });
+
+  it.each([
+    {
+      name: "static-only imports and loader names in comments",
+      source:
+        '// require and createRequire are only documentation.\nexport const text = "a require example";',
+      loader: false,
+      direct: false,
+    },
+    {
+      name: "ambient require",
+      source: 'require("./native.cjs");',
+      loader: true,
+      direct: true,
+    },
+    {
+      name: "escaped require identifier",
+      source: String.raw`requ\u0069re("./native.cjs");`,
+      loader: true,
+      direct: true,
+    },
+    {
+      name: "escaped createRequire import",
+      source: String.raw`import { create\u0052equire as makeLoader } from "node:module";
+const load = makeLoader(import.meta.url); load("./native.cjs");`,
+      loader: true,
+      direct: false,
+    },
+    {
+      name: "escaped createRequire property",
+      source: String.raw`import * as mod from "node:module";
+const load = mod["create\u0052equire"](import.meta.url); load("./native.cjs");`,
+      loader: true,
+      direct: false,
+    },
+    {
+      name: "destructured createRequire alias",
+      source: `import * as mod from "node:module";
+const { createRequire: makeLoader } = mod;
+const load = makeLoader(import.meta.url); load("./native.cjs");`,
+      loader: true,
+      direct: false,
+    },
+  ])("reports Node loader references from parsed $name", ({ source, loader, direct }) => {
+    const onNodeLoaderReference = vi.fn();
+    const imports = collectPackageDistImports({
+      files: ["dist/index.mjs"],
+      readText: () => `import "./static.mjs";\n${source}`,
+      onNodeLoaderReference,
+    });
+    expect(onNodeLoaderReference.mock.calls.length > 0).toBe(loader);
+    expect(imports).toEqual([
+      { importerPath: "dist/index.mjs", importedPath: "dist/static.mjs" },
+      ...(direct
+        ? [{ importerPath: "dist/index.mjs", importedPath: "dist/native.cjs", kind: "require" }]
+        : []),
+    ]);
+  });
+
+  it.each(["ts", "mts", "cts"])("opts into runtime imports from typed %s helpers", (extension) => {
+    const file = `dist/helper.${extension}`;
+    const source =
+      'import type { Missing } from "./types-only.ts";\n' +
+      (extension === "cts"
+        ? 'const runtime: Missing = require("./runtime.cts");'
+        : 'import runtime from "./runtime.mts"; const value: Missing = runtime; new URL("./worker.ts", import.meta.url);');
+    const input = { files: [file], readText: () => source };
+    expect(collectPackageDistImports(input)).toEqual([]);
+    const imports = collectPackageDistImports({ ...input, includeTypeScript: true });
+    const expected = extension === "cts" ? ["runtime.cts"] : ["runtime.mts", "worker.ts"];
+    expect(imports).toEqual(
+      expected.map((target) => ({
+        importerPath: file,
+        importedPath: `dist/${target}`,
+        ...(extension === "cts" ? { kind: "require" } : {}),
+      })),
+    );
+    expect(collectPackageDistImportErrors({ files: [file], imports })).toEqual(
+      expected.map((target) => `${file} imports missing dist/${target}`),
+    );
+  });
+
+  it("normalizes typed native require aliases for package-root import analysis", () => {
+    const source = `import { createRequire } from "node:module";
+const load = createRequire(import.meta.url) as NodeRequire;
+load("./native.cjs");`;
+    expect(collectPackageRootImports(preparePackageDistJavaScript("helper.mts", source))).toContain(
+      "./native.cjs",
+    );
+    expect(preparePackageDistJavaScript("helper.mjs", source)).toBe(source);
+  });
+
   it.each(["mjs", "cjs"])(
     "keeps binding searches bounded while rejecting a redeclaration in a large %s artifact",
     (extension) => {
@@ -142,7 +256,12 @@ return require("./leaf.cjs");`;
   it("leaves installed dependency modules to their own package scope", () => {
     expect(
       collectPackageDistImports({
-        files: ["node_modules/vendor/index.js", "dist/node_modules/vendor/index.mjs"],
+        files: [
+          "node_modules/vendor/index.js",
+          "dist/node_modules/vendor/index.mjs",
+          "node_modules/vendor/index.ts",
+        ],
+        includeTypeScript: true,
         readText: () => {
           throw new Error("Dependency source belongs to a separate package scope");
         },

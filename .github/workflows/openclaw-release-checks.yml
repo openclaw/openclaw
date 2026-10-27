@@ -1702,6 +1702,7 @@ jobs:
       shared_image_artifact_namespace: release-live
       shared_image_policy: no-push-artifact
     secrets: &live_e2e_release_secrets
+      ABLITERATION_API_KEY: ${{ secrets.ABLITERATION_API_KEY }}
       AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
       AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
       BASETEN_API_KEY: ${{ secrets.BASETEN_API_KEY }}

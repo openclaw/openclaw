@@ -21,6 +21,7 @@ import {
 } from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { AssistantAttachments } from "./components/chat-message-attachments-solid.tsx";
+import { stubObjectUrls } from "./components/chat-message-media.test-helpers.ts";
 import { projectMessageMedia } from "./components/chat-message-media.ts";
 import { hydrateDurableComposerAttachments } from "./durable-composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
@@ -41,19 +42,14 @@ beforeEach(() => {
   created = new Map();
   revoked = [];
   owned = [];
-  const NativeURL = URL;
-  vi.stubGlobal(
-    "URL",
-    class extends NativeURL {
-      static override createObjectURL(blob: Blob) {
-        const value = `blob:http://localhost/preview-${created.size}`;
-        created.set(value, blob);
-        return value;
-      }
-      static override revokeObjectURL(value: string) {
-        revoked.push(value);
-      }
+  stubObjectUrls(
+    (blob) => {
+      assert(blob instanceof Blob);
+      const value = `blob:http://localhost/preview-${created.size}`;
+      created.set(value, blob);
+      return value;
     },
+    vi.fn((value: string) => revoked.push(value)),
   );
 });
 afterEach(() => {
@@ -62,17 +58,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-function hostFor() {
-  const host = makeChatHost({
-    requestHandlers: {},
-    settings: { gatewayUrl: "ws://synthetic-preview.test" },
-    sessionKey: "agent:main:preview",
-    agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
-  });
-  assert(host.client, "Missing fixture client");
-  vi.spyOn(host.client, "recoveryScope", "get").mockReturnValue("synthetic-preview-owner");
-  return host;
-}
 function selected(): ChatAttachment {
   const attachment = registerChatAttachmentPayload({
     attachment: { ...pdf },
@@ -82,7 +67,37 @@ function selected(): ChatAttachment {
   owned.push(attachment);
   return attachment;
 }
-function card(attachment: ChatAttachment) {
+it("retains document Open and Download after complete outbox hydration", async () => {
+  const host = makeChatHost({
+    requestHandlers: {},
+    settings: { gatewayUrl: "ws://synthetic-preview.test" },
+    sessionKey: "agent:main:preview",
+    agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
+  });
+  assert(host.client, "Missing fixture client");
+  vi.spyOn(host.client, "recoveryScope", "get").mockReturnValue("synthetic-preview-owner");
+  const item: ChatQueueItem = {
+    id: "synthetic-queue",
+    text: "Read brief",
+    createdAt: 1,
+    sessionKey: host.sessionKey,
+    agentId: "main",
+    attachments: [selected()],
+  };
+  const persisted = await prepareOutboxPayload(host, item);
+  assert(persisted.status === "ready", "Payload was not persisted");
+  releaseChatAttachmentPayloads(item.attachments);
+  const restored = await prepareOutboxPayload(
+    host,
+    { ...item, ...persisted.update, attachments: [{ ...pdf }] },
+    "handoff",
+  );
+  assert(restored.status === "ready", "Payload was not restored");
+  const attachment = restored.update.attachments?.[0];
+  assert(attachment, "Missing restored attachment");
+  owned.push(attachment);
+  expect(getChatAttachmentDataUrl(attachment)).toBe(dataUrl);
+  expect(attachment).toMatchObject(pdf);
   const message = buildLocalUserMessage({
     attachments: [attachment],
     createdAt: 1,
@@ -94,44 +109,16 @@ function card(attachment: ChatAttachment) {
     createComponent(AssistantAttachments, { attachments, options: {}, onOpenSidebar: onOpen }),
   );
   flush();
-  return {
-    container,
-    onOpen,
-    download: container.querySelector<HTMLAnchorElement>(
-      ".chat-assistant-attachment-card__download",
-    ),
-    open: container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand"),
-  };
-}
-async function persisted(host: ReturnType<typeof hostFor>): Promise<ChatQueueItem> {
-  const item: ChatQueueItem = {
-    id: "synthetic-queue",
-    text: "Read brief",
-    createdAt: 1,
-    sessionKey: host.sessionKey,
-    agentId: "main",
-    attachments: [selected()],
-  };
-  const result = await prepareOutboxPayload(host, item);
-  assert(result.status === "ready", "Payload was not persisted");
-  releaseChatAttachmentPayloads(item.attachments);
-  return { ...item, ...result.update, attachments: [{ ...pdf }] };
-}
-it("retains document Open and Download after complete outbox hydration", async () => {
-  const host = hostFor();
-  const item = await persisted(host);
-  const restored = await prepareOutboxPayload(host, item, "handoff");
-  assert(restored.status === "ready", "Payload was not restored");
-  const attachment = restored.update.attachments?.[0];
-  assert(attachment, "Missing restored attachment");
-  owned.push(attachment);
-  expect(getChatAttachmentDataUrl(attachment)).toBe(dataUrl);
-  expect(attachment).toMatchObject(pdf);
-  const result = card(attachment);
-  expect(result.container.textContent).toContain("brief.pdf");
-  expect(result.download, "restored PDF Download must remain available").not.toBeNull();
-  expect(result.open, "restored PDF Open must remain available").not.toBeNull();
-  const href = result.download!.getAttribute("href")!;
+  const download = container.querySelector<HTMLAnchorElement>(
+    ".chat-assistant-attachment-card__download",
+  );
+  const open = container.querySelector<HTMLButtonElement>(
+    ".chat-assistant-attachment-card__expand",
+  );
+  expect(container.textContent).toContain("brief.pdf");
+  assert(download, "restored PDF Download must remain available");
+  assert(open, "restored PDF Open must remain available");
+  const href = download.getAttribute("href")!;
   expect(href).toMatch(/^blob:/);
   const blob = created.get(href);
   expect(blob).toBeDefined();
@@ -140,8 +127,8 @@ it("retains document Open and Download after complete outbox hydration", async (
       .update(new Uint8Array(await blob!.arrayBuffer()))
       .digest("hex"),
   ).toBe("e5c62df5dab5c87b6a015ef3d43597074d1eec433b15f51aec63b8582d0e4ab4");
-  result.open!.click();
-  expect(result.onOpen).toHaveBeenCalledWith(
+  open!.click();
+  expect(onOpen).toHaveBeenCalledWith(
     expect.objectContaining({ kind: "attachment", src: href, title: "brief.pdf" }),
   );
   releaseChatAttachmentPayloads([attachment]);

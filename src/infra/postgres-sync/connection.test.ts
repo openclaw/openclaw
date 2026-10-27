@@ -40,7 +40,7 @@ function transactionFixture() {
 }
 
 function transportFixture(
-  initialMode: "normal" | "spurious" | "mismatched" | "missing" | "timeout",
+  initialMode: "normal" | "spurious" | "mismatched" | "missing" | "timeout" | "service-death",
 ) {
   let mode = initialMode;
   let command: string | undefined;
@@ -48,13 +48,13 @@ function transportFixture(
   const { port1, port2 } = new MessageChannel();
   const control = new Int32Array(new SharedArrayBuffer(8));
   control.set([1, 1]);
-  const terminate = vi.fn(async () => 0);
+  const service = new Int32Array(new SharedArrayBuffer(8));
   // Exercise the connection over real ports; live tests cover worker startup and admission.
   const db = harness.connection();
   Object.assign(db, {
     port: port1,
     control,
-    worker: { terminate, off: vi.fn() },
+    service,
     requestId: 1,
   });
   const sent = vi.spyOn(port1, "postMessage");
@@ -83,7 +83,10 @@ function transportFixture(
         now += 1;
         return "ok";
       }
-      if (mode === "timeout") {
+      if (mode === "timeout" || mode === "service-death") {
+        if (mode === "service-death") {
+          Atomics.store(service, 1, 1);
+        }
         now += timeout ?? 0;
         return "timed-out";
       }
@@ -113,7 +116,7 @@ function transportFixture(
             };
       port2.postMessage(reply);
     }
-    Atomics.store(control, index, id);
+    Atomics.store(control, 0, id);
     return "ok";
   });
   harness.cleanups.push(() => {
@@ -130,7 +133,6 @@ function transportFixture(
     db,
     sent,
     waits,
-    terminate,
     normal: () => (mode = "normal"),
     command: (value: string) => (command = value),
     rejectQuery: (error: PostgresErrorData) => (queryError = error),
@@ -229,18 +231,18 @@ it("waits through a late notify until its own completion and preserves increasin
   const { db, sent, waits, normal } = transportFixture("spurious");
   expect(db.prepare("SELECT 7 AS value").get()).toEqual({ value: 7 });
   expect(waits).toEqual([
-    { observed: 1, timeout: 120_000 },
-    { observed: 1, timeout: 119_999 },
+    { observed: 1, timeout: 50 },
+    { observed: 1, timeout: 50 },
   ]);
   normal();
   expect(db.prepare("SELECT 7 AS value").get()).toEqual({ value: 7 });
   expect(sent.mock.calls.map(([request]) => request.id)).toEqual([2, 3]);
 });
 
-it.each(["mismatched", "missing", "timeout"] as const)(
+it.each(["mismatched", "missing", "timeout", "service-death"] as const)(
   "poisons %s requests and never sends another operation",
   (mode) => {
-    const { db, sent, terminate, waits } = transportFixture(mode);
+    const { db, sent, waits } = transportFixture(mode);
     const before = readToken(db.anchor, "entry");
     let failure: unknown;
     try {
@@ -255,9 +257,12 @@ it.each(["mismatched", "missing", "timeout"] as const)(
     expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
     const after = readToken(db.anchor, "entry");
     expect(after).not.toBe(before);
-    expect(terminate).toHaveBeenCalledOnce();
     if (mode === "timeout") {
-      expect(waits).toHaveLength(1);
+      expect(waits.reduce((sum, wait) => sum + (wait.timeout ?? 0), 0)).toBe(120_000);
+      expect(waits.every((wait) => wait.timeout! <= 50)).toBe(true);
+    }
+    if (mode === "service-death") {
+      expect(waits).toEqual([{ observed: 1, timeout: 50 }]);
     }
     const count = sent.mock.calls.length;
     expect(() => db.exec("SELECT 8")).toThrow("PostgreSQL connection lost; outcome unknown");

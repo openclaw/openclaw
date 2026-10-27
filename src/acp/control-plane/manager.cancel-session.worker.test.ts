@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -137,9 +138,7 @@ it("joins a failing accepted sibling while another terminal signal remains activ
     });
     try {
       await secondGate.reached(turnResults);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       expect(settled).toBe(false);
       secondGate.open();
       expect(await result).toMatchObject([{ status: "rejected" }]);
@@ -219,9 +218,7 @@ it("joins reentrant cancellation without issuing a second backend effect", async
     const outerResult = Promise.allSettled([outer]);
     try {
       await cancelGate.reached(outerResult);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       expect(f.cancel).toHaveBeenCalledOnce();
       expect([nestedSettled, outerSettled]).toEqual([false, false]);
       cancelGate.open();

@@ -7,13 +7,6 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import type { IrcChannelConfig } from "./types.js";
 
-type IrcGroupMatch = {
-  allowed: boolean;
-  groupConfig?: IrcChannelConfig;
-  wildcardConfig?: IrcChannelConfig;
-  hasConfiguredGroups: boolean;
-};
-
 function resolveIrcGroupScope(params: {
   groups?: Record<string, IrcChannelConfig>;
   target: string;
@@ -37,7 +30,7 @@ function resolveIrcGroupScope(params: {
 export function resolveIrcGroupMatch(params: {
   groups?: Record<string, IrcChannelConfig>;
   target: string;
-}): IrcGroupMatch {
+}) {
   const { path } = resolveIrcGroupScope(params);
   const key = path[0];
   const groupConfig = key ? params.groups?.[key] : undefined;

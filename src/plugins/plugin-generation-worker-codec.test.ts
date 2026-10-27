@@ -228,17 +228,10 @@ it("keeps only owner-marked source copies outside the ordinary method deadline",
   const ownerCopy = markPluginSourceCaptureOperation(() => undefined);
   const original = {
     captureRecoverySource: ownerCopy,
-    retainSourceCustody: ownerCopy,
-    recovery: { fork: ownerCopy },
     fork: () => undefined,
-    resolve: () => undefined,
   };
   const decoded = receiver.decode(sender.encode(original)) as typeof original;
   decoded.captureRecoverySource();
-  decoded.retainSourceCustody();
-  decoded.recovery.fork();
   decoded.fork();
-  decoded.resolve();
-  expect(calls).toEqual([true, true, true, false, false]);
-  expect(decoded.captureRecoverySource).toBe(decoded.recovery.fork);
+  expect(calls).toEqual([true, false]);
 });

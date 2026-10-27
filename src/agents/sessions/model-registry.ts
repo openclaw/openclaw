@@ -834,10 +834,9 @@ export class ModelRegistry {
         "ModelRegistry.unregisterProviderAsync",
       );
     }
-    if (!this.registeredProviders.has(providerName)) {
+    if (!this.registeredProviders.delete(providerName)) {
       return;
     }
-    this.registeredProviders.delete(providerName);
     this.refreshFromStorage();
   }
 

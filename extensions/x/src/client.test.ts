@@ -25,6 +25,13 @@ const fixture = vi.hoisted(() => {
 let current: OpenClawConfig;
 let stateDir: string;
 let failTokenCommit: "before" | "after" | undefined;
+const refreshes: { token: string | null; auth: string | null }[] = [];
+const requests: string[] = [];
+let exchange: (token: string | null, attempt: number) => Response | Promise<Response>;
+let resource: (input: string, init?: RequestInit) => Response | Promise<Response>;
+const tokenResponse = (attempt: number) =>
+  Response.json({ access_token: "access", refresh_token: `rotated-${attempt}`, expires_in: 3600 });
+const tokens = () => refreshes.map(({ token }) => token);
 
 function config(overrides: Partial<XAccountConfig> = {}): OpenClawConfig {
   return {
@@ -106,7 +113,19 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   current = config();
   failTokenCommit = undefined;
+  refreshes.length = requests.length = 0;
+  exchange = (_token, attempt) => tokenResponse(attempt);
+  resource = () => Response.json({ data: [] });
   fixture.fetch.mockReset();
+  fixture.fetch.mockImplementation(async (input, init) => {
+    requests.push(input);
+    if (!input.endsWith("/oauth2/token")) {
+      return resource(input, init);
+    }
+    const token = new URLSearchParams(requestBody(init)).get("refresh_token");
+    refreshes.push({ token, auth: new Headers(init?.headers).get("authorization") });
+    return exchange(token, refreshes.length);
+  });
   setXTestFetch("api.x.com", fixture.fetch);
   restartRuntime();
 });
@@ -124,33 +143,23 @@ describe("X OAuth client ownership", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const refreshStarted = Promise.withResolvers<void>();
     const releaseRefresh = Promise.withResolvers<void>();
-    const refreshes: { token: string | null; auth: string | null }[] = [];
     const bearerHeaders: (string | null)[] = [];
-    fixture.fetch.mockImplementation(async (input, init) => {
-      const url = input;
-      if (url.endsWith("/oauth2/token")) {
-        refreshes.push({
-          token: new URLSearchParams(requestBody(init)).get("refresh_token"),
-          auth: new Headers(init?.headers).get("authorization"),
-        });
-        if (refreshes.length === 1) {
-          refreshStarted.resolve();
-          await releaseRefresh.promise;
-        }
-        return Response.json({
-          access_token: "access",
-          refresh_token: `rotated-${refreshes.length}`,
-          expires_in: 3600,
-        });
+    exchange = async (_token, attempt) => {
+      if (attempt === 1) {
+        refreshStarted.resolve();
+        await releaseRefresh.promise;
       }
-      if (url.endsWith("/activity/subscriptions")) {
+      return tokenResponse(attempt);
+    };
+    resource = (input, init) => {
+      if (input.endsWith("/activity/subscriptions")) {
         bearerHeaders.push(new Headers(init?.headers).get("authorization"));
         return Response.json({
           data: [{ event_type: "post.mention.create", filter: { user_id: "9" } }],
         });
       }
       return Response.json({ data: [] });
-    });
+    };
     const initial = await getXApi("default", config());
     const first = initial.getMentions({ userId: "9" });
     await refreshStarted.promise;
@@ -160,7 +169,7 @@ describe("X OAuth client ownership", () => {
     const concurrent = updated.getMentions({ userId: "9" });
     releaseRefresh.resolve();
     await Promise.all([first, concurrent]);
-    expect(refreshes.map(({ token }) => token)).toEqual(["seed-initial"]);
+    expect(tokens()).toEqual(["seed-initial"]);
     await updated.ensureActivitySubscriptions("9");
     expect(bearerHeaders).toEqual(["Bearer bearer-new"]);
     vi.setSystemTime(Date.now() + 3_600_000);
@@ -181,22 +190,16 @@ describe("X OAuth client ownership", () => {
   it("does not let a retired seed overwrite the replacement grant", async () => {
     const staleStarted = Promise.withResolvers<void>();
     const releaseStale = Promise.withResolvers<void>();
-    const refreshes: (string | null)[] = [];
-    fixture.fetch.mockImplementation(async (input, init) => {
-      if (input.endsWith("/oauth2/token")) {
-        const token = new URLSearchParams(requestBody(init)).get("refresh_token");
-        refreshes.push(token);
-        if (token === "seed-initial") {
-          staleStarted.resolve();
-          await releaseStale.promise;
-        }
-        return Response.json({
-          access_token: "access",
-          refresh_token: token === "seed-initial" ? "rotated-stale" : "rotated-current",
-        });
+    exchange = async (token) => {
+      if (token === "seed-initial") {
+        staleStarted.resolve();
+        await releaseStale.promise;
       }
-      return Response.json({ data: [] });
-    });
+      return Response.json({
+        access_token: "access",
+        refresh_token: token === "seed-initial" ? "rotated-stale" : "rotated-current",
+      });
+    };
     const stale = (await getXApi("default", config())).getMentions({ userId: "9" });
     const rejected = expect(stale).rejects.toThrow("X token refresh failed");
     await staleStarted.promise;
@@ -207,19 +210,14 @@ describe("X OAuth client ownership", () => {
     await rejected;
     restartRuntime();
     await (await getXApi("default", replacement)).getMentions({ userId: "9" });
-    expect(refreshes).toEqual(["seed-initial", "seed-new", "rotated-current"]);
+    expect(tokens()).toEqual(["seed-initial", "seed-new", "rotated-current"]);
   });
 });
 
 it.each(["lost-response", "http-429", "http-503", "nested-200", "invalid-rotation"] as const)(
   "fences %s across retry and SQLite/runtime reopen",
   async (mode) => {
-    const posts: string[] = [];
-    fixture.fetch.mockImplementation(async (input, init) => {
-      if (!input.endsWith("/oauth2/token")) {
-        return Response.json({ data: [] });
-      }
-      posts.push(new URLSearchParams(requestBody(init)).get("refresh_token")!);
+    exchange = () => {
       if (mode === "lost-response") {
         throw new Error("synthetic network loss");
       }
@@ -233,7 +231,7 @@ it.each(["lost-response", "http-429", "http-503", "nested-200", "invalid-rotatio
         });
       }
       return Response.json({ access_token: "must-not-publish", refresh_token: 7 });
-    });
+    };
     const api = await getXApi("default", current);
     await expect(api.getMentions({ userId: "9" })).rejects.toThrow();
     await expect(api.getMentions({ userId: "9" })).rejects.toThrow();
@@ -243,22 +241,17 @@ it.each(["lost-response", "http-429", "http-503", "nested-200", "invalid-rotatio
     await expect(
       (await getXApi("default", current)).getMentions({ userId: "9" }),
     ).rejects.toThrow();
-    expect(posts).toEqual(["seed-initial"]);
+    expect(tokens()).toEqual(["seed-initial"]);
   },
 );
 it("rechecks current account configuration after a held provider response without requiring a new client lookup", async () => {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const requests: string[] = [];
-  fixture.fetch.mockImplementation(async (input) => {
-    requests.push(input);
-    if (input.endsWith("/oauth2/token")) {
-      entered.resolve();
-      await release.promise;
-      return Response.json({ access_token: "access", refresh_token: "rotated" });
-    }
-    return Response.json({ data: [] });
-  });
+  exchange = async (_token, attempt) => {
+    entered.resolve();
+    await release.promise;
+    return tokenResponse(attempt);
+  };
   const result = (await getXApi("default", current)).getMentions({ userId: "9" });
   const rejected = expect(result).rejects.toThrow();
   await entered.promise;
@@ -271,47 +264,40 @@ it("rechecks current account configuration after a held provider response withou
 it.each(["before", "after"] as const)(
   "recovers a %s-commit failure without exchanging the completed rotation twice",
   async (mode) => {
-    const posts: string[] = [];
     let uses = 0;
-    fixture.fetch.mockImplementation(async (input, init) => {
-      if (!input.endsWith("/oauth2/token")) {
-        uses++;
-        return Response.json({ data: [] });
-      }
-      posts.push(new URLSearchParams(requestBody(init)).get("refresh_token")!);
-      if (posts.length === 1) {
+    resource = () => {
+      uses++;
+      return Response.json({ data: [] });
+    };
+    exchange = (_token, attempt) => {
+      if (attempt === 1) {
         failTokenCommit = mode;
       }
-      return Response.json({ access_token: "access", refresh_token: "rotated-" + posts.length });
-    });
+      return tokenResponse(attempt);
+    };
     const api = await getXApi("default", current);
     await expect(api.getMentions({ userId: "9" })).rejects.toThrow();
     expect(uses).toBe(0);
     failTokenCommit = undefined;
     await api.getMentions({ userId: "9" });
-    expect(posts).toEqual(["seed-initial"]);
+    expect(tokens()).toEqual(["seed-initial"]);
     expect(uses).toBe(1);
     restartRuntime();
     await (await getXApi("default", current)).getMentions({ userId: "9" });
-    expect(posts).toEqual(["seed-initial", "rotated-1"]);
+    expect(tokens()).toEqual(["seed-initial", "rotated-1"]);
   },
 );
 
 it("detaches an aborted caller while a joined owner persists its late rotation", async () => {
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const posts: string[] = [];
-  fixture.fetch.mockImplementation(async (input, init) => {
-    if (!input.endsWith("/oauth2/token")) {
-      return Response.json({ data: [] });
-    }
-    posts.push(new URLSearchParams(requestBody(init)).get("refresh_token")!);
-    if (posts.length === 1) {
+  exchange = async (_token, attempt) => {
+    if (attempt === 1) {
       entered.resolve();
       await release.promise;
     }
-    return Response.json({ access_token: "access", refresh_token: "rotated" });
-  });
+    return tokenResponse(attempt);
+  };
   const api = await getXApi("default", current);
   const controller = new AbortController();
   const first = api.getMentions({ userId: "9", signal: controller.signal });
@@ -320,10 +306,10 @@ it("detaches an aborted caller while a joined owner persists its late rotation",
   const second = api.getMentions({ userId: "9" });
   controller.abort();
   await rejected;
-  expect(posts).toEqual(["seed-initial"]);
+  expect(tokens()).toEqual(["seed-initial"]);
   release.resolve();
   await second;
   restartRuntime();
   await (await getXApi("default", current)).getMentions({ userId: "9" });
-  expect(posts).toEqual(["seed-initial", "rotated"]);
+  expect(tokens()).toEqual(["seed-initial", "rotated-1"]);
 });

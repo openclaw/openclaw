@@ -1,16 +1,17 @@
 import { createHash } from "node:crypto";
+import { runtimeProcessDeployEntryFileName } from "../infra/runtime-process-manifest.ts";
 
 export const WORKER_BUNDLE_MANIFEST_VERSION = "openclaw-worker-bundle-v1";
 export const WORKER_BUNDLE_ARTIFACT_MODE = 0o700;
-export const WORKER_BUNDLE_ENTRY_PATH = "worker.mjs";
-export const WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH = "github-exec-launcher.mjs";
-export const WORKER_BUNDLE_IMAGE_PROCESSOR_PATH = "image-processor.worker.mjs";
-export const WORKER_BUNDLE_FILE_TOOL_PLANNING_PATH = "file-tool-planning.worker.mjs";
-export const WORKER_BUNDLE_FILE_TOOL_READ_PATH = "file-tool-read.worker.mjs";
+export const WORKER_BUNDLE_ENTRY_PATH = runtimeProcessDeployEntryFileName("worker");
+const WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH = "github-exec-launcher.mjs";
+const WORKER_BUNDLE_IMAGE_PROCESSOR_PATH = "image-processor.worker.mjs";
+const WORKER_BUNDLE_FILE_TOOL_PLANNING_PATH = "file-tool-planning.worker.mjs";
+const WORKER_BUNDLE_FILE_TOOL_READ_PATH = "file-tool-read.worker.mjs";
 export const WORKER_BUNDLE_RSYNC_RECEIVER_PATH = "workspace-rsync-receiver.mjs";
-export const WORKER_BUNDLE_SQLITE_SOURCE_REVISION_PATH = "sqlite-source-revision.worker.mjs";
+const WORKER_BUNDLE_SQLITE_SOURCE_REVISION_PATH = "sqlite-source-revision.worker.mjs";
 export const WORKER_BUNDLE_SQLITE_STORE_PATH = "sqlite-store.worker.mjs";
-export const WORKER_BUNDLE_CLIENT_CREDENTIAL_PATH = "client-credential.worker.mjs";
+const WORKER_BUNDLE_CLIENT_CREDENTIAL_PATH = "client-credential.worker.mjs";
 export const WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH = "windows-security-helper.exe";
 export const WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS = {
   "darwin-arm64": "fs-safe-darwin-arm64.node",

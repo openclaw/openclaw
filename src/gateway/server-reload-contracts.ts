@@ -6,8 +6,8 @@ import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
-import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayConfigReloaderHandle } from "./server-runtime-handles.js";
 import type { GatewayChannelManager } from "./server-runtime-services.js";
 import type {

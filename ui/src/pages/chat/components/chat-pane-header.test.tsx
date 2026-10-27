@@ -6,6 +6,7 @@ import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.
 import { RouteElements, type RouteElementEvent } from "../../../app/route-elements.ts";
 import { SHELL_NAV_DRAWER_TOGGLE_EVENT } from "../../../components/command-palette-contract.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
+import { allMutationObserverOptions } from "../../../test-helpers/dom-probe.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
@@ -13,9 +14,9 @@ import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import {
   activePlacementSession,
   createPaneHeaderWorkspaceFixture,
-  createSessionCapabilityFixture,
   createTestChatPane,
 } from "../chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import { openSlot } from "../sidebar-layout.ts";
 import {
@@ -237,6 +238,21 @@ describe("chat pane header", () => {
     expect(container.querySelector("openclaw-chat-header-session-menu")).not.toBeNull();
   });
 
+  it("translates the saved-conversation status through the header's English catalog registration", () => {
+    const { container, update } = mountHeader({
+      savedConversation: true,
+      gatewayStatus: { kind: "reconnecting" },
+    });
+    const savedStatus = () => text(container, ".chat-pane__connection-state");
+    expect(savedStatus()).toBe("Saved conversation · Reconnecting…");
+    update({ gatewayStatus: undefined });
+    expect(savedStatus()).toBe("Saved conversation · Reconnecting…");
+    update({ gatewayStatus: { kind: "offline" } });
+    expect(savedStatus()).toBe("Saved conversation · Disconnected");
+    update({ savedConversation: false, gatewayStatus: { kind: null } });
+    absent(container, ".chat-pane__connection");
+  });
+
   it("defers narrow Layout shortcuts and retains their nodes across label updates", async () => {
     const readShortcut = vi.fn(() => KEYBOARD_SHORTCUT_COMBOS.terminalPanel);
     const action = (label: string) => ({
@@ -255,7 +271,7 @@ describe("chat pane header", () => {
     });
     const menu = container.querySelector(".chat-pane__layout-menu")!;
     expect(readShortcut).not.toHaveBeenCalled();
-    await openNativeMenu(menu);
+    await openNativeMenu(menu, "terminal");
     const shortcut = menu.querySelector('[data-value="terminal"] kbd');
     expect(shortcut).not.toBeNull();
     update({ panelMenuActions: [action("Open terminal")] });
@@ -464,12 +480,7 @@ describe("chat pane header", () => {
     await facepile.updateComplete;
     const updates: MutationRecord[] = [];
     const observer = new MutationObserver((records) => updates.push(...records));
-    observer.observe(facepile, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      characterData: true,
-    });
+    observer.observe(facepile, allMutationObserverOptions());
     onTestFinished(() => observer.disconnect());
     mounted.renderHeader();
     await facepile.updateComplete;

@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
-  errorShape,
   validateToolsEffectiveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -16,13 +15,11 @@ import {
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
-import {
-  buildConversationToolPolicyPipelineSteps,
-  resolveConversationToolPolicies,
-} from "../../agents/conversation-tool-policy-pipeline.js";
+import { resolveConversationToolPolicies } from "../../agents/conversation-tool-policy-pipeline.js";
 import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runner/effective-tool-policy.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { readToolAllowlistIntersection } from "../../agents/tool-policy-shared.js";
+import type { ToolPolicyLike } from "../../agents/tool-policy.js";
 import { buildEffectiveToolInventoryGroups } from "../../agents/tools-effective-inventory-groups.js";
 import { buildEffectiveToolInventory } from "../../agents/tools-effective-inventory-shared.js";
 import {
@@ -110,12 +107,10 @@ function buildToolsEffectiveCacheKey(context: TrustedToolsEffectiveContext): str
     replyToMode: optionalCacheString(context.replyToMode),
     webSearchEnabled: context.toolOverrides?.webSearch !== false,
     // Prepared session ceilings can change without a config or session-id change.
-    policy: buildConversationToolPolicyPipelineSteps({
-      capabilityProfile: context.capabilityProfile,
-      policies: resolveConversationToolPolicies({ capabilityProfile: context.capabilityProfile }),
-      includeRuntimeToolPolicy: true,
-    }).map(
-      ({ policy }) =>
+    policy: Object.values<ToolPolicyLike | undefined>(
+      resolveConversationToolPolicies({ capabilityProfile: context.capabilityProfile }),
+    ).map(
+      (policy) =>
         policy && {
           allow: policy.allow && (readToolAllowlistIntersection(policy.allow) ?? policy.allow),
           deny: policy.deny,
@@ -623,11 +618,7 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
           );
         }
       } catch (err) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, `tools.effective failed: ${String(err)}`),
-        );
+        respondError(respond, ErrorCodes.UNAVAILABLE, `tools.effective failed: ${String(err)}`);
       }
     },
   ),

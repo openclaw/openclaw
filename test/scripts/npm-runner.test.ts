@@ -1,7 +1,10 @@
+import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { resolveNpmRunner, type NpmRunnerParams } from "../../scripts/npm-runner.mts";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 
 const originalVersions = process.versions;
 afterEach(() => Object.defineProperty(process, "versions", { value: originalVersions }));
@@ -16,6 +19,25 @@ function runner(npmPath: string, options: NpmRunnerParams = {}) {
     ...options,
   });
 }
+
+it("loads the npm runner with native Node source imports", () => {
+  const env = { ...process.env };
+  delete env.NODE_OPTIONS;
+  const moduleUrl = pathToFileURL(path.resolve("scripts/npm-runner.mts")).href;
+  const result = spawnSync(
+    requireNodeTool("node"),
+    [
+      "--input-type=module",
+      "-e",
+      `import { resolveNpmRunner } from ${JSON.stringify(moduleUrl)};
+process.stdout.write(resolveNpmRunner({ npmArgs: ["--version"] }).args.at(-1));`,
+    ],
+    { encoding: "utf8", env, timeout: 10_000 },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toBe("--version");
+});
 
 it("runs bundled npm under Bun without PATH Node", () => {
   Object.defineProperty(process, "versions", { value: { ...originalVersions, bun: "1.4.3" } });

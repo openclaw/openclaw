@@ -76,7 +76,7 @@
 .dashboards-search input,
 .dashboards-select select {
   min-height: 40px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
   color: var(--text);
   background: var(--card);
@@ -134,13 +134,20 @@
   gap: var(--space-4);
 }
 
+.dashboards-grid__item {
+  min-width: 0;
+}
+
+.dashboards-grid__item > .dashboard-card {
+  height: 100%;
+}
+
 .dashboard-card {
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--card);
-  box-shadow: var(--shadow-sm);
   transition:
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease,
@@ -167,7 +174,7 @@
   position: relative;
   aspect-ratio: 16 / 9;
   overflow: hidden;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid transparent;
   background: var(--bg);
   pointer-events: none;
 }
@@ -189,8 +196,23 @@
 }
 
 .dashboard-preview .board-document__content .board-view {
-  min-height: 100%;
-  padding: 8px;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+}
+
+/* A passive thumbnail has its own frame; the full-page empty-state frame and
+   minimum height would be clipped inside it. */
+.dashboard-preview .board-empty {
+  height: 100%;
+  min-height: 0;
+  padding: var(--space-4);
+  border: 0;
+  border-radius: 0;
+}
+
+.dashboard-preview .board-empty__mark {
+  color: var(--muted);
 }
 
 .dashboard-preview .board-tabs {
@@ -266,7 +288,7 @@
   height: 22px;
   flex: none;
   place-items: center;
-  border: 1px solid var(--border-strong);
+  border: 1px solid transparent;
   border-radius: 50%;
   color: var(--text);
   background: var(--bg-hover);
@@ -277,7 +299,7 @@
 .dashboard-card__footer {
   min-height: 42px;
   padding: 0 var(--space-4);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid transparent;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }

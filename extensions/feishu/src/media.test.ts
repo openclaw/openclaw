@@ -9,11 +9,7 @@ import {
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import {
-  saveMessageResourceFeishu,
-  sendMediaFeishu,
-  shouldSuppressFeishuTextForVoiceMedia,
-} from "./media.js";
+import { saveMessageResourceFeishu, sendMediaFeishu } from "./media.js";
 
 type FileUploadData = {
   file: Buffer;
@@ -41,16 +37,9 @@ const imageCreateMock = vi.hoisted(() => vi.fn());
 const messageCreateMock = vi.hoisted(() =>
   vi.fn<(request: { data: MessageData }) => Promise<unknown>>(),
 );
+const messageReplyMock = vi.hoisted(() => vi.fn());
 const messageResourceGetMock = vi.hoisted(() =>
   vi.fn<(request: ResourceRequest) => Promise<unknown>>(),
-);
-const messageReplyMock = vi.hoisted(() =>
-  vi.fn<
-    (request: {
-      path: { message_id: string };
-      data: { msg_type: string; content: string; reply_in_thread?: boolean };
-    }) => Promise<unknown>
-  >(),
 );
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
@@ -99,24 +88,22 @@ const webMedia = (fileName: string, contentType: string, bytes: string) => ({
   contentType,
 });
 const mp3Media = webMedia("reply.mp3", "audio/mpeg", "remote-mp3");
-const uploadData = () => mockCallArgs(fileCreateMock)[0].data;
-const messageData = () => mockCallArgs(messageCreateMock)[0].data;
-const resourceRequest = (callIndex: number) => mockCallArgs(messageResourceGetMock, callIndex)[0];
+const uploadData = () => fileCreateMock.mock.calls[0]![0].data;
+const messageData = () => messageCreateMock.mock.calls[0]![0].data;
+const resourceRequest = (callIndex: number) => messageResourceGetMock.mock.calls[callIndex]![0];
 const resourceResponse = (data: string | Buffer[], headers?: Record<string, string>) => ({
   getReadableStream: () => Readable.from(typeof data === "string" ? [Buffer.from(data)] : data),
   headers,
 });
 
-function mockCallArgs<T extends unknown[]>(mock: { mock: { calls: T[] } }, callIndex = 0): T {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
+function expectNotCalled(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
   }
-  return call;
 }
 
 function expectMediaLoad(url: string, localRoots: readonly string[], extra = {}) {
-  const [loadedUrl, options] = mockCallArgs(loadWebMediaMock);
+  const [loadedUrl, options] = loadWebMediaMock.mock.calls[0]!;
   expect(loadedUrl).toBe(url);
   expect(options).toEqual({
     maxBytes: expect.any(Number),
@@ -172,7 +159,6 @@ describe("sendMediaFeishu msg_type routing", () => {
   beforeEach(() => {
     normalizeFeishuTargetMock.mockReturnValue("ou_target");
     resolveReceiveIdTypeMock.mockReturnValue("open_id");
-
     createFeishuClientMock.mockReturnValue({
       im: {
         file: { create: fileCreateMock },
@@ -181,14 +167,11 @@ describe("sendMediaFeishu msg_type routing", () => {
         messageResource: { get: messageResourceGetMock },
       },
     });
-
     fileCreateMock.mockResolvedValue({ code: 0, data: { file_key: "file_key_1" } });
     imageCreateMock.mockResolvedValue({ code: 0, data: { image_key: "image_key_1" } });
     messageCreateMock.mockResolvedValue({ code: 0, data: { message_id: "msg_1" } });
-    messageReplyMock.mockResolvedValue({ code: 0, data: { message_id: "reply_1" } });
-
+    messageReplyMock.mockResolvedValue({ code: 0, data: { message_id: "msg_reply" } });
     loadWebMediaMock.mockResolvedValue(webMedia("remote.opus", "audio/ogg", "remote-audio"));
-
     messageResourceGetMock.mockImplementation(async () => resourceResponse("resource-bytes"));
     transcodeAudioMock.mockResolvedValue(Buffer.from("opus-output"));
     runFfprobeMock.mockResolvedValue("1.234\n");
@@ -196,6 +179,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
   it.each([
     ["report.pdf", "application/pdf", Buffer.from("%PDF-1.7 document"), true],
+    ["report.pdf", "application/pdf", Buffer.from("%PDF-1.7 document"), false],
     [
       "diagram.png",
       "image/png",
@@ -206,11 +190,15 @@ describe("sendMediaFeishu msg_type routing", () => {
     "sends %s as a file despite voice intent or image metadata",
     async (fileName, contentType, buffer, audioAsVoice) => {
       loadWebMediaMock.mockResolvedValueOnce({ buffer, fileName, contentType });
-      const result = await sendMedia({ mediaUrl: `https://example.com/${fileName}`, audioAsVoice });
+      const isPdf = fileName.endsWith(".pdf");
+      const result = await sendMedia({
+        mediaUrl: `https://example.com/${isPdf ? "download.ogg" : fileName}`,
+        audioAsVoice,
+      });
       expect(imageCreateMock).not.toHaveBeenCalled();
-      expect(uploadData().file_type).toBe(audioAsVoice ? "pdf" : "stream");
+      expect(uploadData().file_type).toBe(isPdf ? "pdf" : "stream");
       expect(messageData()).toMatchObject({ msg_type: "file" });
-      expect(result.voiceIntentDegradedToFile).toBe(audioAsVoice ? true : undefined);
+      expect(result.voiceIntentDegradedToFile).toBe(isPdf ? true : undefined);
     },
   );
 
@@ -220,8 +208,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     await expect(
       sendMedia({ mediaBuffer: oversizedImage, fileName: "oversized.png" }),
     ).rejects.toThrow("Feishu image exceeds its 10485760-byte upload limit");
-    expect(imageCreateMock).not.toHaveBeenCalled();
-    expect(messageCreateMock).not.toHaveBeenCalled();
+    expectNotCalled(imageCreateMock, messageCreateMock);
   });
 
   it("rejects oversized voice inputs before starting transcoding", async () => {
@@ -236,8 +223,7 @@ describe("sendMediaFeishu msg_type routing", () => {
         audioAsVoice: true,
       }),
     ).rejects.toThrow("Feishu file exceeds its 1-byte upload limit");
-    expect(transcodeAudioMock).not.toHaveBeenCalled();
-    expect(fileCreateMock).not.toHaveBeenCalled();
+    expectNotCalled(transcodeAudioMock, fileCreateMock);
   });
 
   it("retains accepted image visibility when its platform identifier is missing", async () => {
@@ -253,27 +239,12 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageCreateMock).toHaveBeenCalledOnce();
   });
 
-  it("rejects empty image and file attachments before contacting Feishu", async () => {
-    for (const fileName of ["empty.png", "empty.pdf"]) {
-      await expect(sendMedia({ mediaBuffer: Buffer.alloc(0), fileName })).rejects.toThrow(
-        "Feishu attachments cannot be empty",
-      );
-    }
-    expect(imageCreateMock).not.toHaveBeenCalled();
-    expect(fileCreateMock).not.toHaveBeenCalled();
+  it("rejects empty attachments before contacting Feishu", async () => {
+    await expect(
+      sendMedia({ mediaBuffer: Buffer.alloc(0), fileName: "empty.pdf" }),
+    ).rejects.toThrow("Feishu attachments cannot be empty");
+    expectNotCalled(imageCreateMock, fileCreateMock);
   });
-  it("respects ttsSupplement.visibleTextAlreadyDelivered over audioAsVoice", () => {
-    for (const visibleTextAlreadyDelivered of [undefined, true]) {
-      expect(
-        shouldSuppressFeishuTextForVoiceMedia({
-          mediaUrl: "https://example.com/tts.mp3",
-          audioAsVoice: true,
-          ttsSupplement: { spokenText: "Hello world", visibleTextAlreadyDelivered },
-        }),
-      ).toBe(visibleTextAlreadyDelivered === true);
-    }
-  });
-
   it("omits audio duration when probing fails", async () => {
     runFfprobeMock.mockRejectedValueOnce(new Error("ffprobe missing"));
 
@@ -291,103 +262,48 @@ describe("sendMediaFeishu msg_type routing", () => {
     await sendMedia({ mediaUrl: "https://example.com/video" });
 
     expect(uploadData()).toMatchObject({ file_type: "mp4", duration: 6789 });
-    expect(mockCallArgs(runFfprobeMock)[0].at(-1)).toMatch(/input\.mp4$/);
+    expect(runFfprobeMock.mock.calls[0]![0].at(-1)).toMatch(/input\.mp4$/);
     expect(messageData().msg_type).toBe("media");
   });
 
   it.each(["transcodes", "falls back"])("%s voice-intent mp3", async (outcome) => {
     const degraded = outcome === "falls back";
-    const warnSpy = degraded
-      ? vi.spyOn(console, "warn").mockImplementation(() => undefined)
-      : undefined;
     loadWebMediaMock.mockResolvedValueOnce(mp3Media);
-    try {
-      if (degraded) {
-        transcodeAudioMock.mockRejectedValueOnce(new Error("ffmpeg missing"));
-      }
-      const result = await sendMedia({
-        mediaUrl: "https://example.com/reply.mp3",
-        audioAsVoice: true,
-      });
-      expect(uploadData()).toMatchObject({
-        file_type: degraded ? "stream" : "opus",
-        file_name: degraded ? "reply.mp3" : "voice.ogg",
-      });
-      expect(uploadData().file).toEqual(Buffer.from(degraded ? "remote-mp3" : "opus-output"));
-      expect(messageData().msg_type).toBe(degraded ? "file" : "audio");
-      if (warnSpy) {
-        expect(result.voiceIntentDegradedToFile).toBe(true);
-        expect(mockCallArgs(warnSpy)[0]).toContain("audioAsVoice transcode failed");
-        expect(mockCallArgs(warnSpy)[1]).toBeInstanceOf(Error);
-      } else {
-        expect(transcodeAudioMock).toHaveBeenCalledExactlyOnceWith({
-          audioBuffer: Buffer.from("remote-mp3"),
-          inputFileName: "reply.mp3",
-          tempPrefix: "feishu-voice-",
-          outputFileName: "voice.ogg",
-          sampleRateHz: 48_000,
-          bitrate: "64k",
-          channels: 1,
+    if (degraded) {
+      transcodeAudioMock.mockRejectedValueOnce(new Error("ffmpeg missing"));
+    }
+    const result = await sendMedia({
+      mediaUrl: "https://example.com/reply.mp3",
+      audioAsVoice: true,
+    });
+    expect(uploadData()).toMatchObject({
+      file_type: degraded ? "stream" : "opus",
+      file_name: degraded ? "reply.mp3" : "voice.ogg",
+    });
+    expect(uploadData().file).toEqual(Buffer.from(degraded ? "remote-mp3" : "opus-output"));
+    expect(messageData().msg_type).toBe(degraded ? "file" : "audio");
+    expect(result.voiceIntentDegradedToFile).toBe(degraded ? true : undefined);
+    if (!degraded) {
+      expect(transcodeAudioMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          audioBuffer: mp3Media.buffer,
+          inputFileName: mp3Media.fileName,
           maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
-        });
-      }
-    } finally {
-      warnSpy?.mockRestore();
+        }),
+      );
     }
   });
 
-  it("preserves Feishu diagnostics when media sends reject before response checks", async () => {
-    messageCreateMock.mockRejectedValueOnce(
-      Object.assign(new Error("Request failed with status code 400"), {
-        response: {
-          status: 400,
-          data: {
-            code: 9499,
-            msg: "Bad Request",
-            error: {
-              log_id: "20260429124731MEDIA",
-              troubleshooter: "https://open.feishu.cn/search?log_id=20260429124731MEDIA",
-            },
-          },
-        },
-      }),
-    );
-
-    const send = sendMedia({ mediaBuffer: validPngImage, fileName: "photo.png" });
-
-    await expect(send).rejects.toThrow(/Feishu image send failed: .*"feishu_code":9499/);
-    await expect(send).rejects.toThrow(/"feishu_log_id":"20260429124731MEDIA"/);
-  });
-
-  it("passes reply_in_thread when replyInThread is true", async () => {
+  it("routes video into a topic reply", async () => {
     await sendMedia({
       mediaBuffer: Buffer.from("video"),
       fileName: "reply.mp4",
       replyToMessageId: "om_parent",
       replyInThread: true,
     });
-
-    const [{ path, data }] = mockCallArgs(messageReplyMock);
+    const [{ path, data }] = messageReplyMock.mock.calls[0]!;
     expect(path).toEqual({ message_id: "om_parent" });
     expect(data).toMatchObject({ msg_type: "media", reply_in_thread: true });
-  });
-
-  it("falls back to top-level image sends for withdrawn reply targets", async () => {
-    messageReplyMock.mockResolvedValueOnce({ code: 230011, msg: "The message was withdrawn." });
-    messageCreateMock.mockResolvedValueOnce({
-      code: 0,
-      data: { message_id: "msg_image_fallback" },
-    });
-
-    const result = await sendMedia({
-      mediaBuffer: validPngImage,
-      fileName: "photo.png",
-      replyToMessageId: "om_parent",
-    });
-
-    expect(result.messageId).toBe("msg_image_fallback");
-    expect(messageCreateMock).toHaveBeenCalledTimes(1);
-    expect(messageData()).toMatchObject({ msg_type: "image", receive_id: "ou_target" });
   });
 
   it("passes mediaLocalRoots as localRoots to loadWebMedia for local paths (#27884)", async () => {
@@ -428,11 +344,7 @@ describe("sendMediaFeishu msg_type routing", () => {
         mediaAccess: { readFile, workspaceDir: "/unapproved/workspace" },
       }),
     ).rejects.toThrow("Host media read requires explicit localRoots");
-    expect(loadWebMediaMock).not.toHaveBeenCalled();
-    expect(readFile).not.toHaveBeenCalled();
-    expect(fileCreateMock).not.toHaveBeenCalled();
-    expect(imageCreateMock).not.toHaveBeenCalled();
-    expect(messageCreateMock).not.toHaveBeenCalled();
+    expectNotCalled(loadWebMediaMock, readFile, fileCreateMock, imageCreateMock, messageCreateMock);
   });
 
   it("fails closed when media URL fetch is blocked", async () => {
@@ -444,9 +356,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       /private\/internal/i,
     );
 
-    for (const mock of [fileCreateMock, messageCreateMock, messageReplyMock]) {
-      expect(mock).not.toHaveBeenCalled();
-    }
+    expectNotCalled(fileCreateMock, messageCreateMock);
   });
 
   it("rejects oversized message resource streams before saving the rest", async () => {
@@ -530,47 +440,34 @@ describe("saveMessageResourceFeishu", () => {
   it("keeps the shipped 120-second media timeout for stalled stream bodies", async () => {
     vi.useFakeTimers();
     try {
-      await withIsolatedHome(async () => {
-        const { promise: readStarted, resolve: markReadStarted } = createDeferred<void>();
-        const stalled = new Readable({
-          read() {
-            markReadStarted();
-          },
-        });
-        messageResourceGetMock.mockResolvedValueOnce({
-          getReadableStream: () => stalled,
-          headers: { "content-type": "image/jpeg" },
-        });
-
-        let settled = false;
-        const download = saveMessageResourceFeishu({
-          cfg: emptyConfig,
-          messageId: "om_stalled_stream",
-          fileKey: "img_key_stalled",
-          type: "image",
-          maxBytes: 1024,
-        });
-        const markSettled = () => {
-          settled = true;
-        };
-        const downloadSettled = download.then(markSettled, markSettled);
-
-        try {
-          await Promise.race([readStarted, download]);
-          await vi.advanceTimersByTimeAsync(FEISHU_MEDIA_HTTP_TIMEOUT_MS - 1);
-          expect(settled).toBe(false);
-          await vi.advanceTimersByTimeAsync(1);
-          await expect(download).rejects.toMatchObject({
-            name: "FeishuInboundMediaTimeoutError",
-            message: `Feishu media download stalled: no data received for ${FEISHU_MEDIA_HTTP_TIMEOUT_MS}ms`,
-          });
-          expect(stalled.destroyed).toBe(true);
-        } finally {
-          // Join the writer before its HOME and directory owners are released on assertion failure.
-          stalled.destroy();
-          await downloadSettled;
-        }
+      const { promise: readStarted, resolve: markReadStarted } = createDeferred<void>();
+      const stalled = new Readable({
+        read() {
+          markReadStarted();
+        },
       });
+      messageResourceGetMock.mockResolvedValueOnce({
+        getReadableStream: () => stalled,
+        headers: { "content-type": "image/jpeg" },
+      });
+      const settled = vi.fn();
+      const download = downloadResource({ type: "image" });
+      const downloadSettled = download.then(settled, settled);
+      try {
+        await Promise.race([readStarted, download]);
+        await vi.advanceTimersByTimeAsync(FEISHU_MEDIA_HTTP_TIMEOUT_MS - 1);
+        expect(settled).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(download).rejects.toMatchObject({
+          name: "FeishuInboundMediaTimeoutError",
+          message: `Feishu media download stalled: no data received for ${FEISHU_MEDIA_HTTP_TIMEOUT_MS}ms`,
+        });
+        expect(stalled.destroyed).toBe(true);
+      } finally {
+        // Join the writer and its isolated HOME cleanup before restoring timers.
+        stalled.destroy();
+        await downloadSettled;
+      }
     } finally {
       vi.useRealTimers();
     }

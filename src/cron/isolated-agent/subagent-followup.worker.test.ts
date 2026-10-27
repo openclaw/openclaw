@@ -54,12 +54,15 @@ function completedChild(text = "Completed child answer") {
   });
 }
 
-function holdCompactWorkerReply() {
+async function withPendingReply(
+  run: (release: () => void, pending: Promise<string | undefined>) => Promise<void>,
+  work?: AsyncWorkScope,
+) {
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const execute = stateReads.executeExistingOpenClawStateRead;
   let held = false;
-  const read = vi
+  const readSpy = vi
     .spyOn(stateReads, "executeExistingOpenClawStateRead")
     .mockImplementation(async (...args) => {
       const result = await execute(...args);
@@ -70,7 +73,20 @@ function holdCompactWorkerReply() {
       }
       return result;
     });
-  return { entered: entered.promise, release: release.resolve, read };
+  const read = () => readDescendantSubagentFallbackReply({ sessionKey, runStartedAt: 10 });
+  const pending = work ? work.track(read) : read();
+  void pending.catch(() => {});
+  try {
+    expect(
+      await Promise.race([entered.promise.then(() => "worker"), pending.then(() => "completed")]),
+    ).toBe("worker");
+    await run(release.resolve, pending);
+  } finally {
+    release.resolve();
+    await pending.catch(() => {});
+    await work?.drain();
+    readSpy.mockRestore();
+  }
 }
 
 function persistChild(child = completedChild()) {
@@ -79,48 +95,19 @@ function persistChild(child = completedChild()) {
   return child;
 }
 
-async function withPendingReply(
-  run: (
-    gate: ReturnType<typeof holdCompactWorkerReply>,
-    pending: Promise<string | undefined>,
-  ) => Promise<void>,
-  work?: AsyncWorkScope,
-) {
-  const gate = holdCompactWorkerReply();
-  const read = () => readDescendantSubagentFallbackReply({ sessionKey, runStartedAt: 10 });
-  const pending = work ? work.track(read) : read();
-  void pending.catch(() => {});
-  try {
-    expect(
-      await Promise.race([gate.entered.then(() => "worker"), pending.then(() => "completed")]),
-    ).toBe("worker");
-    await run(gate, pending);
-  } finally {
-    gate.release();
-    await pending.catch(() => {});
-    await work?.drain();
-    gate.read.mockRestore();
-  }
-}
-
 it(
   "keeps the host responsive while Cron descendant fallback awaits a real worker",
   withPersistedCronRuns(async () => {
     persistChild();
     const parent = observeParentSqlite();
     try {
-      expect(parent.counts).toEqual(emptySqliteCounts());
-      await withPendingReply(async (gate, pending) => {
-        let settled = false;
-        const outcome = pending.finally(() => {
-          settled = true;
-        });
-        void outcome.catch(() => {});
-        await nextTurn();
-        expect(settled).toBe(false);
+      await withPendingReply(async (release, pending) => {
+        expect(await Promise.race([pending, nextTurn().then(() => "responsive")])).toBe(
+          "responsive",
+        );
         expect(parent.counts).toEqual(emptySqliteCounts());
-        gate.release();
-        expect(await outcome).toBe("Completed child answer");
+        release();
+        expect(await pending).toBe("Completed child answer");
         expect(parent.counts).toEqual(emptySqliteCounts());
       });
     } finally {
@@ -133,7 +120,7 @@ it.each(["update", "delete", "successor", "other requester"] as const)(
   "uses a committed %s published while the Cron worker reply is pending",
   withPersistedCronRuns(async (change) => {
     const child = persistChild();
-    await withPendingReply(async (gate, pending) => {
+    await withPendingReply(async (release, pending) => {
       const replacement = completedChild("Current child answer");
       if (change === "successor" || change === "other requester") {
         Object.assign(replacement, {
@@ -155,7 +142,7 @@ it.each(["update", "delete", "successor", "other requester"] as const)(
         () => ({ value: undefined, postimages }),
         { runs: new Map([[child.runId, child]]) },
       );
-      gate.release();
+      release();
       expect(await pending).toBe(
         change === "delete" || change === "other requester" ? undefined : "Current child answer",
       );
@@ -169,16 +156,16 @@ it.each(["close", "caller cancellation"] as const)(
     persistChild();
     const context = captureOpenClawStateWorkerContext();
     const work = new AsyncWorkScope();
-    await withPendingReply(async (gate, pending) => {
+    await withPendingReply(async (release, pending) => {
       const outcome = pending.catch((error: unknown) => error);
       if (change === "caller cancellation") {
         const reason = new Error("Cron read owner canceled");
         work.beginClose(reason);
-        gate.release();
+        release();
         expect(await outcome).toBe(reason);
       } else {
         const closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
-        gate.release();
+        release();
         await closing;
         expect(await outcome).toMatchObject({
           message: expect.stringMatching(/read admission/u),

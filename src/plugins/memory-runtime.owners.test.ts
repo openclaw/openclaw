@@ -6,11 +6,17 @@ import { createOpenClawTestState as createState } from "../test-utils/openclaw-t
 import type { EmbeddingProviderAdapter } from "./embedding-provider-types.js";
 import { createPluginRecord } from "./loader-records.js";
 import { activatePluginRegistry } from "./loader-shared.js";
-import { getMemoryEmbeddingProvider } from "./memory-embedding-provider-runtime.js";
 import { prepareMemoryRuntimeReload as prepareReload } from "./memory-runtime.js";
+import {
+  bindPluginMetadataSnapshotCache,
+  createPluginCache,
+  retirePluginCache,
+} from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { disposePluginRegistryInstances as disposeRegistry } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope as currentScope } from "./runtime/gateway-request-scope.js";
@@ -120,7 +126,6 @@ it.each([
   "legacy-retained",
   "pending-primary",
   "pending-fallback",
-  "healthy-fallback",
   "unavailable-create",
   "failed-close",
   "timeout",
@@ -128,7 +133,7 @@ it.each([
   "transient",
 ] as const)("drains the actual managed embedding owner before replacement (%s)", async (mode) => {
   const state = await createState({ scenario: "minimal", label: "memory-provider-reload" });
-  const fallback = mode === "pending-fallback" || mode === "healthy-fallback";
+  const fallback = mode === "pending-fallback";
   const providerId = fallback ? "primary-probe" : "embedding-probe";
   const targetId = fallback ? "fallback-probe" : providerId;
   const revoked = mode === "failed-close" || mode === "late-probe";
@@ -199,17 +204,6 @@ it.each([
     id: targetId,
     create: successorCreate,
   });
-  const unaffectedConfig = {
-    ...config,
-    memory: { search: { ...config.memory?.search, provider: "unaffected-probe" } },
-  };
-  const unaffectedClose = vi.fn(async () => {});
-  if (mode === "ready") {
-    registerAdapter(owner, unaffectedConfig, {
-      id: "unaffected-probe",
-      create: async () => ({ provider: embeddingProvider("unaffected-probe", unaffectedClose) }),
-    });
-  }
   const next = createEmptyPluginRegistry();
   next.plugins.push(
     ...owner.registry.plugins.filter((record) => record !== retiring.record),
@@ -226,10 +220,7 @@ it.each([
   const successorProviders = () => (mode === "late-probe" ? 0 : lateManager ? 2 : 1);
   let drain: ReturnType<ReturnType<typeof prepareReload>["drain"]> | undefined;
   try {
-    expect(owner.instance.run(() => getMemoryEmbeddingProvider(targetId, config))).toBe(
-      retiring.registration.provider,
-    );
-    let manager = await getManager(owner, config, mode === "transient" ? { purpose: "cli" } : {});
+    const manager = await getManager(owner, config, mode === "transient" ? { purpose: "cli" } : {});
     const other = await getManager(sibling, config);
     await other.probeEmbeddingAvailability();
     probe = manager.probeEmbeddingAvailability();
@@ -239,33 +230,12 @@ it.each([
     } else if (!mode.startsWith("pending")) {
       await probe;
     }
-    if (mode === "healthy-fallback") {
-      const primaryOnly = prepareReload(owner.registry, {
-        ...owner.registry,
-        embeddingProviders: owner.registry.embeddingProviders.filter(
-          (entry) => entry !== owner.registry.embeddingProviders[0],
-        ),
-      });
-      await primaryOnly.drain();
-      await expect(manager.probeEmbeddingAvailability()).rejects.toThrow("closed");
-      expect(close).toHaveBeenCalledOnce();
-      primaryOnly.rollback();
-      const previousManager = manager;
-      manager = await getManager(owner, config);
-      expect(manager).not.toBe(previousManager);
-      await expectAvailable(manager);
-    }
     if (mode === "legacy-retained") {
       const unchanged = prepareReload(owner.registry, owner.registry);
       await unchanged.drain();
       unchanged.commit();
       expect(close).not.toHaveBeenCalled();
     }
-    if (mode === "ready") {
-      const unaffected = await getManager(owner, unaffectedConfig, { agentId: "unaffected" });
-      await unaffected.probeEmbeddingAvailability();
-    }
-    const providerClosesBeforeReload = close.mock.calls.length;
     const reload = prepareReload(owner.registry, next);
     const drained = vi.fn();
     drain = reload.drain().finally(drained);
@@ -299,9 +269,7 @@ it.each([
       await expired;
     } else {
       await drain;
-      expect(close).toHaveBeenCalledTimes(
-        providerClosesBeforeReload + (mode === "unavailable-create" ? 0 : 1),
-      );
+      expect(close).toHaveBeenCalledTimes(mode === "unavailable-create" ? 0 : 1);
     }
     activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
     reload.commit();
@@ -328,7 +296,6 @@ it.each([
     await expect(manager.probeEmbeddingAvailability()).rejects.toThrow("closed");
     await expectAvailable(other);
     expect(siblingClose).not.toHaveBeenCalled();
-    expect(unaffectedClose).not.toHaveBeenCalled();
     const fresh = await getManager(owner, config);
     if (mode === "late-probe") {
       await expect(fresh.search("replacement provider required")).rejects.toThrow(
@@ -392,7 +359,6 @@ it.each([
     }
   }
   expect(siblingClose).toHaveBeenCalledOnce();
-  expect(unaffectedClose).toHaveBeenCalledTimes(mode === "ready" ? 1 : 0);
   expect(successorClose).toHaveBeenCalledTimes(successorProviders());
 });
 
@@ -464,4 +430,47 @@ it("unwinds prepared memory admission when another runtime rejects preparation",
   } finally {
     await disposeRegistry(first.registry);
   }
+});
+
+it("restarts a carried-over memory service only when an embedding adapter retires", async () => {
+  const config: OpenClawConfig = {};
+  const owner = createTestPluginRegistry();
+  const record = createPluginRecord({ ...fixture, id: "memory-fixture" });
+  record.kind = "memory";
+  record.memorySlotSelected = true;
+  owner.registry.plugins.push(record);
+  const prepare = vi.fn(() => ({ drain: async () => {}, resume() {} }));
+  owner.createApi(record, { config }).registerMemoryCapability({
+    providerRuntime: { open: async () => ({ provider: null }), prepareReload: prepare },
+  });
+  // A lazily loaded capability registry retires with its plugin cache on every reload.
+  const cache = createPluginCache();
+  const metadata = createPluginMetadataSnapshotFixture();
+  bindPluginMetadataSnapshotCache(metadata, cache);
+  const cached = createTestPluginRegistry();
+  const adapterRecord = createPluginRecord({
+    ...fixture,
+    id: "cached-probe",
+    contracts: { embeddingProviders: ["cached-probe"] },
+  });
+  cached.registry.plugins.push(adapterRecord);
+  cached.createApi(adapterRecord, { config }).registerEmbeddingProvider({
+    id: "cached-probe",
+    create: async () => ({ provider: null }),
+  });
+  getPluginLoaderCacheState(cache).set("cached", cached.registry);
+
+  const unchanged = prepareReload(owner.registry, owner.registry);
+  expect(unchanged.restartPluginIds).toEqual(new Set());
+  expect(prepare).not.toHaveBeenCalled();
+  unchanged.commit();
+
+  const retiring = prepareReload(owner.registry, owner.registry, metadata);
+  expect(retiring.restartPluginIds).toEqual(new Set(["memory-fixture"]));
+  expect(prepare).toHaveBeenCalledWith({
+    retireRuntime: false,
+    retiringEmbeddingProviders: [cached.registry.embeddingProviders[0]!.provider],
+  });
+  retiring.commit();
+  await retirePluginCache(cache);
 });

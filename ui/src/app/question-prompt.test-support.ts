@@ -4,7 +4,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import type { QuestionAnswers, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import { afterEach, expect, vi } from "vitest";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import {
   createQuestionPromptState,
   disposeQuestionPromptState,

@@ -97,7 +97,7 @@ Already-running older updaters retain their own activation and finalization beha
 For package installs with an owned managed Bun Gateway at a different root,
 `openclaw update` targets the Gateway's package root and leaves the invoking CLI
 installation unchanged. It validates the service's actual Bun executable for
-Bun 1.4.3+ and WAL-safe `node:sqlite`, and retains its recorded runtime pin through
+Bun 1.4.4+ and WAL-safe `node:sqlite`, and retains its recorded runtime pin through
 service installation and restart. Bun's emulated Node version is never compared
 to the target's `engines.node` requirement. When the updater runs on Node, its
 Node must also pass the target's engine and SQLite checks before package
@@ -324,33 +324,55 @@ under the Homebrew prefix continue to use npm.
 
 ## Alternative: manual npm, pnpm, or bun
 
-The npm command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
-omit `--allow-scripts=openclaw`.
+Prefer `openclaw update` for supervised installs: it can coordinate the package
+swap with the running Gateway service. When a manual installation is required,
+for example to bypass an older installed updater once, use this procedure for an
+OpenClaw-managed Gateway service. Other pages link here instead of repeating it.
+
+1. Create a [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup).
+2. Stop the Gateway. Package managers replace files in place, and a running
+   Gateway can otherwise try to load core or plugin files mid-swap.
+3. Install the target with the package manager that owns the installation.
+4. Run `openclaw doctor --fix` so the new build applies canonical config and
+   migrated state before the Gateway starts.
+5. Refresh the service definition with `openclaw gateway install --force`.
+   Installation starts the service.
+6. Run `openclaw gateway start` to confirm readiness, then verify with
+   `openclaw gateway status --deep`.
+
+For an npm installation:
 
 ```bash
+openclaw gateway stop
 npm i -g openclaw@latest --allow-scripts=openclaw
+openclaw doctor --fix
+openclaw gateway install --force
+openclaw gateway start
+openclaw gateway status --deep
 ```
 
-Prefer `openclaw update` for supervised installs: it can coordinate the package
-swap with the running Gateway service. If you update manually on a supervised
-install, stop the managed Gateway first. Package managers replace files in
-place, and a running Gateway can otherwise try to load core or plugin files
-mid-swap. After the package manager finishes, run `openclaw doctor --fix` before
-restarting the Gateway so it picks up canonical config and migrated state. Check
-`openclaw update status` for unfinished plugin upgrades and their repair commands.
-Normal CLI commands and Gateway startup do not apply deferred plugin migrations.
+Run each command only after the previous one succeeds. The install command is
+for npm 12 or npm 11.16+; on npm 11.15 and earlier, omit
+`--allow-scripts=openclaw`. For pnpm or Bun, replace the install command with
+the matching command below. Replace `latest` with an exact version or tag when
+a refusal or recovery message names one. Keep the same service account, package
+manager, installation prefix, profile, and state/config overrides throughout.
+In a non-interactive shell, such as a script, `openclaw gateway stop` requires
+`--force`. For a custom supervisor or foreground Gateway, stop and start it
+through its owner instead of the `openclaw gateway` service commands.
+
+Check `openclaw update status` for unfinished plugin upgrades and their repair
+commands. Normal CLI commands and Gateway startup do not apply deferred plugin
+migrations.
 
 On any platform, the published OpenClaw 2026.9.3 and 2026.9.4 updaters can exhaust
 their fixed 30-second baseline package-fingerprint budget before replacing any
 files. They then report `Installation recovery is unverified`,
 `Package rollback verification timed out`, or `retained package tree changed`
 even when the installed tree is unchanged.
-A newer candidate cannot repair the updater already running. After creating a
-[verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup),
-stop the Gateway and use its existing package manager to install the target
-release manually. Run `openclaw doctor --fix`, refresh the service with
-`openclaw gateway install --force`, then start and verify the Gateway.
-Published OpenClaw 2026.9.5 and later include the baseline-timeout fallback.
+A newer candidate cannot repair the updater already running. Install the target
+release once with the manual procedure above. Published OpenClaw 2026.9.5 and
+later include the baseline-timeout fallback.
 
 Gateways with installation-replacement detection also check the installed build
 on their maintenance tick. If the running and installed builds differ, the
@@ -374,22 +396,17 @@ preserve a running Gateway's old module state, cover arbitrary plugin imports,
 or make rollback into an older published package safe without restarting.
 
 For a root-owned Linux system-global install, if `openclaw update` fails with
-`EACCES`, recover with system npm while keeping the Gateway stopped for the
-manual replacement. Use the same profile flags/environment you normally use for
-that Gateway. Replace `/usr/bin/npm` with the system npm that owns the
-root-owned global prefix on your host:
-
-The npm command below follows the same version contract: use the flag on npm 12
-or npm 11.16+, and omit it on npm 11.15 and earlier.
+`EACCES`, follow the manual procedure above with the system npm that owns the
+root-owned global prefix as the install step. Use the same profile
+flags/environment you normally use for that Gateway. Replace `/usr/bin/npm` with
+that npm on your host; the same npm version rule applies to
+`--allow-scripts=openclaw`:
 
 ```bash
-openclaw gateway stop
 sudo /usr/bin/npm i -g openclaw@latest --allow-scripts=openclaw
-openclaw gateway install --force
-openclaw gateway restart
 ```
 
-Then verify:
+For a deeper check after the Gateway starts:
 
 ```bash
 openclaw --version
@@ -472,9 +489,9 @@ only as the final fallback. A missing or different PATH Bun does not replace
 an explicitly selected executable. Package-manager ownership detection is
 unchanged; locating an installation under `~/.openclaw` does not make it Bun-owned.
 On Windows, the staged updater rejects Bun installs before stopping the Gateway
-because it cannot relocate Bun's binary launchers. Run
-`bun add -g --trust openclaw@<resolved-target-version>` manually, then
-`openclaw gateway restart`; verify with `openclaw update status`.
+because it cannot relocate Bun's binary launchers. Follow the manual procedure
+above with `bun add -g --trust openclaw@<resolved-target-version>` as the
+install step; verify with `openclaw update status`.
 
 ### Package lifecycle and operator state
 
@@ -519,29 +536,13 @@ different npm prefix alone does not isolate operator state.
 
 The published 2026.9.3 updater has a fixed five-minute limit that can stop an
 upgrade before it finishes. A timeout fix in the target release cannot replace
-the updater already running. Bypass that older updater once with a manual
-package installation.
-
-Create a [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
-first. Keep the same service account, npm prefix, profile, and state/config
-overrides. Stop the Gateway through its owning supervisor before replacing the
-package. For a managed npm install:
-
-```bash
-openclaw gateway stop
-npm install -g openclaw@latest --allow-scripts=openclaw
-openclaw doctor --fix
-openclaw gateway restart
-openclaw gateway status --deep
-```
-
-Omit `--allow-scripts=openclaw` on npm 11.15 and earlier. For an external
-supervisor, use its stop and restart commands. Doctor keeps an already-stopped
-Gateway stopped, so complete the restart after reviewing its repair results.
+the updater already running. Bypass that older updater once with the
+[manual procedure](#alternative-manual-npm-pnpm-or-bun).
 
 Automatic official-plugin drift repair was added after 2026.9.5. If the installed
-release still prints **Fix each drifted plugin**, run its printed
-`openclaw plugins update` commands before restarting. Once installed, a build
+release still prints **Fix each drifted plugin** after `openclaw doctor --fix`,
+run its printed `openclaw plugins update` commands before refreshing and
+starting the Gateway service. Once installed, a build
 with automatic drift repair performs those official-plugin updates during
 `doctor --fix`; any remaining readiness warning names the plugin that still
 needs attention.
@@ -568,9 +569,9 @@ needs attention.
 
     For package updates, the check runs before registry lookups and database-schema validation. Managed update runs retain the warning in update history so it also appears in the Control UI.
 
-    Before staging a replacement, a read-only snapshot check measures the known SQLite database families, including WAL, SHM, and journal files. Its non-warning diagnostic entries in `openclaw update status --json` record each family's size and the existing snapshot budget: twice the total family bytes, three times the largest family, and 64 MiB for metadata. Plugin copies and registered external databases remain unknown until the complete check after staging.
+    Before staging a replacement, a read-only snapshot check measures the known SQLite database families, including WAL, SHM, and journal files. Its non-warning diagnostic entries in `openclaw update status --json` record each family's size, largest first. Current candidate copies need the total family bytes plus the largest family and 64 MiB for metadata. Separately, the activation backup and rollback check uses the same calculation as activation: twice the total family bytes plus three times the largest family and 64 MiB at the backup destination, with total family bytes plus the largest family and 64 MiB on each separate source volume. Plugin copies and registered external databases remain unknown until the complete check after staging.
 
-    Snapshot space is checked at the existing destinations: `TMPDIR`, the capture directory beside the state directory, and the system temporary directory. An update refuses before staging only when every destination has known free space below the snapshot owner's requirement, because its private state copy cannot be taken. Database sizes are inventory for the temporary snapshot, not database-health or growth warnings. A successful check needs no database cleanup. If measurement fails, the updater warns that it will check again after staging. A usable alternative or unknown free-space reading does not itself stop the update. Package and Git targets that are already current need no candidate snapshot. The updater preserves a config copy, not a full-state backup.
+    Snapshot space is checked at the existing destinations: `TMPDIR`, the capture directory beside the state directory, and the system temporary directory. Git and package updates refuse before staging when every candidate destination has known free space below the snapshot requirement, or when the activation backup or a separate rollback volume has known insufficient space. Refusals report the required and free bytes and the database families that dominate the requirement. Free space on the reported backup or source volume; changing `TMPDIR` only helps a candidate-copy shortfall. Database sizes are inventory for the temporary snapshot, not database-health or growth warnings. A successful check needs no database cleanup. If measurement fails, the updater warns that it will check again after staging. A usable candidate alternative or unknown free-space reading does not itself stop the update. This is an early check of known database sizes, not a reservation: builds, retained runtimes, plugin copies, and concurrent disk use can consume space afterward, so activation still checks its complete inventory before migration. Package and Git targets that are already current need no candidate snapshot. The updater preserves a config copy, not a full-state backup.
 
     For a direct CLI update, scratch variables set by the invoking operator (`TMPDIR`, `TMP`, and `TEMP`) take precedence over managed-service defaults. For example, `TMPDIR="$HOME/.cache" openclaw update` checks that directory first and labels it `explicit-tmpdir` in snapshot capacity reports. The service still owns installation, profile, state, and runtime-path selection. This precedence fix belongs to the installed updater and takes effect for updates it performs after installation; a newer candidate cannot change an older updater's environment merge.
 

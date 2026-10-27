@@ -10,20 +10,6 @@ export type MatrixQaRoomEvent = {
   type?: string;
 };
 
-type MatrixQaObservedEventKind =
-  | "membership"
-  | "message"
-  | "notice"
-  | "redaction"
-  | "reaction"
-  | "room-event";
-
-type MatrixQaObservedEventAttachment = {
-  caption?: string;
-  filename?: string;
-  kind: "audio" | "file" | "image" | "sticker" | "video";
-};
-
 type MatrixQaObservedApproval = {
   agentId?: string;
   allowedDecisions?: string[];
@@ -39,7 +25,7 @@ type MatrixQaObservedApproval = {
 };
 
 export type MatrixQaObservedEvent = {
-  kind: MatrixQaObservedEventKind;
+  kind: ReturnType<typeof resolveMatrixQaObservedEventKind>;
   roomId: string;
   eventId: string;
   sender?: string;
@@ -67,7 +53,7 @@ export type MatrixQaObservedEvent = {
   };
   replacesEventId?: string;
   redactsEventId?: string;
-  attachment?: MatrixQaObservedEventAttachment;
+  attachment?: NonNullable<ReturnType<typeof resolveMatrixQaAttachmentSummary>>;
   approval?: MatrixQaObservedApproval;
 };
 
@@ -77,17 +63,6 @@ function readNonEmptyStringEntries(value: unknown) {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     : undefined;
-}
-
-function resolveMatrixQaMessageContent(
-  content: Record<string, unknown>,
-  relatesTo: Record<string, unknown> | null,
-) {
-  const newContent = asNullableObjectRecord(content["m.new_content"]);
-  if (relatesTo?.rel_type === "m.replace" && newContent) {
-    return newContent;
-  }
-  return content;
 }
 
 function normalizeMatrixQaRelation(relation: Record<string, unknown> | null) {
@@ -120,12 +95,6 @@ function resolveMatrixQaObservedEventKind(params: { msgtype?: string; type: stri
   return "room-event" as const;
 }
 
-function resolveMatrixQaAttachmentKind(msgtype: string | undefined) {
-  return (["audio", "file", "image", "sticker", "video"] as const).find(
-    (kind) => msgtype === `m.${kind}`,
-  );
-}
-
 function isLikelyMatrixQaFilenameBody(value: string) {
   return !value.includes("\n") && /\.[a-z0-9][a-z0-9._-]{0,24}$/i.test(value);
 }
@@ -134,8 +103,11 @@ function resolveMatrixQaAttachmentSummary(params: {
   body?: string;
   filename?: string;
   msgtype?: string;
-}): MatrixQaObservedEventAttachment | undefined {
-  const kind = resolveMatrixQaAttachmentKind(params.msgtype);
+}) {
+  const msgtype = params.msgtype;
+  const kind = (["audio", "file", "image", "sticker", "video"] as const).find(
+    (candidate) => msgtype === `m.${candidate}`,
+  );
   if (!kind) {
     return undefined;
   }
@@ -199,7 +171,8 @@ export function normalizeMatrixQaObservedEvent(
   const msgtype = readStringField(content, "msgtype");
   const relatesToRaw = content["m.relates_to"];
   const relatesTo = asNullableObjectRecord(relatesToRaw);
-  const messageContent = resolveMatrixQaMessageContent(content, relatesTo);
+  const newContent = asNullableObjectRecord(content["m.new_content"]);
+  const messageContent = relatesTo?.rel_type === "m.replace" && newContent ? newContent : content;
   const replacesEventId =
     relatesTo?.rel_type === "m.replace" && typeof relatesTo.event_id === "string"
       ? relatesTo.event_id

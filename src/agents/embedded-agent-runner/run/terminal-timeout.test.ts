@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { deriveGatewaySessionLifecycleSnapshot } from "../../../gateway/session-lifecycle-state.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "../../../gateway/session-lifecycle-projection.js";
 import * as agentEvents from "../../../infra/agent-events.js";
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
 import {
@@ -53,14 +54,7 @@ async function resolveTerminal(
     assistantTexts: commentary ? [commentary] : [],
     messagesSnapshot: [
       assistant,
-      {
-        role: "toolResult",
-        toolCallId: "read-1",
-        toolName: "read",
-        content: [{ type: "text", text: "Saved file contents" }],
-        isError: false,
-        timestamp: 0,
-      },
+      makeTextToolResult("read-1", "read", "Saved file contents", false, 0),
     ],
     toolMetas: [{ toolName: "read", toolCallId: "read-1", isError: false, replaySafe: true }],
     itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },

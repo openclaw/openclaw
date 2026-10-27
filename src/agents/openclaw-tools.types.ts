@@ -2,7 +2,6 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ExecMode } from "../infra/exec-approvals.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
@@ -95,7 +94,7 @@ export type OpenClawSharedToolsOptions = {
   /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   runtimeToolAllowlist?: string[];
-  /** Host-enabled Gateway publication request surface; the broker checks target and credentials. */
+  /** Session-owned Gateway publication surface; the broker checks current identity and authority. */
   githubPublicationAvailable?: boolean;
   cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
@@ -143,7 +142,7 @@ export type OpenClawToolsOptions = {
   /** Exact admitted session policy shared with terminal-input authorization. */
   execSession?: ExecSessionDefaults;
   /** Effective run-local exec overrides, including prepared permission mode. */
-  execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
+  execOverrides?: ExecPolicyOverrides;
   /** Trusted operator devices allowed to review this run's terminal input. */
   approvalReviewerDeviceIds?: string[];
   /** Trusted account used for authorization; delivery keeps agentAccountId. */

@@ -5,23 +5,26 @@ import type { SessionSuggestionsListResult } from "../../../../packages/gateway-
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import * as draftStore from "../../lib/chat/composer-draft-store.runtime.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { mockDocumentVisibility as trackVisibility } from "../../test-helpers/mock-cleanup.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import { applyChatAgentsList, loadChatHistory } from "./chat-history.ts";
 import { makeRequestMock, requestCalls } from "./chat-host.test-support.ts";
 import {
-  createSessionCapabilityFixture,
   createTestChatPane,
   connectPaneTestView,
   getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { retainSessionWorkspaceArtifacts } from "./components/chat-session-workspace-state.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
@@ -33,7 +36,11 @@ import {
 } from "./history-merge.ts";
 import { handleAbortChat, replayPendingChatAbort } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
-import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
+import {
+  applyChatCacheSnapshot,
+  cacheChatSessionSnapshot,
+  readChatMessagesFromCache,
+} from "./session-message-cache.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -49,12 +56,7 @@ function createReconnectRequest(
 ) {
   return makeRequestMock({
     "chat.startup": startup,
-    "agents.list": {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }],
-    },
+    "agents.list": makeBootRoster(),
     "chat.metadata": { commands: [] },
     "models.list": { models: [] },
     "models.authStatus": { ts: 1, providers: [] },
@@ -78,6 +80,79 @@ function reconnectPane(
   return { request, client, ...createTestChatPane({ client }) };
 }
 
+function openingPane(approvals = false) {
+  let connectSent = createDeferred<boolean>();
+  let generation = 0;
+  const requested = createDeferred();
+  const approvalRequested = createDeferred();
+  const approval = createDeferred<{
+    key: string;
+    approvalReplay: { sessionKey: string; approvals: [] };
+  }>();
+  const subscription = createDeferred<{
+    key: string;
+    initialHistory: { ok: true; payload: ChatHistoryResult };
+  }>();
+  const history = {
+    messages: [{ role: "assistant", content: [{ type: "text", text: "Pipelined transcript" }] }],
+    sessionId: "pipeline-session",
+  } satisfies ChatHistoryResult;
+  const request = createReconnectRequest(history, {
+    "sessions.messages.subscribe": (params: { includeApprovals?: boolean }) => {
+      if (params.includeApprovals) {
+        approvalRequested.resolve();
+        return approval.promise;
+      }
+      requested.resolve();
+      return subscription.promise;
+    },
+  });
+  const client = createTestGatewayClient(request);
+  Object.defineProperties(client, {
+    connectSent: { configurable: true, get: () => connectSent.promise },
+    connectionGeneration: { configurable: true, get: () => generation },
+  });
+  const fixture = createTestChatPane({ client });
+  fixture.state.loadAssistantIdentity = vi.fn(async () => undefined);
+  fixture.state.chatMessage = "Unsent draft";
+  fixture.pane.sessionKey = fixture.state.sessionKey;
+  const hello = sessionMutationGatewayHello([
+    "operator.read",
+    "operator.write",
+    ...(approvals ? ["operator.approvals"] : []),
+  ]);
+  const connected = {
+    ...fixture.pane.context.gateway.snapshot,
+    hello: {
+      ...hello,
+      auth: {
+        ...hello.auth,
+        recoveryScope: "accepted-pipeline-scope",
+      },
+    },
+  };
+  fixture.pane.applyGatewaySnapshot({ ...connected, phase: "connecting", hello: null });
+  return {
+    ...fixture,
+    request,
+    requested: requested.promise,
+    approvalRequested: approvalRequested.promise,
+    approval,
+    subscription,
+    history,
+    connected,
+    dispatchConnect() {
+      generation += 1;
+      connectSent.resolve(true);
+    },
+    retireConnect() {
+      connectSent.resolve(false);
+      connectSent = createDeferred<boolean>();
+      generation += 1;
+    },
+  };
+}
+
 function presentationPane() {
   const fixture = createTestChatPane({
     client: { request: vi.fn() } as unknown as GatewayBrowserClient,
@@ -85,15 +160,6 @@ function presentationPane() {
   });
   fixture.pane.render = emptyPresentation;
   return fixture;
-}
-
-function trackVisibility(initial: DocumentVisibilityState) {
-  let current = initial;
-  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => current);
-  return (next: DocumentVisibilityState) => {
-    current = next;
-    document.dispatchEvent(new Event("visibilitychange"));
-  };
 }
 
 function disconnect(pane: TestChatPane) {
@@ -115,6 +181,139 @@ const setConnected = (pane: TestChatPane, value: boolean) =>
   Object.defineProperty(pane, "isConnected", { configurable: true, value });
 
 describe("chat pane connection lifecycle", () => {
+  it("uses a snapshot hydrated during connect preparation for the pipelined delta", async () => {
+    const h = openingPane();
+    const snapshot = {
+      messages: h.history.messages,
+      sessionId: h.history.sessionId!,
+      pagination: { hasMore: false as const },
+      deltaCursor: "warm-cursor",
+      historyState: {
+        commands: [],
+        stateRevision: {
+          commands: "commands-1",
+          pendingInputs: "pending-1",
+          sessionInfo: "session-1",
+        },
+      },
+    };
+    applyChatCacheSnapshot(h.state, snapshot);
+    cacheChatSessionSnapshot(
+      h.state.chatMessagesBySession,
+      h.state,
+      { sessionKey: h.state.sessionKey },
+      snapshot,
+    );
+    h.dispatchConnect();
+    await h.requested;
+    expect(h.state.chatMessages).toEqual(snapshot.messages);
+    expect(requestCalls(h.request, "sessions.messages.subscribe")[0]?.[1]).toMatchObject({
+      initialHistory: { cursor: "warm-cursor", knownState: { commands: "commands-1" } },
+    });
+    expect(h.state.connected).toBe(false);
+    h.pane.applyGatewaySnapshot(h.connected);
+    h.subscription.resolve({
+      key: h.state.sessionKey,
+      initialHistory: { ok: true, payload: h.history },
+    });
+    await chatHistoryRequests(h.state).subscriptionReady;
+  });
+
+  it.each([false, true])(
+    "pipelines history before hello without early writes or duplicate history (approvals: %s)",
+    async (approvals) => {
+      const h = openingPane(approvals);
+      const ready = chatHistoryRequests(h.state).subscriptionReady;
+      expect(requestCalls(h.request, "sessions.messages.subscribe")).toHaveLength(0);
+      expect(h.state.connected).toBe(false);
+      expect(h.sessions.captureConnectionScope()).toBeNull();
+
+      // The first challenge advances generation from zero; the same dispatch receipt survives it.
+      h.dispatchConnect();
+      await h.requested;
+      expect(requestCalls(h.request, "sessions.messages.subscribe")).toEqual([
+        [
+          "sessions.messages.subscribe",
+          expect.objectContaining({
+            key: h.state.sessionKey,
+            initialHistory: expect.objectContaining({ limit: 80 }),
+          }),
+          expect.anything(),
+        ],
+      ]);
+      expect(requestCalls(h.request, "chat.startup")).toHaveLength(0);
+      expect(requestCalls(h.request, "chat.history")).toHaveLength(0);
+      expect(h.state.connected).toBe(false);
+      expect(h.state.chatSessionMessageSubscription ?? null).toBeNull();
+      expect(
+        readSessionMethodAccess(h.pane.context.gateway.snapshot, {
+          method: "chat.send",
+          requiredScope: "operator.write",
+        }).allowed,
+      ).toBe(false);
+
+      h.pane.applyGatewaySnapshot(h.connected);
+      h.subscription.resolve({
+        key: h.state.sessionKey,
+        initialHistory: { ok: true, payload: h.history },
+      });
+      await expect(ready).resolves.toBe(true);
+      await waitForSolid(() => expect(h.state.chatMessages).toEqual(h.history.messages));
+      expect(chatHistoryRequests(h.state).historyLoad.phase).toBe("committed");
+      expect(h.state).toMatchObject({ connected: true, chatMessage: "Unsent draft" });
+      expect(h.state.chatSessionMessageSubscription?.key).toBe(h.state.sessionKey);
+      expect(h.sessions.captureConnectionScope()).not.toBeNull();
+      if (approvals) {
+        await h.approvalRequested;
+        expect(h.state.chatSessionMessageSubscription?.includeApprovals).not.toBe(true);
+        h.approval.resolve({
+          key: h.state.sessionKey,
+          approvalReplay: { sessionKey: h.state.sessionKey, approvals: [] },
+        });
+        await waitForSolid(() =>
+          expect(h.state.chatSessionMessageSubscription?.includeApprovals).toBe(true),
+        );
+      }
+      h.pane.applyGatewaySnapshot(h.connected);
+      expect(requestCalls(h.request, "sessions.messages.subscribe")).toHaveLength(
+        approvals ? 2 : 1,
+      );
+      expect(requestCalls(h.request, "chat.startup")).toHaveLength(0);
+      expect(requestCalls(h.request, "chat.history")).toHaveLength(0);
+      expect(requestCalls(h.request, "chat.send")).toHaveLength(0);
+    },
+  );
+
+  it.each(["authentication failure", "replacement before dispatch"] as const)(
+    "retires pre-hello history after %s without adopting it",
+    async (failure) => {
+      const h = openingPane();
+      const ready = chatHistoryRequests(h.state).subscriptionReady;
+      if (failure === "authentication failure") {
+        h.dispatchConnect();
+        await h.requested;
+        // A closed transport rejects pending RPCs before publishing its offline snapshot.
+        h.subscription.reject(new Error("Connection rejected during authentication"));
+      }
+      h.retireConnect();
+      h.pane.applyGatewaySnapshot({ ...h.connected, phase: "offline", hello: null });
+      await expect(ready).resolves.toBe(false);
+      expect(h.state).toMatchObject({
+        connected: false,
+        chatMessages: [],
+        chatMessage: "Unsent draft",
+      });
+      expect(h.state.chatSessionMessageSubscription ?? null).toBeNull();
+      expect(h.sessions.captureConnectionScope()).toBeNull();
+      expect(requestCalls(h.request, "sessions.messages.subscribe")).toHaveLength(
+        failure === "authentication failure" ? 1 : 0,
+      );
+      expect(requestCalls(h.request, "chat.startup")).toHaveLength(0);
+      expect(requestCalls(h.request, "chat.history")).toHaveLength(0);
+      expect(requestCalls(h.request, "chat.send")).toHaveLength(0);
+    },
+  );
+
   it("keeps explicit mobile Outputs available during pending history only while presented", async () => {
     const { pane, state, request } = reconnectPane(new Promise<ChatHistoryResult>(() => {}));
     getPaneTestRuntime(pane).mergedChrome = true;

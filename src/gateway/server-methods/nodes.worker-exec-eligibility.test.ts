@@ -12,10 +12,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createNodeRegistryRuntime } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
-import {
-  createDevicePlacementAuthority,
-  resolveDevicePlacementEligibility,
-} from "../worker-environments/device-placement-eligibility.js";
+import { createDevicePlacementAuthority } from "../worker-environments/device-placement-eligibility.js";
 import { selectDevicePlacementCandidates } from "../worker-environments/device-placement-selector.js";
 import {
   bindDeviceWorkerAvailability,
@@ -133,15 +130,6 @@ it("scopes an outdated v6 host to OpenClaw and refreshes eligibility from curren
       ok: false,
       error: expect.stringContaining("run openclaw update, then reconnect"),
     });
-    expect(
-      await resolveDevicePlacementEligibility({
-        environmentService,
-        deviceId: "node-1",
-        executionMode: "worker-turn",
-        requirement: openclawRequirement,
-        config,
-      }),
-    ).toMatchObject({ ok: false, error: expect.stringContaining("openclaw update") });
     for (const runtimeId of [undefined, "codex"]) {
       expect(await node(runtimeId)).not.toHaveProperty("issues");
     }

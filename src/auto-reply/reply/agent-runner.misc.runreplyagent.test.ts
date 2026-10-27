@@ -18,6 +18,7 @@ import {
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+import { createUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { NormalizedUsage } from "../../agents/usage.js";
 import { setRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -25,7 +26,6 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { peekSystemEvents } from "../../infra/system-events.js";
-import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import {
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
@@ -75,8 +75,11 @@ function sessionState(sessionKey: string, sessionEntry: SessionEntry) {
   return { sessionKey, sessionEntry, sessionStore: { [sessionKey]: sessionEntry } };
 }
 
-async function storedSession(overrides: Partial<SessionEntry> = {}, sessionKey = "main") {
-  const tmp = tempDirs.make("openclaw-reply-");
+async function storedSession(
+  overrides: Partial<SessionEntry> = {},
+  sessionKey = "main",
+  tmp = tempDirs.make("openclaw-reply-"),
+) {
   const storePath = path.join(tmp, "sessions.json");
   const sessionEntry = sessionFixture(overrides);
   await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
@@ -105,14 +108,7 @@ function assistantMessage(input: number, output: number, text = "NO_REPLY") {
     content: [{ type: "text", text }],
     stopReason: "stop",
     errorMessage: undefined,
-    usage: {
-      input,
-      output,
-      totalTokens: input + output,
-      cacheRead: 0,
-      cacheWrite: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createUsageFixture(input, output, input + output),
   });
 }
 
@@ -246,8 +242,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         compactionCount: 0,
       });
       const reply = { ...sessionState(sessionKey, sessionEntry), storePath };
-      const logPath = path.join(tmp, "maintenance.log");
-      setLoggerOverride({ level: "debug", consoleLevel: "silent", file: logPath });
       const prompt = "What is two plus two? Answer in one short sentence without tools.";
       const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => boolean>(() => true);
       const delivery = createDeferred();
@@ -387,12 +381,9 @@ describe("runReplyAgent auto-compaction token update", () => {
         delivery.resolve();
         await operation.ownerSettlement;
         await maintenance;
-        await flushLogger();
-        const diagnostic = await fs.readFile(logPath, "utf8");
-        expect(
-          runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger),
-          diagnostic,
-        ).toEqual(preempted || retiredGateway ? ["user"] : ["user", "memory"]);
+        expect(runEmbeddedAgentMock.mock.calls.map(([params]) => params.trigger)).toEqual(
+          preempted || retiredGateway ? ["user"] : ["user", "memory"],
+        );
         if (preempted || retiredGateway) {
           expect(loadSessionEntry(scope)?.memoryFlush).toBeUndefined();
         } else {
@@ -416,7 +407,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         onReplyOperationOwned.mock.calls[0]?.[0].complete();
         releaseForeground?.();
         await waitForSessionMaintenance(sessionKey);
-        setLoggerOverride(null);
       }
     },
   );
@@ -497,15 +487,11 @@ describe("runReplyAgent auto-compaction token update", () => {
   });
 
   it.each([
-    { label: "its upstream signal", superseded: false, expectedCode: "aborted_by_user" as const },
-    {
-      label: "a visible-turn supersession",
-      superseded: true,
-      expectedCode: "aborted_for_supersession" as const,
-    },
-  ])(
-    "records a settled fallback cancelled by $label without losing committed compaction",
-    async ({ superseded, expectedCode }) => {
+    [false, "aborted_by_user"],
+    [true, "aborted_for_supersession"],
+  ] as const)(
+    "records a settled fallback cancellation (superseded=%s) without losing committed compaction",
+    async (superseded, expectedCode) => {
       const upstreamAbort = new AbortController();
       const { storePath, sessionKey, sessionEntry, reply } = await storedSession(
         {
@@ -688,13 +674,13 @@ it("delivers tool progress with inline on over stored full", async () => {
 
 describe("runReplyAgent Active Memory inline debug", () => {
   it.each([
-    ["off", "on", undefined, true, true],
-    ["on", "off", undefined, true, false],
-    ["off", "on", "off", true, false],
-    ["on", "off", "on", true, true],
+    ["off", "on", undefined, true],
+    ["on", "off", undefined, false],
+    ["off", "on", "off", false],
+    ["on", "off", "on", true],
   ] as const)(
-    "refreshes plugin trace %s → %s with override %s and authority %s",
-    async (stored, live, override, authorized, visible) => {
+    "refreshes authorized plugin trace %s → %s with override %s (visible=%s)",
+    async (stored, live, override, visible) => {
       const { storePath, sessionEntry, reply } = await storedSession({ traceLevel: stored });
       runEmbeddedAgentMock.mockImplementationOnce(async () => {
         await replaceSessionEntry(
@@ -710,7 +696,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
         return replyResult("Normal reply", {});
       });
       const result = await createBaseRun({
-        run: { traceAuthorized: authorized, traceLevelOverride: override },
+        run: { traceAuthorized: true, traceLevelOverride: override },
         reply,
       }).run();
       expect(replyText(result).includes("Active Memory Debug")).toBe(visible);
@@ -719,33 +705,8 @@ describe("runReplyAgent Active Memory inline debug", () => {
     },
   );
 
-  function runRawTraceCase(
-    scope: {
-      sessionEntry: SessionEntry;
-      sessionFile: string;
-      storePath: string;
-    },
-    run: BaseRunOptions["run"],
-    commandBody: string,
-  ) {
-    const sessionKey = "main";
-    return channelRun("telegram", "chat:1", {
-      context: { CommandBody: commandBody },
-      run: {
-        agentId: "main",
-        sessionKey,
-        sessionFile: scope.sessionFile,
-        ...run,
-      },
-      reply: {
-        ...sessionState(sessionKey, scope.sessionEntry),
-        storePath: scope.storePath,
-      },
-    }).run();
-  }
-
-  it("appends raw trace payloads when trace raw is enabled", async () => {
-    const { tmp, storePath, sessionKey, sessionEntry, scope } = await storedSession({
+  it("appends raw trace payloads with escaped fences when trace raw is enabled", async () => {
+    const { tmp, storePath, sessionKey, sessionEntry, scope, reply } = await storedSession({
       traceLevel: "raw",
       compactionCount: 3,
     });
@@ -757,12 +718,9 @@ describe("runReplyAgent Active Memory inline debug", () => {
         stopReason: "stop",
         errorMessage: undefined,
         usage: {
-          input: 200,
-          output: 10,
+          ...createUsageFixture(200, 10, 235),
           cacheRead: 20,
           cacheWrite: 5,
-          totalTokens: 235,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },
       }),
     );
@@ -797,9 +755,9 @@ describe("runReplyAgent Active Memory inline debug", () => {
       });
       return replyResult("Visible reply", {
         finalPromptText:
-          "Context:\n<active_memory_plugin>\nPrefer from/to failover logs.\n</active_memory_plugin>\n\n/trace raw show me everything",
+          "Context:\n<active_memory_plugin>\nPrefer from/to failover logs.\n</active_memory_plugin>\n\n/trace raw show me everything\n~~~\nnot a fence",
         finalAssistantVisibleText: "Visible reply",
-        finalAssistantRawText: "<final>Visible reply</final>",
+        finalAssistantRawText: "<final>Visible reply\n~~~\nresponse</final>",
         executionTrace: {
           winnerProvider: "anthropic",
           winnerModel: "claude",
@@ -840,11 +798,18 @@ describe("runReplyAgent Active Memory inline debug", () => {
       });
     });
 
-    const result = await runRawTraceCase(
-      { sessionEntry, sessionFile: sessionKey, storePath },
-      { reasoningLevel: "on", thinkLevel: "low", traceAuthorized: true },
-      "/trace raw show me everything",
-    );
+    const result = await channelRun("telegram", "chat:1", {
+      context: { CommandBody: "/trace raw show me everything" },
+      run: {
+        agentId: "main",
+        sessionKey,
+        sessionFile: sessionKey,
+        reasoningLevel: "on",
+        thinkLevel: "low",
+        traceAuthorized: true,
+      },
+      reply,
+    }).run();
 
     expect(Array.isArray(result)).toBe(true);
     expect((result as { text?: string }[])[0]?.text).toBe("Visible reply");
@@ -875,34 +840,8 @@ describe("runReplyAgent Active Memory inline debug", () => {
     expect(traceText).toContain("Summary: winner=claude 🧠 low fallback=yes attempts=2");
     expect(traceText).not.toContain("🔎 Provider Usage (Turn Total):");
     expect(traceText).not.toContain("🔎 Provider Usage (Last Provider Call):");
-  });
-
-  // Unauthorized stored-raw delivery is covered by agent-runner-result-diagnostics.persistence.
-  it("escapes raw trace fences", async () => {
-    const { tmp, storePath, sessionEntry } = await storedSession({ traceLevel: "raw" });
-    const sessionFile = path.join(tmp, "session.jsonl");
-    await fs.writeFile(sessionFile, "", "utf-8");
-    runEmbeddedAgentMock.mockResolvedValueOnce(
-      replyResult("Visible reply", {
-        finalPromptText: "show me\n~~~\nnot a fence",
-        finalAssistantVisibleText: "Visible reply",
-        finalAssistantRawText: "assistant\n~~~\nresponse",
-        agentMeta: {
-          sessionId: "session",
-          provider: "anthropic",
-          model: "claude",
-          usage: { input: 10, output: 2, total: 12 },
-        },
-      }),
-    );
-    const result = await runRawTraceCase(
-      { sessionEntry, sessionFile, storePath },
-      { reasoningLevel: "off", thinkLevel: "off", traceAuthorized: true },
-      "/trace raw",
-    );
-    const traceText = (result as { text?: string }[])[1]?.text ?? "";
-    expect(traceText).toContain("show me\n\\~~~\nnot a fence");
-    expect(traceText).toContain("assistant\n\\~~~\nresponse");
+    expect(traceText).toContain("show me everything\n\\~~~\nnot a fence");
+    expect(traceText).toContain("<final>Visible reply\n\\~~~\nresponse</final>");
   });
 });
 
@@ -965,10 +904,6 @@ it("does not leak hook-blocked CLI input in raw trace payloads", async () => {
 });
 
 describe("runReplyAgent messaging tool dedupe", () => {
-  function createRun() {
-    return channelRun("slack", "channel:C1").run();
-  }
-
   it.each([
     { state: undefined, routed: true, delivered: true },
     { state: "missing", routed: true, delivered: false },
@@ -985,7 +920,7 @@ describe("runReplyAgent messaging tool dedupe", () => {
           : undefined,
         meta: {},
       });
-      const result = await createRun();
+      const result = await channelRun("slack", "channel:C1").run();
       if (delivered) {
         expect(result).toBeUndefined();
       } else {
@@ -1041,15 +976,11 @@ it.each([false, true])("enforces fallback <final> tags (memory flush=%s)", async
   let options: BaseRunOptions = {};
   if (memoryFlush) {
     const root = await fs.realpath(tempDirs.make("openclaw-memory-flush-tags-"));
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:memory-flush-tags";
-    const sessionEntry = sessionFixture({
-      totalTokens: 1_000_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 0,
-    });
-    await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+    const { sessionKey, reply } = await storedSession(
+      { totalTokens: 1_000_000, totalTokensFresh: true, totalTokensVersion: 1, compactionCount: 0 },
+      "agent:main:memory-flush-tags",
+      root,
+    );
     registerMemoryFlushPlanResolverForTest(() =>
       flushPlan({
         softThresholdTokens: 1_000,
@@ -1070,7 +1001,7 @@ it.each([false, true])("enforces fallback <final> tags (memory flush=%s)", async
         sessionKey,
         workspaceDir: root,
       },
-      reply: { ...sessionState(sessionKey, sessionEntry), storePath },
+      reply,
     };
   } else {
     runEmbeddedAgentMock.mockResolvedValueOnce(replyResult("ok", {}));

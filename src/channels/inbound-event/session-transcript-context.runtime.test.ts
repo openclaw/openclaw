@@ -1,10 +1,7 @@
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
-import { runPreparedChannelTurn } from "../turn/execution.js";
 import { mergeSessionTranscriptContext } from "./session-transcript-context.runtime.js";
 
 vi.mock("../../config/sessions/transcript.js", () => ({
@@ -43,8 +40,6 @@ function chatWindow(messages: object[], overrides: Partial<WindowEntry> = {}) {
 }
 
 describe("session transcript inbound context", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
   beforeEach(() => {
     readRecent.mockReset();
   });
@@ -60,26 +55,9 @@ describe("session transcript inbound context", () => {
     return ctx;
   }
 
-  async function runTurn(ctx: FinalizedMsgContext, channel = "slack", render?: () => string) {
-    let prompt = "";
-    await runPreparedChannelTurn({
-      channel,
-      routeSessionKey: ctx.SessionKey!,
-      storePath: path.join(tempDirs.make("openclaw-session-transcript-context-"), "sessions.json"),
-      ctxPayload: ctx,
-      recordInboundSession: vi.fn(async () => undefined),
-      runDispatch: vi.fn(async () => {
-        prompt = render?.() ?? "";
-        return { queuedFinal: false };
-      }),
-    });
-    return prompt;
-  }
-
   it("restores Slack assistant context when the live window is empty after restart", async () => {
     readRecent.mockResolvedValue(transcriptPair("deploy at noon", "remind at 11:50"));
-    const ctx = context();
-    await runTurn(ctx);
+    const ctx = await merged();
 
     expect(ctx.InboundHistory).toEqual([
       { messageId: "session:u1", sender: "User", body: "deploy at noon", timestamp: 1_000 },
@@ -89,7 +67,7 @@ describe("session transcript inbound context", () => {
 
   it("renders the configured native window without restoring stale transcript content", async () => {
     readRecent.mockResolvedValue([{ role: "user", text: "deleted platform message" }]);
-    const ctx = context({
+    const ctx = await merged({
       ChatType: "channel",
       SessionTranscriptContext: { historyLimit: 50, historyKind: "recent" },
       InboundHistory: Array.from({ length: 55 }, (_, index) => ({
@@ -98,7 +76,7 @@ describe("session transcript inbound context", () => {
         timestamp: index,
       })),
     });
-    const prompt = await runTurn(ctx, "slack", () => buildInboundUserContextPrefix(ctx));
+    const prompt = buildInboundUserContextPrefix(ctx);
     expect(prompt.match(/native-line-\d{2}/g)).toEqual(
       Array.from({ length: 50 }, (_, index) => `native-line-${String(index + 5).padStart(2, "0")}`),
     );
@@ -196,7 +174,7 @@ describe("session transcript inbound context", () => {
       { message_id: "graph-parent", sender: "Parent", body: "Graph parent" },
       { message_id: "graph-reply", sender: "Teammate", body: "Graph reply" },
     ];
-    const ctx = context({
+    const ctx = await merged({
       ChatType: "channel",
       InboundHistory: [
         { messageId: "pending", sender: "Pending", body: "pending backlog", timestamp: 3_000 },
@@ -209,9 +187,7 @@ describe("session transcript inbound context", () => {
       }),
     });
 
-    const prompt = await runTurn(ctx, "msteams", () =>
-      buildInboundUserContextPrefix(ctx, { timezone: "UTC" }),
-    );
+    const prompt = buildInboundUserContextPrefix(ctx, { timezone: "UTC" });
 
     expect(ctx.ChannelStructuredContext?.[0]).toMatchObject({
       source: "msteams",

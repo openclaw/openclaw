@@ -88,11 +88,12 @@ export function appendTranscriptEventInTransaction(
   options: TranscriptAppendOptions = {},
   cursor: TranscriptAppendCursor = {},
 ): string | false {
-  const priorAssistant = !cursor.initialized
-    ? "unchanged"
-    : cursor.rowTranscript
-      ? cursor.rowTranscript.lastAssistantMessage
-      : "unknown";
+  const priorAssistant =
+    options.independentMessageProjection || !cursor.initialized
+      ? "unchanged"
+      : cursor.rowTranscript
+        ? cursor.rowTranscript.lastAssistantMessage
+        : "unknown";
   const persistedEvent =
     options.eventJson === undefined ? canonicalizeTranscriptEventMedia(event) : event;
   return withSqliteDatabaseWriteScope(
@@ -103,7 +104,7 @@ export function appendTranscriptEventInTransaction(
       const actor = readSessionActorTransactionState(database, scope);
       const initial =
         !cursor.initialized && !actor
-          ? readTranscriptAppendStateInTransaction(database, scope)
+          ? (cursor.initialState ?? readTranscriptAppendStateInTransaction(database, scope))
           : undefined;
       const window = initial?.roots[0];
       const isCompaction = isRecord(persistedEvent) && persistedEvent.type === "compaction";
@@ -157,6 +158,7 @@ export function appendTranscriptEventInTransaction(
           );
         }
         cursor.initialized = true;
+        cursor.initialState = undefined;
       }
       if (windowExists) {
         cursor.windowUpdatedAt = createdAt;
@@ -378,14 +380,13 @@ export function appendTranscriptEventInTransaction(
       }
       if (options.touchMutation !== false) {
         preserveSessionEntryCacheAcrossWrite(database, () => {
-          touchTranscriptMutationInTransaction(
-            database,
-            scope.sessionId,
-            deferWindowTouch ? windowUpdatedAt : undefined,
-            cursor.rowTranscript,
-            options.persistActorMutation,
-            flushProjectionWithMutation,
-          );
+          touchTranscriptMutationInTransaction(database, scope.sessionId, {
+            windowUpdatedAt: deferWindowTouch ? windowUpdatedAt : undefined,
+            rowTranscript: cursor.rowTranscript,
+            persistActorMutation: options.persistActorMutation,
+            writeActorMutation: flushProjectionWithMutation,
+            projectionReady: !projectionNeedsRebuild,
+          });
         });
       }
       scheduleTranscriptProjectionReconcile(
@@ -460,7 +461,12 @@ export function replaceSqliteTranscriptEventsInTransaction(
     () => {
       const rebuildSynchronously =
         events.length > 0 &&
-        shouldRebuildSessionTranscriptIndexSynchronously(database.db, resolved.sessionId, events);
+        (options.rebuildProjectionSynchronously === true ||
+          shouldRebuildSessionTranscriptIndexSynchronously(
+            database.db,
+            resolved.sessionId,
+            events,
+          ));
       const preservedTranscriptUpdatedAt =
         options.preserveSessionWindowRecency === true
           ? readTranscriptMutationStateInTransaction(database, resolved.sessionId).updatedAt
@@ -494,6 +500,7 @@ export function replaceSqliteTranscriptEventsInTransaction(
             database,
             resolved.sessionId,
             preservedTranscriptUpdatedAt,
+            true,
           );
         }
         return;
@@ -597,6 +604,7 @@ export function replaceSqliteTranscriptEventsInTransaction(
           database,
           resolved.sessionId,
           preservedTranscriptUpdatedAt,
+          rebuildSynchronously,
         );
       }
     },

@@ -83,13 +83,8 @@ function expectAborted(respond: ReturnType<typeof vi.fn>, runId: string | undefi
 function expectRejected(
   respond: ReturnType<typeof vi.fn>,
   error: Record<string, unknown> = { code: expect.any(String) },
-  soft = false,
 ) {
-  (soft ? expect.soft(respond) : expect(respond)).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining(error),
-  );
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
 }
 
 function reserveAgain(entry: { runId: string; groupId?: string }) {
@@ -714,17 +709,13 @@ describe("queued collector session projection", () => {
       admission.activeRunAbort.controller.signal.addEventListener("abort", () => finish.resolve(), {
         once: true,
       });
-      const producer = (async () => {
-        try {
-          await finish.promise;
-        } finally {
-          if (scenario === "parent-retired" && admission.activeRunAbort.controller.signal.aborted) {
-            rpcSourceTesting.deleteExpected("parent-turn", parentSource);
-          }
-          releaseClaim();
-          cleanup();
+      const producer = finish.promise.finally(() => {
+        if (scenario === "parent-retired" && admission.activeRunAbort.controller.signal.aborted) {
+          rpcSourceTesting.deleteExpected("parent-turn", parentSource);
         }
-      })();
+        releaseClaim();
+        cleanup();
+      });
       try {
         expect(rpcSourceTesting.get(extraRunId)).toBe(admission.activeRunAbort.entry);
         expect(isSubagentRunQueued(entry)).toBe(true);

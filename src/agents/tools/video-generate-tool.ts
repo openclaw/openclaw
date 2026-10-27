@@ -132,7 +132,7 @@ function videoReferenceProperties(
   };
 }
 
-const VideoGenerateToolProperties = {
+const VideoGenerateToolSchema = Type.Object({
   action: Type.Optional(Type.String({ description: MEDIA_GENERATE_DESCRIPTIONS.action })),
   prompt: Type.Optional(Type.String({ description: "Video prompt." })),
   ...videoReferenceProperties(
@@ -199,7 +199,12 @@ const VideoGenerateToolProperties = {
       minimum: 1,
     }),
   ),
-} satisfies Record<string, TSchema>;
+});
+const VideoGenerateWithoutAudioToolSchema = Type.Omit(VideoGenerateToolSchema, [
+  "audioRef",
+  "audioRefs",
+  "audioRoles",
+]);
 
 export function createVideoGenerateTool(
   options?: MediaGenerateToolOptions,
@@ -306,12 +311,6 @@ export function createVideoGenerateTool(
     }
     return false;
   })();
-  const properties: Record<string, TSchema> = { ...VideoGenerateToolProperties };
-  if (!includeAudioReferences) {
-    delete properties.audioRef;
-    delete properties.audioRefs;
-    delete properties.audioRoles;
-  }
 
   return {
     label: "Video Generation",
@@ -321,7 +320,9 @@ export function createVideoGenerateTool(
       "Create video, incl. image-to-video: image refs take first_frame/last_frame/reference_image roles; video refs condition style" +
       (includeAudioReferences ? "; audio refs condition sound" : "") +
       ". resolution up to 4K; audio/watermark toggles. action=list discovers providers/models. Session chat background: call once/request; result returns as a later turn that sends the media. This turn: short ack at most, then end; no poll/yield. status checks active task. Duration may round to provider value.",
-    parameters: Type.Object(properties),
+    parameters: includeAudioReferences
+      ? VideoGenerateToolSchema
+      : VideoGenerateWithoutAudioToolSchema,
     execute: createMediaGenerateExecute({
       options,
       list: (auth) => createVideoGenerateListActionResult(cfg, auth),
@@ -504,6 +505,8 @@ export function createVideoGenerateTool(
                   videoGenerationTaskLifecycle.recordTaskProgress({
                     handle: taskHandle,
                     progressSummary: "Saving generated video",
+                    provider: result.provider,
+                    model: result.model,
                   });
                   const remoteAttachment = (url: string, video: GeneratedVideoAsset) =>
                     ({

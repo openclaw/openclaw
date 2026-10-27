@@ -51,6 +51,15 @@ const runtimes = useAutoCleanupTempDirTracker(afterAll);
 const missingMessage =
   "Local credentials are missing; restore the matching client credential backup.";
 let runtimeRoot: string;
+async function withPostgres<T>(run: (client: Client) => Promise<T>) {
+  const client = new Client({ connectionString: connection });
+  await client.connect();
+  try {
+    return await run(client);
+  } finally {
+    await client.end();
+  }
+}
 
 beforeAll(() => {
   if (!connection) {
@@ -67,15 +76,11 @@ afterAll(async () => {
   if (!connection || !namespaces.size) {
     return;
   }
-  const client = new Client({ connectionString: connection });
-  await client.connect();
-  try {
+  await withPostgres(async (client) => {
     for (const namespace of namespaces) {
       await client.query(`DROP SCHEMA "${namespace}" CASCADE`);
     }
-  } finally {
-    await client.end();
-  }
+  });
 });
 
 describe.skipIf(!connection)("PostgreSQL missing credential Doctor CLI recovery", () => {
@@ -193,7 +198,7 @@ describe.skipIf(!connection)("PostgreSQL missing credential Doctor CLI recovery"
     await closeOpenClawStateDatabaseAsync();
     const local = path.join(root, "client", "credentials.sqlite");
     const anchor = path.join(root, "state", "openclaw.sqlite");
-    return { root, env, local, anchor, namespace, identity, source: receipt(env)!.receipt.source };
+    return { root, env, local, anchor, namespace, identity };
   }
   function receipt(env: NodeJS.ProcessEnv) {
     using owner = openClientCredentialCustody(env, { readOnly: true, migration: true });
@@ -202,13 +207,22 @@ describe.skipIf(!connection)("PostgreSQL missing credential Doctor CLI recovery"
   function doctor(f: Awaited<ReturnType<typeof bootstrap>>, args: string[] = ["--fix", "--yes"]) {
     return runBuiltRuntime(runtimeRoot, f.env, ["doctor", ...args], 120_000);
   }
+  function inspectRepair(f: Awaited<ReturnType<typeof bootstrap>>) {
+    return runBuiltRuntime(
+      runtimeRoot,
+      f.env,
+      ["doctor", "--client-credentials", "--repair", "--non-interactive", "--json"],
+      60_000,
+    );
+  }
   function replaceAnchor(anchor: string) {
     fs.copyFileSync(anchor, `${anchor}.replacement`);
     fs.renameSync(`${anchor}.replacement`, anchor);
   }
 
   it("repairs with --fix --yes, seals legacy imports, and survives a later anchor replacement", async () => {
-    const f = await bootstrap();
+    const prepared = await bootstrap();
+    const f = { ...prepared, source: receipt(prepared.env)!.receipt.source };
     const legacy = path.join(f.root, "identity");
     fs.mkdirSync(legacy, { recursive: true });
     const retained = {
@@ -261,21 +275,15 @@ describe.skipIf(!connection)("PostgreSQL missing credential Doctor CLI recovery"
     for (const [name, bytes] of Object.entries(retained)) {
       expect(fs.readFileSync(path.join(legacy, name), "utf8")).toBe(bytes);
     }
-    const client = new Client({ connectionString: connection });
-    await client.connect();
-    try {
-      const result = await client.query(
-        `SELECT device_id, tokens_json FROM "${f.namespace}".device_pairing_paired`,
-      );
-      expect(result.rows).toEqual([
-        {
-          device_id: "retained-remote",
-          tokens_json: '{"operator":{"token":"synthetic-remote-token"}}',
-        },
-      ]);
-    } finally {
-      await client.end();
-    }
+    const result = await withPostgres((client) =>
+      client.query(`SELECT device_id, tokens_json FROM "${f.namespace}".device_pairing_paired`),
+    );
+    expect(result.rows).toEqual([
+      {
+        device_id: "retained-remote",
+        tokens_json: '{"operator":{"token":"synthetic-remote-token"}}',
+      },
+    ]);
   }, 300_000);
 
   it("migrates authoritative PostgreSQL credentials without identity-change consent", async () => {
@@ -333,12 +341,7 @@ describe.skipIf(!connection)("PostgreSQL missing credential Doctor CLI recovery"
       }
       replaceAnchor(f.anchor);
       const before = fs.readFileSync(f.local);
-      const ordinary = await runBuiltRuntime(
-        runtimeRoot,
-        f.env,
-        ["doctor", "--client-credentials", "--repair", "--non-interactive", "--json"],
-        60_000,
-      );
+      const ordinary = await inspectRepair(f);
       const explicit = await doctor(f);
       expect(ordinary.code, ordinary.stderr).toBe(2);
       expect(explicit.code, explicit.stderr).not.toBe(0);
@@ -366,12 +369,7 @@ describe.skipIf(!connection)("PostgreSQL missing credential Doctor CLI recovery"
     expect(loadDeviceIdentityIfPresent({ env: healthy.env })).toEqual(healthy.identity);
     const sqlite = await bootstrap("sqlite");
     fs.rmSync(path.dirname(sqlite.local), { recursive: true });
-    const ordinary = await runBuiltRuntime(
-      runtimeRoot,
-      sqlite.env,
-      ["doctor", "--client-credentials", "--repair", "--non-interactive", "--json"],
-      60_000,
-    );
+    const ordinary = await inspectRepair(sqlite);
     const explicit = await doctor(sqlite);
     expect(ordinary.code, ordinary.stderr).toBe(2);
     expect(JSON.parse(ordinary.stdout).error.message).toBe(

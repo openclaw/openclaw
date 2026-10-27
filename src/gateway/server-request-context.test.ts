@@ -25,16 +25,10 @@ import * as deletionJournal from "../state/agent-deletion-journal.read.js";
 import * as userProfileCatalog from "../state/user-profile-list.js";
 import { linkEmail } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureGatewayDeviceRevocation } from "./device-revocation.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
-import {
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -44,6 +38,7 @@ import {
   makeGatewayClient,
 } from "./server-request-context.test-support.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { createSubscriptionTestParams } from "./server-runtime-subscriptions.params.test-support.js";
 import { gatewayProfile, dispatchProfile } from "./server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -201,26 +196,15 @@ describe("createGatewayRequestContext", () => {
       for (const peer of peers) {
         prepareGatewayRecipientProfile(peer);
       }
-      const subscribers = createSessionEventSubscriberRegistry();
-      for (const peer of peers) {
-        subscribers.subscribe(peer.connId);
-      }
-      const chatRunState = createChatRunState();
-      const subscriptions = startGatewayEventSubscriptions({
-        scheduler: createTestGatewayScheduler(),
+      const subscriptionParams = {
+        ...createSubscriptionTestParams(params.log),
         ...broadcaster,
-        signal: new AbortController().signal,
-        log: params.log,
-        nodeHasSessionSubscribers: () => false,
-        nodeSendToSession: vi.fn(),
-        agentRunSeq: new Map(),
-        chatRunState,
-        toolEventRecipients: chatRunState.toolEventRecipients,
-        sessionEventSubscribers: subscribers,
-        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-        restartRecoveryCandidates: new Map(),
         refreshConnectedUserProfiles: () => context.refreshConnectedUserProfile?.(),
-      });
+      };
+      for (const peer of peers) {
+        subscriptionParams.sessionEventSubscribers.subscribe(peer.connId);
+      }
+      const subscriptions = startGatewayEventSubscriptions(subscriptionParams);
       try {
         linkEmail("event-source@example.test", target.id);
         for (const [index, profileId] of [target.id, target.id, third.id].entries()) {

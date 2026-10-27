@@ -24,7 +24,7 @@ import { createModelProviderStartChat } from "./login-start-chat.ts";
 import "../../styles/model-providers.css";
 registerEnglishCatalog(registerSettingsEnglish);
 
-type LoginOptions = {
+export function createModelProviderLogin(options: {
   getScope: () => {
     context: ApplicationContext;
     agentId: string | null;
@@ -38,9 +38,7 @@ type LoginOptions = {
   onApiKey?: (provider: string) => void;
   getManualProviders?: () => SystemAgentSetupDetectResult["manualProviders"];
   onManualProvider?: (authChoice: string) => void;
-};
-
-export function createModelProviderLogin(options: LoginOptions) {
+}) {
   let publish: (() => void) | undefined;
   const notify = () => publish?.();
   const [query, setQuery] = createSignal("");
@@ -430,7 +428,7 @@ export function createModelProviderLogin(options: LoginOptions) {
         const selectingModel = picker.allowSetup && selected.requiresSetup;
         loginMode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
         refreshWarning = null;
-        runner.prepareSignIn(selected.kind, selected.label);
+        runner.prepareSignIn(selected.kind, selected.label, selected.brandId);
         void run(() =>
           runner.start(
             selected.id,

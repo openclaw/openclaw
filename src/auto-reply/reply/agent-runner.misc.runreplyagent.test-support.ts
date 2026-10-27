@@ -12,6 +12,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.test-fixtures.js";
+import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
 import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -42,13 +43,7 @@ function registerCliBackendsForTest(): void {
       const resolved = backends.find((entry) => entry.id === backend);
       return resolved ? { pluginId: resolved.pluginId, backend: resolved } : undefined;
     },
-    resolvePluginSetupRegistry: () => ({
-      providers: [],
-      cliBackends: [],
-      configMigrations: [],
-      autoEnableProbes: [],
-      diagnostics: [],
-    }),
+    resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
     resolveRuntimeCliBackends: () => [...backends],
   });
 }

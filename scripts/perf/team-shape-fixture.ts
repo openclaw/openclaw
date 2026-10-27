@@ -12,6 +12,7 @@ import {
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { runManagedCommand } from "../lib/managed-child-process.mts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
+import type { TeamShapeSessionsOptions } from "./team-shape-sessions.ts";
 
 export function parseTeamShapeOptions(argv: string[]) {
   const { values } = parseArgs({
@@ -19,8 +20,11 @@ export function parseTeamShapeOptions(argv: string[]) {
     options: {
       "state-dir": { type: "string" },
       sessions: { type: "string" },
+      agents: { type: "string" },
       runs: { type: "string" },
       "settled-runs": { type: "boolean" },
+      "team-stress": { type: "boolean" },
+      "auth-availability-storm": { type: "boolean" },
       approvals: { type: "string" },
       cron: { type: "string" },
       "cron-announce-last": { type: "boolean" },
@@ -31,7 +35,9 @@ export function parseTeamShapeOptions(argv: string[]) {
       "transcript-mib": { type: "string" },
       "long-transcript-entries": { type: "string" },
       "long-transcript-sessions": { type: "string" },
+      "chat-startup-sessions": { type: "string" },
       "worktree-files": { type: "string" },
+      "worktree-local-origin": { type: "boolean" },
       "worktree-file-bytes": { type: "string" },
       "worktree-install-failure": { type: "boolean" },
       "worktree-cold-commits": { type: "string" },
@@ -58,6 +64,16 @@ export function parseTeamShapeOptions(argv: string[]) {
   }
   const sessions = integer("sessions", 5_000, 1);
   const retainedRuns = integer("runs", 6_000);
+  if (
+    values["team-stress"] &&
+    (sessions < 100 ||
+      retainedRuns !== Math.floor((sessions * 4_300) / 10_800) ||
+      !values["settled-runs"])
+  ) {
+    throw new Error(
+      "--team-stress requires >= 100 sessions, proportional runs (4300/10800), and --settled-runs",
+    );
+  }
   if (retainedRuns > 0 && sessions < 2) {
     throw new Error("--runs requires at least two sessions (parent and child)");
   }
@@ -72,6 +88,10 @@ export function parseTeamShapeOptions(argv: string[]) {
   }
   const longTranscriptEntries = integer("long-transcript-entries", 0);
   const longTranscriptSessions = Math.min(integer("long-transcript-sessions", 4, 1), sessions);
+  const chatStartupSessions = integer("chat-startup-sessions", 0);
+  if (chatStartupSessions > sessions) {
+    throw new Error("--chat-startup-sessions must not exceed --sessions");
+  }
   // Includes text, signatures and envelope headroom; keep opt-in stress writes bounded.
   if (
     longTranscriptEntries > 0 &&
@@ -97,6 +117,7 @@ export function parseTeamShapeOptions(argv: string[]) {
     (worktreeFiles > 0 ||
       worktreeColdCommits > 0 ||
       values["nested-repository"] ||
+      values["worktree-local-origin"] ||
       values["worktree-install-failure"]) &&
     projects === 0
   ) {
@@ -108,8 +129,11 @@ export function parseTeamShapeOptions(argv: string[]) {
   return {
     stateDir: path.resolve(values["state-dir"] ?? "."),
     sessions,
+    agents: integer("agents", values["team-stress"] ? 4 : 1, 1),
     retainedRuns,
     settledRuns: values["settled-runs"] ?? false,
+    teamStress: values["team-stress"] ?? false,
+    authAvailabilityStorm: values["auth-availability-storm"] ?? false,
     localPlacements,
     approvals: integer("approvals", 200),
     cronJobs,
@@ -120,7 +144,9 @@ export function parseTeamShapeOptions(argv: string[]) {
     transcriptBytes,
     longTranscriptEntries,
     longTranscriptSessions,
+    chatStartupSessions,
     worktreeFiles,
+    worktreeLocalOrigin: values["worktree-local-origin"] ?? false,
     worktreeFileBytes,
     worktreeColdCommits,
     worktreeInstallFailure: values["worktree-install-failure"] ?? false,
@@ -132,7 +158,9 @@ export function parseTeamShapeOptions(argv: string[]) {
   };
 }
 
-export async function generateTeamShapeFixture(options: ReturnType<typeof parseTeamShapeOptions>) {
+export async function generateTeamShapeFixture(
+  options: ReturnType<typeof parseTeamShapeOptions> & Pick<TeamShapeSessionsOptions, "sessionKeys">,
+) {
   const startedAt = performance.now();
   const { stateDir } = options;
   mkdirSync(path.dirname(stateDir), { recursive: true });
@@ -176,11 +204,37 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
       plugins: { enabled: false },
       cron: { enabled: false },
       update: { checkOnStart: false },
+      ...(options.teamStress
+        ? { session: { maintenance: { maxEntries: Math.max(5_000, options.sessions * 2) } } }
+        : {}),
       agents: {
-        entries: { main: { workspace: path.join(stateDir, "workspace") } },
+        ...(options.teamStress
+          ? {
+              ownership: "explicit" as const,
+              defaults: {
+                systemAgent: { agentId: "main" },
+                subagents: { archiveAfterMinutes: 24 * 60 },
+              },
+            }
+          : {}),
+        entries: Object.fromEntries(
+          Array.from(
+            { length: options.agents },
+            (_, index) =>
+              ["main", "reviewer", "researcher", "planner"][index] ?? `agent-${index + 1}`,
+          ).map((agentId) => [
+            agentId,
+            {
+              workspace: path.join(stateDir, "workspace", ...(agentId === "main" ? [] : [agentId])),
+            },
+          ]),
+        ),
       },
       logging: { file: path.join(stateDir, "gateway.log") },
     } satisfies OpenClawConfig;
+    for (const agent of Object.values(config.agents.entries)) {
+      mkdirSync(agent.workspace, { recursive: true });
+    }
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
 
     // Resolvers capture environment on import; bind the fixture before loading storage owners.
@@ -195,6 +249,14 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
     const state = stateDb.openOpenClawStateDatabase();
     let summary;
     try {
+      if (options.authAvailabilityStorm) {
+        const { upsertAuthProfileAsync } =
+          await import("../../src/agents/auth-profiles/profiles.js");
+        await upsertAuthProfileAsync({
+          profileId: "openai:auth-availability-storm",
+          credential: { type: "api_key", provider: "openai", key: "synthetic-availability-key" },
+        });
+      }
       const seeded = await seedTeamShapeSessions(options);
       const extras = await seedTeamShapeExtras({ ...options, sessions: seeded.sessions });
       agent.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
@@ -206,6 +268,7 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
         seed: options.seed,
         now: options.now,
         sessionCount: sessions.length,
+        agentCount: options.agents,
         ...sessionMetrics,
         sessionGenerationMs,
         ...extras,
@@ -234,10 +297,13 @@ async function main() {
     console.log(`Usage: node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts --state-dir <new-dir> [options]
   --sessions 5000 --runs 6000 --approvals 200 --cron 100 --projects 12
   --settled-runs           Keep run history terminal and delivered, without a subagent recovery backlog.
+  --team-stress            Use the shared stress harness's session categories and four configured agents.
+  --agents <count>        Override configured agents (default one, or four with --team-stress).
   --local-placements 0    Retain local placement rows for startup orphan-workspace discovery.
   --cron-announce-last     Seed disabled isolated cron jobs with announce/last delivery.
   --seed 967 --now <epoch-ms> --transcript-mib 64
   --long-transcript-entries 0 --long-transcript-sessions 4
+  --chat-startup-sessions 0  Seed UUID chat keys, model overrides, and retained pending inputs.
   --worktree-files 0 --worktree-file-bytes 0 --nested-repository
   --worktree-cold-commits 0  Add same-tree commits for cold dependency-template measurements.
   --worktree-install-failure  Add a synthetic pnpm package that cannot install in the probe image.

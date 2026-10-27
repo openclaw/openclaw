@@ -12,8 +12,8 @@ import {
   retainLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
 } from "../config/legacy.default-agent-owner.js";
-import { findLegacyConfigRuleIssues } from "../config/legacy.js";
 import { resolveLegacyAgentRosterOwner } from "../config/legacy.roster.js";
+import { findLegacyConfigRuleIssues } from "../config/legacy.shared.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -88,6 +88,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       : {}),
     agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery,
     beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(params.prompter),
+    cronStoreSelection: { options: params.options, prompter: params.prompter },
     measure: (name, run) =>
       withDoctorProgress(
         name.slice(name.lastIndexOf(".") + 1).replaceAll("-", " "),
@@ -95,7 +96,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         params.options.json !== true,
       ),
   });
-  const { snapshot, baseConfig: baseCfg } = preflight;
+  const { snapshot, baseConfig: baseCfg, heartbeatMigrationDeferred: deferHeartbeat } = preflight;
   if (!shouldRepair && !params.options.json) {
     const { collectRecoveryDiskUsage, formatRecoveryDiskUsage } =
       await import("./recovery-disk-usage.js");
@@ -194,9 +195,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     retainLegacyDefaultAgentId(state.cfg, legacyDefaultAgentId);
     retainLegacyDefaultAgentId(state.candidate, legacyDefaultAgentId);
   }
-  const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
   const persistCanonicalAgentRoster =
-    snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster;
+    snapshot.exists && rosterMigrationNeeded && !configIncludeOwnsAgentRoster(snapshot);
   if (persistCanonicalAgentRoster) {
     applyConfigMutation(
       {
@@ -281,7 +281,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
   changesPanelSink.emit(legacyStep.changeLines);
 
-  const { MODEL_METADATA_CORRUPTION_AUDIT_LIMIT, repairGeneratedModelMetadataCorruption } =
+  const { repairGeneratedModelMetadataCorruption } =
     await import("./doctor/shared/model-metadata-corruption-repair.js");
   const modelMetadataRepair = runWithCurrentPluginMetadata(state.candidate, () =>
     repairGeneratedModelMetadataCorruption({
@@ -289,11 +289,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       authoredRoot: snapshot.parsed,
       configPath: snapshot.path,
       currentHash: hashConfigRaw(snapshot.raw),
-      auditRecords: readRecentConfigAuditRecords({
-        env: process.env,
-        homedir,
-        limit: MODEL_METADATA_CORRUPTION_AUDIT_LIMIT,
-      }),
+      loadAuditRecords: () =>
+        readRecentConfigAuditRecords({ env: process.env, homedir, limit: 2048 }),
     }),
   );
   applyConfigMutation(
@@ -499,7 +496,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     snapshot.authoredConfig?.agents?.defaults?.workspace ??
     (isRecord(parsedDefaults) ? parsedDefaults.workspace : undefined);
   const systemAgentWorkspaceOptions = {
-    includeOwnsRoster,
+    includeOwnsRoster: configIncludeOwnsAgentRoster(snapshot),
     authoredDefaultWorkspace:
       typeof authoredDefaultWorkspace === "string" ? authoredDefaultWorkspace : undefined,
   };
@@ -523,6 +520,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
           state,
           installedPluginIdRecovery: installedPluginRecovery.recovery,
           doctorFixCommand,
+          modelReplacements: params.options.modelReplacements,
           reportFindings: params.reportFindings,
           env: process.env,
           blockedCodexProviderPlan,
@@ -607,6 +605,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
     sourceConfig: snapshot.sourceConfig,
     emitChanges: changesPanelSink.emit,
+    preflight,
   });
 
   const finalized = await finalizeDoctorConfigFlow({
@@ -616,7 +615,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     confirm: params.confirm,
     note,
   });
-  const shouldWriteConfig = finalized.shouldWriteConfig && legacyStep.blocksWrite !== true;
+  const shouldWriteConfig =
+    finalized.shouldWriteConfig && !legacyStep.blocksWrite && !deferHeartbeat;
   // An accepted preview copies the system agent's files before its workspace pin joins the write.
   const confirmedWorkspace =
     !shouldRepair && shouldWriteConfig && systemAgentWorkspace.restorePending
@@ -684,10 +684,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   // them as "Doctor changes" only after the atomic write commits. A blocked
   // write drops them — its blocking note already states nothing was changed.
   // The accepted preview already printed; its applied lines print once the write commits.
-  const pendingChangePanels = [
-    ...changesPanelSink.drain(),
-    ...(confirmedWorkspace?.changes.length ? [confirmedWorkspace.changes.join("\n")] : []),
-  ];
+  const pendingChangePanels = changesPanelSink.drain(confirmedWorkspace?.changes);
   const providerRenames = legacyStep.blocksWrite ? [] : plannedProviderRenames;
   await setAppliedRuntimeConfigSnapshot(cfg, cfg);
   // Later Doctor contributions and service finalization consume these callbacks.

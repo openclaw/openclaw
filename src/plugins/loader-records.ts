@@ -57,6 +57,7 @@ export function createPluginRecord(params: {
   channelIds?: readonly string[];
   providerIds?: readonly string[];
   declaredContextEngineIds?: readonly string[];
+  turnHandover?: boolean;
   configSchema: boolean;
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
@@ -99,6 +100,7 @@ export function createPluginRecord(params: {
     ...createManifestProviderIdLists(params.contracts),
     contextEngineIds: [],
     declaredContextEngineIds: params.declaredContextEngineIds,
+    ...(params.turnHandover ? { turnHandover: true } : {}),
     agentHarnessIds: [],
     cliCommands: [],
     services: [],

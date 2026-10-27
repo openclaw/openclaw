@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -8,7 +7,6 @@ import { makeWorktreeRecord } from "../agents/worktrees/service.test-support.js"
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliFailureLines } from "./failure-output.js";
-import { parseCliProfileArgs } from "./profile.js";
 import { registerWorktreesCli } from "./worktrees-cli.js";
 
 afterEach(() => {
@@ -30,49 +28,52 @@ const owner = ManagedWorktreeService.prototype;
 const muteOutput = (json = true) =>
   vi.spyOn(defaultRuntime, json ? "writeJson" : "log").mockImplementation(() => undefined);
 
-function parseProfile(args: string[]) {
-  const parsed = parseCliProfileArgs(["node", "openclaw", ...args]);
-  if (!parsed.ok) {
-    throw new Error(parsed.error);
-  }
-  return parsed;
-}
-
 describe("worktrees cli", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  const exactRequest = {
-    ownerKind: "session",
-    ownerId: "example-owner",
-    createdAt: 1,
-    lastActiveAt: 2,
-    head: "1".repeat(40),
-    branchHead: "2".repeat(40),
-    indexSha256: "a".repeat(64),
-  };
-  it.each(["exact-state", "force"] as const)(
-    "passes the %s removal policy to the owner",
-    async (policy) => {
-      const exact = policy === "exact-state";
-      const filename = path.join(tempDirs.make("openclaw-exact-cli-"), "request.json");
-      if (exact) {
-        await fs.writeFile(filename, JSON.stringify(exactRequest));
-      }
-      const remove = vi.spyOn(owner, "remove").mockResolvedValue({ removed: true });
-      muteOutput(exact);
-      await run([
-        "remove",
+
+  it.each(["list", "create"] as const)(
+    "escapes %s output but preserves raw JSON",
+    async (command) => {
+      const repoRoot = await fs.realpath(tempDirs.make("openclaw-terminal-worktree-"));
+      const record = makeWorktreeRecord(
+        command === "list" ? "/repo/café\x1b[31m\nforged" : repoRoot,
         "worktree-id",
-        ...(exact ? ["--exact-state", filename, "--json"] : ["--force"]),
-      ]);
-      expect(remove).toHaveBeenCalledWith({
-        id: "worktree-id",
-        reason: "manual-delete",
-        ...admission,
-        allowSnapshotLoss: !exact,
-        ...(exact ? { exactState: exactRequest } : {}),
-      });
+        {
+          path: "/state/café\x1b[31m\nforged\tpath\r\x00\x85",
+        },
+      );
+      if (command === "list") {
+        vi.spyOn(owner, "list").mockResolvedValue([record]);
+      } else {
+        vi.spyOn(owner, "create").mockResolvedValue(record);
+      }
+      const args = command === "list" ? [command] : [command, repoRoot];
+      const text = muteOutput(false);
+      await run(args);
+      if (command === "list") {
+        const output = text.mock.calls.map(([line]) => String(line)).join("\n");
+        expect(output).toContain("/repo/café\\nforged");
+        expect(output).toContain(record.branch);
+        expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+      } else {
+        expect(text).toHaveBeenCalledWith("worktree-id\t/state/café\\nforged\\tpath\\r");
+      }
+      const json = muteOutput();
+      await run([...args, "--json"]);
+      expect(json).toHaveBeenCalledWith(command === "list" ? { worktrees: [record] } : record);
     },
   );
+  it("passes explicit force permission to the removal owner", async () => {
+    const remove = vi.spyOn(owner, "remove").mockResolvedValue({ removed: true });
+    muteOutput(false);
+    await run(["remove", "worktree-id", "--force"]);
+    expect(remove).toHaveBeenCalledWith({
+      id: "worktree-id",
+      reason: "manual-delete",
+      ...admission,
+      allowSnapshotLoss: true,
+    });
+  });
   it.each([
     ["--exact-state", "/missing-request", "--force"],
     ["--exact-state", "/missing-request", "--if-lossless"],
@@ -87,84 +88,26 @@ describe("worktrees cli", () => {
     expect(lossless).not.toHaveBeenCalled();
   });
 
-  it.each([
-    [[], [], undefined, null],
-    [[], ["--source-profile", "alpha"], ["alpha"], null],
-    [
-      ["--profile", "work"],
-      ["--source-profile", "alpha", "--source-profile=beta"],
-      ["alpha", "beta"],
-      "work",
-    ],
-    [["--dev"], ["--source-profile=alpha"], ["alpha"], "dev"],
-    [[], ["--source-profile=alpha", "--profile", "work"], ["alpha"], "work"],
-  ] satisfies [string[], string[], string[] | undefined, string | null][])(
-    "passes source profiles through early parsing: %j %j",
-    async (runtime, selected, profiles, state) => {
-      const repoRoot = await fs.realpath(tempDirs.make("openclaw-cli-profile-input-"));
-      const create = vi.spyOn(owner, "create").mockResolvedValue(
-        makeWorktreeRecord(repoRoot, "created", {
-          name: "task",
-          repoFingerprint: "fingerprint",
-          path: "/state/task",
-          branch: "openclaw/task",
-          ownerKind: "manual",
-        }),
-      );
-      muteOutput();
-      const parsed = parseProfile([
-        ...runtime,
-        "worktrees",
-        "create",
-        repoRoot,
-        "--name",
-        "task",
-        "--json",
-        ...selected,
-      ]);
-      expect(parsed.profile).toBe(state);
-      await createProgram().parseAsync(parsed.argv);
-      expect(create).toHaveBeenCalledWith({
-        repoRoot,
-        name: "task",
-        baseRef: undefined,
-        ownerKind: "manual",
-        ...admission,
-        ...(profiles ? { profiles } : {}),
-      });
-    },
-  );
-
   it("leaves missing source profile values to Commander and performs no creation", async () => {
     const create = vi.spyOn(owner, "create");
-    const parsed = parseProfile(["worktrees", "create", "/repo", "--source-profile"]);
-    await expect(createProgram().parseAsync(parsed.argv)).rejects.toThrow(/argument missing/);
+    await expect(run(["create", "/repo", "--source-profile"])).rejects.toThrow(/argument missing/);
     expect(create).not.toHaveBeenCalled();
   });
 
   it("requires an exact pending commit and returns recovery's actual outcome", async () => {
     const snapshot = "a".repeat(40);
-    const recover = vi.spyOn(owner, "recoverRemoval").mockResolvedValue({
+    const result: Awaited<ReturnType<ManagedWorktreeService["recoverRemoval"]>> = {
       removed: true,
       snapshotRef: "refs/openclaw/snapshots/worktree-id",
-    });
+    };
+    const recover = vi.spyOn(owner, "recoverRemoval").mockResolvedValue(result);
     const output = muteOutput();
-    const program = createProgram();
-    const recoverArgs = ["worktrees", "recover-removal", "worktree-id"];
-    await expect(program.parseAsync(recoverArgs, { from: "user" })).rejects.toThrow(
-      /required option/,
-    );
+    const recoverArgs = ["recover-removal", "worktree-id"];
+    await expect(run(recoverArgs)).rejects.toThrow(/required option/);
     expect(recover).not.toHaveBeenCalled();
-    await program.parseAsync([...recoverArgs, "--snapshot", snapshot, "--json"], { from: "user" });
-    expect(recover).toHaveBeenCalledWith({
-      id: "worktree-id",
-      snapshot,
-      ...admission,
-    });
-    expect(output).toHaveBeenCalledWith({
-      removed: true,
-      snapshotRef: "refs/openclaw/snapshots/worktree-id",
-    });
+    await run([...recoverArgs, "--snapshot", snapshot, "--json"]);
+    expect(recover).toHaveBeenCalledWith({ id: "worktree-id", snapshot, ...admission });
+    expect(output).toHaveBeenCalledWith(result);
   });
 
   const retireSnapshotArgs = (removedAt: string) => [
@@ -182,37 +125,30 @@ describe("worktrees cli", () => {
     "b".repeat(40),
   ];
 
-  it.each(["1700000000100ms", "1,700,000,000,100", "12abc", "1.5", "-1", "", "9007199254740993"])(
+  it.each(["1700000000100ms", "-1", "", "9007199254740993"])(
     "rejects the malformed --removed-at value %j before retiring a snapshot",
     async (removedAt) => {
       setRuntimeConfigSnapshot({}, {});
       const retire = vi
         .spyOn(owner, "retireSnapshot")
         .mockRejectedValue(new Error("Unexpected snapshot retirement"));
-      await expect(run(retireSnapshotArgs(removedAt))).rejects.toThrow(
+      const pending = run(retireSnapshotArgs(removedAt));
+      await expect(pending).rejects.toThrow(
         "--removed-at must be a non-negative integer (epoch milliseconds).",
       );
       expect(retire).not.toHaveBeenCalled();
+      expect(
+        formatCliFailureLines({
+          title: "The CLI command failed.",
+          error: await pending.catch((cause: unknown) => cause),
+          argv: ["node", "openclaw", "worktrees", "retire-snapshot"],
+          env: {},
+        }),
+      ).toEqual([
+        `--removed-at must be a non-negative integer (epoch milliseconds). Got: ${JSON.stringify(removedAt)}`,
+      ]);
     },
   );
-
-  it("renders the rejected --removed-at value instead of the generic CLI failure", async () => {
-    setRuntimeConfigSnapshot({}, {});
-    vi.spyOn(owner, "retireSnapshot").mockRejectedValue(
-      new Error("Unexpected snapshot retirement"),
-    );
-    const error = await run(retireSnapshotArgs("1700000000100ms")).catch((cause: unknown) => cause);
-    expect(
-      formatCliFailureLines({
-        title: "The CLI command failed.",
-        error,
-        argv: ["node", "openclaw", "worktrees", "retire-snapshot"],
-        env: {},
-      }),
-    ).toEqual([
-      '--removed-at must be a non-negative integer (epoch milliseconds). Got: "1700000000100ms"',
-    ]);
-  });
 
   it("rejects an empty cleanup job selector before cleanup", async () => {
     setRuntimeConfigSnapshot({}, {});

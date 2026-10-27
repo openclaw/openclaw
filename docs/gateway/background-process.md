@@ -44,7 +44,7 @@ Behavior:
 - Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.
 - For long-running work that starts now: start it once. Automatic completion wake (when enabled) can happen after the command exits. New output while it is still running does not start another turn. Ending the turn does not stop the command; use `process kill` when it is no longer needed. Completion and the configured timeout still apply; background exec is not a saved, restartable automation.
 
-- A completion wake lets the agent continue outstanding work; it does not require a new chat message. The agent is instructed to report requested results not yet delivered, meaningful outcome changes, or new actionable failures, and stay silent for routine, duplicate, superseded, or already-recovered results. A completion without captured output, such as a command that redirected its output to a file, continues the same way, so the agent can read that file and report. This is a model instruction, not a rule-based notification filter, and it does not disable the completion turn.
+- A completion wake lets the agent continue outstanding work; it does not require a new chat message. The agent is instructed to report requested results not yet delivered, meaningful outcome changes, or new actionable failures, and stay silent for routine, duplicate, superseded, or already-recovered results. A completion without captured output, such as a command that redirected its output to a file, continues the same way, so the agent can read that file and report. This is a model instruction, not a rule-based notification filter, and it does not disable the completion turn. A silent completion turn is valid in every conversation, including Control UI chats; subagent runs still require a final result.
 - Raw exec completion notices stay in the agent's transcript but are hidden from the Control UI's chat history and live message updates. The agent's user-facing reply remains visible.
 - A host command started in a chat conversation completes through ordinary execution in that conversation: the completion turn runs with its session history, and any reply goes back to the captured account, chat, and topic. It waits behind existing work in that session, independently of heartbeat cadence, active hours, and delivery settings. A command started in an automatically silent run keeps that restriction for its completion. Current session permissions and tool restrictions can tighten the captured permissions before execution.
 - Isolated cron exec completions stay on the originating run's session, including jobs with `delivery.mode: "announce"`. They never wake the agent main session. A completion accepted while that run is active waits for it to finish before starting a follow-up turn. Completions not yet accepted when the originating run ends cannot start another turn; retained output remains available through `process poll` or `process log`. Jobs with `delivery.mode: "none"` keep automatic completion wakes disabled. The cron job's normal announcement delivery is unchanged.
@@ -112,9 +112,10 @@ while leaving unrelated work running.
 For managed background work on a paired device, enable [session hosting](/nodes/session-hosting) and select that device for an OpenClaw session. Use the worker's local `exec` with `background: true` and its `process` tool when permitted by the session's tool and exec policy. This runs the session on the device instead of sending individual remote `host=node` commands.
 
 On a paired-node or node-backed cloud worker, background processes belong to the
-session's environment. Finishing or cancelling a turn leaves already-backgrounded
-commands running. A later turn in the same environment can use `process` to poll,
-send input, or stop them; foreground commands still stop when their turn is cancelled.
+session's environment. Finishing a turn leaves already-backgrounded commands running.
+A later turn in the same environment can use `process` to poll, send input, or stop
+them. Cancelling an active worker turn also stops its retained background commands
+and releases the worker after process cleanup completes.
 
 The retained worker occupies one node worker slot. Reusing it needs no additional
 slot. If a command finishes between turns, its retained output remains available
@@ -144,9 +145,11 @@ Reading the output does not drain pending agent output or acknowledge completion
 notifications. **Stop** requests termination of the exact observed process instance.
 
 The list is bounded, prioritizes running processes, and follows the existing
-in-memory retention limits. It refreshes while visible; disconnected or
-unavailable workers show an error rather than an empty list. It does not provide
-an interactive terminal or enumerate unrelated operating-system processes.
+in-memory retention limits. It refreshes while visible. A connected node returns
+an empty list after confirming that the worker has fully retired and no launch
+is still active for that environment. Disconnected workers and uncertain cleanup show
+an error. It does not provide an interactive terminal or enumerate unrelated
+operating-system processes.
 
 ## Child process bridging
 
@@ -181,6 +184,7 @@ broker. One-shot CLI commands, native file-descriptor inputs, and independently
 launched applications keep their local process transport, as do Bun, macOS, and Windows.
 The broker has its own process group, which the Gateway terminates on broker loss;
 service relays also retain their own parent-loss cleanup.
+Broker cleanup grace periods use elapsed time and are unaffected by system-clock corrections.
 A detached child can survive a broker crash before its PID is reported, matching
 the existing residual for directly spawned children when the Gateway crashes.
 
@@ -210,6 +214,11 @@ and worker builds in environments that prohibit process-group signaling. An
 unsupported ownership contract fails before launch instead of downgrading to
 transport-only cleanup. A source loader with an independent child reaper cannot
 share this ownership; source installations using one must build their process helpers.
+Process helpers discard inherited instrumentation hooks (`--import`, `--require`,
+`-r`, `--loader`, and `--experimental-loader`) from `NODE_OPTIONS`, while retaining
+other options such as `--max-old-space-size`. The Gateway and executed commands
+keep their instrumentation environment. An explicit source loader needed to run
+an unbuilt helper still prevents it from claiming Linux child ownership.
 Admission uses the runtime's standalone identity and startup hooks, including
 `--import`, `--require`, and loader flags in argv or `NODE_OPTIONS`. A TypeScript
 filename alone does not require a source loader: native TypeScript execution and
@@ -258,12 +267,13 @@ Actions:
 
 Notes:
 
-- Only backgrounded sessions are listed/persisted — in memory only, not on disk. Sessions are lost on process restart.
+- Only backgrounded sessions are listed/persisted — in memory only, not on disk. Sessions are lost on process restart. New handles include an opaque boot suffix so old handles cannot select a new process after restart. Looking up an old handle explains that it is no longer tracked and advises checking saved output and side effects before rerunning. Older handles without a boot suffix cannot distinguish restart from expiry or removal.
+- Graceful Gateway shutdown stops supervised process trees and waits for their cleanup. After an abrupt crash, service-managed child processes have parent-loss cleanup; raw detached processes and native PTY descendants may survive. A lost handle does not establish that the process stopped.
 - Resetting or deleting a session clears only its completed background processes; other sessions, explicit shared scopes, and running processes remain unaffected.
 - A live background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit.
 - `process remove` can hide a running session immediately after requesting termination; suspension and restart remain blocked until exit confirmation.
 - Session logs are only saved to chat history if you run `process poll`/`log` and the tool result is recorded.
-- `process` is scoped per agent; it only sees sessions started by that agent.
+- `process` sees its own session’s processes and processes started by ancestor sessions belonging to the same agent. It cannot access sibling sessions, unrelated session trees, or another agent’s processes. Visibility follows the recorded session tree; handles do not need to be copied.
 - After an explicit `kill` or task cancellation, `list`, `poll`, `log`, and a repeated `kill` report a confirmed requested stop as a completed observation, retaining the process's signal and cancellation reason. Unexpected termination, timeouts, and cleanup failures remain errors; `finalizationFailed: true` identifies cleanup failure.
 - A repeated `kill` of a retained finished session returns its terminal facts without sending another signal or consuming output. An unknown or cleared session ID does not confirm termination.
 - Process context shown at turn start is a snapshot. Later `process` results supersede it; the snapshot is not refreshed during the turn.

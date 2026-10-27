@@ -20,6 +20,7 @@ import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { createQaSuiteEvidenceInvocation } from "./suite-evidence.js";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
 import {
+  makeQaSuiteTestResult,
   makeQaSuiteTestScenario as makeScenario,
   recordQaSuiteTestResults,
 } from "./suite-test-helpers.js";
@@ -270,16 +271,7 @@ async function passFlow(
     ),
   );
   await writeEvidence(evidencePath, recorded.evidence, params?.writeEvidenceFile);
-  return {
-    ...recorded,
-    outputDir,
-    evidencePath,
-    reportPath: path.join(outputDir, "qa-suite-report.md"),
-    summaryPath: path.join(outputDir, "qa-suite-summary.json"),
-    report: "# QA Suite Report\n",
-    startedScenarioIds: scenarioIds,
-    watchUrl: "http://127.0.0.1:43124",
-  };
+  return makeQaSuiteTestResult(recorded, outputDir, scenarioIds);
 }
 
 async function passNative(

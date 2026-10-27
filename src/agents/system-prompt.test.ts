@@ -374,8 +374,9 @@ describe("buildAgentSystemPrompt", () => {
       "keeps update and delegated controls distinct when both tools are present",
       { toolNames: ["openclaw", "gateway"] },
       [
-        "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`.",
-        "Update OpenClaw: `gateway` action update.run",
+        "Config writes, channels, plugins, agents, models/providers: ask `openclaw`.",
+        "perform the work with `gateway`: update.run",
+        "update.cleanup retires eligible recovery copies",
       ],
       ["models/providers, updates: ask `openclaw`"],
     ],
@@ -612,16 +613,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(minimal).not.toContain("## Delegation");
   });
 
-  it("requires in-turn child collection for isolated automation without sessions_yield", () => {
+  it("requires in-turn child collection for isolated automation with sessions_yield", () => {
     for (const overrides of [
-      {},
+      { toolNames: ["sessions_spawn", "agents_wait", "sessions_yield", "subagents"] },
       { subagentDelegationMode: "prefer" as const },
       { promptMode: "minimal" as const },
       { codeModeActive: true, toolNames: ["code_execution"] },
     ]) {
       const prompt = renderPrompt({
-        toolNames: ["sessions_spawn", "agents_wait"],
-        capabilityToolNames: ["sessions_spawn", "agents_wait"],
+        toolNames: ["sessions_spawn", "agents_wait", "sessions_yield"],
+        capabilityToolNames: ["sessions_spawn", "agents_wait", "sessions_yield"],
         runtimeInfo: { sessionKey: "agent:main:cron:nightly-job:run:run-1" },
         ...overrides,
       });
@@ -631,7 +632,7 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).toContain("Fire-and-forget is valid when child output is the deliverable");
       expect(prompt).not.toContain("wait for runtime completion events");
       expect(prompt).not.toContain("Announced completion is push-based");
-      expect(prompt).not.toContain("Announcing spawns notify when the run ends");
+      expect(prompt).not.toContain("Announcing children:");
       const coordinationSection = prompt.split(
         overrides.subagentDelegationMode === "prefer" ? "## Delegation" : "## Messaging",
       )[1];
@@ -640,7 +641,7 @@ describe("buildAgentSystemPrompt", () => {
       }
     }
     const withoutCollection = renderPrompt({
-      toolNames: ["sessions_spawn"],
+      toolNames: ["sessions_spawn", "sessions_yield"],
       runtimeInfo: { sessionKey: "agent:main:cron:nightly-job" },
     });
     expect(withoutCollection).toContain("complete that work directly in this turn");

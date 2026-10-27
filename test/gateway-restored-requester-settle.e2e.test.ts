@@ -321,35 +321,48 @@ describe("Gateway restored requester settlement", () => {
   );
 
   it(
-    "runs at most two restored wakes while leaving the third queued",
+    "admits every restored wake once earlier wakes are accepted, without delaying live turns",
     { timeout: 180_000 },
     async () => {
       const { modelServer, instance } = await setupGateway("gateway-restored-requester-settle");
       await seedRestoredRequesters(instance, 3);
 
       await instance.startGateway();
+      // The two-slot budget covers preparation only; accepted wakes keep their model turns open.
       await vi.waitFor(
-        () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(2),
+        () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(3),
         { timeout: 30_000, interval: 20 },
       );
-      expect(modelServer.active(), instance.logs()).toBe(2);
-      expect(modelServer.peakRestored(), instance.logs()).toBe(2);
+      expect(modelServer.active(), instance.logs()).toBe(3);
 
       const probe = instance.cli(["agent", "--message", PROBE_MARKER, "--json"]);
       await vi.waitFor(() => expect(modelServer.countRequestsContaining(PROBE_MARKER)).toBe(1), {
         interval: 20,
         timeout: 30_000,
       });
-      expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(2);
-
-      modelServer.release(0);
-      await vi.waitFor(
-        () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(3),
-        { interval: 20, timeout: 30_000 },
-      );
-      expect(modelServer.peakRestored(), instance.logs()).toBe(2);
       modelServer.releaseAll();
       await expect(probe).resolves.toMatchObject({ code: 0 });
+      const client = await connectProofClient(instance);
+      try {
+        await vi.waitFor(
+          async () => {
+            const { sessions } = await client.request<SessionsListResult>("sessions.list", {
+              agentId: "main",
+            });
+            for (const index of [0, 1, 2]) {
+              expect(
+                sessions.find(
+                  (row) => row.key === `agent:main:gateway-restored-requester-${index}`,
+                ),
+              ).toMatchObject({ status: "done", hasActiveRun: false });
+            }
+          },
+          { timeout: 30_000 },
+        );
+        expect(modelServer.requestCount(), instance.logs()).toBe(4);
+      } finally {
+        await disconnectGatewayClient(client);
+      }
     },
   );
 });
@@ -559,8 +572,6 @@ async function startHeldModelServer() {
     startedAt: number;
   }[] = [];
   let active = 0;
-  let activeRestored = 0;
-  let peakRestored = 0;
   const server = await startOpenAiResponsesModelServer({
     modelId: "restored-settle",
     bindError: "restored requester model server did not bind",
@@ -570,11 +581,6 @@ async function startHeldModelServer() {
       const release = createDeferred();
       requests.push({ release, body, response, startedAt: Date.now() });
       active += 1;
-      const isRestored = body.includes(RESTORED_WAKE_MARKER);
-      if (isRestored) {
-        activeRestored += 1;
-        peakRestored = Math.max(peakRestored, activeRestored);
-      }
       try {
         await release.promise;
         if (!response.destroyed) {
@@ -586,9 +592,6 @@ async function startHeldModelServer() {
         }
       } finally {
         active -= 1;
-        if (isRestored) {
-          activeRestored -= 1;
-        }
       }
     },
   });
@@ -599,7 +602,6 @@ async function startHeldModelServer() {
     requestAgeMs: (index: number) => Date.now() - (requests[index]?.startedAt ?? Date.now()),
     countRequestsContaining: (marker: string) =>
       requests.filter(({ body }) => body.includes(marker)).length,
-    peakRestored: () => peakRestored,
     release: (index: number) => requests[index]?.release.resolve(undefined),
     releaseAll,
     requestCount: () => requests.length,

@@ -385,51 +385,6 @@ it.each(kinds)("delivers a bounded %s timeout while its callback remains pending
   expect(rows.size).toBe(kind === "direct" ? 0 : 2);
 });
 
-it.each(cleanupCases)(
-  "retains $kind authority until command cleanup reports $cleanupResult",
-  async ({ kind, cleanupResult }) => {
-    const state = settlement(cleanupResult);
-    const { admitted, cleanup } = state;
-    const original = new Error("operation cancelled");
-    let saved: UpdateCommandExecutor | undefined;
-    let fence: UpdateRecoveryFence | undefined;
-    const operation = async (current: UpdateRecoveryFence) => {
-      fence = current;
-      retainCommandProcessCleanup(cleanup.promise);
-      admitted.resolve();
-      if (kind === "direct") {
-        throw original;
-      }
-      return "complete";
-    };
-    const work = state.track(
-      kind === "direct"
-        ? withExecutor("run", async (executor) => {
-            saved = executor;
-            return operation(await executor.enter(root));
-          })
-        : runWithExecutorFence(kind, operation),
-    );
-    await state.check(() => {
-      expect(rows.has(root)).toBe(true);
-      expect(() => captureAuthority(fence!)).not.toThrow();
-    });
-    const error = await work;
-    expect(hasCleanupError(error)).toBe(cleanupResult === "uncertain");
-    if (cleanupResult === "forced") {
-      expect(error).toBe(kind === "direct" ? original : "complete");
-    }
-    if (kind === "direct") {
-      expect(rows.has(root)).toBe(cleanupResult === "uncertain");
-      expect(fence!.assertCurrent).toThrow("no longer current");
-      await expect(saved!.enter(root)).rejects.toThrow("closed or busy");
-    } else {
-      expect(fence!.assertCurrent).toThrow("no longer has permission");
-      expect(rows.size).toBe(2);
-    }
-  },
-);
-
 it.each(cleanupResults)(
   "retains child lineage before startup binding until cleanup reports %s",
   async (cleanupResult) => {
@@ -563,25 +518,21 @@ it("preserves activation timeout provenance without a cause cycle after uncertai
   visit(result);
 });
 
-it.each([
-  { kind: "direct", cleanupResult: "forced" },
-  { kind: "direct", cleanupResult: "uncertain" },
-  { kind: "delegated", cleanupResult: "forced" },
-  { kind: "delegated", cleanupResult: "uncertain" },
-] as const)(
-  "joins $kind terminal preparation before release ($cleanupResult)",
+it.each(cleanupCases)(
+  "retains $kind authority through operation and terminal cleanup ($cleanupResult)",
   async ({ kind, cleanupResult }) => {
-    const entered = createDeferredCore();
-    const cleanup = createDeferredCore<"forced" | "uncertain">();
+    const state = settlement(cleanupResult);
+    const { admitted: entered, cleanup } = state;
     const operationJoined = createDeferredCore();
     const original = new Error("original update failure");
     const preparationFailure = new Error("report preparation failed");
     let calls = 0;
-    let finished = false;
-    const work = runWithExecutorFence(kind, async (fence) => {
+    let fence: UpdateRecoveryFence | undefined;
+    const work = state.run(kind, async (current) => {
+      fence = current;
       // A cleanup admitted by the operation must join before preparation starts.
       retainCommandProcessCleanup(operationJoined.promise);
-      registerUpdateCommandTerminalPreparation(fence, "run", async (failure) => {
+      registerUpdateCommandTerminalPreparation(current, "run", async (failure) => {
         expect(failure).toBe(original);
         calls++;
         retainCommandProcessCleanup(cleanup.promise);
@@ -589,22 +540,18 @@ it.each([
         throw preparationFailure;
       });
       throw original;
-    })
-      .catch((error: unknown) => {
-        entered.reject(error);
-        return error;
-      })
-      .finally(() => {
-        finished = true;
-      });
+    });
     try {
       await setImmediate();
       expect(calls).toBe(0);
+      expect(rows.has(root)).toBe(true);
+      expect(() => captureAuthority(fence!)).not.toThrow();
       operationJoined.resolve();
       await entered.promise;
       await setImmediate();
-      expect(finished).toBe(false);
+      expect(state.ended).toBe(false);
       expect(rows.has(root)).toBe(true);
+      expect(() => captureAuthority(fence!)).not.toThrow();
     } finally {
       operationJoined.resolve();
       cleanup.resolve(cleanupResult);
@@ -616,28 +563,35 @@ it.each([
     expect(collectNestedErrorCandidates(error)).toContain(preparationFailure);
     expect(hasCleanupError(error)).toBe(cleanupResult === "uncertain");
     expect(rows.size).toBe(kind === "delegated" ? 2 : cleanupResult === "uncertain" ? 1 : 0);
+    expect(fence!.assertCurrent).toThrow(
+      kind === "direct" ? "no longer current" : "no longer has permission",
+    );
   },
 );
 
-it("keeps the update operation deadline bounded when the wall clock rewinds", async () => {
-  vi.useFakeTimers();
+it("keeps the operation budget monotonic and the relay admission deadline epoch-based", async () => {
+  fakeTimers();
+  const epoch = 1_790_000_000_000;
+  vi.setSystemTime(epoch);
   const onExpired = vi.fn();
   const deadline = createUpdateOperationDeadline<UpdateActivationTimeoutError>(onExpired);
   const budget = 1000;
   deadline.start(new UpdateActivationTimeoutError(root, budget), budget);
   const finish = createDeferredCore();
+  let admissionDeadline: number | undefined;
   const work = deadline
     .run(async () => {
+      admissionDeadline = readSqliteDatabaseAdmissionDeadline();
       await finish.promise;
     })
     .catch((error: unknown) => error);
   await setImmediate();
+  // The relay subtracts Date.now(); a raw monotonic value would expire immediately.
+  expect(admissionDeadline!).toBeGreaterThan(epoch);
+  expect(admissionDeadline! - epoch).toBeLessThanOrEqual(budget);
   expect(deadline.signal.aborted).toBe(false);
-  // Advance 500ms; both clocks move together so far.
   await vi.advanceTimersByTimeAsync(500);
-  // A clock correction rewinds the wall clock by 90s. A wall-clock-based
-  // remaining budget would compute ~90.5s; the monotonic deadline must
-  // still fire at the original 1000ms budget.
+  // Rewinding wall time must not extend the operation's monotonic budget.
   vi.setSystemTime(Date.now() - 90_000);
   await vi.advanceTimersByTimeAsync(500);
   expect(deadline.signal.aborted).toBe(true);
@@ -645,33 +599,4 @@ it("keeps the update operation deadline bounded when the wall clock rewinds", as
   finish.resolve();
   const result = await work;
   expect(result).toBeInstanceOf(UpdateActivationTimeoutError);
-  vi.useRealTimers();
-});
-
-it("exposes an epoch admission deadline that preserves the relay's remaining budget", async () => {
-  // Set the wall clock to a realistic epoch value while keeping performance at
-  // zero, so a monotonic deadlineAtMs (~budget) is distinguishable from an epoch
-  // one (~Date.now() + budget). The relay computes Math.max(0, deadlineAtMs -
-  // Date.now()); a raw monotonic value would underflow to zero and time out.
-  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-  vi.setSystemTime(1_790_000_000_000);
-  const deadline = createUpdateOperationDeadline<UpdateActivationTimeoutError>();
-  const budget = 60_000;
-  deadline.start(new UpdateActivationTimeoutError(root, budget), budget);
-  const finish = createDeferredCore();
-  let admissionDeadline: number | undefined;
-  deadline
-    .run(async () => {
-      admissionDeadline = readSqliteDatabaseAdmissionDeadline();
-      await finish.promise;
-    })
-    .catch(() => {});
-  await setImmediate();
-  finish.resolve();
-  vi.useRealTimers();
-  expect(admissionDeadline).toBeDefined();
-  expect(admissionDeadline!).toBeGreaterThan(1_790_000_000_000);
-  const remaining = admissionDeadline! - 1_790_000_000_000;
-  expect(remaining).toBeGreaterThan(0);
-  expect(remaining).toBeLessThanOrEqual(budget);
 });

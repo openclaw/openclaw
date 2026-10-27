@@ -5,7 +5,6 @@ import { isSecretRef, normalizeSecretInputString } from "../config/types.secrets
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createSetupTranslator, resolveWizardLocale } from "../wizard/i18n/index.js";
 import type { SystemAgentChatEngine } from "./chat-engine.js";
-import { formatSystemAgentOnboardingWelcome } from "./overview.js";
 
 /**
  * The basic bootstrap is conversational: the welcome message carries the plan
@@ -75,6 +74,7 @@ export async function buildOnboardingWelcome(params: {
     setupModel &&
     (!requestedWorkspace || requestedWorkspace === authoredWorkspace)
   ) {
+    const { formatSystemAgentOnboardingWelcome } = await import("./overview.js");
     const welcome = formatSystemAgentOnboardingWelcome(overview, translate);
     params.engine.noteAssistantMessage(welcome);
     /**
@@ -108,11 +108,13 @@ export async function buildOnboardingWelcome(params: {
     );
   }
 
-  const { DEFAULT_WORKSPACE } = await import("../commands/onboard-helpers.js");
   // A durable receipt owns recovery even after partial config writes; using its
   // workspace prevents the fallback chat from resuming a different installation.
   const workspace = resolveUserPath(
-    pendingSetup?.workspace || requestedWorkspace || authoredWorkspace || DEFAULT_WORKSPACE,
+    pendingSetup?.workspace ||
+      requestedWorkspace ||
+      authoredWorkspace ||
+      (await import("../commands/onboard-helpers.js")).DEFAULT_WORKSPACE,
   );
 
   params.engine.propose({

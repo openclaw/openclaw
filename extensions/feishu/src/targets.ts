@@ -61,9 +61,6 @@ export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_
 
 export function looksLikeFeishuId(raw: string): boolean {
   const trimmed = stripFeishuProviderPrefix(raw.trim());
-  if (!trimmed) {
-    return false;
-  }
   if (/^(chat|group|channel|user|dm|open_id):/i.test(trimmed)) {
     return true;
   }

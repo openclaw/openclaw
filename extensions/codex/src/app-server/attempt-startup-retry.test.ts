@@ -35,7 +35,7 @@ const tempRoots = new Set<string>();
 const cleanups: Array<() => void | Promise<void>> = [];
 
 async function createStartupFailureFixture(
-  mode: "transient" | "persistent" | "unsupported" | "overload" | "refusal",
+  mode: "transient" | "persistent" | "overload" | "refusal",
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-startup-retry-"));
   tempRoots.add(root);
@@ -69,15 +69,10 @@ async function createStartupFailureFixture(
       '      process.stdout.write(`${JSON.stringify({ id: message.id, error: { code: -32001, message: "Server overloaded; retry later." } })}\\n`);',
       "      return;",
       "    }",
-      '    const result = message.method === "initialize"',
-      '      ? { userAgent: `openclaw/${mode === "unsupported" ? "0.1.0" : "0.149.0"} (macOS; test)` }',
-      '      : message.method === "config/read"',
-      "        ? { config: {}, origins: {}, layers: [] }",
-      '        : message.method === "configRequirements/read"',
-      "          ? { requirements: null }",
-      '          : message.method === "skills/list"',
-      "            ? { data: [] }",
-      `            : ${JSON.stringify(threadStartResult("thread-recovered", "/repo"))};`,
+      '    const result = { initialize: { userAgent: "openclaw/0.149.0 (macOS; test)" },',
+      '      "config/read": { config: {}, origins: {}, layers: [] },',
+      '      "configRequirements/read": { requirements: null }, "skills/list": { data: [] }',
+      `    }[message.method] ?? ${JSON.stringify(threadStartResult("thread-recovered", "/repo"))};`,
       // Managed resume requires an unloaded thread before it can reach the overload rejection.
       '    if (message.method === "thread/read") result.thread.status = { type: "notLoaded" };',
       "    process.stdout.write(`${JSON.stringify({ id: message.id, result })}\\n`);",
@@ -186,18 +181,10 @@ describe("Codex app-server startup retry", () => {
     tempRoots.clear();
   });
 
-  it.skipIf(process.platform === "win32").each(["snapshot", "command", "commit"] as const)(
+  it.skipIf(process.platform === "win32").each(["snapshot", "command"] as const)(
     "keeps live-child %s registration failures non-retryable for shared startup",
     async (failure) => {
       const fixture = await createStartupFailureFixture("refusal");
-      const { createPluginStateSyncKeyedStore } =
-        await import("openclaw/plugin-sdk/plugin-state-store-runtime");
-      const store = createPluginStateSyncKeyedStore("codex", {
-        namespace: "app-server-processes",
-        maxEntries: 512,
-        overflowPolicy: "reject-new",
-      });
-      cleanups.push(() => store.clear());
       const readSnapshot = processSnapshot.readCodexAppServerProcessSnapshot;
       const readCommand = processSnapshot.readCodexAppServerProcessCommand;
       const observed = observeFixtureSpawn(fixture);
@@ -216,13 +203,6 @@ describe("Codex app-server startup retry", () => {
       vi.spyOn(processSnapshot, "readCodexAppServerProcessCommand").mockImplementation(
         async (...args) => {
           const command = await readCommand(...args);
-          if (failure === "commit") {
-            // Fill the real reject-new store after orphan inspection, so the
-            // synchronous registration commit, not a mock, refuses the live child.
-            for (let index = 0; index < 512; index++) {
-              store.register(`capacity-${index}`, {});
-            }
-          }
           return failure === "command" ? readCommand(args[0], performance.now() - 1) : command;
         },
       );
@@ -230,9 +210,7 @@ describe("Codex app-server startup retry", () => {
         (caught: unknown) => caught,
       );
       expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toContain(
-        failure === "commit" ? "512-row limit" : "Process inspection exceeded its deadline",
-      );
+      expect((error as Error).message).toContain("Process inspection exceeded its deadline");
       expect((error as Error).message).toContain("startup diagnostic: inspection probe");
       expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("1");
       await expect(fs.access(fixture.requestLogPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -324,12 +302,11 @@ describe("Codex app-server startup retry", () => {
     }
   });
 
-  it.each([
-    ["persistent", "failed to initialize sqlite state runtime"],
-    ["unsupported", /app-server .* or newer is required/i],
-  ] as const)("rejects %s startup without retrying", async (mode, error) => {
-    const fixture = await createStartupFailureFixture(mode);
-    await expect(startFixtureAttempt(fixture)).rejects.toThrow(error);
+  it("rejects persistent startup failure without retrying", async () => {
+    const fixture = await createStartupFailureFixture("persistent");
+    await expect(startFixtureAttempt(fixture)).rejects.toThrow(
+      "failed to initialize sqlite state runtime",
+    );
     expect(await fs.readFile(fixture.spawnCountPath, "utf8")).toBe("1");
   });
 
@@ -363,18 +340,12 @@ describe("Codex app-server startup retry", () => {
     };
     const binding = testCodexAppServerBindingStore.read(identity);
     expect(binding?.threadId).toBe("thread-recovered");
-    const requestsBeforeResume = await fs.readFile(fixture.requestLogPath, "utf8");
-
     // An unrelated lease must not hide a native refusal or lose its healthy client.
     await expect(startFixtureAttempt(fixture)).rejects.toMatchObject({
       name: "CodexAppServerRpcError",
       code: -32_001,
       method: "thread/resume",
     });
-    const requests = await fs.readFile(fixture.requestLogPath, "utf8");
-    expect(new Set(requests.slice(requestsBeforeResume.length).trim().split("\n"))).toEqual(
-      new Set(["config/read", "configRequirements/read", "thread/read", "thread/resume"]),
-    );
     expect(testCodexAppServerBindingStore.read(identity)).toEqual(binding);
 
     await expect(

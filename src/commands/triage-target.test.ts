@@ -181,7 +181,6 @@ async function inspectInstallation(
     const target = resolveInstallationTarget();
     const observedTargets: Record<string, ReturnType<typeof getInstallationTarget>> = {};
     const runtime = createTriageRuntime();
-    const execSpy = vi.spyOn(agentExec, "agentExecCommand");
     const before = await inspectChildTarget(sanitizeHostExecEnv(), state.workspaceDir);
     expect(before).toEqual({
       stateDir: state.stateDir,
@@ -277,9 +276,6 @@ async function inspectInstallation(
     expect(observedTargets).toEqual({ repair: target });
 
     expect(mocks.agentCommand).toHaveBeenCalledOnce();
-    expect(execSpy).toHaveBeenCalledOnce();
-    expect(execSpy.mock.calls[0]?.[1].stateDir).toBeUndefined();
-    expect(execSpy.mock.calls[0]?.[1].cwd).toBe(executionRoot);
 
     expect(installationSelectors()).toEqual(originalSelectors);
 

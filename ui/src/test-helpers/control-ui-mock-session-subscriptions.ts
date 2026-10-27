@@ -1,6 +1,11 @@
 // Serialized into the browser mock, like the session and response fixture owners.
 export function createControlUiMockSessionSubscriptions(
-  scenario: { mainSessionKey: string; defaultAgentId: string; sessionScope: string },
+  scenario: {
+    mainSessionKey: string;
+    defaultAgentId: string;
+    sessionScope: string;
+    subscriptionInitialHistory: boolean;
+  },
   isRecord: (value: unknown) => value is Record<string, unknown>,
 ) {
   const scopedEvents = new Set(
@@ -21,12 +26,34 @@ export function createControlUiMockSessionSubscriptions(
   };
   return {
     canonicalKey,
+    subscribeResponse(params: unknown, readHistory: (params: Record<string, unknown>) => unknown) {
+      const key = canonicalKey(
+        isRecord(params) && typeof params.key === "string" ? params.key : "",
+      );
+      if (
+        !scenario.subscriptionInitialHistory ||
+        !isRecord(params) ||
+        !isRecord(params.initialHistory)
+      ) {
+        return { key };
+      }
+      const payload = readHistory({
+        ...params.initialHistory,
+        sessionKey: key,
+        agentId: params.agentId,
+      });
+      const error = isRecord(payload) ? payload["__mockError"] : undefined;
+      return {
+        key,
+        initialHistory: isRecord(error) ? { ok: false, error } : { ok: true, payload },
+      };
+    },
     createClient(lifecycle?: {
       isOpen: () => boolean;
       startRepeatingEvents: () => void;
       stopRepeatingEvents: () => void;
     }) {
-      const keys = new Set<string>();
+      const observers = new Map<string, string>();
       let capabilities: readonly unknown[] = [];
       let observesSessions = false;
       const hasCapability = (capability: string) => capabilities.includes(capability);
@@ -38,16 +65,19 @@ export function createControlUiMockSessionSubscriptions(
             typeof candidate.sessionKey === "string" &&
             Boolean(candidate.sessionKey.trim()),
         );
-        return Boolean(source && keys.has(subscriptionKey(source.sessionKey, source.agentId)));
+        return Boolean(
+          source &&
+          [...observers.values()].includes(subscriptionKey(source.sessionKey, source.agentId)),
+        );
       };
       return {
         hasCapability,
         hasSubscription,
         get size() {
-          return keys.size;
+          return observers.size;
         },
         clear() {
-          keys.clear();
+          observers.clear();
           observesSessions = false;
         },
         recordRequest(method: string, params: unknown, result?: unknown) {
@@ -60,12 +90,14 @@ export function createControlUiMockSessionSubscriptions(
             observesSessions = isRecord(result) && result.subscribed === true;
           } else if (typeof params.key === "string" && params.key.trim()) {
             const key = subscriptionKey(params.key, params.agentId);
+            const observer =
+              typeof params.subscriptionId === "string" ? params.subscriptionId : key;
             if (method === "sessions.messages.subscribe") {
-              keys.add(key);
+              observers.set(observer, key);
               lifecycle?.startRepeatingEvents();
             } else if (method === "sessions.messages.unsubscribe") {
-              keys.delete(key);
-              if (keys.size === 0) {
+              observers.delete(observer);
+              if (observers.size === 0) {
                 lifecycle?.stopRepeatingEvents();
               }
             }

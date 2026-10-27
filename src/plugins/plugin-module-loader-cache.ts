@@ -6,8 +6,8 @@ import type { NodePath } from "@babel/traverse";
 import type { CallExpression, Program, Statement } from "@babel/types";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import {
-  assertRuntimeSupportsDynamicExecution,
-  assertRuntimeSupportsPluginModule,
+  annotateRuntimeExecutionError,
+  noteRuntimePluginExecution,
 } from "../infra/runtime-profile.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { createJiti } from "./jiti-factory.js";
@@ -240,7 +240,6 @@ function createPluginModuleLoader(
     return target;
   };
   const getLoadWithSourceTransform = () => {
-    assertRuntimeSupportsDynamicExecution("Plugin source transformation");
     if (loadWithSourceTransform) {
       return loadWithSourceTransform;
     }
@@ -296,37 +295,41 @@ function createPluginModuleLoader(
   };
   // Prefer native compiled JS, but preserve caller-requested transforms for alias rewrites.
   return (target) => {
-    assertRuntimeSupportsPluginModule(target);
     const source = getPluginCacheSource(target, params.cache);
     const cached = source.variants.get(params.scopedCacheKey)?.exports;
     if (cached) {
       return cached.value;
     }
+    noteRuntimePluginExecution(target);
     // Lazy transforms and nested imports must read the creating generation,
     // even when a retained loader is invoked from a newer operation scope.
-    const loaded = withPluginCache(params.cache, () => {
-      pluginModuleLoaderStats.calls += 1;
-      if (params.tryNative) {
-        const native = tryNativeRequireJavaScriptModule(target, {
-          aliasMap: resolveNativeAlias,
-          fallbackOnMissingDependency: true,
-        });
-        if (native.ok) {
-          pluginModuleLoaderStats.nativeHits += 1;
-          return native.moduleExport;
+    try {
+      const loaded = withPluginCache(params.cache, () => {
+        pluginModuleLoaderStats.calls += 1;
+        if (params.tryNative) {
+          const native = tryNativeRequireJavaScriptModule(target, {
+            aliasMap: resolveNativeAlias,
+            fallbackOnMissingDependency: true,
+          });
+          if (native.ok) {
+            pluginModuleLoaderStats.nativeHits += 1;
+            return native.moduleExport;
+          }
+          pluginModuleLoaderStats.nativeMisses += 1;
+          pluginModuleLoaderStats.sourceTransformFallbacks += 1;
+        } else {
+          // Jiti shares Node's CJS cache, but native ESM chunks are not in it.
+          // Explicit source-transform callers keep their graph separate from native loads.
+          pluginModuleLoaderStats.sourceTransformForced += 1;
         }
-        pluginModuleLoaderStats.nativeMisses += 1;
-        pluginModuleLoaderStats.sourceTransformFallbacks += 1;
-      } else {
-        // Jiti shares Node's CJS cache, but native ESM chunks are not in it.
-        // Explicit source-transform callers keep their graph separate from native loads.
-        pluginModuleLoaderStats.sourceTransformForced += 1;
-      }
-      recordSourceTransformTarget(target);
-      return getLoadWithSourceTransform()(target);
-    });
-    source.variants.set(params.scopedCacheKey, { exports: { value: loaded } });
-    return loaded;
+        recordSourceTransformTarget(target);
+        return getLoadWithSourceTransform()(target);
+      });
+      source.variants.set(params.scopedCacheKey, { exports: { value: loaded } });
+      return loaded;
+    } catch (error) {
+      throw annotateRuntimeExecutionError(error, "Plugin module loading");
+    }
   };
 }
 
@@ -394,7 +397,6 @@ function resolvePublicSurfaceInstance(params: PluginModuleBoundaryParams) {
 
 /** Validates an entry once per generation without changing its module export shape. */
 export function preparePluginModule(params: PluginModuleBoundaryParams) {
-  assertRuntimeSupportsPluginModule(params.modulePath);
   const cache = getPluginCache();
   let source = getPluginCacheSource(params.modulePath, cache);
   const boundaryKey = `${getPluginCacheRoot(params.boundaryRoot).rootDir}\0${params.rejectHardlinks}`;

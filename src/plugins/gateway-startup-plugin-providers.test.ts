@@ -93,65 +93,37 @@ function plan(
 
 describe("auto-enabled plugin startup", () => {
   const manifestRegistry = startupRegistry(acpxManifest);
-  it.each<[string, OpenClawConfig, string[]]>([
-    ["no ACP key", {}, ["acpx"]],
-    ["explicitly enabled", { acp: { enabled: true } }, ["acpx"]],
-    ["explicitly disabled", { acp: { enabled: false } }, ["acpx"]],
-    ["acpx excluded from allowlist", { acp: { enabled: true }, plugins: { allow: ["other"] } }, []],
-    [
-      "acpx included in allowlist",
-      { acp: { enabled: true }, plugins: { allow: ["other", "acpx"] } },
-      ["acpx"],
-    ],
-    ["acpx denied", { acp: { enabled: true }, plugins: { deny: ["acpx"] } }, []],
-    [
-      "acpx explicitly disabled",
-      { acp: { enabled: true }, plugins: { entries: { acpx: { enabled: false } } } },
-      [],
-    ],
-  ])("plans the expected plugin with %s", (_name, activationSourceConfig, expected) => {
-    expect(
-      plan(
-        activationSourceConfig,
-        manifestRegistry,
-        activationSourceConfig.acp?.enabled === true
-          ? [{ pluginId: "acpx", kind: "setup-auto-enable", reason: "ACP runtime configured" }]
-          : [],
-      ),
-    ).toEqual(expected);
+  it.each<[string, OpenClawConfig["plugins"], boolean]>([
+    ["without a policy", undefined, true],
+    ["excluded from allowlist", { allow: ["other"] }, false],
+    ["included in allowlist", { allow: ["other", "acpx"] }, true],
+    ["denied", { deny: ["acpx"] }, false],
+    ["explicitly disabled", { entries: { acpx: { enabled: false } } }, false],
+  ])("plans ACP %s", (_name, plugins, enabled) => {
+    const config = { acp: { enabled: true }, plugins };
+    const candidates = [{ pluginId: "acpx", kind: "setup-auto-enable" as const, reason: "ACP" }];
+    expect(plan(config, manifestRegistry, candidates)).toEqual(enabled ? ["acpx"] : []);
   });
-  it.each<[string, StartupPlugin, OpenClawConfig, string[]]>([
-    [
-      "a default-disabled startup plugin",
-      { id: "optional", enabledByDefault: false, activation: { onStartup: true } },
-      {},
-      [],
-    ],
-    [
-      "a default-enabled plugin without a startup trigger",
-      { id: "lazy", enabledByDefault: true, activation: { onStartup: false } },
-      {},
-      [],
-    ],
-    [
-      "Codex with a configured harness",
-      codexManifest,
-      {
-        agents: { defaults: { models: { "openai/gpt-test": { agentRuntime: { id: "codex" } } } } },
-      },
-      ["codex"],
-    ],
-    ["an enabled Codex tool owner without a configured harness", codexManifest, {}, ["codex"]],
-  ])("preserves startup eligibility for %s", (_name, plugin, activationSourceConfig, expected) => {
-    expect(
-      plan(activationSourceConfig, startupRegistry(plugin), [
-        {
-          pluginId: plugin.id,
-          kind: "agent-harness-runtime-configured",
-          runtime: "codex",
-        },
-      ]),
-    ).toEqual(expected);
+  it.each([undefined, false])("starts default-enabled ACP with enabled=%s", (enabled) => {
+    const config = enabled === undefined ? {} : { acp: { enabled } };
+    expect(plan(config, manifestRegistry, [])).toEqual(["acpx"]);
+  });
+  const harnessCandidate = (pluginId: string) => [
+    {
+      pluginId,
+      kind: "agent-harness-runtime-configured" as const,
+      runtime: "codex",
+    },
+  ];
+  it.each([
+    [false, true],
+    [true, false],
+  ])("rejects ineligible startup: default=%s trigger=%s", (enabledByDefault, onStartup) => {
+    const plugin = { id: "optional", enabledByDefault, activation: { onStartup } };
+    expect(plan({}, startupRegistry(plugin), harnessCandidate(plugin.id))).toEqual([]);
+  });
+  it("starts an enabled Codex tool owner without a configured harness", () => {
+    expect(plan({}, startupRegistry(codexManifest), harnessCandidate("codex"))).toEqual(["codex"]);
   });
 });
 
@@ -346,12 +318,9 @@ describe("selected CLI backend Gateway startup", () => {
       plugins: {
         allow: owners.map((owner) => owner.id),
         load: { paths: pluginPaths },
-        entries: {
-          "selected-plugin": { enabled: true },
-          "disabled-plugin": { enabled: false },
-          "unused-plugin": { enabled: true },
-          "http-plugin": { enabled: true },
-        },
+        entries: Object.fromEntries(
+          owners.map(({ id }) => [id, { enabled: id !== "disabled-plugin" }]),
+        ),
         slots: { memory: "none" },
       },
     };
@@ -370,13 +339,9 @@ describe("selected CLI backend Gateway startup", () => {
       expect(
         registry.plugins.filter((plugin) => plugin.status === "loaded").map((plugin) => plugin.id),
       ).toEqual(["selected-plugin"]);
-      expect(
-        registry.cliBackends.map(({ pluginId, backend }) => ({
-          pluginId,
-          id: backend.id,
-          config: backend.config,
-        })),
-      ).toEqual([{ pluginId: "selected-plugin", id: "selected-cli", config: backendConfig }]);
+      expect(registry.cliBackends).toMatchObject([
+        { pluginId: "selected-plugin", backend: { id: "selected-cli", config: backendConfig } },
+      ]);
     } finally {
       loaded.retireGatewayRuntimeBindings();
       await disposePluginRegistryInstances(registry);

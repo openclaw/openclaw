@@ -36,7 +36,12 @@ session workloads, or a catalog scene ID such as `^route-usage$` for one page.
 own directory and retains failed attempts.
 
 The census measures two successive blocks of 50 distinct session switches, ten visits to each
-catalog page/dialog state, 2,000 streaming deltas, and ten reconnects. Each
+catalog page/dialog state, 2,000 streaming deltas, ten reconnects, 100 distinct
+session hover intents followed by cached reuse after the cooldown, ten full long-session scrolls, and ten minutes each of
+visible and hidden idle. Use `OPENCLAW_RETENTION_FILTER='^(intent-prefetch|long-session-scroll|idle-visible|idle-hidden)$'`
+for the added performance workloads. Hidden idle minimizes a fresh, runner-owned
+Chromium window; it requires a windowed host and never fakes visibility or freezes
+the renderer. Each
 SPA page/dialog gets its own browser context, and all ten visits use the same
 document: a reload cannot hide leaked owners. The `document-*` cases cover
 boot-only Gateway confirmation and standalone approval/question documents by
@@ -47,10 +52,19 @@ and caches. MCP warms its App first and opens ten confirmations total to honor
 the native prompt limit; compare its second five-visit block. Browser-auth
 recovery preserves its native 30-second throttle and has a ten-minute deadline. Samples follow a 4.1-second drain of intentional retirement and
 feedback timers, two animation frames, and two explicit GCs.
+Hidden samples skip animation-frame settlement because minimized windows can
+pause it. Each workload uses a fresh browser process to isolate native teardown
+failures; headless runs disable GPU rendering. A failure still fails its workload.
 
 `census.json` records post-GC JS heap, native DOM counters, detached native DOM
 nodes and shallow bytes, live/disposed Solid owners, global event listeners by
-event type, and active timer/interval IDs. The timer probe retains IDs only.
+event type, and active timer/interval IDs. It also records cumulative timer
+callbacks and CDP task/script/layout/style duration, so idle wakeups can be
+compared over the same interval. The timer probe retains IDs only.
+Named string-keyed cache maps (`lastAttemptAt`, `revisions`, `readScopes`, `hydratedSnapshots`)
+report key counts and shallow key/table bytes from the heap snapshot. These
+bytes overlap other totals and exclude referenced values; they are not retained
+heap size. V8 compilation can grow heap even while DOM and live owners plateau.
 Before each GC the mock's request log is cleared and its count recorded; it must
 not masquerade as product retention. Heap measurements still include other
 mock/probe state. Owner counts use the installed rc.18 production object shape;

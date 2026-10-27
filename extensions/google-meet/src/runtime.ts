@@ -26,11 +26,7 @@ import type {
   GoogleMeetModeInput,
   GoogleMeetTransport,
 } from "./config.js";
-import {
-  testGoogleMeetListening,
-  testGoogleMeetSpeech,
-  type GoogleMeetRuntimeProbeContext,
-} from "./runtime-probes.js";
+import { normalizeMeetUrl } from "./meet-url.js";
 import { getGoogleMeetRuntimeSetupStatus } from "./runtime-setup.js";
 import {
   launchChromeMeet,
@@ -47,6 +43,41 @@ import type {
   GoogleMeetSession,
 } from "./transports/types.js";
 import { createVoiceCallGateway, joinMeetViaVoiceCallGateway } from "./voice-call-gateway.js";
+
+const probes = MeetingPlatformAdapter.createRuntimeProbes<
+  GoogleMeetConfig,
+  GoogleMeetMode,
+  GoogleMeetTransport,
+  GoogleMeetChromeHealth,
+  GoogleMeetSession,
+  GoogleMeetJoinRequest
+>({
+  defaultSpeechMessage: "Say exactly: Google Meet speech test complete.",
+  invalidRequest: (message) => new Error(message),
+  resolveTimeoutMs: MeetingPlatformAdapter.resolveProbeTimeoutMs,
+  shouldWaitForListening: (session) =>
+    Boolean(
+      (session.transport === "chrome" || session.transport === "chrome-node") &&
+      session.chrome?.launched,
+    ),
+  talkBackMode: MeetingPlatformAdapter.isTalkBackMode,
+  normalizeUrl: normalizeMeetUrl,
+  resolveRequestMode: (mode) => (mode === "realtime" ? "agent" : mode),
+  defaultTransport: (config) => config.defaultTransport,
+  validateListeningTransport: (transport) => {
+    if (transport === "twilio") {
+      throw new Error("test_listen supports chrome or chrome-node transports");
+    }
+  },
+  resolveSpeechTimeoutMs: (_request, config) => Math.min(config.chrome.joinTimeoutMs, 5_000),
+  refreshCaptionHealth: async (context, session) => await context.refreshCaptionHealth(session),
+  speechModeError:
+    "test_speech requires mode: agent or bidi; use join mode: transcribe for observe-only sessions.",
+  listeningModeError:
+    "test_listen requires mode: transcribe; use test_speech for talk-back sessions.",
+});
+
+type GoogleMeetRuntimeProbeContext = Parameters<typeof probes.testListening>[0];
 
 type ChromeLaunchResult =
   | Awaited<ReturnType<typeof launchChromeMeet>>
@@ -263,11 +294,11 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
   }
 
   async testSpeech(request: GoogleMeetJoinRequest) {
-    return await testGoogleMeetSpeech(this.#probeContext(), request);
+    return await probes.testSpeech(this.#probeContext(), request);
   }
 
   async testListen(request: GoogleMeetJoinRequest) {
-    return await testGoogleMeetListening(this.#probeContext(), request);
+    return await probes.testListening(this.#probeContext(), request);
   }
 
   #probeContext(): GoogleMeetRuntimeProbeContext {

@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { sendPolicySessionEntry } from "./dispatch-from-config.session-fixtures.test-support.js";
 import {
   createDispatcher,
   emptyConfig,
@@ -10,11 +11,6 @@ import { dispatchReplyFromConfig, setNoAbort } from "./dispatch-from-config.test
 import { buildTestCtx } from "./test-ctx.js";
 
 export function registerFastAutoProgressCases() {
-  const sendPolicySessionEntry = (sendPolicy: "allow" | "deny") => ({
-    sessionId: "s1",
-    updatedAt: 0,
-    sendPolicy,
-  });
   it("suppresses fast auto progress when sendPolicy is deny", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
@@ -124,12 +120,9 @@ export function registerFastAutoProgressCases() {
     "falls back once when a forced fast auto callback declines visibility at verbose %s",
     async (verboseLevel) => {
       setNoAbort();
-      sessionStoreMocks.currentEntry = {
-        sessionId: "s1",
-        updatedAt: 0,
-        sendPolicy: "allow",
+      sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", {
         verboseLevel,
-      };
+      });
       const dispatcher = createDispatcher();
       const onToolResult = vi.fn(() => false);
       const payload = {
@@ -167,12 +160,7 @@ export function registerFastAutoProgressCases() {
 
   it("delivers forced fast auto progress once without a channel callback", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "off",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "off" });
     const dispatcher = createDispatcher();
     const payload = {
       text: "💨Fast: auto-on",
@@ -200,12 +188,7 @@ export function registerFastAutoProgressCases() {
 
   it("does not invoke a source-suppressed fast auto callback without opt-in", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "on",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", { verboseLevel: "on" });
     const dispatcher = createDispatcher();
     const onToolResult = vi.fn(() => true);
     const payload = {
@@ -245,12 +228,9 @@ export function registerFastAutoProgressCases() {
     "does not duplicate forced fast auto progress accepted with $callbackResult at verbose $verboseLevel",
     async ({ callbackResult, verboseLevel }) => {
       setNoAbort();
-      sessionStoreMocks.currentEntry = {
-        sessionId: "s1",
-        updatedAt: 0,
-        sendPolicy: "allow",
+      sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow", {
         verboseLevel,
-      };
+      });
       const dispatcher = createDispatcher();
       const onToolResult = vi.fn(() => callbackResult);
       const payload = {

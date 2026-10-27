@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveAgentWorkspaceMemoryRouting,
   shouldIncludeAgentHarnessRuntimeContext,
-} from "./prompt-context.js";
+} from "../../plugin-sdk/agent-harness-attempt-runtime.js";
 
 describe("harness runtime context inclusion", () => {
   it.each([

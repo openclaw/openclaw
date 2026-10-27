@@ -28,26 +28,6 @@ type ChannelConfig = AccountConfig & {
 const mainCredentials = { botId: "test-main-bot-id", secret: "test-secret" };
 const alertCredentials = { botId: "test-alerts-bot-id", secret: "example-secret" };
 
-function newAccountPrompter() {
-  return createQueuedWizardPrompter({
-    selectValues: ["__new__"],
-    textValues: ["alerts", alertCredentials.botId, alertCredentials.secret],
-  });
-}
-
-function expectPromotion(
-  result: { cfg: OpenClawConfig },
-  queued: ReturnType<typeof createQueuedWizardPrompter>,
-  accounts: ChannelConfig["accounts"],
-) {
-  const channel = getChannelConfig(result.cfg);
-  expect(channel).not.toHaveProperty("botId");
-  expect(channel).not.toHaveProperty("secret");
-  expect(channel.accounts).toEqual(accounts);
-  expect(queued.confirm).not.toHaveBeenCalled();
-  return channel;
-}
-
 function getChannelConfig(cfg: OpenClawConfig): ChannelConfig {
   return ((cfg.channels as Record<string, unknown> | undefined)?.demo ?? {}) as ChannelConfig;
 }
@@ -81,25 +61,21 @@ function setLegacyAccount(cfg: OpenClawConfig, patch: AccountConfig): OpenClawCo
 }
 
 function createLegacyPlugin(): ChannelSetupPlugin {
-  return {
-    ...createChannelTestPluginBase({
-      id: "demo",
-      label: "Demo",
-      config: {
-        listAccountIds: (cfg) => {
-          const ids = Object.keys(getChannelConfig(cfg).accounts ?? {});
-          return ids.length > 0 ? ids : [DEFAULT_ACCOUNT_ID];
-        },
-        defaultAccountId: resolveDefaultAccountId,
+  const plugin = createChannelTestPluginBase({
+    id: "demo",
+    label: "Demo",
+    config: {
+      listAccountIds: (cfg) => {
+        const ids = Object.keys(getChannelConfig(cfg).accounts ?? {});
+        return ids.length > 0 ? ids : [DEFAULT_ACCOUNT_ID];
       },
-    }),
-    setup: {
-      applyAccountConfig: ({ cfg, input }) =>
-        setLegacyAccount(cfg, {
-          botId: typeof input.token === "string" ? input.token : undefined,
-          secret: typeof input.privateKey === "string" ? input.privateKey : undefined,
-        }),
+      defaultAccountId: resolveDefaultAccountId,
     },
+  });
+  return {
+    ...plugin,
+    // Credentials own applySet; retain the undeclared legacy setup capability for promotion.
+    setup: { applyAccountConfig: ({ cfg }) => cfg },
   };
 }
 
@@ -209,7 +185,10 @@ describe("channel setup wizard account scoping", () => {
   it.each([false, true])(
     "promotes root credentials with an existing named account=%s",
     async (mixed) => {
-      const queued = newAccountPrompter();
+      const queued = createQueuedWizardPrompter({
+        selectValues: ["__new__"],
+        textValues: ["alerts", alertCredentials.botId, alertCredentials.secret],
+      });
       const marker = { marker: { keep: "mixed-shape" } };
       const result = await configure(
         mixed
@@ -221,10 +200,14 @@ describe("channel setup wizard account scoping", () => {
           : { enabled: true, ...mainCredentials },
         queued,
       );
-      const channel = expectPromotion(result, queued, {
+      const channel = getChannelConfig(result.cfg);
+      expect(channel).not.toHaveProperty("botId");
+      expect(channel).not.toHaveProperty("secret");
+      expect(channel.accounts).toEqual({
         [mixed ? "main" : "default"]: { ...mainCredentials, ...(mixed ? marker : {}) },
         alerts: alertCredentials,
       });
+      expect(queued.confirm).not.toHaveBeenCalled();
       if (mixed) {
         expect(channel.defaultAccount).toBe("main");
       } else {
@@ -384,9 +367,7 @@ describe("channel setup wizard group access", () => {
           expect(actual).toBe(resolved);
           expect(current.channels?.slack?.groupPolicy).toBe("allowlist");
           return {
-            ...current,
             channels: {
-              ...current.channels,
               slack: {
                 ...current.channels?.slack,
                 channels: Object.fromEntries(resolved.map((id) => [id, { enabled: true }])),

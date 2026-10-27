@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { observeSettlement } from "../promise-settlement.test-support.js";
 import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createModelFallbackConfig } from "../test-helpers/model-fallback-config-fixture.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -120,23 +121,18 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     });
     try {
       run = runNative("runtime-deadline-handoff", { timeoutMs: 1 });
-      let settled = false;
-      const markSettled = () => {
-        settled = true;
-      };
-      void run.then(markSettled, markSettled);
-      const params = await Promise.race([
+      const settled = observeSettlement(run);
+      const params = await awaitGateBeforeSettlement(
         entered.promise,
-        run.then(() => {
-          throw new Error("Run completed before reaching the native attempt");
-        }),
-      ]);
+        run,
+        "Run completed before reaching the native attempt",
+      );
       await vi.advanceTimersByTimeAsync(30_001);
-      expect(settled).toBe(false);
+      expect(settled()).toBe(false);
       expect(params.onAttemptTimeout).toBeTypeOf("function");
       params.onAttemptDeadlineChanged?.({ kind: "bounded", deadlineAtMs: Date.now() + 120_000 });
       await vi.advanceTimersByTimeAsync(125_000);
-      expect(settled).toBe(false);
+      expect(settled()).toBe(false);
       finish.resolve(successAttempt());
       await expect(run).resolves.toMatchObject({ meta: { aborted: false } });
 

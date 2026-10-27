@@ -59,37 +59,31 @@ import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
 
 registerAgentSessionLoopTestLifecycle();
+const inactiveCaller = "agent tool caller authority is no longer active";
 
 describe("sessions_send direct queue source authority", () => {
   it.each([
-    "live",
-    "revoked",
-    "unscoped",
-    "send-revoked",
-    "send-live",
-    "peer-revoked",
-    "peer-live",
-    "ask-revoked",
-    "settle-live",
-    "settle-wildcard",
-    "settle-revoked",
-    "settle-reassigned",
+    ["live", null],
+    ["revoked", inactiveCaller],
+    ["unscoped", "guarded_injection_unsupported"],
+    ["send-revoked", "tools.agentToAgent.send"],
+    ["send-live", null],
+    ["peer-revoked", "Session communication state changed before admission."],
+    ["peer-live", null],
+    ["ask-revoked", "authority"],
+    ["settle-live", null],
+    ["settle-wildcard", null],
+    ["settle-revoked", inactiveCaller],
+    ["settle-reassigned", inactiveCaller],
   ] as const)(
     "checks the %s source at the real final enqueue and preserves accepted input",
-    async (source) => {
+    async (source, error) => {
       const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
       await withOpenClawTestState(stateOptions, async (state) => {
         const crossAgent = source.startsWith("send-");
         const peerPolicy = source.startsWith("peer-");
         const asks = peerPolicy || source === "ask-revoked";
-        const rejected =
-          source === "revoked" ||
-          source === "send-revoked" ||
-          source === "peer-revoked" ||
-          source === "ask-revoked" ||
-          source === "settle-revoked" ||
-          source === "settle-reassigned" ||
-          source === "unscoped";
+        const rejected = error !== null;
         const targetAgentId = crossAgent ? "worker" : "main";
         const cfg = {
           agents: {
@@ -414,17 +408,7 @@ describe("sessions_send direct queue source authority", () => {
             expect(result.details).toMatchObject({
               status: source === "ask-revoked" ? "forbidden" : "error",
             });
-            expect(JSON.stringify(result)).toContain(
-              source === "ask-revoked"
-                ? "authority"
-                : source === "send-revoked"
-                  ? "tools.agentToAgent.send"
-                  : source === "unscoped"
-                    ? "guarded_injection_unsupported"
-                    : source === "peer-revoked"
-                      ? "Session communication state changed before admission."
-                      : "agent tool caller authority is no longer active",
-            );
+            expect(JSON.stringify(result)).toContain(error);
             expect(queued).not.toHaveBeenCalled();
           } else {
             expect(result.details).toMatchObject({

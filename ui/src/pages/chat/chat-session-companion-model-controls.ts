@@ -9,26 +9,9 @@ import {
   readChatModelCatalogState,
   refreshChatModelCatalogOnDemand,
 } from "./chat-state-refresh.ts";
-import type { ChatModelControlsProps } from "./components/chat-model-controls.tsx";
+import type { ChatModelControlsProps } from "./components/chat-model-controls.types.ts";
 
 const sideChatCatalogs = new WeakMap<ModelCatalogEntry[], ModelCatalogEntry[]>();
-
-// Side chat always answers on the OpenClaw runtime, so runtime variants are not choices.
-function sideChatCatalog(catalog: ModelCatalogEntry[]): ModelCatalogEntry[] {
-  let projected = sideChatCatalogs.get(catalog);
-  if (!projected) {
-    projected = catalog.map(({ runtimeChoices: _runtimeChoices, ...entry }) => entry);
-    sideChatCatalogs.set(catalog, projected);
-  }
-  return projected;
-}
-
-function splitModelRef(value: string): { provider?: string; model?: string } {
-  const separator = value.indexOf("/");
-  return separator > 0
-    ? { provider: value.slice(0, separator), model: value.slice(separator + 1) }
-    : { model: value || undefined };
-}
 
 /**
  * Side chat reuses the main composer's model and effort pickers for its own
@@ -43,8 +26,19 @@ export function createSideChatModelControlProps(params: {
   const { state, companion } = params;
   const selection = companion.modelSelection ?? {};
   const sessionKey = `side-chat:${state.sessionKey}`;
-  const catalog = sideChatCatalog(state.chatModelCatalog);
-  const effective = splitModelRef(selection.model || companion.defaultModel || "");
+  // Side chat always answers on the OpenClaw runtime, so runtime variants are not choices.
+  const sourceCatalog = state.chatModelCatalog;
+  let catalog = sideChatCatalogs.get(sourceCatalog);
+  if (!catalog) {
+    catalog = sourceCatalog.map(({ runtimeChoices: _runtimeChoices, ...entry }) => entry);
+    sideChatCatalogs.set(sourceCatalog, catalog);
+  }
+  const modelRef = selection.model || companion.defaultModel || "";
+  const separator = modelRef.indexOf("/");
+  const effective =
+    separator > 0
+      ? { provider: modelRef.slice(0, separator), model: modelRef.slice(separator + 1) }
+      : { model: modelRef || undefined };
   const entry = catalog.find(
     (candidate) => candidate.provider === effective.provider && candidate.id === effective.model,
   );

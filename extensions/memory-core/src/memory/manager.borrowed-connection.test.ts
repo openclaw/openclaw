@@ -16,8 +16,7 @@ import {
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   requireNativeSqliteDatabase,
@@ -36,6 +35,7 @@ import {
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
 import { memoryPublicationFaultEntrypoint } from "./manager-publication-fault-entrypoint.test-support.js";
+import { reservePublishedWriter } from "./manager-publication-observer.test-support.js";
 import { MemoryIndexManager } from "./manager.js";
 
 const memoryIndex = await import("./index.js");
@@ -255,24 +255,8 @@ describe("memory manager agent database lifecycle", () => {
     const cfg = createConfig();
     const source = await fixture.getFreshManager(cfg, "cli");
     const sourcePath = source.status().dbPath;
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:maintenance-admission",
-      sessionId: "maintenance-admission",
-    };
-    await upsertSessionEntry({
-      ...target,
-      entry: { sessionId: target.sessionId, updatedAt: Date.now() },
-    });
-    const entered = createDeferred<void>();
-    const released = createDeferred<void>();
     const queued = createDeferred<void>();
-    const writer = withSessionTranscriptWriteLock(target, async () => {
-      entered.resolve();
-      await released.promise;
-      closeOpenClawAgentDatabasesForTest();
-    });
-    await entered.promise;
+    const writer = await reservePublishedWriter(() => closeOpenClawAgentDatabasesForTest());
     const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
     vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
       async (...args) => {
@@ -297,7 +281,7 @@ describe("memory manager agent database lifecycle", () => {
     void creating.catch(() => undefined);
     try {
       await Promise.race([queued.promise, creating]);
-      released.resolve();
+      writer.release();
       await expect(creating).rejects.toThrow(/^Agent database execution admission is closed$/);
       expect(
         prepare.mock.contexts.filter(
@@ -308,8 +292,8 @@ describe("memory manager agent database lifecycle", () => {
         ),
       ).toEqual([]);
     } finally {
-      released.resolve();
-      await Promise.allSettled([writer, creating]);
+      writer.release();
+      await Promise.allSettled([writer.done, creating]);
     }
   });
 

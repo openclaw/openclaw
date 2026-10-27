@@ -44,10 +44,9 @@ export async function startStalledSlackApiServer(events: string[]) {
     waitForRequest: (number: number) => requestLifecycle(number).received.promise,
     waitForRequestClose: (number: number) => requestLifecycle(number).closed.promise,
     close: async () => {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-        server.closeAllConnections();
-      });
+      const closed = server[Symbol.asyncDispose]();
+      server.closeAllConnections();
+      await closed;
     },
   };
 }

@@ -4,8 +4,21 @@ import path from "node:path";
 import { normalizeBuildCommit } from "../write-build-info.ts";
 
 export const STANDALONE_USAGE =
-  "Usage: bun scripts/build-bun-standalone.mjs <fresh-output-directory> [--bytecode|--compile-aot] [--plugins <id,id,...>] [--support-output <fresh-directory>]\n" +
-  "Default: JIT. --compile-aot is EXPERIMENTAL and requires an AOT-capable Bun.";
+  "Usage: bun scripts/build-bun-standalone.mjs <fresh-output-directory> [--bytecode|--compile-aot|--aot-source] [--plugins <id,id,...>] [--support-output <fresh-directory>]\n" +
+  "AOT options: --aot-log-type-mismatches, --aot-disable <name,...>, --trim, --trim-allow <run[,jit]>, --trim-locales <locale,...>, --explain[=<report>], " +
+  "--no-compile-function-source, --disallow-code-generation-from-strings[=strict]\n" +
+  "Default: JIT. AOT is EXPERIMENTAL and requires an AOT-capable Bun.";
+
+/**
+ * @typedef {{
+ *   aotLogTypeMismatches?: true,
+ *   aotExplain?: string[],
+ *   aotDisable?: string[],
+ *   trim?: true | { allow?: ("run" | "jit")[], locales?: string[] },
+ *   functionSource?: false,
+ *   disallowCodeGenerationFromStrings?: true | "strict"
+ * }} StandaloneAotCompileOptions
+ */
 
 /**
  * @param {string[]} args
@@ -14,6 +27,8 @@ export const STANDALONE_USAGE =
  *   outputDirectory: string,
  *   mode: "jit" | "bytecode" | "aot",
  *   compileFlags: string[],
+ *   aotCompileOptions?: StandaloneAotCompileOptions,
+ *   source?: true,
  *   pluginIds?: string[]
  *   supportOutputDirectory?: string
  * }}
@@ -27,8 +42,15 @@ export function parseStandaloneArguments(args) {
     throw new Error(STANDALONE_USAGE);
   }
   const compileFlags = [];
+  /** @type {StandaloneAotCompileOptions} */
+  const aotCompileOptions = {};
+  const aotFlags = [];
+  const locales = [];
+  /** @type {Set<"run" | "jit">} */
+  const trimAllow = new Set();
   let pluginIds;
   let supportOutputDirectory;
+  let source = false;
   for (let index = 0; index < flags.length; index += 1) {
     const flag = flags[index];
     if (flag === "--target" || flag.startsWith("--target=")) {
@@ -54,8 +76,75 @@ export function parseStandaloneArguments(args) {
         );
       }
       pluginIds = [...new Set(value.split(",").map((id) => id.trim()))];
-    } else if (["--bytecode", "--compile-aot"].includes(flag) && compileFlags.length === 0) {
-      compileFlags.push(flag === "--compile-aot" ? "--aot" : flag);
+    } else if (
+      ["--bytecode", "--compile-aot", "--aot-source"].includes(flag) &&
+      compileFlags.length === 0
+    ) {
+      source = flag === "--aot-source";
+      compileFlags.push(flag === "--bytecode" ? flag : "--aot");
+    } else if (flag === "--aot-disable" || flag.startsWith("--aot-disable=")) {
+      const value = flag === "--aot-disable" ? flags[++index] : flag.slice("--aot-disable=".length);
+      const names = value?.split(",").map((name) => name.trim());
+      if (!names?.length || names.some((name) => !name || name.startsWith("-"))) {
+        throw new Error(
+          `--aot-disable requires a comma-separated list of compiler steps.\n${STANDALONE_USAGE}`,
+        );
+      }
+      (aotCompileOptions.aotDisable ??= []).push(...names);
+      aotFlags.push(`--aot-disable=${names.join(",")}`);
+    } else if (flag === "--explain" || flag.startsWith("--explain=")) {
+      const report = flag === "--explain" ? "text" : flag.slice("--explain=".length);
+      if (!report) {
+        throw new Error(`--explain requires a report name after '='.\n${STANDALONE_USAGE}`);
+      }
+      (aotCompileOptions.aotExplain ??= []).push(report);
+      aotFlags.push(flag);
+    } else if (flag === "--trim-allow" || flag.startsWith("--trim-allow=")) {
+      const value = flag === "--trim-allow" ? flags[++index] : flag.slice("--trim-allow=".length);
+      const selected = value?.split(",").map((feature) => feature.trim());
+      if (!selected?.length) {
+        throw new Error(`--trim-allow requires run, jit, or run,jit.\n${STANDALONE_USAGE}`);
+      }
+      for (const feature of selected) {
+        if (feature !== "run" && feature !== "jit") {
+          throw new Error(`--trim-allow requires run, jit, or run,jit.\n${STANDALONE_USAGE}`);
+        }
+        trimAllow.add(feature);
+      }
+    } else if (flag === "--trim-locales" || flag.startsWith("--trim-locales=")) {
+      const value =
+        flag === "--trim-locales" ? flags[++index] : flag.slice("--trim-locales=".length);
+      if (!value || value.startsWith("-") || value.split(",").some((locale) => !locale.trim())) {
+        throw new Error(
+          `--trim-locales requires a comma-separated locale list.\n${STANDALONE_USAGE}`,
+        );
+      }
+      const selected = value.split(",").map((locale) => locale.trim());
+      locales.push(...selected);
+      aotFlags.push(`--trim-locales=${selected.join(",")}`);
+    } else if (flag === "--aot-log-type-mismatches" && !aotCompileOptions.aotLogTypeMismatches) {
+      aotCompileOptions.aotLogTypeMismatches = true;
+      aotFlags.push(flag);
+    } else if (flag === "--trim" && !aotCompileOptions.trim) {
+      aotCompileOptions.trim = true;
+      aotFlags.push(flag);
+    } else if (
+      flag === "--no-compile-function-source" &&
+      aotCompileOptions.functionSource !== false
+    ) {
+      aotCompileOptions.functionSource = false;
+      aotFlags.push(flag);
+    } else if (
+      [
+        "--disallow-code-generation-from-strings",
+        "--disallow-code-generation-from-strings=strict",
+      ].includes(flag) &&
+      !aotCompileOptions.disallowCodeGenerationFromStrings
+    ) {
+      aotCompileOptions.disallowCodeGenerationFromStrings = flag.endsWith("=strict")
+        ? "strict"
+        : true;
+      aotFlags.push(flag);
     } else {
       throw new Error(
         `Unknown option or repeated build mode: ${flag}. Choose at most one build mode.\n${STANDALONE_USAGE}`,
@@ -64,15 +153,44 @@ export function parseStandaloneArguments(args) {
   }
   const mode =
     compileFlags[0] === "--aot" ? "aot" : compileFlags[0] === "--bytecode" ? "bytecode" : "jit";
-  if (supportOutputDirectory && mode !== "aot") {
-    throw new Error("--support-output requires --compile-aot; it builds a matched JIT companion.");
+  if (trimAllow.size) {
+    /** @type {("run" | "jit")[]} */
+    const features = ["run", "jit"];
+    const allow = features.filter((feature) => trimAllow.has(feature));
+    aotCompileOptions.trim = { allow };
+    aotFlags.push(`--trim-allow=${allow.join(",")}`);
+  }
+  if (aotFlags.length) {
+    if (mode !== "aot") {
+      throw new Error(
+        `${aotFlags[0]} requires --compile-aot or --aot-source.\n${STANDALONE_USAGE}`,
+      );
+    }
+    if (locales.length) {
+      if (!aotCompileOptions.trim) {
+        throw new Error(`--trim-locales requires --trim or --trim-allow.\n${STANDALONE_USAGE}`);
+      }
+      aotCompileOptions.trim = {
+        ...(typeof aotCompileOptions.trim === "object" ? aotCompileOptions.trim : {}),
+        locales: [...new Set(locales)],
+      };
+    }
+    compileFlags.push(...aotFlags);
+  }
+  if (supportOutputDirectory && (mode !== "aot" || source)) {
+    throw new Error(
+      "--support-output requires --compile-aot (emitted-JavaScript AOT). " +
+        "Build a separate JIT artifact from the same commit when using --aot-source.",
+    );
   }
   return {
     outputDirectory,
     mode,
     compileFlags,
-    ...(pluginIds ? { pluginIds } : {}),
+    ...(aotFlags.length ? { aotCompileOptions } : {}),
+    ...(source ? { source: true } : {}),
     ...(supportOutputDirectory ? { supportOutputDirectory } : {}),
+    ...(pluginIds ? { pluginIds } : {}),
   };
 }
 
@@ -225,9 +343,11 @@ export async function describeStandaloneRuntime(root) {
  * openclaw: import("../../cli-invocation.mjs").StandaloneBuildInfo["openclaw"],
  * embedded: {modules: number, plugins: number, workers: number, inlineWorkers: number},
  * plugins: {embedded: string[], omitted: string[]},
+ * pluginContract: ReturnType<typeof import("./bun-standalone-plugins.mjs").createStandalonePluginContract>,
  * pruning: {categories: Record<string, {files: number, bytes: number}>, sidecarPlugins: string[], policy?: string, removedFiles?: number, removedBytes?: number, removedSymlinks?: number},
  * sqlite: {version: string, [key: string]: unknown},
  * packageManager?: {name: string, version: string, entrypoint: string, fileCount: number, sizeBytes: number},
+ * sourceBuild?: object,
  * build?: import("../../cli-invocation.mjs").StandaloneBuildInfo["build"],
  * nativeModules?: import("../../cli-invocation.mjs").StandaloneBuildInfo["nativeModules"],
  * debug?: {entry: {path: string, sizeBytes: number, sha256: string}, bootstrap: {path: string, sizeBytes: number, sha256: string}, executable: {path: string, sizeBytes: number, sha256: string}, runtime: Awaited<ReturnType<typeof describeStandaloneRuntime>>}
@@ -240,9 +360,11 @@ export async function createStandaloneManifest({
   openclaw,
   embedded,
   plugins,
+  pluginContract,
   pruning,
   sqlite,
   packageManager,
+  sourceBuild,
   build,
   nativeModules,
   debug,
@@ -252,6 +374,7 @@ export async function createStandaloneManifest({
   const { categories, sidecarPlugins, ...pruningSummary } = pruning;
   return {
     schemaVersion: 1,
+    ...(sourceBuild ? { sourceBuild } : {}),
     mode,
     ...(build ? { build } : {}),
     ...(nativeModules ? { nativeModules } : {}),
@@ -275,6 +398,7 @@ export async function createStandaloneManifest({
     plugins: {
       embedded: plugins.embedded.toSorted(),
       omitted: plugins.omitted.toSorted(),
+      contract: pluginContract,
     },
     pruning: pruningSummary,
     ...(process.platform === "darwin"

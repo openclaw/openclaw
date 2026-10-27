@@ -1,3 +1,4 @@
+import { parseAutomationResult } from "../cron/automation-result.js";
 import {
   getAgentRunContext,
   getAgentRunContextOwnership,
@@ -6,6 +7,22 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "./agent-run-registry.js";
 import type { AutomationResult } from "./agent-run-registry.types.js";
+
+/** Presentation reads the existing invocation; it never decides execution or delivery. */
+export function readAutomationDisplayState(
+  runId: string | undefined,
+): "ordinary" | "checking" | "quiet" {
+  const invocations = runId ? getAgentRunContext(runId)?.cronRunsByJobId : undefined;
+  if (!invocations?.size) {
+    return "ordinary";
+  }
+  for (const invocation of invocations.values()) {
+    if (invocation.result?.outcome === "no_change") {
+      return "quiet";
+    }
+  }
+  return "checking";
+}
 
 /** Records the latest next-check proposal on the matching live cron run. */
 export function recordCronNextCheckProposal(runId: string, jobId: string, delayMs: number): void {
@@ -51,7 +68,7 @@ export function createAutomationRunGuard(runId: string, jobId: string): () => vo
 export function createAutomationResultRecorder(
   runId: string,
   jobId: string,
-): (result: AutomationResult) => void {
+): (result: unknown) => AutomationResult {
   const run = getAgentRunContext(runId)?.cronRunsByJobId?.get(jobId);
   const assertCurrent = createAutomationRunGuard(runId, jobId);
   return (result) => {
@@ -62,10 +79,14 @@ export function createAutomationResultRecorder(
     if (run.result) {
       throw new Error("record_result already accepted for this automation run");
     }
-    if (!result.summary.trim() || result.summary.length > 2000) {
-      throw new Error("record_result summary must contain 1–2000 characters");
+    const normalized = parseAutomationResult(result);
+    if (!normalized) {
+      throw new Error(
+        "record_result requires a valid outcome and trimmed summary of 1–2000 characters (optional only for no_change)",
+      );
     }
-    run.result = { ...result, summary: result.summary.trim() };
+    run.result = normalized;
+    return normalized;
   };
 }
 

@@ -107,27 +107,13 @@ afterEach(() => {
 });
 
 describe("resolveWorkerToolAuthority", () => {
-  it.each<{ name: string; overrides: TurnOverrides }>([
-    { name: "default", overrides: {} },
-    {
-      name: "configured review",
-      overrides: {
-        config: { tools: { exec: { host: "gateway", mode: "auto", strictInlineEval: true } } },
-      },
-    },
-    {
-      name: "scheduled approval",
-      overrides: {
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:cron:owner",
-          ownerAccountId: "default",
-          execTarget: { host: "gateway", ask: "always" },
-        },
-      },
-    },
-  ])("preserves launch fingerprint bytes across JSON for $name policy", async ({ overrides }) => {
+  it.each<[string, TurnOverrides]>([
+    ["default", {}],
+    [
+      "configured review",
+      { config: { tools: { exec: { host: "gateway", mode: "auto", strictInlineEval: true } } } },
+    ],
+  ])("preserves launch fingerprint bytes across JSON for %s policy", async (_name, overrides) => {
     const { exec } = await resolvedAuthority(overrides);
     // The node supervisor fingerprints the projection before and after JSON transport.
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise JSON transport, which omits undefined fields.
@@ -137,13 +123,11 @@ describe("resolveWorkerToolAuthority", () => {
   it.each(["auto", "ask"] as const)(
     "preserves %s exec mode without withholding worker shell tools",
     async (mode) => {
-      const config = { tools: { exec: { host: "gateway" as const, mode } } };
-      const result = await resolvedAuthority({ config, toolsAllow: ["exec", "process"] });
+      const overrides: TurnOverrides = { config: { tools: { exec: { host: "gateway", mode } } } };
+      const result = await resolvedAuthority(overrides);
       expect(result.exec).toMatchObject({ mode });
       expect(result.execUnavailable).toBe(false);
-      expect(await authority({ config, toolsAllow: ["exec", "process"] })).toEqual(
-        expect.arrayContaining(["exec", "process"]),
-      );
+      expect(await authority(overrides)).toEqual(expect.arrayContaining(["exec", "process"]));
     },
   );
   it("refuses an existing delegated session before exporting worker tool authority", async () => {
@@ -334,11 +318,6 @@ describe("resolveWorkerToolAuthority", () => {
     );
   });
 
-  it("projects runtime caps with canonical write-to-apply_patch semantics", async () => {
-    expect(await authority({ toolsAllow: ["write"] })).toEqual(["write", "apply_patch"]);
-    expect(await authority({ toolsAllow: [] })).toEqual([]);
-  });
-
   it.each([
     { senderId: "restricted", expected: ["read"] },
     { senderId: "authorized", expected: ["read", "write", "apply_patch"] },
@@ -400,7 +379,12 @@ describe("resolveWorkerToolAuthority", () => {
         messageProvider: "whatsapp",
         config: { channels: { whatsapp: { groups: { team: { tools: denyWrites } } } } },
         toolsAllow: ["write"],
-        scheduledToolPolicy,
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerAccountId: "default",
+          ownerSessionKey: "agent:main:whatsapp:group:team",
+        },
       }),
     ).toEqual([]);
   });

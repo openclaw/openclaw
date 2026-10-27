@@ -341,13 +341,19 @@ describe("Codex app-server terminal settlement", () => {
       );
     const answer = async (method: string, result: unknown, since = 0) => {
       const request = await waitForHarnessRequest(physical, method, since);
+      const nextRequest = physical.writes.length;
       physical.send({ id: request.id, result });
+      return nextRequest;
+    };
+    const allowNativeToolPreflight = async (since = 0) => {
+      const nextRequest = await answer("configRequirements/read", { requirements: null }, since);
+      await answer("configRequirements/read", { requirements: null }, nextRequest);
     };
     try {
       await answer("initialize", {
         userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)`,
       });
-      await answer("configRequirements/read", { requirements: null });
+      await allowNativeToolPreflight();
       await answer("thread/start", threadStartResult("thread-settlement"));
       await answer("turn/start", turnStartResult("turn-warmup"));
       physical.send({
@@ -363,13 +369,13 @@ describe("Codex app-server terminal settlement", () => {
       const firstStart = physical.writes.length;
       firstRun = runCodexAppServerAttempt(firstParams);
       void firstRun.then(firstSettled, firstSettled);
-      await answer("configRequirements/read", { requirements: null }, firstStart);
+      await allowNativeToolPreflight(firstStart);
       await answer("turn/start", turnStartResult("turn-settlement"), firstStart);
       expect(isCodexAppServerLiveThreadClaimed(physical.client, "thread-settlement")).toBe(true);
 
       const siblingStart = physical.writes.length;
       siblingRun = runCodexAppServerAttempt(siblingParams);
-      await answer("configRequirements/read", { requirements: null }, siblingStart);
+      await allowNativeToolPreflight(siblingStart);
       await answer("thread/start", threadStartResult("thread-sibling"), siblingStart);
       await answer("turn/start", turnStartResult("turn-sibling"), siblingStart);
       await vi.waitFor(() => {
@@ -756,17 +762,9 @@ describe("Codex app-server terminal settlement", () => {
             abortSignal: successorAbort.signal,
           });
           await successor.waitForTurnAccepted();
-          await nextHarness.notify({
-            method: "turn/completed",
-            params: {
-              threadId: nextThreadId,
-              turn: {
-                id: "turn-next",
-                status: "completed",
-                items: [{ id: "next-answer", type: "agentMessage", text: "Next turn saved." }],
-              },
-            },
-          });
+          await nextHarness.notify(
+            completedTurn("Next turn saved.", nextThreadId, "turn-next", "next-answer"),
+          );
           const next = await successor;
           expect(readAttemptTerminal(next)).toMatchObject({ aborted: false, timedOut: false });
           expect(next.assistantTranscriptOwned).toBe(true);

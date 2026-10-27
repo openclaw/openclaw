@@ -31,16 +31,18 @@ beforeEach(() => {
   vi.stubGlobal(
     "IntersectionObserver",
     class {
-      private target?: Element;
+      private readonly targets = new Set<Element>();
       constructor(private callback: IntersectionObserverCallback) {}
       observe(target: Element) {
-        this.target = target;
-        observers.set(target, (visible) =>
-          this.callback(
-            [{ target, isIntersecting: visible } as IntersectionObserverEntry],
-            this as unknown as IntersectionObserver,
-          ),
-        );
+        this.targets.add(target);
+        observers.set(target, (visible) => {
+          if (this.targets.has(target)) {
+            this.callback(
+              [{ target, isIntersecting: visible } as IntersectionObserverEntry],
+              this as unknown as IntersectionObserver,
+            );
+          }
+        });
         // These fixtures place thumbnails inside the explicitly admitted row.
         queueMicrotask(() => {
           if (target.matches(".chat-image-frame")) {
@@ -48,10 +50,15 @@ beforeEach(() => {
           }
         });
       }
+      unobserve(target: Element) {
+        this.targets.delete(target);
+        observers.delete(target);
+      }
       disconnect() {
-        if (this.target) {
-          observers.delete(this.target);
+        for (const target of this.targets) {
+          observers.delete(target);
         }
+        this.targets.clear();
       }
     },
   );
@@ -176,10 +183,13 @@ it("gates and coalesces discovery in FIFO order, retaining thumbnails in the sha
   pending[2]!.resolve(images("third"));
   await waitCalls(request, 4);
   pending[3]!.resolve(images("fourth"));
+  // Join lazy renderers before starting the gallery's DOM readiness deadline.
+  await vi.dynamicImportSettled();
   await waitForSolid(() => expect(container.querySelectorAll("img")).toHaveLength(16));
   expect(rows[4]!.querySelectorAll("img")).toHaveLength(0);
   await waitForSolid(() => expect(first.querySelectorAll(".chat-message-image")).toHaveLength(4));
   thumbnail(first).click();
+  await vi.dynamicImportSettled();
   await waitForSolid(() => expect(imageUrl(lightbox(first))).toBe(originalUrl));
   const opened = lightbox(first);
   update({ revision: 1 });

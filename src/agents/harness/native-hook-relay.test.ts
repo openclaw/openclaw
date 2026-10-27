@@ -174,12 +174,11 @@ function openDeferredNativeHookRelayBridgeRequest(
 } {
   const body = JSON.stringify(payload);
   let settled = false;
-  let resolveResponse!: (value: Record<string, unknown>) => void;
-  let rejectResponse!: (error: unknown) => void;
-  const response = new Promise<Record<string, unknown>>((resolve, reject) => {
-    resolveResponse = resolve;
-    rejectResponse = reject;
-  });
+  const {
+    promise: response,
+    resolve: resolveResponse,
+    reject: rejectResponse,
+  } = createDeferredCore<Record<string, unknown>>();
   const req = httpRequest(
     {
       hostname: record.hostname,

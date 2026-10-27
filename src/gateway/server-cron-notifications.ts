@@ -204,7 +204,6 @@ function resolveCronCompletionWebhook(delivery: CronJob["delivery"]): string | u
 
 function appendCronFailureAlertDetails(
   message: string,
-  jobId: string,
   runAtMs: number | undefined,
   config: OpenClawConfig,
 ): string {
@@ -217,11 +216,7 @@ function appendCronFailureAlertDetails(
       text += `\nRun started: ${timestamp}`;
     }
   }
-  const inspectUrl = resolveControlUiAutomationRunUrl(config, {
-    jobId,
-    runId: runAtMs ? createCronExecutionId(jobId, runAtMs) : undefined,
-  });
-  return inspectUrl ? `${text}\nInspect: ${inspectUrl}` : text;
+  return text;
 }
 
 function buildCronFinishedWebhookPayload(evt: CronEvent) {
@@ -496,19 +491,26 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           cfg: runtimeConfig,
           agentId,
           jobId: params.job.id,
-          target: {
-            ...resolved,
-            sessionKey: resolveCronDeliverySessionKey(params.job),
+          target: resolved,
+          transcriptRoute: resolved.sessionRoute,
+          onTranscriptDiagnostic: (message) => {
+            params.logger.warn({ jobId: params.job.id }, message);
           },
           payload: {
             ...params.payload,
             text: appendCronFailureAlertDetails(
               params.payload.text ?? "",
-              params.job.id,
               params.runAtMs,
               runtimeConfig,
             ),
           },
+          inspectionUrl: resolveControlUiAutomationRunUrl(runtimeConfig, {
+            jobId: params.job.id,
+            runId:
+              params.runAtMs === undefined
+                ? undefined
+                : createCronExecutionId(params.job.id, params.runAtMs),
+          }),
           abortSignal: abortController.signal,
           onDeliveryAttempt,
         });

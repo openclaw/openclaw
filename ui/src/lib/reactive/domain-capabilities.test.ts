@@ -2,8 +2,10 @@ import { flush } from "@solidjs/signals";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createAgentCapability } from "../agents/index.ts";
 import { createChannelCapability } from "../channels/index.ts";
+import { configSnapshot } from "../config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 import * as project from "./domain-capabilities.ts";
 
@@ -46,14 +48,24 @@ it("invalidates channel state on the real connection boundary", () => {
   expect(changed).toHaveBeenCalledOnce();
 });
 
-it("reads config permissions with the mutable draft snapshot", () => {
+it("reads config permissions with the mutable draft snapshot", async () => {
   const source = createApplicationGateway();
   const config = owned(createRuntimeConfigCapability(source.gateway));
   const projection = owned(project.projectRuntimeConfig(config));
   projection.subscribe(() => {});
   expect(projection.read().canSet).toBe(false);
+  const client = createTestGatewayClient(async () => configSnapshot({}));
+  source.publish({
+    ...source.gateway.snapshot,
+    client,
+    phase: "connected",
+    hello: gatewayHelloForMethods(["config.get"], ["operator.read"]),
+  });
+  await config.ensureLoaded();
+  expect(projection.read().canSet).toBe(false);
+  const previousRevision = projection.revision();
   config.setRaw('{"agents":{}}');
   flush();
   expect(projection.read().state.configRaw).toBe('{"agents":{}}');
-  expect(projection.revision()).toBeGreaterThan(0);
+  expect(projection.revision()).toBeGreaterThan(previousRevision);
 });

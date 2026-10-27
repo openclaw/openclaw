@@ -1,6 +1,5 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
-import { readStyles, styleDocument, styleFixture } from "./style-fixture.test-support.ts";
+import { readStyles, styleDocument, styleFixture, traceCss } from "./style-fixture.test-support.ts";
 
 const fixture = styleFixture("background-invalidation-", { required: true });
 
@@ -27,36 +26,16 @@ fixture.describe("personal background style scope", () => {
               (selector) => getComputedStyle(document.querySelector(selector)!).backgroundImage,
             ),
           );
-        expect(await backgrounds()).toEqual(["none", "none"]);
-        const cdp = await page.context().newCDPSession(page);
-        const recalculated: number[] = [];
-        cdp.on("Tracing.dataCollected", ({ value }) => {
-          for (const event of value) {
-            const args = event.args;
-            if (
-              event.name === "UpdateLayoutTree" &&
-              isRecord(args) &&
-              typeof args.elementCount === "number"
-            ) {
-              recalculated.push(args.elementCount);
-            }
-          }
-        });
-        await cdp.send("Tracing.start", {
-          categories: "devtools.timeline",
-          transferMode: "ReportEvents",
-        });
+        const initialBackgrounds = await backgrounds();
+        expect(initialBackgrounds[0]).toBe("none");
+        const finishTrace = await traceCss(page);
         await page.locator(".shell").evaluate((shell) => {
           shell.setAttribute("data-background-managed", "");
         });
         const painted = await backgrounds();
-        const completed = new Promise<void>((resolve) => {
-          cdp.once("Tracing.tracingComplete", () => resolve());
-        });
-        await cdp.send("Tracing.end");
-        await completed;
-        await cdp.detach();
-        expect(painted.every((background) => background.startsWith("linear-gradient("))).toBe(true);
+        const recalculated = await finishTrace();
+        expect(painted[0]).toMatch(/^linear-gradient\(/u);
+        expect(painted[1]).toBe(initialBackgrounds[1]);
         expect(recalculated.length).toBeGreaterThan(0);
         // Fewer computations than sidebar rows excludes a sidebar-wide invalidation.
         expect(recalculated.reduce((total, count) => total + count, 0)).toBeLessThan(64);

@@ -9,7 +9,6 @@ import { Icon } from "../solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuItem } from "../solid/menu.tsx";
 import { StrokeIcon } from "../solid/stroke-icon.tsx";
 import type { DesktopPanelState, DesktopSizingMode } from "./desktop-panel-state.ts";
-import "../../styles/session-panel-rail.css";
 
 registerEnglishCatalog(registerDesktopEnglish);
 

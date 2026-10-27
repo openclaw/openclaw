@@ -2,44 +2,22 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectGeneratedTokenPersistedToGatewayAuth } from "../../test-support.js";
 
+type GatewayAuth = NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]>;
+
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
   writeConfigFile: vi.fn<(cfg: OpenClawConfig) => Promise<void>>(async (_cfg) => {}),
-  replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
-    await mocks.writeConfigFile(nextConfig);
+  mutateConfigFile: vi.fn(async (params: { mutate: (draft: OpenClawConfig) => unknown }) => {
+    const draft = structuredClone(mocks.getRuntimeConfig());
+    await params.mutate(draft);
+    await mocks.writeConfigFile(draft);
   }),
-  mutateConfigFile: vi.fn(
-    async (params: {
-      mutate: (draft: OpenClawConfig, context: { snapshot: { path: string } }) => unknown;
-    }) => {
-      const draft = structuredClone(mocks.getRuntimeConfig());
-      const result = await params.mutate(draft, { snapshot: { path: "/tmp/openclaw.json" } });
-      await mocks.writeConfigFile(draft);
-      return {
-        path: "/tmp/openclaw.json",
-        previousHash: "test-hash",
-        persistedHash: "test-hash",
-        snapshot: { path: "/tmp/openclaw.json" },
-        nextConfig: draft,
-        result,
-        attempts: 1,
-        afterWrite: { mode: "auto" },
-        followUp: { action: "none" },
-      };
-    },
-  ),
-  resolveGatewayAuth: vi.fn(
-    ({
-      authConfig,
-    }: {
-      authConfig?: NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]>;
-    }) => {
-      const token = typeof authConfig?.token === "string" ? authConfig.token : undefined;
-      const password = typeof authConfig?.password === "string" ? authConfig.password : undefined;
-      const mode = authConfig?.mode ?? (password ? "password" : "token");
-      return { mode, token, password };
-    },
-  ),
+  resolveGatewayAuth: vi.fn(({ authConfig }: { authConfig?: GatewayAuth }) => {
+    const token = typeof authConfig?.token === "string" ? authConfig.token : undefined;
+    const password = typeof authConfig?.password === "string" ? authConfig.password : undefined;
+    const mode = authConfig?.mode ?? (password ? "password" : "token");
+    return { mode, token, password };
+  }),
   ensureGatewayStartupAuth: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => {
     const auth = { mode: "token" as const, token: "a".repeat(48) };
     return {
@@ -58,7 +36,6 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) =>
 
 vi.mock("openclaw/plugin-sdk/config-mutation", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/config-mutation")>()),
-  replaceConfigFile: mocks.replaceConfigFile,
   mutateConfigFile: mocks.mutateConfigFile,
 }));
 
@@ -67,22 +44,15 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
   resolveGatewayAuth: mocks.resolveGatewayAuth,
 }));
 
-type GatewayAuth = NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]>;
-
 function browserConfig(auth?: GatewayAuth): OpenClawConfig {
   return { browser: { enabled: true }, ...(auth ? gatewayConfig(auth) : {}) };
 }
 
 function gatewayConfig(auth: GatewayAuth): OpenClawConfig {
+  const trustedProxy =
+    auth.mode === "trusted-proxy" ? { userHeader: "x-forwarded-user" } : undefined;
   return {
-    gateway: {
-      auth: {
-        ...(auth.mode === "trusted-proxy"
-          ? { trustedProxy: { userHeader: "x-forwarded-user" } }
-          : {}),
-        ...auth,
-      },
-    },
+    gateway: { auth: { ...(trustedProxy ? { trustedProxy } : {}), ...auth } },
   };
 }
 
@@ -114,19 +84,14 @@ describe("ensureBrowserControlAuth", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    mocks.getRuntimeConfig.mockClear();
-    mocks.writeConfigFile.mockClear();
-    mocks.mutateConfigFile.mockClear();
-    mocks.resolveGatewayAuth.mockClear();
-    mocks.ensureGatewayStartupAuth.mockClear();
+    Object.values(mocks).forEach((mock) => mock.mockClear());
   });
 
   it("returns existing auth and skips writes", async () => {
-    const cfg: OpenClawConfig = { gateway: { auth: { token: "already-set" } } };
-
-    const result = await ensureBrowserControlAuth({ cfg, env: {} });
-
-    expect(result).toEqual({ auth: { token: "already-set" } });
+    const cfg = gatewayConfig({ token: "already-set" });
+    expect(await ensureBrowserControlAuth({ cfg, env: {} })).toEqual({
+      auth: { token: "already-set" },
+    });
     expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expectNoAuthWrites();
   });
@@ -148,8 +113,7 @@ describe("ensureBrowserControlAuth", () => {
 
   it("auto-generates and persists a token when auth is missing", async () => {
     const cfg = browserConfig();
-    mocks.getRuntimeConfig.mockReturnValue(browserConfig());
-
+    mocks.getRuntimeConfig.mockReturnValue(cfg);
     const result = await ensureBrowserControlAuth({ cfg, env: {} });
     await expectGeneratedTokenPersisted(result);
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
@@ -159,8 +123,7 @@ describe("ensureBrowserControlAuth", () => {
     ["test env", browserConfig(), { NODE_ENV: "test" }],
     ["explicit password mode", browserConfig({ mode: "password" }), {}],
   ])("skips auto-generation for %s", async (_name, cfg, env) => {
-    const result = await ensureBrowserControlAuth({ cfg, env });
-    expect(result).toEqual({ auth: {} });
+    expect(await ensureBrowserControlAuth({ cfg, env })).toEqual({ auth: {} });
     expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expectNoAuthWrites();
   });
@@ -187,8 +150,7 @@ describe("ensureBrowserControlAuth", () => {
     expect(result.generatedToken).toMatch(/^[a-f0-9]{48}$/);
     expect(result.auth).toEqual({ token: result.generatedToken });
     expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const persistedCfg = mocks.writeConfigFile.mock.calls[0]![0];
-    expect(persistedCfg.gateway?.auth).toMatchObject({
+    expect(mocks.writeConfigFile.mock.calls[0]![0].gateway?.auth).toMatchObject({
       mode: "none",
       token: result.generatedToken,
     });
@@ -207,7 +169,6 @@ describe("ensureBrowserControlAuth", () => {
 
     expect(first.auth.password).toMatch(/^[a-f0-9]{48}$/);
     expect(first.auth.token).toBeUndefined();
-    // Every listener in this process shares one credential, so cached bridges stay reusable.
     expect(second).toEqual({ auth: first.auth });
     expect(mocks.mutateConfigFile).not.toHaveBeenCalled();
     expectNoAuthWrites();
@@ -217,27 +178,21 @@ describe("ensureBrowserControlAuth", () => {
     const cfg = browserConfig();
     mocks.getRuntimeConfig.mockReturnValue(browserConfig({ token: "latest-token" }));
 
-    const result = await ensureBrowserControlAuth({ cfg, env: {} });
-
-    expect(result).toEqual({ auth: { token: "latest-token" } });
+    expect(await ensureBrowserControlAuth({ cfg, env: {} })).toEqual({
+      auth: { token: "latest-token" },
+    });
     expectNoAuthWrites();
   });
 
-  it.each([
-    { mode: "none", afterWrite: "generated" },
-    { mode: "none", afterWrite: "replacement" },
-    { mode: "none", afterWrite: "other-mode" },
-  ] as const)(
-    "rereads $afterWrite auth after generating for $mode",
-    async ({ mode, afterWrite }) => {
-      const kind = mode === "none" ? "token" : "password";
-      const otherKind = kind === "token" ? "password" : "token";
-      const cfg: OpenClawConfig = { gateway: { auth: { mode } } };
+  it.each(["generated", "replacement", "other-mode"] as const)(
+    "rereads %s auth after generating for none mode",
+    async (afterWrite) => {
+      const cfg = gatewayConfig({ mode: "none" });
       let latest = cfg;
       let generated: string | undefined;
       mocks.getRuntimeConfig.mockImplementation(() => latest);
       mocks.writeConfigFile.mockImplementationOnce(async (written) => {
-        const value = written.gateway?.auth?.[kind];
+        const value = written.gateway?.auth?.token;
         if (typeof value !== "string") {
           throw new Error("expected a generated browser credential");
         }
@@ -246,8 +201,8 @@ describe("ensureBrowserControlAuth", () => {
           afterWrite === "generated"
             ? written
             : afterWrite === "replacement"
-              ? { gateway: { auth: { mode, [kind]: "concurrent-credential" } } }
-              : { gateway: { auth: { mode: otherKind, [otherKind]: "concurrent-credential" } } };
+              ? gatewayConfig({ mode: "none", token: "concurrent-credential" })
+              : gatewayConfig({ mode: "password", password: "concurrent-credential" });
       });
 
       const result = await ensureBrowserControlAuth({ cfg, env: {} });
@@ -257,8 +212,8 @@ describe("ensureBrowserControlAuth", () => {
       expect(result).toEqual({
         auth:
           afterWrite === "replacement" || afterWrite === "other-mode"
-            ? { [afterWrite === "other-mode" ? otherKind : kind]: "concurrent-credential" }
-            : { [kind]: generated },
+            ? { [afterWrite === "other-mode" ? "password" : "token"]: "concurrent-credential" }
+            : { token: generated },
         generatedToken: afterWrite === "generated" ? generated : undefined,
       });
     },

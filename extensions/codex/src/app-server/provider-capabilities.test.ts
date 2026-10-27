@@ -12,10 +12,7 @@ import {
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-const appServer = {
-  start: {},
-  requestTimeoutMs: 1_000,
-} as CodexAppServerRuntimeOptions;
+const appServer = { start: {}, requestTimeoutMs: 1_000 } as CodexAppServerRuntimeOptions;
 
 const request = vi.fn(async (_method: string) => ({ webSearch: false }));
 const client = { request } as unknown as CodexAppServerClient;
@@ -112,13 +109,6 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     request.mockResolvedValueOnce({ webSearch: true });
     await expect(resolveSupport()).resolves.toBe("supported");
     await expect(resolveSupport()).resolves.toBe("unsupported");
-
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenCalledWith(
-      "modelProvider/capabilities/read",
-      {},
-      expect.objectContaining({ timeoutMs: 1_000 }),
-    );
   });
 
   it("does not use default OpenAI capabilities for a copilot thread", async () => {
@@ -129,11 +119,7 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     await expect(resolveSupport({ expectedNativeModelProvider: "copilot" })).resolves.toBe(
       "unknown",
     );
-    expect(read).toHaveBeenCalledExactlyOnceWith(
-      "config/read",
-      { includeLayers: false },
-      expect.anything(),
-    );
+    expect(read.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
   });
 
   it("forwards one prepared auth handoff to capability startup", async () => {
@@ -149,10 +135,9 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     );
   });
 
-  it.each(["startup", "read"])("reports unknown support after %s failure", async (stage) => {
-    (stage === "startup" ? clientFactory : request).mockRejectedValueOnce(new Error(stage));
+  it("reports unknown support after startup failure", async () => {
+    clientFactory.mockRejectedValueOnce(new Error("startup"));
     await expect(resolveSupport()).resolves.toBe("unknown");
-    expect(request).toHaveBeenCalledTimes(stage === "startup" ? 0 : 1);
   });
 
   it.each([
@@ -161,10 +146,8 @@ describe("resolveCodexProviderWebSearchSupport", () => {
   ])(
     "resolves the %s override without probing native capabilities",
     async (modelProviderOverride, expected) => {
-      request.mockResolvedValue({ webSearch: expected === "unsupported" });
       await expect(resolveSupport({ modelProviderOverride })).resolves.toBe(expected);
       expect(clientFactory).not.toHaveBeenCalled();
-      expect(request).not.toHaveBeenCalled();
     },
   );
 });

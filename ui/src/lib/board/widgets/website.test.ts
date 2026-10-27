@@ -2,22 +2,19 @@
 // @vitest-environment-options {"url":"https://control.example/"}
 import { afterEach, describe, expect, it } from "vitest";
 import type { BoardWidget } from "../types.ts";
+import { createBoardWidget } from "../widget.test-support.ts";
 import "./website.tsx";
 
 function widget(url: string): BoardWidget {
-  return {
+  return createBoardWidget({
     name: "website",
-    tabId: "main",
     title: "Team status",
     contentKind: "plugin",
     pluginKind: "session:website",
     props: { url },
     sizeW: 12,
     sizeH: 8,
-    position: 0,
-    grantState: "none",
-    revision: 1,
-  };
+  });
 }
 
 async function mount(url: string, active = true) {

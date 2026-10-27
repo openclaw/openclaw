@@ -494,6 +494,7 @@ describe("Codex paired-device exec-server carrier", () => {
         published = await createPublishedWireWorkspace(path.join(root, "workspace"));
         gateway = await gatewayOwner.start({
           repoRoot: process.cwd(),
+          initializeCurrentRuntimeState: true,
           command: {
             executablePath: process.execPath,
             argsPrefix: ["dist/index.js"],

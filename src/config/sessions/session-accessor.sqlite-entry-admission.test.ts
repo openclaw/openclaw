@@ -8,6 +8,7 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
 import * as writerQueue from "../../shared/store-writer-queue.js";
@@ -585,6 +586,6 @@ it.each(["relative native reopen"] as const)(
       label: "retained selected root",
     });
     expect(env.OPENCLAW_STATE_DIR).toBe("state");
-    expect(fs.readdirSync(successor, { recursive: true })).toEqual([]);
+    expect(listDirectoryTreeStrictSync(successor).map((entry) => entry.relativePath)).toEqual([]);
   },
 );

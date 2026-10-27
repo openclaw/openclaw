@@ -125,11 +125,19 @@ describe("Control UI service-worker reconnect refresh", () => {
     expect(registration.update).toHaveBeenCalledOnce();
   });
 
-  it.each(["discovered", "installing", "waiting"] as const)(
-    "holds reconnect work until a %s replacement can identify its build",
-    async (phase) => {
-      const replacement = createWorker("next-build", "installing");
-      const registration = installRegistration();
+  it.each([
+    ["discovered", "next-build"],
+    ["installing", "next-build"],
+    ["waiting", "next-build"],
+    ["installing", CONTROL_UI_BUILD_INFO.buildId],
+  ] as const)(
+    "holds reconnect work until a %s replacement identifies build %s",
+    async (phase, version) => {
+      const ownBuild = version === CONTROL_UI_BUILD_INFO.buildId;
+      const replacement = createWorker(version, "installing");
+      const registration = installRegistration(
+        createWorker(ownBuild ? "previous-build" : undefined),
+      );
       if (phase === "discovered") {
         registration.update.mockImplementation(async () => {
           registration.installing = replacement as unknown as ServiceWorker;
@@ -151,24 +159,12 @@ describe("Control UI service-worker reconnect refresh", () => {
       registration.waiting = null;
       replacement.state = "activated";
       replacement.dispatchEvent(new Event("statechange"));
-      await expect(refresh).resolves.toBe(true);
+      await expect(refresh).resolves.toBe(!ownBuild);
+      if (ownBuild) {
+        expect(scheduleStaleChunkReload).not.toHaveBeenCalled();
+      }
     },
   );
-
-  it("releases reconnect work when activation serves the document's own build", async () => {
-    const replacement = createWorker();
-    replacement.state = "installing";
-    const registration = installRegistration(createWorker("previous-build"));
-    registration.installing = replacement as unknown as ServiceWorker;
-    const listening = vi.spyOn(replacement, "addEventListener");
-    const refresh = refreshControlUiServiceWorker();
-    await vi.waitFor(() => expect(listening).toHaveBeenCalled());
-    registration.active = replacement as unknown as ServiceWorker;
-    replacement.state = "activated";
-    replacement.dispatchEvent(new Event("statechange"));
-    await expect(refresh).resolves.toBe(false);
-    expect(scheduleStaleChunkReload).not.toHaveBeenCalled();
-  });
 
   it("does not hold reconnect work when document recovery declines the reload", async () => {
     const registration = installRegistration(createWorker("next-build"));

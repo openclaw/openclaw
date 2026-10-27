@@ -14,17 +14,18 @@ import {
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const registrar = resolveRuntimeWorkerUrl(doctorOutputEntrypoints.maintenance);
+type InterruptionOptions = {
+  pendingApproval?: boolean;
+  restoringApproval?: boolean;
+  progress?: boolean;
+  archiveSignal?: "SIGINT" | "SIGTERM" | "SIGHUP";
+  closedChildStdin?: boolean;
+};
 
 // Keep the maintenance, restoration, signal, and console owners real. Native
 // service and database adapters record effects only in this process's fixture.
-function interruptionScript(
-  eventsPath: string,
-  pendingApproval: boolean,
-  restoringApproval: boolean,
-  progress: boolean,
-  archiveSignal?: "SIGINT" | "SIGTERM",
-  closedChildStdin = false,
-) {
+function interruptionScript(eventsPath: string, options: InterruptionOptions) {
+  const { pendingApproval, restoringApproval, progress, archiveSignal, closedChildStdin } = options;
   return `
     import { registerHooks } from "node:module";
     import { once } from "node:events";
@@ -209,34 +210,24 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it.skipIf(process.platform === "win32").each([
+const interruptionCases: (InterruptionOptions & { interruption: string; code: number })[] = [
   { interruption: "closed stdout", code: 141 },
-  { interruption: "SIGINT during archives", code: 130 },
-  { interruption: "closed child stdin", code: 0 },
-  { interruption: "SIGTERM with progress", code: 143 },
-  { interruption: "SIGTERM while approving", code: 143 },
-  { interruption: "SIGTERM while restoring", code: 143 },
-] as const)(
+  { interruption: "SIGINT during archives", code: 130, archiveSignal: "SIGINT" },
+  { interruption: "closed child stdin", code: 0, closedChildStdin: true },
+  { interruption: "SIGTERM with progress", code: 143, archiveSignal: "SIGTERM", progress: true },
+  { interruption: "SIGHUP during archives", code: 129, archiveSignal: "SIGHUP" },
+  { interruption: "SIGTERM while approving", code: 143, pendingApproval: true },
+  { interruption: "SIGTERM while restoring", code: 143, restoringApproval: true },
+];
+it.skipIf(process.platform === "win32").each(interruptionCases)(
   "restores its stopped Gateway before $interruption exits",
-  async ({ interruption, code }) => {
+  async ({ interruption, code, ...options }) => {
     const root = dirs.make("doctor-interruption-");
     const eventsPath = path.join(root, "events.json");
-    const pendingApproval = interruption === "SIGTERM while approving";
-    const restoringApproval = interruption === "SIGTERM while restoring";
-    const archives =
-      interruption === "SIGINT during archives" || interruption === "SIGTERM with progress";
+    const { pendingApproval, restoringApproval, archiveSignal, closedChildStdin } = options;
     const child = spawn(
       resolveTestNodeExecPath(),
-      createNodeEvalArgs(
-        interruptionScript(
-          eventsPath,
-          pendingApproval,
-          restoringApproval,
-          interruption === "SIGTERM with progress",
-          archives ? (interruption === "SIGINT during archives" ? "SIGINT" : "SIGTERM") : undefined,
-          interruption === "closed child stdin",
-        ),
-      ),
+      createNodeEvalArgs(interruptionScript(eventsPath, options)),
       {
         env: {
           ...process.env,
@@ -272,7 +263,7 @@ it.skipIf(process.platform === "win32").each([
     try {
       const ready = await message();
       expect(ready[0]).toBe("stopped");
-      const terminationSignal = interruption === "SIGINT during archives" ? "SIGINT" : "SIGTERM";
+      const terminationSignal = archiveSignal ?? "SIGTERM";
       if (pendingApproval || restoringApproval) {
         const approval = message();
         child.send("continue", () => {});
@@ -280,7 +271,7 @@ it.skipIf(process.platform === "win32").each([
         child.kill("SIGTERM");
       } else if (interruption === "closed stdout") {
         child.stdout!.destroy();
-      } else if (!archives && interruption !== "closed child stdin") {
+      } else if (!archiveSignal && !closedChildStdin) {
         child.kill(terminationSignal);
       }
       if (!pendingApproval && !restoringApproval) {
@@ -291,8 +282,8 @@ it.skipIf(process.platform === "win32").each([
       expect(JSON.parse(fs.readFileSync(eventsPath, "utf8")), stderr).toEqual([
         "stopped",
         ...(pendingApproval ? ["approval-declined"] : []),
-        ...(interruption === "closed child stdin" ? ["child-stdin-closed"] : []),
-        ...(archives
+        ...(closedChildStdin ? ["child-stdin-closed"] : []),
+        ...(archiveSignal
           ? ["archive-started", "archives-cancelled", "repair-cancelled"]
           : ["repair-complete"]),
         "stores-closed",
@@ -302,7 +293,7 @@ it.skipIf(process.platform === "win32").each([
       ]);
       expect(signal, stderr).toBeNull();
       expect(exitCode, stderr).toBe(code);
-      if (interruption === "closed child stdin") {
+      if (closedChildStdin) {
         expect(stderr).not.toContain("Doctor interrupted");
       } else {
         expect(stderr).toContain(

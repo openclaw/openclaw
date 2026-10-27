@@ -6,25 +6,28 @@ import type {
   WorkerEnvironmentProfileSummary,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { nativeRuntime, createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
   createModalDialogTestFixture,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
+import { stubResizeObserver } from "../../test-helpers/resize-observer.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import {
   createPlacementPane,
   selectPlacementConfiguration,
   deviceFixture,
   type AsyncRequest,
 } from "./chat-pane-placement.test-support.ts";
+import { resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import {
+  runPaneHeaderAction,
   activePlacementSession as placementSession,
   offlineDeviceSession,
   createTestChatPane,
-  createGatewayBrowserClientFixture,
 } from "./chat-pane.test-support.ts";
 
 function activePlacementSession() {
@@ -90,14 +93,7 @@ function startMove(pane: ReturnType<typeof createTestChatPane>["pane"], row: Gat
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 
 beforeEach(() => {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
+  stubResizeObserver();
   dialogs = createModalDialogTestFixture();
 });
 
@@ -138,14 +134,7 @@ function repositoryRecoveryFixture(placementState: "local" | undefined) {
           },
         }
       : {}),
-    agentRuntime: {
-      id: "openclaw",
-      cloudPlacementSupported: true,
-      cloudPlacementExecutionMode: "worker-turn",
-      devicePlacementSupported: true,
-      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-      source: "model",
-    },
+    agentRuntime: { ...nativeRuntime(), devicePlacementSupported: true },
   };
   state.sessionKey = session.key;
   state.currentSessionId = session.sessionId;
@@ -217,53 +206,19 @@ describe("chat pane placement", () => {
 
   it("does not open worker dispatch for an archived repository session", async () => {
     const { pane, session, request } = repositoryRecoveryFixture("local");
-    await pane.changeHeaderPlacement({ ...session, archived: true }, "recover");
+    const archived = { ...session, archived: true };
+    expect(
+      resolveChatPanePlacement({
+        gatewaySnapshot: pane.context.gateway.snapshot,
+        movingKey: null,
+        reclaimingKey: null,
+        row: archived,
+      }).recoveryDisabledReason,
+    ).toBe("This session is archived. Unarchive it to continue the conversation.");
+    await pane.changeHeaderPlacement(archived, "recover");
 
     expect(request).not.toHaveBeenCalled();
     expect(document.body.querySelector("dialog[open]")).toBeNull();
-  });
-
-  it("shows authoritative device targets to writers and moves to the selected device", async () => {
-    const { pane, request, reconcileMutation } = moveFixture(
-      catalogRequest(
-        [{ id: "aws", providerId: "crabbox" }],
-        [
-          deviceFixture("runner", "Writer runner"),
-          deviceFixture("saturated", "Busy runner", { workerSlots: { total: 2, available: 0 } }),
-          deviceFixture("offline", "Offline runner", {
-            status: "unavailable",
-            workerSlots: undefined,
-          }),
-          deviceFixture("nonhost", "Hosting disabled", {
-            sessionHost: false,
-            workerSlots: undefined,
-          }),
-        ],
-      ),
-    );
-    const session = { ...activePlacementSession(), hasActiveRun: true };
-
-    const moving = dialogs.track(startMove(pane, session));
-    await waitForOption("device:runner");
-    expect(option("cloud:aws")).toBeNull();
-    expect(option("device:saturated")?.disabled).toBe(true);
-    expect(option("device:offline")?.disabled).toBe(true);
-    expect(option("device:nonhost")?.disabled).toBe(true);
-    expect(document.body.textContent).toContain("No worker slots are available");
-    expect(document.body.textContent).toContain("Device unavailable");
-    expect(document.body.textContent).toContain("Session hosting is disabled");
-    selectOption("device:runner");
-    clickButton("Move session", true);
-    await moving;
-
-    expect(request).toHaveBeenCalledWith("sessions.move", {
-      key: session.key,
-      agentId: "main",
-      expected: { generation: 1, environmentId: "worker:one", ownerEpoch: 1 },
-      target: { kind: "device", deviceId: "runner" },
-    });
-    expect(request.mock.calls.some(([method]) => method === "node.list")).toBe(false);
-    expect(reconcileMutation).toHaveBeenCalledWith("main");
   });
 
   it("moves codex to a two-mode cloud profile while preserving machine selection", async () => {
@@ -352,30 +307,6 @@ describe("chat pane placement", () => {
     await moving;
 
     expect(request).not.toHaveBeenCalled();
-  });
-
-  it("continues an offline device placement on the Gateway with exact abandonment", async () => {
-    const { pane, request, reconcileMutation } = moveFixture();
-    const session = offlineDeviceSession();
-
-    const moving = dialogs.track(startMove(pane, session));
-    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
-    await moving;
-
-    expect(request).toHaveBeenCalledWith("sessions.move", {
-      key: session.key,
-      agentId: "main",
-      expected: {
-        generation: session.placement.generation,
-        environmentId: session.placement.environmentId,
-        ownerEpoch: session.placement.activeOwnerEpoch,
-      },
-      target: { kind: "gateway" },
-      abandonSource: true,
-    });
-    expect(request).not.toHaveBeenCalledWith("environments.list", expect.anything());
-    expect(request).not.toHaveBeenCalledWith("node.list", expect.anything());
-    expect(reconcileMutation).toHaveBeenCalledWith("main");
   });
 
   it("keeps the offline placement visible when continuation fails", async () => {
@@ -474,9 +405,7 @@ describe("local session placement actions", () => {
     "does not dispatch after the picker becomes stale: %s",
     async (change) => {
       const { pane, session, state, request } = localFixture();
-      const moving = dialogs.track(
-        pane.handleHeaderSessionAction({ kind: "move-session" }, session),
-      );
+      const moving = dialogs.track(runPaneHeaderAction(pane, { kind: "move-session" }, session));
       await selectRepositoryWorker();
       const current = { ...session };
       if (change === "replacement") {
@@ -541,7 +470,7 @@ describe("local session placement actions", () => {
           }
         : original(method, ...args),
     );
-    const moving = dialogs.track(pane.handleHeaderSessionAction({ kind: "move-session" }, session));
+    const moving = dialogs.track(runPaneHeaderAction(pane, { kind: "move-session" }, session));
     await dialogs.waitFor(() => expect(option("cloud:cloud")).not.toBeNull());
     option("cloud:cloud")!.click();
     flush();

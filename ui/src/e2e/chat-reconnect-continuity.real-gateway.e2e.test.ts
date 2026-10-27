@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
@@ -8,7 +8,7 @@ import {
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { startScrollInferenceFixture } from "./chat-collaborator-scroll.real-gateway.test-support.ts";
 import { exactButton, requireString } from "./chat-flow.test-support.ts";
-import { callGateway, createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
+import { connectChatGateway, createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -21,25 +21,38 @@ const offlineTail = "The second section arrived while the browser was offline.";
 const followUpPrompt = "Confirm the next turn is clean.";
 const followUpReply = "The follow-up completed exactly once.";
 
+type HistoryPayload = {
+  inFlightRun?: { runId?: string; text?: string } | null;
+  messages?: Array<{ role?: string }>;
+};
 type Frame = {
   connection: number;
   type?: string;
   id?: string;
   method?: string;
+  ok?: boolean;
   params?: Record<string, unknown>;
-  payload?: {
-    inFlightRun?: { runId?: string; text?: string } | null;
-    messages?: Array<{ role?: string }>;
+  payload?: HistoryPayload & {
+    initialHistory?: { ok?: boolean; payload?: HistoryPayload };
   };
 };
 
 let instance: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
 let provider: Awaited<ReturnType<typeof startScrollInferenceFixture>>;
 
 const suite = createControlUiE2eSuite({
   name: "Control UI real Gateway reconnect continuity",
   startServerBeforeBrowser: true,
-  resources: { run: async () => {}, retainedState: () => instance.stateDir },
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+    retainedState: () => instance.stateDir,
+  },
   async startServer() {
     provider = await startScrollInferenceFixture();
     const close = () =>
@@ -70,15 +83,16 @@ const suite = createControlUiE2eSuite({
 
 const occurrences = (value: string, marker: string) => value.split(marker).length - 1;
 
-const call = (method: string, params: Record<string, unknown>) =>
-  callGateway(instance, method, params);
-
 suite.define(() => {
   it("reconstructs one streamed turn after browser socket loss, then aborts and follows up cleanly", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      await call("sessions.create", { key: sessionKey, agentId: "main", label: "Reconnect" });
-      const readHistory = async () =>
-        JSON.parse(await call("chat.history", { sessionKey })) as NonNullable<Frame["payload"]>;
+      await client.request("sessions.create", {
+        key: sessionKey,
+        agentId: "main",
+        label: "Reconnect",
+      });
+      const readHistory = () =>
+        client.request<NonNullable<Frame["payload"]>>("chat.history", { sessionKey });
       const url = new URL("/chat/main/reconnect-continuity", suite.server.baseUrl);
       url.hash = new URLSearchParams({ token: instance.gatewayToken }).toString();
 
@@ -165,12 +179,21 @@ suite.define(() => {
         (frame) =>
           frame.connection === 2 &&
           frame.type === "req" &&
-          ["chat.startup", "chat.history"].includes(frame.method ?? "") &&
-          frame.params?.sessionKey === sessionKey,
+          ((["chat.startup", "chat.history"].includes(frame.method ?? "") &&
+            frame.params?.sessionKey === sessionKey) ||
+            (frame.method === "sessions.messages.subscribe" &&
+              frame.params?.key === sessionKey &&
+              frame.params.initialHistory !== undefined)),
       );
       expect(historyRequest?.id).toEqual(expect.any(String));
-      expect(response(historyRequest?.id, 2)).toMatchObject({
-        type: "res",
+      const historyResponse = response(historyRequest?.id, 2);
+      expect(historyResponse).toMatchObject({ type: "res", ok: true });
+      const history =
+        historyRequest?.method === "sessions.messages.subscribe"
+          ? historyResponse?.payload?.initialHistory
+          : { ok: historyResponse?.ok, payload: historyResponse?.payload };
+      expect(history).toMatchObject({
+        ok: true,
         payload: { inFlightRun: { runId, text: opening + offlineTail } },
       });
 
@@ -188,16 +211,21 @@ suite.define(() => {
       await expect.poll(() => response(aborts()[0]?.id)).toMatchObject(ack);
       await stop.waitFor({ state: "detached" });
 
-      // A cursor-free CLI read proves persistence outside the browser cache and live stream buffer.
-      const abortedHistory = await readHistory();
-      expect(abortedHistory.inFlightRun ?? null).toBeNull();
-      const partials = abortedHistory.messages?.filter(({ role }) => role === "assistant");
-      expect(partials).toHaveLength(1);
-      expect(partials?.[0]).toMatchObject({
-        content: [{ type: "text", text: opening + offlineTail }],
-        idempotencyKey: `${runId}:assistant`,
-        openclawAbort: { aborted: true, origin: "rpc", runId },
-      });
+      // Stop acknowledges cancellation before the producer's deferred partial is persisted.
+      await vi.waitFor(
+        async () => {
+          const abortedHistory = await readHistory();
+          expect(abortedHistory.inFlightRun ?? null).toBeNull();
+          const partials = abortedHistory.messages?.filter(({ role }) => role === "assistant");
+          expect(partials).toHaveLength(1);
+          expect(partials?.[0]).toMatchObject({
+            content: [{ type: "text", text: opening + offlineTail }],
+            idempotencyKey: `${runId}:assistant`,
+            openclawAbort: { aborted: true, origin: "rpc", runId },
+          });
+        },
+        { timeout: 15_000 },
+      );
 
       const followUpTurn = provider.plan();
       await composer.fill(followUpPrompt);
@@ -208,12 +236,19 @@ suite.define(() => {
       await followUpTurn.finish();
       // Final text hands off from the live stream to persisted history at settlement.
       await stop.waitFor({ state: "detached" });
-      const completedHistory = await readHistory();
-      expect(completedHistory.inFlightRun ?? null).toBeNull();
-      expect(completedHistory.messages?.filter(({ role }) => role === "assistant")).toMatchObject([
-        { content: [{ type: "text", text: opening + offlineTail }] },
-        { content: [{ type: "text", text: followUpReply }] },
-      ]);
+      await vi.waitFor(
+        async () => {
+          const completedHistory = await readHistory();
+          expect(completedHistory.inFlightRun ?? null).toBeNull();
+          expect(
+            completedHistory.messages?.filter(({ role }) => role === "assistant"),
+          ).toMatchObject([
+            { content: [{ type: "text", text: opening + offlineTail }] },
+            { content: [{ type: "text", text: followUpReply }] },
+          ]);
+        },
+        { timeout: 15_000 },
+      );
       await assistant(followUpReply).waitFor();
 
       await page.reload();

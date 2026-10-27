@@ -1,6 +1,6 @@
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { validateStructuredOutputSchema } from "../subagents/swarm/swarm-output-schema.js";
 import { isToolResultError } from "../tool-result-error.js";
 import {
@@ -109,22 +109,19 @@ describe("structured_output", () => {
     const { submit } = makeTool({ onStateChange: persist });
     await expect(submit({ count: "bad" })).rejects.toThrow("Retry once");
     const previous = peek(runId);
-    const entered = createDeferred();
-    const release = createDeferred();
-    persist.mockImplementationOnce(() => {
-      entered.resolve();
-      return release.promise.then(() => {
-        throw new Error("storage unavailable");
-      });
+    const gate = createEnteredGate();
+    persist.mockImplementationOnce(async () => {
+      await gate.wait();
+      throw new Error("storage unavailable");
     });
     const rejected = expect(submit({ count: "still bad" })).rejects.toThrow(
       "Failed to persist structured_output: storage unavailable",
     );
-    await entered.promise;
+    await gate.entered;
     try {
       expect(peek(runId)).toEqual(previous);
     } finally {
-      release.resolve();
+      gate.release();
     }
     await rejected;
     expect(peek(runId)).toEqual(previous);
@@ -138,21 +135,17 @@ describe("structured_output", () => {
   });
 
   it("publishes one acknowledged result when tool calls overlap", async () => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    const persist = vi.fn(async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const gate = createEnteredGate();
+    const persist = vi.fn(gate.wait);
     const { submit } = makeTool({ schema: {}, onStateChange: persist });
     const first = submit({ answer: "first" });
-    await entered.promise;
+    await gate.entered;
     const duplicate = expect(submit({ answer: "second" })).rejects.toThrow("already recorded");
     try {
       expect(peek(runId)).toBeUndefined();
       expect(persist).toHaveBeenCalledOnce();
     } finally {
-      release.resolve();
+      gate.release();
     }
     expect((await first).details).toEqual({ status: "recorded" });
     await duplicate;

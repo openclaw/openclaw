@@ -7,8 +7,8 @@ import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-snapshot.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
-import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 import {
   agentEvent,
   createHost,
@@ -358,6 +358,43 @@ describe("app-tool-stream approval lifecycle", () => {
     resetToolStream(host);
   });
 
+  it("keeps text output next to node browser tab details in a completed live result", () => {
+    const host = createHost();
+    const emit = toolEvents(host, "browser-text-run", {
+      name: "browser",
+      toolCallId: "browser-text-call",
+    });
+    emit(1, {
+      phase: "start",
+      args: { action: "open" },
+    });
+    emit(2, {
+      phase: "result",
+      result: {
+        content: [{ type: "text", text: "CLI result" }],
+        details: {
+          browserTab: {
+            profile: "shared",
+            target: "node",
+            node: "node-1",
+            targetId: "tab-shared",
+            url: "https://example.org/",
+            title: "Shared tab",
+          },
+        },
+      },
+    });
+    const entry = [...host.toolStreamById.values()][0];
+    const [card] = extractToolCardsCached(entry?.message);
+    expect(card).toMatchObject({
+      completed: true,
+      outputText: "CLI result",
+      browserTab: { profile: "shared", target: "node", node: "node-1", targetId: "tab-shared" },
+      preview: { kind: "browser-tab", profile: "shared", target: "node", targetId: "tab-shared" },
+    });
+    resetToolStream(host);
+  });
+
   const approval = (runId: string | undefined, sessionKey = "main") => ({
     id: "approval-1",
     kind: "exec" as const,
@@ -461,6 +498,51 @@ describe("app-tool-stream throttled projections", () => {
     ]);
   });
 });
+
+it.each(["live", "history"] as const)(
+  "does not create raw tool bubbles for display-hidden automation activity (%s)",
+  (source) => {
+    useToolStreamFakeTimers();
+    const host = createHost();
+    for (const [index, phase] of ["start", "update", "result"].entries()) {
+      for (const stream of ["item", "tool"] as const) {
+        handleAgentEvent(
+          host,
+          agentEvent("run-quiet", index * 2 + (stream === "item" ? 1 : 2), stream, {
+            itemId: "tool:quiet-call",
+            toolCallId: "quiet-call",
+            kind: "tool",
+            name: "automations",
+            title: "Automations",
+            phase: stream === "item" && phase === "result" ? "end" : phase,
+            hideFromChannelProgress: true,
+            display: false,
+          }),
+          source,
+        );
+      }
+    }
+    vi.advanceTimersByTime(80);
+    expect(host.chatToolMessages).toEqual([]);
+    expect(host.toolStreamOrder).toEqual([]);
+    // A later attention result has no display suppression and must still create its card.
+    handleAgentEvent(
+      host,
+      agentEvent("run-quiet", 7, "tool", {
+        toolCallId: "quiet-call",
+        name: "automations",
+        phase: "result",
+        isError: true,
+        result: "The check failed.",
+      }),
+      source,
+    );
+    expect(host.chatToolMessages.flatMap(extractToolCardsCached)).toMatchObject([
+      { name: "automations", isError: true },
+    ]);
+    resetToolStream(host);
+  },
+);
 
 it("does not render Codex reasoning items as tool calls", () => {
   const host = createHost({ chatRunId: "run-1" });

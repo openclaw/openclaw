@@ -20,7 +20,8 @@ import {
   saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun } from "./subagent-registry.js";
-import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
+import type { RegistryRegistrationFixture } from "./subagent-registry.requester-completion.fixture.test-support.js";
+import type { SubagentRegistrationScope } from "./subagent-registry.types.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 
 type Registration = Parameters<typeof registerSubagentRun>[0];
@@ -28,10 +29,7 @@ type Registration = Parameters<typeof registerSubagentRun>[0];
 export function registerSubagentRegistrationOwnershipTests({
   registration,
   updateRun,
-}: {
-  registration: (runId: string, overrides?: Partial<Registration>) => Registration;
-  updateRun: (runId: string, update: (draft: SubagentRunRecord) => void) => Promise<void>;
-}) {
+}: RegistryRegistrationFixture) {
   const paramsFor = (runId: string, overrides: Partial<Registration> = {}) =>
     registration(runId, { childSessionKey: "global", ...overrides });
   const register = (runId: string, overrides?: Partial<Registration>) =>

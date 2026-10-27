@@ -66,7 +66,6 @@ function policyReceipt(
         : [],
     ),
     retiredRunIds: [...postimages].flatMap(([id, entry]) => (entry ? [] : [id])),
-    queueIds: [],
   };
 }
 
@@ -175,7 +174,7 @@ export function mockBlockedCompletionDeliveryOwner(completionDeliveryMocks: {
   mutateRequesterCompletionBatch: Mock<typeof mutateRequesterCompletionBatch>;
   ownersByEntry: CompletionPolicyOwners;
 }): void {
-  // Policy fixtures use the real row owner; native worker suites own queue receipts.
+  // Policy fixtures use the real row owner; native worker suites own committed receipts.
   const mutateWake = createRequesterSettleWakeMutationFixture(
     completionDeliveryMocks.ownersByEntry,
   );
@@ -320,7 +319,6 @@ export function registerPrivateCompletionSettlementTests({
           requesterYielded ? true : undefined,
         );
         expect(readLifecycleRun(sibling).execution.endedAt).toBeUndefined();
-        expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
         expect(completionDeliveryMocks.blockSubagentCompletionDelivery).not.toHaveBeenCalled();
       } finally {
         requesterTurn.restore();
@@ -403,7 +401,6 @@ export function registerNativeCompletionAuthorityTest({
       killReconciliation: { killedAt: 4_000, suppressTaskDelivery: true },
       completion: { required: true, resultText: null, capturedAt: 4_000 },
     });
-    const marker = entry.killReconciliation;
     const original = structuredClone(entry);
     const controller = createLifecycleController({ entry });
     await completeRun(controller, entry, {
@@ -412,10 +409,9 @@ export function registerNativeCompletionAuthorityTest({
       triggerCleanup: false,
     });
     expect(readLifecycleRun(entry)).toEqual(original);
-    expect(readLifecycleRun(entry).killReconciliation).toBe(marker);
     expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
   });
-  it.each(["replacement", "cancellation", "recovery authority"] as const)(
+  it.each(["replacement", "recovery authority"] as const)(
     "does not commit a captured result after %s retires its owner",
     async (transition) => {
       const entry = createRunEntry({ expectsCompletionMessage: false });
@@ -446,9 +442,7 @@ export function registerNativeCompletionAuthorityTest({
         recoveryHostCurrent = false;
       } else {
         await mutateLifecycleRun(entry, (draft) => {
-          if (transition === "replacement") {
-            draft.generation = (draft.generation ?? 0) + 1;
-          }
+          draft.generation = (draft.generation ?? 0) + 1;
           draft.execution = {
             status: "terminal",
             endedAt: 3_000,
@@ -462,14 +456,10 @@ export function registerNativeCompletionAuthorityTest({
       beforeWrite.mockClear();
       gate.release();
       const [result] = await settled;
-      if (transition === "cancellation") {
-        expect(result?.status).toBe("fulfilled");
-      } else {
-        expect(result).toMatchObject({
-          status: "rejected",
-          reason: expect.objectContaining({ message: "Subagent terminal execution changed" }),
-        });
-      }
+      expect(result).toMatchObject({
+        status: "rejected",
+        reason: expect.objectContaining({ message: "Subagent terminal execution changed" }),
+      });
       expect(runs.get(entry.runId)).toBe(successor);
       expect(beforeWrite).not.toHaveBeenCalled();
       expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();

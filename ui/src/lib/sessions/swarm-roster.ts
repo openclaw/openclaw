@@ -1,5 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { childSessionListQuery } from "./child-session-data.ts";
 import type { SessionCapability, SessionListSnapshot, SessionRowObservation } from "./index.ts";

@@ -38,7 +38,8 @@ function createLedgerStore<T>(): PluginStateKeyedStore<T> {
   };
 }
 
-type MenuCommands = Parameters<typeof syncTelegramMenuCommands>[0]["commandsToRegister"];
+type MenuOptions = Parameters<typeof syncTelegramMenuCommands>[0];
+type MenuCommands = MenuOptions["commandsToRegister"];
 type MenuScope = { scope?: { type?: string }; language_code?: string };
 function createMenu(botToken = `${nextBotId++}:test-token`) {
   const deleteMyCommands = vi.fn(async (_options?: MenuScope): Promise<void> => undefined);
@@ -54,12 +55,8 @@ function createMenu(botToken = `${nextBotId++}:test-token`) {
     runtimeError,
     sync: (commandsToRegister: MenuCommands) =>
       syncTelegramMenuCommands({
-        bot: { api: { deleteMyCommands, setMyCommands } } as unknown as Parameters<
-          typeof syncTelegramMenuCommands
-        >[0]["bot"],
-        runtime: { log: runtimeLog, error: runtimeError, exit: vi.fn() } as Parameters<
-          typeof syncTelegramMenuCommands
-        >[0]["runtime"],
+        bot: { api: { deleteMyCommands, setMyCommands } } as unknown as MenuOptions["bot"],
+        runtime: { log: runtimeLog, error: runtimeError, exit: vi.fn() } as MenuOptions["runtime"],
         accountId: botToken,
         botToken,
         commandsToRegister,
@@ -83,13 +80,6 @@ function setMyCommandsCall(setMyCommands: MenuMock, index: number) {
 }
 
 const setMyCommandsPayload = (mock: MenuMock, index: number) => setMyCommandsCall(mock, index)[0];
-
-function readLanguageCodeFromApiCall(call: readonly unknown[]): unknown {
-  const options = call.at(-1);
-  return options && typeof options === "object" && "language_code" in options
-    ? options.language_code
-    : undefined;
-}
 
 beforeEach(() => {
   ledgerRows.clear();
@@ -123,25 +113,22 @@ describe("bot-native-command-menu sync lifecycle", () => {
     expect(setMyCommands).toHaveBeenCalledTimes(4);
 
     expect(deleteMyCommands).toHaveBeenCalledTimes(2);
-    expect(setMyCommandsPayload(setMyCommands, 0)).toEqual([
-      { command: "cmd", description: "Default" },
+    expect(setMyCommands.mock.calls.map(([payload, options]) => [payload, options])).toEqual([
+      [[{ command: "cmd", description: "Default" }], undefined],
+      [[{ command: "cmd", description: "Default" }], { scope: { type: "all_group_chats" } }],
+      [[{ command: "cmd", description: "한국어" }], { language_code: "ko" }],
+      [
+        [{ command: "cmd", description: "한국어" }],
+        { scope: { type: "all_group_chats" }, language_code: "ko" },
+      ],
     ]);
-    expect(setMyCommandsPayload(setMyCommands, 2)).toEqual([
-      { command: "cmd", description: "한국어" },
-    ]);
-    expect(setMyCommandsCall(setMyCommands, 2).at(1)).toEqual({ language_code: "ko" });
-    expect(setMyCommandsCall(setMyCommands, 3).at(1)).toEqual({
-      scope: { type: "all_group_chats" },
-      language_code: "ko",
-    });
     expect(runtimeLog).toHaveBeenCalledWith(
       "Telegram command menu ignored unsupported description localization codes: en-GB, zz.",
     );
     expect(
-      [...deleteMyCommands.mock.calls, ...setMyCommands.mock.calls].every((call) => {
-        const languageCode = readLanguageCodeFromApiCall(call);
-        return languageCode !== "zz" && languageCode !== "en-GB";
-      }),
+      deleteMyCommands.mock.calls.every(
+        ([options]) => options?.language_code !== "zz" && options?.language_code !== "en-GB",
+      ),
     ).toBe(true);
   });
 
@@ -278,10 +265,7 @@ describe("bot-native-command-menu sync lifecycle", () => {
     const events: string[] = [];
     let active = 0;
     let maxActive = 0;
-    const record = async (
-      kind: string,
-      options?: { scope?: { type?: string }; language_code?: string },
-    ) => {
+    const record = async (kind: string, options?: MenuScope) => {
       active += 1;
       maxActive = Math.max(maxActive, active);
       events.push(
@@ -320,18 +304,16 @@ describe("bot-native-command-menu sync lifecycle", () => {
   it("retries failed localized cleanup instead of hash-caching it", async () => {
     let failFrenchGroupClear = false;
     const { deleteMyCommands, setMyCommands, runtimeError, sync } = createMenu();
-    deleteMyCommands.mockImplementation(
-      async (options?: { scope?: { type?: string }; language_code?: string }) => {
-        if (
-          failFrenchGroupClear &&
-          options?.language_code === "fr" &&
-          options.scope?.type === "all_group_chats"
-        ) {
-          failFrenchGroupClear = false;
-          throw new Error("localized cleanup failed");
-        }
-      },
-    );
+    deleteMyCommands.mockImplementation(async (options?: MenuScope) => {
+      if (
+        failFrenchGroupClear &&
+        options?.language_code === "fr" &&
+        options.scope?.type === "all_group_chats"
+      ) {
+        failFrenchGroupClear = false;
+        throw new Error("localized cleanup failed");
+      }
+    });
     await sync([makeCommand({ fr: "Français" })]);
     expect(setMyCommands).toHaveBeenCalledTimes(4);
     deleteMyCommands.mockClear();

@@ -6,6 +6,7 @@ import {
   buildCodexAppInventoryCacheKey,
   serializeCodexAppInventoryError,
 } from "./app-inventory-cache.js";
+import { appMetadata as app } from "./app-inventory.test-helpers.js";
 import { CodexAppServerRpcError } from "./client.js";
 import type { CodexAppServerRequestParams, CodexAppServerRequestResult, v2 } from "./protocol.js";
 
@@ -344,20 +345,6 @@ describe("Codex app inventory cache", () => {
     expect(read.snapshot?.apps).toEqual([app("calendar-app")]);
   });
 });
-
-function app(id: string): AppMetadata {
-  return {
-    id,
-    name: id,
-    description: null,
-    iconUrl: null,
-    iconUrlDark: null,
-    distributionChannel: null,
-    installUrl: null,
-    pluginDisplayNames: [],
-    toolSummaries: null,
-  };
-}
 
 function codexAppInventoryResponse<Method extends "app/installed" | "app/read">(
   method: Method,

@@ -101,7 +101,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
 
     #### Custom provider capability declarations
 
-    Provider catalogs own `compat` for bundled and catalog-known model routes. Do not copy those flags into config: OpenClaw uses the catalog row when the configured `api` and `baseUrl` still identify that route. `openclaw doctor --fix` removes matching legacy overrides and reports divergent values for review.
+    Provider catalogs own `compat` defaults for bundled and catalog-known model routes. Explicit `supportsReasoningEffort`, `supportedReasoningEfforts`, and `reasoningEffortMap` declarations override catalog reasoning metadata on the same route. Other flags still use the catalog row when the configured `api` and `baseUrl` identify that route. `openclaw doctor --fix` removes matching legacy overrides and reports divergent values for review.
 
     A `compat` block remains supported for a genuinely custom provider, custom model, or catalog model routed to a different endpoint. Set only capabilities verified against that endpoint:
 
@@ -120,7 +120,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     | `strictMessageKeys` | Requires outgoing messages to contain only accepted keys. |
     | `visibleReasoningDetailTypes` | Names reasoning detail block types safe to show in transcripts. |
     | `supportedReasoningEfforts` | Lists the endpoint's accepted reasoning labels. Requests are clamped to this ladder. Unknown models default to `low`, `medium`, and `high`. |
-    | `reasoningEffortMap` | Maps OpenClaw thinking labels to endpoint-specific labels. Custom Completions routes omit effort for `off` by default; an explicit off mapping can send the endpoint's accepted disable value. |
+    | `reasoningEffortMap` | Maps OpenClaw thinking labels to endpoint-specific labels. Unknown Completions and Responses routes omit effort for `off` by default; an explicit off mapping can send the endpoint's accepted disable value. |
     | `maxTokensField` | Selects `max_tokens` or `max_completion_tokens`. |
     | `thinkingFormat` | Selects the endpoint's reasoning payload dialect. |
     | `requiresToolResultName` | Requires a tool name on tool-result messages. |

@@ -10,7 +10,7 @@ import {
 } from "./diagnostic-profile.js";
 
 const WINDOW_MS = 5_000;
-const SAMPLE_MS = 10;
+const SAMPLE_MS = 25;
 const MAX_SAMPLES = 1_024;
 const MAX_PROFILE_BYTES = 1_048_576;
 
@@ -50,8 +50,8 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
     warn("stall flight recorder unavailable: profiler-start-failed");
   }
   return {
-    sample(stallMs = 0): string | undefined {
-      if (disabled || !active || (stallMs === 0 && performance.now() - startedAt < WINDOW_MS)) {
+    sample(stall?: { startedAt: number; endedAt: number }): string | undefined {
+      if (disabled || !active || (!stall && performance.now() - startedAt < WINDOW_MS)) {
         return undefined;
       }
       try {
@@ -59,10 +59,12 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
         // Keep the native code map and sampler alive; restarting the last profile scans the heap.
         active = start();
         startedAt = performance.now();
-        const current = { json: old.stop(), endedAt: performance.now() };
+        // Native endTime precedes serialization; anchoring afterward shifts samples forward.
+        const endedAt = performance.now();
+        const current = { json: old.stop(), endedAt };
         const windows = previous ? [previous, current] : [current];
         previous = current.json.length <= MAX_PROFILE_BYTES ? current : undefined;
-        if (!stallMs) {
+        if (!stall) {
           return undefined;
         }
         const counts = new Map<string, number>();
@@ -82,12 +84,12 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
             }
           }
           let at = profile.startTime;
-          const cutoff =
-            profile.endTime - (stallMs + 100 - (performance.now() - window.endedAt)) * 1_000;
+          const from = profile.endTime + (stall.startedAt - window.endedAt) * 1_000;
+          const to = profile.endTime + (stall.endedAt - window.endedAt) * 1_000;
           truncated ||= (profile.samples?.length ?? 0) >= MAX_SAMPLES;
           for (const [index, id] of (profile.samples ?? []).entries()) {
             at += profile.timeDeltas?.[index] ?? 0;
-            if (at < cutoff) {
+            if (at < from || at > to) {
               continue;
             }
             samples++;
@@ -122,7 +124,7 @@ export function createStallFlightRecorder(warn: (message: string) => void) {
           }
         }
         const frames = [...counts].toSorted((a, b) => b[1] - a[1]).slice(0, 8);
-        return `windowMs=${Math.round(stallMs + 100)} samples=${samples} intervalMs=${SAMPLE_MS} truncated=${truncated} inclusive=${JSON.stringify(frames)}`;
+        return `windowMs=${Math.round(stall.endedAt - stall.startedAt)} windowStartMs=${Math.round(performance.timeOrigin + stall.startedAt)} windowEndMs=${Math.round(performance.timeOrigin + stall.endedAt)} reportedAtMs=${Math.round(performance.timeOrigin + performance.now())} samples=${samples} intervalMs=${SAMPLE_MS} truncated=${truncated} inclusive=${JSON.stringify(frames)}`;
       } catch {
         stop();
         warn("stall flight recorder unavailable: profiler-capture-failed");

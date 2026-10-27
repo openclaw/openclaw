@@ -4,7 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { getAiTransportHost } from "@openclaw/ai";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { resolveAgentDir } from "../../agents/agent-scope-config.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../../agents/auth-profiles/path-resolve.native.js";
 import {
@@ -57,12 +57,7 @@ function waitForWork(
   completion: Promise<unknown>,
   message = "Completion settled before accepted work",
 ) {
-  return Promise.race([
-    started,
-    completion.then(() => {
-      throw new Error(message);
-    }),
-  ]);
+  return awaitGateBeforeSettlement(started, completion, message);
 }
 
 const nextTurn = () =>

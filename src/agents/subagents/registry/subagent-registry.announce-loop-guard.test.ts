@@ -136,6 +136,7 @@ describe("announce loop guard (#18264)", () => {
   async function hydrateAndActivateRegistry() {
     await registry.initSubagentRegistry();
     const recoveryRuntime = {
+      prepareFailedWorkerPlacement: async () => undefined,
       prepareRestartRecovery: () => undefined,
       resumeChatInput: async () => {
         throw new Error("Unexpected chat input recovery");

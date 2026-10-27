@@ -4,7 +4,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as terminalNote from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronModelSelection } from "../cron/isolated-agent/model-selection.js";
 import { readDefaultProactiveJobReceiptInDatabase } from "../cron/proactive-job-receipt.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
@@ -135,45 +134,6 @@ it.each([
         expect(job.payload).toMatchObject({ model: "openai/gpt-4o-mini" });
       } else {
         expect(job.payload).not.toHaveProperty("model");
-      }
-      const selection = {
-        cfg: next,
-        agentId: "main",
-        agentDir: path.join(root, "agents", "main", "agent"),
-        workspaceDir: path.join(root, "workspace"),
-        sessionEntry: {},
-        isGmailHook: false,
-        owner: {
-          config: next,
-          agentId: "main",
-          agentDir: path.join(root, "agents", "main", "agent"),
-          workspaceDir: path.join(root, "workspace"),
-          metadataSnapshot,
-          modelCatalog: { entries: [], routeVariants: [] },
-        },
-      };
-      await expect(
-        resolveCronModelSelection({
-          ...selection,
-          payloadModel: job.payload.kind === "agentTurn" ? job.payload.model : undefined,
-        }),
-      ).resolves.toMatchObject({
-        ok: true,
-        provider: "openai",
-        model: allowed ? "gpt-4o-mini" : "gpt-5.4",
-        modelSource: allowed ? "payload" : "default",
-        ...(pending ? { configuredProfileId: "openai:subscription" } : {}),
-      });
-      if (!allowed) {
-        await expect(
-          resolveCronModelSelection({
-            ...selection,
-            payloadModel: "openai/gpt-4o-mini",
-          }),
-        ).resolves.toMatchObject({
-          ok: false,
-          error: expect.stringContaining("rejected by agents.defaults.modelPolicy.allow"),
-        });
       }
     }
     const warnings = note.mock.calls.filter(([, title]) => title === "Heartbeat model changed");

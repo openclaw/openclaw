@@ -222,23 +222,26 @@ function extractDiagnosticMediaField(
   return { kind: "redacted", bytes, source: encoded };
 }
 
-const diagnosticRecords = new WeakSet<object>();
-
-/** Fresh records need no native-object probe while their prototype stays ordinary. */
-export function createDiagnosticRecord(): Record<string, unknown> {
-  const record = {};
-  diagnosticRecords.add(record);
-  return record;
-}
-
-/** Producer-filled arrays hold only assigned elements, like diagnostic records. */
-export function createDiagnosticArray(): unknown[] {
-  const array: unknown[] = [];
-  diagnosticRecords.add(array);
-  return array;
-}
-
 export function projectDiagnosticValue(
+  value: unknown,
+  policy: DiagnosticProjectionPolicy = {},
+  seen?: WeakSet<object>,
+  mediaPayload?: boolean,
+  state?: { changed: boolean; nodesRemaining: number },
+): unknown {
+  return projectValue(false, value, policy, seen, mediaPayload, state);
+}
+
+/** Internal producers supply a fresh graph of ordinary records and assigned array elements. */
+export function projectPreparedDiagnosticValue(
+  value: unknown,
+  policy?: DiagnosticProjectionPolicy,
+): unknown {
+  return projectValue(true, value, policy);
+}
+
+function projectValue(
+  producerOwned: boolean,
   value: unknown,
   policy: DiagnosticProjectionPolicy = {},
   seen = new WeakSet<object>(),
@@ -276,7 +279,7 @@ export function projectDiagnosticValue(
     }
     if (
       !Array.isArray(value) &&
-      (!diagnosticRecords.has(value) || Object.getPrototypeOf(value) !== Object.prototype)
+      (!producerOwned || Object.getPrototypeOf(value) !== Object.prototype)
     ) {
       try {
         // Brand-check without provider getters; retain only numeric retry timing.
@@ -290,11 +293,11 @@ export function projectDiagnosticValue(
     }
     const keys = Reflect.ownKeys(value);
     const maxKeys = policy.maxKeys ?? 64;
-    // Branded producer output holds only own enumerable data properties in native key order,
+    // Prepared producer output holds only own enumerable data properties in native key order,
     // so reading it directly matches the descriptor snapshot without allocating one per key.
     const trusted =
       keys.length <= maxKeys &&
-      diagnosticRecords.has(value) &&
+      producerOwned &&
       Object.getPrototypeOf(value) === (Array.isArray(value) ? Array.prototype : Object.prototype);
     let descriptors: PropertyDescriptorMap | undefined;
     if (!trusted) {
@@ -370,7 +373,7 @@ export function projectDiagnosticValue(
         continue;
       }
       const childMedia = media?.kind === "context";
-      out[key] = projectDiagnosticValue(child, policy, seen, childMedia, state);
+      out[key] = projectValue(producerOwned, child, policy, seen, childMedia, state);
     }
     return out;
   } catch {
@@ -428,7 +431,8 @@ function projectDiagnosticText(value: string): string {
     try {
       const state = { changed: false, nodesRemaining: 64 };
       const parsed = JSON.parse(fragment.json);
-      const projected = projectDiagnosticValue(parsed, {}, new WeakSet(), false, state);
+      // JSON.parse owns this fresh data-only graph; no provider getters or native brands remain.
+      const projected = projectValue(true, parsed, {}, new WeakSet(), false, state);
       redacted += state.changed ? stableStringify(projected) : fragment.json;
     } catch {
       return "[Malformed diagnostic JSON redacted]";

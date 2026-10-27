@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -309,7 +310,16 @@ suite.define(() => {
               .getByRole("button", { name: "Show more" });
             await showMore.click();
             await showMore.click();
-            await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(30);
+            await revealSidebarTarget(
+              scroller,
+              page.locator('.sidebar-recent-session[data-session-key="agent:main:task-29"]'),
+            );
+            await scroller.evaluate((element) => {
+              element.scrollTop = 0;
+            });
+            await page
+              .locator('.sidebar-recent-session[data-session-key="agent:main:task-0"]')
+              .waitFor();
           }
           const homeTop = () => home.evaluate((element) => element.getBoundingClientRect().top);
           const rowTop = () => row.evaluate((element) => element.getBoundingClientRect().top);
@@ -317,11 +327,20 @@ suite.define(() => {
           await row.hover();
           const initialHomeTop = await homeTop();
           const initialRowTop = await rowTop();
+          const firstRow = await row.elementHandle();
           const initialRailBounds = await railBounds();
           expect(initialRailBounds).toHaveLength(3);
 
           await page.mouse.wheel(0, 160);
-          await expect.poll(rowTop).toBeLessThan(initialRowTop - 80);
+          await expect
+            .poll(() =>
+              firstRow!.evaluate(
+                (element, top) =>
+                  !element.isConnected || element.getBoundingClientRect().top < top - 80,
+                initialRowTop,
+              ),
+            )
+            .toBe(true);
 
           expect(await homeTop()).toBe(initialHomeTop);
           expect(await railBounds()).toEqual(initialRailBounds);
@@ -336,6 +355,7 @@ suite.define(() => {
           expect(await railBounds()).toEqual(initialRailBounds);
           expect(await scroller.evaluate((element) => element.scrollTop)).toBe(0);
           expect(await rowTop()).toBeCloseTo(initialRowTop, 0);
+          await firstRow!.dispose();
         },
       );
     },

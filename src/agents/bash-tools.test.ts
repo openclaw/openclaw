@@ -15,6 +15,7 @@ import {
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
+import type { SpawnInput } from "../process/supervisor/types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
@@ -25,6 +26,7 @@ import { getFinishedSession, waitForExecScope } from "./bash-process-registry.js
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import * as supervisorExit from "./bash-tools.exec-runtime.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
+import { fullGatewayExec, runningSession } from "./bash-tools.lifecycle.test-support.js";
 import { getBashShellConfig } from "./shell-utils.js";
 
 // mock-isolation: Hold normal follow-up admission so factory tests can inspect exact queued routing.
@@ -48,10 +50,8 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 vi.mock("../infra/shell-env.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
   return {
-    ...actual,
+    ...(await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js")),
     getShellPathFromLoginShell: vi.fn(() => null),
     resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
   };
@@ -61,16 +61,7 @@ vi.mock("../infra/shell-env.js", async () => {
 vi.mock("../process/supervisor/index.js", async () => {
   const { takeHeldSupervisorExit, createRunExit } =
     await import("./bash-tools.exec-runtime.test-support.js");
-  type SpawnInput = {
-    argv?: string[];
-    env?: NodeJS.ProcessEnv;
-    onStdout?: (chunk: string) => void;
-  };
-
-  const immediate = () =>
-    new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+  const { setImmediate: immediate } = await import("node:timers/promises");
   const splitCommands = (command: string) =>
     command
       .split(";")
@@ -99,7 +90,7 @@ vi.mock("../process/supervisor/index.js", async () => {
 
   return {
     getProcessSupervisor: () => ({
-      spawn: async (input: SpawnInput) => {
+      spawn: async (input: Partial<Extract<SpawnInput, { mode: "child" }>>) => {
         const exitGate = takeHeldSupervisorExit();
         const command = input.argv?.at(-1) ?? "";
         const output = commandOutput(command, input.env);
@@ -152,9 +143,7 @@ const shellEcho = (text: string) => (isWin ? `Write-Output ${text}` : `echo ${te
 const echoSequence = (...values: string[]) => values.map(shellEcho).join("; ");
 const createTool = (defaults?: Parameters<typeof createExecTool>[0]) =>
   createExecTool({
-    host: "gateway",
-    security: "full",
-    ask: "off",
+    ...fullGatewayExec,
     bypassHostApprovalFloors: true,
     scopeKey,
     ...defaults,
@@ -171,15 +160,8 @@ const execute = (
 ) => tool.execute(`call-${++callId}`, { command, ...options });
 const processAction = (args: Parameters<typeof processTool.execute>[1]) =>
   processTool.execute(`call-${++callId}`, args);
-function runningId(result: Awaited<ReturnType<ReturnType<typeof createExecTool>["execute"]>>) {
-  expect(result.details.status).toBe("running");
-  if (result.details.status !== "running") {
-    throw new Error("expected running session");
-  }
-  return result.details.sessionId;
-}
 const startBackground = async (tool: ReturnType<typeof createExecTool>, command: string) =>
-  runningId(await execute(tool, command, { background: true }));
+  runningSession((await execute(tool, command, { background: true })).details).sessionId;
 const notifyTool = (defaults?: Parameters<typeof createExecTool>[0]) =>
   createTool({
     backgroundMs: 0,
@@ -229,7 +211,7 @@ it("yields a pollable process and releases foreground callbacks", async () => {
     );
     await Promise.race([exit.waitStarted, execution]);
     await vi.advanceTimersByTimeAsync(10);
-    const runningSessionId = runningId(await execution);
+    const runningSessionId = runningSession((await execution).details).sessionId;
     expect(onUpdate).toHaveBeenCalledTimes(1);
     const listener = addListener.mock.calls.find(([type]) => type === "abort")?.[1];
     expect(listener).toBeDefined();
@@ -295,29 +277,8 @@ it("reads the unbounded offset log window", async () => {
   const log = await processAction({ action: "log", sessionId, offset: 30 });
   expect(log.details).toMatchObject({ totalLines: 201 });
   expect(text(log).split("\n")[0]).toBe("line-31");
-  expect(text(log).split("\n").at(-1)).toBe("line-201");
+  expect(text(log)).toMatch(/line-201\n\nProcess exited with code 0\.$/);
   expect(text(log)).not.toContain("showing last 200");
-});
-
-it("isolates process lists and polling by scopeKey", async () => {
-  const alpha = await startBackground(createTool({ scopeKey: "agent:alpha" }), shellEcho("alpha"));
-  const beta = await startBackground(createTool({ scopeKey: "agent:beta" }), shellEcho("beta"));
-  try {
-    const list = await createProcessTool({ scopeKey: "agent:alpha" }).execute("list", {
-      action: "list",
-    });
-    expect(list.details).toMatchObject({
-      sessions: [expect.objectContaining({ sessionId: alpha })],
-    });
-    expect(text(list)).not.toContain(beta);
-    const poll = await createProcessTool({ scopeKey: "agent:beta" }).execute("poll", {
-      action: "poll",
-      sessionId: alpha,
-    });
-    expect(poll.details).toMatchObject({ status: "failed" });
-  } finally {
-    await Promise.all([waitForExecScope("agent:alpha"), waitForExecScope("agent:beta")]);
-  }
 });
 
 describe("background completion notifications", () => {

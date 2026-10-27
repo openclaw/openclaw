@@ -1,9 +1,6 @@
 import { createChannelProgressDraftCompositor } from "openclaw/plugin-sdk/channel-outbound";
 import { createNativeCommandItem } from "./event-projector-command.test-support.js";
-import {
-  createConfiguredProjection,
-  createProjection,
-} from "./event-projector-projection.test-support.js";
+import { createConfiguredProjection } from "./event-projector-projection.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -53,7 +50,7 @@ function streamData(mock: ReturnType<typeof vi.fn>, stream: string) {
 }
 
 describe("CodexAppServerEventProjector replay safety and progress projection", () => {
-  it("keeps dynamic card blocked outcomes in the correct progress stream", async () => {
+  it("keeps executed blocked card outcomes side-effecting and in the correct progress stream", async () => {
     const onToolResult = vi.fn();
     const { projector, events } = await createConfiguredProjection({
       verboseLevel: "full",
@@ -81,6 +78,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
       tool: item.tool,
       success: false,
       terminalType: "blocked" as const,
+      sideEffectEvidence: true,
       contentItems: [{ type: "inputText" as const, text }],
     };
     projector.recordDynamicToolResult(result);
@@ -100,6 +98,10 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
       isError: true,
     });
     expect(JSON.stringify(onToolResult.mock.calls)).not.toContain("private");
+    expect(events.result().replayMetadata).toEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
   });
 
   it.each([false, true])(
@@ -144,28 +146,6 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
       }
     },
   );
-
-  it("keeps executed dynamic tools side-effecting when their result is rewritten as blocked", async () => {
-    const { projector, events } = await createProjection();
-
-    projector.recordDynamicToolCall({
-      callId: "call-bash-blocked",
-      tool: "bash",
-      arguments: { command: "touch blocked.txt" },
-    });
-    projector.recordDynamicToolResult({
-      callId: "call-bash-blocked",
-      tool: "bash",
-      success: false,
-      terminalType: "blocked",
-      sideEffectEvidence: true,
-      contentItems: [{ type: "inputText", text: "blocked" }],
-    });
-
-    const result = events.result();
-
-    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
-  });
 
   it("records command sensitivity on namespaced MCP item events", async () => {
     const onAgentEvent = vi.fn();
@@ -259,10 +239,6 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
     expect(itemEvent.status).toBeUndefined();
     expect(event("tool", "result", "bash")).toMatchObject({ status: "completed", isError: false });
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      "codex app-server item reported unknown status; continuing projection",
-      { itemId: "cmd-future-status", itemType: "commandExecution", status: "pausedByProtocol" },
-    );
   });
 
   it("warns once per raw unknown event kind and continues projecting known events", async () => {

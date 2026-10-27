@@ -180,6 +180,7 @@ const ownerRoutedUnitTestPatterns = [
   "src/agents/agent-harness-completion-ownership.test.ts",
   "src/agents/agent-command.compaction-rotation.test.ts",
   "src/agents/agent-command.embedded-maintenance.test.ts",
+  "src/agents/agent-command.operator-direct-root.test.ts",
   // Source plugin workers retain the agent runtime owner after test extraction.
   "src/agents/code-mode-quickjs.integration.test.ts",
   "src/agents/tool-surface-plan.provider-catalog.integration.test.ts",
@@ -218,7 +219,6 @@ const broadUnitFastCandidateSkipPatterns = prepareGlobPatterns(
     "src/proxy-capture/runtime.test.ts",
     "src/plugins/install.npm-spec.test.ts",
     "src/plugins/contracts/**/*.test.ts",
-    "src/pairing/pairing-store.test.ts",
     "src/plugin-sdk/browser-subpaths.test.ts",
     "src/security/**/*.test.ts",
     "src/secrets/**/*.test.ts",

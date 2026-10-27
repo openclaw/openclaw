@@ -16,6 +16,7 @@ import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite
 import { observeSessionMaintenanceCompletion } from "../../config/sessions/session-accessor.sqlite-maintenance-completion.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import { gatewayOwnerPayload } from "../../infra/gateway-owner-payload.test-support.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
@@ -55,7 +56,6 @@ const SETUP_LIST_MAX_ATTEMPTS = 3;
 export async function createComposedCatalogFixture(
   state: OpenClawTestState,
   counters: ReturnType<typeof createCatalogIoCounters>,
-  options: { beforeNativeListResponse?: () => Promise<void> } = {},
 ) {
   const agentDir = state.agentDir("main");
   await fs.mkdir(path.join(agentDir, "codex-home"), { recursive: true });
@@ -140,19 +140,7 @@ export async function createComposedCatalogFixture(
         });
         return;
       }
-      const respond = () => send({ result });
-      if (request.method === "thread/list" && options.beforeNativeListResponse) {
-        void options.beforeNativeListResponse().then(respond, (error: unknown) => {
-          send({
-            error: {
-              code: -32603,
-              message: error instanceof Error ? error.message : "Synthetic native list failed",
-            },
-          });
-        });
-      } else {
-        respond();
-      }
+      send({ result });
     }),
   );
   await once(server, "listening");
@@ -219,14 +207,7 @@ export async function createComposedCatalogFixture(
     // Exercise the serving Gateway's admission path, including worker reads.
     stateOwner = acquireGatewayStateOwner({
       databasePath: resolveOpenClawStateSqlitePath(),
-      payload: {
-        pid: process.pid,
-        processNamespace: readGatewayLockProcessNamespace(),
-        createdAt: new Date().toISOString(),
-        configPath: state.configPath,
-        stateDir: state.stateDir,
-        role: "gateway",
-      },
+      payload: gatewayOwnerPayload(state, readGatewayLockProcessNamespace),
     });
     counters.observeOwnershipFile(stateOwner.path);
     // These are resident catalog rows, not an age-pruning fixture.
@@ -408,7 +389,6 @@ export async function createComposedCatalogFixture(
     const setupMaintenance = { completed: 0 };
     let maintenanceReady: ReturnType<typeof observeSessionMaintenanceCompletion> | undefined;
     return {
-      api,
       projection,
       list,
       setupList,

@@ -1,6 +1,7 @@
 import type { BrowserContext, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { computeBaseConfigSchemaResponse } from "../../../src/config/schema-base.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
@@ -78,10 +79,7 @@ function seedSettings(context: BrowserContext, values: Record<string, unknown>, 
 }
 
 async function delayedThemeRoute(page: Page) {
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const { promise: gate, resolve: release } = createDeferred();
   await page.route("https://tweakcn.com/r/themes/replacement", async (route) => {
     await gate;
     await route.fulfill({ json: createTweakcnThemePayload() });

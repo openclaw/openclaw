@@ -85,10 +85,6 @@ export function takeHeldSupervisorExit(): HeldSupervisorExit | undefined {
   return heldSupervisorExit;
 }
 
-function releaseHeldSupervisorExit(): void {
-  heldSupervisorExit?.release();
-}
-
 export async function withHeldSupervisorExit<T>(
   run: (exit: Pick<HeldSupervisorExit, "waitStarted">) => Promise<T>,
   settle: () => Promise<void>,
@@ -97,7 +93,7 @@ export async function withHeldSupervisorExit<T>(
   try {
     return await run(holdNextSupervisorExit());
   } finally {
-    releaseHeldSupervisorExit();
+    heldSupervisorExit?.release();
     try {
       await settle();
     } finally {

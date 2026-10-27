@@ -177,7 +177,7 @@ describe("memory source changes during indexing", () => {
       deleteIndexedFile(
         pathname: string,
         source: MemorySource,
-        expectedHash?: string,
+        expectedHash?: string | null,
       ): Promise<void>;
     };
     const deleteIndexedFile = deletion.deleteIndexedFile.bind(manager);

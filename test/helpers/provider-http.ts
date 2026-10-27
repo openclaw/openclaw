@@ -77,6 +77,22 @@ export function oversizedJsonResponse(params?: {
   return { response, state };
 }
 
+export function cancelTrackedResponse(init?: ResponseInit) {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("ignored"));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 export function bufferedOversizedJsonResponse(): Response {
   return new Response(Buffer.alloc(16 * 1024 * 1024 + 1, 0x20), {
     status: 200,

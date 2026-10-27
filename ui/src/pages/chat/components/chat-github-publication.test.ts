@@ -26,6 +26,12 @@ import {
 let container: HTMLDivElement;
 const query = (selector: string) => container.querySelector(selector);
 const publish = () => container.querySelector<HTMLButtonElement>(".chat-pr__create");
+const waitForPublication = () =>
+  waitForSolid(() => {
+    const button = publish();
+    expect(button).not.toBeNull();
+    return button!;
+  });
 let environmentView:
   | {
       update: (work: ChatPullRequestsProps) => void;
@@ -171,8 +177,8 @@ it.each([
     branch: sessionBranch(),
     publication: await settled(controller),
   });
+  const action = await waitForPublication();
   const row = container.querySelector<HTMLElement>(".chat-environment__branch")!;
-  const action = row.querySelector<HTMLButtonElement>(".chat-pr__create")!;
   expect(action.textContent).toBe("Create PR");
   expect(action.disabled).toBe(!scenario.native);
   row.querySelector<HTMLButtonElement>(".chat-pr__actions-trigger")!.click();
@@ -325,9 +331,7 @@ it("selects an eligible profile directly from Details and publishes its exact id
     });
   changed.mockImplementation(draw);
   draw();
-  const create = container.querySelector<HTMLButtonElement>(
-    ".chat-environment__branch button.chat-pr__create",
-  );
+  const create = await waitForPublication();
   expect(create?.textContent).toBe("Create PR");
   expect(
     request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
@@ -388,9 +392,7 @@ it.each(["personal", "confirmation"] as const)(
         onConfirm: nativeAction,
       }),
     });
-    const entry = container.querySelector<HTMLButtonElement>(
-      ".chat-environment__branch button.chat-pr__create",
-    )!;
+    const entry = await waitForPublication();
     expect(entry.textContent).toBe(state === "personal" ? "Create PR" : "Review");
     entry.click();
     await waitForSolid(() =>
@@ -408,7 +410,7 @@ it.each(["personal", "confirmation"] as const)(
   },
 );
 
-it.each([false, true])("labels publication reads as Loading (recovery=%s)", (recovery) => {
+it.each([false, true])("labels publication reads as Loading (recovery=%s)", async (recovery) => {
   const onPublish = vi.fn();
   const draw = (activity: GitHubPublicationView["activity"]) =>
     paintEnvironment({
@@ -419,6 +421,7 @@ it.each([false, true])("labels publication reads as Loading (recovery=%s)", (rec
       publication: publication({ activity, locked: recovery, onPublish }),
     });
   draw("read");
+  await waitForPublication();
   expect(publish()?.textContent?.trim()).toBe("Loading…");
   draw("publish");
   expect(publish()?.textContent?.trim()).toBe("Creating…");
@@ -433,7 +436,7 @@ it.each(["pull-requests", "environment"] as const)(
     const readiness = { read: null, retired: retired.promise };
     const onPublish = vi.fn(() => completion.promise);
     paint({ readiness, onPublish }, surface);
-    const button = publish()!;
+    const button = await waitForPublication();
     button.click();
     await waitForSolid(() => expect(button.disabled).toBe(true));
     expect(onPublish).toHaveBeenCalledOnce();
@@ -469,7 +472,7 @@ it.each(["pull-requests", "environment"] as const)(
   async (surface) => {
     const completion = Promise.withResolvers<void>();
     paint({ onPublish: () => completion.promise }, surface);
-    publish()!.click();
+    (await waitForPublication()).click();
     completion.reject(new Error("Publication action unavailable"));
     await waitForSolid(() =>
       expect(container.textContent).toContain("Publication action unavailable"),
@@ -488,7 +491,7 @@ it.each(["pull-requests", "environment"] as const)(
   async (surface) => {
     const completion = Promise.withResolvers<void>();
     paint({ onPublish: () => completion.promise }, surface);
-    publish()!.click();
+    (await waitForPublication()).click();
     await waitForSolid(() => expect(publish()?.disabled).toBe(true));
     if (surface === "environment") {
       environmentView?.unmount();
@@ -514,7 +517,7 @@ it.each(["pull-requests", "environment"] as const)(
       },
       surface,
     );
-    publish()!.click();
+    (await waitForPublication()).click();
     await waitForSolid(() =>
       expect(container.querySelector('button[aria-label="Refresh publication"]')).not.toBeNull(),
     );
@@ -533,7 +536,7 @@ it.each([
   ["publishing", "Could not read publication status.", "Retry", true],
 ] as const)(
   "distinguishes %s with status error %s in Environment",
-  (status, error, label, warning) => {
+  async (status, error, label, warning) => {
     const result =
       status === "failed"
         ? {
@@ -547,6 +550,7 @@ it.each([
           ? { status, requestId: "request-one", message: "Publication status." }
           : null;
     paint({ locked: status !== "failed", result, error }, "environment");
+    await waitForPublication();
     expect(publish()?.textContent).toContain(label);
     expect(publish()?.querySelector(".chat-pr__publication-warning") !== null).toBe(warning);
   },

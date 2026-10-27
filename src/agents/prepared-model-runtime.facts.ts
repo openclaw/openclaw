@@ -236,22 +236,30 @@ export async function prepareWorkspaceBuildGroup(
       (options.providerDiscoveryProviderIds ?? []).map(normalizeProviderId).filter(Boolean),
     );
     const configuredModelRefs: ConfiguredModelRef[] = [];
+    const configuredScopes = new Map<
+      PreparedModelRuntimeInput,
+      Parameters<typeof prepareAgentFacts>[2]
+    >();
     for (const candidate of inputs) {
       await nextTurn();
       options.assertCurrent?.(candidate);
       const { config, agentId } = candidate;
-      for (const provider of withAgentRosterFactsBatch(config, () => {
+      const scope = withAgentRosterFactsBatch(config, () => {
         const refs = collectPreparedModelRuntimeConfiguredRefs(
           config,
           agentId,
           candidate.readOnly ? candidate.runtimePluginSelections : undefined,
         );
         configuredModelRefs.push(...refs);
-        return [
+        const providerIds = [
           ...collectPreparedModelRuntimeProviderIds(config, {}, false, refs, agentId),
           ...parseConfiguredModelVisibilityEntries({ cfg: config, agentId }).providerWildcards,
+          ...(options.providerDiscoveryProviderIds ?? []).map(normalizeProviderId).filter(Boolean),
         ];
-      })) {
+        return { configuredModelRefs: refs, providerIds };
+      });
+      configuredScopes.set(candidate, scope);
+      for (const provider of scope.providerIds) {
         configuredProviders.add(provider);
       }
     }
@@ -356,11 +364,10 @@ export async function prepareWorkspaceBuildGroup(
       agentBaseFacts.push(
         await prepareAgentFacts(
           candidate,
-          catalogMode,
           ambientCredentials,
+          configuredScopes.get(candidate)!,
           () => options.assertCurrent?.(candidate),
-          options.providerDiscoveryProviderIds,
-          options.includeCredentialProviders,
+          options.includeCredentialProviders ?? catalogMode === "live",
         ),
       );
     }
@@ -511,10 +518,7 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
   pluginGeneration: PreparedModelRuntimePluginGeneration;
   assertCurrent?: (input: PreparedModelRuntimeInput) => void;
   registries?: PreparedConfiguredModelRegistries;
-}): Promise<{
-  catalogs: Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogFacts>;
-  registryCount: number;
-}> {
+}) {
   const catalogs = new Map<PreparedModelRuntimeInput, PreparedModelRuntimeCatalogFacts>();
   let registryCount = 0;
   const preparedStaticProviderConfigs = resolvePreparedProviderStaticConfigs(

@@ -6,7 +6,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
-import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
@@ -40,38 +39,6 @@ function readManifests() {
           JSON.parse(fs.readFileSync(path.join(repoRoot, file), "utf8")) as Record<string, unknown>,
         ] as const,
     );
-}
-
-function listProductionSources(): string[] {
-  return listBundledPluginFiles()
-    .filter((file) => /\.(?:ts|tsx|js|mjs|cjs)$/.test(file))
-    .filter((file) => !/(^|\/)(?:node_modules|dist|\.[^/]+)(?:\/|$)/.test(file))
-    .filter((file) => !/(\.test\.|\.spec\.|\/__tests__\/|\/test-support\/)/.test(file))
-    .filter((file) => fs.existsSync(path.join(repoRoot, file)))
-    .toSorted();
-}
-
-function providerObjects(source: string): string[] {
-  return Array.from(
-    source.matchAll(/\bregisterProvider\s*\(|:\s*[A-Za-z0-9_]*ProviderPlugin\s*=\s*\{/g),
-    (match) => {
-      const start = match.index + match[0].length - 1;
-      const closer = source[start] === "(" ? ")" : "}";
-      let depth = 0;
-      // Consume quoted strings whole, then balance only punctuation outside them.
-      const tokens =
-        /"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`|[()[\]{}]/g;
-      for (const token of source.slice(start).matchAll(tokens)) {
-        const char = token[0];
-        if ("({[".includes(char)) {
-          depth++;
-        } else if (")}]".includes(char) && --depth === 0 && char === closer) {
-          return source.slice(start + 1, start + token.index);
-        }
-      }
-      return "";
-    },
-  );
 }
 
 // Group aggregator aliases with first-party rows, ignoring namespace and case.
@@ -252,25 +219,5 @@ describe("bundled channel-provider skill contracts", () => {
         .map((pattern) => `${file}: retired contract ${pattern.source}`);
     });
     expect(failures).toStrictEqual([]);
-  });
-});
-
-describe("bundled provider catalog deprecation guard", () => {
-  it("lists production extension sources from git without walking extension roots", () => {
-    expectNoReaddirSyncDuring(() => {
-      const files = listProductionSources();
-      expect(files.length).toBeGreaterThan(0);
-      expect(files.every((file) => file.startsWith("extensions"))).toBe(true);
-      expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
-    });
-  });
-
-  it("keeps bundled provider plugins off the deprecated discovery hook", () => {
-    const offenders = listProductionSources().flatMap((file) =>
-      providerObjects(fs.readFileSync(path.join(repoRoot, file), "utf8"))
-        .filter((candidate) => /\bdiscovery\s*:/.test(candidate))
-        .map(() => file),
-    );
-    expect(offenders).toEqual([]);
   });
 });

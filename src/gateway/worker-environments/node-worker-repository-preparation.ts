@@ -1,9 +1,15 @@
 import { createHash } from "node:crypto";
-import { appendGitConfig, gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
+import {
+  gitMaintenanceEnvironment,
+  gitMaintenanceEnvironmentExpression,
+} from "../../infra/git-maintenance-env.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { NodeWorkerWorkspaceExecResult } from "../../worker/node-workspace-protocol.js";
-import { prepareRepositoryPublicationRestore } from "../github-repository-publication-restore.js";
+import {
+  prepareRepositoryPublicationRestore,
+  RESTORE_PUBLICATION_INDEX_JS,
+} from "../github-repository-publication-restore.js";
 import type { createNodeWorkspaceTransferCommand } from "./node-workspace-transfer-command.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type {
@@ -40,11 +46,17 @@ type RepositoryIdentity = {
 
 const AUTHENTICATED_GIT_JS = String.raw`const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
-const { origin, token } = JSON.parse(fs.readFileSync(0, "utf8"));
+const { origin, token, disableLazyFetch } = JSON.parse(fs.readFileSync(0, "utf8"));
 const env = { ...process.env };
 for (const key of Object.keys(env)) if (/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key)) delete env[key];
 Object.assign(env, { GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" });
-Object.assign(env, (${appendGitConfig.toString()})(${JSON.stringify(gitMaintenanceEnvironment())}, token ? [["http." + origin + ".extraheader", "Authorization: Basic " + Buffer.from("x-access-token:" + token).toString("base64")]] : []));
+if (disableLazyFetch) env.GIT_NO_LAZY_FETCH = "1";
+Object.assign(env, token ? ${gitMaintenanceEnvironmentExpression([
+  [
+    '"http." + origin + ".extraheader"',
+    '"Authorization: Basic " + Buffer.from("x-access-token:" + token).toString("base64")',
+  ],
+])} : ${JSON.stringify(gitMaintenanceEnvironment())});
 const args = process.argv.slice(1);
 // Identity-scoped workspaces can put partial-clone .promisor files at MAX_PATH.
 if (process.platform === "win32") args.unshift("-c", "core.longpaths=true");
@@ -136,7 +148,11 @@ export function createNodeWorkerRepositoryPreparation(
   ) =>
     exec({
       argv: ["node", "-e", AUTHENTICATED_GIT_JS, "--", ...WORKER_REPOSITORY_GIT_ARGS, ...args],
-      input: JSON.stringify({ origin: identity?.origin, token: identity?.gitToken }),
+      input: JSON.stringify({
+        origin: identity?.origin,
+        token: identity?.gitToken,
+        disableLazyFetch: args[0] === "fetch",
+      }),
       ...(resetWorkspace ? { resetWorkspace: true } : {}),
       timeoutMs: GIT_TIMEOUT_MS,
       transportRetry: "never",
@@ -463,12 +479,13 @@ export async function restoreNodeWorkerRepositoryCheckpoint(params: {
     if (historyNote) {
       workspaceSyncLog.info(historyNote);
     }
-    for (const command of await prepareRepositoryPublicationRestore({
+    for (const batch of await prepareRepositoryPublicationRestore({
       ...checkpoint,
       current: manifest,
     })) {
       const publicationRestored = await exec({
-        ...command,
+        argv: ["node", "-e", RESTORE_PUBLICATION_INDEX_JS, batch.action],
+        input: batch.input,
         timeoutMs: 60_000,
         transportRetry: "never",
         assertCurrent: authorize,

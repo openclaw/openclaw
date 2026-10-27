@@ -266,7 +266,11 @@ function ChatPaneHeaderChrome(
                   />
                 </Show>
               </Show>
-              <Show when={props.gatewayStatus?.kind}>
+              <Show
+                when={
+                  props.gatewayStatus?.kind ?? (props.savedConversation ? "reconnecting" : null)
+                }
+              >
                 {(kind) => (
                   <openclaw-tooltip
                     prop:content={
@@ -319,7 +323,9 @@ function ChatPaneHeaderChrome(
                             />
                           </Show>
                         </span>
-                        {t(`connection.${kind()}`)}
+                        {props.savedConversation
+                          ? t("chat.savedConversation", { status: t(`connection.${kind()}`) })
+                          : t(`connection.${kind()}`)}
                       </span>
                       <Show when={canRetryGatewayStatus(kind()) && props.gatewayStatus?.onRetry}>
                         <span class="chat-pane__connection-divider" aria-hidden="true" />

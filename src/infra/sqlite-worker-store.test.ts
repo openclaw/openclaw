@@ -1,15 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import {
-  link,
-  mkdir,
-  readFile,
-  readdir,
-  rename,
-  symlink,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
+import { link, mkdir, readFile, rename, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getEnvironmentData, setEnvironmentData, Worker } from "node:worker_threads";
@@ -21,6 +12,7 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
@@ -32,9 +24,11 @@ import {
   appendWorkerRow as append,
   readWorkerRows as read,
 } from "./sqlite-worker-fixture.test-support.js";
+import { readDatabasePathIdentity } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import {
   openSharedStateSqliteWorkerStore,
+  openSqliteWorkerStore,
   closeUnclaimedSharedStateSqliteWorkers,
   hasUnclaimedSharedStateSqliteCleanup,
   runSqliteWorkerStoreOperation,
@@ -302,7 +296,9 @@ describe("SQLite worker store", () => {
         incognito,
         empty: "",
       };
-      const contents = (await readdir(directory, { recursive: true })).toSorted();
+      const contents = (await listDirectoryTreeStrict(directory))
+        .map((walkEntry) => walkEntry.relativePath)
+        .toSorted();
       // A regressed broker can create a file from a memory locator; its child owns that cwd.
       const result = await runNodeScript(
         createNodeEvalArgs(
@@ -338,11 +334,48 @@ describe("SQLite worker store", () => {
       );
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
-      expect((await readdir(directory, { recursive: true })).toSorted()).toEqual(contents);
+      expect(
+        (await listDirectoryTreeStrict(directory))
+          .map((walkEntry) => walkEntry.relativePath)
+          .toSorted(),
+      ).toEqual(contents);
     },
   );
 
   describe.skipIf(process.platform === "win32")("replaced admitted aliases", () => {
+    it("refuses borrowed cleanup after alias replacement without changing an ordinary actor client", async () => {
+      const file = databasePath();
+      const aliasPath = path.join(path.dirname(file), "cleanup.sqlite");
+      const ordinary = await open(file);
+      const original = await append(ordinary, "original");
+      await symlink(file, aliasPath);
+      const identity = await readDatabasePathIdentity(aliasPath);
+      const cleanup = await openSqliteWorkerStore<FixtureOperations>({
+        moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+        databasePath: aliasPath,
+        input: undefined,
+        existingOnly: true,
+        admission: {
+          identity: identity.key,
+          birthtime: identity.birthtime,
+          assertCurrent() {},
+        },
+      });
+      expect(cleanup).toBeDefined();
+      if (!cleanup) {
+        throw new Error("Expected cleanup to borrow the existing database");
+      }
+      stores.add(cleanup);
+      expect(await append(cleanup, "borrowed")).toMatchObject({ actor: original.actor });
+      await unlink(aliasPath);
+      await writeFile(aliasPath, "");
+      await expect(append(cleanup, "must not write")).rejects.toThrow(
+        "database no longer matches its borrowed native owner",
+      );
+      expect(await append(ordinary, "ordinary")).toMatchObject({ actor: original.actor });
+      expect(await read(ordinary)).toEqual(["original", "borrowed", "ordinary"]);
+    });
+
     it.each(["hardlink", "symlink"] as const)(
       "holds a replaced %s alias until both alias clients drain and close",
       async (kind) => {

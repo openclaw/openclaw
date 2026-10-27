@@ -1,11 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createContextEngineLogicalTurnLease as createTurn } from "../agents/harness/context-engine-logical-turn.js";
 import { resolveConfigWidePluginMetadataSnapshot as resolveMetadata } from "../config/io.plugin-metadata.js";
 import type { ConfigReplaceInput } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { listContextEngineQuarantines } from "../context-engine/registry.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -19,11 +17,9 @@ import { persistPluginInstall } from "./install-persistence.js";
 import { writePersistedInstalledPluginIndex as writeIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex as readIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex as loadIndex } from "./installed-plugin-index.js";
-import { loadPluginRegistryHandle } from "./loader.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot as loadMetadata } from "./plugin-metadata-snapshot.js";
 import * as metadataWorker from "./plugin-metadata-state-worker.js";
-import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import {
   cleanupTrackedTempDirs,
@@ -74,16 +70,16 @@ function isolateWorkspace(root: string, configPath?: string) {
   }
 }
 
-function workspace(name: string, kind?: string, withCapabilities = false) {
+function workspace(
+  name: string,
+  options: { kind?: string; capabilities?: boolean; installed?: boolean } = {},
+) {
   const root = makeTrackedTempDir(`managed-${name}`, roots);
-  const pluginRoot = path.join(root, "plugin");
+  const pluginRoot = options.installed
+    ? resolvePluginInstallDir(name, path.join(root, "state", "extensions"))
+    : path.join(root, "plugin");
   const configPath = path.join(root, "openclaw.json");
-  if (withCapabilities) {
-    mkdirSafeDir(pluginRoot);
-  }
-  const fixture = withCapabilities
-    ? createColdPluginFixture({ rootDir: pluginRoot, pluginId: name })
-    : coldFixture(pluginRoot, name, kind);
+  const fixture = coldFixture(pluginRoot, name, options);
   isolateWorkspace(root, configPath);
   return { root, pluginRoot, configPath, fixture };
 }
@@ -126,22 +122,32 @@ function publishMetadata(config: OpenClawConfig) {
   return boot;
 }
 
-function coldFixture(rootDir: string, pluginId: string, kind?: string) {
+function coldFixture(
+  rootDir: string,
+  pluginId: string,
+  { kind, capabilities }: { kind?: string; capabilities?: boolean } = {},
+) {
   mkdirSafeDir(rootDir);
   return createColdPluginFixture({
     rootDir,
     pluginId,
     manifest: {
       ...(kind ? { kind } : {}),
-      providers: [],
-      channels: [],
-      channelConfigs: {},
-      providerAuthChoices: [],
+      ...(!capabilities && {
+        providers: [],
+        channels: [],
+        channelConfigs: {},
+        providerAuthChoices: [],
+      }),
     },
   });
 }
 
-function mockConfigFile(configPath: string, initial: OpenClawConfig) {
+function mockConfigFile(
+  configPath: string,
+  initial: OpenClawConfig,
+  options: { error?: Error; receipt?: boolean } = {},
+) {
   let current = initial;
   configIo.read.mockImplementation(async () => ({
     snapshot: {
@@ -154,25 +160,29 @@ function mockConfigFile(configPath: string, initial: OpenClawConfig) {
     writeOptions: { expectedConfigPath: configPath },
   }));
   configIo.write.mockImplementation(async (params: ConfigReplaceInput) => {
+    if (options.error) {
+      throw options.error;
+    }
     const config = params.sourceConfig ?? params.nextConfig;
     current = config;
     fs.writeFileSync(configPath, JSON.stringify(config));
-    return { path: configPath, nextConfig: config };
+    return {
+      path: configPath,
+      nextConfig: config,
+      ...(options.receipt && { persistedHash: "committed", persistedSourceConfig: config }),
+    };
   });
   return () => current;
 }
 
 it("refreshes foreign install facts and requires live authority before publishing management inventory", async () => {
-  const root = makeTrackedTempDir("managed-external-ledger", roots);
-  const pluginRoot = path.join(root, "external-install");
+  const {
+    root,
+    pluginRoot,
+    fixture: { pluginId: id },
+  } = workspace("external-candidate", { capabilities: true });
   const loadPath = path.join(root, "configured-plugins");
-  mkdirSafeDir(pluginRoot);
   mkdirSafeDir(loadPath);
-  const { pluginId: id } = createColdPluginFixture({
-    rootDir: pluginRoot,
-    pluginId: "external-candidate",
-  });
-  isolateWorkspace(root);
   const config: OpenClawConfig = { plugins: { load: { paths: [loadPath] } } };
   await writeIndex(loadIndex({ config, env: process.env, candidates: [], installRecords: {} }));
   const boot = publishMetadata(config);
@@ -225,30 +235,24 @@ it("refreshes foreign install facts and requires live authority before publishin
 });
 
 it("removes an npm-pack plugin from management inventory without replacing Gateway metadata", async () => {
-  const root = makeTrackedTempDir("managed-npm-pack-uninstall", roots);
-  const stateDir = path.join(root, "state");
-  const packageName = "@example/tgz-visible";
-  const pluginRoot = resolvePluginInstallDir("tgz-visible", path.join(stateDir, "extensions"));
-  mkdirSafeDir(pluginRoot);
-  const { pluginId: id } = createColdPluginFixture({
-    rootDir: pluginRoot,
-    pluginId: "tgz-visible",
-    packageName,
-  });
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+  const {
+    root,
+    pluginRoot,
+    configPath,
+    fixture: { pluginId: id },
+  } = workspace("tgz-visible", { installed: true, capabilities: true });
   const config: OpenClawConfig = {
     plugins: { entries: { [id]: { enabled: true } } },
   };
   const installRecord = {
     source: "npm",
-    spec: `${packageName}@1.0.0`,
+    spec: "@example/openclaw-cold-control-plane@1.0.0",
     sourcePath: path.join(root, `${id}.tgz`),
     installPath: pluginRoot,
     artifactKind: "npm-pack",
     artifactFormat: "tgz",
   } as const;
-  const currentConfig = mockConfigFile(path.join(stateDir, "openclaw.json"), config);
+  const currentConfig = mockConfigFile(configPath, config);
   await persistIndex(config, { [id]: installRecord });
   const boot = loadMetadata({
     config,
@@ -272,7 +276,7 @@ it("toggles a listed secondary-workspace plugin without a system owner", async (
   const mainWorkspace = path.join(root, "main");
   const secondaryWorkspace = path.join(root, "secondary");
   const pluginRoot = path.join(secondaryWorkspace, ".openclaw", "extensions", "workspace-memory");
-  const { pluginId: id } = coldFixture(pluginRoot, "workspace-memory", "memory");
+  const { pluginId: id } = coldFixture(pluginRoot, "workspace-memory", { kind: "memory" });
   isolateWorkspace(root);
   const config: OpenClawConfig = {
     agents: {
@@ -303,7 +307,7 @@ it("toggles a listed secondary-workspace plugin without a system owner", async (
 });
 
 it.each([true, false])("keeps config bytes for repeated enabled=%s requests", async (enabled) => {
-  const { pluginRoot, configPath, fixture } = workspace("policy-noop", undefined, true);
+  const { pluginRoot, configPath, fixture } = workspace("policy-noop", { capabilities: true });
   const config = pluginConfig(pluginRoot, fixture.pluginId, enabled);
   const { raw } = await useRealConfigFile(configPath, config);
 
@@ -360,7 +364,7 @@ it.each(["config-write", "none"] as const)(
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
     isolateWorkspace(root);
-    let config: OpenClawConfig = {};
+    const config: OpenClawConfig = {};
     await writeIndex(loadIndex({ config, candidates: [], installRecords: {} }));
     const boot = resolveMetadata({ config, allowCurrent: false });
     setMetadata(boot, { config });
@@ -370,20 +374,12 @@ it.each(["config-write", "none"] as const)(
       "saved-candidate",
       path.join(stateDir, "extensions"),
     );
-    const fixture = coldFixture(pluginRoot, "saved-candidate", "memory");
+    const fixture = coldFixture(pluginRoot, "saved-candidate", { kind: "memory" });
+    const committed = failure !== "config-write";
     const rejected = new Error(`intentional ${failure} failure`);
-    configIo.write.mockImplementation(async (params: ConfigReplaceInput) => {
-      if (failure === "config-write") {
-        throw rejected;
-      }
-      config = params.sourceConfig ?? params.nextConfig;
-      fs.writeFileSync(configPath, JSON.stringify(config));
-      return {
-        path: configPath,
-        nextConfig: config,
-        persistedHash: "committed",
-        persistedSourceConfig: config,
-      };
+    const currentConfig = mockConfigFile(configPath, config, {
+      error: committed ? undefined : rejected,
+      receipt: true,
     });
     const applyRuntime = vi.fn(async () => {
       return { operationId: "install", generation: 1, pluginIds: [fixture.pluginId] };
@@ -397,13 +393,12 @@ it.each(["config-write", "none"] as const)(
       runtime: { log: vi.fn() },
     });
     if (failure === "none") {
-      expect(await installed).toEqual(config);
+      expect(await installed).toEqual(currentConfig());
     } else {
       await expect(installed).rejects.toBe(rejected);
     }
-    const committed = failure !== "config-write";
     expect((await readIndex())?.installRecords[fixture.pluginId] !== undefined).toBe(committed);
-    const listed = (await listManagedPlugins({ config })).plugins.find(
+    const listed = (await inventory(currentConfig())).find(
       (plugin) => plugin.id === fixture.pluginId,
     );
     if (committed) {
@@ -419,11 +414,10 @@ it.each(["config-write", "none"] as const)(
   },
 );
 
-it("persists management disable before a cold context-engine runtime turn", async () => {
-  const { pluginRoot, configPath, fixture } = workspace(
-    "synthetic-context-engine",
-    "context-engine",
-  );
+it("persists management disable while retaining the context-engine slot", async () => {
+  const { pluginRoot, configPath, fixture } = workspace("synthetic-context-engine", {
+    kind: "context-engine",
+  });
   const config = pluginConfig(pluginRoot, fixture.pluginId, true);
   config.plugins!.slots = { contextEngine: fixture.pluginId, memory: "none" };
   const { actual } = await useRealConfigFile(configPath, config);
@@ -435,29 +429,5 @@ it("persists management disable before a cold context-engine runtime turn", asyn
   expect(fresh.config).toMatchObject(pluginConfig(pluginRoot, fixture.pluginId, false));
   expect(fresh.config.plugins?.slots).toMatchObject({ contextEngine: fixture.pluginId });
 
-  // A fresh real loader has no disabled factory; subsequent turns are baseline, not failures.
-  const registry = loadPluginRegistryHandle({ config: fresh.config, cache: false });
-  using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  await withPluginRuntimeRegistryScope(registry, async () => {
-    for (const runId of ["first", "second"]) {
-      const lease = await createTurn({
-        config: fresh.config,
-        identity: { runId, sessionId: "synthetic-session" },
-      });
-      try {
-        lease.begin();
-        expect(lease).toMatchObject({ effectiveEngineId: "legacy", degraded: false });
-        await lease.engine.assemble({
-          sessionId: "synthetic-session",
-          messages: [],
-          tokenBudget: 100,
-        });
-      } finally {
-        await lease.dispose();
-      }
-    }
-    expect(await listContextEngineQuarantines()).toEqual([]);
-  });
-  expect(warn).not.toHaveBeenCalled();
   expect(fs.existsSync(fixture.runtimeMarker)).toBe(false);
 });

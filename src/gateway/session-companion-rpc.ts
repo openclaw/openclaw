@@ -13,6 +13,7 @@ import {
   type SessionSourceAssertion,
   type PreparedSessionSourceAuthority,
 } from "../config/sessions/session-source-authority.js";
+import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { defineValidatedGatewayHandler } from "./server-methods/validation.js";
@@ -56,6 +57,21 @@ function resolveCompanionTarget(
     companion,
     ...requested.value,
   };
+}
+
+/**
+ * Side chat history is private to the authenticated person asking. Connections
+ * without a personal identity (for example, a shared Gateway token) are one
+ * principal, so they keep sharing a single thread per session.
+ */
+function resolveSessionCompanionOwnerId(
+  client: Parameters<GatewayRequestHandlers[string]>[0]["client"],
+): string {
+  const actor = resolveGatewayOperatorRoleActor(client);
+  const profileId =
+    client?.authenticatedUserProfile?.profileId ??
+    (actor?.kind === "operator" ? actor.profileId : undefined);
+  return profileId ? `profile:${profileId}` : "shared";
 }
 
 function companionTargetIsVisible(
@@ -293,6 +309,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
           ...(originalAttachments ? { attachments: originalAttachments } : {}),
           ...(selection ? { selection } : {}),
           connId,
+          ownerId: resolveSessionCompanionOwnerId(client),
           assertSourceCurrent,
           ...(assertInputCurrent ? { assertInputCurrent } : {}),
           ...(capturedOperator ? { operatorAuthority: capturedOperator.authority } : {}),
@@ -375,7 +392,11 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
         }
         respond(
           true,
-          target.companion.state({ agentId: target.agentId, sessionKey: target.sessionKey }),
+          target.companion.state({
+            agentId: target.agentId,
+            sessionKey: target.sessionKey,
+            ownerId: resolveSessionCompanionOwnerId(client),
+          }),
         );
       } finally {
         facts.release();
@@ -385,16 +406,18 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
   "sessions.companion.reset": defineValidatedGatewayHandler(
     "sessions.companion.reset",
     validateSessionsCompanionResetParams,
-    ({ params, respond, context }) => {
+    ({ params, respond, client, context }) => {
       const { sessionKey, agentId } = params;
       const target = resolveCompanionTarget({ sessionKey, agentId }, context);
       if (!target.ok) {
         respond(false, undefined, target.error);
         return;
       }
+      // Clearing affects only the caller's own thread.
       target.companion.reset({
         agentId: target.agentId,
         sessionKey: target.sessionKey,
+        ownerId: resolveSessionCompanionOwnerId(client),
       });
       respond(true, { ok: true });
     },

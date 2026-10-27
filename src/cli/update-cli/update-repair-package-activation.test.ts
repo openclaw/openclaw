@@ -31,6 +31,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   createInterruptedPackagePublication,
@@ -193,15 +194,12 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
         }
         fs.renameSync(f.packageRoot, `${f.packageRoot}.manual-backup`);
         fs.mkdirSync(f.packageRoot);
-        fs.writeFileSync(
-          path.join(f.packageRoot, "package.json"),
-          JSON.stringify({
-            name: "openclaw",
-            version: "2026.10.1",
-            type: "module",
-            bin: { openclaw: "./openclaw.mjs" },
-          }),
-        );
+        writeFixtureJsonSync(path.join(f.packageRoot, "package.json"), {
+          name: "openclaw",
+          version: "2026.10.1",
+          type: "module",
+          bin: { openclaw: "./openclaw.mjs" },
+        });
         fs.writeFileSync(path.join(f.packageRoot, "openclaw.mjs"), "// newer installed launcher\n");
         fs.mkdirSync(path.join(f.packageRoot, "dist"));
         fs.writeFileSync(
@@ -349,7 +347,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       const f = await interruptedPublication();
       const manifestPath = path.join(f.packageRoot, "package.json");
       const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, [field]: value }));
+      writeFixtureJsonSync(manifestPath, { ...manifest, [field]: value });
       const journal = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
       await expect(repair()).rejects.toThrow("package.json");
       expect(fs.readFileSync(resolvePackageActivationJournalPath(f.anchor))).toEqual(journal);
@@ -426,10 +424,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       );
     }
     if (failure === "wrong version") {
-      fs.writeFileSync(
-        path.join(f.packageRoot, "dist/build-info.json"),
-        JSON.stringify({ version: "1.0.0" }),
-      );
+      writeFixtureJsonSync(path.join(f.packageRoot, "dist/build-info.json"), { version: "1.0.0" });
       await writePackageDistInventory(f.packageRoot);
     }
     const journal = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
@@ -551,10 +546,10 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       if (source === f.anchor) {
         fs.renameSync(f.packageRoot, `${f.packageRoot}.replaced-again`);
         fs.cpSync(`${f.packageRoot}.replaced-again`, f.packageRoot, { recursive: true });
-        fs.writeFileSync(
-          path.join(f.packageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "4.0.0" }),
-        );
+        writeFixtureJsonSync(path.join(f.packageRoot, "package.json"), {
+          name: "openclaw",
+          version: "4.0.0",
+        });
       }
     });
 

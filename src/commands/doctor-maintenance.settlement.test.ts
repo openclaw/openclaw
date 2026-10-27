@@ -21,7 +21,10 @@ import {
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
 import { projectPublicUpdateFailureIdentifiers } from "../infra/update-failure-public-identifiers.js";
-import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-physical-database-generations.js";
+import {
+  readUpdatePhysicalDatabaseGenerationPair,
+  readUpdatePhysicalDatabaseGenerations,
+} from "../infra/update-physical-database-generations.js";
 import { redactPublicSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
@@ -98,8 +101,8 @@ function executeEvidence(pathname: string, sql: string) {
 function fingerprintReads() {
   // These SQLite fixtures exercise generation settlement without native engine inspection.
   vi.spyOn(databaseBackup, "readBackupEngine").mockReturnValue({ engine: "sqlite" });
-  vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
-    readUpdatePhysicalDatabaseGenerations(paths),
+  vi.spyOn(updateState, "readUpdateDatabaseGenerationPairIsolated").mockImplementation(
+    async (paths) => readUpdatePhysicalDatabaseGenerationPair(paths),
   );
 }
 
@@ -225,13 +228,19 @@ it.each([
     const barrier = cleanupBarrier();
     const databaseGenerations = { "/synthetic/doctor-state/state/openclaw.sqlite": null };
     let reads = 0;
-    vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async () => {
-      reads++;
-      if (reads === (phase === "admission" ? 1 : 2)) {
-        barrier.retain();
-      }
-      return databaseGenerations;
-    });
+    vi.spyOn(updateState, "readUpdateDatabaseGenerationPairIsolated").mockImplementation(
+      async () => {
+        reads++;
+        if (reads === (phase === "admission" ? 1 : 2)) {
+          barrier.retain();
+        }
+        return {
+          committed: databaseGenerations,
+          physical: databaseGenerations,
+          emptyReaderAlternates: {},
+        };
+      },
+    );
     let maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>>;
     const work = (async () => {
       maintenance = await beginWithGenerations(databaseGenerations, root);
@@ -518,6 +527,73 @@ it("waits for the stopped Gateway to release lifecycle ownership", async () => {
   expect(boundary.restart).toHaveBeenCalledOnce();
 });
 
+it("releases ownership acquired after the parent deadline without starting repair", async () => {
+  let elapsedMs = 0;
+  vi.spyOn(Date, "now").mockReturnValue(1_000);
+  vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+  const acquire = boundary.gatewayAcquire.getMockImplementation()!;
+  boundary.gatewayAcquire.mockImplementationOnce(async () => {
+    elapsedMs = 501;
+    return acquire();
+  });
+  const prepare = vi.fn();
+
+  const refusal = await beginDoctorMaintenance({
+    root,
+    options: { repair: true, nonInteractive: true },
+    runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+    serviceInspectionDeadlineAtMs: 1_500,
+    beforeStateMutation: prepare,
+  }).catch((error: unknown) => error);
+
+  expect(prepare).not.toHaveBeenCalled();
+  expect(String(refusal)).toContain("Doctor service-inspection deadline has expired.");
+  expect(boundary.release).toHaveBeenCalledOnce();
+  expect(boundary.stop).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ phase: "inspect" }),
+  );
+  expectCalls(0, "repair", "restart", "health");
+});
+
+it("restores a stopped service when post-stop ownership admission exceeds the parent deadline", async () => {
+  let wallNow = 1_000;
+  let elapsedMs = 0;
+  const deadlineAtMs = wallNow + 500;
+  vi.spyOn(Date, "now").mockImplementation(() => wallNow);
+  vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+  boundary.owner.mockReturnValue({ state: "live", mode: "supervised" });
+  const acquire = boundary.gatewayAcquire.getMockImplementation()!;
+  boundary.gatewayAcquire
+    .mockImplementationOnce(() => {
+      throw new GatewayStateOwnerContentionError("/synthetic/doctor-state/state/openclaw.sqlite");
+    })
+    .mockImplementationOnce(() => {
+      throw new GatewayStateOwnerContentionError("/synthetic/doctor-state/state/openclaw.sqlite");
+    })
+    .mockImplementationOnce(acquire);
+  boundary.sleep.mockImplementation(async () => {
+    elapsedMs = 501;
+    wallNow -= 90_000;
+  });
+  let prepared = false;
+
+  const refusal = await beginDoctorMaintenance({
+    root,
+    options: { repair: true, nonInteractive: true },
+    runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+    serviceInspectionDeadlineAtMs: deadlineAtMs,
+    beforeStateMutation: async () => {
+      prepared = true;
+    },
+  }).catch((error: unknown) => error);
+
+  expect(String(refusal)).toContain("Doctor service-inspection deadline has expired.");
+  expect(prepared).toBe(false);
+  expect(boundary.repair).not.toHaveBeenCalled();
+  expect(boundary.restart).toHaveBeenCalledOnce();
+  expect(boundary.health).toHaveBeenCalledOnce();
+});
+
 it("restores a service after state ownership fails without retaining a partial maintenance scope", async () => {
   boundary.owner.mockReturnValue({ state: "live", mode: "supervised" });
   let heldLeases = 0;
@@ -688,23 +764,25 @@ const privateCause =
 
 it("refuses an external active agent lease before serving-Gateway coordinator contention", async () => {
   boundary.external.mockReturnValue(true);
-  boundary.readLeases.mockReturnValue([
-    {
+  boundary.readLeases.mockReturnValue(
+    [4242, 4242, 4243, 4244, 4245].map((owner_pid) => ({
       agent_id: "private-agent",
       lease_id: "private-lease",
-      owner_pid: 4242,
+      owner_pid,
       owner_start_time: 123,
       opened_at: 1,
       provenance: null,
       path: "/synthetic/private-state/private.db",
-    },
-  ]);
+    })),
+  );
   boundary.gatewayAcquire.mockImplementation(() => {
     throw new Error("another OpenClaw process owns gateway-lifecycle");
   });
   const refusal: unknown = await begin().catch((error: unknown) => error);
   expect(refusal).toBeInstanceOf(UpdateDoctorError);
-  expect(refusal).toMatchObject({ message: leaseGuidance });
+  expect(refusal).toMatchObject({
+    message: `${leaseGuidance} Observed lease holder PIDs 4242, 4243, 4244, ...`,
+  });
   const facts = collectUpdateDoctorFailureFacts(refusal);
   expect(facts).toEqual([leaseFact]);
   expect(await projectPublicUpdateFailureIdentifiers(facts[0]!)).toEqual({
@@ -832,6 +910,8 @@ it("carries an actual typed lease refusal through Doctor IPC, finalization and p
     "typed-refusal-run",
     { status: "failed" },
     expect.anything(),
+    // The finalization owner also hands its settled outcome to the update-result reporter.
+    expect.any(Function),
   );
   const failed = boundary.step.mock.calls
     .map((call) => call[1])

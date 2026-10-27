@@ -54,21 +54,24 @@ function tokenizeCommand(command: string): string[] {
   );
 }
 
+function nodeCommand(command: string) {
+  const tokens = tokenizeCommand(command);
+  let index = tokens[0] === "env" ? 1 : 0;
+  const hasEnvPrefix = ENV_ASSIGNMENT_RE.test(tokens[index] ?? "");
+  while (ENV_ASSIGNMENT_RE.test(tokens[index] ?? "")) {
+    index += 1;
+  }
+  return { args: tokens[index] === "node" ? tokens.slice(index + 1) : undefined, hasEnvPrefix };
+}
+
 function extractNodeScriptTargets(script: string): string[] {
   return script.split(/\s*(?:&&|\|\||;)\s*/u).flatMap((command) => {
-    const tokens = tokenizeCommand(command);
-    let index = tokens[0] === "env" ? 1 : 0;
-
-    while (ENV_ASSIGNMENT_RE.test(tokens[index] ?? "")) {
-      index += 1;
-    }
-
-    if (tokens[index] !== "node") {
+    const { args } = nodeCommand(command);
+    if (!args) {
       return [];
     }
-
-    for (let tokenIndex = index + 1; tokenIndex < tokens.length; tokenIndex += 1) {
-      const token = tokens[tokenIndex];
+    for (let tokenIndex = 0; tokenIndex < args.length; tokenIndex += 1) {
+      const token = args[tokenIndex];
       if (!token) {
         continue;
       }
@@ -126,13 +129,8 @@ describe("package scripts", () => {
       script
         .split(/\s*(?:&&|\|\||;)\s*/u)
         .filter((command) => {
-          const tokens = tokenizeCommand(command);
-          let index = tokens[0] === "env" ? 1 : 0;
-          const hasEnvPrefix = ENV_ASSIGNMENT_RE.test(tokens[index] ?? "");
-          while (ENV_ASSIGNMENT_RE.test(tokens[index] ?? "")) {
-            index += 1;
-          }
-          return hasEnvPrefix && tokens[index] === "node";
+          const { args, hasEnvPrefix } = nodeCommand(command);
+          return hasEnvPrefix && args !== undefined;
         })
         .map((command) => `${name}: ${command}`),
     );
@@ -163,7 +161,7 @@ describe("package scripts", () => {
 
   it("builds runtime artifacts before browser bootstrap E2E against real Chromium", () => {
     expect(readPackageJson().scripts["test:e2e:browser-extension"]).toBe(
-      "node --import ./scripts/tsx.mjs scripts/build-all.mts qaRuntime && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers -- node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts PLAYWRIGHT_BROWSERS_PATH=.artifacts/playwright-browsers OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
+      "node --import ./scripts/tsx.mjs scripts/build-all.mts qaRuntime && node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium && node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_BROWSER_EXTENSION_E2E=1 OPENCLAW_E2E_WORKERS=1 -- node scripts/run-vitest.mjs extensions/browser/chrome-extension/bootstrap.chromium.test.ts",
     );
   });
 

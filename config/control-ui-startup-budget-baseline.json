@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281671,
-  "reason": "Bound Cron run-history selector traversal: matched c64f3109 startup 281744 to 281671 B gzip, style CPU median down 15.25% desktop and 17.09% mobile; 7 JS and 1 CSS request unchanged.",
-  "updatedAt": "2026-10-24"
+  "startupJsGzipBytes": 90195,
+  "reason": "Early transport overlaps cold boot without delaying cached reloads; final current-main build measures 90,195 B gzip in 3 startup requests.",
+  "updatedAt": "2026-10-27"
 }

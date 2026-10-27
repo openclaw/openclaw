@@ -229,6 +229,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
               authProfileIdSource: selected.authProfileIdSource,
               thinkLevel: selected.thinkLevel,
               thinkingCatalog: selected.thinkingCatalog,
+              cyberAccessProgram: selected.cyberAccessProgram,
             };
           },
           resetTriggered: params.resetTriggered === true,
@@ -269,6 +270,10 @@ export async function prepareReplyAgentTurn<TConfigured>(
     }
     const selectionEntry = admission.sessionEntry ?? initialEntry;
     const admittedSelectionEntry = selectionEntry ? { ...selectionEntry } : undefined;
+    // An edit before enqueue can miss the queue refresh; admission owns the saved preference.
+    if (kind === "queued_followup" && admission.sessionEntry) {
+      run.cyberAccessProgram = admittedSelectionEntry?.cyberAccessProgram;
+    }
     let queuedFollowupAdmitted = false;
     let admissionFailed = false;
     let callerOwnsOperation = false;

@@ -268,7 +268,12 @@ export function createGatewayRunSignals(params: {
       eagerLifecycleRuntime.markGatewayRestartHandled();
       const handleRestart = (durableIntent: GatewayRestartIntent | null, acceptedAtMs: number) => {
         const restartIntent = durableIntent
-          ? { ...durableIntent, ...(localIntent?.successorOwner ? localIntent : {}) }
+          ? {
+              ...durableIntent,
+              ...(localIntent?.successorOwner || localIntent?.requireFreshProcess
+                ? localIntent
+                : {}),
+            }
           : localIntent;
         if (!durableIntent && !authorized) {
           if (!eagerLifecycleRuntime.isGatewayRestartExternallyAllowed()) {

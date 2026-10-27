@@ -144,13 +144,9 @@ export function formatZonedTimestamp(
       formatter.formatToParts(date).map(({ type, value }) => [type, value]),
     );
     const { year, month, day, hour, minute, second, weekday } = parts;
-    const tz = parts.timeZoneName?.trim();
-    if (!year || !month || !day || !hour || !minute || (displayWeekday && !weekday)) {
-      return undefined;
-    }
-    const seconds = displaySeconds && second ? `:${second}` : "";
+    const seconds = displaySeconds ? `:${second}` : "";
     const prefix = displayWeekday ? `${weekday} ` : "";
-    return `${prefix}${year}-${month}-${day} ${hour}:${minute}${seconds}${tz ? ` ${tz}` : ""}`;
+    return `${prefix}${year}-${month}-${day} ${hour}:${minute}${seconds} ${parts.timeZoneName}`;
   } catch {
     return undefined;
   }

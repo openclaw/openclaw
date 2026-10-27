@@ -19,8 +19,8 @@ const TOOL_FOLLOWUPS = [
   [
     "gateway",
     "openclaw",
-    "Never via shell.",
-    "Never via shell. Other system changes: use openclaw tool.",
+    "Use runtime-owned actions.",
+    "Use runtime-owned actions. Other system changes: use openclaw tool.",
   ],
   [
     "sessions_search",
@@ -35,18 +35,6 @@ const TOOL_FOLLOWUPS = [
     "through a conversationRef from conversations_list.",
   ],
   ["sessions_spawn", "agents_list", "configured agent;", "configured agent (see agents_list);"],
-  [
-    "sessions_yield",
-    "sessions_send",
-    "Does not message other sessions.",
-    "Does not message other sessions; use sessions_send.",
-  ],
-  [
-    "sessions_yield",
-    "agents_wait",
-    "Collector runs require explicit collection instead.",
-    "Collector runs require agents_wait instead.",
-  ],
   [
     "nodes",
     "exec",

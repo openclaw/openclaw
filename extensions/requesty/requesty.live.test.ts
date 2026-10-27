@@ -6,12 +6,10 @@ import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin
 import { describe, expect, it } from "vitest";
 import {
   createLiveValueTool,
+  createLiveToolReplayContext,
   requireLiveToolCall,
 } from "../test-support/live-value-tool.test-support.js";
-import {
-  makeTextToolResult,
-  makeUserMessage,
-} from "../test-support/message-fixtures.test-support.js";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
 import {
   getStaticRequestyModelCatalog,
   REQUESTY_BASE_URL,
@@ -134,15 +132,7 @@ describeLive("requesty plugin live", () => {
 
       const second = await completeSimple(
         model,
-        {
-          messages: [
-            userPrompt,
-            first,
-            makeTextToolResult(toolCall.id, toolCall.name, "ok", false, Date.now() - 1),
-            { role: "user", content: "Reply with exactly: ok", timestamp: Date.now() },
-          ],
-          tools: [tool],
-        },
+        createLiveToolReplayContext(userPrompt, first, toolCall, tool),
         { apiKey: REQUESTY_API_KEY, maxTokens: 2048, reasoning: "low" },
       );
       if (second.stopReason === "error") {

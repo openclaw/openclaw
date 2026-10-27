@@ -34,6 +34,8 @@ export type UpdateDoctorInput = Omit<UpdatePostCoreInput, "opts"> & {
   postCoreSchemaRepair?: true;
   databaseGenerations?: UpdateDatabaseGenerations;
   databasePluginOwners?: import("../../infra/database-engine/port-descriptor.js").DatabasePortPluginOwners;
+  /** Parent Doctor phase deadline for nested managed-service inspection. */
+  serviceInspectionDeadlineAtMs?: number;
 };
 
 export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {

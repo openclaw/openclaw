@@ -22,6 +22,7 @@ import type { ReplyPayload } from "../types.js";
 import type * as CommandsStatus from "./commands-status.js";
 import { dispatchReplyFromConfig } from "./dispatch-from-config.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
+import { createReplyAgentDefaults } from "./get-reply-config.test-support.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { getReplyFromConfig } from "./get-reply.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
@@ -78,12 +79,7 @@ beforeEach(async ({ onTestFinished }) => {
   });
   cfg = withFullRuntimeReplyConfig({
     agents: {
-      defaults: {
-        workspace: state.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: "mock-openai/gpt-5.6-luna" },
-        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-      },
+      defaults: createReplyAgentDefaults(state.workspaceDir),
     },
     commands: { ownerAllowFrom: [`${channel}:owner`] },
     plugins: { enabled: false },
@@ -108,18 +104,20 @@ async function persistConfig(allowMember = false) {
 }
 
 // Ingress has admitted the member; command authorization is the boundary under test.
-async function send(params: {
-  sender: string;
-  body: string;
-  native: boolean;
-  replyOptions?: DispatchFromConfigParams["replyOptions"];
-  onDelivery?: (payload: ReplyPayload) => void;
-}) {
-  const replies: ReplyPayload[] = [];
+async function send(
+  sender: string,
+  body: string,
+  native = true,
+  options: {
+    replyOptions?: DispatchFromConfigParams["replyOptions"];
+    onDelivery?: (payload: ReplyPayload) => void;
+  } = {},
+) {
+  const texts: Array<ReplyPayload["text"]> = [];
   const dispatcher = createReplyDispatcher({
     deliver: async (payload) => {
-      replies.push(payload);
-      params.onDelivery?.(payload);
+      texts.push(payload.text);
+      options.onDelivery?.(payload);
     },
   });
   const result = await withReplyDispatcher({
@@ -134,15 +132,15 @@ async function send(params: {
           From: `${channel}:group:room`,
           To: `${channel}:room`,
           ChatType: "group",
-          SessionKey: params.native ? `agent:main:${channel}:slash:${params.sender}` : targetKey,
-          ...(params.native ? { CommandTargetSessionKey: targetKey } : {}),
-          SenderId: params.sender,
-          MessageSid: `${params.sender}-${params.body}`,
-          Body: params.body,
-          RawBody: params.body,
-          CommandBody: params.body,
+          SessionKey: native ? `agent:main:${channel}:slash:${sender}` : targetKey,
+          ...(native ? { CommandTargetSessionKey: targetKey } : {}),
+          SenderId: sender,
+          MessageSid: `${sender}-${body}`,
+          Body: body,
+          RawBody: body,
+          CommandBody: body,
           BotUsername: "bot",
-          CommandSource: params.native ? "native" : "text",
+          CommandSource: native ? "native" : "text",
           CommandAuthorized: true,
           InboundAccessAuthorized: true,
           InboundEventKind: "user_request",
@@ -150,11 +148,11 @@ async function send(params: {
         },
         cfg,
         dispatcher,
-        replyOptions: params.replyOptions,
+        replyOptions: options.replyOptions,
         replyResolver: getReplyFromConfig,
       }),
   });
-  return { result, texts: replies.map((reply) => reply.text) };
+  return { result, texts };
 }
 
 type RunParams = Parameters<typeof runEmbeddedAgent>[0];
@@ -199,7 +197,7 @@ it.each<
   ["owner", "/status", true, "throw", "throw"],
 ])("delivers %s %s (%s, %s)", async (sender, body, native, outcome, expected) => {
   statusReply.outcome = outcome;
-  const response = send({ sender, body, native });
+  const response = send(sender, body, native);
   if (expected === "throw") {
     await expect(response).rejects.toThrow("status renderer unavailable");
     return;
@@ -241,7 +239,7 @@ it.each([false, true])(
     const originalSource = loadSessionEntry(source);
     const originalTarget = loadSessionEntry(target);
 
-    const { texts } = await send({ sender: "owner", body: "/new", native: true });
+    const { texts } = await send("owner", "/new");
 
     expect(texts).toEqual(sendDenied ? [] : [expect.stringContaining("Use Resume in WebChat")]);
     expect(loadSessionEntry(source)).toEqual(originalSource);
@@ -265,18 +263,14 @@ it("delivers a native cross-human steering refusal after consuming its source", 
     });
     operation.setPhase("running");
   });
-  const incumbent = send({
-    sender: "owner",
-    body: "Keep working on Alice's task",
-    native: false,
-  });
+  const incumbent = send("owner", "Keep working on Alice's task", false);
   try {
     const operation = await withinTest(
       awaitGateBeforeSettlement(run.entered.promise, incumbent, "Incumbent never started"),
       signal,
     );
     const { texts, result } = await withinTest(
-      send({ sender: "member", body: "/steer stop and use Bob's instructions", native: true }),
+      send("member", "/steer stop and use Bob's instructions"),
       signal,
     );
     expect(texts).toEqual([
@@ -309,18 +303,13 @@ it.for([false, true])(
     });
     const started = createDeferred();
     const upstream = new AbortController();
-    const deliveredTexts: Array<string | undefined> = [];
     const run = holdAgentRun("member", async (params) => {
       expect(params).toMatchObject({ senderId: "member", sessionKey: targetKey });
       await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
     });
-    const dispatch = send({
-      sender: "member",
-      body: "/followup return the synthetic answer",
-      native: true,
+    const dispatch = send("member", "/followup return the synthetic answer", true, {
       replyOptions: { abortSignal: upstream.signal },
       onDelivery: (payload) => {
-        deliveredTexts.push(payload.text);
         if (payload.text === "Your followup has started.") {
           started.resolve();
         }
@@ -349,7 +338,7 @@ it.for([false, true])(
     } finally {
       await run.finish(dispatch);
     }
-    expect(deliveredTexts).toEqual(
+    expect((await dispatch).texts).toEqual(
       cancelled
         ? ["Your followup has started."]
         : ["Your followup has started.", "Synthetic final answer."],

@@ -111,6 +111,7 @@ it("drains final short-task GC on retirement without sampling each task or count
       },
     ]);
     expect(memory.collectTask()).toBe(true);
+    await vi.advanceTimersByTimeAsync(900);
     expect(samples).toEqual([]);
     await flush();
     expect(samples).toContainEqual({

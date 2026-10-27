@@ -33,9 +33,9 @@ const {
 
 describe("grouped chat rendering", () => {
   function renderMarkdownAssistant(content: unknown) {
-    markdownRenderMock.withImplementation(renderMarkdownHtml, () =>
-      renderAssistantMessage(createAssistantMessage(content)),
-    );
+    markdownRenderMock.withImplementation(renderMarkdownHtml, () => {
+      renderAssistantMessage(createAssistantMessage(content));
+    });
   }
 
   function renderAssistantMessageEntries(

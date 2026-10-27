@@ -281,9 +281,7 @@ export function watchClientDisconnect(
   const handleClose = () => {
     stopWatchingDisconnect();
     onDisconnect?.();
-    if (!abortController.signal.aborted) {
-      abortController.abort(new ClientDisconnectError());
-    }
+    abortController.abort(new ClientDisconnectError());
   };
   const handleResponseClose = () => {
     res.off("error", handleClose);

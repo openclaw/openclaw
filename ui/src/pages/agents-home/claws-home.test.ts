@@ -4,9 +4,10 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { pathForClawCatalogEntry } from "../../app-route-paths.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ClawsPage } from "../claws/page.tsx";
 import { page as clawsRoute } from "../claws/route.ts";
@@ -147,14 +148,10 @@ describe("Claws discovery", () => {
   ])("rejects direct visits to %s while Labs is disabled", async (pathname) => {
     const { context, page, request, ensureConfigLoaded } = createPage({ pathname });
     const location = { pathname, search: "", hash: "" };
-    const result = await clawsRoute.loader!(context, {
-      location,
-      signal: new AbortController().signal,
-      shouldRun: () => true,
-      revalidating: false,
-      cause: "navigation",
-      deps: clawsRoute.loaderDeps!(context, location),
-    });
+    const result = await clawsRoute.loader!(
+      context,
+      createRouteLoaderOptions(location, clawsRoute.loaderDeps!(context, location)),
+    );
     expect(result).toEqual({ type: "notFound", data: undefined });
     expect(ensureConfigLoaded).toHaveBeenCalledOnce();
     expect(page.textContent).toContain("Claws is disabled");

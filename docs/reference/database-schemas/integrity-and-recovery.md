@@ -40,6 +40,25 @@ format checks; remove them when touched. Identify replacement files by volume,
 inode, and birthtime with `fstat`, not SQL. Migration/repair owners publish new
 facts after their DDL; Doctor and explicit verification retain full checks.
 
+On Linux, a separate process, such as a CLI `agent exec` run while the Gateway
+holds the same agent database, reuses the Gateway's completed admission. The peer
+must hold a lease on the exact path, have finished admission, still match its
+recorded PID and start time, and carry the same lease provenance (boot, PID
+namespace, build, and file inode), so a file replaced at that path is checked again.
+Aliases, unfinished admissions, stale leases, and platforms without lease
+provenance still run the full check. The borrowing process never checked the file
+itself, so if it closes last it leaves the next opener to verify instead of writing
+a seal.
+
+Shared-state fast-path admission on Linux trusts a live Gateway that owns the
+exact file: after startup admission and listening, its owner lease publishes
+provenance binding the host, boot, PID namespace, build, and inode. A different
+process with matching provenance and a live owner PID/start time skips only its
+whole-file integrity scan; schema, version, and legacy-repair checks still run,
+and the borrower records no verification or clean-close seal. Corruption can
+still surface through normal SQLite access, Doctor, explicit verification, and
+the next startup without a reusable seal.
+
 Independent read-only subprocesses do not share the Gateway's writer invalidations.
 Their local admission facts retire at final native close, even while the pooled
 process remains alive. Canonical auth reads can reuse the owner's compact schema
@@ -121,6 +140,11 @@ Agent clean-close receipt messages name the agent. An intermediate `active-lease
 receipt can precede that same agent's final `written` receipt: idle retained database
 handles still hold leases even when no agent work is running. The final handle must
 release its lease after checkpoint and native close before certifying the seal.
+An `active-leases` receipt means this handle closed; peers prevent seal publication,
+not the close itself.
+Each worker coalesces unchanged outcomes for its 128 most recently observed database
+paths. Changed outcomes still log after commit; rollback cannot suppress the next
+committed receipt. This diagnostic history does not change handle retention or seal checks.
 At the next full integrity gate, `no-proof` means no seal was found. Rejected seals
 report `malformed-proof`, `expired-proof`, `file-mismatch`, or `journal-present`;
 incompatible identities report `feature-mismatch`, `schema-mismatch`, or
@@ -197,14 +221,16 @@ owner and grant for the normal lease duration. A fence lasting longer than that
 duration produces a Doctor warning; a replaced owner still refuses settlement.
 Rollback releases the fence and restores ordinary expiry handling.
 
-| When                                                   | Check                                                                                                                                                                                      |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Startup with a matching, recent clean-close seal       | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans                                                               |
-| Startup without a reusable seal                        | Run the normal full format, schema, canonical-index, integrity, and foreign-key validation                                                                                                 |
-| Same-process reopen or new worker                      | Reuse live file-bound facts or a matching seal; retain current ownership and durable quarantine-row checks                                                                                 |
-| Before a migration or ordinary same-version repair     | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; `--full-integrity-check` requests full database integrity |
-| After a migration or repair                            | Verify changes and publish committed facts through the existing owner                                                                                                                      |
-| Explicit verification, Doctor recovery, and compaction | Retain full checks before accepting or rewriting the database; ordinary Doctor migrations use the migration policy above                                                                   |
+| When                                                       | Check                                                                                                                                                                                                                            |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Startup with a matching, recent clean-close seal           | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans                                                                                                     |
+| Startup without a reusable seal                            | Run the normal full format, schema, canonical-index, integrity, and foreign-key validation                                                                                                                                       |
+| Same-process reopen or new worker                          | Reuse live file-bound facts or a matching seal; retain current ownership and durable quarantine-row checks                                                                                                                       |
+| Another live process already admitted the same file        | On Linux, reuse that admission instead of a full scan when the peer's PID, start time, and lease provenance (including inode) still match; schema and index checks still run, and the borrower cannot publish a clean-close seal |
+| Shared-state fast path while a live Gateway holds the file | On Linux, trust the live Gateway owner when PID, start time, and exact-file provenance match; skip only the integrity scan, retain schema, version, and legacy-repair checks, and never publish a clean-close seal               |
+| Before a migration or ordinary same-version repair         | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; `--full-integrity-check` requests full database integrity                                       |
+| After a migration or repair                                | Verify changes and publish committed facts through the existing owner                                                                                                                                                            |
+| Explicit verification, Doctor recovery, and compaction     | Retain full checks before accepting or rewriting the database; ordinary Doctor migrations use the migration policy above                                                                                                         |
 
 The migration default does not compare every untouched index with its table.
 An index/table mismatch outside the declared migration scope therefore needs
@@ -404,6 +430,11 @@ snapshot or startup/Doctor admission keeps its existing owner.
 
 Private snapshots remain necessary for artifact-preserving inspection without a reusable seal, incomplete WAL families whose inspection would create source sidecars, and rollback journals requiring private recovery. Those cases use the existing snapshot owner and deadline; ordinary inspection errors do not trigger a full-copy fallback. A matching clean-close seal permits startup to read the unchanged, checkpointed source directly. Other live files use native SQLite reads; immutable reads require a sealed source or a verified private or explicit consolidated copy. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file.
 
+Startup config-health and plugin-metadata reads verify clean-close proof while
+holding physical custody in their isolated reader. They keep custody through
+native close, without creating WAL sidecars or copying unrelated state. Missing
+proof or competing custody retains the existing private snapshot path.
+
 Concurrent asynchronous requests for the same physical live database share one
 snapshot operation. When the current runtime already owns an open SQLite
 connection, that owner supplies SQLite's online backup instead of reopening or
@@ -528,6 +559,8 @@ owner and worker tokens, applies a 15-minute grace period to current staging
 directories, and uses a 512 MiB copied-byte budget per pass. The first reclaimed
 directory may exceed that budget, after the same ownership and age checks; the
 pass then stops, so oversized interrupted copies can make progress one at a time.
+Recognized payloads include fs-safe's `.fs-safe-<UUID>.tmp` publication files left
+by interrupted copies, including those inside nested staging directories.
 Active, recent, over-budget, or
 structurally unknown directories remain untouched. Shutdown and the existing
 reclamation deadline stop at directory boundaries, after removal and token
@@ -815,6 +848,11 @@ agent's full integrity scan. Worker limits and existing command ordering are unc
 Genuine migration warnings remain recorded for the boot. This changes no stored state or update
 migration behavior.
 
+The initial startup pass reports fleet-wide legacy-session migration guidance.
+Deferred preparation of one agent does not repeat that advisory scan across other
+agents and retired stores. Its own schema, canonical-session, and ACP checks still
+finish before the agent becomes available; Doctor remains the repair owner.
+
 Every 60 seconds while recovery is pending, `agent database startup preparation
 still running` reports `agentId`, `phase`, `elapsedMs`, and `phaseElapsedMs`;
 `publication-wait` also names `publishingAgentId`. Success (`agent database
@@ -1094,6 +1132,19 @@ reset when that handle is replaced or the Gateway restarts. Status and Doctor
 read the recorded observation through the existing status RPC; they do not run
 a checkpoint or open a diagnostic database. Before the first observation, or
 when an older Gateway supplies no observations, this warning is absent.
+
+On Linux, periodic WAL maintenance checks the open sidecar identities with
+asynchronous filesystem reads before dispatching maintenance. Slow metadata
+writeback delays that check without blocking the Gateway event loop. Stopping
+maintenance joins the check. A confirmed live sidecar mismatch still terminates
+the process without SQLite cleanup, including when shutdown is waiting on the
+check. Native close and replacement refuse while inspection is pending; idle eviction
+retains its handle and lease until a later retry. Otherwise, a stopped owner
+dispatches no further maintenance.
+
+Reclamation workers await maintenance shutdown before settling native close.
+A healthy inspection overlap therefore preserves shared runtime validation,
+instead of forcing unrelated session reads through integrity re-admission.
 
 If the warning persists, capture `openclaw status --deep` output and restart the
 Gateway with `openclaw gateway restart`. Report the captured output

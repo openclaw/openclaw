@@ -4,6 +4,7 @@ import { createComponent, createSignal, getOwner } from "solid-js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { stubManualIntersectionObserver } from "./chat-media-observer.test-support.ts";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { managedSource, ticketResponse } from "./chat-message-media.test-helpers.ts";
 import {
@@ -23,23 +24,9 @@ const subscribers = new Set<() => void>();
 const views = new Set<ReturnType<typeof mountSolid>>();
 
 beforeEach(() => {
-  vi.stubGlobal(
-    "IntersectionObserver",
-    class {
-      constructor(private readonly callback: IntersectionObserverCallback) {}
-      observe(element: Element) {
-        observations.push({
-          element,
-          show: () =>
-            this.callback(
-              [{ target: element, isIntersecting: true } as IntersectionObserverEntry],
-              this as unknown as IntersectionObserver,
-            ),
-        });
-      }
-      disconnect() {}
-    },
-  );
+  stubManualIntersectionObserver((element, notify) => {
+    observations.push({ element, show: () => notify(true) });
+  });
 });
 
 afterEach(() => {

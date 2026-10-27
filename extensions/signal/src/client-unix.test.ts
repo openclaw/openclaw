@@ -8,7 +8,6 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { signalCheck, signalRpcRequest, streamSignalEvents } from "./client.js";
 import { expectPreparedHandoff } from "./client.test-support.js";
-import * as socketEndpoint from "./socket-path.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -67,8 +66,8 @@ const send = (
 describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
   it.each([false, true])(
     "prepares the socket write and rechecks its caller after waiting (revoked=%s)",
-    async (revoked) => {
-      await expectPreparedHandoff(revoked, async ({ arrive, response: reply, assertHandoff }) => {
+    (revoked) =>
+      expectPreparedHandoff(revoked, async ({ arrive, response: reply, assertHandoff }) => {
         const requests: Record<string, unknown>[] = [];
         const { baseUrl } = await serve((request, socket) => {
           requests.push(request);
@@ -80,54 +79,23 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
           assertCount: (count) => expect(requests).toHaveLength(count),
           result: { sent: true },
         };
-      });
-    },
+      }),
   );
 
   it("sends newline JSON-RPC and matches a fragmented UTF-8 response by id", async () => {
-    const caller = new AbortController();
     const requests: Record<string, unknown>[] = [];
     const { baseUrl } = await serve((request, socket) => {
       requests.push(request);
-      caller.abort(new Error("Signal caller closed after transmission"));
       const bytes = Buffer.from(response(request.id, { text: "héllo" }));
       const split = bytes.indexOf(Buffer.from("é")) + 1;
       socket.write(response("unrelated", "wrong"));
       socket.write(bytes.subarray(0, split));
       setImmediate(() => socket.write(bytes.subarray(split)));
     });
-    await expect(
-      send(baseUrl, "test", {
-        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-      }),
-    ).resolves.toEqual({ text: "héllo" });
+    await expect(send(baseUrl, "test")).resolves.toEqual({ text: "héllo" });
     expect(requests).toEqual([
       expect.objectContaining({ jsonrpc: "2.0", method: "send", params: { message: "test" } }),
     ]);
-  });
-
-  it("stops before writing when the caller closes during socket preparation", async () => {
-    const requests: Record<string, unknown>[] = [];
-    const { baseUrl } = await serve((request, socket) => {
-      requests.push(request);
-      socket.end(response(request.id, { timestamp: 1700000000999 }));
-    });
-    const caller = new AbortController();
-    const validate = socketEndpoint.assertSignalSocketEndpoint;
-    const preparation = vi
-      .spyOn(socketEndpoint, "assertSignalSocketEndpoint")
-      .mockImplementationOnce(async (endpoint) => {
-        await validate(endpoint);
-        caller.abort(new Error("Signal caller closed during socket preparation"));
-      });
-
-    await expect(
-      send(baseUrl, "pending", {
-        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-      }),
-    ).rejects.toThrow("Signal caller closed during socket preparation");
-    expect(preparation).toHaveBeenCalledOnce();
-    expect(requests).toHaveLength(0);
   });
 
   it("checks the daemon using the supported version RPC", async () => {

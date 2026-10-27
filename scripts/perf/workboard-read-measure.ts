@@ -23,6 +23,7 @@ const { values } = parseArgs({
     root: { type: "string" },
     output: { type: "string" },
     prepare: { type: "boolean", default: false },
+    placements: { type: "boolean", default: false },
     port: { type: "string", default: "41510" },
     boards: { type: "string", default: "24" },
     cards: { type: "string", default: "50" },
@@ -171,6 +172,11 @@ function checkBoards(payload: Record<string, unknown>) {
   assert.equal(total, boardCount * cardsPerBoard);
 }
 try {
+  const readyDeadline = Date.now() + 60_000;
+  while (!(await fetch(`http://127.0.0.1:${port}/readyz`)).ok) {
+    assert(Date.now() < readyDeadline, "Gateway did not become ready");
+    await delay(100);
+  }
   for (let index = 0; index < (values.prepare ? 1 : clientCount); index++) {
     const challenge = Promise.withResolvers<{ nonce: string; ts: number }>();
     const peer = createGatewayWsClient({
@@ -223,7 +229,39 @@ try {
     });
   }
   const controller = peers[0]!;
-  if (values.prepare) {
+  if (values.placements) {
+    assert(values.prepare && values.output, "--placements requires --prepare and --output");
+    const sessionKey = "agent:main:workboard-placement-bench";
+    await rpc(controller, "sessions.create", { key: sessionKey, visibility: "shared" });
+    await rpc(controller, "workboard.boards.upsert", {
+      id: "placement-bench",
+      name: "Synthetic placements",
+      kind: "sessions",
+    });
+    const samples: Array<{ phase: string; roundTripMs: number }> = [];
+    for (let index = 0; index <= waves; index++) {
+      const phase = index === 0 ? "placement.cold" : `placement.warm-${index}`;
+      if (process.env.SQLMEASURE_OUT) {
+        await writeFile(path.join(process.env.SQLMEASURE_OUT, "phase"), phase);
+      }
+      const columnId = index % 2 === 0 ? "working" : "done";
+      const started = performance.now();
+      const result = await rpc(controller, "workboard.sessionsBoard.move", {
+        boardId: "placement-bench",
+        sessionKey,
+        columnId,
+      });
+      samples.push({ phase, roundTripMs: performance.now() - started });
+      assert(Array.isArray(result.sessions));
+      const session = result.sessions.find((entry) => isRecord(entry) && entry.key === sessionKey);
+      assert(isRecord(session) && session.columnId === columnId, "Move was not visible");
+    }
+    if (process.env.SQLMEASURE_OUT) {
+      await writeFile(path.join(process.env.SQLMEASURE_OUT, "phase"), "placement.shutdown");
+    }
+    await writeFile(values.output, `${JSON.stringify({ samples }, null, 2)}\n`);
+    console.log(JSON.stringify({ placementMoves: samples.length }));
+  } else if (values.prepare) {
     for (let board = 0; board < boardCount; board++) {
       await rpc(controller, "workboard.boards.upsert", {
         id: boardId(board),

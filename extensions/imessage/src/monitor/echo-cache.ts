@@ -10,12 +10,6 @@ type SentMessageLookup = {
   messageId?: string;
 };
 
-type SentMessageLookupOptions = {
-  // Self-chat SQLite row IDs differ from outbound GUIDs; allow text matching after an ID miss.
-  skipIdShortCircuit?: boolean;
-  includePendingText?: boolean;
-};
-
 export type SentMessageCache = ReturnType<typeof createSentMessageCache>;
 
 // Echo arrival observed at ~2.2s on M4 Mac Mini (SQLite poll interval is the bottleneck).
@@ -54,7 +48,11 @@ export function createSentMessageCache() {
   async function has(
     scope: string,
     lookup: SentMessageLookup,
-    options: SentMessageLookupOptions = {},
+    options: {
+      // Self-chat SQLite row IDs differ from outbound GUIDs; allow text matching after an ID miss.
+      skipIdShortCircuit?: boolean;
+      includePendingText?: boolean;
+    } = {},
   ): Promise<boolean> {
     if (
       await hasPersistedIMessageEcho({

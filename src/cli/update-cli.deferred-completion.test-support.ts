@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createDirectorySync, createFileSync } from "@openclaw/fs-safe/advanced";
 import { afterEach, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,7 +17,6 @@ const spawn = vi.fn();
 export const observeUpdateGatewayReadiness =
   vi.fn<typeof import("./update-cli/update-command-readiness.js").observeUpdateGatewayReadiness>();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
-const sqliteHostPlatform = process.platform;
 const sourceRuntimeCompletion = vi.hoisted(() =>
   vi.fn<typeof import("./update-cli/update-command-runtime.js").completeSourceUpdateRuntime>(),
 );
@@ -95,8 +93,7 @@ vi.mock("../daemon/gateway-entrypoint.js", async (importOriginal) => {
 
 vi.mock("./update-cli/update-command-readiness.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-cli/update-command-readiness.js")>()),
-  observeUpdateGatewayReadiness: (...args: Parameters<typeof observeUpdateGatewayReadiness>) =>
-    observeUpdateGatewayReadiness(...args),
+  observeUpdateGatewayReadiness,
 }));
 
 vi.mock("./update-cli/update-command-post-plugin-readiness.js", async (importOriginal) => {
@@ -111,20 +108,13 @@ vi.mock("./update-cli/update-command-post-plugin-readiness.js", async (importOri
   };
 });
 
-vi.mock("../utils.js", async (importOriginal) => {
-  const [actual, { isRecord: isRecordGuard }] = await Promise.all([
-    importOriginal<typeof import("../utils.js")>(),
-    import("@openclaw/normalization-core/record-coerce"),
-  ]);
-  return {
-    ...actual,
-    displayString: (input: string) => input,
-    isRecord: isRecordGuard,
-    pathExists: (...args: unknown[]) => pathExists(...args),
-    resolveConfigDir: () => "/tmp/openclaw-config",
-    sleep: vi.fn(async () => undefined),
-  };
-});
+vi.mock("../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils.js")>()),
+  displayString: (input: string) => input,
+  pathExists,
+  resolveConfigDir: () => "/tmp/openclaw-config",
+  sleep: vi.fn(async () => undefined),
+}));
 
 vi.mock("../plugins/official-external-install-records.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/official-external-install-records.js")>()),
@@ -132,14 +122,11 @@ vi.mock("../plugins/official-external-install-records.js", async (importOriginal
   resolveTrustedSourceLinkedOfficialNpmInstall: vi.fn(() => undefined),
 }));
 
-vi.mock("../plugins/update.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/update.js")>();
-  return {
-    ...actual,
-    syncPluginsForUpdateChannel: (...args: unknown[]) => syncPluginsForUpdateChannel(...args),
-    updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
-  };
-});
+vi.mock("../plugins/update.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/update.js")>()),
+  syncPluginsForUpdateChannel,
+  updateNpmInstalledPlugins,
+}));
 
 // mock-isolation: Deferred completion supplies convergence facts without running Doctor or plugin installs.
 vi.mock("../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
@@ -160,11 +147,7 @@ const {
   stableWhatsAppConfig,
 } = await import("./update-cli/update-cli-config.test-support.js");
 const { writeJsonFixture } = await import("./update-cli/update-cli-package.test-support.js");
-const nodeSqlite = await import("../infra/node-sqlite.js");
-const windowsPrivateDirectory = await import("../infra/windows-private-directory.js");
 const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
-const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
-const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
 export const { updateGitCheckout } = await import("../infra/update-runner-git.js");
 const { runExec, runCommandWithTimeout } = await import("../process/exec.js");
 export { runExec };
@@ -186,9 +169,7 @@ export const runPostCorePluginConvergenceSpy = vi.spyOn(
 export function installDeferredCompletionFixture() {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
   let tempHome: TempHomeEnv | undefined;
-  let fixtureRoot = "";
-  let fixtureCount = 0;
-  const createCaseDir = (prefix: string) => path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
+  const createCaseDir = (prefix: string) => dirs.make(`${prefix}-`);
   const FRESH_POST_UPDATE_ENTRYPOINT = "/tmp/openclaw-updated-entry.mjs";
   const baseConfig: OpenClawConfig = {};
   const baseSnapshot = createUpdateCliBaseSnapshot(baseConfig);
@@ -239,7 +220,6 @@ export function installDeferredCompletionFixture() {
 
   beforeEach(async () => {
     tempHome = await createTempHomeEnv("openclaw-deferred-completion-");
-    fixtureRoot = dirs.make("openclaw-deferred-completion-fixtures-");
     vi.resetAllMocks();
     sourceRuntimeCompletion.mockResolvedValue({ changed: false });
     resetRuntimeCapture();
@@ -293,22 +273,6 @@ export function installDeferredCompletionFixture() {
     spawn.mockImplementation(() => {
       throw new Error("Completion must not spawn core update");
     });
-    vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((file) =>
-      existingHostUri(file, sqliteHostPlatform),
-    );
-    vi.spyOn(nodeSqlite, "resolveImmutableSqliteFileUri").mockImplementation((file) =>
-      immutableHostUri(file, sqliteHostPlatform),
-    );
-    if (sqliteHostPlatform !== "win32") {
-      vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsDirectory").mockImplementation(
-        (dir) => {
-          createDirectorySync(dir, { mode: 0o700 });
-        },
-      );
-      vi.spyOn(windowsPrivateDirectory, "createPrivateWindowsFile").mockImplementation((file) =>
-        createFileSync(file, { mode: 0o600 }),
-      );
-    }
   });
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();

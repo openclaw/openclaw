@@ -4,6 +4,7 @@ import type { SessionsCatalogListResult } from "../../../packages/gateway-protoc
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { patchSettings } from "../app/settings.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import {
@@ -189,12 +190,9 @@ describe("sidebar session feedback", () => {
         gateway.gateway,
         sessions,
         "panel",
-        {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
+        makeBootRoster({
           agents: [{ id: "main", name: "Harbor" }],
-        },
+        }),
       );
       const plugin = registerSessionPluginAction(context, {
         id: "review",

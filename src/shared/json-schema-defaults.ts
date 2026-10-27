@@ -7,6 +7,7 @@ import {
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { Check } from "typebox/schema";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { validateSchemaKeywordShapes, validateTypeKeyword } from "./json-schema-keywords.js";
 
 type LocalRefResolution =
   | {
@@ -40,55 +41,6 @@ const schemaValueKeywords = new Set([
   "unevaluatedProperties",
 ]);
 const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
-const schemaCombinatorKeywords = new Set(["allOf", "anyOf", "oneOf"]);
-const jsonSchemaTypes = new Set([
-  "array",
-  "boolean",
-  "integer",
-  "null",
-  "number",
-  "object",
-  "string",
-]);
-const schemaStringKeywords = new Set([
-  "$anchor",
-  "$comment",
-  "$dynamicAnchor",
-  "$dynamicRef",
-  "$id",
-  "$schema",
-  "$ref",
-  "contentEncoding",
-  "contentMediaType",
-  "description",
-  "format",
-  "pattern",
-  "title",
-]);
-const schemaNumberKeywords = new Set([
-  "exclusiveMaximum",
-  "exclusiveMinimum",
-  "maximum",
-  "minimum",
-  "multipleOf",
-]);
-const schemaIntegerKeywords = new Set([
-  "maxContains",
-  "maxItems",
-  "maxLength",
-  "maxProperties",
-  "minContains",
-  "minItems",
-  "minLength",
-  "minProperties",
-]);
-const schemaBooleanKeywords = new Set(["deprecated", "readOnly", "uniqueItems", "writeOnly"]);
-const schemaKeywordGroups = [
-  [schemaStringKeywords, "string"],
-  [schemaNumberKeywords, "number"],
-  [schemaIntegerKeywords, "non-negative integer"],
-  [schemaBooleanKeywords, "boolean"],
-] as const;
 const JSON_POINTER_ARRAY_INDEX_SEGMENT = /^(0|[1-9]\d*)$/;
 
 function schemaTypeIncludes(schema: Record<string, unknown>, type: string): boolean {
@@ -111,23 +63,6 @@ function schemaResourceRefKey(
   return `schema:${id}:${baseId ?? ""}:${ref}`;
 }
 
-function validateTypeKeyword(type: unknown, path: string): string | undefined {
-  if (typeof type === "string") {
-    return jsonSchemaTypes.has(type) ? undefined : `${path}.type: unsupported JSON Schema type`;
-  }
-  if (Array.isArray(type) && type.length > 0) {
-    for (const entry of type) {
-      if (typeof entry !== "string" || !jsonSchemaTypes.has(entry)) {
-        return `${path}.type: unsupported JSON Schema type`;
-      }
-    }
-    return new Set(type).size === type.length
-      ? undefined
-      : `${path}.type: expected unique JSON Schema types`;
-  }
-  return `${path}.type: expected string or non-empty string array`;
-}
-
 function parseJsonPointerArrayIndex(segment: string): number | undefined {
   if (!JSON_POINTER_ARRAY_INDEX_SEGMENT.test(segment)) {
     return undefined;
@@ -144,7 +79,11 @@ function resolveLocalAnchor(
   if (!isRecord(schema)) {
     return undefined;
   }
-  if (!isRoot && typeof schema.$id === "string") {
+  if (typeof schema.$id === "string" && schema.$id.startsWith("#")) {
+    if (decodeLocalSchemaRefFragment(schema.$id) === anchor) {
+      return schema;
+    }
+  } else if (!isRoot && typeof schema.$id === "string") {
     return undefined;
   }
   if (schema.$anchor === anchor || schema.$dynamicAnchor === anchor) {
@@ -189,7 +128,7 @@ function resolveLocalRef(
       } else {
         return { found: false };
       }
-      if (isRecord(current) && typeof current.$id === "string") {
+      if (isRecord(current) && typeof current.$id === "string" && !current.$id.startsWith("#")) {
         currentResourceRoot = current as JsonSchemaValue;
         currentResourceBaseId = resolveSchemaId(current.$id, currentResourceBaseId);
       }
@@ -209,7 +148,7 @@ function resolveLocalRef(
     : { found: true, schema: resolved, resourceRoot, resourceBaseId };
 }
 
-function splitResourceRef(ref: string): { resource: string; fragment: string } {
+export function splitResourceRef(ref: string): { resource: string; fragment: string } {
   const hashIndex = ref.indexOf("#");
   return hashIndex === -1
     ? { resource: ref, fragment: "" }
@@ -276,6 +215,34 @@ function resolveSchemaRef(
 ): LocalRefResolution {
   const localTarget = resolveLocalRef(resourceRoot, ref, baseId);
   return localTarget.found ? localTarget : resolveSchemaResourceRef(root, ref, baseId);
+}
+
+export type JsonSchemaReferenceContext = {
+  resources: ReadonlyMap<string, JsonSchemaValue>;
+  resolveId: (id: string, baseId: string | undefined) => string;
+};
+
+function resolveContextRef(
+  context: JsonSchemaReferenceContext | undefined,
+  ref: string,
+  baseId: string | undefined,
+): LocalRefResolution {
+  if (!context) {
+    return { found: false };
+  }
+  const exact = context.resources.get(context.resolveId(ref, baseId));
+  if (exact !== undefined) {
+    return { found: true, schema: exact, resourceRoot: exact, resourceBaseId: baseId };
+  }
+  const { resource, fragment } = splitResourceRef(ref);
+  const resourceId = stripFragment(context.resolveId(resource, baseId));
+  const target = context.resources.get(resourceId);
+  if (target === undefined) {
+    return { found: false };
+  }
+  return fragment
+    ? resolveLocalRef(target, fragment, resourceId)
+    : { found: true, schema: target, resourceRoot: target, resourceBaseId: resourceId };
 }
 
 function visitSchemaChildren<T>(
@@ -350,93 +317,13 @@ function visitSchemaChildren<T>(
   return undefined;
 }
 
-function hasDuplicateJsonValues(values: unknown[]): boolean {
-  const seen = new Set<string>();
-  for (const value of values) {
-    const key = JSON.stringify(value);
-    if (seen.has(key)) {
-      return true;
-    }
-    seen.add(key);
-  }
-  return false;
-}
-
-function validateSchemaKeywordShapes(
-  schema: Record<string, unknown>,
-  path: string,
-): string | undefined {
-  for (const [keywords, expected] of schemaKeywordGroups) {
-    for (const key of keywords) {
-      const value = schema[key];
-      if (
-        value !== undefined &&
-        (expected === "non-negative integer"
-          ? !Number.isInteger(value) || (typeof value === "number" && value < 0)
-          : typeof value !== expected)
-      ) {
-        return `${path}.${key}: expected ${expected}`;
-      }
-    }
-  }
-  if (
-    schema.multipleOf !== undefined &&
-    typeof schema.multipleOf === "number" &&
-    schema.multipleOf <= 0
-  ) {
-    return `${path}.multipleOf: expected positive number`;
-  }
-  if (schema.required !== undefined) {
-    if (!isStringArray(schema.required)) {
-      return `${path}.required: expected string array`;
-    }
-    if (new Set(schema.required).size !== schema.required.length) {
-      return `${path}.required: expected unique string array`;
-    }
-  }
-  if (schema.enum !== undefined) {
-    if (!Array.isArray(schema.enum)) {
-      return `${path}.enum: expected array`;
-    }
-    if (schema.enum.length === 0 || hasDuplicateJsonValues(schema.enum)) {
-      return `${path}.enum: expected non-empty array with unique values`;
-    }
-  }
-  for (const key of schemaCombinatorKeywords) {
-    const value = schema[key];
-    if (Array.isArray(value) && value.length === 0) {
-      return `${path}.${key}: expected non-empty schema array`;
-    }
-  }
-  if (schema.dependentRequired !== undefined) {
-    if (!isRecord(schema.dependentRequired)) {
-      return `${path}.dependentRequired: expected string array map`;
-    }
-    for (const [key, value] of Object.entries(schema.dependentRequired)) {
-      if (!isStringArray(value)) {
-        return `${path}.dependentRequired.${key}: expected string array`;
-      }
-    }
-  }
-  if (schema.dependencies !== undefined) {
-    if (!isRecord(schema.dependencies)) {
-      return `${path}.dependencies: expected schema or string array map`;
-    }
-    for (const [key, value] of Object.entries(schema.dependencies)) {
-      if (!isStringArray(value) && typeof value !== "boolean" && !isRecord(value)) {
-        return `${path}.dependencies.${key}: expected schema or string array`;
-      }
-    }
-  }
-  return undefined;
-}
-
 function findJsonSchemaNodeError(
   schema: unknown,
   path: string,
   root: JsonSchemaValue,
   resourceRoot: JsonSchemaValue,
   resourceBaseId: string | undefined,
+  context: JsonSchemaReferenceContext | undefined,
 ): string | undefined {
   if (typeof schema === "boolean") {
     return undefined;
@@ -462,15 +349,28 @@ function findJsonSchemaNodeError(
   if (keywordError) {
     return keywordError;
   }
-  const currentResourceRoot = typeof schema.$id === "string" ? schema : resourceRoot;
+  const currentResourceRoot =
+    typeof schema.$id === "string" && !schema.$id.startsWith("#") ? schema : resourceRoot;
   const currentResourceBaseId =
-    typeof schema.$id === "string" ? resolveSchemaId(schema.$id, resourceBaseId) : resourceBaseId;
+    typeof schema.$id === "string"
+      ? context
+        ? stripFragment(context.resolveId(schema.$id, resourceBaseId))
+        : resolveSchemaId(schema.$id, resourceBaseId)
+      : resourceBaseId;
   const findChildError = (child: unknown, childPath: string) =>
-    findJsonSchemaNodeError(child, childPath, root, currentResourceRoot, currentResourceBaseId);
+    findJsonSchemaNodeError(
+      child,
+      childPath,
+      root,
+      currentResourceRoot,
+      currentResourceBaseId,
+      context,
+    );
   for (const key of ["$ref", "$dynamicRef"] as const) {
     if (
       typeof schema[key] === "string" &&
-      !resolveSchemaRef(root, currentResourceRoot, schema[key], currentResourceBaseId).found
+      !resolveSchemaRef(root, currentResourceRoot, schema[key], currentResourceBaseId).found &&
+      !resolveContextRef(context, schema[key], currentResourceBaseId).found
     ) {
       return `${path}.${key}: unresolved ref`;
     }
@@ -484,8 +384,11 @@ function findJsonSchemaNodeError(
 }
 
 /** Return the first structural JSON Schema error that would make validation/defaulting unsafe. */
-export function findJsonSchemaShapeError(schema: JsonSchemaValue): string | undefined {
-  return findJsonSchemaNodeError(schema, "<schema>", schema, schema, undefined);
+export function findJsonSchemaShapeError(
+  schema: JsonSchemaValue,
+  context?: JsonSchemaReferenceContext,
+): string | undefined {
+  return findJsonSchemaNodeError(schema, "<schema>", schema, schema, undefined, context);
 }
 
 function inlineLocalRefsForMatch(
@@ -517,7 +420,8 @@ function inlineLocalRefsForMatch(
   if (!isRecord(schema)) {
     return schema;
   }
-  const currentResourceRoot = typeof schema.$id === "string" ? schema : resourceRoot;
+  const currentResourceRoot =
+    typeof schema.$id === "string" && !schema.$id.startsWith("#") ? schema : resourceRoot;
   const currentResourceBaseId =
     typeof schema.$id === "string" ? resolveSchemaId(schema.$id, resourceBaseId) : resourceBaseId;
   const inlineChild = (child: JsonSchemaValue) =>
@@ -624,7 +528,8 @@ function applySchemaDefaults(
     nextValue = structuredClone(schema.default);
   }
 
-  const currentResourceRoot = typeof schema.$id === "string" ? schema : resourceRoot;
+  const currentResourceRoot =
+    typeof schema.$id === "string" && !schema.$id.startsWith("#") ? schema : resourceRoot;
   const currentResourceBaseId =
     typeof schema.$id === "string" ? resolveSchemaId(schema.$id, resourceBaseId) : resourceBaseId;
   const applyChild = (child: unknown, current: unknown) =>
@@ -797,4 +702,3 @@ function applySchemaDefaults(
 export function applyJsonSchemaDefaults<T>(schema: JsonSchemaValue, value: T): T {
   return applySchemaDefaults(schema, value) as T;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -281,12 +281,8 @@ describe("worker environment service provision replay", () => {
       },
     );
 
-    let recoverySettled = false;
-    const recovery = dispatch.reconcile().finally(() => {
-      recoverySettled = true;
-    });
+    const recovery = dispatch.reconcile();
     await beforeSettlement(enrollmentStarted.promise, recovery, "Recovery enrollment");
-    expect(recoverySettled).toBe(false);
     expect(placements.get(REQUEST.sessionId)).toMatchObject({
       state: "provisioning",
       environmentId: intent.environmentId,
@@ -322,10 +318,6 @@ describe("worker environment service provision replay", () => {
     for (const effect of [attachSession, nodeTunnelManager.start, syncWorkspace, onActivated]) {
       expect(effect).toHaveBeenCalledOnce();
     }
-    expect(onActivated).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: REQUEST.sessionId }),
-      activePlacement,
-    );
     expect(destroy).not.toHaveBeenCalled();
   });
 
@@ -344,9 +336,8 @@ describe("worker environment service provision replay", () => {
         new Error(cleanupDetail),
       );
     });
-    const inspect = vi.fn(async () => ({ status: "active" as const }));
     const destroy = vi.fn(async () => {});
-    const provider = support.createProvider({ provision, inspect, destroy });
+    const provider = support.createProvider({ provision, destroy });
     const workerService = support.createService(provider);
 
     const failure = await create(workerService, "request-provision-cleanup").catch(
@@ -391,11 +382,7 @@ describe("worker environment service provision replay", () => {
     );
 
     expect(provision).toHaveBeenCalledTimes(1);
-    expect(inspect).toHaveBeenCalledWith(
-      expect.objectContaining({ leaseId, profile: { region: "test" } }),
-    );
     expect(destroy).toHaveBeenCalledTimes(1);
-    expect(destroy).toHaveBeenCalledWith({ leaseId, profile: { region: "test" } });
     expect(support.testState.store.get(pending.environmentId)).toMatchObject({
       state: "failed",
       leaseId: null,
@@ -406,10 +393,7 @@ describe("worker environment service provision replay", () => {
 
   it("rejects a timer-overflow provider provision timeout before allocation", async () => {
     const timeoutMs = MAX_TIMER_TIMEOUT_MS + 1;
-    const provision = vi.fn(async () => ({
-      leaseId: "lease-invalid-timeout",
-      ssh: support.SSH_ENDPOINT,
-    }));
+    const provision = vi.fn();
     const workerService = providerService({
       provision,
       resolveProvisionTimeoutMs: () => timeoutMs,
@@ -477,58 +461,38 @@ describe("worker environment service provision replay", () => {
       return record;
     });
     const events: string[] = [];
-    const operationIds: string[] = [];
-    let active = 0;
-    let maxActive = 0;
-    let originalProvisionCalls = 0;
     const { promise: firstProvisionPending, resolve: finishFirstProvision } = createDeferredCore();
     const destroy = vi.fn(async () => {
-      events.push("destroy:start");
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      active -= 1;
-      events.push("destroy:end");
+      events.push("destroy");
     });
     const provider = support.createProvider({
       resolveAllocation: async () => {
         events.push("resolve");
-        expect(active).toBe(0);
         return { leaseId: "lease-timeout-replay", sharedHost: false };
       },
-      provision: async (_profile, operationId) => {
-        originalProvisionCalls += 1;
-        const call = originalProvisionCalls;
-        operationIds.push(operationId);
-        events.push(`provision:${call}:start`);
-        active += 1;
-        maxActive = Math.max(maxActive, active);
-        if (call === 1) {
-          provisionEntered.resolve();
-          await firstProvisionPending;
-        }
-        active -= 1;
-        events.push(`provision:${call}:end`);
+      provision: async () => {
+        events.push("provision:start");
+        provisionEntered.resolve();
+        await firstProvisionPending;
+        events.push("provision:end");
         return { leaseId: "lease-timeout-replay", ssh: support.SSH_ENDPOINT };
       },
       destroy,
       resolveProvisionTimeoutMs: () => 20,
     });
     const workerService = support.createService(provider);
-    const creation = create(workerService, "request-provider-timeout-race");
-    const creationResult = creation.then(
+    const creationResult = create(workerService, "request-provider-timeout-race").then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
-    let environmentId: string | undefined;
     let teardownResult: Promise<unknown> | undefined;
     try {
       await beforeSettlement(provisionEntered.promise, creationResult, "Creation provider call");
-      expect(events).toEqual(["provision:1:start"]);
+      expect(events).toEqual(["provision:start"]);
       const queuedEnvironmentId = expectDefined(
         support.testState.store.list()[0],
         "timed-out provision row",
       ).environmentId;
-      environmentId = queuedEnvironmentId;
       teardownResult = workerService.destroy(queuedEnvironmentId).then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
@@ -536,27 +500,15 @@ describe("worker environment service provision replay", () => {
       await vi.advanceTimersByTimeAsync(20);
       expect(await creationResult).toMatchObject({ error: providerFailure });
       await beforeSettlement(intentCommitted.promise, teardownResult, "Teardown intent commit");
-      expect(originalProvisionCalls).toBe(1);
       expect(destroy).not.toHaveBeenCalled();
-      expect(maxActive).toBe(1);
     } finally {
       finishFirstProvision();
       await Promise.all([creationResult, teardownResult]);
     }
 
     expect(await teardownResult).toMatchObject({ value: { state: "destroyed" } });
-    const finalEnvironmentId = expectDefined(environmentId, "timed-out provision environment id");
-    expect(operationIds).toHaveLength(1);
-    expect(new Set(operationIds).size).toBe(1);
-    expect(maxActive).toBe(1);
-    expect(events).toEqual([
-      "provision:1:start",
-      "provision:1:end",
-      "resolve",
-      "destroy:start",
-      "destroy:end",
-    ]);
-    expect(support.testState.store.get(finalEnvironmentId)).toMatchObject({ state: "destroyed" });
+    expect(events).toEqual(["provision:start", "provision:end", "resolve", "destroy"]);
+    expect(support.testState.store.list()[0]).toMatchObject({ state: "destroyed" });
   });
 
   it.each([

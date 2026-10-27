@@ -70,6 +70,7 @@ import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommandMock,
   createGatewayTestState,
+  createCompactionResult,
   cronIsolatedRun,
   embeddedRunMock,
   gatewayReplyMock,
@@ -356,16 +357,9 @@ function resetGatewayMutableTestFixtures(sessionStorePath?: string): void {
   }
   embeddedRunMock.endWaiters.clear();
   embeddedRunMock.resolveEndBeforeTimeoutIds.clear();
-  embeddedRunMock.compactEmbeddedAgentSession.mockReset().mockResolvedValue({
-    ok: true,
-    compacted: true,
-    result: {
-      summary: "summary",
-      firstKeptEntryId: "entry-1",
-      tokensBefore: 120,
-      tokensAfter: 80,
-    },
-  });
+  embeddedRunMock.compactEmbeddedAgentSession
+    .mockReset()
+    .mockResolvedValue(createCompactionResult());
 }
 
 async function removeGatewayTestDir(dir: string) {
@@ -405,7 +399,8 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   resetTestPluginRegistry();
   resetGatewayMutableTestFixtures();
   resetSystemEventsForTest();
-  resetAgentEventsForTest();
+  // Module-owned observers survive fixture resets; the runner retires them between files.
+  resetAgentEventsForTest({ preserveListeners: true });
   await resetPreparedModelCatalogStateForTest();
   gatewayReplyRuntimePrepared = false;
 }
@@ -974,42 +969,6 @@ export async function readConnectChallengeNonce(
   }
 }
 
-function shouldPrePairTestDevice(params: {
-  client: ConnectReqClient;
-  opts?: ConnectReqOptions;
-}): boolean {
-  if (params.opts?.device !== undefined || params.opts?.deviceToken) {
-    return false;
-  }
-  if (params.opts?.prePairDevice !== undefined) {
-    return params.opts.prePairDevice;
-  }
-  if (params.opts?.skipDefaultAuth === true) {
-    return false;
-  }
-  return (
-    params.client.mode === GATEWAY_CLIENT_MODES.WEBCHAT ||
-    params.client.id === GATEWAY_CLIENT_NAMES.WEBCHAT_UI
-  );
-}
-
-function pairedDeviceAllowsScopes(params: {
-  paired: Awaited<ReturnType<typeof getPairedDevice>>;
-  publicKey: string;
-  role: string;
-  scopes: string[];
-}): boolean {
-  if (!params.paired || params.paired.publicKey !== params.publicKey) {
-    return false;
-  }
-  const pairedRoles = params.paired.roles ?? (params.paired.role ? [params.paired.role] : []);
-  if (!pairedRoles.includes(params.role)) {
-    return false;
-  }
-  const approvedScopes = params.paired.approvedScopes ?? params.paired.scopes ?? [];
-  return params.scopes.every((scope) => approvedScopes.includes(scope));
-}
-
 async function prePairTestDevice(params: {
   device: ConnectReqDevice;
   client: ConnectReqClient;
@@ -1018,13 +977,12 @@ async function prePairTestDevice(params: {
   browserOrigin?: string;
 }): Promise<void> {
   const paired = await getPairedDevice(params.device.id);
+  const pairedRoles = paired?.roles ?? (paired?.role ? [paired.role] : []);
+  const approvedScopes = paired?.approvedScopes ?? paired?.scopes ?? [];
   if (
-    pairedDeviceAllowsScopes({
-      paired,
-      publicKey: params.device.publicKey,
-      role: params.role,
-      scopes: params.scopes,
-    })
+    paired?.publicKey === params.device.publicKey &&
+    pairedRoles.includes(params.role) &&
+    params.scopes.every((scope) => approvedScopes.includes(scope))
   ) {
     return;
   }
@@ -1117,7 +1075,14 @@ export async function connectReq(
       nonce: connectChallengeNonce,
     };
   })();
-  if (device && shouldPrePairTestDevice({ client, opts })) {
+  const prePairDevice =
+    opts?.device === undefined &&
+    !opts?.deviceToken &&
+    (opts?.prePairDevice ??
+      (opts?.skipDefaultAuth !== true &&
+        (client.mode === GATEWAY_CLIENT_MODES.WEBCHAT ||
+          client.id === GATEWAY_CLIENT_NAMES.WEBCHAT_UI)));
+  if (device && prePairDevice) {
     await prePairTestDevice({
       device,
       client,

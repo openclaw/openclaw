@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
-import { writeTree } from "./plugin-generation-capture.test-support.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const fixtureTempDirs: string[] = [];

@@ -18,7 +18,7 @@ import { repairCanonicalSessionEntries } from "./doctor-session-delivery-state.j
  * never use a dashboard key, so they cannot match. Rows from before dashboard
  * roots were grouped under main lack the parent link and stay unstamped.
  */
-export function isUnstampedDashboardRoot(
+function isUnstampedDashboardRoot(
   entry: SessionEntry,
   sessionKey: string,
   cfg: OpenClawConfig,

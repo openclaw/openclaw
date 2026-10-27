@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 
-export type ObservedTranscriptHydration = {
+type ObservedTranscriptHydration = {
   kind: string;
   events: number;
   totalEvents: number | undefined;

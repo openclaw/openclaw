@@ -224,11 +224,13 @@ it("shares the current self avatar with typed owner faces missing a revision", a
   const avatars = [...view.container.querySelectorAll("openclaw-viewer-avatar")];
 
   await settle(avatars);
-  expect(fetchAvatar).toHaveBeenCalledOnce();
-  expect(fetchAvatar).toHaveBeenCalledWith(
-    "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
-    expect.objectContaining({ headers: { Authorization: "Bearer viewer-token" } }),
-  );
+  await waitForSolid(() => {
+    expect(fetchAvatar).toHaveBeenCalledOnce();
+    expect(fetchAvatar).toHaveBeenCalledWith(
+      "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
+      expect.objectContaining({ headers: { Authorization: "Bearer viewer-token" } }),
+    );
+  });
   await resolveAvatarImageUrl(user.avatarUrl);
   await settle(avatars);
   expect(avatars.map((avatar) => avatar.querySelector("img")?.getAttribute("src"))).toEqual([
@@ -245,10 +247,12 @@ it("shares the current self avatar with typed owner faces missing a revision", a
     selfUser: { ...user, avatarUrl: "/api/users/profile-ada/avatar?v=8" },
   });
   await settle(avatars);
-  expect(fetchAvatar.mock.calls.map(([url]) => url)).toEqual([
-    "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
-    "https://gateway.example.test/api/users/profile-ada/avatar?v=8",
-  ]);
+  await waitForSolid(() =>
+    expect(fetchAvatar.mock.calls.map(([url]) => url)).toEqual([
+      "https://gateway.example.test/api/users/profile-ada/avatar?v=7",
+      "https://gateway.example.test/api/users/profile-ada/avatar?v=8",
+    ]),
+  );
   await resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=8");
   await settle(avatars);
   expect(avatars.map((avatar) => avatar.querySelector("img")?.getAttribute("src"))).toEqual([
@@ -503,8 +507,10 @@ it("keeps a newly advertised teammate avatar ahead of cached directory availabil
   await profileDirectory(gateway).load();
   avatar.user = { ...user, avatarUrl: "/api/users/teammate/avatar?v=8" };
   await avatar.updateComplete;
-  expect(fetchAvatar.mock.calls.at(-1)?.[0]).toBe(
-    "https://gateway.example.test/api/users/teammate/avatar?v=8",
+  await waitForSolid(() =>
+    expect(fetchAvatar.mock.calls.at(-1)?.[0]).toBe(
+      "https://gateway.example.test/api/users/teammate/avatar?v=8",
+    ),
   );
 });
 

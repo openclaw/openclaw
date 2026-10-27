@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import path from "node:path";
 import { afterEach, assert, expect, it } from "vitest";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -74,7 +75,7 @@ writeFileSync(out + "/GatewayModels.swift", "public let generatedBy = " + runtim
       });
     const result = build("debug");
     expect(result.status, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`).toBe(0);
-    const files = fs.readdirSync(scratch, { recursive: true, encoding: "utf8" });
+    const files = listDirectoryTreeStrictSync(scratch).map((walkEntry) => walkEntry.relativePath);
     const output = files.find((file) =>
       file.endsWith("GenerateGatewayProtocol/GatewayModels.swift"),
     );

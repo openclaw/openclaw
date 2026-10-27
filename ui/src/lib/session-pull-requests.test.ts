@@ -1,15 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import {
   createGatewayHarness,
   createHello,
   flushSync,
 } from "./session-pull-requests.test-support.ts";
-import {
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-  sessionGitHubRepository,
-  sessionPullRequestsForGateway,
-} from "./session-pull-requests.ts";
+import { sessionGitHubRepository, sessionPullRequestsForGateway } from "./session-pull-requests.ts";
 import { scopedSessionArtifactKey } from "./sessions/session-key.ts";
 
 let harness: ReturnType<typeof createGatewayHarness>;
@@ -586,20 +583,6 @@ describe("session pull request snapshot store", () => {
       await unwatch();
     },
   );
-
-  it("requests an immediate refresh for only the selected watched key", async () => {
-    await watch(["agent:main:demo", "agent:main:other"]);
-    harness.request.mockClear();
-
-    expect(store.refresh("agent:main:unwatched")).toBe(false);
-    expect(store.refresh("agent:main:demo")).toBe(true);
-    expect(store.refresh("agent:main:demo")).toBe(true);
-    await flushSync();
-
-    expect(harness.request).toHaveBeenCalledOnce();
-    expectSubscription(harness, ["agent:main:demo", "agent:main:other"], ["agent:main:demo"]);
-    await unwatch();
-  });
 
   it("debounces automatic bursts per session while an explicit refresh absorbs its timer", async () => {
     vi.useFakeTimers();

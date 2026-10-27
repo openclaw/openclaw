@@ -9,6 +9,7 @@ import {
   pauseSessionPlacementRecovery,
   readSessionPlacementRecovery,
 } from "../../lib/sessions/session-placement-recovery.ts";
+import { openRowSessionMenu as openSessionMenu } from "../app-sidebar-menu.ts";
 import {
   createGatewayHarness,
   createSessionState,
@@ -82,21 +83,6 @@ describe("AppSidebar session mutation feedback", () => {
     sidebar.connected = true;
     await sidebar.updateComplete;
     return { gateway, harness, sidebar, context };
-  }
-
-  async function openSessionMenu(sidebar: SidebarLifecycleState, key: string) {
-    const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
-    if (!row) {
-      throw new Error(`expected session row for ${key}`);
-    }
-    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-    await sidebar.updateComplete;
-    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-    if (!menu) {
-      throw new Error("expected session menu");
-    }
-    await menu.updateComplete;
-    return menu;
   }
 
   function selectSession(sidebar: SidebarLifecycleState, key: string) {

@@ -18,7 +18,8 @@ const transport = vi.hoisted(() => ({
 }));
 vi.mock("openclaw/plugin-sdk/agent-workspace-runtime", async (original) => ({
   ...(await original<typeof import("openclaw/plugin-sdk/agent-workspace-runtime")>()),
-  resolveWorkspaceWorkerArgv: () => ["/fixture/memory-worker.js"],
+  resolveWorkspaceWorkerUrl: () => new URL("file:///fixture/memory-worker.js"),
+  resolveWorkspaceWorkerExecArgv: () => ["--import", "file:///fixture/loader.mjs"],
 }));
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (original) => ({
   ...(await original<typeof import("openclaw/plugin-sdk/memory-core-host-engine-foundation")>()),
@@ -183,6 +184,10 @@ it("waits for readiness, publishes facts, and delivers dirty before settled in t
     }),
   );
   const starting = track(instance.start());
+  expect(transport.createWorker).toHaveBeenCalledExactlyOnceWith(
+    new URL("file:///fixture/memory-worker.js"),
+    { execArgv: ["--import", "file:///fixture/loader.mjs"], name: "memory-files" },
+  );
   const worker = activeWorker();
   const facts = { ...readyFacts, capacityDegraded: true };
   await worker.flush({ type: "state", id: 1, facts });

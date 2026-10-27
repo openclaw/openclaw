@@ -689,6 +689,23 @@ describe("Control UI offline app shell", () => {
     expect(worker.priorCache.has(worker.scope + "__offline_shell__")).toBe(true);
   });
 
+  it("preserves an installing replacement cache when the active worker is probed", async () => {
+    const worker = createFetchServiceWorker();
+    worker.fetch.mockResolvedValue(new Response("build asset"));
+    await worker.install();
+    await worker.activate();
+    const replacementName = "openclaw-control-next-fixture";
+    const replacementCache = new Map([
+      [worker.scope + "assets/next.js", new Response("installing replacement")],
+    ]);
+    worker.generations.set(replacementName, replacementCache);
+
+    await worker.probe();
+
+    expect(worker.generations.get(replacementName)).toBe(replacementCache);
+    expect(worker.cache.has(worker.scope + "__offline_shell__")).toBe(true);
+  });
+
   it("uses the cached shell when an online navigation stalls until the deadline", async () => {
     vi.useFakeTimers();
     try {
@@ -890,11 +907,19 @@ function createFetchServiceWorker(
       },
     },
   });
+  const createLifecycleRequest = (): ServiceWorkerFetchRequest => ({
+    url: scope,
+    method: "GET",
+    mode: "cors",
+    cache: "default",
+    headers: new Headers(),
+  });
   return {
     scope,
     cache,
     priorCache,
     olderCache,
+    generations,
     info,
     cacheDelete,
     cacheMatch,
@@ -911,13 +936,7 @@ function createFetchServiceWorker(
     async activate() {
       listeners.get("activate")?.({
         waitUntil,
-        request: {
-          url: scope,
-          method: "GET",
-          mode: "cors",
-          cache: "default",
-          headers: new Headers(),
-        },
+        request: createLifecycleRequest(),
         clientId: "",
         respondWith: vi.fn(),
       });
@@ -928,13 +947,7 @@ function createFetchServiceWorker(
       listeners.get("message")?.({
         data: { type: "sw-version-probe", offlinePrecache },
         ports: [{ postMessage: probeReply }],
-        request: {
-          url: scope,
-          method: "GET",
-          mode: "cors",
-          cache: "default",
-          headers: new Headers(),
-        },
+        request: createLifecycleRequest(),
         clientId: "requesting-window",
         respondWith: vi.fn(),
         waitUntil,
@@ -944,13 +957,7 @@ function createFetchServiceWorker(
     async install() {
       listeners.get("install")?.({
         waitUntil,
-        request: {
-          url: scope,
-          method: "GET",
-          mode: "cors",
-          cache: "default",
-          headers: new Headers(),
-        },
+        request: createLifecycleRequest(),
         clientId: "",
         respondWith: vi.fn(),
       });

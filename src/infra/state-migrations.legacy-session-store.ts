@@ -361,7 +361,7 @@ export function normalizeLegacySessionEntryDelivery(value: SessionEntry | Record
   assertSupportedSessionStoreEntry(value);
   const entry =
     isRecord(value) && hasLegacySessionProviderState(value)
-      ? migrateLegacySessionEntryState(value)
+      ? migrateLegacySessionEntryState(value).entry
       : value;
   const legacy = entry as LegacySessionDeliveryEntry;
   const hasLegacyFields = LEGACY_SESSION_DELIVERY_KEYS.some((key) => key in legacy);

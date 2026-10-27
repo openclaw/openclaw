@@ -23,7 +23,6 @@ const EmbeddedAgentConfigSchema = z.strictObject({
   cyberFailover: z
     .strictObject({
       mode: z.union([z.literal("auto"), z.literal("off")]).optional(),
-      model: z.string().min(1).optional(),
       cooloffMs: z.number().int().positive().optional(),
     })
     .optional(),

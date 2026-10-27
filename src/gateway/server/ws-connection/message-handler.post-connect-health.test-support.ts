@@ -4,10 +4,6 @@ import type { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
-import {
-  onInternalDiagnosticEvent,
-  type DiagnosticEventPayload,
-} from "../../../infra/diagnostic-events.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
@@ -45,19 +41,6 @@ export const BACKEND_CONNECT_PARAMS = {
   role: "operator",
   caps: [],
 } as const satisfies Record<string, unknown>;
-
-export function captureSecurityEvents(): {
-  events: Extract<DiagnosticEventPayload, { type: "security.event" }>[];
-  stop: () => void;
-} {
-  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
-  const stop = onInternalDiagnosticEvent((event, metadata) => {
-    if (metadata.trusted && event.type === "security.event") {
-      events.push(event);
-    }
-  });
-  return { events, stop };
-}
 
 export function createCloseMock() {
   return vi.fn<CloseGatewayConnection>();

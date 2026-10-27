@@ -32,6 +32,7 @@ export function resolveEmbeddedAgentRunRecoverySnapshot(
     const target = controller.target;
     return (
       target !== undefined &&
+      controller.attachment?.projectSessionActive !== false &&
       matchesStore(target.storeScope, operation.agentId) &&
       matchesGateway(operation) &&
       !operation.result &&
@@ -86,7 +87,8 @@ export type ChatHistoryMethod =
   | "chat.history"
   | "chat.startup"
   | "chat.message.get"
-  | "chat.predict";
+  | "chat.predict"
+  | "chat.pendingInputs.dismiss";
 
 export function respondChatHistoryUnavailable(
   method: ChatHistoryMethod,

@@ -2,6 +2,7 @@ import { MessageChannel, receiveMessageOnPort, type Transferable } from "node:wo
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Result } from "@openclaw/normalization-core/result";
 import { isSessionActorCommand } from "../config/sessions/session-actor-command.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
@@ -27,13 +28,13 @@ import {
 import { withAgentCreationClaimWitness } from "./agent-creation-claim.js";
 import { withAgentDeletionWorkerCleanup } from "./agent-deletion-cleanup.worker.js";
 import { readAgentDeletionJournalStatusInDatabase } from "./agent-deletion-journal.read.js";
+import { retainAgentDatabase } from "./openclaw-agent-db-borrower.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseRegistrationCommit,
 } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { prepareOpenClawAgentDatabaseWorkerLease } from "./openclaw-agent-db-lease.js";
-import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema-refresh.js";
 import {
   getOpenClawAgentDatabaseValidation,
@@ -271,6 +272,7 @@ function openAgentDatabaseBackend(
       } catch (error) {
         // An explicit pre-open refusal cannot retain a native handle.
         if (!(error instanceof SqliteWorkerOpenRefusedError)) {
+          materializeErrorStack(error);
           openingFailure = { error };
         }
         openingResult = { ok: false, error };
@@ -326,7 +328,8 @@ function openAgentDatabaseBackend(
     if (!database || !database.db.isOpen || getOpenClawAgentDatabaseIfOpen(options) !== database) {
       throw new Error("Agent execution lost its retained native database");
     }
-    if (refreshSchema) {
+    // A fresh open already admitted the schema; publication below still checks its live receipt.
+    if (refreshSchema && !validation) {
       validation = refreshOpenClawAgentDatabaseSchema(database, admitOpen);
     }
     requestSqliteWorkerOperationAdmission({
@@ -515,12 +518,23 @@ function openAgentDatabaseBackend(
         return domain.prepare(command);
       }
       const preparing = registry.prepare(command.type);
-      if (command.type === "session.turn.commit" && command.input.options.voiceTranscript) {
+      if (command.type === "session.turn.prepare" || command.type === "session.turn.commit") {
+        const predicate = command.input.options.sessionTurnMutation?.routingPredicate;
+        const voice =
+          command.type === "session.turn.commit" && command.input.options.voiceTranscript;
+        // Command preparation also runs after the registry is warm and before BEGIN.
         return Promise.all([
           preparing,
-          import("../config/sessions/session-turn.worker.js").then((turn) =>
-            turn.prepareVoiceTranscriptCommit(),
-          ),
+          predicate
+            ? import("../config/sessions/session-turn-predicate.js").then((turn) =>
+                turn.prepareSessionTurnRoutingDependencies(predicate),
+              )
+            : undefined,
+          voice
+            ? import("../config/sessions/session-turn.worker.js").then((turn) =>
+                turn.prepareVoiceTranscriptCommit(),
+              )
+            : undefined,
         ]).then(() => {});
       }
       const nativeBindings =

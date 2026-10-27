@@ -42,19 +42,16 @@ describe("resolveActiveRunQueueAction", () => {
     ).toBe("run-now");
   });
 
-  it.each(["steer", "followup", "collect"] as const)(
-    "enqueues %s turns behind queued followups",
-    (mode) => {
-      expect(
-        resolveActiveRunQueueAction({
-          hasQueuedFollowups: true,
-          isActive: true,
+  it("enqueues turns behind queued followups", () => {
+    expect(
+      resolveActiveRunQueueAction({
+        hasQueuedFollowups: true,
+        isActive: true,
 
-          shouldFollowup: mode === "steer" || mode === "followup" || mode === "collect",
-        }),
-      ).toBe("enqueue-followup");
-    },
-  );
+        shouldFollowup: true,
+      }),
+    ).toBe("enqueue-followup");
+  });
 
   it("runs reset-triggered turns immediately while another run is active", () => {
     expect(

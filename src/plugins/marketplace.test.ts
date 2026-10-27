@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 import * as jsonFiles from "../infra/json-files.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
@@ -78,23 +79,6 @@ function mockSuccessfulMarketplaceInstall() {
   });
 }
 
-async function writeRemoteMarketplaceFixture(params: {
-  repoDir: string;
-  manifest: unknown;
-  pluginDir?: string;
-  pluginFile?: string;
-}) {
-  if (params.pluginDir) {
-    await fs.mkdir(path.join(params.repoDir, params.pluginDir), { recursive: true });
-  }
-  if (params.pluginFile) {
-    const pluginFilePath = path.join(params.repoDir, params.pluginFile);
-    await fs.mkdir(path.dirname(pluginFilePath), { recursive: true });
-    await fs.writeFile(pluginFilePath, "plugin fixture");
-  }
-  await writeMarketplaceManifest(params.repoDir, params.manifest);
-}
-
 async function writeLocalMarketplaceFixture(rootDir: string) {
   const pluginDir = path.join(rootDir, "plugins", pluginName);
   await fs.mkdir(pluginDir, { recursive: true });
@@ -112,10 +96,15 @@ function mockRemoteMarketplaceClone(params: {
 }) {
   runCommandWithTimeoutMock.mockImplementationOnce(async (argv: string[]) => {
     const repoDir = argv.at(-1)!;
-    await writeRemoteMarketplaceFixture({
-      repoDir,
-      ...params,
-    });
+    if (params.pluginDir) {
+      await fs.mkdir(path.join(repoDir, params.pluginDir), { recursive: true });
+    }
+    if (params.pluginFile) {
+      const pluginFilePath = path.join(repoDir, params.pluginFile);
+      await fs.mkdir(path.dirname(pluginFilePath), { recursive: true });
+      await fs.writeFile(pluginFilePath, "plugin fixture");
+    }
+    await writeMarketplaceManifest(repoDir, params.manifest);
     if (params.symlinkPath) {
       const outsideDir = await makeTrackedTempDirAsync(
         "openclaw-marketplace-outside",
@@ -203,7 +192,7 @@ describe("marketplace plugins", () => {
       gitSource("https://example.com/alias.git"),
     ],
   ] as const)("normalizes %s in local marketplace listings", async (_label, source, expected) => {
-    await writeMarketplaceManifest(rootDir, { plugins: [{ name: "example", source }] });
+    await writeMarketplaceManifest(rootDir, manifestFor(source, "example"));
 
     const result = await listMarketplacePlugins({ marketplace: rootDir });
 
@@ -216,9 +205,7 @@ describe("marketplace plugins", () => {
     { source: { type: "github", repo: " ", url: false }, error: 'github source missing "repo"' },
     { source: { type: "git", url: null, repo: "\t" }, error: 'git source missing "url"' },
   ])("preserves $error in local marketplace listings", async ({ source, error }) => {
-    const manifestPath = await writeMarketplaceManifest(rootDir, {
-      plugins: [{ name: "example", source }],
-    });
+    const manifestPath = await writeMarketplaceManifest(rootDir, manifestFor(source, "example"));
 
     const result = await listMarketplacePlugins({ marketplace: rootDir });
 
@@ -319,9 +306,10 @@ describe("marketplace plugins", () => {
       bundleFormat: "claude",
       name: "Guarded Bundle",
     });
-    const manifestPath = await writeMarketplaceManifest(rootDir, {
-      plugins: [{ name: "guarded-bundle", source: "./plugin-src" }],
-    });
+    const manifestPath = await writeMarketplaceManifest(
+      rootDir,
+      manifestFor("./plugin-src", "guarded-bundle"),
+    );
     const { installPluginFromPath } = await import("./install-package.js");
     installPluginFromPathMock.mockImplementationOnce(installPluginFromPath);
     let authorityActive = true;
@@ -532,13 +520,7 @@ describe("marketplace archive downloads", () => {
   }
 
   function streamingResponse(cancel: () => void | Promise<void>, status = 200) {
-    return new Response(
-      new ReadableStream<Uint8Array>({
-        start: (controller) => controller.enqueue(Buffer.from("archive fixture")),
-        cancel,
-      }),
-      { status },
-    );
+    return new Response(makeStallingStream([Buffer.from("archive fixture")], cancel), { status });
   }
 
   function expectDownloadFailure(result: unknown, error: string) {
@@ -547,9 +529,7 @@ describe("marketplace archive downloads", () => {
   }
 
   async function install(timeoutMs?: number, source = archiveUrl) {
-    manifestPath = await writeMarketplaceManifest(rootDir, {
-      plugins: [{ name: "frontend-design", source }],
-    });
+    manifestPath = await writeMarketplaceManifest(rootDir, manifestFor(source));
     return installPluginFromMarketplace({
       marketplace: manifestPath,
       plugin: "frontend-design",

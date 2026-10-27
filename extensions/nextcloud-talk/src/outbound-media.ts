@@ -293,6 +293,10 @@ export async function sendMediaNextcloudTalk(
     optimizeImages: false,
   });
   assertCurrent();
+  // Talk only keeps native voice metadata for these server-supported audio MIME types.
+  const asVoice =
+    ctx.audioAsVoice === true &&
+    (media.contentType === "audio/mpeg" || media.contentType === "audio/wav");
   const uid = await client.user(options);
   const uploadId = randomUUID();
   const prefix = `openclaw-${uploadId}-`;
@@ -405,6 +409,7 @@ export async function sendMediaNextcloudTalk(
       referenceId,
       talkMetaData: JSON.stringify({
         caption,
+        ...(asVoice ? { messageType: "voice-message" } : {}),
         ...(ctx.silent ? { silent: true } : {}),
         ...(ctx.replyToId ? { replyTo: Number(ctx.replyToId) } : {}),
       }),
@@ -483,7 +488,7 @@ export async function sendMediaNextcloudTalk(
       roomToken,
       receipt: createMessageReceiptFromOutboundResults({
         results: [{ channel: "nextcloud-talk", conversationId: roomToken, messageId }],
-        kind: "media",
+        kind: asVoice && message.messageType === "voice-message" ? "voice" : "media",
         ...(replyToId ? { replyToId } : {}),
       }),
     };

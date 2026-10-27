@@ -26,6 +26,9 @@ export async function tryRunUpdateAdmissionBeforeStartup(
   if (!isUpdateAdmissionInvocation(invocation)) {
     return false;
   }
+  // The supervisor parses stdout as one verdict; raised console levels must not prefix it.
+  const { routeLogsToStderr } = await import("../logging/console.js");
+  routeLogsToStderr();
   const reject = (message: string) => {
     console.error(message);
     process.exitCode = 2;

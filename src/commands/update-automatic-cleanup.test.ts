@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { automaticallyCleanUpdateRecovery } from "../cli/update-cli/automatic-cleanup.js";
 import { prepareUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
 import { finalizeRestartUpdateRun } from "../gateway/server-restart-update-run.js";
@@ -24,8 +25,14 @@ import {
   UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
 } from "../infra/update-capture-privacy-marker.js";
 import { createRetainedUpdateRecovery } from "../infra/update-retained-recovery.test-support.js";
-import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../infra/update-run-ledger.js";
-import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunPhase,
+  recordUpdateRunStep,
+} from "../infra/update-run-ledger.js";
+import type { UpdateRunPhase, UpdateRunRecord } from "../infra/update-run-record.js";
 import * as updateRunWrites from "../infra/update-run-write.async.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { defaultRuntime } from "../runtime.js";
@@ -36,10 +43,9 @@ import {
   completeDoctorMigrationBackups,
   recordDoctorMigrationBackups,
 } from "./doctor-migration-backup-artifacts.js";
-import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
-import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { useDoctorSessionSqliteTestFixture } from "./doctor-session-sqlite.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
+import { createMissingConfigRecoveryManifest } from "./update-recovery-manifest.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const { createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
@@ -81,37 +87,17 @@ function capture(runId: string, doctor = false, age = 0) {
     UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
   );
   fs.writeFileSync(path.join(directory, "payload"), "preserved rollback bytes");
-  fs.writeFileSync(
+  writeFixtureJsonSync(
     path.join(directory, "manifest.json"),
-    JSON.stringify(
-      doctor
-        ? {
-            schemaVersion: 2,
-            kind: "update-recovery",
-            generation: { kind: "baseline" },
-            databases: [],
-            runId,
-            installRoot: stateDir,
-            stateDir,
-            configPath: env.OPENCLAW_CONFIG_PATH,
-            configPaths: [env.OPENCLAW_CONFIG_PATH],
-            creator: { host: "fixture", pid: 1, startIdentity: "1" },
-            drivers: [],
-            createdAt: new Date(now - age * 86_400_000).toISOString(),
-            roots: [env.OPENCLAW_CONFIG_PATH],
-            excludedRoots: [],
-            protectedPaths: [env.OPENCLAW_CONFIG_PATH],
-            entries: [
-              {
-                kind: "missing",
-                sourcePath: env.OPENCLAW_CONFIG_PATH,
-                sqlite: false,
-                directory: false,
-              },
-            ],
-          }
-        : {},
-    ),
+    doctor
+      ? createMissingConfigRecoveryManifest({
+          runId,
+          installRoot: stateDir,
+          stateDir,
+          configPath: env.OPENCLAW_CONFIG_PATH,
+          createdAt: new Date(now - age * 86_400_000).toISOString(),
+        })
+      : {},
   );
   return directory;
 }
@@ -119,6 +105,61 @@ function start(at: number) {
   using clock = vi.spyOn(Date, "now");
   clock.mockReturnValue(at);
   return createUpdateRun({ trigger: "cli" }, { env }).runId;
+}
+function capturedRun(at: number, status?: Parameters<typeof finishUpdateRun>[1]["status"]) {
+  const runId = start(at);
+  const directory = capture(runId);
+  if (status) {
+    finishUpdateRun(runId, { status }, { env });
+  }
+  return { runId, directory };
+}
+function failedRun(at: number, phases: readonly UpdateRunPhase[]) {
+  const runId = start(at);
+  recordUpdateRunStep(runId, { step: "original-state-capture", status: "completed" }, { env });
+  for (const phase of phases) {
+    recordUpdateRunPhase(runId, phase, {}, { env });
+  }
+  return { runId, directory: capture(runId) };
+}
+async function fail(runId: string, at: number) {
+  using clock = vi.spyOn(Date, "now");
+  clock.mockReturnValue(at);
+  const emit = await prepareUpdateCommandTerminalResult(
+    { opts: { json: true, run: { runId, env } } },
+    { status: "error", mode: "git", reason: "update-failed", steps: [], durationMs: 1 },
+    { rolledBack: false },
+  );
+  const result = await emit();
+  expect(result.status).toBe("error");
+  expect(getUpdateRun(runId, { env })?.status).toBe("failed");
+  return result;
+}
+async function recoveryFixture() {
+  const fixture = await createVerifiedRecoveryStore();
+  env = fixture.store.env;
+  stateDir = fixture.store.stateDir;
+  return fixture;
+}
+function originalBytes(fixture: Awaited<ReturnType<typeof recoveryFixture>>) {
+  return new Map(
+    fixture.target.completedMoves.map((move) => [
+      move.archivePath,
+      fs.readFileSync(move.archivePath),
+    ]),
+  );
+}
+function expectOriginals(originals: Map<string, Buffer>) {
+  for (const [file, contents] of originals) {
+    expect(fs.existsSync(file), file).toBe(true);
+    expect(fs.readFileSync(file)).toEqual(contents);
+  }
+}
+function warning(detail: string) {
+  return expect.objectContaining({
+    step: "warning:recovery-artifact-cleanup",
+    detail: expect.stringContaining(detail),
+  });
 }
 async function complete(runId: string, at: number, json = true) {
   using clock = vi.spyOn(Date, "now");
@@ -154,19 +195,20 @@ async function migrationOriginal() {
 }
 
 it("retires the previous successful generation and migration originals, but retains current and protected recovery", async () => {
-  const failed = start(now - 240_000);
+  const { runId: failed, directory: failedCapture } = failedRun(now - 240_000, [
+    "staging",
+    "validating",
+    "activating",
+  ]);
   finishUpdateRun(failed, { status: "failed" }, { env });
-  const failedCapture = capture(failed);
-  const first = start(now - 120_000);
-  const firstCapture = capture(first);
+  const { runId: first, directory: firstCapture } = capturedRun(now - 120_000);
   const backup = await migrationOriginal();
   await complete(first, now + 1_000);
   expect(fs.existsSync(firstCapture)).toBe(true);
   expect(fs.existsSync(backup)).toBe(true);
   const doctors = [5, 4, 3, 2, 1].map((age) => capture(`doctor-${randomUUID()}`, true, age));
   const orphan = capture("unmanifested");
-  const second = start(now + 60_000);
-  const secondCapture = capture(second);
+  const { runId: second, directory: secondCapture } = capturedRun(now + 60_000);
   const result = await complete(second, now + 61_000);
   expect(result.steps.at(-1)?.advisory).toBeUndefined();
   expect(fs.existsSync(firstCapture)).toBe(false);
@@ -181,8 +223,7 @@ it("retires the previous successful generation and migration originals, but reta
 it.each([true, false])(
   "keeps success and reports an actual retirement failure consistently (JSON: %s)",
   async (json) => {
-    const first = start(now - 120_000);
-    const original = capture(first);
+    const { runId: first, directory: original } = capturedRun(now - 120_000);
     await complete(first, now - 60_000);
     const second = start(now);
     const rm = fs.promises.rm;
@@ -203,35 +244,22 @@ it.each([true, false])(
         .mock.calls.at(-1)?.[0] as UpdateRunResult & { run: UpdateRunRecord };
       expect(output.status).toBe("ok");
       expect(output.steps.at(-1)?.advisory?.message).toContain("injected retirement failure");
-      expect(output.run.steps).toContainEqual(
-        expect.objectContaining({
-          step: "warning:recovery-artifact-cleanup",
-          detail: expect.stringContaining("injected retirement failure"),
-        }),
-      );
+      expect(output.run.steps).toContainEqual(warning("injected retirement failure"));
     } else {
       const printed = vi.mocked(defaultRuntime.log).mock.calls.flat().join("\n");
       expect(printed).toContain("OpenClaw updated; 1 warning needs attention");
       expect(printed).toContain("injected retirement failure");
     }
     expect(getUpdateRun(second, { env })?.steps).toContainEqual(
-      expect.objectContaining({
-        step: "warning:recovery-artifact-cleanup",
-        detail: expect.stringContaining("injected retirement failure"),
-      }),
+      warning("injected retirement failure"),
     );
   },
 );
 
-it("runs retirement in the owning Gateway worker while manual cleanup still refuses its live lock", async () => {
-  const pending = start(now - 240_000);
-  const pendingCapture = capture(pending);
-  finishUpdateRun(pending, { status: "rolled-back" }, { env });
-  const first = start(now - 120_000);
-  const original = capture(first);
-  finishUpdateRun(first, { status: "succeeded" }, { env });
-  const second = start(now + 60_000);
-  const current = capture(second);
+it("runs retirement in the owning Gateway worker while retaining pending recovery", async () => {
+  const { runId: pending, directory: pendingCapture } = capturedRun(now - 240_000, "rolled-back");
+  const { directory: original } = capturedRun(now - 120_000, "succeeded");
+  const { runId: second, directory: current } = capturedRun(now + 60_000);
   {
     using clock = vi.spyOn(Date, "now");
     clock.mockReturnValue(now + 61_000);
@@ -244,42 +272,40 @@ it("runs retirement in the owning Gateway worker while manual cleanup still refu
   await closeOpenClawStateDatabaseAsync();
   const lock = await acquireGatewayLock({ env, role: "gateway", allowInTests: true });
   expect(lock).toBeTruthy();
+  const lstat = fs.lstatSync;
+  let hostOwnerReads = 0;
+  using hostProbe = vi.spyOn(fs, "lstatSync").mockImplementation((pathname, options) => {
+    if (String(pathname) === lock!.stateLockPath) {
+      hostOwnerReads++;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+    return lstat(pathname, options);
+  });
   try {
-    await expect(
-      retireSessionSqliteRecovery({
-        env,
-        preview: inspectSessionSqliteRecovery({ cfg: {}, env }),
-        readConfig: async () => ({}),
-        confirm: async () => true,
-      }),
-    ).rejects.toThrow(/ownership|lock/i);
-    expect(fs.existsSync(original)).toBe(true);
-    const result = await cleanupGatewayUpdateRecovery(second, env, () => lock!.assertCurrent());
+    const result = await cleanupGatewayUpdateRecovery(second, env);
     expect(result?.advisory).toBeUndefined();
+    expect(hostOwnerReads).toBe(0);
     expect(fs.existsSync(original)).toBe(false);
     expect(fs.existsSync(current)).toBe(true);
     expect(fs.existsSync(pendingCapture)).toBe(true);
     expect(getUpdateRun(second, { env })?.status).toBe("succeeded");
   } finally {
+    hostProbe.mockRestore();
     await lock?.release();
   }
 });
 
-it.each(["claim-publication", "first-unlink"] as const)(
+it.each(["before-first-effect", "claim-publication", "first-unlink"] as const)(
   "stops migration-original retirement when its physical owner is replaced after %s",
   async (phase) => {
-    const fixture = await createVerifiedRecoveryStore();
-    env = fixture.store.env;
-    stateDir = fixture.store.stateDir;
+    const fixture = await recoveryFixture();
     const originals = new Map(
       fixture.target.completedMoves
         .filter((move) => move.artifact?.classification !== "protected")
         .map((move) => [move.archivePath, fs.readFileSync(move.archivePath)]),
     );
     expect(originals.size).toBe(2);
-    const runId = start(now);
-    const current = capture(runId);
-    finishUpdateRun(runId, { status: "succeeded" }, { env });
+    const { runId, directory: current } = capturedRun(now, "succeeded");
     await closeOpenClawStateDatabaseAsync();
     const acquire = () =>
       acquireGatewayStateOwner({
@@ -313,13 +339,14 @@ it.each(["claim-publication", "first-unlink"] as const)(
         // Observe real worker effects, then replace the real physical owner.
         // Production host admission still decides whether the next effect is allowed.
         const reached =
-          phase === "claim-publication"
+          phase === "before-first-effect" ||
+          (phase === "claim-publication"
             ? moves().some(
                 (move) =>
                   move.artifact?.disposal.state === "pending-disposal" &&
                   fs.existsSync(move.artifact.disposal.claimPath),
               )
-            : remaining().length < originals.size;
+            : remaining().length < originals.size);
         if (!successor && reached) {
           originalOwner.release();
           successor = acquire();
@@ -330,15 +357,12 @@ it.each(["claim-publication", "first-unlink"] as const)(
       expect(() => originalOwner.assertCurrent()).toThrow();
       successor!.assertCurrent();
       const retained = remaining();
-      expect(retained).toHaveLength(phase === "claim-publication" ? 2 : 1);
+      expect(retained).toHaveLength(phase === "first-unlink" ? 1 : 2);
       for (const { original, retained: file } of retained) {
         expect(fs.readFileSync(file)).toEqual(originals.get(original));
       }
-      if (phase === "claim-publication") {
-        for (const [file, bytes] of originals) {
-          expect(fs.existsSync(file)).toBe(true);
-          expect(fs.readFileSync(file)).toEqual(bytes);
-        }
+      if (phase !== "first-unlink") {
+        expectOriginals(originals);
       }
       expect(fs.existsSync(current)).toBe(true);
       expect(getUpdateRun(runId, { env })?.status).toBe("succeeded");
@@ -356,9 +380,7 @@ it.each(["claim-publication", "first-unlink"] as const)(
 );
 
 it("does not retire artifacts when another process owns live state", async () => {
-  const first = start(now - 120_000);
-  const original = capture(first);
-  finishUpdateRun(first, { status: "succeeded" }, { env });
+  const { directory: original } = capturedRun(now - 120_000, "succeeded");
   const second = start(now);
   finishUpdateRun(second, { status: "succeeded" }, { env });
   await closeOpenClawStateDatabaseAsync();
@@ -407,15 +429,8 @@ it("does not retire artifacts when another process owns live state", async () =>
 it.each(["legacy-store", "transcript"] as const)(
   "keeps the entire mixed-proof recovery set when its %s needs historical verification",
   async (unverifiedKind) => {
-    const fixture = await createVerifiedRecoveryStore();
-    env = fixture.store.env;
-    stateDir = fixture.store.stateDir;
-    const originals = new Map(
-      fixture.target.completedMoves.map((move) => [
-        move.archivePath,
-        fs.readFileSync(move.archivePath),
-      ]),
-    );
+    const fixture = await recoveryFixture();
+    const originals = originalBytes(fixture);
     // A supported historical receipt can lack proof for only part of a connected
     // recovery set. Deferring that verification must also retain its dependencies.
     for (const move of [...fixture.target.plannedMoves, ...fixture.target.completedMoves]) {
@@ -429,16 +444,33 @@ it.each(["legacy-store", "transcript"] as const)(
     });
     const runId = start(now + 60_000);
     await complete(runId, now + 61_000);
-    for (const [file, contents] of originals) {
-      expect(fs.existsSync(file), file).toBe(true);
-      expect(fs.readFileSync(file)).toEqual(contents);
-    }
+    expectOriginals(originals);
   },
 );
 
+it("retires a failed update's own capture only when it never activated", async () => {
+  const { runId: succeeded, directory: succeededCapture } = capturedRun(now - 120_000);
+  await complete(succeeded, now - 60_000);
+  const activated = failedRun(now, ["staging", "validating", "activating"]);
+  const activatedResult = await fail(activated.runId, now + 1_000);
+  expect(activatedResult.steps.map((step) => step.name)).not.toContain("recovery-artifact-cleanup");
+  const unactivated = failedRun(now + 2_000, ["staging", "validating"]);
+  const result = await fail(unactivated.runId, now + 3_000);
+  expect(fs.existsSync(unactivated.directory)).toBe(false);
+  // Neither the earlier activated failure nor the latest success becomes superseded.
+  expect([activated.directory, succeededCapture].map(fs.existsSync)).toEqual([true, true]);
+  const cleanup = result.steps.find((step) => step.name === "recovery-artifact-cleanup");
+  expect(cleanup).toMatchObject({ exitCode: 0 });
+  expect(cleanup?.advisory).toBeUndefined();
+  const recorded = getUpdateRun(unactivated.runId, { env });
+  expect(recorded?.status).toBe("failed");
+  expect(recorded?.steps).toContainEqual(
+    expect.objectContaining({ step: "recovery-artifact-cleanup", status: "completed" }),
+  );
+});
+
 it("keeps the triggering update's capture when the wall clock moves backward", async () => {
-  const runId = start(now + 60_000);
-  const current = capture(runId);
+  const { runId, directory: current } = capturedRun(now + 60_000);
   const result = await complete(runId, now);
   expect(fs.existsSync(current)).toBe(true);
   expect(result.steps.at(-1)?.advisory?.message).toContain("triggering update");
@@ -447,15 +479,8 @@ it("keeps the triggering update's capture when the wall clock moves backward", a
 it.each([true, false])(
   "defers cross-manifest disposal even for protected historical originals (completed: %s)",
   async (completed) => {
-    const fixture = await createVerifiedRecoveryStore();
-    env = fixture.store.env;
-    stateDir = fixture.store.stateDir;
-    const originals = new Map(
-      fixture.target.completedMoves.map((move) => [
-        move.archivePath,
-        fs.readFileSync(move.archivePath),
-      ]),
-    );
+    const fixture = await recoveryFixture();
+    const originals = originalBytes(fixture);
     const transcript = fixture.target.completedMoves.find((move) => move.kind === "transcript")!;
     const separate = createSessionSqliteMigrationRun(env, []);
     separate.manifest.completedAt = fixture.manifest.completedAt;
@@ -486,15 +511,10 @@ it.each([true, false])(
       manifest: fixture.manifest,
     });
     const backup = await migrationOriginal();
-    const first = start(now - 120_000);
-    const oldCapture = capture(first);
-    finishUpdateRun(first, { status: "succeeded" }, { env });
+    const { directory: oldCapture } = capturedRun(now - 120_000, "succeeded");
     const second = start(now + 60_000);
     await complete(second, now + 61_000);
-    for (const [file, contents] of originals) {
-      expect(fs.existsSync(file), file).toBe(true);
-      expect(fs.readFileSync(file)).toEqual(contents);
-    }
+    expectOriginals(originals);
     expect(fs.existsSync(backup)).toBe(true);
     // Capture eligibility is independent of deferred session-original dependencies.
     expect(fs.existsSync(oldCapture)).toBe(false);
@@ -502,11 +522,8 @@ it.each([true, false])(
 );
 
 it("keeps Gateway completion warnings visible when cleanup diagnostics cannot be persisted", async () => {
-  const first = start(now - 120_000);
-  const oldCapture = capture(first);
-  finishUpdateRun(first, { status: "succeeded" }, { env });
-  const second = start(now + 60_000);
-  const current = capture(second);
+  const { directory: oldCapture } = capturedRun(now - 120_000, "succeeded");
+  const { runId: second, directory: current } = capturedRun(now + 60_000);
   {
     using clock = vi.spyOn(Date, "now");
     clock.mockReturnValue(now + 61_000);
@@ -528,18 +545,8 @@ it("keeps Gateway completion warnings visible when cleanup diagnostics cannot be
       stats: { runId: second },
     });
     expect(completed?.status).toBe("succeeded");
-    expect(completed?.steps).toContainEqual(
-      expect.objectContaining({
-        step: "warning:recovery-artifact-cleanup",
-        detail: expect.stringContaining("receipt write unavailable"),
-      }),
-    );
-    expect(completed?.steps).toContainEqual(
-      expect.objectContaining({
-        step: "warning:recovery-artifact-cleanup",
-        detail: expect.stringContaining("unreadable-manifest"),
-      }),
-    );
+    expect(completed?.steps).toContainEqual(warning("receipt write unavailable"));
+    expect(completed?.steps).toContainEqual(warning("unreadable-manifest"));
     expect(
       getUpdateRun(second, { env })?.steps.some(
         (step) => step.step === "warning:recovery-artifact-cleanup",

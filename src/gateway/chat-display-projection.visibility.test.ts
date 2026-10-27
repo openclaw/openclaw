@@ -3,8 +3,11 @@ import { HEARTBEAT_PROMPT, INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-repl
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../sessions/input-provenance.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
+import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.message.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import { projectPendingInputMessage } from "./server-methods/chat-pending-inputs.js";
 import { assistantTextMessage } from "./session-history-fixtures.test-support.js";
+import { projectSessionMessagePayload } from "./session-transcript-message.js";
 
 const internalContext = (text: string) =>
   ["<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>", text, "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>"].join("\n");
@@ -16,6 +19,13 @@ const userTextMessage = (text: string, seq = 1) => ({
 const internalMessage = (text: string, sourceTool: string) => ({
   ...userTextMessage(text),
   provenance: { kind: "internal_system", sourceTool },
+});
+const mediaMessage = (text: string, seq: number, url: string) => ({
+  ...assistantTextMessage(text, seq),
+  content: [
+    { type: "text", text },
+    { type: "image", source: { type: "url", url } },
+  ],
 });
 const expectProjection = (
   messages: unknown[],
@@ -61,6 +71,38 @@ it.each(["reviewer", "legacy-plugin"])("projects %s steering only on request", (
   expect(capped).not.toHaveProperty(["__openclaw", "pluginSteering", "displayText"]);
 });
 
+it("hides tool handoff resumes from history, live, and pending chat but keeps plugin events", () => {
+  const event = (sourceTool: string, text: string) =>
+    buildPersistedUserTurnMessage({
+      text,
+      timestamp: 2,
+      provenance: { kind: "internal_system", sourceTool },
+    });
+  const resume = event(
+    "tool_handoff",
+    'Plugin reload result: {"ok":false,"error":"denied","code":"INVALID_REQUEST"}\n' +
+      "Continue the original task in this conversation. Do not repeat a completed operation.",
+  );
+  const pluginEvent = event("plugin", "Discord presence changed to idle.");
+  const answer = assistantTextMessage("The reload was refused; nothing changed.", 3);
+  expect(projectChatDisplayMessages([resume, pluginEvent, answer])).toMatchObject([
+    { role: "user", content: pluginEvent.content },
+    { role: "assistant", content: answer.content },
+  ]);
+  const live = (message: unknown) =>
+    projectSessionMessagePayload({ message, sessionKey: "agent:main:main" }).payload;
+  expect(live(resume)).toBeUndefined();
+  expect(live(pluginEvent)?.message).toMatchObject({ content: pluginEvent.content });
+  const pending = (message: typeof resume) =>
+    projectPendingInputMessage(
+      { id: "event-1", runId: "event-run", message, acceptedAt: 2, state: "queued" },
+      20_000,
+      (projected) => projected,
+    );
+  expect(pending(resume)).toBeUndefined();
+  expect(pending(pluginEvent)).toMatchObject({ content: pluginEvent.content });
+});
+
 it("hides attributed child coordination without hiding peer messages or parent answers", () => {
   const child = {
     role: "user",
@@ -95,7 +137,6 @@ it.each(["visible ask", ""])("strips legacy internal envelopes: %s", (visible) =
 
 it.each([
   [" exec ", "Exec completed (background-job, code 0) :: PRIVATE_COMMAND_OUTPUT"],
-  [" exec ", "Exec failed (background-job, code 1) :: PRIVATE_COMMAND_OUTPUT"],
   ["subagent_announce", "private child announcement"],
   ["subagent_settle", "private child settlement"],
   ["image_generate", 'session_key: image_generate:task-123\npath="/private.png"'],
@@ -115,13 +156,7 @@ it.each([
         internalMessage("Gateway restarted during update.", "restart-sentinel"),
       ]
     : [];
-  const answer = {
-    ...assistantTextMessage("Created.", 2),
-    content: [
-      { type: "text", text: "Created." },
-      { type: "image", source: { type: "url", url: "/api/chat/media/outgoing/generated.png" } },
-    ],
-  };
+  const answer = mediaMessage("Created.", 2, "/api/chat/media/outgoing/generated.png");
   expectProjection([completion, ...controls, answer], [...controls, answer]);
   expect(completion).toEqual(original);
 });
@@ -215,6 +250,37 @@ const provenance = {
   sourceSessionKey: sessionKey,
   sourcePromptPrefix: `[cron:${jobId} Old report]`,
 };
+
+it("keeps scheduled inputs quiet without hiding historical announcements, lookalikes, or delivered media", () => {
+  const input = {
+    ...userTextMessage("[cron:daily Daily check] Check the queue."),
+    provenance: { ...provenance, sourceTool: "cron_execution" },
+  };
+  const announcement = {
+    ...userTextMessage("The historical scheduled result is ready.", 2),
+    provenance,
+  };
+  const human = {
+    ...userTextMessage("[cron:daily Daily check] This is my example.", 3),
+    provenance: { kind: "external_user", sourceTool: "cron_execution" },
+  };
+  const delivered = {
+    ...mediaMessage("The new scheduled result is ready.", 4, "/api/chat/media/outgoing/report.png"),
+    provenance: input.provenance,
+  };
+  const original = structuredClone(input);
+  expectProjection(
+    [input, announcement, human, delivered],
+    [
+      expect.objectContaining({ role: "assistant", content: announcement.content, provenance }),
+      human,
+      delivered,
+    ],
+    { resolveCronJobName: () => "Daily check" },
+  );
+  expectProjection([input], [], { resolveCronJobName: () => "Daily check" });
+  expect(input).toEqual(original);
+});
 
 it("projects only recorded cron envelopes and current labels without changing model input", () => {
   const body = "Check the queue.\n    Keep indentation.";

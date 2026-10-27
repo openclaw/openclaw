@@ -33,11 +33,6 @@ import {
 
 const servers: http.Server[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const closeServer = (server: http.Server) =>
-  new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-
 async function listen(server: http.Server, port = 0, host = "127.0.0.1"): Promise<number> {
   await new Promise<void>((resolve) => {
     server.listen({ port, host: host === "localhost" ? undefined : host }, resolve);
@@ -138,7 +133,7 @@ async function serveInspection(routes: Record<string, () => unknown>) {
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
-  await Promise.all(servers.splice(0).map(closeServer));
+  await Promise.all(servers.splice(0).map((server) => server[Symbol.asyncDispose]()));
 });
 
 it("selects the pinned darwin/x64 asset", () => {
@@ -392,7 +387,7 @@ it("reconciles a mutation after the child reads the preset but before it listens
   const { presetPath } = await createPresetFixture("startup-race");
   const probe = http.createServer();
   const port = await listen(probe);
-  await closeServer(probe);
+  await probe[Symbol.asyncDispose]();
   const prepare = async (contextSize: number) =>
     await prepareManagedLlamaServer({
       chatModel: configureChat("chat", "/models/chat.gguf", contextSize, 2048),

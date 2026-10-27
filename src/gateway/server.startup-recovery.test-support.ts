@@ -6,6 +6,7 @@ import {
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createGatewayBackgroundTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 /** Real HTTP model fixture; each scenario controls its own request gates. */
@@ -17,16 +18,7 @@ export async function createStartupRecoveryFixture(
   const token = `${label}-token`;
   const state = await createOpenClawTestState({
     label,
-    env: {
-      OPENCLAW_GATEWAY_TOKEN: token,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
+    env: createGatewayBackgroundTestEnv(token),
   });
   let responseCount = 0;
   const provider = createServer((request, response) => {

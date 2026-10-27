@@ -67,6 +67,29 @@ async function expectBackdrop(page: Page) {
   expect(backdrop.alpha).toBeLessThanOrEqual(0.2);
 }
 
+function paletteInputPresentation(input: HTMLTextAreaElement) {
+  const card = input.closest(".cmd-palette")!;
+  const cardStyle = getComputedStyle(card);
+  const inputStyle = getComputedStyle(input);
+  const cardRect = card.getBoundingClientRect();
+  const inputRect = input.getBoundingClientRect();
+  return {
+    background: cardStyle.backgroundColor,
+    border: cardStyle.border,
+    radius: cardStyle.borderRadius,
+    shadow: cardStyle.boxShadow,
+    input: {
+      left: inputRect.left - cardRect.left,
+      top: inputRect.top - cardRect.top,
+      width: inputRect.width,
+      height: inputRect.height,
+      fontFamily: inputStyle.fontFamily,
+      fontSize: inputStyle.fontSize,
+      lineHeight: inputStyle.lineHeight,
+    },
+  };
+}
+
 suite.define(() => {
   it("retains files accepted before the cold palette is dismissed and cancels queued submission", async () => {
     await withColdPalette(async (page, paletteModule, _chat, gateway) => {
@@ -274,39 +297,51 @@ suite.define(() => {
     },
   );
 
-  it("shows the mobile palette shell while its module loads", async () => {
+  it("keeps the mobile palette shell styled while its stylesheet loads", async () => {
     await withColdPalette(async (page, paletteModule, chatModule) => {
       assert(chatModule, "Expected a held chat route");
-      // Navigation can finish before the shell installs its shortcut handler.
-      await page.locator(".shell").waitFor({ state: "visible" });
-      await page.keyboard.press("ControlOrMeta+K");
-
-      const shell = page.locator(".cmd-palette");
-      await shell.waitFor({ state: "visible" });
-      await paletteModule.request;
-      expect(await shell.getAttribute("aria-busy")).toBe("true");
-      const input = shell.locator(".cmd-palette__input");
-      expect(await input.isEditable()).toBe(true);
-      await expectFocused(input);
-      await page.keyboard.type("early query");
-      await page.keyboard.press("Enter");
-      expect(await input.inputValue()).toBe("early query");
-      await input.evaluate((element: HTMLTextAreaElement) =>
-        element.setSelectionRange(2, 7, "backward"),
+      const paletteStyles = await holdModuleResponse(
+        page,
+        /\/assets\/command-palette-[^/]+\.css(?:\?.*)?$/u,
       );
-      await expectBackdrop(page);
-      await page
-        .locator("openclaw-router-outlet .lazy-view-state--loading")
-        .waitFor({ state: "attached" });
-      expect(await shell.locator(".lazy-view-state--loading").count()).toBe(0);
+      try {
+        // Navigation can finish before the shell installs its shortcut handler.
+        await page.locator(".shell").waitFor({ state: "visible" });
+        await page.keyboard.press("ControlOrMeta+K");
 
-      chatModule.release();
-      paletteModule.release();
-      const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
-      await loaded.waitFor({ state: "visible" });
-      expect(await loaded.inputValue()).toBe("early query");
-      await expectSelection(loaded, { focused: true, start: 2, end: 7, direction: "backward" });
-      await expectBackdrop(page);
+        const shell = page.locator(".cmd-palette");
+        await shell.waitFor({ state: "visible" });
+        await paletteStyles.request;
+        paletteModule.release();
+        expect(await shell.getAttribute("aria-busy")).toBe("true");
+        const input = shell.locator(".cmd-palette__input");
+        expect(await input.isEditable()).toBe(true);
+        await expectFocused(input);
+        await page.keyboard.type("early query");
+        await page.keyboard.press("Enter");
+        expect(await input.inputValue()).toBe("early query");
+        await input.evaluate((element: HTMLTextAreaElement) =>
+          element.setSelectionRange(2, 7, "backward"),
+        );
+        await expectBackdrop(page);
+        await page
+          .locator("openclaw-router-outlet .lazy-view-state--loading")
+          .waitFor({ state: "attached" });
+        expect(await shell.locator(".lazy-view-state--loading").count()).toBe(0);
+        const loadingPresentation = await input.evaluate(paletteInputPresentation);
+        await page.screenshot({ path: `${suite.artifactDir}/palette-styles-pending.png` });
+
+        chatModule.release();
+        paletteStyles.release();
+        const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
+        await loaded.waitFor({ state: "visible" });
+        expect(await loaded.inputValue()).toBe("early query");
+        await expectSelection(loaded, { focused: true, start: 2, end: 7, direction: "backward" });
+        await expectBackdrop(page);
+        expect(await loaded.evaluate(paletteInputPresentation)).toEqual(loadingPresentation);
+      } finally {
+        paletteStyles.release();
+      }
     }, true);
   });
 });

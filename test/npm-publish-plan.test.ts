@@ -51,15 +51,32 @@ const noRetry = async () => {
   throw new Error("unexpected retry");
 };
 
+function cancellableResponse(status: number, cancel: () => void, headers: HeadersInit = {}) {
+  return new Response(new ReadableStream({ cancel }), { status, headers });
+}
+
+async function expectTarballFailure(
+  options: Parameters<typeof fetchNpmRegistryTarballWithRetry>[0],
+  error: string | { code: string },
+) {
+  const fetchImpl = vi.fn(options.fetchImpl);
+  const result = fetchNpmRegistryTarballWithRetry({ ...options, fetchImpl, sleep: noRetry });
+  if (typeof error === "string") {
+    await expect(result).rejects.toThrow(error);
+  } else {
+    await expect(result).rejects.toMatchObject(error);
+  }
+  expect(fetchImpl).toHaveBeenCalledOnce();
+}
+
 describe("fetchNpmRegistryPackumentWithRetry", () => {
   it("bounds decoded packument bytes and cancels an oversized stream without retrying", async () => {
-    let requests = 0;
     let cancelled = false;
     await expect(
       fetchPackument({
         maxBytes: 16,
+        sleep: noRetry,
         fetchImpl: async () => {
-          requests += 1;
           return new Response(
             new ReadableStream<Uint8Array>({
               pull(controller) {
@@ -73,7 +90,6 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
         },
       }),
     ).rejects.toMatchObject({ code: "ETOOBIG" });
-    expect(requests).toBe(1);
     expect(cancelled).toBe(true);
   });
 
@@ -158,28 +174,22 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
     expect(waits).toEqual(recovers ? [1000] : [1000, 2000]);
   });
 
-  it("rejects completed invalid JSON without retry or recoverable publication deferral", async () => {
-    const fetchImpl = vi.fn(async () => new Response("{"));
-    await expect(
-      fetchPackument({
-        fetchImpl,
-        sleep: noRetry,
-      }),
-    ).rejects.toThrow("returned invalid JSON");
-    expect(fetchImpl).toHaveBeenCalledOnce();
-  });
-
-  it.each(["CERT_HAS_EXPIRED"])("does not retry permanent fetch TypeError %s", async (code) => {
-    const error = new TypeError("fetch failed", { cause: { code } });
+  it.each([
+    ["invalid JSON", "returned invalid JSON"],
+    ["certificate failure", new TypeError("fetch failed", { cause: { code: "CERT_HAS_EXPIRED" } })],
+  ] as const)("does not retry permanent %s", async (_label, error) => {
     const fetchImpl = vi.fn(async () => {
-      throw error;
+      if (error instanceof Error) {
+        throw error;
+      }
+      return new Response("{");
     });
-    await expect(
-      fetchPackument({
-        fetchImpl,
-        sleep: noRetry,
-      }),
-    ).rejects.toBe(error);
+    const result = fetchPackument({ fetchImpl, sleep: noRetry });
+    if (error instanceof Error) {
+      await expect(result).rejects.toBe(error);
+    } else {
+      await expect(result).rejects.toThrow(error);
+    }
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
@@ -214,111 +224,75 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
       maxBytes: bytes.length,
       ...options,
     });
+  const fails = (options: Parameters<typeof fetchTarball>[0], error: string | { code: string }) =>
+    expectTarballFailure({ packageName, packageUrl, maxBytes: bytes.length, ...options }, error);
 
-  it.each([429, "connection"] as const)(
-    "recovers %s using only the original tarball URL",
-    async (failure) => {
-      const requests: string[] = [];
-      const waits: number[] = [];
-      let canceled = 0;
-      const result = await fetchTarball({
-        fetchImpl: async (url) => {
-          requests.push(url);
-          if (requests.length !== 1) {
-            return new Response(bytes);
-          }
-          if (failure === "connection") {
-            throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
-          }
-          return new Response(
-            new ReadableStream({
-              cancel() {
-                canceled += 1;
-              },
-            }),
-            {
-              status: failure,
-              headers: failure === 429 ? { "retry-after": "2" } : {},
-            },
-          );
-        },
-        sleep: async (milliseconds) => {
-          waits.push(milliseconds);
-        },
-      });
-      expect(result).toEqual(bytes);
-      expect(requests).toEqual([packageUrl, packageUrl]);
-      expect(waits).toEqual([failure === 429 ? 2000 : 1000]);
-      if (typeof failure === "number") {
-        expect(canceled).toBe(1);
-      }
-    },
-  );
+  it("recovers rate limiting using only the original tarball URL", async () => {
+    const requests: string[] = [];
+    const waits: number[] = [];
+    const cancel = vi.fn();
+    const result = await fetchTarball({
+      fetchImpl: async (url) => {
+        requests.push(url);
+        if (requests.length !== 1) {
+          return new Response(bytes);
+        }
+        return cancellableResponse(429, cancel, { "retry-after": "2" });
+      },
+      sleep: async (milliseconds) => {
+        waits.push(milliseconds);
+      },
+    });
+    expect(result).toEqual(bytes);
+    expect(requests).toEqual([packageUrl, packageUrl]);
+    expect(waits).toEqual([2000]);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
 
   it.each([403, 404, 302])(
     "does not retry or follow permanent HTTP %s responses",
     async (status) => {
-      let requests = 0;
-      let canceled = 0;
-      await expect(
-        fetchTarball({
-          fetchImpl: async () => {
-            requests += 1;
-            return new Response(
-              new ReadableStream({
-                cancel() {
-                  canceled += 1;
-                },
-              }),
-              {
-                status,
-                headers: { location: "https://other.example/package.tgz" },
-              },
-            );
-          },
-          sleep: noRetry,
-        }),
-      ).rejects.toThrow(`HTTP ${status}`);
-      expect(requests).toBe(1);
-      expect(canceled).toBe(1);
+      const cancel = vi.fn();
+      await fails(
+        {
+          fetchImpl: async () =>
+            cancellableResponse(status, cancel, {
+              location: "https://other.example/package.tgz",
+            }),
+        },
+        `HTTP ${status}`,
+      );
+      expect(cancel).toHaveBeenCalledOnce();
     },
   );
 
   it.each(["header", "stream"])("rejects oversized %s bytes without retry", async (kind) => {
-    let requests = 0;
-    await expect(
-      fetchTarball({
-        fetchImpl: async () => {
-          requests += 1;
-          return new Response(Buffer.concat([bytes, Buffer.from("extra")]), {
+    await fails(
+      {
+        fetchImpl: async () =>
+          new Response(Buffer.concat([bytes, Buffer.from("extra")]), {
             headers: kind === "header" ? { "content-length": String(bytes.length + 5) } : {},
-          });
-        },
-        sleep: noRetry,
-      }),
-    ).rejects.toMatchObject({ code: "ETOOBIG" });
-    expect(requests).toBe(1);
+          }),
+      },
+      { code: "ETOOBIG" },
+    );
   });
 
   it.each(["seconds", "date"])(
     "does not violate Retry-After %s to fit its deadline",
     async (kind) => {
       const retryAfter = kind === "seconds" ? "60" : new Date(Date.now() + 60_000).toUTCString();
-      let requests = 0;
-      await expect(
-        fetchTarball({
+      await fails(
+        {
           deadlineMs: Date.now() + 1000,
-          fetchImpl: async () => {
-            requests += 1;
-            return new Response("rate limited", {
+          fetchImpl: async () =>
+            new Response("rate limited", {
               status: 429,
               headers: { "retry-after": retryAfter },
-            });
-          },
-          sleep: noRetry,
-        }),
-      ).rejects.toThrow("deadline would be exceeded before the permitted retry");
-      expect(requests).toBe(1);
+            }),
+        },
+        "deadline would be exceeded before the permitted retry",
+      );
     },
   );
 
@@ -413,7 +387,6 @@ describe("resolvePublishedNpmVersionRoute", () => {
       'npm dist-tag "latest" points to "2026.9.7" and cannot be safely moved to "2026.9.6" (ahead)',
     ],
     ["unpublished behind lagging selector", { latest: "2026.9.5" }, false],
-    ["unpublished missing selector", {}, false],
   ] as const)(
     "decides publication for %s",
     (_label, distTags, published, supersededBy?: string | null, error?: string) => {
@@ -434,11 +407,6 @@ describe("resolvePublishedNpmVersionRoute", () => {
         route: published ? "npm-readback" : null,
         supersededBy: supersededBy ?? null,
       });
-      if (published) {
-        expect(
-          resolvePublishedNpmVersionRoute({ packageVersion: version, publishPlan, distTags }),
-        ).toBe("npm-readback");
-      }
     },
   );
 });

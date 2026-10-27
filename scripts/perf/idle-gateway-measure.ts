@@ -1,7 +1,7 @@
-// One real connected client, no application traffic after connect.
+// One real connected client; optional config reloads precede the idle window.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -40,6 +40,9 @@ const { values } = parseArgs({
     entry: { type: "string", default: "dist/entry.js" },
     minutes: { type: "string", default: "10" },
     "settle-seconds": { type: "string", default: "60" },
+    "ready-timeout-seconds": { type: "string", default: "180" },
+    "config-reloads": { type: "string", default: "0" },
+    "watcher-failure": { type: "boolean", default: false },
     "start-at": { type: "string" },
     port: { type: "string", default: "41563" },
     timers: { type: "boolean", default: false },
@@ -61,6 +64,9 @@ if (values.profile && values.allocations) {
 if (Boolean(values["sql-observer"]) !== Boolean(values["sql-output"])) {
   throw new Error("--sql-observer and --sql-output must be supplied together");
 }
+if (values["watcher-failure"] && values.entry !== "src/entry.ts") {
+  throw new Error("--watcher-failure requires --entry src/entry.ts");
+}
 const sqlOutput = values["sql-output"] ? path.resolve(values["sql-output"]) : undefined;
 const sqlPhase = (phase: string) => {
   if (sqlOutput) {
@@ -76,6 +82,10 @@ const integer = (raw: string, label: string, min: number) =>
   parseStrictIntegerOption({ raw, label, min, fallback: min });
 const minutes = integer(values.minutes, "--minutes", 1);
 const settleSeconds = integer(values["settle-seconds"], "--settle-seconds", 0);
+const readyTimeoutSeconds = integer(values["ready-timeout-seconds"], "--ready-timeout-seconds", 1);
+const configReloads = integer(values["config-reloads"], "--config-reloads", 0);
+const needsDevice = values.subscribe || configReloads > 0 || values["watcher-failure"];
+const traceGc = configReloads === 0;
 const port = integer(values.port, "--port", 40000);
 const startAt = values["start-at"] ? integer(values["start-at"], "--start-at", 1) : undefined;
 if (port > 65535) {
@@ -116,7 +126,7 @@ writeFileSync(
           userHeader: "x-forwarded-user",
           requiredHeaders: ["x-forwarded-proto"],
           allowUsers: ["idle-measure"],
-          ...(values.subscribe
+          ...(needsDevice
             ? { deviceAutoApprove: { enabled: true, scopes: ["operator.read"] } }
             : {}),
         },
@@ -140,17 +150,18 @@ const env = createGatewayBenchEnv(path.join(state ?? output, "home"), configPath
     OPENCLAW_SYSTEMD_UNIT: `openclaw-idle-measure-${port}`,
     OPENCLAW_IDLE_MEASURE_CHANNEL: channel,
     OPENCLAW_IDLE_MEASURE_TIMERS: values.timers ? "1" : "0",
+    OPENCLAW_IDLE_MEASURE_WATCHER_FAILURE: values["watcher-failure"] ? "1" : "0",
+    OPENCLAW_BENCH_TRACE_GC: traceGc ? "1" : "0",
     NODE_DISABLE_COMPILE_CACHE: "1",
   },
 });
 const args = [
   ...gatewayBenchCpuProfileArgs(values["cpu-profile-dir"]),
-  "--trace-gc-nvp",
   "--import",
   path.resolve("scripts/tsx.mjs"),
   "--import",
   path.resolve("scripts/lib/gateway-bench-profile-preload.ts"),
-  ...(values.timers
+  ...(values.timers || values["watcher-failure"]
     ? ["--import", path.resolve("scripts/perf/idle-gateway-measure-preload.mjs")]
     : []),
   path.resolve(values.entry),
@@ -172,6 +183,36 @@ process.once("SIGINT", interrupt);
 process.once("SIGTERM", interrupt);
 const wait = (ms: number) => delay(ms, undefined, { signal: abort.signal });
 const samples: unknown[] = [];
+async function watcherCommand(action: "watcher-fail" | "watcher-count") {
+  const id = randomUUID();
+  const reply = Promise.withResolvers<{ watchNotifications?: number; error?: string }>();
+  const onMessage = (message: {
+    channel?: string;
+    id?: string;
+    watchNotifications?: number;
+    error?: string;
+  }) => {
+    if (message.channel === channel && message.id === id) {
+      reply.resolve(message);
+    }
+  };
+  child!.on("message", onMessage);
+  child!.send({ channel, action, id });
+  try {
+    const result = await Promise.race([
+      reply.promise,
+      wait(15_000).then(() => {
+        throw new Error(`Watcher command timed out: ${action}`);
+      }),
+    ]);
+    if (result.error) {
+      throw new Error(result.error);
+    }
+    return result;
+  } finally {
+    child!.off("message", onMessage);
+  }
+}
 async function sample() {
   const id = randomUUID();
   const rows: unknown[] = [];
@@ -213,7 +254,7 @@ try {
     closeSync(log);
   }
   writeFileSync(path.join(output, "gateway.pid"), String(child.pid));
-  const deadline = Date.now() + 180_000;
+  const deadline = Date.now() + readyTimeoutSeconds * 1000;
   while (
     !(await fetch(`http://127.0.0.1:${port}/readyz`, { signal: abort.signal }).then(
       (r) => r.ok,
@@ -262,7 +303,7 @@ try {
   };
   const scopes = ["operator.read"];
   let device;
-  if (values.subscribe) {
+  if (needsDevice) {
     const { nonce, ts } = await Promise.race([
       challenge.promise,
       wait(12_000).then(() => {
@@ -314,6 +355,59 @@ try {
   }
   sqlPhase("settle");
   await wait(settleSeconds * 1000);
+  const cpuProfilePath = path.join(output, "idle.cpuprofile");
+  if (values.profile && values["watcher-failure"]) {
+    await controlGatewayProfile(child, "cpu", "start", cpuProfilePath, { includeWorkers: true });
+  }
+  const reloads: Array<{ requests: number; elapsedMs: number }> = [];
+  let watcherRecovery: Awaited<ReturnType<typeof watcherCommand>> | undefined;
+  for (let index = 0; index < configReloads + (values["watcher-failure"] ? 1 : 0); index++) {
+    const forceFailure = values["watcher-failure"] && index === 0;
+    sqlPhase(forceFailure ? "watcher-failure" : `reload-${index + 1}`);
+    if (forceFailure) {
+      await watcherCommand("watcher-fail");
+    }
+    const nextConfig: OpenClawConfig = JSON.parse(readFileSync(configPath, "utf8"));
+    const level = nextConfig.logging?.level === "debug" ? "info" : "debug";
+    nextConfig.logging = { ...nextConfig.logging, level };
+    const started = performance.now();
+    const pendingPath = `${configPath}.pending`;
+    writeFileSync(pendingPath, JSON.stringify(nextConfig));
+    renameSync(pendingPath, configPath);
+    if (forceFailure) {
+      // Observe after the bounded first recovery, without adding latency-dependent RPC polling.
+      await wait(2000);
+    }
+    let requests = 0;
+    for (;;) {
+      const response = await client.request("config.get", {});
+      requests++;
+      const snapshot = response.payload;
+      if (!response.ok || !isRecord(snapshot)) {
+        throw new Error("Config reload observation failed");
+      }
+      if (
+        isRecord(snapshot.config) &&
+        isRecord(snapshot.config.logging) &&
+        snapshot.config.logging.level === level &&
+        typeof snapshot.configRevisionHash === "string" &&
+        snapshot.appliedConfigHash === snapshot.configRevisionHash
+      ) {
+        break;
+      }
+      if (performance.now() - started > 30_000) {
+        throw new Error("Config reload did not publish its applied revision");
+      }
+      await wait(100);
+    }
+    reloads.push({ requests, elapsedMs: performance.now() - started });
+    if (forceFailure) {
+      await wait(2000);
+      watcherRecovery = await watcherCommand("watcher-count");
+    }
+    sqlPhase(`reload-settle-${index + 1}`);
+    await wait(1000);
+  }
   if (startAt !== undefined) {
     if (Date.now() >= startAt) {
       throw new Error("--start-at passed before Gateway readiness and settling completed");
@@ -324,10 +418,9 @@ try {
     child.send({ channel, action: "enable" });
     await sample();
   }
-  const cpuProfilePath = path.join(output, "idle.cpuprofile");
   const heapProfilePath = path.join(output, "idle.heapprofile");
   const diagnosticsId = path.join(output, "idle-diagnostics");
-  if (values.profile) {
+  if (values.profile && !values["watcher-failure"]) {
     await controlGatewayProfile(child, "cpu", "start", cpuProfilePath);
   }
   if (values.allocations) {
@@ -371,13 +464,14 @@ try {
   if (!diagnostics || diagnostics.collectionErrors > 0) {
     throw new Error("Idle measurement has incomplete diagnostic accounting");
   }
-  const promotion = values.profile
-    ? undefined
-    : readGatewayGcTrace(
-        logPath,
-        values.allocations ? heapProfilePath : diagnosticsId,
-        values.allocations ? "heap" : "diagnostics",
-      );
+  const promotion =
+    values.profile || !traceGc
+      ? undefined
+      : readGatewayGcTrace(
+          logPath,
+          values.allocations ? heapProfilePath : diagnosticsId,
+          values.allocations ? "heap" : "diagnostics",
+        );
   writeFileSync(
     path.join(output, "result.json"),
     JSON.stringify(
@@ -389,6 +483,8 @@ try {
         fixture,
         minutes,
         settleSeconds,
+        reloads,
+        watcherRecovery,
         subscribe: values.subscribe,
         channels: values.channels,
         sqlOutput,

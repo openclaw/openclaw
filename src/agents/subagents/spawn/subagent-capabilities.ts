@@ -323,7 +323,7 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
       (!direct &&
         (parent?.delegatedToolPolicy?.requesterSessionKey !==
           delegatedToolPolicy.requesterSessionKey ||
-          parent?.delegatedToolPolicy?.targetAgentId !== targetAgentId))
+          parent.delegatedToolPolicy?.targetAgentId !== targetAgentId))
     ) {
       delegatedToolPolicy = undefined;
     }

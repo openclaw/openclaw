@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
-import * as protocol from "../../../packages/gateway-protocol/src/validator-registry.js";
 import * as refreshes from "../plugin-runtime-refresh.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import { createPluginsTool } from "./plugins-tool.js";
@@ -14,10 +13,12 @@ type Result = Awaited<ReturnType<ReturnType<typeof createPluginsTool>["execute"]
 const json = (value: unknown) => JSON.stringify(value, null, 2);
 const execute = (args: Record<string, unknown>) => createPluginsTool().execute("call", args);
 const reload = () => execute(reloadArgs);
-function fail(details: Record<string, unknown>) {
-  callGateway.mockRejectedValue(
-    new GatewayClientRequestError({ code: "UNAVAILABLE", message: "Activation failed", details }),
-  );
+function fail(
+  details: Record<string, unknown>,
+  code = "UNAVAILABLE",
+  message = "Activation failed",
+) {
+  callGateway.mockRejectedValueOnce(new GatewayClientRequestError({ code, message, details }));
 }
 function expectBounded(result: Result, details?: Record<string, unknown>) {
   expect(Buffer.byteLength(json(result.details), "utf8")).toBeLessThanOrEqual(3_840);
@@ -27,10 +28,6 @@ function expectBounded(result: Result, details?: Record<string, unknown>) {
       content: [{ type: "text", text: json(result.details) }],
     });
   }
-}
-function expectCompleteReviewOmitted(result: Result) {
-  expectBounded(result);
-  expect(JSON.stringify(result)).not.toContain("complete-review-only");
 }
 function expectFailure(result: Result, details: Record<string, unknown>) {
   expect(result).toMatchObject({ isError: true });
@@ -81,23 +78,20 @@ it.each([
   {
     args: { action: "enable", pluginId: "local-tool" },
     method: "plugins.setEnabled",
-    validate: protocol.validatePluginsSetEnabledParams,
     params: { pluginId: "local-tool", enabled: true },
   },
   {
     args: { action: "install", source: "clawhub", packageName: "local-tool", version: "1.0.0" },
     method: "plugins.install",
-    validate: protocol.validatePluginsInstallParams,
     params: { source: "clawhub", packageName: "local-tool", version: "1.0.0" },
   },
 ])(
   "routes $args.action through the authorized management owner",
-  async ({ args, method, params, validate }) => {
+  async ({ args, method, params }) => {
     callGateway.mockResolvedValue({ runtime, restartRequired: false });
     const signal = new AbortController().signal;
     await withConsumer(async (tool) => {
       const result = await tool.execute("management", args, signal);
-      expect(validate(callGateway.mock.calls[0]?.[0].params)).toBe(true);
       expect(callGateway).toHaveBeenCalledExactlyOnceWith({
         method,
         params,
@@ -123,15 +117,8 @@ it("rejects an official version before dispatch", async () => {
 
 it("retains capability review details without scheduling refresh after rejection", async () => {
   const details = { capabilityConsent: { reviewToken: "review-1", pluginId: "local-tool" } };
-  callGateway
-    .mockRejectedValueOnce(
-      new GatewayClientRequestError({
-        code: "INVALID_REQUEST",
-        message: "Review the declared capability change",
-        details,
-      }),
-    )
-    .mockResolvedValueOnce({ runtime, restartRequired: false });
+  fail(details, "INVALID_REQUEST", "Review the declared capability change");
+  callGateway.mockResolvedValueOnce({ runtime, restartRequired: false });
   await withConsumer(async (tool) => {
     const owner = refreshes.captureAgentPluginRuntimeRefresh();
     const result = await tool.execute("review", reloadArgs);
@@ -146,17 +133,10 @@ it("retains capability review details without scheduling refresh after rejection
       ...reloadArgs,
       reviewToken: "review-1",
     });
-    expect(callGateway).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        params: {
-          plugins: [{ pluginId: "local-tool" }],
-          acknowledgeCapabilities: { reviewToken: "review-1" },
-        },
-      }),
-    );
-    expect(protocol.validatePluginsReloadParams(callGateway.mock.calls.at(-1)?.[0].params)).toBe(
-      true,
-    );
+    expect(callGateway.mock.calls.at(-1)?.[0].params).toEqual({
+      plugins: [{ pluginId: "local-tool" }],
+      acknowledgeCapabilities: { reviewToken: "review-1" },
+    });
     expect(owner.isPending()).toBe(true);
   });
 });
@@ -193,7 +173,7 @@ it.each([
     callGateway.mockResolvedValue(payload);
     const result = await execute({ action, pluginId: "local-tool", query: "large" });
     expectBounded(result, { ok: true, detailsOmitted: "response_budget_exceeded" });
-    expectCompleteReviewOmitted(result);
+    expect(JSON.stringify(result)).not.toContain("complete-review-only");
     expect(result.terminate).toBeUndefined();
   },
 );
@@ -244,7 +224,7 @@ it.each([false, true])(
         omittedWarningCount: 1,
         detailsOmitted: "response_budget_exceeded",
       });
-      expectCompleteReviewOmitted(result);
+      expect(JSON.stringify(result)).not.toContain("complete-review-only");
       expect(result.terminate).toBe(supported ? true : undefined);
       expect(owner.isPending()).toBe(supported);
       expect(owner.isRequested()).toBe(supported);

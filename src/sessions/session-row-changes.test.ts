@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -10,17 +10,10 @@ import {
   type SessionRowChange,
 } from "./session-row-changes.js";
 
-const cleanup: Array<() => void> = [];
-afterEach(() => {
-  for (const close of cleanup.splice(0).toReversed()) {
-    close();
-  }
-});
-
 function database() {
   const { DatabaseSync } = requireNodeSqlite();
   const db = new DatabaseSync(":memory:");
-  cleanup.push(() => db.close());
+  onTestFinished(() => db.close());
   return db;
 }
 
@@ -37,20 +30,22 @@ it.each([false, true])("captures surviving postimages with a separate anchor: %s
   const db = separate
     ? Object.assign(database(), { anchor, [Symbol.for("openclaw.postgres-sync-connection")]: true })
     : anchor;
-  anchor.exec("CREATE TABLE facts (key TEXT PRIMARY KEY)");
-  const write = (key: string) => {
-    if (!separate) {
-      anchor.prepare("INSERT INTO facts VALUES (?)").run(key);
-    }
-    sessionChanges.emit({ sessionKey: key, facts: { kind: "unchanged" } }, db);
-  };
+  const write = (sessionKey: string) =>
+    sessionChanges.emit({ sessionKey, facts: { kind: "unchanged" } }, db);
   const initialRevision = readSessionRowChangeRevision();
   const transaction = <T>(run: () => T) =>
     withSqlitePostCommitPublications(anchor, () =>
       separate ? run() : runSqliteImmediateTransactionSync(anchor, run),
     );
   const notifications: string[] = [];
-  cleanup.push(sessionChanges.subscribe(collectKeys(notifications)));
+  onTestFinished(
+    sessionChanges.subscribe((change) => {
+      collectKeys(notifications)(change);
+      if ("sessionKey" in change && change.sessionKey === "last") {
+        sessionChanges.emit({ sessionKey: "observer" }, db);
+      }
+    }),
+  );
   const mutate = () => {
     write("first");
     expect(() =>
@@ -64,45 +59,13 @@ it.each([false, true])("captures surviving postimages with a separate anchor: %s
     expect(readSessionRowChangeRevision()).toBe(initialRevision);
     return "committed";
   };
-  const receipt = separate
-    ? captureSessionRowChanges(anchor, () => transaction(mutate))
-    : transaction(() => captureSessionRowChanges(anchor, mutate));
+  const receipt = captureSessionRowChanges(anchor, () => transaction(mutate));
   expect(receipt.result).toBe("committed");
   expect(receipt.changes).toEqual(
     ["first", "last"].map((sessionKey) => ({ sessionKey, facts: { kind: "unchanged" } })),
   );
-  expect(notifications).toEqual(["first", "last"]);
+  expect(notifications).toEqual(["first", "last", "observer"]);
   expect(readSessionRowChangeRevision()).toBeGreaterThan(initialRevision);
-  if (!separate) {
-    expect(anchor.prepare("SELECT key FROM facts ORDER BY key").all()).toEqual(
-      ["first", "last"].map((key) => ({ key })),
-    );
-  }
-});
-
-it("keeps postcommit observer events outside the committing worker's captured postimages", () => {
-  const db = database();
-  const observed: string[] = [];
-  cleanup.push(
-    sessionChanges.subscribe((change) => {
-      if (!("sessionKey" in change)) {
-        return;
-      }
-      observed.push(change.sessionKey);
-      if (change.sessionKey === "committed") {
-        sessionChanges.emit({ sessionKey: "observer" }, db);
-      }
-    }),
-  );
-  const captured = captureSessionRowChanges(db, () =>
-    withSqlitePostCommitPublications(db, () =>
-      runSqliteImmediateTransactionSync(db, () =>
-        sessionChanges.emit({ sessionKey: "committed", facts: { kind: "unchanged" } }, db),
-      ),
-    ),
-  );
-  expect(observed).toEqual(["committed", "observer"]);
-  expect(captured.changes).toEqual([{ sessionKey: "committed", facts: { kind: "unchanged" } }]);
 });
 
 it("installs private authority before observers without duplicate presentation notifications", () => {
@@ -111,10 +74,10 @@ it("installs private authority before observers without duplicate presentation n
   const observed: string[][] = [];
   const pluginEvents: string[] = [];
   const pluginFacts: string[][] = [];
-  cleanup.push(
-    sessionChanges.subscribeFacts(collectKeys(installed)),
-    sessionChanges.subscribeProjection(collectKeys(projected)),
-    sessionChanges.subscribe(() => observed.push([...installed])),
+  onTestFinished(sessionChanges.subscribeFacts(collectKeys(installed)));
+  onTestFinished(sessionChanges.subscribeProjection(collectKeys(projected)));
+  onTestFinished(sessionChanges.subscribe(() => observed.push([...installed])));
+  onTestFinished(
     subscribeRuntimeSessionChanges((change) => {
       pluginEvents.push(change.sessionKey);
       pluginFacts.push([...installed]);

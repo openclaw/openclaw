@@ -2,6 +2,7 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import { describe, expect, it } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import {
@@ -115,7 +116,9 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
         type: "stdio",
         allowed_origins: [origin],
       });
-      const before = (await fs.readdir(value.homeDir, { recursive: true })).toSorted();
+      const before = (await listDirectoryTreeStrict(value.homeDir))
+        .map((walkEntry) => walkEntry.relativePath)
+        .toSorted();
       const request = {
         v: 1,
         op,
@@ -138,7 +141,11 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
       await fs.chmod(launcher, 0o777);
       const unsafe = invoke();
       expect(nativeResponse(unsafe)).toEqual({ v: 1, ok: false, code: "manifest_invalid" });
-      expect((await fs.readdir(value.homeDir, { recursive: true })).toSorted()).toEqual(before);
+      expect(
+        (await listDirectoryTreeStrict(value.homeDir))
+          .map((walkEntry) => walkEntry.relativePath)
+          .toSorted(),
+      ).toEqual(before);
       expect(await fs.readFile(value.config, "utf8")).toBe("{ invalid config");
     },
   );

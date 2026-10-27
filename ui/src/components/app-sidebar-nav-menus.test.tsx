@@ -17,7 +17,6 @@ import { SidebarDropdown, type SidebarDropdownProps } from "./app-sidebar-dropdo
 import { renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import { renderSidebarSessionSectionHeader as SectionHeader } from "./app-sidebar-session-section-header.tsx";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
-import { SessionOrganizer } from "./session-organizer.ts";
 import { SidebarMenusRenderer } from "./sidebar-menus-render.tsx";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import { createSidebarMenus, type SidebarMenus } from "./sidebar-menus.tsx";
@@ -175,9 +174,6 @@ it("keeps personal pinning and navigation usable in an offline session menu", as
     sessionOrganizer: {
       isPersonalSessionPin: () => false,
       setPersonalSessionPin: pin,
-      runSessionAction(...args: Parameters<SessionOrganizer["runSessionAction"]>) {
-        return SessionOrganizer.prototype.runSessionAction.call(this, ...args);
-      },
     },
   } as unknown as SidebarMenusOwner;
   const view = render(() => (

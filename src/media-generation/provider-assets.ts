@@ -7,6 +7,7 @@ import {
   readProviderBinaryResponse,
 } from "../agents/provider-http-errors.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
+import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import {
   createProviderOperationDeadline,
   createProviderOperationTimeoutError,
@@ -84,6 +85,8 @@ export async function downloadGeneratedVideoAsset(params: {
   /** Zero preserves deadline-only downloads without adding an idle timeout. */
   chunkTimeoutMs?: number;
   metadata?: Record<string, unknown>;
+  /** Result transport only; strict target admission never inherits task trust. */
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   fetchResponse?: GeneratedVideoResponseFactory;
 }): Promise<GeneratedVideoAsset> {
   const deadline = createProviderOperationDeadline({
@@ -106,7 +109,10 @@ export async function downloadGeneratedVideoAsset(params: {
             { method: "GET" },
             timeoutMs(),
             params.fetchFn,
-            { mode: "strict", dispatcherPolicy: { mode: "env-proxy" } },
+            {
+              mode: "strict",
+              dispatcherPolicy: params.dispatcherPolicy ?? { mode: "env-proxy" },
+            },
           );
           try {
             await assertOkOrThrowHttpError(result.response, params.requestFailedMessage, {

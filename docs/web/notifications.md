@@ -51,7 +51,7 @@ Single-user Gateways use their durable owner profile for account defaults, so th
 
 By default, approval request and resolution notifications are enabled, and every other attention category is opt-in. Quiet hours suppress matching sends rather than queueing stale alerts for later delivery.
 
-Selecting an attention notification opens its question, conversation, or automation run on the Gateway that produced it. **Agent finished** waits for completion. A parent waiting for child agents does not count as finished. Automation failures use **Scheduled task failures**, without also generating a **Background task failures** alert for the same run.
+Selecting an attention notification opens its question, conversation, or automation run on the Gateway that produced it. **Agent finished** waits for completion. A parent waiting for child agents does not count as finished. The device currently showing that conversation does not receive its **Agent finished** push; other subscribed devices still do. Hiding the conversation or opening another one restores normal notification delivery for that device. Automation failures use **Scheduled task failures**, without also generating a **Background task failures** alert for the same run.
 
 The detail levels are:
 

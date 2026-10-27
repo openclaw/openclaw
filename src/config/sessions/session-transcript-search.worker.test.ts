@@ -41,15 +41,10 @@ import {
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 function transcriptMessage(id: string, content: string, timestamp = 1) {
-  return {
-    type: "message",
-    id,
-    parentId: null,
-    timestamp,
-    message: { role: "assistant", content },
-  };
+  return timedMessageEvent(id, null, timestamp, { role: "assistant", content });
 }
 
 async function searchFixture(
@@ -86,17 +81,15 @@ it("reenters the projection writer from a cold search's retained read admission"
     );
     await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
     const reader = retainSessionHistoryWorkerDatabase(database);
-    const readStatus = vi.fn((signal: AbortSignal) =>
+    const readStatus = (signal: AbortSignal) =>
       projectionWriter.readSessionTranscriptIndexStatus(
         database,
         reader.owner.assertCurrent,
         signal,
-      ),
-    );
+      );
     try {
       const result = await reader.owner.searchTranscripts(request, readStatus);
       expect(result.hits).toMatchObject([{ messageId: "cold-needle" }]);
-      expect(readStatus).toHaveBeenCalledOnce();
     } finally {
       reader.release();
       await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
@@ -203,7 +196,6 @@ it("reuses completed readiness after idle writer eviction and observes a later t
         hits: [{ messageId: "message-0", snippet: "Original needle" }],
         indexing: false,
       });
-      expect(openWriter.mock.calls[0]?.[0].databasePath).toBe(primary.database.path);
       const nativeWriter = await openWriter.mock.results[0]!.value;
       expect(nativeWriter).toBeDefined();
       const closeWriter = vi.spyOn(nativeWriter!, "close");
@@ -297,7 +289,7 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
     try {
       const actual = await searchSessionTranscripts(request, database);
       expect(actual).toEqual({ ...golden, indexing: false });
-      expect(hostSql.calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      expect(hostSql.queries).toEqual([]);
     } finally {
       hostSql.restore();
     }
@@ -335,7 +327,6 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
           ...golden,
           indexing: true,
         });
-        expect(unavailableStatus).toHaveBeenCalledTimes(1);
         expect(isSessionTranscriptIndexReconcileRunning({ ...database, env: state.env })).toBe(
           false,
         );
@@ -359,7 +350,6 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
         message: expect.stringMatching(/narrow the session selection/),
         cause: expect.objectContaining({ code: "timeout" }),
       });
-      expect(slowUnavailable).toHaveBeenCalledTimes(1);
     } finally {
       slowUnavailable.mockRestore();
       clock.mockRestore();

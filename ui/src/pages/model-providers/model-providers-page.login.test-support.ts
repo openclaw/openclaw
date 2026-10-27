@@ -1,6 +1,7 @@
 import { expect } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ModelAuthStatusResult, WizardNextResult } from "../../api/types.ts";
+import { loginOption } from "../../test-helpers/model-providers.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   clickLoginChoice,
@@ -8,7 +9,24 @@ import {
   createHarness,
   type ModelProvidersPageTestElement,
   startSelectedLogin,
+  waitForProviders,
 } from "./model-providers-page.test-support.tsx";
+
+export function museCodeCapability(): NonNullable<
+  ModelAuthStatusResult["providerCapabilities"]
+>[number] {
+  return {
+    provider: "meta",
+    apiKeySupported: true,
+    quickApiKeySetup: true,
+    loginOptions: [
+      loginOption("meta/muse-code", "meta", "Muse Code", "device-code", {
+        featured: true,
+        requiresSetup: true,
+      }),
+    ],
+  };
+}
 
 export function loginHarness(
   options: {
@@ -92,7 +110,7 @@ async function clickEnabled(page: ModelProvidersPageTestElement, selector: strin
 }
 
 export async function openPicker(page: ModelProvidersPageTestElement) {
-  await waitForSolid(() => expect(page.view.props.updatedAt).toEqual(expect.any(Number)));
+  await waitForProviders(page);
   await clickEnabled(page, "[data-models-connect]");
 }
 

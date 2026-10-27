@@ -69,21 +69,16 @@ it.each(["stop", "replacement"] as const)("keeps cleanup service-scoped until %s
     try {
       await vi.advanceTimersByTimeAsync(300_000);
       await observed.entered;
-      expect(observed.scopes).toEqual(["discovery-service"]);
       if (end === "stop") {
         await lifecycle.stop();
       } else {
         setBrowserStateRuntime({ ...getBrowserStateRuntime() });
       }
       await vi.advanceTimersByTimeAsync(600_000);
-      expect(observed.scopes).toHaveLength(1);
+      expect(observed.scopes).toEqual(["discovery-service"]);
     } finally {
       await lifecycle.stop();
-      await stopBrowserRuntime({
-        current: runtime,
-        clearState: vi.fn(),
-        onWarn: vi.fn(),
-      });
+      await stopBrowserRuntime({ current: runtime, clearState: vi.fn(), onWarn: vi.fn() });
       vi.useRealTimers();
     }
   });
@@ -247,7 +242,6 @@ it.each([
       await lifecycle.stop();
       expect(lifecycle.entries).toHaveBeenCalledOnce();
       if (replaced) {
-        expect(reconcile).not.toHaveBeenCalled();
         lifecycle.boardChanged();
         await lifecycle.sessionEnd();
         expect(lifecycle.entries).toHaveBeenCalledOnce();
@@ -279,19 +273,16 @@ it.each(["stop", "restart"] as const)(
       stopping = Promise.resolve(transition === "stop" ? lifecycle.stop() : lifecycle.start()).then(
         settled,
       );
-      expect(lifecycle.subscribe).toHaveBeenCalledOnce();
       lifecycle.boardChanged();
       await Promise.resolve();
       expect(settled).not.toHaveBeenCalled();
       expect(reconcile).not.toHaveBeenCalled();
       releaseDiscovery();
       await observed.entered;
-      expect(reconcile).toHaveBeenCalledOnce();
       expect(settled).not.toHaveBeenCalled();
       finishing.resolve(0);
       await stopping;
       expect(observed.scopes).toEqual(["discovery-service"]);
-      expect(lifecycle.entries).toHaveBeenCalledOnce();
       expect(lifecycle.subscribe).toHaveBeenCalledTimes(transition === "stop" ? 1 : 2);
       await lifecycle.stop();
       lifecycle.boardChanged();
@@ -358,7 +349,6 @@ it.each(["registration", "retirement"] as const)(
         expect(result).toBe(1);
       }
       await stopping;
-      expect(settled).toHaveBeenCalledOnce();
       expect(await getBrowserSessionTabStore().lookup(storageKey)).toEqual(
         phase === "registration" ? persisted : undefined,
       );

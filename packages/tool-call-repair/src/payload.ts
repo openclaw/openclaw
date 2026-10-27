@@ -513,6 +513,57 @@ export function stripPlainTextToolCallBlocks(
   return projectPlainTextToolCallBlocks(text, options).text;
 }
 
+/** Admit bracket JSON candidates without activating on ordinary brace prose. */
+export function createPlainTextToolCallBraceProbe(): (delta: string) => boolean {
+  let lineStart = true;
+  let header = "";
+  let awaitingPayload = "";
+  return (delta) => {
+    for (const char of delta) {
+      if (char === "\r" || char === "\n") {
+        lineStart = true;
+        header = "";
+        if (awaitingPayload && !awaitingPayload.endsWith("\n")) {
+          awaitingPayload += "\n";
+        }
+        continue;
+      }
+      if (awaitingPayload) {
+        if (/\s/u.test(char)) {
+          continue;
+        }
+        // The canonical header parser owns names, limits, and required line breaks.
+        const opening = char === "{" ? scanBracketOpening(awaitingPayload + char, 0) : undefined;
+        awaitingPayload = "";
+        if (opening?.kind === "complete") {
+          return true;
+        }
+      }
+      if (header) {
+        header += char;
+        if (char === "]") {
+          awaitingPayload = header;
+          header = "";
+        } else if (
+          /\s/u.test(char) ||
+          header.length > MAX_PLAIN_TEXT_TOOL_NAME_CHARS + "[tool:]".length
+        ) {
+          header = "";
+        }
+        continue;
+      }
+      if (!lineStart || /[^\S\r\n]/u.test(char)) {
+        continue;
+      }
+      lineStart = false;
+      if (char === "[") {
+        header = char;
+      }
+    }
+    return false;
+  };
+}
+
 /** Call-grammar settlement; callers also retain any mutable Markdown ownership. */
 export function projectPlainTextToolCallBlocks(
   text: string,

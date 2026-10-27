@@ -181,7 +181,8 @@ export function renderTelegramTextEntities(
     }
   }
 
-  const sortedQuoteEdges = [...quoteEdges].toSorted((left, right) => left - right);
+  // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread creates an owned array.
+  const sortedQuoteEdges = [...quoteEdges].sort((left, right) => left - right);
   const boundaries = new Map<number, TelegramMarkdownBoundary[]>();
   const escapedLinkLabelOffsets = new Set<number>();
   const addBoundary = (offset: number, boundary: TelegramMarkdownBoundary) => {
@@ -238,13 +239,15 @@ export function renderTelegramTextEntities(
     if (boundary) {
       boundary
         .filter((entity) => entity.end === offset)
-        .toSorted((a, b) => a.length - b.length || b.priority - a.priority || b.index - a.index)
+        // oxlint-disable-next-line unicorn/no-array-sort -- filter creates an owned array.
+        .sort((a, b) => a.length - b.length || b.priority - a.priority || b.index - a.index)
         .forEach((entity) => {
           result += entity.close;
         });
       boundary
         .filter((entity) => entity.start === offset)
-        .toSorted((a, b) => b.length - a.length || a.priority - b.priority || a.index - b.index)
+        // oxlint-disable-next-line unicorn/no-array-sort -- filter creates an owned array.
+        .sort((a, b) => b.length - a.length || a.priority - b.priority || a.index - b.index)
         .forEach((entity) => {
           result += entity.open;
         });

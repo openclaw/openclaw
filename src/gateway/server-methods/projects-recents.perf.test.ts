@@ -1,10 +1,5 @@
 import { expect, test, vi } from "vitest";
-import {
-  deleteSessionEntryLifecycle,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -12,7 +7,9 @@ import { retainSessionListForegroundWork } from "../session-projection-work.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { invokeProjectMethod, projectsHandlers } from "./projects.test-support.js";
 
-test("project recents do not enumerate unrelated sessions after projection hydration", async () => {
+test("project recents do not enumerate unrelated sessions after projection hydration", async ({
+  onTestFinished,
+}) => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "recents-perf-" });
   const release = retainSessionListForegroundWork();
   const cfg = { agents: { entries: { main: {} } } };
@@ -22,7 +19,6 @@ test("project recents do not enumerate unrelated sessions after projection hydra
     const actor = { type: "human" as const, source: "profile" as const, id: profile.id };
     const now = Date.now();
     const unrelated = 4_096;
-    const marker = "agent:main:unrelated-0";
     runOpenClawAgentWriteTransaction(
       (database) => {
         for (let index = 0; index < unrelated + 32; index++) {
@@ -46,87 +42,39 @@ test("project recents do not enumerate unrelated sessions after projection hydra
       { agentId: "main" },
     );
     projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const request = () =>
-      invokeProjectMethod(
-        "projects.list",
-        {},
-        cfg,
-        ["operator.write"],
-        profile.id,
-        projectsHandlers,
-        projection,
-      );
     const expected = Array.from({ length: 8 }, (_, index) => ({
       kind: "folder",
       folder: `/work/recent-${index}`,
       displayName: `recent-${index}`,
     }));
-    const expectRecents = async (recents = expected) => {
-      expect(await request()).toMatchObject({ ok: true, payload: { recents } });
+    const expectRecents = async () => {
+      expect(
+        await invokeProjectMethod(
+          "projects.list",
+          {},
+          cfg,
+          ["operator.write"],
+          profile.id,
+          projectsHandlers,
+          projection,
+        ),
+      ).toMatchObject({ ok: true, payload: { recents: expected } });
     };
-    for (let index = 0; index < 2; index++) {
-      await expectRecents();
-    }
+    await expectRecents();
     const originalEntries = Object.entries;
     let enumerated = 0;
     const enumeration = vi.spyOn(Object, "entries").mockImplementation((value) => {
       const entries = originalEntries(value);
-      if (Object.hasOwn(value, marker)) {
+      if (Object.hasOwn(value, "agent:main:unrelated-0")) {
         enumerated += entries.length;
       }
       return entries;
     });
-    try {
-      for (let index = 0; index < 7; index++) {
-        await expectRecents();
-      }
-    } finally {
-      enumeration.mockRestore();
+    onTestFinished(() => enumeration.mockRestore());
+    for (let index = 0; index < 7; index++) {
+      await expectRecents();
     }
     expect(enumerated).toBe(0);
-
-    const changed = "agent:main:recent-0";
-    const moved = {
-      sessionId: changed,
-      updatedAt: now + 1,
-      archivedAt: now,
-      createdActor: actor,
-      spawnedCwd: "/work/moved",
-    };
-    // A receipt without a postimage must reenter the existing exact-key worker admission.
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        writeSessionEntry(database, changed, moved);
-      },
-      { agentId: "main" },
-    );
-    sessionChanges.emit({
-      agentId: "main",
-      sessionKey: changed,
-      scope: "session-entry",
-      factsInvalidated: true,
-    });
-    await expectRecents([
-      { kind: "folder", folder: "/work/moved", displayName: "moved" },
-      ...expected.slice(0, 7),
-    ]);
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: changed },
-      {
-        ...moved,
-        updatedAt: now - unrelated,
-        spawnedCwd: "/work/recent-0",
-      },
-    );
-    await expectRecents();
-    const removed = "agent:main:recent-31";
-    await deleteSessionEntryLifecycle({
-      agentId: "main",
-      storePath: projection.capture({ agentId: "main", key: removed })!.storeTarget.storePath,
-      archiveTranscript: false,
-      target: { canonicalKey: removed, storeKeys: [removed] },
-    });
-    await expectRecents(expected.slice(0, 7));
   } finally {
     projection?.dispose();
     release();

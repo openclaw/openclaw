@@ -26,22 +26,17 @@ vi.mock("openai/resources/responses/ws.js", () => ({
   },
 }));
 
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 
 // Cost figures are per million tokens; usage below uses 1M input + 1M output
 // so the expected totals read directly off the multiplied unit prices.
-const model = {
-  id: "gpt-5.5",
+const model = makeProviderModel("openai-responses", "openai", "gpt-5.5", {
   name: "GPT 5.5",
-  api: "openai-responses",
-  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
   cost: { input: 2, output: 10, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200_000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+}) satisfies Model<"openai-responses">;
 
 function completedResponse(
   serviceTier: string | null | undefined,

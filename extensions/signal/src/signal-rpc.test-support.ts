@@ -55,9 +55,3 @@ export async function listenSignalServer(
   const port = await listenOnLoopback(server);
   return signalAccountConfig(kind, `http://127.0.0.1:${port}`);
 }
-
-export function closeSignalServer(server: http.Server) {
-  return new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}

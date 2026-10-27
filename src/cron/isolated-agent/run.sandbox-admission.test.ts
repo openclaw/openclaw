@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { buildDefaultTestCliBackend } from "../../agents/cli-runner.test-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../scheduled-occurrence.test-support.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import * as harness from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await harness.loadRunCronIsolatedAgentTurn();
@@ -22,36 +23,24 @@ const actualCliRunner = await vi.importActual<typeof import("../../agents/cli-ru
 );
 
 const sessionId = "cron-sandbox-admission-session";
-const tempRoots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function createRealCliStubExecutable(dir: string) {
-  const commandPath = path.join(dir, "test-cli-bin.sh");
-  const markerPath = path.join(dir, "cli-launched.marker");
-  fs.writeFileSync(
-    commandPath,
-    [
-      "#!/bin/sh",
-      `printf 'launched:%s\\n' "$*" >> ${JSON.stringify(markerPath)}`,
-      "printf 'real cli stub output\\n'",
-    ].join("\n"),
-    { mode: 0o755 },
-  );
-  return { commandPath, markerPath };
-}
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 
 describe("cron isolated-agent sandbox placement admission", () => {
-  let previousFastTestEnv: string | undefined;
+  setupRunCronIsolatedAgentTurnSuite();
   let tempDir: string;
-  let commandPath: string;
   let markerPath: string;
   function run(
     defaults: AgentDefaults,
-    model?: string,
-    sessionKey = "existing-cron-session",
-    agentModel?: string,
-    child?: { occurrence: ScheduledOccurrence },
+    options: {
+      model?: string;
+      sessionKey?: string;
+      agentModel?: string;
+      occurrence?: ScheduledOccurrence;
+    } = {},
   ) {
+    const { model, sessionKey = "existing-cron-session", agentModel, occurrence } = options;
     const cfg: OpenClawConfig = {
       session: { store: path.join(tempDir, "sessions.json") },
       agents: {
@@ -67,21 +56,21 @@ describe("cron isolated-agent sandbox placement admission", () => {
         agentId: "main",
         sessionKey,
         message: "summarize",
-        ...(child ? { occurrence: child.occurrence } : {}),
+        ...(occurrence ? { occurrence } : {}),
         job: makeIsolatedAgentJobFixture({
           agentId: "main",
-          sessionTarget: child ? "isolated" : `session:${sessionKey}`,
+          sessionTarget: occurrence ? "isolated" : `session:${sessionKey}`,
           payload: { kind: "agentTurn", message: "summarize", ...(model ? { model } : {}) },
         }),
       }),
     );
   }
-  function setSession(sandbox?: "required") {
+  function setSession(sandbox?: "required", isNewSession = true) {
     harness.resolveCronSessionMock.mockReturnValue(
       harness.makeCronSession({
         storePath: path.join(tempDir, "sessions.json"),
         sessionEntry: harness.makeCronSessionEntry({ sessionId, ...(sandbox ? { sandbox } : {}) }),
-        isNewSession: true,
+        isNewSession,
       }),
     );
   }
@@ -92,17 +81,15 @@ describe("cron isolated-agent sandbox placement admission", () => {
   }
 
   beforeEach(() => {
-    previousFastTestEnv = harness.clearFastTestEnv();
-    harness.resetRunCronIsolatedAgentTurnHarness();
-    harness.resolveAgentConfigMock.mockImplementation(
-      (cfg: OpenClawConfig, id: string) => cfg.agents?.entries?.[id],
-    );
     harness.buildWorkspaceSkillSnapshotMock.mockReturnValue({
       prompt: "<available_skills></available_skills>",
       skills: [],
       resolvedSkills: [],
       version: 42,
     });
+    harness.resolveAgentConfigMock.mockImplementation(
+      (cfg: OpenClawConfig, id: string) => cfg.agents?.entries?.[id],
+    );
     const acquireRuntime = expectDefined(
       harness.acquirePreparedModelRuntimeMock.getMockImplementation(),
       "runtime fixture",
@@ -111,8 +98,18 @@ describe("cron isolated-agent sandbox placement admission", () => {
       const lease = await acquireRuntime(input, options);
       return { ...lease, snapshot: { ...lease.snapshot, isCurrent: () => true } };
     });
-    tempDir = makeTempDir(tempRoots, "cron-sandbox-admission-");
-    ({ commandPath, markerPath } = createRealCliStubExecutable(tempDir));
+    tempDir = tempDirs.make("cron-sandbox-admission-");
+    const commandPath = path.join(tempDir, "test-cli-bin.sh");
+    markerPath = path.join(tempDir, "cli-launched.marker");
+    fs.writeFileSync(
+      commandPath,
+      [
+        "#!/bin/sh",
+        `printf 'launched:%s\\n' "$*" >> ${JSON.stringify(markerPath)}`,
+        "printf 'real cli stub output\\n'",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
     const backend = {
       ...buildDefaultTestCliBackend(),
       modelProvider: "anthropic",
@@ -135,7 +132,6 @@ describe("cron isolated-agent sandbox placement admission", () => {
       }
       return { ref: { provider: "openai", model: "gpt-test" } } as never;
     });
-    harness.resolveThinkingDefaultMock.mockReturnValue("off");
     setSession();
     // Exercise the real fallback loop and real runCliAgent child-process launch.
     harness.runWithModelFallbackMock.mockImplementation((params) =>
@@ -147,52 +143,33 @@ describe("cron isolated-agent sandbox placement admission", () => {
     harness.runCliAgentMock.mockImplementation((params) => actualCliRunner.runCliAgent(params));
   });
 
-  afterEach(() => {
-    cliBackendsTesting.resetDepsForTest();
-    cleanupTempDirs(tempRoots);
-    harness.restoreFastTestEnv(previousFastTestEnv);
-  });
+  afterEach(() => cliBackendsTesting.resetDepsForTest());
 
-  it.each<{
-    name: string;
-    defaults: AgentDefaults;
-    model?: string;
-    required?: boolean;
-    fallback?: boolean;
-  }>([
-    {
-      name: "inherited CLI default",
-      defaults: { sandbox: { mode: "all" }, subagents: { model: "test-cli/claude-x" } },
-    },
-    {
-      name: "CLI fallback",
-      defaults: {
+  const cliDefaults: AgentDefaults = { subagents: { model: "test-cli/claude-x" } };
+  it.each<[string, AgentDefaults, { model?: string; required?: boolean; fallback?: boolean }]>([
+    ["inherited CLI default", { sandbox: { mode: "all" }, ...cliDefaults }, {}],
+    [
+      "CLI fallback",
+      {
         sandbox: { mode: "all" },
         subagents: { model: { primary: "openai/gpt-test", fallbacks: ["test-cli/claude-x"] } },
       },
-      fallback: true,
-    },
-    {
-      name: "API model with CLI runtime",
-      defaults: {
+      { fallback: true },
+    ],
+    [
+      "API model with CLI runtime",
+      {
         sandbox: { mode: "all" },
         subagents: { model: "anthropic/claude-sonnet-4-6" },
         models: { "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "test-cli" } } },
       },
-    },
-    {
-      name: "explicit CLI payload",
-      defaults: { sandbox: { mode: "all" } },
-      model: "test-cli/claude-x",
-    },
-    {
-      name: "required session isolation",
-      defaults: { subagents: { model: "test-cli/claude-x" } },
-      required: true,
-    },
+      {},
+    ],
+    ["explicit CLI payload", { sandbox: { mode: "all" } }, { model: "test-cli/claude-x" }],
+    ["required session isolation", cliDefaults, { required: true }],
   ])(
-    "fails closed for $name before CLI launch",
-    async ({ defaults, model, required, fallback }) => {
+    "fails closed for %s before CLI launch",
+    async (_name, defaults, { model, required, fallback }) => {
       if (required) {
         setSession("required");
       }
@@ -206,7 +183,7 @@ describe("cron isolated-agent sandbox placement admission", () => {
           }),
         );
       }
-      const result = await run(defaults, model);
+      const result = await run(defaults, { model });
       expectSandboxRejection(result);
       expect(result.error).toContain("agents.entries.<id>.subagents.model");
       expect(harness.runEmbeddedAgentMock).toHaveBeenCalledTimes(fallback ? 1 : 0);
@@ -220,64 +197,45 @@ describe("cron isolated-agent sandbox placement admission", () => {
       { sessionKey: "agent:main:cron:test-job", storePath: path.join(tempDir, "sessions.json") },
       { sessionId, updatedAt: Date.now() },
     );
-    harness.resolveCronSessionMock.mockReturnValue(
-      harness.makeCronSession({
-        storePath: path.join(tempDir, "sessions.json"),
-        sessionEntry: harness.makeCronSessionEntry({ sessionId }),
-        isNewSession: false,
-      }),
-    );
+    setSession(undefined, false);
   }
-  const childOf = (sandbox?: "required"): { occurrence: ScheduledOccurrence } => ({
-    occurrence: {
-      ...TEST_SCHEDULED_OCCURRENCE,
-      childParent: { ...(sandbox ? { sandbox } : {}), assertCurrent: () => {} },
-    },
+  const childOf = (sandbox?: "required"): ScheduledOccurrence => ({
+    ...TEST_SCHEDULED_OCCURRENCE,
+    childParent: { ...(sandbox ? { sandbox } : {}), assertCurrent: () => {} },
   });
-  const cliDefaults: AgentDefaults = { subagents: { model: "test-cli/claude-x" } };
 
   it("fails closed before CLI launch for an existing unstamped root whose parent requires a sandbox", async () => {
     useExistingUnstampedRoot();
-    expectSandboxRejection(
-      await run(cliDefaults, undefined, undefined, undefined, childOf("required")),
-    );
+    expectSandboxRejection(await run(cliDefaults, { occurrence: childOf("required") }));
   });
 
   it("launches the CLI for an existing root whose parent does not require a sandbox", async () => {
     useExistingUnstampedRoot();
-    const result = await run(cliDefaults, undefined, undefined, undefined, childOf());
-    expect([result.status, result.error]).toEqual(["ok", undefined]);
-    expect(fs.existsSync(markerPath)).toBe(true);
-  });
-
-  it("admits a sandboxed session when per-agent subagents.model overrides the global CLI default", async () => {
-    const result = await run(
-      { sandbox: { mode: "all" }, subagents: { model: "test-cli/claude-x" } },
-      undefined,
-      undefined,
-      "openai/gpt-test",
-    );
-    expect([result.status, result.error]).toEqual(["ok", undefined]);
-    expect(fs.existsSync(markerPath)).toBe(false);
-    expect(harness.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-  });
-
-  it("launches the real CLI process for permitted unsandboxed sessions", async () => {
-    const result = await run({ subagents: { model: "test-cli/claude-x" } });
+    const result = await run(cliDefaults, { occurrence: childOf() });
     expect([result.status, result.error]).toEqual(["ok", undefined]);
     expect(fs.existsSync(markerPath)).toBe(true);
     expect(fs.readFileSync(markerPath, "utf8")).toContain("launched:");
     expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
+  it("admits a sandboxed session when per-agent subagents.model overrides the global CLI default", async () => {
+    const result = await run(
+      { sandbox: { mode: "all" }, ...cliDefaults },
+      { agentModel: "openai/gpt-test" },
+    );
+    expect([result.status, result.error]).toEqual(["ok", undefined]);
+    expect(fs.existsSync(markerPath)).toBe(false);
+    expect(harness.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
   it("rejects non-main cron sessions under sandbox mode non-main while permitting main-session CLI execution", async () => {
     const defaults: AgentDefaults = {
       sandbox: { mode: "non-main" },
-      subagents: { model: "test-cli/claude-x" },
+      ...cliDefaults,
     };
     expectSandboxRejection(await run(defaults));
     setSession();
-    const mainResult = await run(defaults, undefined, "agent:main:main");
+    const mainResult = await run(defaults, { sessionKey: "agent:main:main" });
     expect([mainResult.status, mainResult.error]).toEqual(["ok", undefined]);
     expect(fs.existsSync(markerPath)).toBe(true);
   });

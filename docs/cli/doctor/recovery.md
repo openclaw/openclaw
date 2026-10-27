@@ -118,7 +118,11 @@ lock wait or an offline-maintenance refusal; requester revocation still stops re
 
 When maintenance cannot acquire state ownership, Doctor includes the underlying
 schema or filesystem error. Manual `openclaw doctor --fix` reports contention
-immediately. Updater-run Doctor first waits, up to 20 minutes by default, for a non-Gateway
+immediately. An agent-database lease refusal names up to three observed holder PIDs
+in local output, without exposing agent names or database paths. Inspect those
+processes before stopping them; externally supervised processes remain with their
+supervisor. Persisted failure facts keep the existing generic guidance.
+Updater-run Doctor first waits, up to 20 minutes by default, for a non-Gateway
 OpenClaw process, such as a CLI command, to release state or close its agent
 database, printing the holder's PID and progress (see [how updates run](/cli/update/how-updates-run#when-restart-is-skipped-or-fails)). A shared-state database from a newer OpenClaw build
 stays unchanged; rerun Doctor with a build that supports that database version.

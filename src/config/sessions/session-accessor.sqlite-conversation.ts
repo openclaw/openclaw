@@ -95,8 +95,7 @@ function preserveSessionConversationIdentity(params: {
     : params.identity;
 }
 
-/** Shared-main DMs multiplex peers through one context; every other routed session has one primary. */
-export function prepareSessionConversationForWrite(params: {
+type SessionConversationWriteInput = {
   database: OpenClawAgentDatabase;
   entry: SessionEntry;
   previousEntry?: SessionEntry | null;
@@ -105,7 +104,12 @@ export function prepareSessionConversationForWrite(params: {
   observeConversation?: boolean;
   routeContext?: ConversationRouteContext | null;
   sessionScope: string;
-}): { conversation: PreparedSessionConversation | null; primaryConversationId: string | null } {
+};
+
+/** Bookkeeping can retain its complete association without reading conversation rows. */
+export function prepareRetainedSessionConversationForWrite(
+  params: SessionConversationWriteInput,
+): { conversation: null; primaryConversationId: string | null } | undefined {
   // Bookkeeping is not a new route observation. Its committed association owns
   // the canonical peer and route context until a route or lifecycle changes.
   if (
@@ -124,6 +128,18 @@ export function prepareSessionConversationForWrite(params: {
       conversation: null,
       primaryConversationId: params.previousWindow.primary_conversation_id,
     };
+  }
+  return undefined;
+}
+
+/** Shared-main DMs multiplex peers through one context; every other routed session has one primary. */
+export function prepareSessionConversationForWrite(params: SessionConversationWriteInput): {
+  conversation: PreparedSessionConversation | null;
+  primaryConversationId: string | null;
+} {
+  const retained = prepareRetainedSessionConversationForWrite(params);
+  if (retained) {
+    return retained;
   }
   const routeContext =
     params.routeContext === null

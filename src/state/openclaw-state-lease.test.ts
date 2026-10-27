@@ -7,9 +7,11 @@ import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-sup
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { stateLeaseProcessExitRuntimeEntrypoint } from "./openclaw-state-lease-runtime.test-support.js";
+import { readOpenClawStateLease } from "./openclaw-state-lease-store.js";
 import { withOpenClawStateLease } from "./openclaw-state-lease.js";
 
 type LeaseDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
@@ -149,4 +151,44 @@ it("rechecks exact ownership inside the caller's write transaction", () =>
         });
       }),
     ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+  }));
+
+it("records expiry and timer lateness when the native owner cannot run its heartbeat", () =>
+  withOpenClawTestState({ label: "lease-starvation" }, async ({ env }) => {
+    const { db } = openOpenClawStateDatabase({ env });
+    let entered = false;
+    const clock = vi.spyOn(Date, "now");
+    const lost = await withOpenClawStateLease(
+      {
+        scope: "synthetic",
+        key: "stall",
+        leaseMs: 3_000,
+        waitMs: 0,
+        database: { scope: "shared", options: { env } },
+      },
+      async (lease) => {
+        entered = true;
+        const row = readOpenClawStateLease(db, { scope: "synthetic", key: "stall" });
+        if (!row || row.expiresAt === null) {
+          throw new Error("Expected acquired lease");
+        }
+        // No timer can run while synchronous work holds the event loop.
+        clock.mockReturnValue(row.expiresAt + 2_000);
+        lease.assertOwned();
+      },
+    ).catch((error: unknown) => error);
+    clock.mockRestore();
+    if (!entered) {
+      throw lost;
+    }
+    expect(lost).toMatchObject({
+      code: "OPENCLAW_STATE_LEASE_LOST",
+      loss: {
+        reason: "expired",
+        expiresAt: expect.any(Number),
+        expiredByMs: 2_000,
+        heartbeatAgeMs: 5_000,
+        renewalTimerLateByMs: expect.any(Number),
+      },
+    });
   }));

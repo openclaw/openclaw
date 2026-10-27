@@ -1,10 +1,12 @@
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import type {
+  SessionMetadataChange,
+  SessionMetadataCommit,
+} from "../../config/sessions/transcript-write-context-store.js";
 import {
   captureSessionMetadataPublication,
   SessionTranscriptWriterClaimReboundError,
-  type SessionMetadataChange,
-  type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
 import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
@@ -32,6 +32,7 @@ import {
 } from "./session-accessor.js";
 import {
   bindSessionPendingInputSources as bindInputs,
+  prepareForeignLiveSessionPendingInputEntries,
   listSessionPendingInputs as listInputs,
   stageSessionPendingInput as stageInput,
   type SessionPendingInputReceipt,
@@ -63,6 +64,8 @@ function authorizedInput(
     message: message(runId, content),
     assertCurrent,
     assertAdmittedCurrent: assertCurrent,
+    assertFreshInputCurrent: authorization.assertCurrent,
+    prepareMessageAfterIdempotencyCheck: (prepared: PersistedUserTurnMessage) => prepared,
     authority: authorization.admittedInputAuthority,
   };
 }
@@ -116,12 +119,21 @@ describe("accepted input worker custody", () => {
     expect(custody.facts.databasePath).toBe(fs.realpathSync(database.path));
 
     const workerScope = { ...scope, storePath: custody.facts.databasePath };
+    const readAlias = await prepareForeignLiveSessionPendingInputEntries(scope);
+    const readCanonical = await prepareForeignLiveSessionPendingInputEntries(workerScope);
+    expect(readAlias()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
+    expect(readCanonical()).toEqual(readAlias());
+    expect(
+      await receipt.run(async () => (await prepareForeignLiveSessionPendingInputEntries(scope))()),
+    ).toEqual(new Map());
     const result = runWithCustody(custody.facts, custody.relocation, custody.assertCurrent, () =>
       appendSync(workerScope, { message: receipt!.message }),
     );
     expect(result.value).toMatchObject({ ok: true, value: { appended: true } });
     custody.publish(result.receipt);
+    expect(readAlias()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
     receipt.finish("cancelled");
+    expect(readAlias()).toEqual(new Map());
     await receipt.settled?.();
     receipt = undefined;
 
@@ -152,6 +164,10 @@ describe("accepted input worker custody", () => {
           receipt = await stageInput(scope, input);
           const admitted = receipt;
           assert(admitted?.runAsync, "Expected incognito pending input custody");
+          const readForeign = await prepareForeignLiveSessionPendingInputEntries(scope);
+          expect(readForeign()).toEqual(
+            new Map([[admitted.inputId, input.message.idempotencyKey]]),
+          );
           await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 2 });
           let effects = 0;
           await expect(
@@ -160,6 +176,9 @@ describe("accepted input worker custody", () => {
               return appendMessage(scope, { message: admitted.message });
             }),
           ).resolves.toMatchObject({ appended: true });
+          expect(readForeign()).toEqual(
+            new Map([[admitted.inputId, input.message.idempotencyKey]]),
+          );
           client.connect.scopes = ["operator.read", "operator.write"];
           await expect(
             admitted.runAsync(() => {
@@ -167,7 +186,12 @@ describe("accepted input worker custody", () => {
             }),
           ).rejects.toThrow("was not found");
           expect(effects).toBe(1);
+          // Revoked execution does not let another turn take still-held input.
+          expect(readForeign()).toEqual(
+            new Map([[admitted.inputId, input.message.idempotencyKey]]),
+          );
           admitted.finish("cancelled");
+          expect(readForeign()).toEqual(new Map());
           await admitted.settled?.();
           receipt = undefined;
 
@@ -224,9 +248,7 @@ it("refreshes every collected source after a non-revoking profile change", async
       const collected = bindInputs(receipts, message("collected", "Collected sources"));
       assert(collected?.runAsync, "Expected collected input authority");
       let executed = 0;
-      await collected.runAsync(() => {
-        executed++;
-      });
+      await collected.runAsync(() => executed++);
       expect(executed).toBe(1);
       setUserProfileRole(second.id, "view");
       await removeSessionMember(scope, second.id);
@@ -281,16 +303,15 @@ it.each(["turn", "locked"] as const)(
       let admitted: SessionPendingInputReceipt | undefined;
       let unsettled: SessionPendingInputReceipt | undefined;
       try {
+        using authorityReads = vi.spyOn(authorization.admittedInputAuthority!, "withCurrent");
+        setUserProfileRole(profileId, "suggest");
         admitted = await stageInput(
           scope,
-          authorizedInput(
-            authorization,
-            "prepared-custody",
-            "Continue with captured custody",
-            assertCurrent,
-          ),
+          authorizedInput(authorization, "prepared-custody", "Continue", assertCurrent),
         );
         expect(admitted?.state).toBe("queued");
+        expect(authorityReads).toHaveBeenCalledTimes(1);
+        setUserProfileRole(profileId, "view");
         unsettled = await stageInput(scope, {
           runId: "pending-settlement",
           message: { ...admitted!.message, idempotencyKey: "pending-settlement:user" },

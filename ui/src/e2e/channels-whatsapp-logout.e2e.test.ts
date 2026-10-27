@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildChannelWizardMocks } from "../../../scripts/control-ui-mock-channels.ts";
+import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
 import {
   installMockGateway,
   type MockGatewayControls,
@@ -18,12 +19,7 @@ const suite = createControlUiE2eSuite({
 
 const QR_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=";
-const pairing = {
-  accounts: [],
-  requests: [],
-  commandOwnerConfigured: true,
-  limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-};
+const pairing = emptyPairingSnapshot();
 const linked = { configured: true, linked: true, running: true, connected: true };
 function channelStatus(
   labels: Record<string, string>,

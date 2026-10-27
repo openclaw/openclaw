@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
-import * as databaseRegistry from "../../state/openclaw-agent-db-registry.js";
+import * as databaseRegistry from "../../state/openclaw-agent-db-registry-listing.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { dedupeSessionStoreTargetsBySqliteTarget as dedupeTargets } from "./targets.js";
 

@@ -200,7 +200,7 @@ it
           message: {
             type: "openclaw-worker-start-v1",
             lineageFds: expect.any(Array),
-            ...(adapter.treeOwnership
+            ...(action !== "force-descendant"
               ? { nativeProcessOwner: expect.stringMatching(/^file:/u) }
               : {}),
           },

@@ -1,6 +1,10 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { encodeOwnedBuffer } from "../shared/owned-buffer.js";
 
-const serializedArrays = new WeakMap<readonly unknown[], Uint8Array>();
+const serializedArrays = new WeakMap<
+  readonly unknown[],
+  { rows?: readonly string[]; bytes?: Uint8Array; retainedBytes: number }
+>();
 /** Owned immutable segments; only transports that require contiguous bytes materialize them. */
 export class SerializedGatewayFrame {
   readonly byteLength: number;
@@ -11,7 +15,16 @@ export class SerializedGatewayFrame {
   }
 
   toBuffer(): Buffer {
-    return (this.#buffer ??= Buffer.concat(this.segments, this.byteLength));
+    if (!this.#buffer) {
+      const bytes = Buffer.allocUnsafeSlow(this.byteLength);
+      let offset = 0;
+      for (const segment of this.segments) {
+        bytes.set(segment, offset);
+        offset += segment.byteLength;
+      }
+      this.#buffer = bytes;
+    }
+    return this.#buffer;
   }
 
   toString(): string {
@@ -25,7 +38,7 @@ export class SerializedJsonPayload {
 
   constructor(payload: unknown) {
     const frame = serializeGatewayFrame({ type: "res", payload });
-    const bytes = typeof frame === "string" ? Buffer.from(frame) : frame.toBuffer();
+    const bytes = typeof frame === "string" ? encodeOwnedBuffer(frame) : frame.toBuffer();
     this.bytes = bytes.subarray('{"type":"res"'.length, -1);
   }
 
@@ -41,25 +54,46 @@ export class SerializedJsonPayload {
   }
 }
 
-/** Register an immutable RPC array with its owner's already encoded row bytes. */
+/** Retain immutable row encodings; conditional replies may never send the full array. */
 export function registerSerializedJsonArray<T>(
   values: readonly T[],
   encodedRows: readonly string[],
 ): readonly T[] {
-  serializedArrays.set(values, Buffer.from(`[${encodedRows.join(",")}]`));
+  serializedArrays.set(values, {
+    rows: encodedRows,
+    // Reserve eventual UTF-8 bytes plus string references, without building an unused buffer.
+    retainedBytes: encodedRows.reduce(
+      (bytes, row) => bytes + Buffer.byteLength(row) + 8,
+      2 + Math.max(0, encodedRows.length - 1),
+    ),
+  });
   return values;
 }
 
 export function serializedJsonArrayBytes(values: readonly unknown[]): number {
-  return serializedArrays.get(values)?.byteLength ?? 0;
+  return serializedArrays.get(values)?.retainedBytes ?? 0;
 }
 
 function arrayBytes(value: unknown): Uint8Array | undefined {
-  return value instanceof SerializedJsonArray
-    ? value.bytes
-    : Array.isArray(value)
-      ? serializedArrays.get(value)
-      : undefined;
+  if (value instanceof SerializedJsonArray) {
+    return value.bytes;
+  }
+  const encoded = Array.isArray(value) ? serializedArrays.get(value) : undefined;
+  if (encoded?.rows) {
+    const bytes = Buffer.allocUnsafeSlow(encoded.retainedBytes - encoded.rows.length * 8);
+    let offset = 1;
+    bytes[0] = 91;
+    for (let index = 0; index < encoded.rows.length; index++) {
+      if (index > 0) {
+        bytes[offset++] = 44;
+      }
+      offset += bytes.write(encoded.rows[index]!, offset);
+    }
+    bytes[offset] = 93;
+    encoded.bytes = bytes;
+    encoded.rows = undefined;
+  }
+  return encoded?.bytes;
 }
 
 /** The history worker owns these already-validated JSON array bytes. */
@@ -105,7 +139,9 @@ export function serializeGatewayFrame(value: unknown): string | SerializedGatewa
   const payload = frame?.type === "res" ? asOptionalRecord(frame.payload) : undefined;
   // Subscription admission nests the same list response one level below payload.
   const list = payload && asOptionalRecord(Object.getOwnPropertyDescriptor(payload, "list")?.value);
-  const arrayOwner = [payload, list].find(
+  const initialHistory = payload && asOptionalRecord(payload.initialHistory);
+  const history = initialHistory && asOptionalRecord(initialHistory.payload);
+  const arrayOwner = [payload, list, history].find(
     (record) =>
       record &&
       typeof record.toJSON !== "function" &&
@@ -123,28 +159,37 @@ export function serializeGatewayFrame(value: unknown): string | SerializedGatewa
     return JSON.stringify(value);
   }
   const chunks: Uint8Array[] = [];
+  let json = "";
   const appendObject = (record: Record<string, unknown>): void => {
-    chunks.push(Buffer.from("{"));
+    json += "{";
     let separator = "";
     for (const key of Object.keys(record)) {
       const field = record[key];
       const rawArray = record === arrayOwner ? arrayBytes(field) : undefined;
       const nestedPayload =
-        field === payload ? payload : field === arrayOwner ? arrayOwner : undefined;
+        field === payload
+          ? payload
+          : field === initialHistory
+            ? initialHistory
+            : field === arrayOwner
+              ? arrayOwner
+              : undefined;
       const encoded = rawArray || nestedPayload ? `${JSON.stringify(key)}:` : fieldJson(key, field);
       if (!encoded) {
         continue;
       }
-      chunks.push(Buffer.from(`${separator}${encoded}`));
+      json += `${separator}${encoded}`;
       separator = ",";
       if (rawArray) {
-        chunks.push(rawArray);
+        chunks.push(Buffer.from(json), rawArray);
+        json = "";
       } else if (nestedPayload) {
         appendObject(nestedPayload);
       }
     }
-    chunks.push(Buffer.from("}"));
+    json += "}";
   };
   appendObject(frame);
+  chunks.push(Buffer.from(json));
   return new SerializedGatewayFrame(chunks);
 }

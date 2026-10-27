@@ -13,6 +13,10 @@ import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { transformTransportMessages } from "../../transport-message-transform.js";
+import { normalizeAssistantReplayContent } from "../replay-history.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "../result-fallback-classifier.js";
 import {
   markEmbeddedRunAuthProfileSuccess,
   reportEmbeddedRunSuccessfulAuthBinding,
@@ -26,6 +30,7 @@ import {
   assistantAttempt,
   expectComplete,
   emptyAssistant,
+  compactionAssistantFixture,
   makeTerminalInput,
   resolveTerminal,
 } from "./terminal-resolution.test-support.js";
@@ -43,6 +48,17 @@ function reasoningAssistant(id: string, thinking: string) {
   return buildEmbeddedRunnerAssistant({
     content: [{ type: "thinking", thinking, thinkingSignature }],
   });
+}
+
+function replaySafeTextInput(text: string) {
+  return {
+    assistant: textAssistant(text),
+    attemptOverrides: {
+      assistantTexts: [text],
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    },
+    finalAssistantRawText: text,
+  };
 }
 
 describe("terminal resolution", () => {
@@ -460,14 +476,8 @@ describe("terminal resolution", () => {
         { text: '{"action":"NO_REPLY"}', silent: false },
         { text: "NO_REPLY The requested result.", silent: false },
       ]) {
-        const assistant = textAssistant(text);
         const input = makeTerminalInput({
-          assistant,
-          attemptOverrides: {
-            assistantTexts: [text],
-            currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-          },
-          finalAssistantRawText: text,
+          ...replaySafeTextInput(text),
           payloadsWithToolMedia: silent ? [] : [{ text }],
           runParams: { lane, messageChannel: undefined },
         });
@@ -486,14 +496,8 @@ describe("terminal resolution", () => {
 
   it("surfaces the canonical missing-result outcome for a presentation-hidden acknowledgement", async () => {
     const text = "HEARTBEAT_OK";
-    const assistant = textAssistant(text);
     const input = makeTerminalInput({
-      assistant,
-      attemptOverrides: {
-        assistantTexts: [text],
-        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-      },
-      finalAssistantRawText: text,
+      ...replaySafeTextInput(text),
       payloadsWithToolMedia: [{ text }],
       payloadsForVisibleCompletion: [],
       runParams: { terminalReplyExpectation: "result-required" },
@@ -524,14 +528,8 @@ describe("terminal resolution", () => {
     "does not manufacture a missing-result outcome for $name",
     async ({ terminalReplyExpectation, delivered }) => {
       const text = "HEARTBEAT_OK";
-      const assistant = textAssistant(text);
       const input = makeTerminalInput({
-        assistant,
-        attemptOverrides: {
-          assistantTexts: [text],
-          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-        },
-        finalAssistantRawText: text,
+        ...replaySafeTextInput(text),
         payloadsWithToolMedia: [{ text }],
         payloadsForVisibleCompletion: [],
         replyDeliveryState: delivered ? "delivered" : "missing",
@@ -601,6 +599,73 @@ describe("terminal resolution", () => {
     expect(exhausted.result.meta.finalAssistantRawText).toBeUndefined();
   });
 
+  it.each([
+    { provider: "anthropic", api: "anthropic-messages", thinkingSignature: "sig" },
+    { provider: "kimi", api: "anthropic-messages", thinkingSignature: "" },
+    { provider: "openai", api: "openai-responses", thinkingSignature: '{"id":"rs_1"}' },
+    { provider: "openai", api: "openai-completions", thinkingSignature: "" },
+  ] as const)(
+    "continues $provider/$api reasoning only while replay keeps the turn",
+    async ({ provider, api, thinkingSignature }) => {
+      const model = makeProviderModelFixture({
+        provider,
+        api,
+        id: "reasoning-model",
+        baseUrl: "https://example.test",
+      });
+      const user = { role: "user", content: "Answer the question.", timestamp: 0 } as const;
+      for (const stopReason of ["stop", "length"] as const) {
+        const assistant = buildEmbeddedRunnerAssistant({
+          provider,
+          api,
+          model: model.id,
+          stopReason,
+          content: [{ type: "thinking", thinking: "Partial reasoning.", thinkingSignature }],
+        });
+        // Both replay owners omit a token-limited reasoning-only turn from the next request.
+        const replay = stopReason === "stop" ? [user, assistant] : [user];
+        expect(normalizeAssistantReplayContent([user, assistant])).toEqual(replay);
+        expect(transformTransportMessages([user, assistant], model)).toEqual(replay);
+        const input = makeTerminalInput({
+          attempt: assistantAttempt(assistant, {
+            currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          }),
+          activeErrorContext: { provider, model: model.id },
+          modelApi: api,
+        });
+
+        const resolved = await resolveEmbeddedRunTerminal(input);
+
+        if (stopReason === "stop") {
+          expect(resolved).toEqual({ action: "retry" });
+          expect(input.sessionPromptState.activateInternalPrompt).toHaveBeenCalledWith(
+            REASONING_ONLY_RETRY_INSTRUCTION,
+          );
+          continue;
+        }
+        expectComplete(resolved);
+        expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+        expect(resolved.result.payloads).toEqual([
+          {
+            text: "⚠️ The model reached its output token limit before generating an answer. Please try again.",
+            isError: true,
+          },
+        ]);
+        expect(resolved.result.meta.error).toMatchObject({
+          kind: "incomplete_turn",
+          fallbackSafe: true,
+        });
+        expect(
+          classifyEmbeddedAgentRunResultForModelFallback({
+            provider,
+            model: model.id,
+            result: resolved.result,
+          }),
+        ).toMatchObject({ code: "incomplete_result" });
+      }
+    },
+  );
+
   it("keeps a prepared answer when a later assistant message is reasoning-only", async () => {
     const answerText = "The operation completed successfully.";
     const answer = textAssistant(answerText);
@@ -649,19 +714,7 @@ describe("terminal resolution", () => {
   });
 
   it("activates the prompt owner for an OpenAI Responses compaction checkpoint", async () => {
-    const assistant = buildEmbeddedRunnerAssistant({
-      stopReason: "length",
-      providerReplay: {
-        v: 1,
-        type: "openai-responses-compaction",
-        id: "cmp-terminal-retry",
-        data: "opaque-compaction",
-        provider: "openai",
-        api: "openai-responses",
-        model: "gpt-5.6-luna",
-        baseUrlHash: "base-url-hash",
-      },
-    });
+    const assistant = compactionAssistantFixture("cmp-terminal-retry");
     const input = makeTerminalInput({
       assistant,
       attemptOverrides: {
@@ -714,6 +767,13 @@ describe("terminal resolution", () => {
       expect(resolved.result.payloads).toEqual(
         truncated ? [{ text }, { text: TRUNCATED_REPLY_NOTICE_TEXT }] : [{ text }],
       );
+      expect(
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider: "openai",
+          model: "partial-answer",
+          result: resolved.result,
+        }),
+      ).toBeNull();
       if (truncated) {
         expect(resolved.result.meta.error).toBeUndefined();
         expect(resolved.result.meta.livenessState).toBe("working");

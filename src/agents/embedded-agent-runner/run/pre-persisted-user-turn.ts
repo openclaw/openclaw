@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
+import { prepareForeignLiveSessionPendingInputEntries } from "../../../config/sessions/session-accessor.pending-inputs.js";
 import type { SessionTranscriptWriteScope } from "../../../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
 import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
@@ -9,6 +10,7 @@ import { SessionTranscriptReadFenceError } from "../../../config/sessions/sessio
 import { resolveSessionTranscriptReadFence } from "../../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../../config/sessions/session-transcript-read-source.js";
 import type { TranscriptEntryAnchor } from "../../../config/sessions/transcript-entry-anchor.js";
+import { sameSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptInitialWriter,
@@ -34,6 +36,7 @@ import {
   AGENT_RUN_RESTART_ABORT_ERROR,
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
 } from "../../run-termination.js";
+import type { AgentSession } from "../../sessions/index.js";
 import { sessionManagerReloadTranscriptCohort } from "../../sessions/session-manager-core.js";
 import {
   sessionManagerPrepareCurrentTurnReplay,
@@ -44,6 +47,7 @@ import { prepareSessionManagerHydration } from "../../sessions/session-manager-i
 import type { SessionEntry } from "../../sessions/session-manager-types.js";
 import type {
   PreparedSessionTranscriptReload,
+  SessionManagerPersistenceTarget,
   SessionManagerTranscriptCohort,
 } from "../../sessions/session-manager-view-types.js";
 import type { SessionManager } from "../../sessions/session-manager.js";
@@ -487,4 +491,83 @@ export function reconcilePrePersistedCurrentUserTurn(params: {
     durableTurnMatches ||
     params.currentUserTurnMessage?.excludeFromContext === true
   );
+}
+
+type ForeignPendingUserTurns = {
+  ownsEntry: (entryId: string) => boolean;
+  omitInput: (messages: AgentMessage[]) => AgentMessage[];
+};
+
+type ForeignPendingUserTurnSession = {
+  agent: { state: { messages: AgentMessage[] } };
+  subscribe: AgentSession["subscribe"];
+};
+
+function readUserIdempotencyKey(message: AgentMessage): string | undefined {
+  return message.role === "user" &&
+    "idempotencyKey" in message &&
+    typeof message.idempotencyKey === "string"
+    ? message.idempotencyKey
+    : undefined;
+}
+
+/** Resolve physical ownership before append admission, then sample live custody at preparation. */
+export async function prepareForeignPendingUserTurns(
+  sessionManager: { getSessionTarget: () => SessionManagerPersistenceTarget | undefined },
+  signal?: AbortSignal,
+): Promise<
+  | ((
+      activeSession: ForeignPendingUserTurnSession,
+      currentUserIdempotencyKey: string | undefined,
+    ) => ForeignPendingUserTurns | undefined)
+  | undefined
+> {
+  const target = sessionManager.getSessionTarget();
+  if (!target) {
+    return undefined;
+  }
+  const assertOwned = captureOwnedTranscriptWriteAssertion(target);
+  const assertPrepared = () => {
+    signal?.throwIfAborted();
+    assertOwned();
+    if (!sameSessionTranscriptTargetBinding(target, sessionManager.getSessionTarget())) {
+      throw new Error("Session manager target changed during live input preparation");
+    }
+  };
+  assertPrepared();
+  const readEntries = await prepareForeignLiveSessionPendingInputEntries(target, signal);
+  assertPrepared();
+  const entries = new Map<string, string>();
+  const adopted = new Set<string>();
+  let observing = false;
+  return (activeSession, currentUserIdempotencyKey) => {
+    assertPrepared();
+    // Preserve the first sample through transcript reload even if a source finishes meanwhile.
+    for (const [id, key] of readEntries()) {
+      entries.set(id, key);
+    }
+    if (!entries.size) {
+      return undefined;
+    }
+    if (!observing) {
+      observing = true;
+      // Steering can accept a sampled input after preparation. Once this attempt
+      // commits it, the input is its own and later model calls must keep it.
+      activeSession.subscribe((event) => {
+        const key =
+          event.type === "message_end" ? readUserIdempotencyKey(event.message) : undefined;
+        if (key) {
+          adopted.add(key);
+        }
+      });
+    }
+    const keys = new Set([...entries.values()].filter((key) => key !== currentUserIdempotencyKey));
+    const omitInput = (messages: AgentMessage[]) =>
+      messages.filter((message) => {
+        const key = readUserIdempotencyKey(message);
+        return !key || !keys.has(key) || adopted.has(key);
+      });
+    activeSession.agent.state.messages = omitInput(activeSession.agent.state.messages);
+    return { ownsEntry: (entryId) => entries.has(entryId), omitInput };
+  };
 }

@@ -10,6 +10,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import {
   resolveImageToolFactoryAvailable,
@@ -429,16 +430,7 @@ describe("optional media tool factory planning", () => {
   });
 
   it("honors manifest-declared image provider auth alias base-url guards", () => {
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "http://localhost:11434/v1",
-            models: [],
-          },
-        },
-      },
-    };
+    const config: OpenClawConfig = configFor("openai", "http://localhost:11434/v1");
     installSnapshot(config, [
       createPlugin({
         id: "openai",

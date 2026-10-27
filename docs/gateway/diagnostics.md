@@ -203,7 +203,7 @@ known task segment from RPC handlers, scheduled jobs, diagnostic phases, timelin
 worker message handling, with elapsed and task milliseconds. Time awaiting I/O
 does not count as task execution. Prepared session-row reads carry the enclosing
 operation across waits and append `session-rows:select`, `session-rows:prepare`, or
-`session-rows:consume`; agent roster batches append `agent-roster`. For example,
+`session-rows:consume`; roster fact batches preserve their caller's task label. For example,
 `gateway:rpc:sessions.list:session-rows:select` identifies list selection, and
 scheduled work retains its `scheduler:<lane>:<task>` prefix. Labels contain only
 code-owned operation names, never session keys or request content. Labels cover
@@ -267,6 +267,14 @@ These are elapsed times, including waits, with fixed phase names and no session
 keys or request values. Worktree preparation measures only work required before
 the response; provisioning already deferred to an initial turn stays with that
 turn's lifecycle.
+
+At trace log level, chat startup diagnostics break `detail.attempt.system-prompt`
+into sandbox policy,
+tool catalog text, session entry, runtime facts, reference paths, provider
+contributions, memory and watched-session context, project memory, TTS preferences,
+rendering, and reporting. These `detail.attempt.system-prompt.*` phases measure
+elapsed preparation time, including awaited work, without recording prompt content.
+The parent and nested phase totals overlap; do not add them together as CPU time.
 
 Managed worktree preparation emits one info-level `managed worktree preparation`
 record on return or failure. `kind=managed` covers checkout creation;
@@ -587,7 +595,7 @@ node --import ./scripts/tsx.mjs scripts/gateway-heap-rig.mjs \
 ```
 
 Run this on a dedicated host with enough memory for snapshots. It starts the
-dist Gateway and local mock model servers on loopback ports 19548–19550,
+dist Gateway and local mock model servers on loopback ports 41673–41675,
 seeds 2,000 sessions with 32 KiB histories across two agents, and drives ten
 reconnecting Control UI WebSocket clients. The workload polls session, history,
 model, and cron APIs and sends mock `chat.send` turns with 8 KiB replies, Code
@@ -686,7 +694,11 @@ sample suppression, never per scrape. Names come from V8's finite space set,
 including spaces added by future V8 versions; each space contributes four gauges
 under the exporter's existing series cap.
 
-Heap and CPU profiles label dependency frames as `[dep:<pkg>]` with URL
+Heap and CPU profiles preserve safe function names for OpenClaw code under the
+installation root, with URLs such as `openclaw:src/...`, `openclaw:dist/...`, and
+`openclaw:packages/<name>/src/...` or `openclaw:packages/<name>/dist/...` for
+workspace packages. Paths outside the installation root are not OpenClaw code.
+Profiles label dependency frames as `[dep:<pkg>]` with URL
 `node_modules/<pkg>`, including scoped packages and pnpm layouts; symbols,
 versions, filenames, and absolute paths stay hidden. URLs with query or fragment
 markers remain redacted. Frames with script ID `0`,
@@ -791,12 +803,20 @@ memory, so do not add those values together. Other direct workers use native hea
 statistics and leave ArrayBuffer bytes unavailable. Nested workers are outside
 the parent registry's coverage.
 
+Worker script labels come from the runtime entrypoint manifest. Source and sealed
+entrypoints use their canonical built names; unknown dependency workers and eval
+sources remain `other`. Knowledge registry and storage workers participate in the
+same census, labeled `registry-worker.js` and `storage-worker.js`.
+
 The prepared-model catalog worker also reports `workerHeaps[].retainedData`: bounded, size-only
 censuses with fixed structure labels, entry counts, approximate bytes, and
 aggregate generation, provider, and account counts where applicable. They never
 include catalog contents, object keys, provider or account identities, or secrets.
 The census uses the existing worker-memory sampling channel; it does not take a
-heap snapshot. Byte counts estimate owner-held data, not V8 retained size; shared
+heap snapshot. Unchanged immutable metadata and remote catalog publications reuse their
+size estimates; replacing, adding, or removing a publication refreshes its census on
+the next worker sample. Mutable data is measured on each sample.
+Byte counts estimate owner-held data, not V8 retained size; shared
 objects are counted once within each structure, and structures can overlap.
 `stringBytes` estimates string payload bytes, while `objects` counts traversed
 objects. Coverage includes the named structures, not module runtime or closure roots.
@@ -843,13 +863,23 @@ close/checkpoint operations off the main thread. Active operations keep their
 custody and the usual 30-minute database retention window resumes after use.
 No stored data, database schema, or update procedure changes.
 
+Transcript history and search lanes retain one warm reader for up to five idle
+minutes. Other transcript lanes retire after 90 idle seconds to span minute-spaced
+bursts, keeping their independent request ordering and growing again on demand. Whole-lane idle cleanup
+uses the existing rotation path, so its retirement reason is `rotation`.
+
 When a task pool recreates an idle-retired Worker within five minutes, it keeps
 one replacement warm for five minutes of inactivity. Other slots retain their
-normal idle timeout. Git metadata readers use a two-minute idle timeout so the
-one-minute PR polling and repository-discovery refreshes can reuse both readers.
-Node Code Mode likewise retains at most one completed
-Worker for five minutes, reusing it only when its runtime entry and heap limit
-match. Code Mode relies on V8's normal garbage collection rather than inspector
+normal idle timeout. Git content and workspace-computation pools instead keep their
+most recently used idle worker warm after their first task. Git metadata, summary,
+worktree preparation, and maintenance pools keep their existing expiry because they
+retain repository observations. All surplus Git workers keep their existing timeout.
+Node Code Mode keeps one compatible completed worker warm for each host,
+runtime entry, and heap limit within its eight-worker warm-cache budget; surplus
+workers expire after 30 seconds. Neither owner starts workers before use.
+Critical memory pressure can evict these warm floors, and normal health,
+rotation, drain, and shutdown cleanup still retires them.
+Code Mode relies on V8's normal garbage collection rather than inspector
 collection at idle task boundaries. Other warm task workers still collect released payloads in place; critical
 pressure, cancellation, rotation, and shutdown retain their existing cleanup
 paths. No configuration setting is needed.
@@ -861,8 +891,10 @@ scavenges, major mark/sweep/compact collections, incremental work, and weak-refe
 processing. Counts and elapsed durations are grouped by main thread or bounded
 worker script kind, without per-GC log lines. Instrumented workers use their
 existing memory telemetry port and observe GC only while an exporter is interested.
-One native `GCProfiler` per isolate supplies batches on a one-second timer, shared
-with the Code Mode thrash guard. It does not schedule JavaScript after each GC:
+One native `GCProfiler` per isolate supplies batches on a one-second timer on both
+main and worker threads, shared with the Code Mode thrash guard. Worker drains no
+longer restart Node's native profiler every 100 milliseconds. Orderly retirement
+explicitly flushes pending collections without waiting for the timer. It does not schedule JavaScript after each GC:
 per-collection `PerformanceObserver` delivery can keep an idle worker collecting.
 Native counts and durations remain exact; callback flags are unavailable, so the
 `reason` label is `other`.

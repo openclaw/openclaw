@@ -218,7 +218,6 @@ async function adoptProgressDraft(
     return false;
   }
   const adopt = info.adoptProgressDraft;
-  await turn.draftEventQueue;
   const stream = turn.answerLane.stream;
   if (!stream || turn.answerLane.finalized || turn.isSuperseded()) {
     return false;
@@ -351,12 +350,7 @@ async function deliverReplyWithNormalization(
   const split = splitTextIntoLaneSegments(turn, lanePayload.text, payload.isReasoning);
   const { segment } = split;
   if (info.kind === "final" && (reply.text.length > 0 || reply.hasMedia)) {
-    // Mark final delivery before any queued draft drain; late tool progress must stay suppressed.
     turn.previewLifecycle.beginFinalDelivery();
-  }
-  if (info.kind === "final") {
-    // Final delivery drains queued draft work so an earlier block cannot overtake it.
-    await enqueueDraftEvent(turn, async () => {});
   }
   if (info.kind === "final" && effectivePayload.isStatusNotice === true) {
     // ACP identity notices finish dispatch but must not replace the answer preview.

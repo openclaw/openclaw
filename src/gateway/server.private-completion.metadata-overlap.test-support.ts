@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import * as killSession from "../agents/subagents/registry/subagent-control-session.js";
 import * as bookkeeping from "../agents/subagents/registry/subagent-registry-lifecycle-bookkeeping.js";
 import { applySessionEntryExactReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
@@ -156,12 +157,11 @@ export function holdMetadataThroughSubagentStop(target: {
         (error: unknown) => ({ ok: false as const, error }),
       );
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           nativeResultHeld.promise,
-          producer.then(() => {
-            throw new Error("Metadata writer finished without its native-result barrier");
-          }),
-        ]);
+          producer,
+          "Metadata writer finished without its native-result barrier",
+        );
         target.signal.throwIfAborted();
         await completeBookkeeping(context, params);
         bookkeepingReturned = true;

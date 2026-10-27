@@ -17,21 +17,13 @@ import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-confi
 import { LEGACY_CONFIG_MIGRATIONS } from "./doctor/shared/legacy-config-migrations.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./doctor/shared/legacy-config-migrations.runtime.models.js";
 import { repairStaleAgentModelRefs } from "./doctor/shared/stale-agent-model-ref-repair.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 function makeModel(
   id: string,
   overrides: Partial<ModelDefinitionConfig> = {},
 ): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 32_000,
-    ...overrides,
-  };
+  return createTestModelDefinition(id, { contextWindow: 128_000, maxTokens: 32_000, ...overrides });
 }
 
 function normalizeProviders(providers: unknown) {

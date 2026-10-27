@@ -9,7 +9,7 @@ import {
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
-import type { GatewayCronState } from "./server-cron.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import type {
   GatewayPluginReloadResult,
   GatewayHotReloadPublication,

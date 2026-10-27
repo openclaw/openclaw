@@ -3,6 +3,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   resolveExpiresAtMsFromDurationSeconds,
   resolveTimestampMsToIsoString,
@@ -13,6 +14,7 @@ import {
   resolveOpenClawCliInvocation,
 } from "../../cli-invocation.mjs";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../infra/runtime-process-url.js";
 import { runExec } from "../process/exec.js";
 
 const LIVE_CRON_PROBE_DELAY_SECONDS = 7 * 24 * 60 * 60;
@@ -45,7 +47,15 @@ export function resolveOpenClawCliProcessArgs(
   args: readonly string[],
   hasBuildOutput: boolean,
 ): string[] {
-  return [hasBuildOutput ? "openclaw.mjs" : "scripts/run-node.mjs", ...args];
+  return [
+    fileURLToPath(
+      resolveExternalPackageRuntimeEntrypointUrl(
+        hasBuildOutput ? "cliLauncher" : "sourceRunner",
+        process.cwd(),
+      ),
+    ),
+    ...args,
+  ];
 }
 
 /** Return true for live agents that expose Claude-style MCP tool names. */

@@ -63,7 +63,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
   protected async deleteIndexedFile(
     pathname: string,
     source: MemorySource,
-    expectedHash?: string,
+    expectedHash?: string | null,
   ): Promise<void> {
     // Recall and forget also write this database under the workspace lock.
     // Keep their synchronous writes outside the Worker's native transaction.
@@ -80,12 +80,14 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           throw new Error("Memory source owner changed before deletion");
         }
       };
+      // Null carries an observed absence; undefined requests a fresh lookup.
       const capturedHash =
-        expectedHash ??
-        (await database.read(
-          { type: "source.hash", input: { path: pathname, source } },
-          assertCurrent,
-        ));
+        expectedHash === undefined
+          ? await database.read(
+              { type: "source.hash", input: { path: pathname, source } },
+              assertCurrent,
+            )
+          : (expectedHash ?? undefined);
       assertCurrent();
       await database.deleteSource(
         { path: pathname, source, expectedHash: capturedHash },
@@ -327,7 +329,11 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         // Archived runs may reveal their internal origin only while parsing.
         // Fresh rebuilds have no earlier artifacts; published indexes may have orphan chunks.
         if (!this.database.isShadow || sourceRows.has(entry.path)) {
-          await this.deleteIndexedFile(entry.path, "sessions", sourceRows.get(entry.path)?.hash);
+          await this.deleteIndexedFile(
+            entry.path,
+            "sessions",
+            sourceRows.get(entry.path)?.hash ?? null,
+          );
         }
         this.advanceSyncProgress(params.progress);
         return null;

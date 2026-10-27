@@ -56,7 +56,7 @@ export function firstEnumerableOwnKeys(value: object, maxKeys: number): string[]
 /** Counts JSON UTF-8 bytes up to a hard limit without fully serializing large objects. */
 export function boundedJsonUtf8Bytes(value: unknown, maxBytes: number): BoundedJsonUtf8Bytes {
   let bytes = 0;
-  const seen = new WeakSet<object>();
+  let seen: WeakSet<object> | undefined;
 
   const add = (amount: number): void => {
     bytes += amount;
@@ -94,7 +94,7 @@ export function boundedJsonUtf8Bytes(value: unknown, maxBytes: number): BoundedJ
     }
 
     const objectEntry = entry as object;
-    if (seen.has(objectEntry)) {
+    if ((seen ??= new WeakSet<object>()).has(objectEntry)) {
       throw new Error("json_byte_length_circular");
     }
     // Custom toJSON can hide arbitrary work or reshape output, so bounded

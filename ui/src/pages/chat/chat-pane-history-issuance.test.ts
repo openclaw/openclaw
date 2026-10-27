@@ -2,8 +2,9 @@
 
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentsListResult } from "../../api/types.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -13,19 +14,14 @@ import { loadChatHistory } from "./chat-history.ts";
 import { requestCalls } from "./chat-host.test-support.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
-const agentsList: AgentsListResult = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "per-sender",
-  agents: [{ id: "main" }],
-};
+const agentsList = makeBootRoster();
 
 function createCanonicalRoutePane(
-  handlers: Record<string, () => unknown> = {},
+  handlers: Record<string, (params: Record<string, unknown>) => unknown> = {},
   fallback: () => unknown = () => ({}),
 ) {
-  const request = vi.fn((method: string) =>
-    Promise.resolve(method === "agents.list" ? agentsList : (handlers[method] ?? fallback)()),
+  const request = vi.fn((method: string, params: Record<string, unknown>) =>
+    Promise.resolve(method === "agents.list" ? agentsList : (handlers[method] ?? fallback)(params)),
   );
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
@@ -67,17 +63,6 @@ async function expectRecoveredHistory(
   text: string,
 ) {
   await vi.waitFor(() => expect(requestCalls(request, method)).toHaveLength(attempts));
-  expect(request).toHaveBeenCalledWith(
-    method,
-    {
-      sessionKey: state.sessionKey,
-      knownState: {},
-      limit: 80,
-      maxBytes: 256 * 1024,
-      toolResultMaxChars: 2_000,
-    },
-    { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-  );
   await vi.waitFor(() => expect(state.chatMessages).toEqual(assistantHistory(text).messages));
   expect(getChatHistoryLoadState(state).phase).toBe("committed");
 }

@@ -5,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { diagnoseChromeCdp } from "./chrome.diagnostics.js";
 import * as chrome from "./chrome.js";
 import { createBrowserRouteContext } from "./server-context.js";
@@ -85,10 +86,7 @@ async function startCdpFixture(
       releaseUpgrade();
     }
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const port = (server.address() as AddressInfo).port;
+  const port = await listenOnLoopback(server);
   return {
     url: `http://127.0.0.1:${port}`,
     reached,

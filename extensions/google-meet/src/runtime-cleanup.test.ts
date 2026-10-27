@@ -3,16 +3,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useMeetingTestState } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
-import { meetRuntime, MEET_URL } from "./test-support/fixtures.test-helpers.js";
+import { meetLaunchedTab, meetRuntime, MEET_URL } from "./test-support/fixtures.test-helpers.js";
 import * as chromeTransport from "./transports/chrome.js";
-
-function launchedTab(targetId: string, openedByPlugin = true) {
-  return {
-    launched: true,
-    tab: { targetId, openedByPlugin },
-    browser: { inCall: true, micMuted: true },
-  };
-}
 
 const state = useMeetingTestState(createOpenClawTestState);
 
@@ -25,8 +17,8 @@ it("does not close an adopted tab when the failed session retries leave", async 
   let donorAttempts = 0;
   let allowAdoptedLeave = false;
   vi.spyOn(chromeTransport, "launchChromeMeet")
-    .mockResolvedValueOnce(launchedTab("donor-tab"))
-    .mockResolvedValueOnce(launchedTab("adopted-tab"))
+    .mockResolvedValueOnce(meetLaunchedTab("donor-tab"))
+    .mockResolvedValueOnce(meetLaunchedTab("adopted-tab"))
     .mockImplementationOnce(async () => {
       adoptionStarted.resolve();
       return await adoption.promise;
@@ -46,7 +38,7 @@ it("does not close an adopted tab when the failed session retries leave", async 
   );
   let replacing: ReturnType<typeof runtime.join> | undefined;
   let retrying: ReturnType<typeof runtime.leave> | undefined;
-  const adoptedResult = launchedTab("adopted-tab", false);
+  const adoptedResult = meetLaunchedTab("adopted-tab", false);
   try {
     await runtime.join({ url: MEET_URL, agentId: "donor" });
     await expect(runtime.join({ url: MEET_URL, agentId: "failed" })).rejects.toThrow(

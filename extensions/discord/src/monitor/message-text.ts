@@ -11,18 +11,6 @@ import {
 } from "./message-forwarded.js";
 import { formatDiscordMediaText } from "./message-media.js";
 
-function resolveDiscordEmbedText(
-  embeds?: readonly { title?: string | null; description?: string | null }[] | null,
-): string {
-  return (embeds ?? [])
-    .flatMap(({ title, description }) => [
-      normalizeOptionalString(title),
-      normalizeOptionalString(description),
-    ])
-    .filter(Boolean)
-    .join("\n");
-}
-
 export function resolveDiscordMessageText(
   message: Message,
   options?: { includeForwarded?: boolean },
@@ -190,7 +178,13 @@ export function resolveDiscordRawMessageText(
   });
   const text =
     content ||
-    resolveDiscordEmbedText(message.embeds) ||
+    (message.embeds ?? [])
+      .flatMap(({ title, description }) => [
+        normalizeOptionalString(title),
+        normalizeOptionalString(description),
+      ])
+      .filter(Boolean)
+      .join("\n") ||
     extractDiscordComponentsV2Text(message.components) ||
     resolveDiscordForwardedMessagesTextFromSnapshots(
       normalizeDiscordMessageSnapshots(message.message_snapshots),

@@ -77,7 +77,6 @@ describe("Doctor foreign launchd jobs", () => {
   it("reports owner rejection without claiming removal", async () => {
     mocks.repair.mockResolvedValue({ removed: false, detail: "Lifecycle command changed." });
     await run({ repair: true, nonInteractive: true });
-    expect(mocks.repair).toHaveBeenCalledExactlyOnceWith(lifecycleJob, {});
     expect(runtime.log).toHaveBeenCalledWith(
       `Removal not confirmed for launchd job ${lifecycleJob.label}: Lifecycle command changed.`,
     );

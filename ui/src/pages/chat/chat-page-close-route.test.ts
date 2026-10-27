@@ -16,6 +16,7 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
   nativeGatewaysCapability: () => null,
 }));
 
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-toggle-contract.ts";
@@ -29,6 +30,7 @@ import {
   settleChatPage,
   setNavigationContext,
   stubMatchMedia,
+  showSession,
 } from "./chat-page.test-support.ts";
 import "./chat-page.tsx";
 import type { ChatRouteData } from "./route-loader.ts";
@@ -55,14 +57,6 @@ const panesIn = (page: HTMLElementTagNameMap["openclaw-chat-page"]) => [
 ];
 function command(detail: UiCommandDetail) {
   window.dispatchEvent(new CustomEvent(UI_COMMAND_EVENT, { cancelable: true, detail }));
-}
-async function showSession(
-  page: HTMLElementTagNameMap["openclaw-chat-page"],
-  sessionKey: string,
-): Promise<void> {
-  page.data = { sessionKey };
-  await settleChatPage(page);
-  await settleChatPage(page);
 }
 
 describe("chat page close navigation", () => {
@@ -135,12 +129,10 @@ describe("chat page close navigation", () => {
   it("preserves a pending Home draft when its bound pane adopts the global wire key after collapsing", async () => {
     const page = document.createElement("openclaw-chat-page");
     const { context, navigate, replace } = setNavigationContext(page);
-    context.agents.state.agentsList = {
-      defaultId: "main",
-      mainKey: "main",
+    context.agents.state.agentsList = makeBootRoster({
       scope: "global",
       agents: [{ id: "main" }, { id: "research" }],
-    };
+    });
     page.data = { sessionKey: "agent:main:main", agentId: "main" };
     document.body.append(page);
     await settleChatPage(page);

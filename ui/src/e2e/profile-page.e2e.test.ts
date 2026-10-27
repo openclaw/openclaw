@@ -3,16 +3,13 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, type Page } from "playwright/test";
 import { beforeEach, it } from "vitest";
-import {
-  buildControlUiCspHeader,
-  computeInlineScriptHashes,
-} from "../../../src/gateway/control-ui-csp.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { fulfillWithControlUiCsp } from "./control-ui-csp.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { defineProfilePreferenceTests } from "./profile-page-preferences.test-support.ts";
 
@@ -133,6 +130,52 @@ suite.define(() => {
     getProofDir: () => proofDir,
   });
 
+  it("keeps keyboard editing and retry available after a rejected display-name save", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await openProfilePage(page);
+      const input = page.getByRole("textbox", { name: "Display name", exact: true });
+      const save = page.locator(".identity-name-control button");
+      await expect(input).toBeEnabled();
+      await gateway.deferNext("users.setDisplayName");
+      await input.fill("Keyboard Draft");
+      await input.press("Enter");
+      const first = await gateway.waitForRequest("users.setDisplayName");
+      expect(first.params).toEqual({ profileId: testProfile.id, displayName: "Keyboard Draft" });
+      await expect(save).toBeDisabled();
+      await page.keyboard.press("Enter");
+      expect(await gateway.getRequests("users.setDisplayName")).toHaveLength(1);
+
+      await gateway.rejectDeferred("users.setDisplayName", {
+        message: "Synthetic profile name save rejected",
+      });
+      await expect(page.locator(".identity-error")).toContainText(
+        "Synthetic profile name save rejected",
+      );
+      await expect(save).toBeEnabled();
+      await expect(input).toHaveValue("Keyboard Draft");
+      await screenshot(page, "display-name-rejected.png");
+      await expect(input).toBeFocused();
+
+      await page.keyboard.press("End");
+      await page.keyboard.type(" retry");
+      await expect(input).toHaveValue("Keyboard Draft retry");
+      await gateway.deferNext("users.setDisplayName");
+      await page.keyboard.press("Enter");
+      const retry = await gateway.waitForRequest("users.setDisplayName", { after: 1 });
+      expect(retry.params).toEqual({
+        profileId: testProfile.id,
+        displayName: "Keyboard Draft retry",
+      });
+      const profile = { ...testProfile, displayName: "Keyboard Draft retry" };
+      await gateway.setMethodResponse("users.self", { profile });
+      await gateway.resolveDeferred("users.setDisplayName", { profile });
+      await expect(save).toHaveText("Save");
+      await expect(input).toHaveValue(profile.displayName);
+      await expect(save).toBeDisabled();
+      expect(await gateway.getRequests("users.setDisplayName")).toHaveLength(2);
+    });
+  });
+
   it("shows the personal connection context without exposing credential fields", async () => {
     await suite.withPage(undefined, async ({ page }) => {
       await openProfilePage(page);
@@ -155,20 +198,9 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
       const el = (selector: string) => page.locator(selector);
 
-      await page.route(new URL(profilePath, suite.server.baseUrl).href, async (route) => {
-        const response = await route.fetch();
-        const body = await response.text();
-        await route.fulfill({
-          body,
-          headers: {
-            ...response.headers(),
-            "content-security-policy": buildControlUiCspHeader({
-              inlineScriptHashes: computeInlineScriptHashes(body),
-            }),
-          },
-          response,
-        });
-      });
+      await page.route(new URL(profilePath, suite.server.baseUrl).href, (route) =>
+        fulfillWithControlUiCsp(route),
+      );
       const gatewayUrl = suite.server.baseUrl.replace(/^http/u, "ws").replace(/\/$/u, "");
       await page.addInitScript((sameOriginGatewayUrl) => {
         (
@@ -245,6 +277,7 @@ suite.define(() => {
       await page.goto(new URL(profilePath, suite.server.baseUrl).href);
       const chooser = page.locator(".identity-avatar-control > button");
       await expect(chooser).toHaveAccessibleName("Choose image");
+      await expect(chooser).toBeEnabled();
       await chooser.focus();
       await expect(chooser).toBeFocused();
       const [fileChooser] = await Promise.all([

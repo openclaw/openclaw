@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -254,15 +255,9 @@ describe("createHooksRequestHandler timeout status mapping", () => {
     const server = createServer((req, res) => {
       tasks.push(handler(req, res));
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing listener");
-    }
+    const origin = await listenLoopback(server);
     try {
-      const response = await fetch(`http://127.0.0.1:${address.port}/hooks/wake`, {
+      const response = await fetch(`${origin}/hooks/wake`, {
         method: "POST",
         headers: { Authorization: "Bearer hook-secret" },
         body: "{}",

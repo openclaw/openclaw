@@ -82,13 +82,7 @@ function fixture() {
     } as never);
     return respond.mock.calls[0];
   };
-  return {
-    ...f,
-    service,
-    open,
-    environments,
-    invoke,
-  };
+  return { ...f, service, open, environments, invoke };
 }
 
 describe("session-scoped attached worker portals", () => {

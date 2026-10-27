@@ -40,7 +40,10 @@ import {
   seedTranscriptRows,
 } from "./server.sessions.compaction-fixtures.test-support.js";
 import { embeddedRunMock, onceMessage, agentDiscoveryMock, rpcReq } from "./test-helpers.js";
-import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
+import {
+  createClaudeCliRegistrationFixture,
+  getTestPluginRegistry,
+} from "./test-helpers.plugin-registry.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 import { testConfigRoot } from "./test-helpers.runtime-state.js";
 import { holdCompaction } from "./test/server-sessions-compaction.test-helpers.js";
@@ -419,16 +422,7 @@ test("sessions.compact records terminal Codex native compaction with a stale neg
 
 test("sessions.compact targets the persisted native CLI session", async () => {
   const pluginRegistry = getTestPluginRegistry();
-  pluginRegistry.cliBackends.push({
-    pluginId: "anthropic",
-    source: "test",
-    backend: {
-      id: "claude-cli",
-      modelProvider: "anthropic",
-      config: { command: "claude" },
-      bundleMcp: false,
-    },
-  });
+  pluginRegistry.cliBackends.push(createClaudeCliRegistrationFixture());
   setActivePluginRegistry(pluginRegistry);
   await createCompactionSession("sess-claude", {
     totalLines: 2,

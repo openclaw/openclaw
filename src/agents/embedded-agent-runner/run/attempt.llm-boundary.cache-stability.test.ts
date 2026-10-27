@@ -8,6 +8,7 @@ import {
   registerParityHostLifecycle,
 } from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
 import { createOpenAIResponsesTransportStreamFn } from "../../../../packages/ai/src/transports/openai-responses-client.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -497,14 +498,8 @@ describe("prompt-cache boundary regressions", () => {
       storePath: path.join(dir, "sessions.json"),
     };
     const input = { text: "describe this", timestamp: TS, idempotencyKey: "cache-99495:user" };
-    let resolveMedia!: (input: UserTurnInput) => void;
-    let markStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    const media = new Promise<UserTurnInput>((resolve) => {
-      resolveMedia = resolve;
-    });
+    const { promise: started, resolve: markStarted } = createDeferred();
+    const { promise: media, resolve: resolveMedia } = createDeferred<UserTurnInput>();
     const recorder = createUserTurnTranscriptRecorder({
       input,
       target,

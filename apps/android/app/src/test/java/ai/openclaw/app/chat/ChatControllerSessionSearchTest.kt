@@ -219,7 +219,7 @@ class ChatControllerSessionSearchTest {
 
       assertEquals(
         expectedPinned,
-        sidebarSessionPresentation(rows, knownGroups = emptyList(), expanded = true).pinned.map { it.key }.toSet(),
+        sidebarSessionPresentation(rows, knownGroups = emptyList()).pinned.map { it.key }.toSet(),
       )
       assertEquals(
         expectedPinned + "agent:main:dashboard:current",
@@ -243,7 +243,7 @@ class ChatControllerSessionSearchTest {
       for (selectedKey in listOf("agent:main:cron:daily", "agent:main:system-probe", "agent:main:dashboard:archived")) {
         assertEquals(
           expectedPinned + selectedKey,
-          sidebarSessionPresentation(rows, knownGroups = emptyList(), expanded = true, currentSessionKey = selectedKey).pinned.map { it.key }.toSet(),
+          sidebarSessionPresentation(rows, knownGroups = emptyList(), currentSessionKey = selectedKey).pinned.map { it.key }.toSet(),
         )
         assertEquals(
           expectedPinned + selectedKey + "agent:main:dashboard:current",
@@ -275,7 +275,7 @@ class ChatControllerSessionSearchTest {
       )
       assertEquals(
         expectedPinned - "agent:main:subject",
-        sidebarSessionPresentation(controller.sessions.value, knownGroups = emptyList(), expanded = true).pinned.map { it.key }.toSet(),
+        sidebarSessionPresentation(controller.sessions.value, knownGroups = emptyList()).pinned.map { it.key }.toSet(),
       )
       assertEquals(14, rows.count { it.pinned == true })
       assertEquals(14, controller.sessions.value.count { it.pinned == true })

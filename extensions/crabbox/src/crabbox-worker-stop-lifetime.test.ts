@@ -9,6 +9,7 @@ import { stopCrabboxLease, type CrabboxCommandRunner } from "./crabbox-worker-co
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import { CRABBOX_STOP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 import {
+  checkpointResult,
   createWarmProvider,
   LEASE_ID,
   PROFILE,
@@ -32,6 +33,112 @@ const HELD_STOP = `
 
 const azureStop = { binary: "crabbox", id: LEASE_ID, provider: "azure", warn: vi.fn() };
 const azureStopArgs = ["crabbox", "stop", "--provider", "azure", "--id", LEASE_ID];
+
+it.each(["capture", "stop", "retirement"] as const)(
+  "interrupts destroy during %s after child settlement and preserves restart cleanup",
+  async (phase) => {
+    const marker = path.join(tempDirs.make("openclaw-crabbox-interrupt-"), "release");
+    const started = createDeferred<void>();
+    const controller = new AbortController();
+    const interrupted = new Error("Worker reconciliation interrupted by shutdown");
+    let commandSignal: AbortSignal | undefined;
+    let childResult: SpawnResult | undefined;
+    let armed = false;
+    let captures = 0;
+    const { provider, calls } = createWarmProvider(async ({ argv, options }) => {
+      if (phase === "retirement" && argv[1] === "checkpoint" && argv[2] === "create") {
+        return checkpointResult(
+          `chk_cleanup_${++captures}`,
+          argv[argv.indexOf("--id") + 1]!,
+          "completed",
+        );
+      }
+      const matches =
+        phase === "stop"
+          ? argv[1] === "stop"
+          : argv[1] === "checkpoint" && argv[2] === (phase === "capture" ? "create" : "delete");
+      if (!armed || !matches) {
+        return undefined;
+      }
+      commandSignal = options.signal;
+      childResult = await runCommandWithTimeout([process.execPath, "-e", HELD_STOP, marker], {
+        ...options,
+        onOutputChunk: (chunk, stream) => {
+          if (stream === "stdout" && chunk.toString() === "ready") {
+            started.resolve();
+          }
+        },
+      });
+      return childResult;
+    });
+    let lease = await provisionWarmProfile(provider);
+    if (phase === "retirement") {
+      await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+      lease = await provisionWarmProfile(provider, PROFILE, "shutdown-retirement");
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 86_400_000);
+    }
+    const store = openWarmImageStore();
+    const owner = store.entries()[0]!;
+    armed = true;
+    const operation = provider
+      .destroy({
+        leaseId: lease.leaseId,
+        profile: { ...PROFILE, warmImage: phase !== "stop" },
+        signal: controller.signal,
+      })
+      .then(
+        () => ({ success: true }),
+        (error: unknown) => ({ error }),
+      );
+    try {
+      await Promise.race([
+        started.promise,
+        operation.then(() => {
+          throw new Error("destroy exited before child readiness");
+        }),
+      ]);
+      controller.abort(interrupted);
+      expect(commandSignal?.aborted).toBe(true);
+      expect(await operation).toEqual({ error: interrupted });
+      expect(childResult?.termination).toBe("signal");
+      if (phase === "retirement") {
+        expect(store.lookup(owner.key)?.allocations[lease.leaseId]).toBeUndefined();
+        expect(store.lookup(owner.key)?.operation).toEqual({
+          type: "retire",
+          checkpointId: "chk_cleanup_1",
+        });
+        expect(calls.findLastIndex(({ argv }) => argv[2] === "delete")).toBeGreaterThan(
+          calls.findLastIndex(({ argv }) => argv[1] === "stop"),
+        );
+      } else {
+        expect(store.lookup(owner.key)?.allocations[lease.leaseId]).toBeDefined();
+      }
+      if (phase === "capture") {
+        expect(store.lookup(owner.key)?.operation).toMatchObject({
+          type: "capture",
+          phase: "uncertain",
+        });
+        expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+      }
+    } finally {
+      fs.writeFileSync(`${marker}.tmp`, "0");
+      fs.renameSync(`${marker}.tmp`, marker);
+      await operation;
+    }
+    armed = false;
+    if (phase === "retirement") {
+      await provider.maintain!({
+        profiles: [PROFILE],
+        signal: new AbortController().signal,
+        assertCurrent() {},
+      });
+      expect(store.lookup(owner.key)?.operation).toBeUndefined();
+    } else {
+      await provider.destroy({ leaseId: lease.leaseId, profile: { ...PROFILE, warmImage: false } });
+    }
+    expect(store.lookup(owner.key)?.allocations[lease.leaseId]).toBeUndefined();
+  },
+);
 
 it.each(
   [60_000, CRABBOX_STOP_TIMEOUT_MS].flatMap((elapsedMs) =>

@@ -324,6 +324,7 @@ async function renderBoundedDiagnostics(
           affectedKey,
           ...(fact.location ? { location: fact.location } : {}),
           ...(fact.destination ? { destination: fact.destination } : {}),
+          ...(fact.leaseLoss ? { leaseLoss: fact.leaseLoss } : {}),
           ...(!refused ? { message: publicMessage } : {}),
         };
       }),

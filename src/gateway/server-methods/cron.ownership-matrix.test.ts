@@ -7,8 +7,7 @@ import {
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { CronService } from "../../cron/service.js";
-import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
+import { createCronStoreHarness } from "../../cron/service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import {
@@ -16,12 +15,12 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createCronCreatorAuthorityRunScope,
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
 } from "../cron-creator-authority-grant.js";
+import { createReadService } from "./cron-read.test-support.js";
 import {
   cronAccountPolicy as policy,
   expectCronReply,
@@ -262,13 +261,10 @@ describe("cron ownership access matrix", () => {
           }
           await saveCronStore(storePath, { version: 1, jobs: [seeded] });
           const before = (await loadCronStore(storePath)).jobs[0];
-          const cron = new CronService({
-            scheduler: createTestGatewayScheduler(),
-            nowMs: () => Date.now(),
+          const cron = createReadService({
             storePath,
             cronEnabled: false,
             defaultAgentId: "ops",
-            log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
             runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
           });

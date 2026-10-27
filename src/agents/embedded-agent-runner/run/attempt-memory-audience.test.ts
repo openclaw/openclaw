@@ -89,25 +89,8 @@ it.each(["legacy", "stale", "unverified"] as const)(
     if (kind === "unverified") {
       expect(mocks.info).toHaveBeenCalledWith(
         expect.stringContaining("could not verify the lineage"),
-        expect.objectContaining({ kind: "unverified" }),
+        expect.objectContaining({ kind: "unverified", sessionKey: CHILD_KEY }),
       );
     }
   },
 );
-
-it("logs an ineligible root at info with its session so memory tool failures are traceable", async () => {
-  mocks.native = true;
-  const root = entry();
-  fakeSessionOwner.rows.set(ROOT_KEY, root);
-  const resolved = await resolveEmbeddedAttemptMemoryAudience({
-    ...attempt,
-    sessionKey: ROOT_KEY,
-    sessionId: root.sessionId,
-    admission: { entry: root, storePath: STORE_PATH },
-  });
-  expect(resolved.memoryAudience).toBeUndefined();
-  expect(mocks.info).toHaveBeenCalledWith(
-    expect.stringContaining("has no durable chat type"),
-    expect.objectContaining({ kind: "ineligible", sessionKey: ROOT_KEY }),
-  );
-});

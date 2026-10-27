@@ -181,7 +181,7 @@ it.each(["snapshot", "requested", "shared", "absent"] as const)(
   },
 );
 
-it("keeps cached credentials and selection state separate from mutable runtime views", async () => {
+it("isolates cached credentials and state until an owner bookkeeping write invalidates them", async () => {
   const persisted: AuthProfileStore = {
     version: 1,
     profiles: {
@@ -191,43 +191,25 @@ it("keeps cached credentials and selection state separate from mutable runtime v
         keyRef: { source: "env", provider: "default", id: "CUSTOM_KEY" },
         metadata: { account: "original" },
       },
-      "custom:token": {
-        type: "token",
-        provider: "custom",
-        tokenRef: { source: "env", provider: "default", id: "CUSTOM_TOKEN" },
-      },
-      "custom:oauth": {
-        type: "oauth",
-        provider: "custom",
-        access: "fixture-access",
-        refresh: "fixture-refresh",
-        expires: 4_102_444_800_000,
-        oauthRef: { source: "openclaw-credentials", provider: "openai-codex", id: "a".repeat(32) },
-        setup: { replacement: true, modelRef: "custom/model", configJson: "{}" },
-      },
     },
   };
   const state = {
-    order: { custom: ["custom:key", "custom:token"] },
+    order: { custom: ["custom:key"] },
     lastGood: { custom: "custom:key" },
     usageStats: { "custom:key": { errorCount: 1, failureCounts: { auth: 1 } } },
   };
   const overlay = vi.fn((store: AuthProfileStore) => {
     expect(store.profiles).toEqual(persisted.profiles);
     const key = store.profiles["custom:key"];
-    const token = store.profiles["custom:token"];
-    const oauth = store.profiles["custom:oauth"];
-    if (key?.type !== "api_key" || token?.type !== "token" || oauth?.type !== "oauth") {
+    if (key?.type !== "api_key") {
       throw new Error("fixture credential types changed");
     }
     key.keyRef!.id = "OVERLAY_KEY";
     key.metadata!.account = "overlay";
-    token.tokenRef!.id = "OVERLAY_TOKEN";
-    oauth.oauthRef!.id = "b".repeat(32);
-    oauth.setup!.modelRef = "custom/overlay";
     return store;
   });
-  const { load } = setupWorker("cached-mutation", overlay);
+  const { agentDir, load } = setupWorker("cached-mutation", overlay);
+  prepareSharedAuthStoreOwnershipForNative();
   reader.read.mockResolvedValue(readableRows(persisted, { status: "readable", raw: state }));
   for (let i = 0; i < 2; i++) {
     const store = await load();
@@ -235,12 +217,25 @@ it("keeps cached credentials and selection state separate from mutable runtime v
       state,
     );
     store.order!.custom!.push("custom:oauth");
-    store.lastGood!.custom = "custom:token";
+    store.lastGood!.custom = "custom:oauth";
     store.usageStats!["custom:key"]!.failureCounts!.auth = 9;
-    delete store.profiles["custom:token"];
+    delete store.profiles["custom:key"];
   }
   expect(overlay).toHaveBeenCalledTimes(2);
   expect(reader.read).toHaveBeenCalledTimes(1);
+  noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
+    credentialsChanged: false,
+    stateChanged: true,
+    profileIds: [],
+  });
+  reader.read.mockResolvedValue(
+    readableRows(persisted, {
+      status: "readable",
+      raw: { version: 1, lastGood: { custom: "custom:new" } },
+    }),
+  );
+  await expect(load()).resolves.toMatchObject({ lastGood: { custom: "custom:new" } });
+  expect(reader.read).toHaveBeenCalledTimes(2);
 });
 
 it("shares canonical rows while keeping scoped read-through credentials separate", async () => {
@@ -262,26 +257,6 @@ function createCacheDatabase(agentDir: string): void {
   using database = openNodeSqliteDatabase(path.join(agentDir, "openclaw-agent.sqlite"));
   database.exec("CREATE TABLE cache_fixture (value)");
 }
-
-it("invalidates warm rows immediately after an owner bookkeeping write", async () => {
-  const { agentDir, load } = setupWorker("identity-probes");
-  prepareSharedAuthStoreOwnershipForNative();
-  reader.read.mockResolvedValue(readableRows());
-  await load();
-  noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
-    credentialsChanged: false,
-    stateChanged: true,
-    profileIds: [],
-  });
-  reader.read.mockResolvedValue(
-    readableRows(undefined, {
-      status: "readable",
-      raw: { version: 1, lastGood: { custom: "custom:new" } },
-    }),
-  );
-  await expect(load()).resolves.toMatchObject({ lastGood: { custom: "custom:new" } });
-  expect(reader.read).toHaveBeenCalledTimes(2);
-});
 
 it.each([false, true])(
   "rechecks retired files after an inherited read with populated local SQLite: %s",

@@ -1,12 +1,6 @@
-import { note as clackNote } from "@clack/prompts";
 import { describe, expect, it } from "vitest";
 import { stripAnsi, visibleWidth } from "./ansi.js";
-import {
-  noteToStream,
-  resolveNoteColumns,
-  resolveNoteOutputColumns,
-  wrapNoteMessage,
-} from "./note.js";
+import { noteToStream, resolveNoteColumns, wrapNoteMessage } from "./note.js";
 
 describe("wrapNoteMessage", () => {
   it.each([["Unicode paragraph separator", "\u2029"]])(
@@ -49,22 +43,19 @@ describe("wrapNoteMessage", () => {
   });
 
   it("widens note output columns so clack does not re-wrap copy-sensitive lines", () => {
-    const wrapped = wrapNoteMessage(
-      [
-        "- Found 1 session lock file.",
-        "- ~/.openclaw/agents/main/sessions/9c2acae5-841f-4aea-936b-fdb513b60202.jsonl.lock pid=86519 (alive) age=2m47s stale=no",
-      ].join("\n"),
-      { columns: 80 },
-    );
+    const message = [
+      "- Found 1 session lock file.",
+      "- ~/.openclaw/agents/main/sessions/9c2acae5-841f-4aea-936b-fdb513b60202.jsonl.lock pid=86519 (alive) age=2m47s stale=no",
+    ].join("\n");
     const writes: string[] = [];
     const output = {
-      columns: resolveNoteOutputColumns(wrapped, 80),
+      columns: 80,
       write(chunk: string) {
         writes.push(chunk);
         return true;
       },
     } as unknown as NodeJS.WriteStream;
-    clackNote(wrapped, "Session locks", { output });
+    noteToStream(message, "Session locks", output);
 
     const rendered = writes.join("");
     expect(rendered).toContain(".jsonl.lock");

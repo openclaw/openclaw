@@ -12,6 +12,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -53,6 +54,8 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
   const accepted = path.join(root, "accepted-workspace");
   await Promise.all([fs.mkdir(remote), fs.mkdir(accepted)]);
   const base = await captureWorkspaceSnapshot({ root: remote, baseCommit: null });
+  // Recovery advances the accepted base before the next turn.
+  const manifests = new Map([[base.manifestRef, base.rawManifest]]);
   await fixture.seedActivePlacement("worker-turn", remote, base.manifestRef);
   const edited = createDeferred();
   const finish = createDeferred();
@@ -69,14 +72,10 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     ).appendMessageAsync(makeTextToolResult("sleep", "exec", "slept-ok", false, 1));
     edited.resolve();
     await finish.promise;
-    return {
-      stdout: "",
+    return createCommandResult({
       stderr: "worker admission deadline exceeded: Unexpected server response: 503",
       code: 1,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    };
+    });
   });
   const tunnel = fixture.createWorkerTurnTunnel({
     launchTurn,
@@ -88,10 +87,15 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
       if (source.kind !== "local") {
         throw new Error("Expected staged local result");
       }
+      const baseManifestRaw = manifests.get(baseManifestRef);
+      if (!baseManifestRaw) {
+        throw new Error("Missing captured worker workspace base manifest");
+      }
       const current = await captureWorkspaceSnapshot({
         root: remoteWorkspaceDir,
         baseCommit: null,
       });
+      manifests.set(current.manifestRef, current.rawManifest);
       const staged = await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
         request: {
           localPath: source.path,
@@ -103,7 +107,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
         },
         stagingRoot: remoteWorkspaceDir,
         currentManifestRef: current.manifestRef,
-        baseManifestRaw: base.rawManifest,
+        baseManifestRaw,
         currentManifestRaw: current.rawManifest,
       });
       return {

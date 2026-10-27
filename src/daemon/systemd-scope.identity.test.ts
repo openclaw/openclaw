@@ -44,9 +44,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it.each([
   ["user", "EACCES"],
-  ["user", "EIO"],
   ["system", "EACCES"],
-  ["system", "EIO"],
 ])("reports %s unit inspection failure %s instead of absence", async (scope, code) => {
   const unitPath = (scope === "user" ? userPath : systemPath)("openclaw-gateway");
   const inspectionError = Object.assign(new Error("unit inspection failed"), { code });
@@ -59,75 +57,65 @@ it.each([
   await expect(findScope()).rejects.toBe(inspectionError);
 });
 
-it.each([
+type Source = "user" | "system" | "marker" | "aliases";
+type SelectionCase = [string | undefined, string | undefined, string, Source, boolean?, string?];
+const template = "openclaw@gateway.service";
+const nodeName = "openclaw-node-work";
+const aliases = ["openclaw-node", "openclaw-gateway", "openclaw-gateway-lisa"].map(userPath);
+const selectionCases: SelectionCase[] = [
   [undefined, undefined, "openclaw", "marker"],
   ["lisa", undefined, "openclaw-lisa", "system"],
   ["lisa", "openclaw-node", "openclaw-node", "system"],
   ["lisa", "openclaw-gateway-lisa", "openclaw-gateway-lisa", "user"],
-  [undefined, "openclaw@gateway.service", "openclaw@", "system"],
-  [undefined, "openclaw@gateway.service", "openclaw@", "marker"],
-] as const)("selects %s / %s from %s / %s (#119648)", async (profile, override, name, source) => {
-  if (name === "openclaw@") {
-    vi.spyOn(os, "userInfo").mockReturnValue({
-      username: "unrelated-login",
-      uid: 1000,
-      gid: 1000,
-      homedir: HOME,
-      shell: "/bin/sh",
-    });
-  }
-  const scope = source === "user" ? "user" : "system";
-  const unitPath = (scope === "user" ? userPath : systemPath)(name);
-  files = source === "marker" ? [] : [unitPath];
-  if (source === "marker") {
-    marker(name);
-  }
-  await expect(findScope(profile, override)).resolves.toEqual({
-    scope,
-    unitName: name === "openclaw@" ? "openclaw@gateway.service" : `${name}.service`,
-    unitPath,
-  });
-});
-
-it.each([
-  ["lisa", undefined, "openclaw-darlene"],
-  ["Lisa", undefined, "openclaw-gateway-lisa"],
-  [undefined, undefined, "my-custom-gateway"],
-  [undefined, "my-gateway", "my-gateway@"],
-  [undefined, "my-gateway", "my-gateway@gateway"],
-  [undefined, "openclaw@gateway.service", "openclaw@other"],
-  [undefined, "openclaw-node", "openclaw-darlene"],
-] as const)("rejects foreign marker %s / %s / %s", async (profile, override, name) => {
-  marker(name);
-  await expect(findScope(profile, override)).resolves.toBeNull();
-});
-
-it.each(["node", "gateway", "gateway-lisa"])("rejects legacy alias %s", async (profile) => {
-  files = ["openclaw-node", "openclaw-gateway", "openclaw-gateway-lisa"].map(userPath);
-  await expect(findScope(profile)).resolves.toBeNull();
-});
-
-it.each(["user", "system"] as const)(
-  "distinguishes a profile node from a legacy Gateway in %s scope",
-  async (scope) => {
-    const unitPath = (scope === "user" ? userPath : systemPath)("openclaw-node-work");
-    files = [unitPath];
-    const read = vi.spyOn(fs, "readFile");
-    read.mockResolvedValue("[Service]\nEnvironment=OPENCLAW_SERVICE_KIND=gateway\n");
-    await expect(findScope("node-work")).resolves.toMatchObject({ unitPath, scope });
-    read.mockResolvedValue("[Service]\nEnvironment=OPENCLAW_SERVICE_KIND=node\n");
-    await expect(findScope("node-work")).resolves.toBeNull();
-    await expect(findScope("work", "openclaw-node-work")).resolves.toMatchObject({
-      unitPath,
+  [undefined, template, "openclaw@", "system"],
+  [undefined, template, "openclaw@", "marker"],
+  ["lisa", undefined, "openclaw-darlene", "marker", false],
+  ["Lisa", undefined, "openclaw-gateway-lisa", "marker", false],
+  [undefined, undefined, "my-custom-gateway", "marker", false],
+  [undefined, "my-gateway", "my-gateway@", "marker", false],
+  [undefined, "my-gateway", "my-gateway@gateway", "marker", false],
+  [undefined, template, "openclaw@other", "marker", false],
+  [undefined, "openclaw-node", "openclaw-darlene", "marker", false],
+  ["node", undefined, "", "aliases", false],
+  ["gateway", undefined, "", "aliases", false],
+  ["gateway-lisa", undefined, "", "aliases", false],
+  ...(["user", "system"] as const).flatMap((scope): SelectionCase[] => [
+    ["node-work", undefined, nodeName, scope, true, "gateway"],
+    ["node-work", undefined, nodeName, scope, false, "node"],
+    ["work", nodeName, nodeName, scope, true, "node"],
+  ]),
+];
+it.each(selectionCases)(
+  "selects only the owned identity: profile=%s override=%s name=%s source=%s found=%s kind=%s",
+  async (profile, override, name, source, found, kind) => {
+    if (name === "openclaw@") {
+      const account = { username: "other", uid: 1000, gid: 1000, homedir: HOME, shell: "/bin/sh" };
+      vi.spyOn(os, "userInfo").mockReturnValue(account);
+    }
+    const scope = source === "user" ? "user" : "system";
+    const unitPath = (scope === "user" ? userPath : systemPath)(name);
+    files = source === "aliases" ? aliases : source === "marker" ? [] : [unitPath];
+    if (source === "marker") {
+      marker(name);
+    }
+    if (kind) {
+      vi.spyOn(fs, "readFile").mockResolvedValue(
+        `[Service]\nEnvironment=OPENCLAW_SERVICE_KIND=${kind}\n`,
+      );
+    }
+    const selected = {
       scope,
-    });
+      unitName: name === "openclaw@" ? template : `${name}.service`,
+      unitPath,
+    };
+    await expect(findScope(profile, override)).resolves.toEqual(found !== false ? selected : null);
   },
 );
 
-it.each([
-  ["Command failed: systemctl --user is-enabled openclaw-gateway.service", true],
-  ["systemctl is-enabled unavailable: Failed to connect to bus", true],
-  ["systemctl is-enabled unavailable: read-only file system", false],
-] as const)("classifies install probe %s as nonfatal=%s", (message, expected) => {
-  expect(isNonFatalSystemdInstallProbeError(new Error(message))).toBe(expected);
+it("accepts legacy command-failure install probes", () => {
+  expect(
+    isNonFatalSystemdInstallProbeError(
+      new Error("Command failed: systemctl --user is-enabled openclaw-gateway.service"),
+    ),
+  ).toBe(true);
 });

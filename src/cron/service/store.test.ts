@@ -59,7 +59,7 @@ describe("cron service store seam coverage", () => {
       invalidConfigRows: [],
     });
     const read = vi
-      .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobs")
+      .spyOn(cronStoreModule, "loadCronJobsStoreWithConfigJobsByKey")
       .mockImplementationOnce(async () => {
         cronStoreModule.noteCronJobsStoreCommit(storePath);
         return loaded(first);
@@ -283,7 +283,7 @@ describe("cron service store seam coverage", () => {
     const before = readRows();
     const onEvent = vi.fn();
     const state = createStoreTestState(storePath, onEvent);
-    vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision").mockRejectedValueOnce(
+    vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevisionByKey").mockRejectedValueOnce(
       new Error("quarantine unavailable"),
     );
 

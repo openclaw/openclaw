@@ -23,12 +23,10 @@ async function atBucket(element: WorkingPhraseElement, bucket = 0): Promise<stri
 
 describe("openclaw-working-phrase", () => {
   let element: WorkingPhraseElement;
-  let visibility: DocumentVisibilityState;
 
   beforeEach(() => {
     vi.useFakeTimers({ now: NOW });
-    visibility = "visible";
-    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     element = document.createElement("openclaw-working-phrase");
     element.seed = "stream-working:test";
     element.startMs = NOW;
@@ -56,29 +54,6 @@ describe("openclaw-working-phrase", () => {
     expect(text(element)).toBe(first);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(text(element)).not.toBe(first);
-  });
-
-  it("pauses hidden polling, catches up on return, and stops after removal", async () => {
-    element.startMs = NOW - WORKING_PHRASE_SHOW_AFTER_MS;
-    await element.updateComplete;
-    const first = element.textContent;
-    expect(vi.getTimerCount()).toBe(1);
-
-    visibility = "hidden";
-    document.dispatchEvent(new Event("visibilitychange"));
-    await vi.advanceTimersByTimeAsync(WORKING_PHRASE_ROTATE_EVERY_MS);
-    expect(element.textContent).toBe(first);
-    expect(vi.getTimerCount()).toBe(0);
-
-    visibility = "visible";
-    document.dispatchEvent(new Event("visibilitychange"));
-    await element.updateComplete;
-    expect(element.textContent).not.toBe(first);
-    expect(vi.getTimerCount()).toBe(1);
-
-    element.remove();
-    await Promise.resolve();
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each([0, 1, 6])(

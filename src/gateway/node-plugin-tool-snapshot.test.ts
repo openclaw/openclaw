@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/index.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
+  listConnectedNodePluginTools,
   normalizeNodePluginToolDescriptors,
+  removeConnectedNodePluginTools,
+  replaceConnectedNodePluginTools,
 } from "./node-plugin-tool-snapshot.js";
 
 function descriptor(name: string, command = "demo.echo"): NodePluginToolDescriptor {
@@ -34,6 +37,23 @@ function registered(agentTool: { name: string; description: string; parameters?:
 }
 
 describe("normalizeNodePluginToolDescriptors", () => {
+  it("returns independently ordered lists without changing published node tools", () => {
+    const tools = Object.freeze([
+      { descriptor: descriptor("z_tool"), registered: false },
+      { descriptor: descriptor("a_tool"), registered: true },
+    ]);
+    replaceConnectedNodePluginTools({ nodeId: "snapshot-test", tools });
+    try {
+      const listed = listConnectedNodePluginTools();
+      expect(listed.map((tool) => tool.descriptor.name)).toEqual(["a_tool", "z_tool"]);
+      listed.pop();
+      expect(listConnectedNodePluginTools()).toHaveLength(2);
+      expect(tools.map((tool) => tool.descriptor.name)).toEqual(["z_tool", "a_tool"]);
+    } finally {
+      removeConnectedNodePluginTools("snapshot-test");
+    }
+  });
+
   it("trusts unregistered descriptors inside the approved command surface", () => {
     const tools = normalize([descriptor("demo_echo"), descriptor("demo_blocked", "demo.blocked")]);
     expect(tools.map((tool) => tool.descriptor.name)).toEqual(["demo_echo"]);

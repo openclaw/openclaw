@@ -221,32 +221,26 @@ describe("anonymous telemetry", () => {
   });
 
   it.each([
-    { id: "bundled-plugin", origin: "bundled" as const, expected: ["bundled-plugin"] },
-    {
-      id: "official-plugin",
-      origin: "global" as const,
-      trustedOfficialInstall: true,
-      expected: ["official-plugin"],
+    [{ id: "bundled-plugin", origin: "bundled" }, ["bundled-plugin"]],
+    [
+      { id: "official-plugin", origin: "global", trustedOfficialInstall: true },
+      ["official-plugin"],
+    ],
+    [
+      { id: "opencode", origin: "workspace", packageName: "@openclaw/opencode-provider" },
+      ["opencode"],
+    ],
+    [{ id: "opencode", origin: "workspace", packageName: "@acme/private" }, []],
+  ] satisfies [Parameters<typeof createPluginRecord>[0], string[]][])(
+    "reports only a public identity for %j",
+    async (plugin, expected) => {
+      installPluginRegistry(plugin);
+      const payload = await payloadFor();
+      expect(payload.features.plugins).toEqual(expected);
+      expect(payload.features.pluginsEnabled).toBe(1);
+      expect(JSON.stringify(payload)).not.toContain("@acme/private");
     },
-    {
-      id: "opencode",
-      origin: "workspace" as const,
-      packageName: "@openclaw/opencode-provider",
-      expected: ["opencode"],
-    },
-    {
-      id: "opencode",
-      origin: "workspace" as const,
-      packageName: "@acme/private",
-      expected: [],
-    },
-  ])("reports only a public identity for $id from $origin", async ({ expected, ...plugin }) => {
-    installPluginRegistry(plugin);
-    const payload = await payloadFor();
-    expect(payload.features.plugins).toEqual(expected);
-    expect(payload.features.pluginsEnabled).toBe(1);
-    expect(JSON.stringify(payload)).not.toContain("@acme/private");
-  });
+  );
 
   it("never consults the hosted catalog when reporting private plugin identities", async () => {
     const hostedCatalog = vi

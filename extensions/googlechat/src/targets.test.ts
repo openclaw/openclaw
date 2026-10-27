@@ -1,5 +1,6 @@
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   downloadGoogleChatMedia,
@@ -176,24 +177,37 @@ it("classifies current and legacy space metadata through the group boundary", ()
   expect(isGoogleChatGroupSpace({})).toBe(true);
 });
 describe("outbound session routing", () => {
-  it("classifies API space type SPACE", async () => {
-    const fetchMock = stubResponse(jsonResponse({ name: "spaces/AAA", spaceType: "SPACE" }));
-    const route = await sessionRoute("googlechat:spaces/AAA");
+  it.each([
+    ["googlechat:spaces/AAA", "spaces/AAA", "SPACE", "group", "/spaces/AAA"],
+    [
+      "users/alice",
+      "spaces/DM-AAA",
+      "DIRECT_MESSAGE",
+      "direct",
+      "/spaces:findDirectMessage?name=users%2Falice",
+    ],
+  ] as const)(
+    "classifies %s using one metadata request",
+    async (target, name, spaceType, kind, url) => {
+      const fetchMock = stubResponse(jsonResponse({ name, spaceType }));
+      const route = await sessionRoute(target);
 
-    expect(route).toMatchObject({
-      peer: { kind: "group", id: "spaces/AAA" },
-      chatType: "group",
-      from: "googlechat:spaces/AAA",
-      to: "spaces/AAA",
-    });
-    expect(fetchMock).toHaveBeenCalledWith("https://chat.googleapis.com/v1/spaces/AAA", {
-      method: "GET",
-      headers: {
-        Authorization: "Bearer token",
-        "Content-Type": "application/json",
-      },
-    });
-  });
+      expect(route).toMatchObject({
+        peer: { kind, id: name },
+        chatType: kind,
+        from: `googlechat:${name}`,
+        to: name,
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledWith(`https://chat.googleapis.com/v1${url}`, {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer token",
+          "Content-Type": "application/json",
+        },
+      });
+    },
+  );
 
   it("rejects an unclassified space response", async () => {
     stubResponse(jsonResponse({ name: "spaces/AAA" }));
@@ -515,30 +529,19 @@ describe("verifyGoogleChatRequest", () => {
   it("caps non-OK sendMessage error bodies before formatting the API error", async () => {
     const chunk = new TextEncoder().encode("x".repeat(1024 * 1024));
     const totalBytes = 32 * chunk.length;
-    const streamed = { bytesPulled: 0, canceled: false };
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: chunk.length,
+      chunk,
+    });
     const release = guardedResponse(
-      new Response(
-        new ReadableStream<Uint8Array>({
-          pull(controller) {
-            if (streamed.bytesPulled >= totalBytes) {
-              controller.close();
-              return;
-            }
-            streamed.bytesPulled += chunk.length;
-            controller.enqueue(chunk);
-          },
-          cancel() {
-            streamed.canceled = true;
-          },
-        }),
-        { status: 500, statusText: "Internal Server Error" },
-      ),
+      new Response(streamed.response.body, { status: 500, statusText: "Internal Server Error" }),
     );
 
     await expect(send()).rejects.toThrow(/^Google Chat API 500: x+/);
 
-    expect(streamed.canceled).toBe(true);
-    expect(streamed.bytesPulled).toBeLessThan(totalBytes);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(streamed.getReadCount() * chunk.length).toBeLessThan(totalBytes);
     expect(release).toHaveBeenCalledOnce();
   });
 });

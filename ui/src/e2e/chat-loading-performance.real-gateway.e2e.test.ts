@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { persistColdLoadWarmState } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
 import { appendTranscriptMessages } from "../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
@@ -14,8 +16,11 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { installHistoryPaginationProbe } from "./chat-history-pagination-probe.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -35,11 +40,16 @@ type RpcMetric = {
   sessionKey?: string;
   agentId?: string;
   shortId?: string;
+  resolveParams?: Record<string, unknown>;
   limit?: number;
   maxBytes?: number;
   offset?: number;
   messages?: number;
   historyBytes?: number;
+  initialHistory?: boolean;
+  cursorPresent?: boolean;
+  historyKind?: "window" | "delta" | "reset";
+  historyOk?: boolean;
   resolvedKey?: string;
   resolvedAgentId?: string;
   resolutionOk?: boolean;
@@ -58,6 +68,12 @@ const selectRpc = (metrics: readonly RpcMetric[], method: string, sessionKey?: s
   metrics.filter(
     (metric) =>
       metric.method === method && (sessionKey === undefined || metric.sessionKey === sessionKey),
+  );
+const selectStartupHistory = (metrics: readonly RpcMetric[], sessionKey: string) =>
+  metrics.filter(
+    (metric) =>
+      (metric.method === "chat.startup" || metric.initialHistory) &&
+      metric.sessionKey === sessionKey,
   );
 const redactFixtureTokens = (text: string, owner: OpenClawTestInstance) =>
   [owner.gatewayToken, owner.hookToken].reduce(
@@ -139,18 +155,6 @@ suite.define(() => {
       }
       return JSON.parse(result.stdout) as Record<string, unknown>;
     };
-    const call = (method: string, params: Record<string, unknown> = {}) =>
-      cliJson(["gateway", "call", method, "--params", JSON.stringify(params), "--json"]);
-    const syntheticViewer = await call("users.list");
-    expect(
-      Array.isArray(syntheticViewer.profiles) &&
-        syntheticViewer.profiles.some(
-          (profile) =>
-            isRecord(profile) &&
-            profile.id === "gateway-owner" &&
-            profile.displayName === "Synthetic Viewer",
-        ),
-    ).toBe(true);
     const sessions = [
       { key: selectedKey, label: "Synthetic loading proof", count: transcriptLength },
       { key: homeKey, label: "Synthetic Home", count: transcriptLength },
@@ -190,6 +194,16 @@ suite.define(() => {
           },
         );
         setupClient = client;
+        const syntheticViewer = await client.request("users.list", {}, { signal });
+        expect(
+          Array.isArray(syntheticViewer.profiles) &&
+            syntheticViewer.profiles.some(
+              (profile) =>
+                isRecord(profile) &&
+                profile.id === "gateway-owner" &&
+                profile.displayName === "Synthetic Viewer",
+            ),
+        ).toBe(true);
         for (const session of sessions) {
           signal.throwIfAborted();
           const created = await client.request(
@@ -213,16 +227,11 @@ suite.define(() => {
             {
               config,
               messages: Array.from({ length: session.count }, (_, index) => ({
-                message: {
-                  role: index % 2 === 0 ? "user" : "assistant",
-                  content: [
-                    {
-                      type: "text",
-                      text: `${session.label} message ${index + 1}.\n\n${"Synthetic transcript content for loading and pagination. ".repeat(72)}`,
-                    },
-                  ],
-                  timestamp: 1_780_000_000_000 + index * 1000,
-                },
+                message: chatMessage(
+                  index % 2 === 0 ? "user" : "assistant",
+                  `${session.label} message ${index + 1}.\n\n${"Synthetic transcript content for loading and pagination. ".repeat(72)}`,
+                  { timestamp: 1_780_000_000_000 + index * 1000 },
+                ),
               })),
             },
           );
@@ -253,9 +262,11 @@ suite.define(() => {
           // Measure short-link resolution, not cached-roster route recovery. Keep
           // restored Home preferences; clear identity admission in each new document
           // because the previous document can persist its boot record on pagehide.
-          for (const key of Object.keys(localStorage)) {
-            if (key.startsWith("openclaw.control.bootRecord.v1:")) {
-              localStorage.removeItem(key);
+          if (sessionStorage.getItem("loading-proof-warm-reload") !== "true") {
+            for (const key of Object.keys(localStorage)) {
+              if (key.startsWith("openclaw.control.bootRecord.v1:")) {
+                localStorage.removeItem(key);
+              }
             }
           }
           window.localStorage.setItem(
@@ -279,11 +290,11 @@ suite.define(() => {
               );
             })
             .toBe(true);
-        const waitForStartupCommit = async (sessionKey: string, pane: Locator) => {
+        const waitForStartupCommit = async (sessionKey: string, pane: Locator, after = 0) => {
           await expect
             .poll(() =>
-              selectRpc(rpc, "chat.startup", sessionKey).some(
-                (metric) => metric.receivedMs !== undefined,
+              selectStartupHistory(rpc.slice(after), sessionKey).some(
+                (metric) => metric.receivedMs !== undefined && metric.historyOk === true,
               ),
             )
             .toBe(true);
@@ -308,16 +319,32 @@ suite.define(() => {
               return;
             }
             const params = isRecord(frame.params) ? frame.params : {};
+            const initialHistory =
+              frame.method === "sessions.messages.subscribe" && isRecord(params.initialHistory)
+                ? params.initialHistory
+                : undefined;
+            const historyParams = initialHistory ?? params;
             const metric: RpcMetric = {
               requestId: frame.id,
               method: frame.method,
               sentMs: Date.now() - startedAt,
-              ...(typeof params.sessionKey === "string" ? { sessionKey: params.sessionKey } : {}),
+              ...(typeof params.sessionKey === "string"
+                ? { sessionKey: params.sessionKey }
+                : initialHistory && typeof params.key === "string"
+                  ? { sessionKey: params.key }
+                  : {}),
+              ...(initialHistory ? { initialHistory: true } : {}),
+              ...(initialHistory || ["chat.startup", "chat.history"].includes(frame.method)
+                ? { cursorPresent: typeof historyParams.cursor === "string" }
+                : {}),
               ...(typeof params.agentId === "string" ? { agentId: params.agentId } : {}),
               ...(typeof params.shortId === "string" ? { shortId: params.shortId } : {}),
-              ...(typeof params.limit === "number" ? { limit: params.limit } : {}),
-              ...(typeof params.maxBytes === "number" ? { maxBytes: params.maxBytes } : {}),
-              ...(typeof params.offset === "number" ? { offset: params.offset } : {}),
+              ...(frame.method === "sessions.resolve" ? { resolveParams: params } : {}),
+              ...(typeof historyParams.limit === "number" ? { limit: historyParams.limit } : {}),
+              ...(typeof historyParams.maxBytes === "number"
+                ? { maxBytes: historyParams.maxBytes }
+                : {}),
+              ...(typeof historyParams.offset === "number" ? { offset: historyParams.offset } : {}),
             };
             rpc.push(metric);
             pending.set(frame.id, metric);
@@ -338,9 +365,21 @@ suite.define(() => {
             metric.receivedMs = Date.now() - startedAt;
             metric.responseBytes = Buffer.byteLength(payload);
             const body = isRecord(frame.payload) ? frame.payload : {};
-            if (Array.isArray(body.messages)) {
-              metric.messages = body.messages.length;
-              metric.historyBytes = Buffer.byteLength(JSON.stringify(body.messages));
+            const initialHistory = isRecord(body.initialHistory) ? body.initialHistory : undefined;
+            const history = metric.initialHistory
+              ? initialHistory?.ok === true && isRecord(initialHistory.payload)
+                ? initialHistory.payload
+                : undefined
+              : body;
+            metric.historyOk = frame.ok === true && history !== undefined;
+            if (history?.kind === "delta" || history?.kind === "reset") {
+              metric.historyKind = history.kind;
+            } else if (Array.isArray(history?.messages)) {
+              metric.historyKind = "window";
+            }
+            if (Array.isArray(history?.messages)) {
+              metric.messages = history.messages.length;
+              metric.historyBytes = Buffer.byteLength(JSON.stringify(history.messages));
             }
             if (metric.method === "sessions.resolve" && typeof body.key === "string") {
               metric.resolvedKey = body.key;
@@ -399,6 +438,10 @@ suite.define(() => {
         // Freeze only completed payloads; keep the earlier visibility timings unchanged.
         await waitForStartupResponses();
         const startupMetrics = structuredClone(rpc);
+        await writeFile(
+          path.join(suite.artifactDir, "startup-rpc.json"),
+          JSON.stringify(startupMetrics, null, 2),
+        );
         const images = await page
           .locator(".sidebar-agent-card__avatar img")
           .evaluateAll((elements) =>
@@ -501,7 +544,7 @@ suite.define(() => {
           nextOffset += messages;
         }
         expect(nextOffset).toBe(transcriptLength);
-        const selectedStartup = selectRpc(startupMetrics, "chat.startup", selectedKey)[0];
+        const selectedStartup = selectStartupHistory(startupMetrics, selectedKey)[0];
         expect(selectedStartup).toBeDefined();
         expect(olderHistoryRequests(startupMetrics)).toHaveLength(0);
         const resolutions = selectRpc(startupMetrics, "sessions.resolve");
@@ -513,10 +556,10 @@ suite.define(() => {
           resolvedKey: selectedKey,
           resolvedAgentId: "main",
         });
-        expect(selectRpc(startupMetrics, "chat.startup", selectedKey)).toHaveLength(1);
+        expect(selectStartupHistory(startupMetrics, selectedKey)).toHaveLength(1);
         expect(selectedStartup?.messages).toBeLessThanOrEqual(80);
         expect(selectedStartup?.historyBytes).toBeLessThanOrEqual(256 * 1024);
-        const homeStartup = selectRpc(startupMetrics, "chat.startup", homeKey)[0];
+        const homeStartup = selectStartupHistory(startupMetrics, homeKey)[0];
         expect(homeStartup?.sentMs).toBeGreaterThanOrEqual(selectedStartup?.receivedMs ?? Infinity);
         expect(selectRpc(startupMetrics, "chat.history", homeKey)).toHaveLength(0);
         expect(selectRpc(startupMetrics, "agent.identity.get")).toHaveLength(1);
@@ -527,6 +570,131 @@ suite.define(() => {
         ).toBe(true);
         expect(images.some((image) => image.width === 128 && image.height === 128)).toBe(true);
         expect(avatarRequests).toBe(1);
+
+        await selectedPane.getByRole("button", { name: "Scroll to latest", exact: true }).click();
+        await waitForTail();
+        await page.waitForFunction(() =>
+          Object.keys(localStorage).some((key) =>
+            key.startsWith("openclaw.control.bootRecord.v1:"),
+          ),
+        );
+        const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
+          sessionKey: selectedKey,
+          sidebarView: "sessions",
+        };
+        const warmState = await page.evaluate(persistColdLoadWarmState, warmInput);
+        const storedSnapshot: unknown = warmState.storage.records.snapshots.find((record) =>
+          record.sessionKey.endsWith(`\u0000${selectedKey}`),
+        )?.snapshot;
+        const currentOwner = await evaluateControlUiContext(page, ({ gateway }) => ({
+          gatewayUrl: gateway.connection.gatewayUrl,
+          sessionKey: gateway.snapshot.sessionKey,
+          recoveryScope: gateway.snapshot.client?.recoveryScope ?? null,
+          recoveryScopeReady: gateway.snapshot.client?.recoveryScopeReady ?? false,
+          profileId: gateway.snapshot.selfUser?.id ?? null,
+        }));
+        const gatewayScope = gatewayCredentialScope(currentOwner.gatewayUrl);
+        const originScope = gatewayOriginScope(currentOwner.gatewayUrl);
+        const bootRecord: unknown = JSON.parse(
+          warmState.storage.local.find(
+            ([key]) => key === `openclaw.control.bootRecord.v1:${gatewayScope}`,
+          )?.[1] ?? "null",
+        );
+        const savedSettings: unknown = JSON.parse(
+          warmState.storage.local.find(
+            ([key]) => key === `openclaw.control.settings.v1:${originScope}`,
+          )?.[1] ?? "null",
+        );
+        const savedSelection =
+          isRecord(savedSettings) && isRecord(savedSettings.sessionsByGateway)
+            ? savedSettings.sessionsByGateway[originScope]
+            : null;
+        const cacheBeforeReload = {
+          currentSessionMatches: currentOwner.sessionKey === selectedKey,
+          savedSessionMatches:
+            isRecord(savedSelection) && savedSelection.sessionKey === selectedKey,
+          recoveryScopeReady: currentOwner.recoveryScopeReady,
+          bootScopeMatches: isRecord(bootRecord) && bootRecord.scope === gatewayScope,
+          bootOwnerMatches:
+            isRecord(bootRecord) &&
+            currentOwner.recoveryScope !== null &&
+            bootRecord.recoveryScope === currentOwner.recoveryScope,
+          bootProfileMatches:
+            isRecord(bootRecord) && bootRecord.profileId === currentOwner.profileId,
+          bootFromCurrentDocument:
+            isRecord(bootRecord) &&
+            typeof bootRecord.savedAt === "number" &&
+            bootRecord.savedAt >= startedAt,
+          messages: warmState.messages,
+          cursorPresent: isRecord(storedSnapshot) && typeof storedSnapshot.deltaCursor === "string",
+          bootRecordPresent: warmState.storage.local.some(([key]) =>
+            key.startsWith("openclaw.control.bootRecord.v1:"),
+          ),
+        };
+        await page.evaluate(() => sessionStorage.setItem("loading-proof-warm-reload", "true"));
+        const warmStart = rpc.length;
+        pending.clear();
+        startedAt = Date.now();
+        measuring = true;
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        await waitForTail();
+        await composer.waitFor();
+        await waitForStartupCommit(selectedKey, selectedPane, warmStart);
+        measuring = false;
+        const warmMessageNumbers = await selectedPane.evaluate((element) =>
+          (element as LoadingPane).state.chatMessages.map((message) =>
+            Number(JSON.stringify(message).match(/Synthetic loading proof message (\d+)\./u)?.[1]),
+          ),
+        );
+        expect(warmMessageNumbers.length).toBeGreaterThan(0);
+        expect(warmMessageNumbers.length).toBeLessThanOrEqual(transcriptLength);
+        expect(warmMessageNumbers).toEqual(
+          Array.from(
+            { length: warmMessageNumbers.length },
+            (_, index) => transcriptLength - warmMessageNumbers.length + index + 1,
+          ),
+        );
+        const warmHistory = selectStartupHistory(rpc.slice(warmStart), selectedKey);
+        recordControlUiE2eFailureFacts(page, {
+          warmCache: cacheBeforeReload,
+          warmMessages: warmMessageNumbers.length,
+          warmHistoryRequests: warmHistory.length,
+          warmHistory: warmHistory.slice(0, 3).map((metric) => ({
+            cursorPresent: metric.cursorPresent ?? false,
+            kind: metric.historyKind ?? "missing",
+            messages: metric.messages ?? null,
+            sentMs: metric.sentMs,
+            receivedMs: metric.receivedMs ?? null,
+          })),
+        });
+        await writeFile(
+          path.join(suite.artifactDir, "warm-history-payload.json"),
+          JSON.stringify(
+            {
+              transcriptLength,
+              shortLinkReload: selectStartupHistory(startupMetrics, selectedKey),
+              warmReload: {
+                pathname: new URL(page.url()).pathname,
+                cacheBeforeReload,
+                messages: warmMessageNumbers.length,
+                history: warmHistory,
+              },
+            },
+            null,
+            2,
+          ),
+        );
+        expect(warmHistory).toHaveLength(1);
+        expect(warmHistory[0]).toMatchObject({
+          cursorPresent: true,
+          historyKind: "delta",
+          messages: 0,
+        });
+        expect(warmHistory[0]?.responseBytes).toBeLessThan(
+          (selectedStartup?.responseBytes ?? 0) * 0.2,
+        );
+        expect(warmMessageNumbers).toHaveLength(cacheBeforeReload.messages);
       },
     );
   });

@@ -66,6 +66,26 @@ async function assertRequest(url: RequestInfo | URL, init?: RequestInit) {
   );
 }
 
+function mockExchange(reply: () => Response | Promise<Response> = () => Response.json(response)) {
+  const network = vi.fn<typeof fetch>(async (url, init) => {
+    await assertRequest(url, init);
+    return reply();
+  });
+  vi.stubGlobal("fetch", network);
+  return network;
+}
+
+function holdExchange() {
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
+  const network = mockExchange(async () => {
+    entered.resolve();
+    await release.promise;
+    return Response.json(response);
+  });
+  return { entered, release, network };
+}
+
 it("restores an undispatched Microsoft grant after DNS failure at the real request guard", async () => {
   const lookup = vi
     .mocked(dnsLookup)
@@ -88,27 +108,13 @@ it("restores an undispatched Microsoft grant after DNS failure at the real reque
   expect((await loadMSTeamsDelegatedTokens(params.accountId))?.refreshToken).toBe(
     original.refreshToken,
   );
-  vi.stubGlobal(
-    "fetch",
-    vi.fn<typeof fetch>(async (url, init) => {
-      await assertRequest(url, init);
-      return Response.json(response);
-    }),
-  );
+  mockExchange();
   await expect(resolveDelegatedAccessToken(params)).resolves.toBe(response.access_token);
 });
 
 describe("Teams actual delegated HTTP parser and SQLite owner", () => {
   it("coalesces callers and publishes the replacement before returning access", async () => {
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    const network = vi.fn<typeof fetch>(async (url, init) => {
-      await assertRequest(url, init);
-      entered.resolve();
-      await release.promise;
-      return Response.json(response);
-    });
-    vi.stubGlobal("fetch", network);
+    const { entered, release, network } = holdExchange();
     const first = resolveDelegatedAccessToken(params);
     await entered.promise;
     const second = resolveDelegatedAccessToken(params);
@@ -126,19 +132,11 @@ describe("Teams actual delegated HTTP parser and SQLite owner", () => {
     });
   });
 
-  it.each(["structured-rejection"] as const)("does not replay %s", async () => {
-    let consumed = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (url, init) => {
-        await assertRequest(url, init);
-        consumed += 1;
-        return Response.json({ error: { code: "invalid_grant" } });
-      }),
-    );
+  it("does not replay a structured rejection", async () => {
+    const network = mockExchange(() => Response.json({ error: { code: "invalid_grant" } }));
     await expect(resolveDelegatedAccessToken(params)).resolves.toBeUndefined();
     await expect(resolveDelegatedAccessToken(params)).resolves.toBeUndefined();
-    expect(consumed).toBe(1);
+    expect(network).toHaveBeenCalledOnce();
     expect(await loadMSTeamsDelegatedTokens(params.accountId)).toBeUndefined();
   });
 
@@ -155,8 +153,7 @@ describe("Teams actual delegated HTTP parser and SQLite owner", () => {
           ),
         ).toBeDefined();
       }
-      const network = vi.fn<typeof fetch>(async (url, init) => {
-        await assertRequest(url, init);
+      const network = mockExchange(() => {
         if (network.mock.calls.length === 1 && mode !== "crash") {
           if (mode === "lost-response") {
             throw new TypeError("synthetic lost response");
@@ -181,7 +178,6 @@ describe("Teams actual delegated HTTP parser and SQLite owner", () => {
         }
         return Response.json(response);
       });
-      vi.stubGlobal("fetch", network);
       if (mode !== "crash") {
         await expect(resolveDelegatedAccessToken(params)).resolves.toBeUndefined();
       }
@@ -196,17 +192,7 @@ describe("Teams actual delegated HTTP parser and SQLite owner", () => {
   );
 
   it("does not overwrite a newer login while the old exchange settles", async () => {
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (url, init) => {
-        await assertRequest(url, init);
-        entered.resolve();
-        await release.promise;
-        return Response.json(response);
-      }),
-    );
+    const { entered, release } = holdExchange();
     const result = resolveDelegatedAccessToken(params);
     await entered.promise;
     const newer = {

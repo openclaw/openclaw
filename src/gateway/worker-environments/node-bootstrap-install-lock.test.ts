@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as commands from "../../process/exec.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
 
 const state = vi.hoisted(() => ({ archive: "", warnings: [] as string[] }));
@@ -60,14 +61,10 @@ it.each([false, true])(
         if (!fail) {
           await fs.writeFile(path.join(options.cwd, "package-lock.json"), lock);
         }
-        return {
-          stdout: "",
+        return createCommandResult({
           stderr: fail ? "npm error code EALLOWREMOTE" : "",
           code: fail ? 1 : 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        });
       });
     const provider = createNodeBootstrapArtifactProvider({
       packageRoot: root,

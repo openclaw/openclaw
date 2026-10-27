@@ -4,7 +4,6 @@
 // cleanup, not five independent Vitest process boots.
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { afterAll, expect, it } from "vitest";
 import type { JsonTestResults } from "vitest/node";
@@ -27,7 +26,6 @@ import { solidFixtureFiles } from "./non-isolated-runner.solid-fixtures.ts";
 import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
-const require = createRequire(import.meta.url);
 const sequencerSource = `import { BaseSequencer } from "vitest/node";
 class AlphabeticalSequencer extends BaseSequencer {
   override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {
@@ -43,6 +41,11 @@ const gatewayProjects = [
     "forks",
   ],
 ] as const;
+const lifecycleMarkers = ["producer", "observer"].flatMap((generation) =>
+  ["afterAll", "resource teardown"].map(
+    (phase) => `test API lifecycle: ${generation} ${phase} passed`,
+  ),
+);
 
 function childEnv(): NodeJS.ProcessEnv {
   const env = createRunnerFixtureEnv();
@@ -135,6 +138,28 @@ const { ManualPayload, AutoPayload } = createRequire(import.meta.url)("./mock-pa
 import { expect, vi, type RunnerTestFile } from "vitest";
 const resetModules = vi.resetModules;
 export default class FixtureRunner extends Runner {
+  private readonly domImport = Promise.withResolvers<void>();
+  private readonly domCollection = Promise.withResolvers<void>();
+
+  override async onCollectStart(file: RunnerTestFile) {
+    const held = file.filepath.endsWith("09-j-test-api-mock-only.test.ts");
+    // Reproduce Vitest's unawaited queue notification without a real timer.
+    if (held) await this.domImport.promise;
+    super.onCollectStart(file);
+    if (held) this.domCollection.resolve();
+  }
+
+  override async importFile(...args: Parameters<Runner["importFile"]>) {
+    try {
+      return await super.importFile(...args);
+    } finally {
+      if (args[1] === "collect" && args[0].endsWith("09-j-test-api-mock-only.test.ts")) {
+        this.domImport.resolve();
+        await this.domCollection.promise;
+      }
+    }
+  }
+
   override async onAfterRunFiles(files: RunnerTestFile[]) {
     const generation = files.some(file => file.filepath.endsWith("99-mcp-b-retained-owner.test.ts"))
       ? "?mcp-retirement-generation"
@@ -491,23 +516,13 @@ type ChildCompletion = Pick<ChildProcess, "exitCode" | "signalCode" | "killed"> 
   output: string;
 };
 
-const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
-
-async function runFixture(root: string, signal: AbortSignal, env = childEnv()) {
+async function runFixture(root: string, args: string[], signal: AbortSignal, env = childEnv()) {
   const reportPath = path.join(root, "report.json");
   let child!: ChildProcess;
   const result = await runVitestShutdownCommand({
     bin: resolveTestNodeExecPath(),
     args: [
-      path.join(vitestPackageDir, "vitest.mjs"),
-      "run",
-      "--root",
-      root,
-      "--config",
-      path.join(root, "vitest.config.ts"),
-      "--configLoader",
-      "runner",
-      "--reporter=verbose",
+      ...args,
       "--reporter=json",
       `--reporter=${path.join(repoRoot, "scripts/lib/vitest-report-capture.mts")}`,
       `--outputFile.json=${reportPath}`,
@@ -628,16 +643,15 @@ async function assertCompletion(
       });
     }
   }
-  for (const generation of ["producer", "observer"]) {
-    expect(child.output).toContain(`test API lifecycle: ${generation} afterAll passed`);
-    expect(child.output).toContain(`test API lifecycle: ${generation} resource teardown passed`);
+  for (const marker of lifecycleMarkers) {
+    expect(child.output).toContain(marker);
   }
   expect(child.output).not.toContain("first-file");
   expect(child.output).not.toContain("multiple instances of Solid");
 }
 
 async function verifyRunnerCleanup(signal: AbortSignal) {
-  await withRunnerFixture("non-isolated-runner", async ({ root }) => {
+  await withRunnerFixture("non-isolated-runner", async ({ root, args }) => {
     const files = fixtureFiles(root);
     for (const [name, content] of Object.entries(files)) {
       await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
@@ -673,7 +687,7 @@ export default defineConfig({
       "utf8",
     );
 
-    const { child, completion, canonicalRoot, reportPath } = await runFixture(root, signal);
+    const { child, completion, canonicalRoot, reportPath } = await runFixture(root, args, signal);
     const expected = {
       root: canonicalRoot,
       pid: child.pid,
@@ -693,11 +707,9 @@ export default defineConfig({
     // Replay faults against this one completed child, not new fixture executions.
     // The same assertion path must reject incomplete proof even with a good summary.
     const capturePath = `${reportPath}.capture.json`;
-    const originals = [
-      await fs.readFile(reportPath, "utf8"),
-      await fs.readFile(capturePath, "utf8"),
-    ];
-    for (const [index, artifact] of [reportPath, capturePath].entries()) {
+    const artifacts = [reportPath, capturePath];
+    const originals = await Promise.all(artifacts.map((artifact) => fs.readFile(artifact, "utf8")));
+    for (const [index, artifact] of artifacts.entries()) {
       for (const contents of [null, "{", "null", "{}"]) {
         if (contents === null) {
           await fs.rm(artifact);
@@ -738,18 +750,13 @@ export default defineConfig({
         },
       ],
     ];
-    for (const generation of ["producer", "observer"]) {
-      for (const phase of ["afterAll", "resource teardown"]) {
-        faults.push([
-          `missing ${generation} ${phase} marker`,
-          ({ child: replayChild }) => {
-            replayChild.output = replayChild.output.replace(
-              `test API lifecycle: ${generation} ${phase} passed`,
-              "",
-            );
-          },
-        ]);
-      }
+    for (const marker of lifecycleMarkers) {
+      faults.push([
+        `missing ${marker}`,
+        ({ child: replayChild }) => {
+          replayChild.output = replayChild.output.replace(marker, "");
+        },
+      ]);
     }
     for (const [label, mutate] of faults) {
       const replay: Replay = {
@@ -774,7 +781,7 @@ it("cleans every shared runner surface between files", (context) => {
 });
 
 async function verifyGatewayWorkerLifetimes(signal: AbortSignal) {
-  await withRunnerFixture("gateway-worker-lifetimes", async ({ root }) => {
+  await withRunnerFixture("gateway-worker-lifetimes", async ({ root, args }) => {
     await fs.writeFile(path.join(root, "threads-events.log"), "");
     await fs.writeFile(path.join(root, "provenance-events.log"), "");
     const files = {
@@ -827,7 +834,12 @@ export default defineConfig({
       OPENCLAW_VITEST_MAX_WORKERS: "1",
       GATEWAY_LIFETIME_PROBE_ROOT: root,
     };
-    const { child, completion, canonicalRoot, reportPath } = await runFixture(root, signal, env);
+    const { child, completion, canonicalRoot, reportPath } = await runFixture(
+      root,
+      args,
+      signal,
+      env,
+    );
     expect(completion, completion.output).toMatchObject({
       code: 0,
       exitCode: 0,

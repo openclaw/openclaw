@@ -212,17 +212,7 @@ async function runFixture(fixture: WireFixture) {
 
   try {
     if (fixture.entryPoint === "speech") {
-      const result = await buildMinimaxSpeechProvider({
-        isProviderAuthProfileConfigured,
-        isProviderAuthProfileConfiguredAsync,
-      }).synthesize({
-        text: "loopback fixture",
-        cfg: {},
-        providerConfig: { apiKey: "sk-test" },
-        target: "audio-file",
-        timeoutMs: 1_000,
-      });
-      return result.audioBuffer;
+      return await tts({ text: "loopback fixture", timeoutMs: 1_000 });
     }
 
     const providerId = fixture.provider ?? "minimax";

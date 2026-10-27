@@ -18,6 +18,7 @@ import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-
 import type { PluginLoadOptions } from "./loader-types.js";
 import { adoptProcessPluginCache, createPluginCache } from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { makeEmptyPluginMetadataOwners } from "./plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -25,6 +26,9 @@ import { createPluginRecord } from "./status.test-helpers.js";
 import { appendRuntimePluginToolGrant } from "./tool-grant-allowlist.js";
 import {
   createNamedToolEntry,
+  createOptionalToolManifest as createToolManifest,
+  createOptionalToolContext as createContext,
+  createConfiguredFeishuToolContext,
   createFeishuToolManifest,
   createToolRegistry,
   createXaiToolManifest,
@@ -96,60 +100,14 @@ vi.mock("./runtime/load-context.resolve.js", async (importOriginal) => {
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let ensureStandalonePluginToolRegistryLoaded: typeof import("./tools.js").ensureStandalonePluginToolRegistryLoaded;
-let buildPluginToolMetadataKey: typeof import("./tool-metadata.js").buildPluginToolMetadataKey;
 let getPluginToolMeta: typeof import("./tool-metadata.js").getPluginToolMeta;
 let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
-let makeEmptyPluginMetadataOwners: typeof import("./current-plugin-metadata.test-support.js").makeEmptyPluginMetadataOwners;
 let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata.test-support.js").setCurrentPluginMetadataSnapshot;
 let getPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").getPluginRuntimeGatewayRequestScope;
 let withPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").withPluginRuntimeGatewayRequestScope;
-
-function createToolManifest(
-  id: string,
-  toolNames: readonly string[],
-  overrides: Record<string, unknown> = {},
-) {
-  return {
-    id,
-    origin: "bundled" as const,
-    enabledByDefault: true,
-    channels: [],
-    providers: [],
-    contracts: { tools: [...toolNames] },
-    ...overrides,
-  };
-}
-
-function createContext(): { config: OpenClawConfig; workspaceDir: string } {
-  return {
-    config: {
-      plugins: {
-        enabled: true,
-        load: { paths: ["/tmp/plugin.js"] },
-        slots: { memory: "none" },
-      },
-    },
-    workspaceDir: "/tmp",
-  };
-}
-
-function createConfiguredFeishuToolContext<T extends string>(conversationReadOrigin: T) {
-  const context = createContext();
-  return {
-    ...context,
-    config: {
-      ...context.config,
-      plugins: {
-        ...context.config.plugins,
-        allow: ["feishu"],
-      },
-    },
-    conversationReadOrigin,
-  };
-}
 
 function createResolveToolsParams(params?: {
   context?: ReturnType<typeof createContext> & Record<string, unknown>;
@@ -375,13 +333,13 @@ function expectSingleDiagnosticMessage(
 describe("resolvePluginTools optional tools", () => {
   beforeAll(async () => {
     ({ ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } = await import("./tools.js"));
-    ({ buildPluginToolMetadataKey, getPluginToolMeta } = await import("./tool-metadata.js"));
+    ({ getPluginToolMeta } = await import("./tool-metadata.js"));
     ({ getActivePluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
       await import("./runtime.js"));
     ({ getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
       await import("./runtime/gateway-request-scope.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
-    ({ makeEmptyPluginMetadataOwners, setCurrentPluginMetadataSnapshot } =
+    ({ setCurrentPluginMetadataSnapshot } =
       await import("./current-plugin-metadata.test-support.js"));
   });
 
@@ -1895,6 +1853,42 @@ describe("resolvePluginTools optional tools", () => {
     },
   );
 
+  it.each([true, false])(
+    "prepares registration membership only for completed generations (published=%s)",
+    (published) => {
+      const context = createContext();
+      const factory = vi.fn((ctx: { runId?: string }) => ({
+        ...makeTool("prepared_tool"),
+        description: ctx.runId,
+      }));
+      const entries = [createNamedToolEntry("prepared-owner", "prepared_tool", { factory })];
+      const publishedRegistry = setRegistry(entries, context.config);
+      const registry = published ? publishedRegistry : createToolRegistry(entries);
+      const iterations = vi.spyOn(registry.tools, Symbol.iterator);
+      const resolve = (runId: string) =>
+        resolvePluginTools({
+          ...createResolveToolsParams({ context: { ...context, runId } }),
+          runtimeRegistry: registry as PluginRegistry,
+        });
+
+      expect(resolve("first")[0]?.description).toBe("first");
+      expect(resolve("second")[0]?.description).toBe("second");
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(iterations).toHaveBeenCalledTimes(published ? 1 : 2);
+
+      if (published) {
+        setActivePluginRegistry(
+          registry as PluginRegistry,
+          "next-tool-generation",
+          "gateway-bindable",
+          "/tmp",
+        );
+        expect(resolve("third")[0]?.description).toBe("third");
+        expect(iterations).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
   it("executes assembled plugin tools from the published generation without rescanning manifests", async () => {
     const context = createContext();
     const runtimeConfig: OpenClawConfig = {
@@ -2411,18 +2405,4 @@ describe("resolvePluginTools optional tools", () => {
   });
 });
 
-describe("buildPluginToolMetadataKey", () => {
-  beforeAll(async () => {
-    ({ buildPluginToolMetadataKey } = await import("./tool-metadata.js"));
-  });
-
-  it("does not collide when ids or names contain separator-like characters", () => {
-    expect(buildPluginToolMetadataKey("plugin", "a\uE000b")).not.toBe(
-      buildPluginToolMetadataKey("plugin\uE000a", "b"),
-    );
-    expect(buildPluginToolMetadataKey("plugin", "a\u0000b")).not.toBe(
-      buildPluginToolMetadataKey("plugin\u0000a", "b"),
-    );
-  });
-});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

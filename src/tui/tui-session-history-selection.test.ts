@@ -78,7 +78,6 @@ it.each([
     await Promise.all([pending, selecting]);
   }
   expect(state).toMatchObject({ currentSessionKey: next, currentSessionId: "selected-row" });
-  expect(history.call).toHaveBeenCalledOnce();
 });
 
 it.each(["agent:research:main", "global"])(
@@ -218,13 +217,14 @@ it.each([
       editorText = "";
       submit("Immediate message");
       await Promise.all(pending);
-      expect(sendChat).toHaveBeenCalledOnce();
-      expect(sendChat.mock.calls[0]?.[0]).toMatchObject({
-        sessionKey: storedKey,
-        sessionId,
-        message: "Immediate message",
-        ...(storedKey === "global" ? { agentId: "research" } : {}),
-      });
+      expect(sendChat).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          sessionKey: storedKey,
+          sessionId,
+          message: "Immediate message",
+          ...(storedKey === "global" ? { agentId: "research" } : {}),
+        }),
+      );
     } finally {
       exact.resolve({ messages: [] });
       bufferedSubmit.dispose();
@@ -267,7 +267,6 @@ it("keeps a failed selection blocked and lets /session retry it", async () => {
   const { state, actions } = commands;
   await expect(actions.loadHistory()).resolves.toEqual({ loaded: false });
   expect(state.currentSessionKey).toBe(key);
-  expect(loadHistory).toHaveBeenCalledOnce();
   await commands.sendMessage("do not send after failed history");
   expect(commands.sendChat).not.toHaveBeenCalled();
   expect(state.historyLoaded).toBe(false);

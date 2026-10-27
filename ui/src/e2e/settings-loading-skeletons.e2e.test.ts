@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -6,6 +8,7 @@ import {
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { sessionsUsageResponse } from "../test-helpers/sessions-usage-response.ts";
+import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import {
   configSnapshot,
   pageRunner,
@@ -40,15 +43,7 @@ suite.define(() => {
     await withPage(async (page) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "agents.list": {
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "reviewer", name: "Reviewer" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createAgentRoster({ main: "Main", reviewer: "Reviewer" }, "main", "agent"),
           "config.get": configSnapshot({}, "settings-loading-models"),
           "models.list": { models: [] },
           "models.authStatus": { providers: [], ts: Date.now() },
@@ -153,12 +148,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         heldMethods: ["tools.catalog", "tools.effective"],
         methodResponses: {
-          "agents.list": {
-            agents: [{ id: "main", name: "Main agent" }],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
           "config.get": {
             ...configSnapshot(config, "settings-loading-tools"),
             sourceConfig: config,
@@ -223,12 +213,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         heldMethods: ["config.schema"],
         methodResponses: {
-          "channels.pairing.list": {
-            accounts: [],
-            requests: [],
-            commandOwnerConfigured: true,
-            limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-          },
+          "channels.pairing.list": emptyPairingSnapshot(),
           "channels.status": {
             ts: Date.now(),
             channelOrder: ["whatsapp"],
@@ -313,10 +298,7 @@ suite.define(() => {
 
   it("renders the lazy Settings sidebar as navigation skeletons", async () => {
     await withPage(async (page) => {
-      let releaseSidebar: (() => void) | undefined;
-      const sidebarRelease = new Promise<void>((resolve) => {
-        releaseSidebar = resolve;
-      });
+      const { promise: sidebarRelease, resolve: releaseSidebar } = createDeferred();
       await page.route("**/src/components/settings-sidebar.ts*", async (route) => {
         await sidebarRelease;
         await route.continue();

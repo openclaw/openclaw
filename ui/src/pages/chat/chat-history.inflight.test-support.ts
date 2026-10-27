@@ -9,7 +9,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatHistoryHost } from "./chat-state-contract.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { visibleCurrentAssistantStreamTail } from "./stream-reconciliation.ts";
-import type { ToolStreamEntry } from "./tool-stream-contract.ts";
+import { agentEvent } from "./tool-stream.test-helpers.ts";
 import type { handleAgentEvent } from "./tool-stream.ts";
 
 export type TestState = ChatHistoryHost & Parameters<typeof handleAgentEvent>[0];
@@ -25,17 +25,7 @@ export function createState(
   vi.spyOn(host.sessions, "reconcileRunTerminal").mockReturnValue(false);
   vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
   onTestFinished(() => host.sessions.dispose());
-  return {
-    ...host,
-    chatToolMessages: host.chatToolMessages ?? [],
-    chatStreamSegments: host.chatStreamSegments ?? [],
-    connectionEpoch: 1,
-    chatVerboseLevel: null,
-    chatStreamStartedAt: null,
-    toolStreamById: host.toolStreamById ?? new Map<string, ToolStreamEntry>(),
-    toolStreamOrder: host.toolStreamOrder ?? [],
-    toolStreamSyncTimer: host.toolStreamSyncTimer ?? null,
-  };
+  return { ...host, connectionEpoch: 1 };
 }
 
 export function activeHistory(runId: string): ChatHistoryResult {
@@ -79,9 +69,9 @@ export function delayed(history: ChatHistoryResult) {
 }
 export const tail = (state: TestState) =>
   visibleCurrentAssistantStreamTail(state, isHiddenAssistantStreamText);
-export function renderedText(state: TestState) {
+export function buildStateItems(state: TestState, paneId = "steer-regression") {
   return buildChatItems({
-    paneId: "steer-regression",
+    paneId,
     sessionKey: state.sessionKey,
     runId: state.chatRunId,
     messages: state.chatMessages,
@@ -90,7 +80,10 @@ export function renderedText(state: TestState) {
     stream: state.chatStream,
     streamStartedAt: state.chatStreamStartedAt,
     showToolCalls: true,
-  }).flatMap((item) =>
+  });
+}
+export function renderedText(state: TestState) {
+  return buildStateItems(state).flatMap((item) =>
     item.kind === "group"
       ? item.messages.map(({ message: entry }) => extractText(entry)?.trim())
       : item.kind === "stream"
@@ -100,12 +93,8 @@ export function renderedText(state: TestState) {
 }
 
 export const event = (seq: number, stream: string, data: Record<string, unknown>) => ({
-  runId: "run-live",
-  seq,
-  stream,
+  ...agentEvent("run-live", seq, stream, data),
   ts: 899 + seq,
-  sessionKey: "main",
-  data,
 });
 
 export function failedHistory(): ChatHistoryResult {

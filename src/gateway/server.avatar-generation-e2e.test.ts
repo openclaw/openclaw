@@ -4,7 +4,9 @@ import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createGardenKeeperDesign } from "./avatar-design.test-support.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 import { pairOperatorDeviceFixture } from "./paired-device.test-support.js";
 import { startGatewayServerCore } from "./server-start.js";
@@ -30,20 +32,10 @@ vi.mock("../agents/isolated-completion-route.js", async (importOriginal) => {
     },
   };
 });
-const design = {
-  version: 1,
-  id: "garden-keeper",
-  name: "Garden Keeper",
-  description: "A friendly gardener with a cream apron.",
-  palette: { shell: "#87b891", claw: "#5b9471", glint: "#fff0b3" },
-  layers: {
-    back: "",
-    left_prop: "",
-    right_prop: "",
-    shell_overlay: '<path d="M35 49 L85 49 L88 84 Q60 99 32 84 Z" fill="#f1e4c4"/>',
-    accessory: "",
-  },
-};
+const design = createGardenKeeperDesign(
+  "A friendly gardener with a cream apron.",
+  '<path d="M35 49 L85 49 L88 84 Q60 99 32 84 Z" fill="#f1e4c4"/>',
+);
 
 function respond(response: ServerResponse, id: string, content = JSON.stringify(design)) {
   writeOpenAiResponsesSse(response, [
@@ -121,15 +113,12 @@ it(
               apiKey: "synthetic-local-provider-key",
               baseUrl: `http://127.0.0.1:${address.port}/v1`,
               models: [
-                {
-                  id: "avatar-model",
+                modelDefinition("avatar-model", {
                   name: "Avatar model",
                   reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 8192,
                   maxTokens: 1024,
-                },
+                }),
               ],
             },
           },

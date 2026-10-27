@@ -1,6 +1,7 @@
 // Narrow agent-scope helpers for control-plane and migration paths.
 
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentIds as readAgentIds } from "../agents/agent-roster.js";
 import {
   AgentSelectionRequiredError,
   tryResolveAmbientOwnerAgentId,
@@ -12,7 +13,6 @@ import {
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 
 export {
-  listAgentIds,
   resolveAgentConfig,
   resolveAgentDir,
   resolveDefaultAgentId,
@@ -20,6 +20,11 @@ export {
 } from "../agents/agent-scope.js";
 
 export { resolveSessionAgentIdStrict, resolveSessionAgentIdsStrict };
+
+/** Preserve the SDK's writable array while core readers share immutable roster facts. */
+function listAgentIdsCompatibility(config: Parameters<typeof readAgentIds>[0]): string[] {
+  return [...readAgentIds(config)];
+}
 
 type SessionAgentResolutionParams = Parameters<typeof resolveSessionAgentIdsStrict>[0];
 
@@ -63,6 +68,7 @@ function resolveSessionAgentIdCompatibility(params: SessionAgentResolutionParams
 }
 
 export {
+  listAgentIdsCompatibility as listAgentIds,
   resolveSessionAgentIdCompatibility as resolveSessionAgentId,
   resolveSessionAgentIdsCompatibility as resolveSessionAgentIds,
 };

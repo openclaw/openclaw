@@ -9,6 +9,7 @@ import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 type ResourceProps = Pick<
   ChatProps,
   | "mediaPolicyEpoch"
+  | "mediaReadAllowed"
   | "connectionEpoch"
   | "embedSandboxMode"
   | "allowExternalEmbedUrls"
@@ -24,13 +25,15 @@ export function chatPaneResourceProps(
   state: ChatPageHost,
   context: ApplicationContext,
 ): ResourceProps {
+  const mediaReadAllowed = state.connected && !state.isRouteSessionPending?.();
   return {
+    mediaReadAllowed,
     mediaPolicyEpoch: state.mediaPolicyEpoch,
     connectionEpoch: state.connectionEpoch,
     embedSandboxMode: state.embedSandboxMode,
     allowExternalEmbedUrls: state.allowExternalEmbedUrls,
-    fetchLinkFavicon: resolveChatLinkFaviconFetcher(state),
-    assistantAttachmentAuthToken: resolveControlUiAuthToken(state),
+    fetchLinkFavicon: mediaReadAllowed ? resolveChatLinkFaviconFetcher(state) : undefined,
+    assistantAttachmentAuthToken: mediaReadAllowed ? resolveControlUiAuthToken(state) : null,
     resolveArtifactDownload: (params, signal) =>
       resolveArtifactDownloadSource(state, params, signal),
     basePath: state.basePath,

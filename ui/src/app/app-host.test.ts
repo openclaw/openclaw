@@ -357,7 +357,7 @@ describe("OpenClaw shell source initialization", () => {
     const createRuntimeConfig = () =>
       ({
         state: { client, connected: true },
-        ensureLoaded: vi.fn(() => Promise.resolve()),
+        ensureDisplayLoaded: vi.fn(() => Promise.resolve()),
       }) as unknown as ApplicationContext["runtimeConfig"];
     const firstAgents = createAgents();
     const secondAgents = createAgents();
@@ -373,15 +373,15 @@ describe("OpenClaw shell source initialization", () => {
 
     expect(firstAgents.ensureList).toHaveBeenCalledOnce();
     expect(secondAgents.ensureList).toHaveBeenCalledOnce();
-    expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
-    expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+    expect(firstRuntimeConfig.ensureDisplayLoaded).toHaveBeenCalledOnce();
+    expect(secondRuntimeConfig.ensureDisplayLoaded).toHaveBeenCalledOnce();
 
     shell.disconnect();
     shell.ensureAgentsList(snapshot, secondAgents);
     void shell.shellGateway.ensureRuntimeConfig(snapshot, secondRuntimeConfig);
 
     expect(secondAgents.ensureList).toHaveBeenCalledTimes(2);
-    expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledTimes(2);
+    expect(secondRuntimeConfig.ensureDisplayLoaded).toHaveBeenCalledTimes(2);
   });
 });
 

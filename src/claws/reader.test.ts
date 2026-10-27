@@ -1,5 +1,5 @@
 import { link, realpath, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, assert, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildClawAddPlan } from "./lifecycle.js";
@@ -39,6 +39,30 @@ async function jsonSource(kind: "package" | "manifest") {
 }
 
 describe("Claw source reader", () => {
+  it.each(["package", "manifest"] as const)(
+    "rejects malformed UTF-8 %s JSON without selecting replacement-decoded data",
+    async (kind) => {
+      const { path, source, json } = await jsonSource(kind);
+      const content = kind === "package" ? json.replace("openclaw.claw.json", "café.json") : json;
+      if (kind === "package") {
+        // Replacement decoding must not silently select a different manifest.
+        await writeFile(join(dirname(path), "caf�.json"), manifestJson);
+        await writeFile(join(dirname(path), "café.json"), manifestJson);
+      }
+      await writeFile(path, Buffer.from(content, "latin1"));
+
+      expect(await readClawManifestFile(source)).toMatchObject(
+        jsonFailure("invalid_json", expect.stringMatching(/must be valid UTF-8/)),
+      );
+
+      await writeFile(path, content, "utf8");
+      expect(await readClawManifestFile(source)).toMatchObject({
+        ok: true,
+        manifest: { agent: { name: "Café" } },
+      });
+    },
+  );
+
   it.each(["package", "manifest"] as const)(
     "reports BOM-prefixed %s JSON at its source path",
     async (kind) => {

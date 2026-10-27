@@ -31,6 +31,7 @@ import {
   makeFailedPlacement as failedPlacementRecord,
   makeReclaimedPlacement as reclaimedPlacementRecord,
   makeSessionTarget as targetWithEntry,
+  createCodexDeviceHarness,
 } from "./sessions-dispatch.test-support.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -142,22 +143,7 @@ function expectReclaimed(respond: unknown, state = "reclaimed") {
 describe("sessions.dispatch", () => {
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry(), "sessions-dispatch-test", "default");
-    const codexHarness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      autoSelection: { providerIds: ["codex", "openai"] },
-      cloudPlacement: {
-        mode: "remote-exec",
-        devicePlacement: {
-          requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-          consumesWorkerSlot: false,
-        },
-      },
-      supports: () => ({ supported: true, priority: 10 }),
-      async runAttempt() {
-        throw new Error("not used");
-      },
-    };
+    const codexHarness: AgentHarness = createCodexDeviceHarness();
     registerAgentHarness(codexHarness);
     vi.clearAllMocks();
     mocks.runCommandWithTimeout.mockResolvedValue({

@@ -29,7 +29,8 @@ const OUTPUT = "https://example.com/video.mp4";
 const MODEL = "kling-2.6/text-to-video";
 const API = "https://api.kie.ai/api/v1/jobs";
 const RESULT = { resultUrls: [OUTPUT] };
-function generate(req: Partial<VideoGenerationRequest> = {}) {
+type Request = Partial<VideoGenerationRequest>;
+function generate(req: Request = {}) {
   return provider.generateVideo({ provider: "kie", model: MODEL, prompt: PROMPT, cfg: {}, ...req });
 }
 function postResponse(payload: unknown) {
@@ -40,9 +41,13 @@ function postResponse(payload: unknown) {
 function taskResponse(data: unknown) {
   fetchWithTimeoutMock.mockResolvedValueOnce(Response.json({ code: 200, data }));
 }
-function mockSuccess(tasks: unknown[] = [{ state: "success", response: RESULT }]) {
+function mockSuccess(pending = false) {
   const release = postResponse({ code: 200, data: { taskId: "task /1" } });
-  tasks.forEach(taskResponse);
+  if (pending) {
+    ["waiting", "queuing", "generating"].forEach((state) => taskResponse({ state }));
+  }
+  const result = pending ? { resultJson: JSON.stringify(RESULT) } : { response: RESULT };
+  taskResponse({ state: "success", ...result });
   fetchWithTimeoutMock.mockResolvedValueOnce(
     new Response("mp4-bytes", { headers: { "content-type": "video/mp4" } }),
   );
@@ -51,88 +56,52 @@ function mockSuccess(tasks: unknown[] = [{ state: "success", response: RESULT }]
 function expectPost(n: number, url: string, body: Record<string, unknown>) {
   expect(postJsonRequestMock).toHaveBeenNthCalledWith(n, expect.objectContaining({ url, body }));
 }
-function expectGet(index: number, url: string, init: RequestInit) {
-  expect(fetchWithTimeoutMock.mock.calls.at(index)).toEqual([url, init, expect.any(Number), fetch]);
-}
-
-it("submits, polls pending states, decodes resultJson, and downloads without auth", async () => {
+it.each<{ model: string; request: Request; input: Record<string, unknown> }>([
+  {
+    model: MODEL,
+    request: { audio: true, durationSeconds: 10, timeoutMs: 20_000 },
+    input: { duration: "10", sound: true, aspect_ratio: "16:9" },
+  },
+  {
+    model: "hailuo/02-text-to-video-pro",
+    request: { model: "hailuo/02-text-to-video-pro" },
+    input: {},
+  },
+  {
+    model: "hailuo/2-3-image-to-video-standard",
+    request: { model: "hailuo/2-3-image-to-video-standard", inputImages: [{ url: IMAGE }] },
+    input: { duration: "6", resolution: "768P", image_url: IMAGE },
+  },
+  {
+    model: "kling-2.6/image-to-video",
+    request: { inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }] },
+    input: { duration: "5", sound: false, image_urls: [IMAGE] },
+  },
+])("submits $model, polls, and downloads without auth", async ({ model, request, input }) => {
   vi.useFakeTimers();
-  const release = mockSuccess([
-    ...["waiting", "queuing", "generating"].map((state) => ({ state })),
-    { state: "success", resultJson: JSON.stringify(RESULT) },
-  ]);
-  const pending = generate({ audio: true, durationSeconds: 10, timeoutMs: 20_000 });
+  const upload = request.inputImages?.[0]?.buffer;
+  const uploadRelease =
+    upload && postResponse({ code: 200, success: true, data: { downloadUrl: IMAGE } });
+  const release = mockSuccess(model === MODEL);
+  const pending = generate(request);
   await vi.runAllTimersAsync();
   expect(await pending).toMatchObject({
-    model: MODEL,
+    model,
     videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
     metadata: { taskId: "task /1" },
   });
-  expectPost(1, `${API}/createTask`, {
-    model: MODEL,
-    input: { prompt: PROMPT, duration: "10", sound: true, aspect_ratio: "16:9" },
-  });
-  expectGet(
-    0,
-    `${API}/recordInfo?taskId=task%20%2F1`,
-    expect.objectContaining({ method: "GET", headers: expect.any(Headers) }),
-  );
-  expectGet(-1, OUTPUT, { method: "GET" });
+  if (upload) {
+    expectPost(1, "https://kieai.redpandaai.co/api/file-base64-upload", {
+      base64Data: "data:image/png;base64,cG5nLWJ5dGVz",
+      uploadPath: "openclaw/video-inputs",
+    });
+    expect(uploadRelease).toHaveBeenCalledOnce();
+  }
+  expectPost(upload ? 2 : 1, `${API}/createTask`, { model, input: { prompt: PROMPT, ...input } });
+  expect(fetchWithTimeoutMock.mock.calls[0]?.[0]).toBe(`${API}/recordInfo?taskId=task%20%2F1`);
+  expect(fetchWithTimeoutMock.mock.calls.at(-1)?.slice(0, 2)).toEqual([OUTPUT, { method: "GET" }]);
   expect(release).toHaveBeenCalledOnce();
 });
-
-it.each([
-  { model: "hailuo/02-text-to-video-pro", input: {} },
-  {
-    model: "hailuo/2-3-image-to-video-standard",
-    input: { duration: "6", resolution: "768P", image_url: IMAGE },
-  },
-])("maps optional controls and scalar image URLs for $model", async ({ model, input }) => {
-  mockSuccess();
-  const inputImages = input.image_url ? [{ url: input.image_url }] : undefined;
-  const result = await generate({ model, inputImages });
-  expectPost(1, `${API}/createTask`, { model, input: { prompt: PROMPT, ...input } });
-  expect(result).toMatchObject({ model, videos: [{ buffer: Buffer.from("mp4-bytes") }] });
-});
-
-it("uploads a local buffer before submitting its returned URL", async () => {
-  const release = postResponse({ code: 200, success: true, data: { downloadUrl: IMAGE } });
-  mockSuccess();
-  await generate({ inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }] });
-  expectPost(1, "https://kieai.redpandaai.co/api/file-base64-upload", {
-    base64Data: "data:image/png;base64,cG5nLWJ5dGVz",
-    uploadPath: "openclaw/video-inputs",
-  });
-  expectPost(2, `${API}/createTask`, {
-    model: "kling-2.6/image-to-video",
-    input: { prompt: PROMPT, duration: "5", sound: false, image_urls: [IMAGE] },
-  });
-  expect(release).toHaveBeenCalledOnce();
-});
-
-it("stops before submission when upload returns an HTTP-200 body error", async () => {
-  const error = "Record not found for requested model";
-  postResponse({ code: 422, msg: error });
-  await expect(generate({ inputImages: [{ buffer: Buffer.from("png") }] })).rejects.toThrow(error);
-  expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
-  expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
-});
-
-it.each`
-  error                                   | data
-  ${"CONTENT_REJECTED): Prompt rejected"} | ${{ state: "fail", failCode: "CONTENT_REJECTED", failMsg: "Prompt rejected" }}
-  ${"unknown state: mystery"}             | ${{ state: "mystery" }}
-  ${"malformed resultJson"}               | ${{ state: "success", resultJson: "not JSON" }}
-  ${"without result URLs"}                | ${{ state: "success", resultJson: '{"resultUrls":[]}' }}
-`(
-  "rejects unusable completed jobs: $error",
-  async ({ error, data }: { error: string; data: unknown }) => {
-    postResponse({ code: 200, data: { taskId: "task-1" } });
-    taskResponse(data);
-    await expect(generate()).rejects.toThrow(error);
-    expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
-  },
-);
 
 it("uses model-specific capabilities through the shared runtime", async () => {
   mockSuccess();
@@ -159,19 +128,55 @@ it("uses model-specific capabilities through the shared runtime", async () => {
   expect(result.ignoredOverrides).toContainEqual({ key: "audio", value: true });
 });
 
-it.each`
-  error                                        | request
-  ${"does not support video or audio"}         | ${{ inputVideos: [{ url: OUTPUT }] }}
-  ${"at most one input image"}                 | ${{ inputImages: [{ url: IMAGE }, { url: IMAGE }] }}
-  ${"remote http(s)"}                          | ${{ inputImages: [{ url: "data:image/png;base64,cG5n" }] }}
-  ${"requires one input image"}                | ${{ model: "hailuo/2-3-image-to-video-pro" }}
-  ${"1080P only at 6 seconds"}                 | ${{ model: "hailuo/2-3-image-to-video-pro", inputImages: [{ url: IMAGE }], resolution: "1080P", durationSeconds: 10 }}
-  ${"does not support model unknown"}          | ${{ model: "unknown" }}
-  ${"requires a prompt of 3-20000 characters"} | ${{ model: "bytedance/seedance-1.5-pro", prompt: "Hi" }}
-`(
-  "rejects invalid inputs before upload or billing: $error",
-  async ({ error, request }: { error: string; request: Partial<VideoGenerationRequest> }) => {
-    await expect(generate(request)).rejects.toThrow(error);
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
+it.each<{ error: string; request: Request; data?: unknown }>([
+  { error: "does not support video or audio", request: { inputVideos: [{ url: OUTPUT }] } },
+  { error: "at most one input image", request: { inputImages: [{ url: IMAGE }, { url: IMAGE }] } },
+  { error: "remote http(s)", request: { inputImages: [{ url: "data:image/png;base64,cG5n" }] } },
+  { error: "requires one input image", request: { model: "hailuo/2-3-image-to-video-pro" } },
+  {
+    error: "1080P only at 6 seconds",
+    request: {
+      model: "hailuo/2-3-image-to-video-pro",
+      inputImages: [{ url: IMAGE }],
+      resolution: "1080P",
+      durationSeconds: 10,
+    },
   },
-);
+  { error: "does not support model unknown", request: { model: "unknown" } },
+  {
+    error: "requires a prompt of 3-20000 characters",
+    request: { model: "bytedance/seedance-1.5-pro", prompt: "Hi" },
+  },
+  {
+    error: "CONTENT_REJECTED): Prompt rejected",
+    request: {},
+    data: { state: "fail", failCode: "CONTENT_REJECTED", failMsg: "Prompt rejected" },
+  },
+  { error: "unknown state: mystery", request: {}, data: { state: "mystery" } },
+  {
+    error: "malformed resultJson",
+    request: {},
+    data: { state: "success", resultJson: "not JSON" },
+  },
+  {
+    error: "without result URLs",
+    request: {},
+    data: { state: "success", resultJson: '{"resultUrls":[]}' },
+  },
+  {
+    error: "Record not found for requested model",
+    request: { inputImages: [{ buffer: Buffer.from("png") }] },
+    data: { code: 422, msg: "Record not found for requested model" },
+  },
+])("rejects at the expected request stage: $error", async ({ error, request, data }) => {
+  const upload = Boolean(request.inputImages?.[0]?.buffer);
+  if (data) {
+    postResponse(upload ? data : { code: 200, data: { taskId: "task-1" } });
+    if (!upload) {
+      taskResponse(data);
+    }
+  }
+  await expect(generate(request)).rejects.toThrow(error);
+  expect(postJsonRequestMock).toHaveBeenCalledTimes(data ? 1 : 0);
+  expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(data && !upload ? 1 : 0);
+});

@@ -10,6 +10,7 @@ import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import * as toolCards from "../../../lib/chat/tool-cards.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import * as thinking from "../../../lib/strip-thinking-tags.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -208,11 +209,27 @@ describe("user message disclosure", () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
-        constructor(private readonly notify: () => void) {}
-        observe() {
+        private readonly targets = new Set<Element>();
+        constructor(private readonly callback: ResizeObserverCallback) {}
+        private readonly notify = () => {
+          // SAFETY: The overflow owner reads layout from its registered elements.
+          this.callback(
+            [...this.targets].map((target) => ({ target }) as ResizeObserverEntry),
+            this as unknown as ResizeObserver,
+          );
+        };
+        observe(target: Element) {
+          this.targets.add(target);
           pendingObservers.add(this.notify);
         }
+        unobserve(target: Element) {
+          this.targets.delete(target);
+          if (this.targets.size === 0) {
+            pendingObservers.delete(this.notify);
+          }
+        }
         disconnect() {
+          this.targets.clear();
           pendingObservers.delete(this.notify);
         }
       },
@@ -321,11 +338,7 @@ describe("user message disclosure", () => {
       container.remove();
       restoreStyles.forEach((restore) => restore());
       vi.unstubAllGlobals();
-      if (previousFonts) {
-        Object.defineProperty(document, "fonts", previousFonts);
-      } else {
-        Reflect.deleteProperty(document, "fonts");
-      }
+      restorePropertyDescriptor(document, "fonts", previousFonts);
     }
   });
 

@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 
 export async function runUpdateSnapshotIsolationProof(
   fixtureRoot: string,
@@ -36,7 +37,7 @@ export async function runUpdateSnapshotIsolationProof(
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, content, { mode: 0o600 });
   }
-  const before = fs.readdirSync(root, { recursive: true, encoding: "utf8" });
+  const before = listDirectoryTreeStrictSync(root).map((walkEntry) => walkEntry.relativePath);
   const selectHome = (home: string) => {
     Object.assign(process.env, {
       HOME: home,
@@ -138,7 +139,7 @@ export async function runUpdateSnapshotIsolationProof(
   assert.deepEqual(writes, [`${configB}.pre-update`]);
   assert.deepEqual(blocked, []);
   assert.deepEqual(
-    new Set(fs.readdirSync(root, { recursive: true, encoding: "utf8" })),
+    new Set(listDirectoryTreeStrictSync(root).map((walkEntry) => walkEntry.relativePath)),
     new Set([...before, path.relative(root, `${configB}.pre-update`)]),
   );
 }

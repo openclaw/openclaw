@@ -9,6 +9,7 @@ import {
   lazy,
   Loading,
   onCleanup,
+  onSettled,
   Show,
 } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -342,6 +343,22 @@ export function createChatProviderReview(deps: {
 }
 
 export type ChatProviderReviewOwner = ReturnType<typeof createChatProviderReview>;
+/** Mounted once per pane only after its authoritative row contains a review. */
+export function ChatProviderReviewHost(
+  props: Parameters<typeof createChatProviderReview>[0] & {
+    onReady: (owner: ChatProviderReviewOwner) => void;
+  },
+) {
+  const owner = createChatProviderReview({
+    source: () => props.source(),
+    readState: () => props.readState(),
+  });
+  onSettled(() => {
+    props.onReady(owner);
+  });
+  return <ChatProviderReviewDialog owner={owner} />;
+}
+
 type ProviderReviewViewProps = { owner: ChatProviderReviewOwner };
 
 export function ChatProviderReviewNotice(props: ProviderReviewViewProps) {

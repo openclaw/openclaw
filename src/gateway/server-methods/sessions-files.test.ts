@@ -30,6 +30,7 @@ import {
   removeWorkspaceFixture,
   writeWorkspaceFile,
 } from "./sessions-files.test-support.js";
+import * as workspaceFs from "./workspace-fs.js";
 
 const { sessionFilesMocks } = await import("./sessions-files.mocks.test-support.js");
 
@@ -310,6 +311,69 @@ describe("sessions.files RPC handlers", () => {
       entries: [{ path: "..notes/readme.md", kind: "file" }],
     });
     await expectFile(folder.browser.entries[0].path, { content: "# Notes\n" });
+  });
+
+  it("lists the admitted local root without a separate metadata probe", async () => {
+    mockVisibleMessages([]);
+    const stat = vi.spyOn(workspaceFs, "statWorkspacePath");
+    try {
+      const payload = await files.ok("list");
+      expect(browserKinds(payload.browser.entries)).toEqual([
+        ["src", "directory", undefined],
+        ["ui", "directory", undefined],
+        ["package.json", "file", undefined],
+      ]);
+      expect(stat).not.toHaveBeenCalled();
+    } finally {
+      stat.mockRestore();
+    }
+  });
+
+  it.each([
+    { cwd: "", prefix: "" },
+    { cwd: "ui", prefix: "../" },
+  ])("omits existing directories from file activity with cwd '$cwd'", async ({ cwd, prefix }) => {
+    writeWorkspace(".cache/note.txt", "cached note\n");
+    fs.symlinkSync(
+      outsideDirs.make("session-files-directory-"),
+      workspacePath("cache-link"),
+      "dir",
+    );
+    mockSession({
+      sessionId: "sess-directories",
+      spawnedCwd: workspacePath(cwd),
+      spawnedWorkspaceDir: workspaceRoot,
+    });
+    mockVisibleMessages(
+      [
+        prefix || ".",
+        `${prefix}.cache`,
+        `${prefix}ui`,
+        workspacePath("src"),
+        `${prefix}src/readme.md`,
+        `${prefix}missing.txt`,
+        `${prefix}cache-link`,
+      ].map((filePath) => assistantToolCall("read", { path: filePath })),
+    );
+
+    const payload = await files.ok("list");
+    expect(payload.files).toEqual([
+      expect.objectContaining({ path: `${prefix}cache-link`, kind: "read", missing: true }),
+      expect.objectContaining({ path: `${prefix}missing.txt`, kind: "read", missing: true }),
+      expect.objectContaining({ path: `${prefix}src/readme.md`, kind: "read", missing: false }),
+    ]);
+    expect(payload.browser.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: ".cache", kind: "directory" }),
+        expect.objectContaining({ path: "src", kind: "directory" }),
+        expect.objectContaining({ path: "ui", kind: "directory" }),
+      ]),
+    );
+    expect((await files.ok("list", { path: ".cache" })).browser).toMatchObject({
+      path: ".cache",
+      entries: [{ path: ".cache/note.txt", kind: "file" }],
+    });
+    expect(await errorType("get", `${prefix}.cache`)).toBe("session_file_not_found");
   });
 
   it("truncates broad workspace searches by visited entries, not only by matches", async () => {

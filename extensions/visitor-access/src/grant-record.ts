@@ -12,7 +12,7 @@ export type VisitorInvitationContext = {
   assertCurrent: () => void;
 };
 
-export type VisitorOnboardingState = "pending" | "ready" | "failed";
+type VisitorOnboardingState = "pending" | "ready" | "failed";
 
 /** Welcome-session setup progress; advanced only through compareAndSetOnboarding. */
 export type VisitorOnboarding = {

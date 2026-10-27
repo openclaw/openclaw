@@ -1,7 +1,10 @@
 import type { Selectable } from "kysely";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { SessionActorHotState } from "./session-actor-state.types.js";
-import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
+import type {
+  ResolvedSessionEntryRow,
+  SessionEntrySnapshotRow,
+} from "./session-entry-storage.types.js";
 import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
 import type { SessionPendingInputRow } from "./session-pending-input.types.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-projection-append.js";
@@ -17,7 +20,16 @@ export type SessionActorStoredState = {
   path: string;
   hot: SessionActorHotState;
   /** Lookup siblings were admitted in the same hydration statement. */
-  entryRows: Map<string, ResolvedSessionEntryRow | undefined>;
+  entryRows: Map<
+    string,
+    | {
+        entry: ResolvedSessionEntryRow["entry"];
+        row: Omit<ResolvedSessionEntryRow["row"], keyof SessionEntrySnapshotRow> & {
+          [K in keyof SessionEntrySnapshotRow]?: never;
+        };
+      }
+    | undefined
+  >;
   window: SessionEntryWindowRow | undefined;
   hasBoard: boolean;
   pendingInputs: Map<string, SessionPendingInputRow>;

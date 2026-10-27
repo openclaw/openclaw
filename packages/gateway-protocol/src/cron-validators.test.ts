@@ -3,13 +3,13 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   formatValidationErrors,
-  validateCronAddParams as validateAdd,
-  validateCronGetParams as validateGet,
-  validateCronListParams as validateList,
-  validateCronRemoveParams as validateRemove,
-  validateCronRunParams as validateRun,
-  validateCronRunsParams as validateRuns,
-  validateCronUpdateParams as validateUpdate,
+  validateCronAddParams as isAdd,
+  validateCronGetParams as get,
+  validateCronListParams as list,
+  validateCronRemoveParams as remove,
+  validateCronRunParams as run,
+  validateCronRunsParams as runs,
+  validateCronUpdateParams as isUpdate,
 } from "./index.js";
 import { CronAddResultSchema, CronJobSchema } from "./schema/cron.js";
 
@@ -35,40 +35,32 @@ const jobWithState = (state: unknown = {}) => ({
   updatedAtMs: 2,
   state,
 });
-const checkAdd = (overrides: Record<string, unknown>) => expect(validateAdd(add(overrides)));
-const checkUpdate = (patch: Record<string, unknown>) => expect(validateUpdate(update(patch)));
+const checkAdd = (overrides: Record<string, unknown>) => expect(isAdd(add(overrides)));
+const checkUpdate = (patch: Record<string, unknown>) => expect(isUpdate(update(patch)));
 const cleared = (...fields: string[]) => Object.fromEntries(fields.map((field) => [field, null]));
 const addAndUpdate = (fields: Record<string, unknown>) =>
   [
-    [validateAdd, add(fields)],
-    [validateUpdate, update(fields)],
+    [isAdd, add(fields)],
+    [isUpdate, update(fields)],
   ] as const;
 describe("cron protocol validators", () => {
   it.each([
-    ["schedule", { kind: "at", at: "2030-01-01T00:00:00Z" }, { kind: "at" }, "'at'"],
-    ["schedule", { kind: "every", everyMs: 1000 }, { kind: "every", everyMs: "soon" }, "integer"],
-    ["schedule", { kind: "cron", expr: "0 * * * *" }, { kind: "cron" }, "'expr'"],
-    ["schedule", { kind: "on-exit", command: "true" }, { kind: "on-exit", command: [] }, "string"],
-    [
-      "schedule",
-      { kind: "stream", command: ["tail", "/workspace/application.log"] },
-      { kind: "stream", command: [] },
-      "items",
-    ],
-    ["payload", { kind: "systemEvent", text: "tick" }, { kind: "systemEvent", text: 1 }, "string"],
-    [
-      "payload",
-      { kind: "agentTurn", message: "report" },
-      { kind: "agentTurn", message: 1 },
-      "string",
-    ],
-    ["payload", { kind: "command", argv: ["true"] }, { kind: "command", argv: [] }, "items"],
-    ["payload", { kind: "script", script: "return 1" }, { kind: "script", script: 1 }, "string"],
+    ["schedule", "at", "at", "2030-01-01T00:00:00Z", undefined, "'at'"],
+    ["schedule", "every", "everyMs", 1000, "soon", "integer"],
+    ["schedule", "cron", "expr", "0 * * * *", undefined, "'expr'"],
+    ["schedule", "on-exit", "command", "true", [], "string"],
+    ["schedule", "stream", "command", ["tail", "/tmp/log"], [], "items"],
+    ["payload", "systemEvent", "text", "tick", 1, "string"],
+    ["payload", "agentTurn", "message", "report", 1, "string"],
+    ["payload", "command", "argv", ["true"], [], "items"],
+    ["payload", "script", "script", "return 1", 1, "string"],
   ] as const)(
     "preserves %s acceptance and diagnoses its selected kind",
-    (field, valid, invalid, message) => {
-      expect(validateAdd(add({ [field]: valid }))).toBe(true);
-      expect(validateUpdate(update({ [field]: valid }))).toBe(true);
+    (field, kind, key, value, badValue, message) => {
+      const valid = { kind, [key]: value };
+      const invalid = badValue === undefined ? { kind } : { kind, [key]: badValue };
+      expect(isAdd(add({ [field]: valid }))).toBe(true);
+      expect(isUpdate(update({ [field]: valid }))).toBe(true);
       for (const [validate, input] of addAndUpdate({ [field]: invalid })) {
         expect(validate(input)).toBe(false);
         expect(formatValidationErrors(validate.errors)).toContain(message);
@@ -197,7 +189,7 @@ describe("cron protocol validators", () => {
         [update({ enabled: false }, { expectedConfigRevision }), false] as const,
     ),
   ] as const)("update %j accepted=%s", (params, accepted) => {
-    expect(validateUpdate(params)).toBe(accepted);
+    expect(isUpdate(params)).toBe(accepted);
   });
   it.each([
     [{ scheduledToolPolicy }, false],
@@ -226,61 +218,51 @@ describe("cron protocol validators", () => {
 
   it("requires scheduling fields on add", () => {
     const { wakeMode: _wakeMode, ...withoutWakeMode } = minimalAddParams;
-    expect(validateAdd(withoutWakeMode)).toBe(false);
+    expect(isAdd(withoutWakeMode)).toBe(false);
   });
 
   it.each([
-    ["list", validateList, {}],
-    ["get", validateGet, { id: "job-1" }],
-    ["add", validateAdd, add()],
-    ["update", validateUpdate, update({ enabled: false })],
-    ["remove", validateRemove, { jobId: "job-1" }],
-    ["run", validateRun, { id: "job-1" }],
-    ["runs", validateRuns, { id: "job-1" }],
+    ["list", list, {}],
+    ["get", get, { id: "job-1" }],
+    ["add", isAdd, add()],
+    ["update", isUpdate, update({ enabled: false })],
+    ["remove", remove, { jobId: "job-1" }],
+    ["run", run, { id: "job-1" }],
+    ["runs", runs, { id: "job-1" }],
   ] as const)("rejects caller scope on %s", (_, validate, params) => {
     expect(validate({ ...params, callerScope: agentToolCallerScope })).toBe(false);
   });
 
   it.each([
-    ["get", validateGet, { id: "job-1" }, true],
-    ["get legacy id", validateGet, { jobId: "job-2" }, true],
-    ["get missing id", validateGet, {}, false],
-    ["get empty id", validateGet, { id: "" }, false],
-    ["remove", validateRemove, { id: "job-1" }, true],
-    [
-      "remove revision",
-      validateRemove,
-      { jobId: "job-2", expectedConfigRevision: "sha256:current" },
-      true,
-    ],
-    ["remove empty revision", validateRemove, { id: "job-1", expectedConfigRevision: "" }, false],
-    ["remove numeric revision", validateRemove, { id: "job-1", expectedConfigRevision: 1 }, false],
-    [
-      "force",
-      validateRun,
-      { id: "job-1", mode: "force", expectedProcessInstanceId: "process-1" },
-      true,
-    ],
-    ["due", validateRun, { jobId: "job-2", mode: "due" }, true],
-    ["if enabled", validateRun, { jobId: "job-3", mode: "if-enabled" }, true],
-    ["empty process", validateRun, { id: "job-1", expectedProcessInstanceId: "" }, false],
-    ["runs id", validateRuns, { id: "job-1", limit: 1 }, true],
-    ["runs legacy id", validateRuns, { jobId: "job-2", limit: 1 }, true],
-    ["runs zero", validateRuns, { id: "job-1", limit: 0 }, false],
-    ["runs legacy zero", validateRuns, { jobId: "job-2", limit: 0 }, false],
+    ["get", get, { id: "job-1" }, true],
+    ["get legacy id", get, { jobId: "job-2" }, true],
+    ["get missing id", get, {}, false],
+    ["get empty id", get, { id: "" }, false],
+    ["remove", remove, { id: "job-1" }, true],
+    ["remove revision", remove, { jobId: "job-2", expectedConfigRevision: "sha256:current" }, true],
+    ["remove empty revision", remove, { id: "job-1", expectedConfigRevision: "" }, false],
+    ["remove numeric revision", remove, { id: "job-1", expectedConfigRevision: 1 }, false],
+    ["force", run, { id: "job-1", mode: "force", expectedProcessInstanceId: "process-1" }, true],
+    ["due", run, { jobId: "job-2", mode: "due" }, true],
+    ["if enabled", run, { jobId: "job-3", mode: "if-enabled" }, true],
+    ["empty process", run, { id: "job-1", expectedProcessInstanceId: "" }, false],
+    ["runs id", runs, { id: "job-1", limit: 1 }, true],
+    ["runs legacy id", runs, { jobId: "job-2", limit: 1 }, true],
+    ["runs zero", runs, { id: "job-1", limit: 0 }, false],
+    ["runs legacy zero", runs, { jobId: "job-2", limit: 0 }, false],
     ...[
       { id: "../job-1" },
       { id: "nested/job-1" },
       { jobId: "..\\job-2" },
       { jobId: "nested\\job-2" },
-    ].map((params) => ["runs path traversal", validateRuns, params, false] as const),
+    ].map((params) => ["runs path traversal", runs, params, false] as const),
   ] as const)("validates %s row %#", (_, validate, params, accepted) => {
     expect(validate(params)).toBe(accepted);
   });
 
   it("accepts list paging/filter/sort params", () => {
     expect(
-      validateList({
+      list({
         includeDisabled: true,
         limit: 50,
         offset: 0,
@@ -304,6 +286,6 @@ describe("cron protocol validators", () => {
     { lastRunStatus: "pending" },
     { trigger: "configured" },
   ])("rejects invalid list filter %j", (params) => {
-    expect(validateList(params)).toBe(false);
+    expect(list(params)).toBe(false);
   });
 });

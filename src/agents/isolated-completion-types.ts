@@ -35,6 +35,7 @@ export type RunIsolatedCompletionParams = {
   /** Adapt host authorization failures to the calling completion API's error contract. */
   mapOperatorAuthorizationError?: (error: unknown) => Error;
   thinkLevel?: ThinkLevel;
+  outputSchema?: AgentHarnessIsolatedCompletionParamsV2["outputSchema"];
   outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
   /** Internal answer budget; reasoning reserves still obey model and explicit stream limits. */
   answerTokenBudget?: number;

@@ -2,6 +2,7 @@ import { onSettled } from "solid-js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import { subscribeDocumentVisibility } from "../../../lib/reactive/platform.ts";
 
 export type ChatCiDisclosureProps = {
   gateway?: ApplicationGateway;
@@ -36,7 +37,7 @@ export function createCiDisclosure(
       }
     };
     const stopToggle = disclosure && listen(disclosure, "toggle", toggle);
-    const stopVisibility = listen(document, "visibilitychange", onVisibility);
+    const stopVisibility = subscribeDocumentVisibility(document, onVisibility);
     const disconnect = connect();
     onVisibility();
     return () => {

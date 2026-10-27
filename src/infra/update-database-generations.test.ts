@@ -20,6 +20,31 @@ import { readUpdatePhysicalDatabaseGenerations } from "./update-physical-databas
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+function transformBigintStats(transform: (stat: fs.BigIntStats) => fs.BigIntStats) {
+  const fstat = fs.fstatSync;
+  const stat = fs.statSync;
+  vi.spyOn(fs, "fstatSync").mockImplementation((...args) =>
+    args[1]?.bigint ? transform(fstat(args[0], { bigint: true })) : fstat(...args),
+  );
+  vi.spyOn(fs, "statSync").mockImplementation((...args) =>
+    args[1]?.bigint ? transform(stat(args[0], { bigint: true })) : stat(...args),
+  );
+}
+
+function replaceText(bytes: Buffer, from: string, to: string) {
+  const changed = Buffer.from(bytes);
+  const offset = changed.indexOf(from);
+  expect(offset).toBeGreaterThan(0);
+  changed.write(to, offset);
+  return changed;
+}
+
+function withNativeCopying(mode: "auto" | "off", operation: () => Promise<void>) {
+  const previous = getFsSafeNativeConfig();
+  configureFsSafeNative({ mode });
+  return operation().finally(() => configureFsSafeNative(previous));
+}
+
 function generationFixture(layout = "delete") {
   const directory = dirs.make("update-generation-content-");
   const file = path.join(directory, "state.sqlite");
@@ -66,9 +91,7 @@ function expectedClosedGeneration(file: string): string {
 it.each(["auto", "off"] as const)(
   "retains exact closed generations and source bytes with native copying %s",
   async (mode) => {
-    const previous = getFsSafeNativeConfig();
-    try {
-      configureFsSafeNative({ mode });
+    await withNativeCopying(mode, async () => {
       for (const layout of ["delete", "wal-absent", "wal-empty", "empty-journal", "zero"]) {
         const { file, staging } = generationFixture(layout);
         const before = ["", "-wal", "-journal"].flatMap((suffix) =>
@@ -85,9 +108,7 @@ it.each(["auto", "off"] as const)(
         expect(fs.readdirSync(staging), layout).toEqual([]);
         vi.restoreAllMocks();
       }
-    } finally {
-      configureFsSafeNative(previous);
-    }
+    });
   },
 );
 
@@ -118,10 +139,7 @@ it.each(["auto", "off"] as const)(
   async (mode) => {
     const { file, staging, prepare } = generationFixture();
     const valid = fs.readFileSync(file);
-    const malformed = Buffer.from(valid);
-    const offset = malformed.indexOf("CREATE TABLE receipt");
-    expect(offset).toBeGreaterThan(0);
-    malformed[offset + 3] = "X".charCodeAt(0);
+    const malformed = replaceText(valid, "CREATE TABLE receipt", "CREX");
     fs.writeFileSync(file, malformed);
     let copied = false;
     vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).mockImplementation(
@@ -135,15 +153,11 @@ it.each(["auto", "off"] as const)(
         }
       },
     );
-    const previous = getFsSafeNativeConfig();
-    try {
-      configureFsSafeNative({ mode });
-      await expect(readUpdatePhysicalDatabaseGenerations([file])).rejects.toThrow(
+    await withNativeCopying(mode, () =>
+      expect(readUpdatePhysicalDatabaseGenerations([file])).rejects.toThrow(
         /snapshot hash mismatch/,
-      );
-    } finally {
-      configureFsSafeNative(previous);
-    }
+      ),
+    );
     expect(copied).toBe(true);
     expect(fs.readFileSync(file)).toEqual(malformed);
     expect(fs.readdirSync(staging)).toEqual([]);
@@ -171,10 +185,7 @@ it.each(["same-size write", "truncation", "identity replacement"] as const)(
   async (change) => {
     const { file, staging, prepare } = generationFixture();
     const original = fs.readFileSync(file);
-    const changed = Buffer.from(original);
-    const offset = changed.indexOf("before");
-    expect(offset).toBeGreaterThan(0);
-    changed.write("after!", offset);
+    const changed = replaceText(original, "before", "after!");
     vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).mockImplementation(
       (pathname, _staging, ...rest) => {
         if (change === "identity replacement") {
@@ -256,10 +267,7 @@ it.each([
   "after acquisition within a timestamp quantum",
 ] as const)("refuses a same-size write after a source digest %s", async (timing) => {
   const { file, staging, prepare } = generationFixture();
-  const changed = fs.readFileSync(file);
-  const offset = changed.indexOf("before");
-  expect(offset).toBeGreaterThan(0);
-  changed.write("after!", offset);
+  const changed = replaceText(fs.readFileSync(file), "before", "after!");
   const source = fs.statSync(file, { bigint: true });
   const coarse = timing === "after acquisition within a timestamp quantum";
   const now = Date.now();
@@ -332,14 +340,7 @@ it.each(["bigint", "number"] as const)(
       });
       return stat;
     };
-    const fstat = fs.fstatSync;
-    const stat = fs.statSync;
-    vi.spyOn(fs, "fstatSync").mockImplementation((...args) =>
-      args[1]?.bigint ? withoutNanoseconds(fstat(args[0], { bigint: true })) : fstat(...args),
-    );
-    vi.spyOn(fs, "statSync").mockImplementation((...args) =>
-      args[1]?.bigint ? withoutNanoseconds(stat(args[0], { bigint: true })) : stat(...args),
-    );
+    transformBigintStats(withoutNanoseconds);
     const read = createSqliteFileGenerationReader();
     read(file);
     fs.writeFileSync(file, "after!");
@@ -454,8 +455,6 @@ it("invalidates ctime-only source changes across interleaved files", () => {
   const before = read(first);
   const other = read(second);
   fs.writeFileSync(first, "after!");
-  const fstat = fs.fstatSync;
-  const stat = fs.statSync;
   const preserveMtime = (current: fs.BigIntStats) => {
     if (current.dev === before.database.dev && current.ino === before.database.ino) {
       current.mtimeNs = before.database.mtimeNs;
@@ -463,12 +462,7 @@ it("invalidates ctime-only source changes across interleaved files", () => {
     }
     return current;
   };
-  vi.spyOn(fs, "fstatSync").mockImplementation((...args) =>
-    args[1]?.bigint ? preserveMtime(fstat(args[0], { bigint: true })) : fstat(...args),
-  );
-  vi.spyOn(fs, "statSync").mockImplementation((...args) =>
-    args[1]?.bigint ? preserveMtime(stat(args[0], { bigint: true })) : stat(...args),
-  );
+  transformBigintStats(preserveMtime);
   expect(read(first).database.sha256).toBe(createHash("sha256").update("after!").digest("hex"));
   expect(read(second)).toEqual(other);
 });

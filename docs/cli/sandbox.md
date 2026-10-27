@@ -75,11 +75,13 @@ For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the re
 
 When a newly generated guest file exceeds the 64 MiB reconciliation limit, its
 pending checkpoint is preserved and later messages cannot prepare the workspace.
-Use explicit recovery to move that selected file out of synchronization without
-losing its bytes:
+When that file is eligible for recovery, the local workspace error includes the
+exact recovery command and asks for a Gateway administrator. Use explicit
+recovery to move that selected file out of synchronization without losing its
+bytes:
 
 ```bash
-openclaw sandbox recover --session agent:main:dashboard:example --path .openclaw/tmp/build/archive.tgz
+openclaw sandbox recover --session agent:main:dashboard:example --path artifacts/archive.tgz
 ```
 
 The command routes to the running Gateway with administrator authorization, or
@@ -93,6 +95,11 @@ files, excluded caches, Git metadata, symlinks, and hardlinks are refused. This
 command does not increase limits, change ignore rules, delete files, or reset the
 workspace. Remote-worker workspaces and already-staged reconciliation receipts
 are not supported by this recovery operation.
+
+The checkout-root `.openclaw/tmp/` scratch directory is excluded from workspace
+synchronization, including recovery of older pending results. Toolchains and
+temporary files there stay in the runtime that created them and do not need this
+command. Save files that must synchronize outside that scratch directory.
 
 Recovered files live under
 `<state-dir>/workspace-recovery/<worktree-id>/<recovery-id>/<original-path>`,

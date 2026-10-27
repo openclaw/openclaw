@@ -12,7 +12,6 @@ import {
   bindSessionRowProjection,
   getSessionRowProjection,
 } from "../session-row-projection-access.js";
-import { createSessionRowProjection } from "../session-row-projection.js";
 import * as sharingPreparation from "../session-sharing-preparation.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
 import {
@@ -40,23 +39,17 @@ it("lists and commits member reactions without caller-thread SQL", () =>
     await seedSession({ visibility: "read-only" });
     addSessionMember(transcriptScope, { identityId: "alice", addedBy: "owner" });
     const messageId = await appendMessage();
-    const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
-    try {
-      await projection.ensureMaterialized();
-      const requestContext = context(roleConfig("view"));
-      bindSessionRowProjection(requestContext, () => projection);
-      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-      expect((await setReaction(messageId, {}, client("alice"), requestContext))[0]).toBe(true);
-      expect((await listReactions(client("alice"), requestContext))[1]).toMatchObject({
-        sessionId,
-        reactions: { [messageId]: [{ emoji: "👍", count: 1 }] },
-      });
-      expect(prepare).not.toHaveBeenCalled();
-      expect(exec).not.toHaveBeenCalled();
-    } finally {
-      projection.dispose();
-    }
+    const requestContext = context(roleConfig("view"));
+    await listReactions(client("alice"), requestContext);
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    expect((await setReaction(messageId, {}, client("alice"), requestContext))[0]).toBe(true);
+    expect((await listReactions(client("alice"), requestContext))[1]).toMatchObject({
+      sessionId,
+      reactions: { [messageId]: [{ emoji: "👍", count: 1 }] },
+    });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(exec).not.toHaveBeenCalled();
   }));
 
 it("awaits membership preparation and rejects failed or revoked preparations", () =>

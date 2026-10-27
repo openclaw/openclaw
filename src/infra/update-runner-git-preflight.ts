@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -7,6 +8,7 @@ import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { readPackageManagerSpec } from "./package-json.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "./runtime-process-url.js";
 import { DEV_BRANCH } from "./update-channels.js";
 import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import { resolveGitUpdateTrackingRef, type GitFetchTarget } from "./update-git-metadata.js";
@@ -335,12 +337,12 @@ async function testPreflightCandidate(
     await params.prepareGitExposure?.(params.worktreeDir, candidateSha, candidateCommand.env);
     // Exposure can run another install after postbuild. Its final topology, not
     // the earlier build graph, must own the packaged plugin dependency links.
-    const metadataScript = "scripts/copy-bundled-plugin-metadata.mjs";
+    const metadataScript = fileURLToPath(
+      resolveExternalPackageRuntimeEntrypointUrl("sourcePluginMetadata", params.worktreeDir),
+    );
     if (
       params.prepareGitExposure &&
-      (
-        await fs.stat(path.join(params.worktreeDir, metadataScript)).catch(ignoreMissingPath)
-      )?.isFile()
+      (await fs.stat(metadataScript).catch(ignoreMissingPath))?.isFile()
     ) {
       const relink = await runCandidateCheck(
         "bundled-plugin-dependency-links",

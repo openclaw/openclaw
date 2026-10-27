@@ -38,6 +38,8 @@ const PUBLIC_CODES = new Set<string>([
   "URIError",
   "EvalError",
   "AggregateError",
+  "OpenClawStateLeaseError",
+  "OPENCLAW_STATE_LEASE_LOST",
   "command-failed",
   "doctor-failed",
   "doctor-processes-unsettled",

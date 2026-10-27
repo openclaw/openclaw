@@ -18,6 +18,14 @@ export function makePayloadAssistant(overrides: Partial<AssistantMessage>): Assi
   });
 }
 
+export function makePayloadToolAssistant(name: string, args: Record<string, unknown>) {
+  return makePayloadAssistant({
+    stopReason: "toolUse",
+    errorMessage: undefined,
+    content: [{ type: "toolCall", id: "toolu_01", name, arguments: args }],
+  });
+}
+
 export function buildPayloads(overrides: Partial<BuildPayloadParams> = {}) {
   // Defaults mirror a quiet interactive session so tests opt into cron,
   // verbose, tool-result, or current-assistant behavior explicitly.

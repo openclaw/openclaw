@@ -23,13 +23,6 @@ async function listen(server: http.Server): Promise<string> {
   return `http://127.0.0.1:${port}`;
 }
 
-async function close(server: http.Server): Promise<void> {
-  server.closeAllConnections?.();
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-}
-
 function client(relayUrl: string): ReefTransportClient {
   return new ReefTransportClient(relayUrl, "alice", keys, fetch, () => 1_752_300_000, 50);
 }
@@ -51,7 +44,8 @@ describe("ReefTransportClient relay request timeout", () => {
     try {
       await expect(client(relayUrl).pull(0)).rejects.toMatchObject({ name: "TimeoutError" });
     } finally {
-      await close(server);
+      server.closeAllConnections?.();
+      await server[Symbol.asyncDispose]();
     }
   });
 });

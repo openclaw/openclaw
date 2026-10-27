@@ -3,6 +3,7 @@ import type { CronJob } from "../api/types.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
+import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -120,12 +121,7 @@ suite.define(() => {
         // The agent panel gates its automation reads and Run now on the advertised methods.
         featureMethods: [...defaultControlUiFeatureMethods, "cron.list", "cron.run"],
         methodResponses: {
-          "agents.list": {
-            agents: [{ id: "main", name: "Main agent" }],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
           "cron.list": cronResponses([alpha])["cron.list"],
           "cron.status": { enabled: true, jobs: 1, triggersEnabled: true },
           "cron.run": { ok: true, enqueued: true, runId: "synthetic-run-alpha" },

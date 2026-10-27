@@ -141,7 +141,7 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
     static let updateGuideURL = URL(string: "https://docs.openclaw.ai/install/updating")!
     static let supportURL = URL(string: "https://community.openclaw.ai/")!
 
-    private let model = PostUpdateModel()
+    let model = PostUpdateModel()
     private var receipt: PostAppUpdateReceipt?
     private var supersededCanonicalCheckpoint: PostAppUpdateReceipt?
     private var window: NSWindow?
@@ -935,9 +935,13 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func fail(message: String, details: String?) {
+    private func fail(
+        message: String, details: String?, connectionMode: AppState.ConnectionMode = .local)
+    {
         self.model.phase = .failed
-        self.model.title = String(localized: "Gateway update needs help")
+        self.model.title = connectionMode == .remote
+            ? String(localized: "Finishing your OpenClaw update")
+            : String(localized: "Gateway update needs help")
         self.model.message = message
         self.model.details = details
     }
@@ -1081,7 +1085,7 @@ extension PostUpdateController {
                 status: managedStatus(),
                 ownsManagedRuntime: true,
                 gatewayUpdateIncomplete: receipt.coreUpdatePending)
-            if legacyAction == .none, receipt.hasPendingRuntimeMigration ||
+            if legacyAction == .none, (remote && !reconciliationOnly) || receipt.hasPendingRuntimeMigration ||
                 Self.isNotificationOnlyRetry(receipt) || receipt.notificationInFlight
             {
                 action = .verify
@@ -1244,7 +1248,7 @@ extension PostUpdateController {
             executable, stateDirectory: AppProfile.current.stateDirectoryURL())
     }
 
-    private func performGatewayUpdate(
+    func performGatewayUpdate(
         resolution: PostUpdateGatewayResolution,
         receipt: PostAppUpdateReceipt,
         verifiedCompanion: Bool,
@@ -1260,8 +1264,20 @@ extension PostUpdateController {
         case .verify:
             self.show()
         case .managedRuntimeUnavailable:
-            self.markGatewayUpdateIncomplete(receipt: receipt)
+            if connectionMode == .local {
+                self.markGatewayUpdateIncomplete(receipt: receipt)
+            } else if verifiedCompanion, !receipt.coreUpdatePending, receipt.gatewayUpdateIncomplete {
+                // Node inspection cannot invalidate a companion already verified by its own owner.
+                self.receipt = PostAppUpdateReceiptStore.setGatewayUpdateIncomplete(false, receipt: receipt)
+            }
             self.show()
+            if connectionMode == .remote {
+                self.fail(
+                    message: String(localized: "The Mac node could not be checked."),
+                    details: NodeServiceManager.runtimeInspectionFailure,
+                    connectionMode: connectionMode)
+                return false
+            }
             self.fail(
                 message: String(localized: "Gateway verification failed."),
                 details: GatewayProcessManager.shared.lastFailureReason?.nonEmpty ??

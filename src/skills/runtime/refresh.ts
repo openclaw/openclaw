@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
@@ -13,6 +14,7 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import type { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
+import type { Skill } from "../loading/skill-contract.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import type { SkillSnapshotProjectionInput } from "../loading/skill-snapshot-projection.js";
 import {
@@ -68,6 +70,7 @@ type Source = {
   observations: Map<string, ReturnType<typeof observeOwnedDirectory>>;
 };
 type DiscoveryState = {
+  catalog: Map<string, Skill>;
   sources: Map<string, Source>;
   plans: Map<string, Promise<{ plan: WorkspaceSkillSourcePlan; input: SkillsSourcePlanInput }>>;
   pool?: WorkerTaskPool<SkillsDiscoveryInput, SkillsDiscoveryOutput>;
@@ -78,9 +81,36 @@ type DiscoveryState = {
 
 const state = resolveGlobalSingleton<DiscoveryState>(
   Symbol.for("openclaw.skillsDiscovery"),
-  () => ({ sources: new Map(), plans: new Map() }),
+  () => ({ sources: new Map(), plans: new Map(), catalog: new Map() }),
   () => closeSkillsWatchers(),
 );
+
+/** Share parsed facts, never agent selection or workspace read authority. */
+function shareCatalogSkill(skill: Skill): Skill {
+  const key = JSON.stringify([
+    skill.filePath,
+    skill.sourceInfo,
+    skill.discoveryRoot,
+    skill.fileHost,
+    skill.source,
+  ]);
+  const previous = state.catalog.get(key);
+  if (previous === skill || (previous && isDeepStrictEqual(previous, skill))) {
+    return previous;
+  }
+  // A completed scan supplies the current content hash and metadata. Replace
+  // edited facts; snapshots already in use retain their immutable old revision.
+  Object.freeze(skill.sourceInfo);
+  if (skill.discoveryRoot) {
+    Object.freeze(skill.discoveryRoot);
+  }
+  state.catalog.set(key, Object.freeze(skill));
+  // Bound catalogs from retired workspaces and transient resource locations.
+  if (state.catalog.size > 4096) {
+    state.catalog.delete(state.catalog.keys().next().value!);
+  }
+  return skill;
+}
 
 function pool() {
   return (state.pool ??= runInDiscoveryContext(
@@ -216,6 +246,9 @@ function scanDirtySources(): Promise<void> {
         if (result.plan && source.selection.plan) {
           const input = source.selection.plan.input;
           state.plans.set(JSON.stringify(input), Promise.resolve({ plan: result.plan, input }));
+        }
+        for (const entry of [...result.sources.entries, ...result.sources.executionEntries]) {
+          entry.skill = shareCatalogSkill(entry.skill);
         }
         source.sources = result.sources;
         source.fingerprint = result.fingerprint;
@@ -353,6 +386,7 @@ export async function projectSkillSnapshot(
   if (state.closing) {
     await state.closing;
   }
+  const skills = input.eligible.map((entry) => shareCatalogSkill(entry.skill));
   const result = await pool().run(
     { kind: "project", input, environment: captureSkillsDiscoveryEnvironment() },
     { timeoutMs: 120_000 },
@@ -360,7 +394,11 @@ export async function projectSkillSnapshot(
   if (result.kind !== "project") {
     throw new Error("Unexpected Skills projection response");
   }
-  return result.snapshot;
+  return {
+    ...result.snapshot,
+    resolvedSkills: result.resolvedIndices.map((index) => skills[index]!),
+    discoverySkills: result.discoveryIndices.map((index) => skills[index]!),
+  };
 }
 
 export async function prepareSkillStatusFacts(
@@ -518,6 +556,9 @@ async function resetSkillsDiscoverySources(
   }
   state.sources.clear();
   state.plans.clear();
+  if (retireWorker) {
+    state.catalog.clear();
+  }
   state.closing = Promise.allSettled([
     state.pending?.catch(() => {}),
     activePool?.close(),

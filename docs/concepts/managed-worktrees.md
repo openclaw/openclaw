@@ -19,9 +19,11 @@ local message attachments, and generation tools reading local references, wait f
 initial diff baseline. Tools that do not use the workspace can run immediately,
 including generation with inline or remote references. Completion also waits
 for preparation, and a preparation failure ends the turn with a retryable error.
+Accelerated clones can start prompt preparation once their files are complete,
+while Git index preparation finishes behind the same workspace-tool gate.
 
 Repositories with setup scripts, included files, unsupported checkout transforms,
-or project configuration that needs additional files finish preparation before
+or project configuration whose required files are not yet available finish preparation before
 the first turn starts. Active bootstrap hooks, including `bootstrap-extra-files`,
 also retain complete preparation so configured instructions remain available.
 Sandboxed projections require a fully published worktree before startup, as do
@@ -90,6 +92,9 @@ See [Workspace access](/gateway/sandboxing/workspace-access#managed-project-work
 for write policy, reconciliation, and conflict recovery. To update an existing
 local sandbox workspace from its selected repository base, use `github_publish`
 action `refresh_base` before tests and Auto Review.
+Publication and base refresh reuse exact commits already stored locally instead
+of fetching them again. Partial clones still fetch missing contents when the
+operation needs those files.
 Only sessions with a writable managed sandbox are offered this action; direct
 host sessions merge the base with git in their workspace before publishing.
 Resolve reported conflicts and repeat it with `conflictsResolved: true` and the
@@ -98,11 +103,19 @@ retaining its HEAD and commit
 history; use the returned local/base Auto Review target before publishing. The host retains the integrated base ancestry; guest Git metadata,
 host credentials, and unrelated ignored host files remain separate.
 
-The projection binding and pending reconciliation journal are additive SQLite
-state. They do not change the database version. Before downgrading, let pending
-workspace operations settle. Older versions do not reconcile these projections;
-they leave their additive state and private files intact. Return to a supporting
-version to recover pending changes rather than deleting a projection directory.
+Local sandbox baselines share immutable directory packs and compressed source path
+sets in the existing shared-state database. Sessions on the same source tree
+reuse those records. Compact file fingerprints let a restarted Gateway reuse
+unchanged hashes while detecting same-size edits and files moved by directory
+renames. Filesystem discovery still checks for additions and deletions on every
+scan. Existing projections convert one at a time during reconciliation; database
+open does not rewrite their inventories.
+
+This storage format requires [shared-state schema 35](/reference/database-schemas/state-schema-history#state-schema-35).
+Let pending workspace operations settle before downgrading. Older builds refuse
+the newer schema; rollback requires the verified pre-upgrade backup and its
+matching build. Keep private projection files and pending recovery data intact
+when returning to a supporting version.
 Versions that support projections but predate `refresh_base` reject a retained
 result from an interrupted base transfer. After both copies accept, that result is
 cleaned and native merge state owns any remaining conflict resolution. Complete
@@ -150,7 +163,9 @@ operations retain their existing execution deadlines.
 
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 
-Source custody inspects managed checkout and Git storage ownership once per operation. Destination protection reuses that inventory while reserving a slot, so ordinary repository creation does not rescan every managed repository under the allocation lease. The inventory ends with the operation; cleanup still checks live dependencies before deleting a checkout.
+If a registered project's checkout is busy, creation releases allocation before waiting for that project. Other repositories can continue reserving and creating workspaces. Once project access is available, creation releases it and retries the reservation with current source, owner, name, and capacity checks. Registered-source waits share the existing 30-minute creation contention budget, including source checks before checkout and before final session binding. The accepted request stays pending and cancellable while waiting; it continues when access becomes available without another request. Source contention after checkout or setup waits at that stage without repeating completed work.
+
+Source custody inspects managed checkout and Git storage ownership once per operation. Destination protection reuses that inventory while reserving a slot, so ordinary repository creation does not rescan every managed repository under the allocation lease. Unchanged inspected paths reuse the database owner's prepared ancestry index; changed paths update it while in-flight operations retain their original snapshot. Filesystem aliases and external Git metadata are still inspected for each operation, and cleanup checks live dependencies before deleting a checkout.
 
 A failed creation releases its slot after confirmed cleanup. If the caller crashes or a native operation has an uncertain outcome, the next allocation or `openclaw worktrees gc` reclaims count capacity after proving the caller is dead. It retains the unfinished checkout and its name in recovery custody and reports its path. Inspect the Git registration and any surviving native processes before manually recovering those files; cleanup does not assume parent-process death stopped a native write. Recovery custody does not publish an incomplete checkout as ready or block a new checkout with an unused name. Creation shares one 30-minute contention budget across admission retries and lease waits. Successful checkout, provisioning, setup, and publication do not consume that budget; an available lease can still be acquired after the wait budget is exhausted. Further contention reports the inspection and cleanup commands instead of starting another wait. Existing records need no schema migration. Let pending operations settle before downgrading to a version that does not understand these reservations.
 
@@ -274,7 +289,7 @@ available in the checkout or ask the Gateway administrator for help; a large
 inventory alone does not mean branches are obsolete. Ordinary default-branch
 creation and bounded branch suggestions keep their separate behavior.
 
-Concurrent creations from the same source checkout share remote-default preparation and the local-default advancement decision, including creations waiting for allocation. Existing callers retain their prepared result until their group finishes. New callers reuse a successful preparation for up to 30 seconds; callers arriving after expiry start a new refresh even while an older group is still active. Failed preparation is discarded when its group finishes. Preserving a busy local default does not fail a Git ref mutation. Branch registration uses the repository's shared Git mutation queue so upstream tracking cannot race another registration; file materialization remains concurrent. A fetch that loses a ref-lock race retries once within its original timeout. Creation reports unconfirmed Git cleanup without starting another fetch.
+Concurrent creations from the same source checkout share remote-default preparation and the local-default advancement decision, including creations waiting for allocation. Existing callers retain their prepared result until their group finishes. New callers reuse a successful preparation for up to 30 seconds; callers arriving after expiry start a new refresh even while an older group is still active. If the initiating caller is canceled, loses authority, or closes preparation, still-authorized callers share a replacement after the native attempt safely settles. This also covers callers that joined before waiting for source access. Recovery uses the remaining creation waiting budget without resetting it. Retry workspace creation if that budget is exhausted. Canceling a follower does not cancel another caller's fetch. Each replacement retains its initiating caller's current authority, and a caller that only reads the base cannot authorize local branch advancement. Other failed preparation is discarded when its group finishes. Preserving a busy local default does not fail a Git ref mutation. Branch registration uses the repository's shared Git mutation queue so upstream tracking cannot race another registration; file materialization remains concurrent. A fetch that loses a ref-lock race retries once within its original timeout. Creation reports unconfirmed Git cleanup without starting another fetch.
 
 Git worktree registration, ordinary checkout removal, and source materialization during creation or snapshot restore each have a five-minute timeout. Fetching missing objects for the size estimate uses the same five-minute budget. Remote-default discovery has a 30-second budget and its fetch has a 60-second budget. Other managed-worktree Git commands keep their two-minute timeout, except automatic Git maintenance, which gets 30 minutes. Explicit interrupted-removal recovery joins deletion without a deadline. The separate `.openclaw/worktree-setup.sh` step also keeps its own two-minute timeout.
 
@@ -351,7 +366,7 @@ Add `.worktreeinclude` at the source repository root to copy selected ignored, u
 fixtures/generated/**
 ```
 
-Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite or change destination files that already exist, does not follow symlinked directories, and preserves copied file modes. It records only paths it actually creates, so later manifest edits cannot make those files disappear from cleanup protection.
+Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite or change destination files that already exist, does not follow symlinked directories, and preserves copied file modes and access/modification times at the filesystem’s supported precision. This keeps the timestamp ordering of prepared build inputs and outputs instead of making every copied file look newly written. It records only paths it actually creates, so later manifest edits cannot make those files disappear from cleanup protection.
 
 ## Run repository setup
 
@@ -439,7 +454,9 @@ Unarchiving, or an authorized human message that reopens the archived session, r
 
 `sessions.create` may include an absolute `cwd` to run directly in another Gateway folder or to choose the source checkout together with `worktree: true`. Connections with `operator.write` may use a Gateway `cwd` contained in any configured agent workspace; realpath containment prevents symlinks from escaping that boundary. Gateway paths outside those workspaces require `operator.admin`. Ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace. For a Gateway source, New Session dispatches the completed worktree session to paired devices or cloud profiles instead of passing a paired-node working directory to creation. The separate `repository: { url, ref? }` create input starts a remote-owned repository session without a Gateway path or `worktree: true`.
 
-`sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. If `worktreeName` is omitted, the session label or generated first-message title supplies the readable branch name, with a two-word, crustacean-themed fallback if naming fails or exceeds the 30-second wait. Raw first-message text is never a branch-name fallback. A title that arrives later updates the session without renaming its existing branch. For a new session with an initial message or task, creation returns the admitted session and run before worktree preparation finishes. The chat shows the submitted message and repository-update, checkout, and setup progress, including after reopening the session; failures remain visible and retryable in the same session. The agent starts only after the finalized worktree is bound. Creation without an initial turn still waits for preparation and returns the worktree in the create result. The bound checkout is persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show its checkout and branch. When session deletion cannot finish that cleanup, `worktreePreserved` identifies the active worktree record that needs attention and reports one bounded reason: owner mismatch, active use or competing cleanup, a foreign Git lock, snapshot failure, or another cleanup failure. These reasons describe cleanup and ownership, not whether the checkout is dirty or has unpushed commits.
+`sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. If `worktreeName` is omitted, the session label or generated first-message title supplies the readable branch name, with a two-word, crustacean-themed fallback if naming fails or exceeds the 30-second wait. Raw first-message text is never a branch-name fallback. A title that arrives later updates the session without renaming its existing branch. For a new session with an initial message or task, creation returns the admitted session and run before worktree preparation finishes. The chat shows the submitted message and repository-update, checkout, and setup progress, including after reopening the session; failures remain visible and retryable in the same session. The agent starts only after the finalized worktree is bound. Creation without an initial turn still waits for preparation and returns the worktree in the create result. The bound checkout is persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show its checkout and branch. Ordinary session deletion waits for cleanup; if it cannot finish, `worktreePreserved` identifies the active worktree record that needs attention and reports one bounded reason: owner mismatch, active use or competing cleanup, a foreign Git lock, snapshot failure, or another cleanup failure. These reasons describe cleanup and ownership, not whether the checkout is dirty or has unpushed commits.
+
+For `sessions.delete` with `archivedOnly: true`, the response confirms durable session deletion and transcript export before worktree cleanup finishes. The Gateway retains the cleanup operation and blocks same-key successors until it settles. Inspect `worktrees.list` for the retained worktree and its `runEndCleanup` outcome; a snapshot failure preserves the checkout and records the failure there. A crash leaves the registry binding available to lossless garbage collection, which also runs hourly or through `worktrees.gc`. Removal still requires a completed snapshot; the early response does not authorize discarding unsaved work. Incognito deletion keeps its existing synchronous cleanup behavior.
 
 An explicit session base must resolve to a commit. Local refs are checked before the session is saved; remote-project refs are checked after cloning. A missing remote ref is refreshed from the recorded project URL and retried only in a Gateway-managed clone, never an operator-registered checkout. Once accepted, the commit stays pinned across setup failures and retries while the original ref remains publication metadata. Invalid explicit refs never silently switch to the repository default. Managed-clone refresh uses an isolated Git repository for network transport, so checkout-local URL rewrites and hooks cannot redirect or execute during the fetch. Pinned-commit presence checks disable lazy fetching; missing commits use the explicit incremental fetch rather than downloading their ancestry again through a promisor remote. Refresh preserves an existing clone's partial-clone filter; checkout preparation fetches the selected commit's missing contents when needed.
 
@@ -689,6 +706,8 @@ reset the index, reattach HEAD, or prune the registration.
 
 ## CLI
 
+Human-readable worktree reports escape control characters in displayed values. The records and paths returned by `--json` are unchanged.
+
 Worktree CLI mutations use the authenticated Gateway that owns the selected local
 state directory when one is running. This includes creation, ordinary, lossless
 and exact-state removal, restoration, garbage collection, interrupted-removal
@@ -754,14 +773,21 @@ openclaw worktrees gc --job <id>
 
 For partial clones, `openclaw worktrees gc --retry-deferred` also checks the
 objects needed by all Git-registered worktree indexes and current HEAD trees
-before attempting cleanup.
+during repository maintenance.
 It fetches missing objects from the existing promisor remote in bounded batches,
 preserving staged and working files. Historical commits remain filtered, and
 ordinary background maintenance does not fetch. Repair has a five-minute budget
-and a 4,096-object limit per pass; completed fetches survive interruption. If
-repair cannot finish, maintenance logs a warning. Restore remote access and run
-the command again to resume from the remaining missing objects. Locally created
-objects unavailable from the remote still require recovery from another copy.
+and a 4,096-object limit per pass; completed fetches survive interruption.
+Each checkout is inspected separately. The shared state database records the
+last attempted checkout, so the next explicit retry starts with its successor
+even after a Gateway restart. A slow or unreadable checkout cannot keep later
+linked indexes from being repaired. This position only schedules work; it never
+certifies object availability or permits checkout removal. Failed checkouts are
+revisited on later sweeps, and a completed sweep clears the position.
+If repair cannot finish, maintenance logs a warning. Restore remote access and
+run the command again to continue. A checkout whose own inventory exceeds the
+budget still needs repository repair; locally created objects unavailable from
+the remote require recovery from another copy.
 
 Gateway Git inspections also use only locally available objects. In partial
 clones, missing objects can leave optional checkout, branch, or diff facts

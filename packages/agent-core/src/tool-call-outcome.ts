@@ -148,7 +148,51 @@ export async function finalizeToolCallOutcome(
   finalized: FinalizedToolCallOutcome,
   args: unknown,
 ): Promise<FinalizedToolCallOutcome> {
-  const outcome = await applyToolOutcomeHook(batch, finalized, args);
+  let outcome = finalized;
+  if (batch.config.afterToolOutcome) {
+    try {
+      const afterResult = await batch.config.afterToolOutcome(
+        {
+          assistantMessage: batch.assistantMessage,
+          toolCall: finalized.toolCall,
+          args,
+          result: finalized.result,
+          isError: finalized.isError,
+          executionStarted: finalized.executionStarted,
+          ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
+          context: batch.currentContext,
+        },
+        batch.signal,
+      );
+      if (afterResult) {
+        outcome = {
+          ...finalized,
+          result: copyInternalToolResultState(finalized.result, {
+            ...finalized.result,
+            content: afterResult.content ?? finalized.result.content,
+            details: afterResult.details ?? finalized.result.details,
+            terminate: afterResult.terminate ?? finalized.result.terminate,
+          }),
+          isError: afterResult.isError ?? finalized.isError,
+        };
+      }
+    } catch (error) {
+      if (batch.isLocalError?.(error)) {
+        throw error;
+      }
+      const errorResult = createErrorToolResult(coerceErrorMessage(error));
+      outcome = {
+        ...finalized,
+        result: {
+          ...errorResult,
+          ...(finalized.result.terminate === undefined
+            ? {}
+            : { terminate: finalized.result.terminate }),
+        },
+        isError: true,
+      };
+    }
+  }
   if (batch.lifecycle?.observeOutcome) {
     outcome.loopOutcome = {
       toolCall: outcome.toolCall,
@@ -159,59 +203,6 @@ export async function finalizeToolCallOutcome(
   }
   const warning = batch.warnings?.find((entry) => entry.toolCallId === outcome.toolCall.id);
   return warning ? { ...outcome, result: appendToolLoopWarning(outcome.result, warning) } : outcome;
-}
-
-async function applyToolOutcomeHook(
-  batch: ToolOutcomeContext,
-  finalized: FinalizedToolCallOutcome,
-  args: unknown,
-): Promise<FinalizedToolCallOutcome> {
-  if (!batch.config.afterToolOutcome) {
-    return finalized;
-  }
-  try {
-    const afterResult = await batch.config.afterToolOutcome(
-      {
-        assistantMessage: batch.assistantMessage,
-        toolCall: finalized.toolCall,
-        args,
-        result: finalized.result,
-        isError: finalized.isError,
-        executionStarted: finalized.executionStarted,
-        ...(finalized.errorKind ? { errorKind: finalized.errorKind } : {}),
-        context: batch.currentContext,
-      },
-      batch.signal,
-    );
-    if (!afterResult) {
-      return finalized;
-    }
-    return {
-      ...finalized,
-      result: copyInternalToolResultState(finalized.result, {
-        ...finalized.result,
-        content: afterResult.content ?? finalized.result.content,
-        details: afterResult.details ?? finalized.result.details,
-        terminate: afterResult.terminate ?? finalized.result.terminate,
-      }),
-      isError: afterResult.isError ?? finalized.isError,
-    };
-  } catch (error) {
-    if (batch.isLocalError?.(error)) {
-      throw error;
-    }
-    const errorResult = createErrorToolResult(coerceErrorMessage(error));
-    return {
-      ...finalized,
-      result: {
-        ...errorResult,
-        ...(finalized.result.terminate === undefined
-          ? {}
-          : { terminate: finalized.result.terminate }),
-      },
-      isError: true,
-    };
-  }
 }
 
 export type ImmediateToolCallOutcome = {
@@ -243,7 +234,7 @@ export function immediateToolPreparationError(error: unknown): ImmediateToolCall
  * An executed call's source comes from its tool declaration, or from the raw
  * result/error mark a dispatcher (Tool Search, Code Mode) sets for nested calls.
  */
-export function resolveToolResultContentSource(
+function resolveToolResultContentSource(
   tool: Pick<AgentTool, "resultContentSource">,
   result: object,
 ): Pick<FinalizedToolCallOutcome, "resultContentSource"> {

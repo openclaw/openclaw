@@ -127,8 +127,7 @@ it.each(["success", "failure"])(
       },
     });
     const failure = formatCliProcessFailure({ reason: "CLI source retirement failed", ...result });
-    expect(result.signal, failure).toBeNull();
-    expect(result.code, failure).toBe(0);
+    expect(result, failure).toMatchObject({ signal: null, code: 0 });
     expect(result.stdout, failure).toContain("cleanup joined after source retirement");
   },
 );

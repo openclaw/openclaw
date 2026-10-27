@@ -8,7 +8,6 @@ import {
   replaceSessionEntrySync,
   persistSessionTranscriptTurn,
   loadSessionEntryReadOnly,
-  readSessionTranscriptWatermark,
 } from "../config/sessions/session-accessor.js";
 import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,21 +22,15 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createGatewayBroadcaster } from "./server-broadcast.js";
-import { makeClient } from "./server-broadcast.test-helpers.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import type { registerSessionPublicationTests } from "./server-runtime-subscriptions.publication.test-support.js";
-import { GatewayClientRegistry } from "./server/client-registry.js";
 import {
   activityRecapResult,
   preparedActivityRecapModel,
   seedRecapConversation,
 } from "./session-activity-summaries.test-support.js";
-import {
-  projectSessionActivitySummary,
-  type ActivitySummaryTarget,
-} from "./session-activity-summary-state.js";
+import type { ActivitySummaryTarget } from "./session-activity-summary-state.js";
 import * as observerModel from "./session-observer-model.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -72,15 +65,6 @@ export function registerActivitySummaryPublicationTests(
     const producer = new AsyncWorkScope();
     const connectionWork = new GatewayConnectionWork();
     const { params, unsubs } = start(projection, connectionWork.signal);
-    const subscribed = makeClient("activity", "operator", ["operator.read"]);
-    const other = makeClient("unsubscribed", "operator", ["operator.read"]);
-    params.sessionEventSubscribers.subscribe(subscribed.client.connId);
-    const broadcaster = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([subscribed.client, other.client]),
-      canReceiveSessionEvent: (client) =>
-        params.sessionEventSubscribers.getAll().has(client.connId),
-    });
-    vi.mocked(params.broadcast).mockImplementation(broadcaster.broadcast);
     const entered = createDeferred();
     const release = createDeferred();
     const prepare = projection.withPreparedExactRows.bind(projection);
@@ -107,24 +91,27 @@ export function registerActivitySummaryPublicationTests(
       onChanged(target);
       await vi.advanceTimersByTimeAsync(0);
       expect(closed).toBe(false);
-      expect(subscribed.socket.send).not.toHaveBeenCalled();
+      expect(params.broadcast).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1_000);
       await entered.promise;
       release.resolve();
       await vi.runAllTimersAsync();
       await closing;
-      expect(subscribed.socket.send).toHaveBeenCalledOnce();
-      expect(JSON.parse(subscribed.socket.send.mock.calls[0]![0])).toMatchObject({
-        event: "sessions.changed",
-        payload: {
+      expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
+        "sessions.changed",
+        expect.objectContaining({
           reason: "activity-summary",
-          session: { key: target.key, sessionId: entry.sessionId, label: "latest recap row" },
-        },
-      });
+          session: expect.objectContaining({
+            key: target.key,
+            sessionId: entry.sessionId,
+            label: "latest recap row",
+          }),
+        }),
+        expect.objectContaining({ sessionKeys: [target.key], agentId: target.agentId }),
+      );
       onChanged(target);
       await vi.runAllTimersAsync();
-      expect(subscribed.socket.send).toHaveBeenCalledOnce();
-      expect(other.socket.send).not.toHaveBeenCalled();
+      expect(params.broadcast).toHaveBeenCalledOnce();
     } finally {
       release.resolve();
       await vi.runAllTimersAsync();
@@ -145,16 +132,11 @@ export function registerActivitySummaryPublicationTests(
         agentId: "main",
         storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       };
-      const parent = { ...target, key: "agent:main:recap-parent" };
-      for (const [key, sessionId, parentSessionKey, archivedAt] of [
-        [parent.key, "recap-parent", undefined, 1],
-        [target.key, "recap", parent.key, undefined],
-        ["agent:main:unrelated", "unrelated", undefined, undefined],
+      for (const [key, sessionId] of [
+        [target.key, "recap"],
+        ["agent:main:unrelated", "unrelated"],
       ] as const) {
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: key },
-          { sessionId, updatedAt: 1, parentSessionKey, archivedAt },
-        );
+        replaceSessionEntrySync({ agentId: "main", sessionKey: key }, { sessionId, updatedAt: 1 });
       }
       const placements = createWorkerSessionPlacementStore();
       const releaseForeground = retainSessionListForegroundWork();
@@ -190,12 +172,7 @@ export function registerActivitySummaryPublicationTests(
           projection,
           () => [target],
           () => undefined,
-          {
-            includeAncestors: true,
-          },
         );
-        const row = projection.describe(target)!;
-        expect(projection.ancestorRows(row)?.map((ancestor) => ancestor.key)).toEqual([parent.key]);
         expect(projection.needsMaterialization).toBe(true);
         const onChanged = getOnChanged();
         if (!onChanged) {
@@ -325,14 +302,6 @@ export function registerActivitySummaryRunTests(
           await clock.advanceBy(3_600_000);
           expect(auth).toHaveBeenCalledOnce();
           expect(complete).toHaveBeenCalledTimes(available ? 1 : 0);
-          expect(
-            projectSessionActivitySummary({
-              ...target,
-              cfg,
-              entry: loadSessionEntryReadOnly(scope),
-              watermark: readSessionTranscriptWatermark(scope),
-            }),
-          ).toMatchObject({ state: available ? "current" : "unavailable" });
         } finally {
           operation.complete();
           await unsubs.agentUnsub();

@@ -122,12 +122,18 @@ export type PreparedAccountCatalogAccess = {
     allowDiscovery: boolean;
     refresh?: boolean;
     load: () => Promise<readonly ProviderCatalogOutcome[]>;
-  }) => Promise<{ outcomes: readonly ProviderCatalogOutcome[]; isCurrent: () => boolean }>;
+  }) => Promise<{
+    outcomes: readonly ProviderCatalogOutcome[];
+    /** Distinguishes an authoritative empty publication from a cold private catalog. */
+    hasPublishedCatalog: boolean;
+    isCurrent: () => boolean;
+  }>;
 };
 
 /** Private auth facts owned by an immutable prepared model generation. */
 type RuntimeAuthBinding = {
   store?: AuthProfileStore;
+  readUsage?: (store: AuthProfileStore) => AuthProfileStore;
   labels?: ModelCatalogAuthLabels;
   materializations?: readonly RuntimeAuthMaterialization[];
   load?: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
@@ -147,7 +153,8 @@ export function bindPreparedModelRuntimeAuth(snapshot: object, binding: RuntimeA
 }
 
 export function getPreparedModelRuntimeAuthStore(snapshot: object): AuthProfileStore | undefined {
-  return runtimeAuth.get(snapshot)?.store;
+  const binding = runtimeAuth.get(snapshot);
+  return binding?.store ? (binding.readUsage?.(binding.store) ?? binding.store) : undefined;
 }
 
 export function getPreparedModelRuntimeAuthLabels(snapshot: object): ModelCatalogAuthLabels {
@@ -202,7 +209,7 @@ export async function loadPreparedModelRuntimeAuth(
   if (load) {
     return await load(scope);
   }
-  const authStore = binding?.store;
+  const authStore = getPreparedModelRuntimeAuthStore(snapshot);
   return authStore ? { authStore, authModes: snapshot.authModes ?? {} } : undefined;
 }
 

@@ -198,6 +198,7 @@ export function mergeProviderModels(
       maxTokensSource: _maxTokensSource,
       parameterCount: _parameterCount,
       family: _family,
+      inference: _inference,
       ...implicitMetadata
     } = implicitModel;
     return Object.assign(
@@ -216,6 +217,15 @@ export function mergeProviderModels(
       maxTokens === undefined ? {} : { maxTokens },
       maxTokensSource === undefined ? {} : { maxTokensSource },
       { compat },
+      {
+        inference:
+          explicitModel.inference ??
+          (catalogRouteMatches
+            ? implicitModel.inference
+            : implicitModel.inference
+              ? { chat: false }
+              : undefined),
+      },
       {
         contextWindows: contextSelection?.contextWindows,
         contextWindowDefault: contextSelection?.contextWindowDefault,

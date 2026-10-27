@@ -32,16 +32,8 @@ function primeOpenAiAuthProfile(mode: "api-key" | "token" = "api-key"): void {
 type LocalAudioSelection = Awaited<ReturnType<typeof inspectLocalAudioSelection>>;
 
 const closeEmbeddingProviderMock = vi.hoisted(() => vi.fn(async () => {}));
-const mocks = vi.hoisted(() => ({
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number) => {
-      throw new Error(`exit ${code}`);
-    }),
-    writeJson: vi.fn(),
-    writeStdout: vi.fn(),
-  },
+const mocks = await vi.hoisted(async () => ({
+  runtime: (await import("./test-runtime-mock.js")).createInertRuntime(vi),
   loadConfig: vi.fn(() => ({})),
   getRuntimeConfigSourceSnapshot: vi.fn(() => null),
   setRuntimeConfigSnapshot: vi.fn(),
@@ -257,16 +249,14 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
 }));
 
 // mock-isolation: Capability commands use fixture config and snapshot publication without host state.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
-  getRuntimeConfig: mocks.loadConfig,
-  loadConfig: mocks.loadConfig,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.loadConfig>) =>
-    async () =>
-      mocks.loadConfig(...args),
-  setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
+  return {
+    getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
+    ...createTestConfigReadMocks(mocks, "loadConfig"),
+    setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
+  };
+});
 
 vi.mock("./command-config-resolution.js", () => ({
   resolveCommandConfigWithSecrets: mocks.resolveCommandConfigWithSecrets,

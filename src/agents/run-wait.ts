@@ -268,7 +268,8 @@ export async function waitForAgentRunsToDrain(params: {
   deadlineAtMs?: number;
   callGateway?: GatewayCaller;
 }): Promise<void> {
-  const deadlineAtMs = resolveRunWaitDeadlineAtMs(params);
+  const deadlineWallAtMs = resolveRunWaitDeadlineAtMs(params);
+  const deadlineAtMs = performance.now() + Math.max(0, deadlineWallAtMs - Date.now());
   const callGateway = params.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true });
 
   // Runs may finish and spawn more runs, so refresh until no pending IDs remain.
@@ -276,8 +277,8 @@ export async function waitForAgentRunsToDrain(params: {
     params.initialPendingRunIds ?? (await params.getPendingRunIds()),
   );
 
-  while (pendingRunIds.size > 0 && Date.now() < deadlineAtMs) {
-    const remainingMs = Math.max(1, deadlineAtMs - Date.now());
+  while (pendingRunIds.size > 0 && performance.now() < deadlineAtMs) {
+    const remainingMs = Math.max(1, deadlineAtMs - performance.now());
     await Promise.allSettled(
       [...pendingRunIds].map((runId) =>
         waitForAgentRun({
@@ -289,7 +290,7 @@ export async function waitForAgentRunsToDrain(params: {
     );
     const previousRunIds = pendingRunIds;
     pendingRunIds = normalizePendingRunIds(await params.getPendingRunIds());
-    const retryDelayMs = Math.min(AGENT_RUN_WAIT_RETRY_DELAY_MS, deadlineAtMs - Date.now());
+    const retryDelayMs = Math.min(AGENT_RUN_WAIT_RETRY_DELAY_MS, deadlineAtMs - performance.now());
     if (
       retryDelayMs > 0 &&
       pendingRunIds.size > 0 &&

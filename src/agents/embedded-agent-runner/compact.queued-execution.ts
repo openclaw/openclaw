@@ -12,10 +12,8 @@ import {
 } from "../../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { sameSessionTranscriptStorePath } from "../../config/sessions/transcript-store-identity.js";
-import {
-  withOwnedSessionTranscriptWrites,
-  type OwnedSessionTranscriptWriteContext,
-} from "../../config/sessions/transcript-write-context.js";
+import type { OwnedSessionTranscriptWriteContext } from "../../config/sessions/transcript-write-context-store.js";
+import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import {
   resolveCompactionSuccessorTranscript,
   type ContextEngine,

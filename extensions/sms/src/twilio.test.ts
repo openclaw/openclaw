@@ -1,4 +1,3 @@
-// Sms tests cover twilio plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -7,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForEffectPreparation } from "../../test-support/effect-preparation.test-support.js";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import {
@@ -22,12 +22,15 @@ import {
 import type { ResolvedSmsAccount } from "./types.js";
 import {
   createSmsTestAccount,
+  createSmsTestForm,
   createSmsTestMessage,
   createSmsTestPhoneNumber,
   signSmsTestForm,
 } from "./webhook.test-support.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const WEBHOOK = "https://gateway.example.com/webhooks/sms";
+const RETRIES = "rp=ct,rt,5xx&rt=5000&rc=1";
 
 const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
@@ -50,6 +53,32 @@ function mockTwilioFetch(implementation?: typeof fetch) {
 
 function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSmsAccount {
   return createSmsTestAccount({ accountId: "default", ...overrides });
+}
+
+function createTwilioSendInput(account = createAccount(), text = "hello") {
+  return { account, to: "+15551234567", text };
+}
+
+function inboundForm(fields: Record<string, string> = {}) {
+  return createSmsTestForm({ AccountSid: "", ...fields });
+}
+
+function signatureInput(form: Record<string, string>) {
+  return { form, url: WEBHOOK, authToken: "secret", signature: signSmsTestForm(form).signature };
+}
+
+function mockResponse(response: Response) {
+  const release = vi.fn(async () => {});
+  fetchWithSsrFGuardMock.mockResolvedValue({ response, release });
+  return release;
+}
+
+function mockJson(payload: unknown, status = 201) {
+  return mockTwilioFetch(async () => Response.json(payload, { status }));
+}
+
+function send(account = createAccount(), text = "hello") {
+  return sendSmsViaTwilio(createTwilioSendInput(account, text));
 }
 
 function readUrlEncodedRequestBody(init: RequestInit | undefined): URLSearchParams {
@@ -90,24 +119,12 @@ describe("Twilio SMS helpers", () => {
         dispatched.resolve();
         return response.promise;
       });
-      const sending = sendSmsViaTwilio({
-        account,
-        to: "+15551234567",
-        text: "hello",
-      }).then(
+      const sending = sendSmsViaTwilio(createTwilioSendInput(account)).then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
       try {
-        await Promise.race([
-          preparing.promise,
-          dispatched.promise.then(() => {
-            throw new Error("dispatched before preparation");
-          }),
-          sending.then(() => {
-            throw new Error("settled before preparation");
-          }),
-        ]);
+        await waitForEffectPreparation(preparing.promise, dispatched.promise, sending);
         expect(fetchImpl).not.toHaveBeenCalled();
         if (replaced) {
           replace();
@@ -170,17 +187,17 @@ describe("Twilio SMS helpers", () => {
 
   it("parses media-only Twilio MMS callbacks in provider order", async () => {
     const form = await readTestTwilioForm(
-      [
-        "From=%2B15551234567",
-        "To=%2B15557654321",
-        "Body=",
-        "MessageSid=MM123",
-        "NumMedia=2",
-        "MediaUrl0=https%3A%2F%2Fapi.twilio.com%2Fmedia%2Ffirst",
-        "MediaContentType0=image%2Fjpeg",
-        "MediaUrl1=https%3A%2F%2Fapi.twilio.com%2Fmedia%2Fsecond",
-        "MediaContentType1=video%2Fmp4",
-      ].join("&"),
+      new URLSearchParams(
+        inboundForm({
+          Body: "",
+          MessageSid: "MM123",
+          NumMedia: "2",
+          MediaUrl0: "https://api.twilio.com/media/first",
+          MediaContentType0: "image/jpeg",
+          MediaUrl1: "https://api.twilio.com/media/second",
+          MediaContentType1: "video/mp4",
+        }),
+      ).toString(),
     );
 
     expect(buildTwilioInboundMessage(form)).toEqual({
@@ -198,14 +215,7 @@ describe("Twilio SMS helpers", () => {
 
   it("preserves the signed Messaging Service identity on inbound messages", () => {
     expect(
-      buildTwilioInboundMessage({
-        AccountSid: "AC123",
-        MessagingServiceSid: "MG123",
-        From: "+15551234567",
-        To: "+15557654321",
-        Body: "hello",
-        MessageSid: "SM123",
-      }),
+      buildTwilioInboundMessage(inboundForm({ AccountSid: "AC123", MessagingServiceSid: "MG123" })),
     ).toMatchObject({
       accountSid: "AC123",
       messagingServiceSid: "MG123",
@@ -214,13 +224,11 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("rejects malformed counts and marks missing Twilio MMS media as unavailable", () => {
-    const base = {
-      From: "+15551234567",
-      To: "+15557654321",
+    const base = inboundForm({
       Body: "",
       MessageSid: "MM123",
       MediaUrl0: "https://api.twilio.com/media/first",
-    };
+    });
     expect(buildTwilioInboundMessage({ ...base, NumMedia: "not-a-number" })).toBeNull();
     expect(buildTwilioInboundMessage({ ...base, NumMedia: "1", MediaUrl0: "" })).toMatchObject({
       media: [],
@@ -237,14 +245,9 @@ describe("Twilio SMS helpers", () => {
     );
 
     expect(
-      buildTwilioInboundMessage({
-        From: "+15551234567",
-        To: "+15557654321",
-        Body: "",
-        MessageSid: "MM123",
-        NumMedia: "11",
-        ...mediaFields,
-      }),
+      buildTwilioInboundMessage(
+        inboundForm({ Body: "", MessageSid: "MM123", NumMedia: "11", ...mediaFields }),
+      ),
     ).toMatchObject({
       media: Array.from({ length: 10 }, (_value, index) => ({
         url: `https://api.twilio.com/media/${index}`,
@@ -259,91 +262,38 @@ describe("Twilio SMS helpers", () => {
     ["whatsapp:+15551234567", null],
     ["signal:+15551234567", null],
   ] as const)("accepts only supported Twilio inbound From address %s", (from, expected) => {
-    const msg = buildTwilioInboundMessage({
-      From: from,
-      To: "+15557654321",
-      Body: "hello",
-      MessageSid: "SM123",
-    });
-
+    const msg = buildTwilioInboundMessage(inboundForm({ From: from }));
     expect(msg?.from ?? null).toBe(expected);
   });
 
   it("verifies Twilio signatures over sorted form fields", () => {
-    const form = {
-      Body: "hello",
-      From: "+15551234567",
-      MessageSid: "SM123",
-      To: "+15557654321",
-    };
-    const signature = signSmsTestForm(form, createAccount()).signature;
-
-    expect(
-      verifyTwilioSignature({
-        signature,
-        url: "https://gateway.example.com/webhooks/sms",
-        authToken: "secret",
-        form,
-      }),
-    ).toBe(true);
-    expect(
-      verifyTwilioSignature({
-        signature,
-        url: "https://gateway.example.com/webhooks/sms/other",
-        authToken: "secret",
-        form,
-      }),
-    ).toBe(false);
-    expect(
-      verifyTwilioSignature({
-        signature: signature.slice(0, -1),
-        url: "https://gateway.example.com/webhooks/sms",
-        authToken: "secret",
-        form,
-      }),
-    ).toBe(false);
+    const input = signatureInput(inboundForm());
+    expect(verifyTwilioSignature(input)).toBe(true);
+    expect(verifyTwilioSignature({ ...input, url: `${WEBHOOK}/other` })).toBe(false);
+    expect(verifyTwilioSignature({ ...input, signature: input.signature.slice(0, -1) })).toBe(
+      false,
+    );
   });
 
   it("preserves signed form values before signature verification", async () => {
     const form = await readTestTwilioForm(
       "From=%2B15551234567&To=%2B15557654321&Body=+hello+&MessageSid=SM123&WaId=",
     );
-    const signature = signSmsTestForm(form, createAccount()).signature;
-
     expect(form.Body).toBe(" hello ");
     expect(form.WaId).toBe("");
-    expect(
-      verifyTwilioSignature({
-        signature,
-        url: "https://gateway.example.com/webhooks/sms",
-        authToken: "secret",
-        form,
-      }),
-    ).toBe(true);
+    expect(verifyTwilioSignature(signatureInput(form))).toBe(true);
     expect(buildTwilioInboundMessage(form)?.body).toBe(" hello ");
   });
 
   it("sends SMS through Twilio's Messages API", async () => {
-    const fetchImpl = mockTwilioFetch(async () =>
-      Response.json(
-        {
-          sid: "SM456",
-          to: "+15551234567",
-          from: "+15557654321",
-          status: "queued",
-        },
-        { status: 201 },
-      ),
-    );
-
+    const fetchImpl = mockJson({
+      sid: "SM456",
+      to: "+15551234567",
+      from: "+15557654321",
+      status: "queued",
+    });
     await expect(
-      sendSmsViaTwilio({
-        account: createAccount({
-          publicWebhookUrl: "https://gateway.example.com/webhooks/sms#rp=4xx",
-        }),
-        to: "+15551234567",
-        text: "hello",
-      }),
+      send(createAccount({ publicWebhookUrl: `${WEBHOOK}#rp=4xx`, messagingServiceSid: "MG123" })),
     ).resolves.toEqual({
       sid: "SM456",
       to: "+15551234567",
@@ -360,11 +310,10 @@ describe("Twilio SMS helpers", () => {
     });
     const body = readUrlEncodedRequestBody(init);
     expect(body.get("From")).toBe("+15557654321");
+    expect(body.has("MessagingServiceSid")).toBe(false);
     expect(body.get("To")).toBe("+15551234567");
     expect(body.get("Body")).toBe("hello");
-    expect(body.get("StatusCallback")).toBe(
-      "https://gateway.example.com/webhooks/sms#rp=4xx,ct,rt,5xx&rt=5000&rc=1",
-    );
+    expect(body.get("StatusCallback")).toBe(`${WEBHOOK}#rp=4xx,ct,rt,5xx&rt=5000&rc=1`);
   });
 
   it("opts delivery commits into bounded connection, timeout, and 5xx retries", () => {
@@ -378,38 +327,15 @@ describe("Twilio SMS helpers", () => {
   });
 
   it.each([
-    [
-      "accepts an absolute HTTP callback URL",
-      "http://gateway.example.com/webhooks/sms",
-      "http://gateway.example.com/webhooks/sms#rp=ct,rt,5xx&rt=5000&rc=1",
-    ],
-    [
-      "preserves the query and existing retry policy",
-      "https://gateway.example.com/webhooks/sms?tenant=support#rp=4xx",
-      "https://gateway.example.com/webhooks/sms?tenant=support#rp=4xx,ct,rt,5xx&rt=5000&rc=1",
-    ],
-    [
-      "preserves an all-failures policy and configured retry count",
-      "https://gateway.example.com/webhooks/sms#rt=5000&rp=all&rc=3",
-      "https://gateway.example.com/webhooks/sms#rt=5000&rp=all&rc=3",
-    ],
-    [
-      "preserves a configured read timeout",
-      "https://gateway.example.com/webhooks/sms#rt=1200&rp=ct",
-      "https://gateway.example.com/webhooks/sms#rt=1200&rp=ct,rt,5xx&rc=1",
-    ],
-    [
-      "repairs an invalid read timeout",
-      "https://gateway.example.com/webhooks/sms#rt=16000",
-      "https://gateway.example.com/webhooks/sms#rt=5000&rp=ct,rt,5xx&rc=1",
-    ],
-    [
-      "repairs a disabled retry count without replacing other overrides",
-      "https://gateway.example.com/webhooks/sms#e=singapore&rc=0",
-      "https://gateway.example.com/webhooks/sms#e=singapore&rc=1&rp=ct,rt,5xx&rt=5000",
-    ],
-  ])("%s", (_name, publicWebhookUrl, expected) => {
-    expect(resolveTwilioStatusCallbackUrl(publicWebhookUrl)).toBe(expected);
+    ["", `#${RETRIES}`, "http:"],
+    ["?tenant=support#rp=4xx", "?tenant=support#rp=4xx,ct,rt,5xx&rt=5000&rc=1"],
+    ["#rt=5000&rp=all&rc=3", "#rt=5000&rp=all&rc=3"],
+    ["#rt=1200&rp=ct", "#rt=1200&rp=ct,rt,5xx&rc=1"],
+    ["#rt=16000", "#rt=5000&rp=ct,rt,5xx&rc=1"],
+    ["#e=singapore&rc=0", "#e=singapore&rc=1&rp=ct,rt,5xx&rt=5000"],
+  ])("preserves or repairs callback overrides %s", (input, expected, protocol = "https:") => {
+    const base = WEBHOOK.replace("https:", protocol);
+    expect(resolveTwilioStatusCallbackUrl(`${base}${input}`)).toBe(`${base}${expected}`);
   });
 
   it("omits the delivery callback when no public webhook URL is configured", () => {
@@ -452,17 +378,11 @@ describe("Twilio SMS helpers", () => {
   ])(
     "keeps text sending available with a %s public webhook URL",
     async (_name, publicWebhookUrl) => {
-      const fetchImpl = mockTwilioFetch(
-        async () => new Response(JSON.stringify({ sid: "SM-no-callback" }), { status: 201 }),
-      );
+      const fetchImpl = mockJson({ sid: "SM-no-callback" });
 
-      await expect(
-        sendSmsViaTwilio({
-          account: createAccount({ publicWebhookUrl }),
-          to: "+15551234567",
-          text: "hello",
-        }),
-      ).resolves.toMatchObject({ sid: "SM-no-callback" });
+      await expect(send(createAccount({ publicWebhookUrl }))).resolves.toMatchObject({
+        sid: "SM-no-callback",
+      });
 
       const body = readUrlEncodedRequestBody(fetchImpl.mock.calls[0]?.[1]);
       expect(body.has("StatusCallback")).toBe(false);
@@ -479,12 +399,7 @@ describe("Twilio SMS helpers", () => {
       events.push("dispatch");
     });
 
-    await sendSmsViaTwilio({
-      account: createAccount(),
-      to: "+15551234567",
-      text: "hello",
-      onPlatformSendDispatch,
-    });
+    await sendSmsViaTwilio({ ...createTwilioSendInput(), onPlatformSendDispatch });
 
     expect(events).toEqual(["dispatch", "post"]);
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
@@ -542,7 +457,7 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("sends MMS with repeated MediaUrl fields and no required text body", async () => {
-    const fetchImpl = mockTwilioFetch(async () => Response.json({ sid: "MM456" }, { status: 201 }));
+    const fetchImpl = mockJson({ sid: "MM456" });
 
     await sendSmsViaTwilio({
       account: createAccount(),
@@ -572,67 +487,37 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("enforces Twilio's provider-owned Message Body limit", async () => {
-    const fetchImpl = mockTwilioFetch(async () =>
-      Response.json({ sid: "SM1600" }, { status: 201 }),
+    const fetchImpl = mockJson({ sid: "SM1600" });
+    await expect(send(createAccount(), "x".repeat(1600))).resolves.toMatchObject({ sid: "SM1600" });
+    await expect(send(createAccount(), "x".repeat(1601))).rejects.toThrow(
+      "Twilio SMS/MMS Body supports at most 1600 characters",
     );
-
-    await expect(
-      sendSmsViaTwilio({
-        account: createAccount(),
-        to: "+15551234567",
-        text: "x".repeat(1600),
-      }),
-    ).resolves.toMatchObject({ sid: "SM1600" });
-    await expect(
-      sendSmsViaTwilio({
-        account: createAccount(),
-        to: "+15551234567",
-        text: "x".repeat(1601),
-      }),
-    ).rejects.toThrow("Twilio SMS/MMS Body supports at most 1600 characters");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("lists Twilio phone-number webhook settings", async () => {
-    const fetchImpl = mockTwilioFetch(async () =>
-      Response.json({
+  it.each([
+    {
+      name: "phone-number webhook settings",
+      payload: {
         incoming_phone_numbers: [
-          {
-            sid: "PN123",
-            ...createSmsTestPhoneNumber({
-              voice_url: "https://gateway.example.com/voice/webhook",
-            }),
-          },
+          createSmsTestPhoneNumber({ voice_url: "https://gateway.example.com/voice/webhook" }),
         ],
-      }),
-    );
-
-    await expect(
-      listTwilioIncomingPhoneNumbers({
-        account: createAccount(),
-        phoneNumber: "+15557654321",
-      }),
-    ).resolves.toEqual([
-      {
-        phoneNumber: "+15557654321",
-        smsUrl: "https://gateway.example.com/webhooks/sms",
-        smsMethod: "POST",
-        voiceUrl: "https://gateway.example.com/voice/webhook",
       },
-    ]);
-
-    const [url, init] = fetchImpl.mock.calls[0] ?? [];
-    expect(url).toBe(
-      "https://api.twilio.com/2010-04-01/Accounts/AC123/IncomingPhoneNumbers.json?PhoneNumber=%2B15557654321",
-    );
-    expect(init?.headers).toMatchObject({
-      authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,
-    });
-  });
-
-  it("lists recent Twilio messages for diagnostics", async () => {
-    const fetchImpl = mockTwilioFetch(async () =>
-      Response.json({
+      request: () =>
+        listTwilioIncomingPhoneNumbers({ account: createAccount(), phoneNumber: "+15557654321" }),
+      expected: [
+        {
+          phoneNumber: "+15557654321",
+          smsUrl: WEBHOOK,
+          smsMethod: "POST",
+          voiceUrl: "https://gateway.example.com/voice/webhook",
+        },
+      ],
+      url: "https://api.twilio.com/2010-04-01/Accounts/AC123/IncomingPhoneNumbers.json?PhoneNumber=%2B15557654321",
+    },
+    {
+      name: "recent messages for diagnostics",
+      payload: {
         messages: [
           createSmsTestMessage({
             error_code: 11200,
@@ -641,112 +526,67 @@ describe("Twilio SMS helpers", () => {
             date_sent: null,
           }),
         ],
-      }),
-    );
-
-    await expect(
-      listTwilioMessages({
-        account: createAccount(),
-        to: "+15557654321",
-      }),
-    ).resolves.toEqual([
-      {
-        sid: "SM123",
-        direction: "inbound",
-        status: "received",
-        errorCode: "11200",
-        dateCreated: "Sun, 31 May 2026 10:00:00 +0000",
-        dateSent: "",
       },
-    ]);
-
-    const [url] = fetchImpl.mock.calls[0] ?? [];
-    expect(url).toBe(
-      "https://api.twilio.com/2010-04-01/Accounts/AC123/Messages.json?To=%2B15557654321&PageSize=3",
-    );
-  });
-
-  it("retrieves Twilio Messaging Service webhook settings", async () => {
-    const fetchImpl = mockTwilioFetch(async () =>
-      Response.json({
+      request: () => listTwilioMessages({ account: createAccount(), to: "+15557654321" }),
+      expected: [
+        {
+          sid: "SM123",
+          direction: "inbound",
+          status: "received",
+          errorCode: "11200",
+          dateCreated: "Sun, 31 May 2026 10:00:00 +0000",
+          dateSent: "",
+        },
+      ],
+      url: "https://api.twilio.com/2010-04-01/Accounts/AC123/Messages.json?To=%2B15557654321&PageSize=3",
+    },
+    {
+      name: "Messaging Service webhook settings",
+      payload: {
         sid: "MG123",
-        inbound_request_url: "https://gateway.example.com/webhooks/sms",
+        inbound_request_url: WEBHOOK,
         inbound_method: "POST",
         use_inbound_webhook_on_number: false,
-      }),
-    );
-
-    await expect(
-      retrieveTwilioMessagingService({
-        account: createAccount({ messagingServiceSid: "MG123", fromNumber: "" }),
-        serviceSid: "MG123",
-      }),
-    ).resolves.toEqual({
-      sid: "MG123",
-      inboundRequestUrl: "https://gateway.example.com/webhooks/sms",
-      inboundMethod: "POST",
-      useInboundWebhookOnNumber: false,
-    });
-
+      },
+      request: () =>
+        retrieveTwilioMessagingService({
+          account: createAccount({ messagingServiceSid: "MG123", fromNumber: "" }),
+          serviceSid: "MG123",
+        }),
+      expected: {
+        sid: "MG123",
+        inboundRequestUrl: WEBHOOK,
+        inboundMethod: "POST",
+        useInboundWebhookOnNumber: false,
+      },
+      url: "https://messaging.twilio.com/v1/Services/MG123",
+    },
+  ])("reads $name", async ({ payload, request, expected, url: expectedUrl }) => {
+    const fetchImpl = mockJson(payload, 200);
+    await expect(request()).resolves.toEqual(expected);
     const [url, init] = fetchImpl.mock.calls[0] ?? [];
-    expect(url).toBe("https://messaging.twilio.com/v1/Services/MG123");
+    expect(url).toBe(expectedUrl);
     expect(init?.headers).toMatchObject({
       authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,
     });
   });
 
   it("can send through a Twilio Messaging Service SID", async () => {
-    const fetchImpl = mockTwilioFetch(async () => Response.json({ sid: "SM789" }, { status: 201 }));
-
-    await sendSmsViaTwilio({
-      account: createAccount({ fromNumber: "", messagingServiceSid: "MG123" }),
-      to: "+15551234567",
-      text: "hello",
-    });
+    const fetchImpl = mockJson({ sid: "SM789" });
+    await send(createAccount({ fromNumber: "", messagingServiceSid: "MG123" }));
 
     const [, init] = fetchImpl.mock.calls[0] ?? [];
     const body = readUrlEncodedRequestBody(init);
     expect(body.get("MessagingServiceSid")).toBe("MG123");
     expect(body.get("To")).toBe("+15551234567");
     expect(body.get("Body")).toBe("hello");
-    expect(body.get("StatusCallback")).toBe(
-      "https://gateway.example.com/webhooks/sms#rp=ct,rt,5xx&rt=5000&rc=1",
-    );
-  });
-
-  it("prefers an explicit from number when both sender options are resolved", async () => {
-    const fetchImpl = mockTwilioFetch(async () => Response.json({ sid: "SM999" }, { status: 201 }));
-
-    await sendSmsViaTwilio({
-      account: createAccount({ fromNumber: "+15557654321", messagingServiceSid: "MG123" }),
-      to: "+15551234567",
-      text: "hello",
-    });
-
-    const [, init] = fetchImpl.mock.calls[0] ?? [];
-    const body = readUrlEncodedRequestBody(init);
-    expect(body.get("From")).toBe("+15557654321");
-    expect(body.get("MessagingServiceSid")).toBeNull();
+    expect(body.get("StatusCallback")).toBe(`${WEBHOOK}#${RETRIES}`);
   });
 
   it("reports actionable Twilio errors from JSON error bodies", async () => {
-    mockTwilioFetch(async () =>
-      Response.json(
-        {
-          code: 21610,
-          message: "The message From/To pair violates a blacklist rule.",
-        },
-        { status: 400 },
-      ),
-    );
+    mockJson({ code: 21610, message: "The message From/To pair violates a blacklist rule." }, 400);
 
-    await expect(
-      sendSmsViaTwilio({
-        account: createAccount(),
-        to: "+15551234567",
-        text: "hello",
-      }),
-    ).rejects.toMatchObject({
+    await expect(send()).rejects.toMatchObject({
       name: "TwilioSmsApiError",
       message: "Twilio SMS send failed (400): The message From/To pair violates a blacklist rule.",
     });
@@ -765,17 +605,7 @@ describe("Twilio SMS helpers", () => {
       });
     });
 
-    let caught: unknown;
-    try {
-      await sendSmsViaTwilio({
-        account,
-        to: "+15551234567",
-        text: "hello",
-      });
-    } catch (error) {
-      caught = error;
-    }
-
+    const caught = await send(account).catch((error: unknown) => error);
     expect(caught).toMatchObject({
       message: "Twilio SMS send failed (503): upstream unavailable; Authorization: Basic ***",
     });
@@ -783,19 +613,9 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("releases guarded Twilio egress on failed send responses", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response("upstream unavailable", { status: 503 }),
-      release,
-    });
+    const release = mockResponse(new Response("upstream unavailable", { status: 503 }));
 
-    await expect(
-      sendSmsViaTwilio({
-        account: createAccount(),
-        to: "+15551234567",
-        text: "hello",
-      }),
-    ).rejects.toThrow("Twilio SMS send failed (503): upstream unavailable");
+    await expect(send()).rejects.toThrow("Twilio SMS send failed (503): upstream unavailable");
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -810,72 +630,35 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("bounds guarded Twilio errors on complete UTF-8 characters and cancels overflow", async () => {
-    const release = vi.fn(async () => {});
     const tracked = cancelTrackedTextResponse(`${"x".repeat(8 * 1024 - 2)}😀tail`, {
       status: 503,
     });
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: tracked.response,
-      release,
-    });
-
-    let caught: Error | undefined;
-    try {
-      await sendSmsViaTwilio({
-        account: createAccount(),
-        to: "+15551234567",
-        text: "hello",
-      });
-    } catch (error) {
-      caught = error as Error;
+    const release = mockResponse(tracked.response);
+    const caught = await send().catch((error: unknown) => error);
+    if (!(caught instanceof Error)) {
+      throw new Error("expected Twilio send failure");
     }
 
-    expect(caught?.message).toContain("Twilio SMS send failed (503): ");
-    expect(caught?.message).toContain("... [truncated]");
-    expect(caught?.message).not.toContain("�");
-    expect(caught?.message).not.toContain("tail");
-    expect(caught?.message.length).toBeLessThan(8_300);
+    expect(caught.message).toContain("Twilio SMS send failed (503): ");
+    expect(caught.message).toContain("... [truncated]");
+    expect(caught.message).not.toContain("�");
+    expect(caught.message).not.toContain("tail");
+    expect(caught.message.length).toBeLessThan(8_300);
     expect(tracked.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects malformed JSON from successful Twilio sends", async () => {
-    mockTwilioFetch(async () => new Response("not json", { status: 201 }));
-
-    await expect(
-      sendSmsViaTwilio({
-        account: createAccount(),
-        to: "+15551234567",
-        text: "hello",
-      }),
-    ).rejects.toThrow("Twilio SMS send returned malformed JSON.");
-  });
-
   it("releases guarded Twilio egress on malformed successful send responses", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response("not json", { status: 201 }),
-      release,
-    });
+    const release = mockResponse(new Response("not json", { status: 201 }));
 
-    await expect(
-      sendSmsViaTwilio({
-        account: createAccount(),
-        to: "+15551234567",
-        text: "hello",
-      }),
-    ).rejects.toThrow("Twilio SMS send returned malformed JSON.");
+    await expect(send()).rejects.toThrow("Twilio SMS send returned malformed JSON.");
 
     expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("rejects malformed JSON from Twilio Messaging Service lookup", async () => {
     mockTwilioFetch(
-      async () =>
-        new Response("NOT JSON {{{", {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+      async () => new Response("NOT JSON {{{", { headers: { "content-type": "application/json" } }),
     );
 
     await expect(
@@ -888,11 +671,7 @@ describe("Twilio SMS helpers", () => {
 
   it("returns empty list on malformed JSON from Twilio incoming phone number list", async () => {
     mockTwilioFetch(
-      async () =>
-        new Response("NOT JSON {{{", {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+      async () => new Response("NOT JSON {{{", { headers: { "content-type": "application/json" } }),
     );
 
     const result = await listTwilioIncomingPhoneNumbers({
@@ -904,20 +683,10 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("bounds and cancels oversized guarded Twilio success bodies", async () => {
-    const release = vi.fn(async () => {});
     const tracked = cancelTrackedTextResponse("x".repeat(1024 * 1024 + 1), { status: 201 });
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: tracked.response,
-      release,
-    });
+    const release = mockResponse(tracked.response);
 
-    await expect(
-      sendSmsViaTwilio({
-        account: createAccount(),
-        to: "+15551234567",
-        text: "hello",
-      }),
-    ).rejects.toThrow(
+    await expect(send()).rejects.toThrow(
       "Twilio SMS API response body too large: 1048577 bytes (limit: 1048576 bytes)",
     );
 
@@ -926,43 +695,28 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("requires successful Twilio sends to include a Message SID", async () => {
-    mockTwilioFetch(
-      async () => new Response(JSON.stringify({ status: "queued" }), { status: 201 }),
+    mockJson({ status: "queued" });
+
+    await expect(send()).rejects.toThrow("Twilio SMS send response did not include a Message SID.");
+  });
+
+  it.each([
+    ["adds request query", "/webhooks/sms?foo=bar", `${WEBHOOK}#rp=4xx`, `${WEBHOOK}?foo=bar`],
+    [
+      "preserves configured query",
+      "/webhooks/sms?foo=request",
+      `${WEBHOOK}?foo=configured#rp=all`,
+      `${WEBHOOK}?foo=configured`,
+    ],
+    [
+      "preserves explicit port",
+      "/webhooks/sms",
+      "https://gateway.example.com:443/webhooks/sms#rp=4xx",
+      "https://gateway.example.com:443/webhooks/sms",
+    ],
+  ])("strips signature URL fragment and %s", (_name, url, publicWebhookUrl, expected) => {
+    expect(resolveTwilioWebhookSignatureUrl({ req: { url } as never, publicWebhookUrl })).toBe(
+      expected,
     );
-
-    await expect(
-      sendSmsViaTwilio({
-        account: createAccount(),
-        to: "+15551234567",
-        text: "hello",
-      }),
-    ).rejects.toThrow("Twilio SMS send response did not include a Message SID.");
-  });
-
-  it("excludes a connection override fragment when adding a request query", () => {
-    expect(
-      resolveTwilioWebhookSignatureUrl({
-        req: { url: "/webhooks/sms?foo=bar" } as never,
-        publicWebhookUrl: "https://gateway.example.com/base#rp=4xx",
-      }),
-    ).toBe("https://gateway.example.com/base?foo=bar");
-  });
-
-  it("keeps an explicit configured query but excludes its connection override fragment", () => {
-    expect(
-      resolveTwilioWebhookSignatureUrl({
-        req: { url: "/webhooks/sms?foo=request" } as never,
-        publicWebhookUrl: "https://gateway.example.com/base?foo=configured#rp=all",
-      }),
-    ).toBe("https://gateway.example.com/base?foo=configured");
-  });
-
-  it("strips a connection override fragment without reserializing the configured URL", () => {
-    expect(
-      resolveTwilioWebhookSignatureUrl({
-        req: { url: "/webhooks/sms" } as never,
-        publicWebhookUrl: "https://gateway.example.com:443/webhooks/sms#rp=4xx",
-      }),
-    ).toBe("https://gateway.example.com:443/webhooks/sms");
   });
 });

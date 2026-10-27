@@ -44,17 +44,7 @@ export function compileConfigRegex(pattern: string, flags = ""): CompiledConfigR
  * Compile a list of user-configured regex patterns, separating usable regexes from diagnostics.
  * Callers can keep operating with safe entries while reporting rejected unsafe patterns once.
  */
-export function compileConfigRegexes(
-  patterns: string[],
-  flags = "",
-): {
-  regexes: RegExp[];
-  rejected: Array<{
-    pattern: string;
-    flags: string;
-    reason: ConfigRegexRejectReason;
-  }>;
-} {
+export function compileConfigRegexes(patterns: string[], flags = "") {
   const regexes: RegExp[] = [];
   const rejected: Array<{
     pattern: string;

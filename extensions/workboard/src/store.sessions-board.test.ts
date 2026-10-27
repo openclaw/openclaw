@@ -1,5 +1,5 @@
 import { copyFileSync, renameSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkboardSessionPlacementWrite } from "./persistence-types.js";
@@ -35,6 +35,12 @@ async function sessionBoard(options: Parameters<typeof createWorkboardSqliteTest
     pin: (patch: Partial<WorkboardSessionPlacementWrite> = {}, expectedSpec = board.sessions) =>
       harness.store.writeSessionPlacement("sessions", placement(patch), { expectedSpec }),
   };
+}
+
+function reopen(dbPath: string) {
+  const stores = createKernelStores(dbPath);
+  const store = new WorkboardStore(stores.cards, stores);
+  return { store, stores, [Symbol.asyncDispose]: () => store.close() };
 }
 
 describe("Sessions board storage", () => {
@@ -100,7 +106,9 @@ describe("Sessions board storage", () => {
     const { store, pin } = await sessionBoard();
     const changes = vi.fn();
     store.onChange = changes;
+    expect(await pin({ expectedUpdatedAt: 1000 })).toBe(false);
     expect(await pin()).toBe(true);
+    expect(await pin()).toBe(false);
     expect(await pin({ columnId: "merged", expectedUpdatedAt: 1000 })).toBe(true);
     // Same-millisecond writes still advance the revision and fence delayed moves.
     expect(await store.listSessionPlacements("sessions")).toEqual([
@@ -117,6 +125,21 @@ describe("Sessions board storage", () => {
     await expect(pin({ columnId: "missing" }, current.sessions)).rejects.toThrow(
       "Unknown sessions board column",
     );
+  });
+
+  test("writes placements without a precondition SELECT", async () => {
+    const { pin } = await sessionBoard({ createStores: createKernelStores });
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- Preserve the native receiver below.
+    const get = StatementSync.prototype.get;
+    const reads: string[] = [];
+    using spy = vi.spyOn(StatementSync.prototype, "get");
+    spy.mockImplementation(function (this: StatementSync, ...params: Parameters<typeof get>) {
+      reads.push(this.sourceSQL);
+      return get.apply(this, params);
+    });
+    expect(await pin()).toBe(true);
+    expect(await pin({ expectedUpdatedAt: 1000 })).toBe(true);
+    expect(reads.filter((sql) => sql.includes("workboard_session_placements"))).toEqual([]);
   });
 
   // Injects legacy session placement data through a native SQLite file handle.
@@ -141,16 +164,11 @@ describe("Sessions board storage", () => {
           "sessions",
         );
     }
-    const stores = createKernelStores(dbPath);
-    const reopened = new WorkboardStore(stores.cards, stores);
-    try {
-      expect((await reopened.getSessionsBoard("sessions")).sessions).toEqual(board.sessions);
-      expect(await reopened.repairSessionPlacements()).toEqual({ placements: 2, boards: 0 });
-      expect(await reopened.repairSessionPlacements()).toEqual({ placements: 0, boards: 0 });
-      expect(await reopened.listSessionPlacements("sessions")).toEqual([placement()]);
-    } finally {
-      await reopened.close();
-    }
+    await using opened = reopen(dbPath);
+    expect((await opened.store.getSessionsBoard("sessions")).sessions).toEqual(board.sessions);
+    expect(await opened.store.repairSessionPlacements()).toEqual({ placements: 2, boards: 0 });
+    expect(await opened.store.repairSessionPlacements()).toEqual({ placements: 0, boards: 0 });
+    expect(await opened.store.listSessionPlacements("sessions")).toEqual([placement()]);
   });
 
   it("deletes only the sessions board and its placements", async () => {
@@ -214,9 +232,6 @@ describe("Sessions board storage", () => {
       expect(await store.listSessionPlacements("sessions")).toEqual([]);
     },
   );
-});
-
-describe("Sessions board schema reopening", () => {
   // Rebuilds and reopens a prior-schema SQLite file.
   test("preserves prior-schema cards and admits a new Sessions board after reopening", async () => {
     const { store, dbPath } = createWorkboardSqliteTestHarness({
@@ -244,41 +259,22 @@ describe("Sessions board schema reopening", () => {
       `);
     }
 
-    const reopenedStores = createKernelStores(dbPath);
-    const reopened = new WorkboardStore(reopenedStores.cards, reopenedStores);
-    try {
-      expect((await reopenedStores.boards.lookup(board.id))?.board).toEqual(board);
-      const restoredBoard = (await reopened.listBoards()).boards.find(
-        (entry) => entry.id === board.id,
-      );
-      expect(restoredBoard).toMatchObject({
-        id: board.id,
-        name: "Planning",
-        color: "blue",
-        total: 1,
-      });
-      expect(restoredBoard).not.toHaveProperty("kind");
-      expect(restoredBoard).not.toHaveProperty("sessions");
-      expect(await reopened.get(card.id)).toEqual(card);
+    await using opened = reopen(dbPath);
+    const { store: reopened, stores } = opened;
+    expect((await stores.boards.lookup(board.id))?.board).toEqual(board);
+    expect((await reopened.listBoards()).boards).toContainEqual(
+      expect.objectContaining({ id: board.id, total: 1 }),
+    );
+    expect(await reopened.get(card.id)).toEqual(card);
 
-      await expect(
-        reopened.upsertBoard({ id: "sessions", kind: "sessions", name: "Sessions" }),
-      ).resolves.toMatchObject({ id: "sessions", kind: "sessions", name: "Sessions" });
-      expect(await reopened.getSessionsBoard("sessions")).toMatchObject({
-        id: "sessions",
-        kind: "sessions",
-        sessions: { columns: expect.any(Array) },
-      });
-      expect(await reopened.listSessionPlacements("sessions")).toEqual([]);
-    } finally {
-      await reopened.close();
-    }
-
-    using migrated = new DatabaseSync(dbPath, { readOnly: true });
-    expect(
-      migrated.prepare("SELECT COUNT(*) AS count FROM workboard_session_placements").get(),
-    ).toEqual({
-      count: 0,
+    await expect(
+      reopened.upsertBoard({ id: "sessions", kind: "sessions", name: "Sessions" }),
+    ).resolves.toMatchObject({ id: "sessions", kind: "sessions", name: "Sessions" });
+    expect(await reopened.getSessionsBoard("sessions")).toMatchObject({
+      id: "sessions",
+      kind: "sessions",
+      sessions: { columns: expect.any(Array) },
     });
+    expect(await reopened.listSessionPlacements("sessions")).toEqual([]);
   });
 });

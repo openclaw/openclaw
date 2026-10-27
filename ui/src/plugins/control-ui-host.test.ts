@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { AssistantDock, type AssistantDockOwner } from "../app/assistant-dock.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { PLUGIN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
@@ -300,12 +301,7 @@ describe("native UI roster refresh", () => {
   it.each(["agents", "sessions"] as const)(
     "refreshes cached %s rows without discarding the current roster scope",
     async (surface) => {
-      const firstAgents: AgentsListResult = {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }],
-      };
+      const firstAgents: AgentsListResult = makeBootRoster();
       const nextAgents: AgentsListResult = {
         ...firstAgents,
         agents: [...firstAgents.agents, { id: "research" }],

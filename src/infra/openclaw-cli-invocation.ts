@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   getEmbeddedStandaloneRuntimeRoot,
   readStandaloneRuntimeManifest,
@@ -9,6 +9,7 @@ import {
 } from "../../cli-invocation.mjs";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeArgs, resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 
@@ -21,13 +22,6 @@ const OPENCLAW_PACKAGE_ENTRY_PATHS = new Set([
   path.join("dist", "index.mjs"),
   path.join("src", "entry.ts"),
 ]);
-
-export type OpenClawCliInvocation = Readonly<{
-  command: string;
-  args: string[];
-  cwd: string;
-  env?: Record<string, string>;
-}>;
 
 /** Keep parent runtime flags, pin its known TSX preload, and leave debugger ownership behind. */
 export function filterOpenClawChildExecArgv(
@@ -57,18 +51,22 @@ export function filterOpenClawChildExecArgv(
 }
 
 function buildPackageRootCliArgs(packageRoot: string, execPath: string): string[] {
-  const sourceEntry = path.join(packageRoot, "src", "entry.ts");
+  const sourceEntryUrl = resolveExternalPackageRuntimeEntrypointUrl("sourceCli", packageRoot);
+  const sourceEntry = fileURLToPath(sourceEntryUrl);
   if (fs.existsSync(sourceEntry)) {
     try {
       return filterOpenClawChildExecArgv(
-        resolveRuntimeWorkerArgv(pathToFileURL(sourceEntry), execPath),
+        resolveRuntimeWorkerArgv(sourceEntryUrl, execPath),
         packageRoot,
       );
     } catch {
       // A checkout without TSX can still use its built package launcher.
     }
   }
-  return [...resolveRuntimeArgs(execPath), path.join(packageRoot, "openclaw.mjs")];
+  return [
+    ...resolveRuntimeArgs(execPath),
+    fileURLToPath(resolveExternalPackageRuntimeEntrypointUrl("cliLauncher", packageRoot)),
+  ];
 }
 
 export function resolveOpenClawCliEntryPath(argv1: string | undefined): string | undefined {
@@ -90,7 +88,12 @@ export function resolveCurrentOpenClawCliInvocation(
   options: {
     moduleUrl?: string;
   } = {},
-): OpenClawCliInvocation {
+): Readonly<{
+  command: string;
+  args: string[];
+  cwd: string;
+  env?: Record<string, string>;
+}> {
   const execPath = process.execPath;
   const embeddedRoot = getEmbeddedStandaloneRuntimeRoot();
   const manifest = embeddedRoot ? undefined : readStandaloneRuntimeManifest(execPath);

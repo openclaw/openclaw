@@ -1,4 +1,5 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import type { Accessor } from "solid-js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { parseMarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
@@ -12,7 +13,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { isProviderVoiceTranscript } from "../chat-assistant-reply.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
-import { readAsyncQuestions } from "./chat-async-question.ts";
+import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { hasUserFileAttachments } from "./chat-message-attachments.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import {
@@ -62,6 +63,7 @@ export type MessageMediaOptions = Pick<
   | "resourceBasePath"
   | "assistantAttachmentAuthToken"
   | "mediaOwner"
+  | "mediaReadAllowed"
   | "onRequestOpenImage"
   | "onOpenImage"
   | "resolveArtifactDownload"
@@ -122,6 +124,7 @@ export function createMessageMediaOptions(
     resourceBasePath: opts.resourceBasePath,
     authToken: opts.assistantAttachmentAuthToken,
     mediaOwner: opts.mediaOwner,
+    mediaReadAllowed: opts.mediaReadAllowed,
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
     resolveArtifactDownload: opts.resolveArtifactDownload,
@@ -349,3 +352,10 @@ export function prepareGroupedMessage(
 }
 
 export type GroupedMessagePresentation = ReturnType<typeof prepareGroupedMessage>;
+
+export type MessageContentProps = {
+  state: Accessor<GroupedMessagePresentation>;
+  messageKey: string;
+  options: GroupedMessageOptions;
+  onOpenSidebar?: (content: SidebarContent) => void;
+};

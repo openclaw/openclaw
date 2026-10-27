@@ -3,6 +3,7 @@ import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { ProviderUsagePanel } from "../../components/solid/provider-usage.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   SettingsSection,
   SettingsPage,
@@ -24,7 +25,7 @@ import type { UsageProps } from "./types.ts";
 import { DailyChartCompact, CostBreakdownCompact } from "./view-chart.tsx";
 import { UsageCreatorFilter, UsageCreators } from "./view-creators.tsx";
 import { SessionDetailPanel } from "./view-details.tsx";
-import { renderUsageHeatmap } from "./view-heatmap.tsx";
+import { UsageHeatmap } from "./view-heatmap.tsx";
 import { renderCostWindowComparison, renderFilterChips, UsageInsights } from "./view-overview.tsx";
 import { UsageQueryFilter } from "./view-query-filter.tsx";
 import { SessionsCard } from "./view-sessions-card.tsx";
@@ -141,7 +142,7 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
   const displayTotals = createMemo(() => (overview().hasOverviewData ? props.data.totals : null));
   const filterOptions = createMemo(
     () =>
-      props.data.overview?.filterOptions ?? {
+      props.data.filterOptions ?? {
         agent: [],
         channel: [],
         provider: [],
@@ -308,21 +309,22 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
                     onChange={(endDate) => props.callbacks.filters.onDatesChange({ endDate })}
                   />
                 </div>
-                <select
+                <SettingsSelect
                   class="usage-select"
                   title={t("usage.filters.timeZone")}
                   aria-label={t("usage.filters.timeZone")}
                   value={props.filters.timeZone}
+                  options={[
+                    { value: "local", label: t("usage.filters.timeZoneLocal") },
+                    { value: "utc", label: t("usage.filters.timeZoneUtc") },
+                  ]}
                   onChange={(event) => {
                     const timeZone = event.currentTarget.value;
                     if (timeZone === "local" || timeZone === "utc") {
                       props.callbacks.filters.onScopeChange({ timeZone });
                     }
                   }}
-                >
-                  <option value="local">{t("usage.filters.timeZoneLocal")}</option>
-                  <option value="utc">{t("usage.filters.timeZoneUtc")}</option>
-                </select>
+                />
               </div>
               <div class="usage-view-options">
                 <UsageCreatorFilter
@@ -660,11 +662,11 @@ function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
               props.filters.endDate,
               props.filters.timeZone,
             )}
-            {renderUsageHeatmap(
-              props.data.costDaily,
-              props.filters.startDate,
-              props.filters.endDate,
-            )}
+            <UsageHeatmap
+              daily={props.data.costDaily}
+              rangeStartDate={props.filters.startDate}
+              rangeEndDate={props.filters.endDate}
+            />
             {
               <UsageMosaic
                 overview={props.data.overview}

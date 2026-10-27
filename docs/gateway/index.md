@@ -184,7 +184,7 @@ What to expect:
 
 Checklist per instance:
 
-- Unique `gateway.port`
+- Unique `gateway.port`, with base ports at least 120 apart to avoid derived-port overlap
 - Unique `OPENCLAW_CONFIG_PATH`
 - Unique `OPENCLAW_STATE_DIR`
 - Unique `agents.defaults.workspace`
@@ -193,7 +193,7 @@ Example:
 
 ```bash
 OPENCLAW_CONFIG_PATH=~/.openclaw/a.json OPENCLAW_STATE_DIR=~/.openclaw-a openclaw gateway --port 19001
-OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b openclaw gateway --port 19002
+OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b openclaw gateway --port 19121
 ```
 
 Detailed setup: [/gateway/multiple-gateways](/gateway/multiple-gateways).

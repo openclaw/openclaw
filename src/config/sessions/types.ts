@@ -167,6 +167,13 @@ export type CliSessionBinding = {
   mcpResumeHash?: string;
   /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
   reseedReceipt?: CliSessionReseedReceipt;
+  /** Last input snapshot supplied to this native session, independent of recovery authority. */
+  transcriptCursor?: {
+    localSessionId: string;
+    entryId: string | null;
+    runId: string;
+    userEntryId?: string;
+  };
 };
 
 type AcpSessionBinding = {
@@ -409,6 +416,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     subagentRole?: "orchestrator" | "leaf";
     /** Explicit control scope assigned at spawn time for subagent control decisions. */
     subagentControlScope?: "children" | "none";
+    /** Spawn-time blind child: its rendered prompt omits its model, identity and workspace path. */
+    blindPrompt?: true;
     /** Version of the requester tool-policy snapshot captured when this child was spawned. */
     inheritedToolPolicyVersion?: 1;
     /** Sender/channel restriction provenance retained with the inherited tool snapshot. */
@@ -498,6 +507,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
         requireExplicitMessageTarget?: boolean;
       };
     };
+    /** Explicit requested access program; omission follows the model/project default. */
+    cyberAccessProgram?: SessionRow["cyberAccessProgram"];
     fastMode?: FastMode;
     toolOverrides?: SessionToolOverrides;
     /** Swarm group for collector-mode child sessions. */
@@ -522,6 +533,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     responseUsage?: "on" | "off" | "tokens" | "full";
     providerOverride?: string;
     modelOverride?: string;
+    /** Last submitted selection, retained when picker edits clear runtime fields. */
+    lastSubmittedModel?: { provider: string; model: string };
     /** Session-scoped agent runtime/harness override selected with the model picker. */
     agentRuntimeOverride?: string;
     /**

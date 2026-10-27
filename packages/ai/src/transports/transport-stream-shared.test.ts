@@ -1,10 +1,12 @@
 import type { Model } from "@openclaw/llm-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { makeStallingStream } from "../providers/provider-stream.test-support.js";
 import { createOpenAIResponsesAssistantOutput } from "./openai-responses-replay-internal.js";
 import {
   assignTransportErrorDetails,
   iterateModelStream,
+  iterateSseFrames,
   notifyProviderHttpMetadata,
   notifyProviderHttpResponse,
   parseTerminalToolCallArguments as parseArguments,
@@ -15,7 +17,11 @@ import {
 const REPAIR = { repairStringLiterals: true } as const;
 const initialHost = getAiTransportHost();
 const model = { provider: "openai", id: "fixture-model", api: "openai-responses" } as Model;
-afterEach(() => configureAiTransportHost(initialHost));
+afterEach(() => {
+  configureAiTransportHost(initialHost);
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 it.each(["error", "data"] as const)(
   "logs failure metadata without response.%s prose or generated content",
@@ -46,6 +52,7 @@ it.each(["error", "data"] as const)(
     expect(logWarn).toHaveBeenCalledWith("provider-error", "Model request failed", {
       provider: "openai",
       model: "fixture-model",
+      name: "Error",
       status: 400,
       code: "invalid_prompt",
       type: "invalid_request_error",
@@ -56,11 +63,24 @@ it.each(["error", "data"] as const)(
     });
     expect(output.errorType).toBe("invalid_request_error");
     expect(output.errorBody?.length).toBeLessThan(6000);
-    for (const secret of ["PRIVATE OUTPUT", "PRIVATE PROMPT", "PRIVATE CAUSE"]) {
-      expect(JSON.stringify(logWarn.mock.calls)).not.toContain(secret);
-    }
+    expect(JSON.stringify(logWarn.mock.calls)).not.toMatch(/PRIVATE (?:OUTPUT|PROMPT|CAUSE)/u);
   },
 );
+
+it("does not collect log-only failure labels when warnings are disabled", () => {
+  const name = vi.fn(() => "Error");
+  const logWarn = vi.fn();
+  configureAiTransportHost({ ...initialHost, logWarn, isLogEnabled: () => false });
+  assignTransportErrorDetails(createOpenAIResponsesAssistantOutput(model), {
+    get name() {
+      return name();
+    },
+    message: "private response",
+    code: "rate_limit_exceeded",
+  });
+  expect(name).not.toHaveBeenCalled();
+  expect(logWarn).not.toHaveBeenCalled();
+});
 
 function captureError(run: () => unknown): Error & { errorCode?: string; errorBody?: string } {
   try {
@@ -105,11 +125,9 @@ it("does not wait for unread response cancellation after the observer fails", as
   const hookError = new Error("acceptance failed");
   const { promise: cancelStarted, resolve: markCancelStarted } = Promise.withResolvers<void>();
   const response = new Response(
-    new ReadableStream<Uint8Array>({
-      cancel() {
-        markCancelStarted();
-        return new Promise<void>(() => {});
-      },
+    makeStallingStream([], () => {
+      markCancelStarted();
+      return new Promise<void>(() => {});
     }),
   );
   const options = withProviderAcceptanceObserver({}, () => {
@@ -200,110 +218,70 @@ it("preserves the lifecycle failure when cancellation throws synchronously", asy
   ).rejects.toBe(callbackError);
   expect(cancelStream).toHaveBeenCalledOnce();
 });
-it.each([false, true])(
-  "yields simultaneous stream starts without reordering events (held hooks=%s)",
-  async (holdHooks) => {
+it.each([
+  { count: 2, mode: "ready" },
+  { count: 80, mode: "ready" },
+  { count: 80, mode: "held" },
+  { count: 80, mode: "body" },
+])(
+  "preserves stream order and only yields large batches ($count streams, $mode)",
+  async ({ count, mode }) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const events = Array.from({ length: 80 }, () => [] as string[]);
+    vi.spyOn(Date, "now").mockReturnValue(0);
+    const events = Array.from({ length: count }, () => [] as string[]);
     let starts = 0;
     let startsBeforeTimer = -1;
+    let completed = 0;
+    let completedBeforeTimer = -1;
     const hooks = Promise.withResolvers<void>();
+    const values = mode === "body" ? ["body"] : ["1", "2", "3", "4", "5"];
     const streams = events.map(async (received) => {
       const controller = new AbortController();
-      const source = withProviderResponseHook({
-        stream: (async function* () {
-          yield "first";
-          yield "last";
-        })(),
-        signal: controller.signal,
-        abort: (error) => controller.abort(error),
-        hook: holdHooks ? () => hooks.promise : undefined,
-        onReady() {
-          starts++;
-          received.push("start");
-        },
-      });
+      const source =
+        mode === "body"
+          ? values
+          : withProviderResponseHook({
+              stream: (async function* () {
+                yield* values;
+              })(),
+              signal: controller.signal,
+              abort: (error) => controller.abort(error),
+              hook: mode === "held" ? () => hooks.promise : undefined,
+              onReady() {
+                starts++;
+                received.push("start");
+              },
+            });
       for await (const event of iterateModelStream(source, controller.signal)) {
         received.push(event);
+        if (mode === "body") {
+          starts++;
+        }
       }
+      completed++;
     });
-    try {
-      if (holdHooks) {
-        await vi.runAllTimersAsync();
-      }
-      setTimeout(() => {
-        startsBeforeTimer = starts;
-      }, 0);
-      hooks.resolve();
+    if (mode === "held") {
       await vi.runAllTimersAsync();
-      await Promise.all(streams);
-      expect(startsBeforeTimer).toBeGreaterThan(0);
-      expect(startsBeforeTimer).toBeLessThan(80);
-      expect(events).toEqual(Array.from({ length: 80 }, () => ["start", "first", "last"]));
-    } finally {
-      vi.useRealTimers();
     }
+    setTimeout(() => {
+      startsBeforeTimer = starts;
+      completedBeforeTimer = completed;
+    }, 0);
+    hooks.resolve();
+    await vi.runAllTimersAsync();
+    await Promise.all(streams);
+    if (count === 2) {
+      expect(completedBeforeTimer).toBe(2);
+    } else {
+      expect(startsBeforeTimer).toBeGreaterThan(0);
+      expect(startsBeforeTimer).toBeLessThan(count);
+    }
+    expect(completed).toBe(count);
+    expect(events).toEqual(
+      Array.from({ length: count }, () => (mode === "body" ? values : ["start", ...values])),
+    );
   },
 );
-
-it("lets a pair of cheap utility responses finish without an extra loop turn", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  vi.spyOn(Date, "now").mockReturnValue(0);
-  let completed = 0;
-  let completedBeforeTimer = -1;
-  setTimeout(() => {
-    completedBeforeTimer = completed;
-  }, 0);
-  const streams = Array.from({ length: 2 }, async () => {
-    const controller = new AbortController();
-    const stream = withProviderResponseHook({
-      stream: (async function* () {
-        yield* [1, 2, 3, 4, 5];
-      })(),
-      signal: controller.signal,
-      abort: (error) => controller.abort(error),
-      onReady() {},
-    });
-    const received = [];
-    for await (const event of iterateModelStream(stream, controller.signal)) {
-      received.push(event);
-    }
-    expect(received).toEqual([1, 2, 3, 4, 5]);
-    completed++;
-  });
-  try {
-    await vi.runAllTimersAsync();
-    await Promise.all(streams);
-    expect(completedBeforeTimer).toBe(2);
-  } finally {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  }
-});
-
-it("shares the body-event budget across streams without readiness hooks", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  let delivered = 0;
-  let deliveredBeforeTimer = -1;
-  setTimeout(() => {
-    deliveredBeforeTimer = delivered;
-  }, 0);
-  const streams = Array.from({ length: 80 }, async () => {
-    for await (const event of iterateModelStream(["body"])) {
-      expect(event).toBe("body");
-      delivered++;
-    }
-  });
-  try {
-    await vi.runAllTimersAsync();
-    await Promise.all(streams);
-    expect(deliveredBeforeTimer).toBeGreaterThan(0);
-    expect(deliveredBeforeTimer).toBeLessThan(80);
-    expect(delivered).toBe(80);
-  } finally {
-    vi.useRealTimers();
-  }
-});
 
 describe("model stream cooperative scheduler", { concurrent: false }, () => {
   let now = 0;
@@ -315,12 +293,48 @@ describe("model stream cooperative scheduler", { concurrent: false }, () => {
   });
 
   afterEach(async () => {
-    try {
-      await vi.runAllTimersAsync();
-    } finally {
-      vi.useRealTimers();
-      vi.restoreAllMocks();
+    await vi.runAllTimersAsync();
+  });
+
+  it("adds no per-event async checkpoints while the shared turn has capacity", async () => {
+    const values = Array.from({ length: 16 }, (_, index) => index);
+    async function countCheckpoints(stream: AsyncIterable<number>) {
+      let finished = false;
+      let checkpoints = 0;
+      const probe = (async () => {
+        // A stalled iterator must still let the runner's deadline fire.
+        while (checkpoints < 1024) {
+          if (finished) {
+            break;
+          }
+          await Promise.resolve();
+          checkpoints++;
+        }
+      })();
+      const received: number[] = [];
+      try {
+        for await (const value of stream) {
+          received.push(value);
+        }
+      } finally {
+        finished = true;
+        await probe;
+      }
+      return { checkpoints, received };
     }
+    const control = await countCheckpoints(
+      (async function* (source: AsyncIterable<number> | Iterable<number>) {
+        for await (const value of source) {
+          yield value;
+        }
+      })(values),
+    );
+    const scheduled = await countCheckpoints(iterateModelStream(values));
+    expect(control.checkpoints).toBeGreaterThan(values.length);
+    expect(control.received).toEqual(values);
+    expect(scheduled.received).toEqual(values);
+    // The control includes iterator/consumer work; ready budget admission needs no extra await.
+    expect(scheduled.checkpoints).toBeLessThanOrEqual(control.checkpoints);
   });
 
   it("stops before pulling upstream again after cancellation", async () => {
@@ -350,7 +364,15 @@ describe("model stream cooperative scheduler", { concurrent: false }, () => {
     const stream = iterateModelStream(["first", "second", "third"]);
     await expect(stream.next()).resolves.toEqual({ done: false, value: "first" });
     now = 6;
+    // Chaining a native promise consults species; awaiting the shared promise does not.
+    const species = vi.spyOn(Promise, Symbol.species, "get");
     const second = stream.next();
+    // Let the upstream read reach admission without advancing the shared timer.
+    await Promise.resolve();
+    await Promise.resolve();
+    const chainedWaits = species.mock.calls.length;
+    species.mockRestore();
+    expect(chainedWaits).toBe(0);
     let delivered = false;
     void second.then(() => {
       delivered = true;
@@ -386,6 +408,52 @@ describe("model stream cooperative scheduler", { concurrent: false }, () => {
         await vi.runOnlyPendingTimersAsync();
       }
       await rejected;
+    },
+  );
+});
+
+describe("SSE pending limits", () => {
+  it.each(["characters", "bytes"] as const)(
+    "counts %s across UTF-8 and delimiter splits",
+    async (unit) => {
+      const frame = "data: 😀x\nignored";
+      const max = unit === "characters" ? frame.length : Buffer.byteLength(frame);
+      for (const ending of ["", "\n\n"]) {
+        for (const allowed of [max - 1, max, max + 4]) {
+          for (const chunkSize of [1, Buffer.byteLength("data: 😀x\n")]) {
+            if (allowed === max && ending && chunkSize !== 1) {
+              continue;
+            }
+            const bytes = new TextEncoder().encode(frame + ending);
+            let offset = 0;
+            const read = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+              if (offset === bytes.length) {
+                return { done: true, value: undefined };
+              }
+              const start = offset;
+              offset = Math.min(bytes.length, offset + chunkSize);
+              return { done: false, value: bytes.subarray(start, offset) };
+            };
+            const frames = (async () => {
+              const result = [];
+              for await (const event of iterateSseFrames(read, {
+                max: allowed,
+                unit,
+                message: "fixture limit",
+              })) {
+                result.push(event);
+              }
+              return result;
+            })();
+            // An incomplete delimiter counts toward the pending limit, as before.
+            if (allowed < max || (allowed === max && ending)) {
+              await expect(frames).rejects.toThrow("fixture limit");
+            } else {
+              await expect(frames).resolves.toEqual([{ frame, terminated: Boolean(ending) }]);
+            }
+          }
+        }
+      }
     },
   );
 });

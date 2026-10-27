@@ -5,7 +5,6 @@ import {
   acquireReplyOperationSessionActor,
   getReplyOperationSessionTarget,
   lifecycleAdmissionByOperation,
-  type ReplyOperationAdmission,
 } from "../../sessions/session-controller.state.js";
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { bindReplyAdmissionRelease } from "./reply-turn-admission-lifecycle.js";
@@ -18,67 +17,57 @@ export function createReplyRecoveryActorFixture(params: {
   getSessionId: () => string;
   operation?: ReplyOperation;
 }) {
-  let bound:
-    | Promise<{
-        operation: ReplyOperation;
-        operationAdmission: ReplyOperationAdmission | undefined;
-        release: () => Promise<void>;
-      }>
-    | undefined;
-  const admission = () =>
-    (bound ??= (async () => {
-      const { databaseClaim } = await loadSessionEntryForAdmission({
+  let bound: ReturnType<typeof acquire> | undefined;
+  const admission = () => (bound ??= acquire());
+  async function acquire() {
+    const { databaseClaim } = await loadSessionEntryForAdmission({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+    let operation = params.operation;
+    try {
+      operation ??= createReplyOperation({
         agentId: params.agentId,
         sessionKey: params.sessionKey,
-        storePath: params.storePath,
+        sessionId: params.getSessionId(),
+        resetTriggered: false,
       });
-      let operation = params.operation;
-      try {
-        operation ??= createReplyOperation({
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          sessionId: params.getSessionId(),
-          resetTriggered: false,
-        });
-        if (!("kind" in databaseClaim)) {
-          throw new Error("Recovery fixture requires an actor-capable database claim");
-        }
-        bindReplyAdmissionRelease({
-          operation,
-          sessionKey: params.sessionKey,
-          sessionId: operation.sessionId,
-          admission: undefined,
-          recoveryOwnerLease: undefined,
-          databaseClaim,
-        });
-        const admittedOperation = operation;
-        return {
-          operation,
-          operationAdmission: lifecycleAdmissionByOperation.get(operation),
-          release: async () => {
-            const target = getSessionControllerEntryForOperation(admittedOperation).target;
-            admittedOperation.complete();
-            const settlement = await waitForReplyRunSuccessorAdmission(
-              admittedOperation.key,
-              null,
-              {
-                target,
-              },
-            );
-            if (!settlement.settled || databaseClaim.isCurrent()) {
-              throw new Error("Recovery fixture did not retire its database claim");
-            }
-          },
-        };
-      } catch (error) {
-        try {
-          operation?.complete();
-        } finally {
-          await databaseClaim.release();
-        }
-        throw error;
+      if (!("kind" in databaseClaim)) {
+        throw new Error("Recovery fixture requires an actor-capable database claim");
       }
-    })());
+      bindReplyAdmissionRelease({
+        operation,
+        sessionKey: params.sessionKey,
+        sessionId: operation.sessionId,
+        admission: undefined,
+        recoveryOwnerLease: undefined,
+        databaseClaim,
+      });
+      const admittedOperation = operation;
+      return {
+        operation,
+        operationAdmission: lifecycleAdmissionByOperation.get(operation),
+        release: async () => {
+          const target = getSessionControllerEntryForOperation(admittedOperation).target;
+          admittedOperation.complete();
+          const settlement = await waitForReplyRunSuccessorAdmission(admittedOperation.key, null, {
+            target,
+          });
+          if (!settlement.settled || databaseClaim.isCurrent()) {
+            throw new Error("Recovery fixture did not retire its database claim");
+          }
+        },
+      };
+    } catch (error) {
+      try {
+        operation?.complete();
+      } finally {
+        await databaseClaim.release();
+      }
+      throw error;
+    }
+  }
   return {
     bind: admission,
     async acquireSessionActor() {

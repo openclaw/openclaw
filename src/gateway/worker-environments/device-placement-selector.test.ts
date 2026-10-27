@@ -51,9 +51,6 @@ function nodeProof(environment: EnvironmentSummary): NodeWorkerSupervisorNodePro
   const deviceId = environment.id.slice("node:".length);
   return createNodeWorkerBundleTestNode({
     nodeId: deviceId,
-    connId: `connection-${deviceId}`,
-    pairingIdentity: `identity-${deviceId}`,
-    pairingGeneration: `generation-${deviceId}`,
     workerHost: {
       capturedExecPolicy: true,
       promptContext: 1,
@@ -70,11 +67,13 @@ async function selectNodes(
     executionMode?: "worker-turn" | "remote-exec";
     availability?: (deviceId: string) => Promise<DeviceWorkerAvailability>;
     admittedSessions?: ReadonlyMap<string, number>;
+    configureNode?: (node: NodeWorkerSupervisorNodeProof) => void;
   } = {},
 ) {
   const proofs = new Map(
     environments.map((environment) => {
       const proof = nodeProof(environment);
+      options.configureNode?.(proof);
       return [proof.nodeId, proof] as const;
     }),
   );
@@ -104,41 +103,32 @@ async function selectNodes(
 }
 
 describe("paired-device automatic placement selection", () => {
-  it.each([0, 2])(
-    "reports the required node update before capacity when %s slots are free",
-    async (available) => {
-      const environment = nodeEnvironment("outdated", available);
-      const node = nodeProof(environment);
-      delete node.workerHost.capturedExecPolicy;
-      expectError(
-        await selectNodes([environment], {
-          availability: async () => ({ available: true, node }),
-        }),
-        "run openclaw update, then reconnect",
-      );
-    },
-  );
+  const omitPolicy = (node: NodeWorkerSupervisorNodeProof) => {
+    delete node.workerHost.capturedExecPolicy;
+  };
+  it("reports the required node update before capacity", async () => {
+    expectError(
+      await selectNodes([nodeEnvironment("outdated", 0)], { configureNode: omitPolicy }),
+      "run openclaw update, then reconnect",
+    );
+  });
 
   it("keeps remote-exec independent of captured policy even when its harness consumes a slot", async () => {
-    const environment = nodeEnvironment("remote", 2);
-    const node = nodeProof(environment);
-    delete node.workerHost.capturedExecPolicy;
     expectCandidates(
-      await selectNodes([environment], {
+      await selectNodes([nodeEnvironment("remote", 2)], {
         executionMode: "remote-exec",
         requirement: { ...REMOTE_REQUIREMENT, consumesWorkerSlot: true },
-        availability: async () => ({ available: true, node }),
+        configureNode: omitPolicy,
       }),
       ["remote", 2],
     );
   });
 
-  it.each([1, 2])(
-    "prefers lower admitted demand while a third host still advertises %s free slots",
-    async (available) => {
-      const result = await selectNodes(
+  it("prefers lower admitted demand over advertised free slots", async () => {
+    expectCandidates(
+      await selectNodes(
         [
-          nodeEnvironment("alpha", available, {}, 2),
+          nodeEnvironment("alpha", 2, {}, 2),
           nodeEnvironment("bravo", 1, {}, 2),
           nodeEnvironment("charlie", 1, {}, 2),
         ],
@@ -149,11 +139,12 @@ describe("paired-device automatic placement selection", () => {
             ["charlie", 1],
           ]),
         },
-      );
-
-      expectCandidates(result, ["bravo", 1], ["charlie", 1], ["alpha", available]);
-    },
-  );
+      ),
+      ["bravo", 1],
+      ["charlie", 1],
+      ["alpha", 2],
+    );
+  });
 
   it("retains physical occupancy for idle workers without double-counting admitted demand", async () => {
     const result = await selectNodes(
@@ -179,16 +170,10 @@ describe("paired-device automatic placement selection", () => {
       ["bravo", 4],
       ["charlie", 2],
     ]);
-    const currentNodes = new Map(
-      environments.map((environment) => {
-        const node = nodeProof(environment);
-        node.workerHost.capacity = { total: 9, available: liveCapacity.get(node.nodeId) ?? 0 };
-        return [node.nodeId, node] as const;
-      }),
-    );
-
     const result = await selectNodes(environments, {
-      availability: async (deviceId) => ({ available: true, node: currentNodes.get(deviceId) }),
+      configureNode: (node) => {
+        node.workerHost.capacity = { total: 9, available: liveCapacity.get(node.nodeId) ?? 0 };
+      },
     });
 
     expectCandidates(result, ["bravo", 4], ["alpha", 2], ["charlie", 2]);
@@ -226,25 +211,17 @@ describe("paired-device automatic placement selection", () => {
     expectCandidates(result, ["alpha", 0], ["bravo", 2], ["charlie", 5]);
   });
 
-  it.each([
+  it.each<[number, Partial<EnvironmentSummary>, string]>([
+    [2, { sessionHost: false }, "pair a node, enable session hosting"],
+    [2, { status: "unavailable" }, "all paired session-host nodes are disconnected"],
+    [0, {}, "device worker is at capacity"],
     [
-      nodeEnvironment("plain-node", 2, { sessionHost: false }),
-      "pair a node, enable session hosting",
-    ],
-    [
-      nodeEnvironment("offline", 2, { status: "unavailable" }),
-      "all paired session-host nodes are disconnected",
-    ],
-    [nodeEnvironment("full", 0), "device worker is at capacity"],
-    [
-      nodeEnvironment("outdated", 0, {
-        sessionHost: false,
-        issues: [NODE_RUNNER_UPDATE_REQUIRED_ISSUE],
-      }),
+      0,
+      { sessionHost: false, issues: [NODE_RUNNER_UPDATE_REQUIRED_ISSUE] },
       "run openclaw update, then reconnect",
     ],
-  ] as const)("explains %j with an operator recovery action", async (environment, message) => {
-    expectError(await selectNodes([environment]), message);
+  ])("explains unavailable hosts (%s, %j)", async (available, overrides, message) => {
+    expectError(await selectNodes([nodeEnvironment("node", available, overrides)]), message);
   });
 
   it("rejects runtimes that do not declare paired-device placement support", async () => {

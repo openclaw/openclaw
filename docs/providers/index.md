@@ -54,6 +54,8 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Kie AI](/providers/kie)
 - [Kilocode](/providers/kilocode)
 - [Levanto Sage (typed decisions, not chat)](/providers/levanto)
+- [Liquid AI (Decision models)](/providers/liquid-ai)
+- [Liquid Inference](/providers/liquid-inference)
 - [LiteLLM (unified gateway)](/providers/litellm)
 - [llama.cpp (managed or existing server)](/plugins/llama-cpp)
 - [llmman (local + hybrid local/hosted models)](/providers/llmman)

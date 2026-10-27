@@ -18,6 +18,7 @@ import {
   settleWorkspaceRuns,
   successfulSessionRequest as request,
 } from "./server.sessions.create.projects.test-support.js";
+import { sessionTitleRequests } from "./session-title-state.js";
 import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -48,6 +49,49 @@ afterEach(async () => {
 const readEntry = (storePath: string, sessionKey: string) =>
   loadSessionEntry({ agentId: "main", sessionKey, storePath });
 const adminClient = { client: { connect: { scopes: ["operator.admin"] } } as never };
+
+test("keeps an automatic title through seven follow-ups and accepts an explicit rename", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const context = { dedupe: new Map() };
+  const options = { ...controlUiClient, context };
+  dispatchInboundMessageMock.mockResolvedValue({
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  });
+  const titleStarted = createDeferredCore();
+  titleMocks.generate.mockImplementation(() => {
+    titleStarted.resolve();
+    return "Release planning";
+  });
+  const { key, sessionId } = await request<{ key: string; sessionId: string }>(
+    "sessions.create",
+    { agentId: "main", message: "Help me plan the release" },
+    options,
+  );
+  await settleWorkspaceRuns(context, storePath, key);
+  await titleStarted.promise;
+  await sessionTitleRequests.get({ storePath, sessionKey: key, sessionId });
+  expect(readEntry(storePath, key)?.displayName).toBe("Release planning");
+  titleMocks.generate.mockResolvedValue("Land PR and archive");
+  for (let index = 0; index < 7; index++) {
+    await request(
+      "chat.send",
+      {
+        sessionKey: key,
+        message: "Land the PR and archive it",
+        idempotencyKey: `follow-up-${index}`,
+      },
+      options,
+    );
+    await settleWorkspaceRuns(context, storePath, key);
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  }
+  expect(readEntry(storePath, key)?.displayName).toBe("Release planning");
+  expect(titleMocks.generate).toHaveBeenCalledOnce();
+  await request("sessions.patch", { key, label: "My release" }, options);
+  expect(readEntry(storePath, key)?.label).toBe("My release");
+});
+
 async function workspaceFixture(prefix: string) {
   const workspace = await initializeRepository(tempDirs.make(prefix), "workspace");
   testState.agentConfig = { workspace };

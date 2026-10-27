@@ -164,11 +164,17 @@ Channel setup catalogs retain the requested workspace and load-path scope, inclu
 
 After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing an account or an agent's run workspace does not invalidate it. Explicit plugin lifecycle operations prepare a new inventory for installs, updates, removals, source or manifest edits, and discovery-root changes before publishing it to the running Gateway.
 
+Plugin enablement readers can pass `rootConfig` to `resolveEffectiveEnableState` without constructing a normalized `config` copy. The policy owner reuses the published runtime configuration's prepared policy and refreshes it on publication; an explicitly supplied normalized `config` still takes precedence. Public normalization helpers continue to return caller-owned mutable copies.
+
 Plugin inventory responses share prepared enablement and package-ownership facts between install-health diagnostics and catalog presentation. Those facts belong to one synchronous response preparation, after hosted catalog loading and before optional category loading; maintenance operations still prepare their own current ownership checks.
+
+Bundled official catalog identities are admitted and indexed once per process. Inventory reads reuse those static entries instead of rescanning the bundled catalog for each installed plugin. Hosted catalog refresh and installed-package provenance checks keep their own lifecycles.
 
 Runs outside the agent's resolved workspace reuse the agent's prepared plugin generation instead of loading the plugins again. Rooted background runs, including skill workshop reviews and isolated cron jobs, qualify when their bootstrap workspace resolves to that agent's resolved workspace. In a Gateway, every other run workspace also qualifies because it resolves to the same boot inventory. Their execution directory and filesystem confinement remain at the task root, including during compaction. Hosts without that shared inventory, such as direct CLI runs in another workspace, retain their own workspace-scoped generation.
 
 Tool resolution treats plugins that the prepared generation recorded as disabled or failed (for example, a memory plugin outside the selected memory slot) as settled outcomes and does not load them again for each turn.
+
+Completed plugin generations reuse their registration grouping and manifest-owner lookup across turns. These facts belong to the registry publication and metadata snapshot; registration in progress stays uncached. Tool factories still receive fresh turn contexts, and returned tools retain that turn's authority, delivery, memory, and sandbox bindings rather than borrowing a later turn's permissions.
 
 Plugin reload reconciles config watcher events after asynchronous metadata preparation. An unchanged source event does not cancel the operation; newer writes or changed config, install records, or source ownership still supersede it.
 
@@ -176,7 +182,7 @@ Ordinary plugin source captures use independent files, including copies reached 
 
 Source capture preserves referenced URL assets, including directory URLs that the plugin uses. Unused standalone URL calculations do not cause the surrounding directory to be copied into the plugin generation.
 
-Asynchronous host loading prepares selected non-bundled plugin sources in a worker before evaluating or registering their code. Selection, trust checks, and entry-path validation happen first; the host checks inventory retirement and the expected source digest before installing the prepared capture. Each live external artifact retains its own worker, so later capture and publication cannot block a loaded sibling's synchronous source resolution. Existing registry and plugin-instance caching provide reuse; recovery retains the original artifact's worker. This isolation uses more worker memory when many external artifacts are active. A failed acquisition records that plugin's load error without discarding successfully prepared siblings. Synchronous CLI loading and loading inside an existing compute worker retain their inline acquisition path. Plugin evaluation and registration still run in their original owner; moving source preparation does not make arbitrary plugin initialization nonblocking.
+Asynchronous host loading prepares selected non-bundled plugin sources and bundled state-operation import closures in a shared worker before evaluating or registering plugin code. Bundled operation captures preserve the same immutable bytes and recovery ownership without retaining the source transpiler in the Gateway main thread. Selection, trust checks, and entry-path validation happen first; the host checks inventory retirement and the expected source digest before installing the prepared capture. Each artifact keeps its own source, admission facts, callbacks, and recovery custody inside that worker. Synchronous source resolution services sibling callbacks and completed tasks, so a sibling's pending host publication does not hold the worker slot. Existing registry and plugin-instance caching provide reuse; the worker retires after its last artifact and recovery snapshot are disposed. A failed acquisition records that plugin's load error without discarding successfully prepared siblings. Unexpected worker exit invalidates its captures and queued preparation; subsequent preparation starts a new worker. Synchronous CLI loading and loading inside an existing compute worker retain their inline acquisition path. Plugin evaluation and registration still run in their original owner; moving source preparation does not make arbitrary plugin initialization nonblocking.
 
 Legacy session-key migration selects plugins that declare that capability before checking channel presence. Owners already eligible under migration policy do not need a channel-presence check. Scoped selections check persisted credentials only for their channel owners, so unrelated authentication modules stay unloaded during Doctor repairs. This credential scope does not limit environment-based presence signals: configured channels with missing plugins still produce installation and recovery hints.
 
@@ -204,11 +210,17 @@ Durable final channel replies can use the admitting Gateway's current registry a
 
 The prepared-model replacement gate holds new runs while already admitted runs finish using their original callbacks. Ordinary quiescence closes plugin admission before resource replacement; there is no separate reservation fence on retained work. Detailed readiness and logs report the retained-work count and drain deadline; the final RPC receipt reports application and any drain notices. Reload from the instance's own active callback or a live turn borrowing that same instance fails during preparation to avoid waiting on itself. Idle prepared publications and closed turn scopes do not block replacement. Nested static model acquisition that matches a still-open turn lease borrows that turn’s original generation before checking the replacement gate, so the turn can finish while an external reload drains it. Borrowing cannot change the agent, workspace, configuration, or selected plugin owners. Explicit live catalog discovery still follows ordinary admission and refresh. Callbacks and consumers without a matching turn lease still cannot wait on their own reload, including an external `--wait` request. Arbitrary nested cross-plugin dependency chains are best effort; cancel `--wait` or restart if such a chain cannot settle.
 
+Reply model preparation uses the configured agent’s inventory workspace across session execution directories. A nested run with matching agent and configuration can reuse its still-open parent lease’s inventory workspace, including a launch override, while tools keep the requested execution directory. Different selections and closed leases still pass through the prepared-runtime admission owner.
+
 A delivery-enabled requester continuation refused at its initial runtime acquisition finishes as failed and uses ordinary final delivery for a failure notice. Check the conversation and logs before retrying after the reload. Cancelled or revoked work cannot send this notice; a refusal after earlier execution keeps its existing error path.
 
 While admitted work drains, ordinary model catalog, auth-status, and chat metadata reads continue using the active publication. Catalog refresh work, downloaded catalog adoption, and new execution still wait. Published facts retire when resource replacement begins; an admitted-work timeout keeps those facts available without rebuilding them. An unfinished startup publication still follows its existing cancellation and recovery path.
 
+Session lists wait for replacement provider policy when the previous runtime has retired. Disconnecting a reader cancels only that reader’s wait; other readers and the reload continue. Lists resume with the published replacement catalog and never invoke retired provider callbacks.
+
 Retained work and in-flight calls share a 60-second pre-stop budget. Retained runs finish before ordinary call admission closes. Existing calls then settle while published metadata remains readable. Sidecars release their capability consumers before the remaining finite consumers drain; memory teardown retains cleanup authority for its exact retiring provider instances until the raw cleanup settles. Replacement stops services and channels only after that handoff. Idle service and channel custody stops later with its owners. If work does not finish, the reload fails once, resumes admission, and clears the reload status; the previous plugin generation keeps serving. The deadline does not cancel agent runs or permit disposal of unfinished writes. Retry `openclaw plugins reload <id>` after that work finishes, or explicitly select `--wait` for a shared ten-minute pre-stop drain budget, matching the plugin lifecycle wait budget. Both modes hold new agent runs behind the replacement gate until completion or rollback; `status` exposes the pending reload and its drain deadline in JSON. The extended wait also expires with the previous generation serving. The explicit wait belongs to its requesting connection: Ctrl+C or disconnect cancels the pre-publication wait and runs the same rollback. Cancellation never disposes admitted work, bypasses cleanup, or reverses a committed publication. Service shutdown and recovery retain their bounded deadlines. Successful publication logs the applied replacement and emits `plugins.changed`.
+
+Automatic config reloads treat an admitted-work timeout with successful rollback as deferred. The previous generation resumes serving, and the config watcher retries the latest saved configuration after that generation's work and cleanup settle. A waiting config-write receipt still reports that the bounded attempt did not apply: keeping it open could prevent the writing turn itself from releasing the old generation. Check `config.get` after the work settles to confirm the active revision. The retry observation does not keep plugin admission closed or extend the drain budget. Explicit plugin reload requests still report their bounded drain failure; cleanup failures and failures after publication remain errors.
 
 A provider or harness plugin load failure remains recorded in its runtime generation. It makes that plugin unavailable without superseding the generation or blocking models that use healthy plugins. Inspect the failing owner with `openclaw plugins inspect <id> --runtime --json`. Use `openclaw doctor --fix` for supported installation repairs, or fix the reported problem in plugin code, then request `plugins.reload` through the admin Gateway API to load the repaired plugin.
 
@@ -244,6 +256,8 @@ Hot registry publication does not wait for retired host cleanup; terminal shutdo
 
 The cache rule is documented in [Plugin architecture internals](/plugins/architecture-internals#plugin-cache-boundary): Gateway retains one cache generation, while explicit management operations use isolated generations of the same cache. There are no wall-clock TTLs for Gateway metadata.
 
+Gateway `plugins.list` serves installed metadata without waiting for hosted catalog or category enrichment. While the generation's shared enrichment is pending, the response uses bundled presentation metadata and includes a pending diagnostic; refresh the list to read the completed facts. Unavailable category enrichment remains recorded until an explicit catalog refresh or metadata generation change. Config validation, enablement, and runtime service health still use current local facts on each read.
+
 Install, update, registry refresh, and doctor flows may read fresh package metadata to validate their changes. A management snapshot or installed-index write alone does not replace the running Gateway's inventory: the Gateway lifecycle owner must prepare and publish it. Runtime flows use their selected snapshot or lookup table instead of falling back to cold management paths.
 
 ### Runtime instance and source lifetime
@@ -251,7 +265,10 @@ Install, update, registry refresh, and doctor flows may read fresh package metad
 Inference verification fingerprints the artifact selected by the runtime's
 source/build preference, including explicit bundled source overrides. Loading an
 unchanged plugin preserves that proof; changing its selected runtime files
-invalidates it.
+invalidates it. For bundled modules embedded in a standalone executable, the
+fingerprint combines the image's build identity, compilation mode, and build
+flavor with the retained plugin sidecar files. Embedded JavaScript does not need
+a second copy on disk.
 
 A managed runtime instance owns its module results, registered callables, and
 runtime-store slots. Non-bundled instances also own a captured source artifact.
@@ -537,6 +554,10 @@ their own environment retain an isolated catalog worker for that environment.
 Provider-discovery entries use the exact selected runtime instance's captured
 source when it is already loaded, so discovery does not create a second copy of
 the same plugin package. Standalone discovery keeps its own setup lifetime.
+Public API sidecars follow the loader-selected setup or runtime artifact and its
+plugin root. A built Gateway uses the selected JavaScript sidecars even when
+discovery metadata still points at the source checkout; source-based instances
+keep their TypeScript sidecars and captured-source membership.
 The loader records its scoped registration inputs with their metadata inventory,
 so catalog workers reuse those facts instead of rerunning setup activation.
 Each worker retains the current plugin registration context for each loader
@@ -574,6 +595,9 @@ references while preserving revocation. Native module exports no longer retain t
 disposed registry through instance ownership, and stale calls remain rejected. Pending or failed
 cleanup retains its custody.
 Successfully disposed registrations leave their plugin caches.
+Failed model-runtime refresh diagnostics retain the error message, name, code, and
+materialized stack, not the failed build or its cause graph. Active publication
+settlement still uses the original failure for lifecycle recovery.
 
 Catalog observation is passive. Inventory requests can ask the catalog owner to
 renew expired providers while returning its accepted rows. Chat metadata and
@@ -631,6 +655,10 @@ without a separate TypeScript analysis pass. Source
 `import.meta.resolve` retains Jiti's optional parent URL and resolution options,
 including custom conditions and `try`. The one-argument resolver uses the
 source's directory and package scope.
+Preparing a package module defers its capture resolver until an import or source
+inspection needs it. Explicit `JITI_TSCONFIG_PATHS` configuration still initializes
+the resolver at module preparation so later tsconfig edits cannot change the
+selected mapping. Preparation workers retain separate artifact isolation.
 Captures reuse resolution state for local TypeScript imports such as `./helper.js`
 when only `helper.ts` exists, avoiding repeated resolver setup and exception-based
 file probing. Existing JavaScript and Jiti's alternative filename precedence remain
@@ -703,6 +731,12 @@ That host joins admitted callback work before releasing consumers and resources;
 releasing the inspection still prevents new borrows. Gateway shutdown keeps shared dependencies
 until the owners that still need them have joined. These ownership rules do not
 make native plugins a sandbox or automatically close plugin-created resources.
+
+After admitted calls and plugin cleanup finish, captured-source membership retires
+before module resources begin asynchronous release. Unrelated public-surface
+lookups cannot re-enter a retiring capture worker; the registration and cleanup
+scope remain retained until resource release finishes.
+
 See [Plugin lifecycle and cleanup](/plugins/sdk-runtime#plugin-lifecycle-and-cleanup)
 for the plugin author's cleanup contract.
 

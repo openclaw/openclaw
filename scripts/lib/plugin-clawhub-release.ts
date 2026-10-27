@@ -248,8 +248,6 @@ function formatClawHubPackageArtifactName(
   return `clawhub-package-${safeName}-${plugin.version}`;
 }
 
-export { resolveOpenClawClawHubPackageFamily };
-
 export function collectClawHubPublishablePluginPackages(
   rootDir = resolve("."),
   filters: ClawHubPublishablePluginPackageFilters = {},

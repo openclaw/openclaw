@@ -16,7 +16,6 @@ import {
   meetingTranscriptSessionQuery,
   meetingTranscriptUtteranceQuery,
   type MeetingTranscriptSessionRow,
-  readTranscriptSummaryKeys,
   readStoredTranscriptSummaryRevision,
   sessionFromRow,
   summaryFromRow,
@@ -136,16 +135,21 @@ export function readTranscriptSessionEntries(database: EngineConnection) {
   const rows = executeSqliteQuerySync(
     database,
     meetingTranscriptDb(database)
-      .selectFrom("meeting_transcript_sessions")
-      .selectAll()
-      .orderBy("started_at", "desc")
-      .orderBy("session_id", "asc"),
+      .selectFrom("meeting_transcript_sessions as sessions")
+      .leftJoin("meeting_transcript_summaries as summaries", (join) =>
+        join
+          .onRef("summaries.session_id", "=", "sessions.session_id")
+          .onRef("summaries.session_started_at", "=", "sessions.started_at"),
+      )
+      .selectAll("sessions")
+      .select((eb) => eb("summaries.session_id", "is not", null).as("has_summary"))
+      .orderBy("sessions.started_at", "desc")
+      .orderBy("sessions.session_id", "asc"),
   ).rows;
-  const summaryKeys = readTranscriptSummaryKeys(database);
   return rows.map((row) => ({
     session: sessionFromRow(row),
     selector: row.selector,
-    hasSummary: summaryKeys.has(`${row.session_id}\0${row.started_at}`),
+    hasSummary: Boolean(row.has_summary),
   }));
 }
 

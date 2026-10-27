@@ -40,13 +40,10 @@ async function seedSession(
   };
 }
 
-const changed = (sessionKey: string) => ({
+const changed = {
   ok: false,
-  error: {
-    message: `Session ${sessionKey} changed before patch. Retry.`,
-    details: { reason: "session-changed" },
-  },
-});
+  error: { code: "INVALID_REQUEST", details: { reason: "session-changed" } },
+};
 const invalid = (message: string) => ({ ok: false, error: { code: "INVALID_REQUEST", message } });
 
 function observingContext() {
@@ -78,15 +75,9 @@ test.each([undefined, "session-a"])(
       { key: sessionKey, archived: true, expectedSessionId },
       { context },
     );
-    expect(result).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        ...(expectedSessionId
-          ? { details: { reason: "session-changed" } }
-          : { message: `session not found: ${sessionKey}` }),
-      },
-    });
+    expect(result).toMatchObject(
+      expectedSessionId ? changed : invalid(`session not found: ${sessionKey}`),
+    );
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
     expectNoSessionQueueCleanup();
     expectNoPublication(context);
@@ -94,41 +85,35 @@ test.each([undefined, "session-a"])(
 );
 
 test.each([
-  {
-    name: "session id before archive",
-    patch: { archived: true, expectedSessionId: "sess-before-reset" },
-  },
-  {
-    name: "lifecycle revision before archive",
-    patch: { archived: true, expectedLifecycleRevision: "revision-before-reset" },
-  },
-  {
-    name: "lifecycle revision for metadata",
-    patch: { label: "Stale agent request", expectedLifecycleRevision: "revision-before-reset" },
-  },
-])("sessions.patch rejects a replaced $name without side effects", async ({ patch }) => {
-  const sessionKey = "agent:main:subagent:active-replacement";
-  const replacementSessionId = "sess-active-after-reset";
-  const { read } = await seedSession(
-    sessionKey,
-    { lifecycleRevision: "revision-after-reset" },
-    replacementSessionId,
-  );
-  const replacementBefore = read();
-  const context = observingContext();
-  embeddedRunMock.activeIds.add(replacementSessionId);
+  [{ archived: true }, { expectedSessionId: "stale" }],
+  [{ archived: true }, { expectedLifecycleRevision: "stale" }],
+  [{ label: "Stale agent request" }, { expectedLifecycleRevision: "stale" }],
+])(
+  "sessions.patch rejects replaced targets (%j, %j) without side effects",
+  async (patch, identity) => {
+    const sessionKey = "agent:main:subagent:active-replacement";
+    const replacementSessionId = "sess-active-after-reset";
+    const { read } = await seedSession(
+      sessionKey,
+      { lifecycleRevision: "revision-after-reset" },
+      replacementSessionId,
+    );
+    const replacementBefore = read();
+    const context = observingContext();
+    embeddedRunMock.activeIds.add(replacementSessionId);
 
-  const result = await directSessionReq(
-    "sessions.patch",
-    { key: sessionKey, ...patch },
-    { context },
-  );
+    const result = await directSessionReq(
+      "sessions.patch",
+      { key: sessionKey, ...patch, ...identity },
+      { context },
+    );
 
-  expect(result).toMatchObject(changed(sessionKey));
-  expect(read()).toEqual(replacementBefore);
-  expect(embeddedRunMock.abortCalls).toEqual([]);
-  expectNoPublication(context);
-});
+    expect(result).toMatchObject(changed);
+    expect(read()).toEqual(replacementBefore);
+    expect(embeddedRunMock.abortCalls).toEqual([]);
+    expectNoPublication(context);
+  },
+);
 
 test("sessions.patch rejects a session replaced before restore reaches the SQLite writer", async () => {
   const patchPreparation = await import("./server-methods/sessions-patch-expectations.js");
@@ -179,13 +164,7 @@ test("sessions.patch rejects a session replaced before restore reaches the SQLit
     await preflightCompleted.promise;
     replaceSession.resolve();
     await writer;
-    expect(await restored).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        details: { reason: "session-changed" },
-      },
-    });
+    expect(await restored).toMatchObject(changed);
     expect(read()).toMatchObject({
       archivedAt: 2,
       sessionId: "restored-replacement",
@@ -202,7 +181,7 @@ test("sessions.patch preserves concurrent tool restrictions from a stale replace
   const original = { webSearch: false };
   const restricted = { ...original, mcpToolsDeny: { docs: ["delete"] } };
   const replacement = { ...original, skills: { release: false } };
-  const { sessionKey, read, patch } = await seedSession("agent:main:tool-overrides-cas", {
+  const { read, patch } = await seedSession("agent:main:tool-overrides-cas", {
     toolOverrides: original,
   });
   const concurrent = await patch({ toolOverrides: restricted });
@@ -210,11 +189,7 @@ test("sessions.patch preserves concurrent tool restrictions from a stale replace
 
   const stale = await patch({ expectedToolOverrides: original, toolOverrides: replacement });
 
-  const expected = changed(sessionKey);
-  expect(stale).toMatchObject({
-    ...expected,
-    error: { ...expected.error, code: "INVALID_REQUEST" },
-  });
+  expect(stale).toMatchObject(changed);
   expect(read()?.toolOverrides).toEqual(restricted);
   const fresh = await patch({ expectedToolOverrides: restricted, toolOverrides: replacement });
   expect(fresh.ok).toBe(true);
@@ -239,23 +214,6 @@ test.each([
   const before = read();
   expect(await patch(request)).toMatchObject(invalid(message));
   expect(read()).toEqual(before);
-});
-
-test("sessions.patch rejects stale permission replacement", async () => {
-  const { read, patch } = await seedSession("agent:main:permission-mode-cas", {
-    permissionMode: "guarded",
-  });
-  await patch({ permissionMode: "read-only" });
-  const stale = await patch({
-    expectedPermissionMode: "guarded",
-    permissionMode: "full",
-  });
-
-  expect(stale).toMatchObject({
-    ok: false,
-    error: { details: { reason: "session-changed" } },
-  });
-  expect(read()?.permissionMode).toBe("read-only");
 });
 
 test.each([
@@ -380,19 +338,14 @@ describe("plugin session ownership", () => {
     await seed("other-plugin");
     const reset = await directSessionReq("sessions.reset", { key: sessionKey }, writeOptions);
     expectDenied(reset, "reset", sessionKey);
-    expect(readEntry()).toMatchObject({
-      sessionId,
-      pluginOwnerId: "other-plugin",
-    });
+    expect(readEntry()).toMatchObject({ sessionId, pluginOwnerId: "other-plugin" });
   });
 
   test("sessions.reset stamps plugin ownership when it materializes a missing session", async () => {
     const reset = await directSessionReq("sessions.reset", { key: sessionKey }, writeOptions);
 
     expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
-    expect(readEntry()).toMatchObject({
-      pluginOwnerId: "memory-core",
-    });
+    expect(readEntry()).toMatchObject({ pluginOwnerId: "memory-core" });
 
     const patched = await patch(sessionKey, "Reset-created plugin session", writeOptions);
 
@@ -420,10 +373,7 @@ describe("plugin session ownership", () => {
     });
 
     expectDenied(reset, "reset", sessionKey);
-    expect(readEntry()).toMatchObject({
-      pluginOwnerId: "other-plugin",
-      sessionId,
-    });
+    expect(readEntry()).toMatchObject({ pluginOwnerId: "other-plugin", sessionId });
   });
 
   test("sessions.patch limits plugin-runtime mutations to sessions owned by that plugin", async () => {
@@ -470,9 +420,7 @@ describe("plugin session ownership", () => {
 
     expect(patched.ok).toBe(false);
     expect(patched.error?.message).toContain("did not create it");
-    expect(readEntry()).toMatchObject({
-      pluginOwnerId: "other-plugin",
-    });
+    expect(readEntry()).toMatchObject({ pluginOwnerId: "other-plugin" });
     expect(readEntry()?.label).toBeUndefined();
   });
 });

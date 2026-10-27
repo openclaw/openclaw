@@ -30,19 +30,7 @@ function prepareTimestamp(timestamp: number) {
         timeZoneName: "short",
       })
     : t("chat.messages.unknownDate");
-  const title = valid
-    ? date.toLocaleString([], {
-        weekday: "long",
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        second: "2-digit",
-        timeZoneName: "short",
-      })
-    : label;
-  return { dateTime: valid ? date.toISOString() : "", label, title };
+  return { dateTime: valid ? date.toISOString() : "", label };
 }
 
 function relativeTimestampLabel(timestamp: number, label: string) {
@@ -80,7 +68,25 @@ export function ChatTimestamp(props: { timestamp: number; metadata?: JSX.Element
     // Parent clock refreshes still advance relative copy without reformatting calendar labels.
     relativeLabel: relativeTimestampLabel(props.timestamp, calendar().label),
   }));
-  const contextLabel = createMemo(() => t("chat.messages.contextFor", { timestamp: view().title }));
+  const contextLabel = createMemo(
+    () => {
+      const date = new Date(timestamp());
+      const title = Number.isFinite(date.getTime())
+        ? date.toLocaleString([], {
+            weekday: "long",
+            month: "long",
+            day: "numeric",
+            year: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            second: "2-digit",
+            timeZoneName: "short",
+          })
+        : calendar().label;
+      return t("chat.messages.contextFor", { timestamp: title });
+    },
+    { lazy: true },
+  );
   const hasMetadata = () => Boolean(props.metadata?.length);
   return (
     <openclaw-tooltip

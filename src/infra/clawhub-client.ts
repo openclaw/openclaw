@@ -241,10 +241,8 @@ async function requestClawHub(params: ClawHubRequestParams) {
     );
     // Successful archives keep only their chunk-idle timeout while streaming.
     const releaseDeadline = () => {
-      if (timeout !== undefined) {
-        clearTimeout(timeout);
-        timeout = undefined;
-      }
+      clearTimeout(timeout);
+      timeout = undefined;
     };
     try {
       const response = await fetch(url, {

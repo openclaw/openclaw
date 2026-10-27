@@ -108,7 +108,7 @@ export function client(request: RequestFn): GatewayBrowserClient {
   return { request } as unknown as GatewayBrowserClient;
 }
 
-export function createOverlayHarness(request: RequestFn, scopes?: string[] | null) {
+function createOverlayHarness(request: RequestFn, scopes?: string[] | null) {
   const harness = createGatewayHarness(client(request));
   if (scopes === null) {
     harness.update({ hello: null });

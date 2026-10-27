@@ -29,7 +29,7 @@ function telegramTokenStillInUse(
  * already excluded the affected account; the token stays cached when a sibling
  * account shares it, so penalty state survives.
  */
-export async function releaseRetiredTelegramAccountThrottler(
+async function releaseRetiredTelegramAccountThrottler(
   token: string,
   cfg?: OpenClawConfig,
   excludeAccountId?: string,

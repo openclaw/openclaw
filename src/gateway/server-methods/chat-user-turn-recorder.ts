@@ -8,15 +8,20 @@ import {
 } from "../../agents/operator-run-recovery-source.js";
 import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import { createRestartRecoveryRequesterSource } from "../../agents/requester-run-recovery-source.js";
+import { resolveSessionSubmittedModelRef } from "../../agents/session-model-ref.js";
 import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import { normalizeMessageClientSources } from "../../chat/message-client-source.js";
+import { hasSessionActiveAutoModelFallback } from "../../config/sessions/model-override-provenance.js";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
 import {
   composeSessionSourceAssertion,
   prepareSessionSourceAuthority,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
-import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import {
+  measureDiagnosticsTimelineSpan,
+  observeDiagnosticsTimelinePhases,
+} from "../../infra/diagnostics-timeline.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { getRpcSourceIdentity } from "../../sessions/session-controller.rpc-sources.js";
 import {
@@ -25,7 +30,10 @@ import {
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import type { UserTurnOriginalInputCommit } from "../../sessions/user-turn-transcript.types.js";
+import type {
+  PersistedUserTurnMessage,
+  UserTurnOriginalInputCommit,
+} from "../../sessions/user-turn-transcript.types.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -85,6 +93,20 @@ export function createGatewayChatUserTurnController(params: {
   onMessagePersisted?: () => void;
 }): GatewayChatUserTurnController {
   const { admission, request, session } = params;
+  const entry = session.entry;
+  const originProvider = entry?.modelOverrideFallbackOriginProvider;
+  const originModel = entry?.modelOverrideFallbackOriginModel;
+  const fallbackOrigin =
+    originProvider && originModel && hasSessionActiveAutoModelFallback(entry)
+      ? { provider: originProvider, model: originModel }
+      : undefined;
+  // Automatic failover has its own notice; capture the user's underlying selection.
+  const selectedModel = fallbackOrigin ?? session.resolvedSessionModel;
+  const previousModel = resolveSessionSubmittedModelRef(entry);
+  const modelSelection = {
+    ...selectedModel,
+    ...(previousModel ? { previous: previousModel } : {}),
+  };
   const progressRefresh = isProgressCardRefreshInputProvenance(request.systemInputProvenance);
   const sender =
     request.goalOperation?.action === "resume"
@@ -228,7 +250,10 @@ export function createGatewayChatUserTurnController(params: {
         }
       : {}),
     input: baseInput,
-    resolveInput: () => inputPromise,
+    resolveInput: async () => {
+      using _ = observeDiagnosticsTimelinePhases("persist.resolveInput");
+      return await inputPromise;
+    },
     target: () => {
       // Retain only the current binding; transcript writers recheck it at commit.
       const target = session.sessionTarget;
@@ -289,8 +314,16 @@ export function createGatewayChatUserTurnController(params: {
       const originalInput = event.message.idempotencyKey === sourceId;
       const next = runAgentHarnessBeforeMessageWriteHook(event);
       if (originalInput && next?.role === "user") {
+        const userMessage: PersistedUserTurnMessage = next;
         const metadata = { ...asOptionalRecord(Reflect.get(next, "__openclaw")) };
         delete metadata.chatRequestIdentity;
+        delete metadata.modelSelection;
+        const visibleHumanInput =
+          !params.client?.internal?.syntheticClient &&
+          !contextFreeCommand &&
+          userMessage.display !== false &&
+          userMessage.excludeFromContext !== true &&
+          (!userMessage.provenance || userMessage.provenance.kind === "external_user");
         return {
           ...next,
           ...(contextFreeCommand ? { excludeFromContext: true } : {}),
@@ -298,6 +331,7 @@ export function createGatewayChatUserTurnController(params: {
             ...metadata,
             ...(recovery ? { chatInputRecovery: recovery } : {}),
             ...(request.requestIdentity ? { chatRequestIdentity: request.requestIdentity } : {}),
+            ...(visibleHumanInput ? { modelSelection } : {}),
             ...(contextFreeCommand ? { contextFreeCommand: true } : {}),
           },
         };
@@ -375,6 +409,7 @@ export function createGatewayChatUserTurnController(params: {
         attributes: admission.chatSendTraceAttributes,
       },
     );
+    using _ = observeDiagnosticsTimelinePhases("persist.mentionPublication");
     await mentionCommit;
     return persisted;
   };

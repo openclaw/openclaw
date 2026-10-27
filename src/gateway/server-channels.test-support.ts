@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import type { getCredentialUnavailableDiagnostics } from "../channels/account-snapshot-fields.js";
 import type { ChannelGatewayAdapterV2 } from "../channels/plugins/types.adapters.js";
 import type {
@@ -5,6 +6,7 @@ import type {
   ChannelId,
   ChannelPlugin,
 } from "../channels/plugins/types.public.js";
+import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
@@ -22,6 +24,16 @@ export type TestAccount = {
   configured?: boolean;
   credentialDiagnostics?: ReturnType<typeof getCredentialUnavailableDiagnostics>;
 };
+
+export function createTestNativeApprovalRuntime(): GatewayNativeApprovalRuntime {
+  return {
+    getRuntimeConfig: () => ({}),
+    request: vi.fn(),
+    requestRoute: vi.fn(),
+    routeCoordinator: {} as never,
+    subscribe: vi.fn(),
+  };
+}
 
 export function healthOf(account: ChannelAccountSnapshot | undefined) {
   return evaluateChannelHealth(account ?? {}, {
@@ -44,8 +56,6 @@ export function createTestPlugin(params?: {
   resolveAccount?: ChannelPlugin<TestAccount>["config"]["resolveAccount"];
   isConfigured?: ChannelPlugin<TestAccount>["config"]["isConfigured"];
   isLinked?: ChannelPlugin<TestAccount>["config"]["isLinked"];
-  disabledReason?: ChannelPlugin<TestAccount>["config"]["disabledReason"];
-  unconfiguredReason?: ChannelPlugin<TestAccount>["config"]["unconfiguredReason"];
   unlinkedReason?: ChannelPlugin<TestAccount>["config"]["unlinkedReason"];
 }): ChannelPlugin<TestAccount, unknown, unknown, 2> {
   const id = params?.id ?? "discord";
@@ -56,8 +66,6 @@ export function createTestPlugin(params?: {
     isEnabled: (resolved) => resolved.enabled !== false,
     ...(params?.isConfigured ? { isConfigured: params.isConfigured } : {}),
     ...(params?.isLinked ? { isLinked: params.isLinked } : {}),
-    ...(params?.disabledReason ? { disabledReason: params.disabledReason } : {}),
-    ...(params?.unconfiguredReason ? { unconfiguredReason: params.unconfiguredReason } : {}),
     ...(params?.unlinkedReason ? { unlinkedReason: params.unlinkedReason } : {}),
   };
   if (params?.includeDescribeAccount !== false) {

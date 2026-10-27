@@ -380,9 +380,9 @@ describe("sandbox exec preparation failures", () => {
 
   it("settles the registered session once when sandbox authorization fails before spawn", async () => {
     const registry = await import("./bash-process-registry.js");
-    const sessionSlugs = await import("./session-slug.js");
+    const sessionIds = await import("./bash-process-id.js");
     const sessionId = "sandbox-preparation-failure";
-    const sessionSlug = vi.spyOn(sessionSlugs, "createSessionSlug").mockReturnValue(sessionId);
+    using _ = vi.spyOn(sessionIds, "createProcessSessionId").mockReturnValue(sessionId);
     const preparation = createDeferred<ReturnType<typeof sandboxSpec>>();
     const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(async () => {});
     const onSettledBeforeNotify = vi.fn();
@@ -392,45 +392,41 @@ describe("sandbox exec preparation failures", () => {
       throw failure;
     });
 
-    try {
-      const pending = runTestExecProcess({
-        sandbox: {
-          ...sandboxDirectories,
-          buildExecSpec: async () => await preparation.promise,
-          finalizeExec,
-        },
+    const pending = runTestExecProcess({
+      sandbox: {
+        ...sandboxDirectories,
+        buildExecSpec: async () => await preparation.promise,
+        finalizeExec,
+      },
+      sessionKey: "agent:main:sandbox-preparation",
+      onSettledBeforeNotify,
+      beforeSpawn,
+    });
+
+    expect(registry.getSession(sessionId)).toMatchObject({ exited: false });
+    expect(beforeSpawn).not.toHaveBeenCalled();
+    preparation.resolve(sandboxSpec());
+    await expect(pending).rejects.toBe(failure);
+    await nextImmediate();
+
+    expect(finalizeExec).toHaveBeenCalledOnce();
+    expect(beforeSpawn).toHaveBeenCalledOnce();
+    expect(supervisorMock.spawn).not.toHaveBeenCalled();
+    expect(registry.getSession(sessionId)).toBeUndefined();
+    expect(onSettledBeforeNotify).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ status: "failed", failureKind: "runtime-error" }),
+    );
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "exec.process.completed",
+        target: "sandbox",
+        mode: "child",
+        outcome: "failed",
+        failureKind: "runtime-error",
+        timedOut: false,
         sessionKey: "agent:main:sandbox-preparation",
-        onSettledBeforeNotify,
-        beforeSpawn,
-      });
-
-      expect(registry.getSession(sessionId)).toMatchObject({ exited: false });
-      expect(beforeSpawn).not.toHaveBeenCalled();
-      preparation.resolve(sandboxSpec());
-      await expect(pending).rejects.toBe(failure);
-      await nextImmediate();
-
-      expect(finalizeExec).toHaveBeenCalledOnce();
-      expect(beforeSpawn).toHaveBeenCalledOnce();
-      expect(supervisorMock.spawn).not.toHaveBeenCalled();
-      expect(registry.getSession(sessionId)).toBeUndefined();
-      expect(onSettledBeforeNotify).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ status: "failed", failureKind: "runtime-error" }),
-      );
-      expect(events).toEqual([
-        expect.objectContaining({
-          type: "exec.process.completed",
-          target: "sandbox",
-          mode: "child",
-          outcome: "failed",
-          failureKind: "runtime-error",
-          timedOut: false,
-          sessionKey: "agent:main:sandbox-preparation",
-        }),
-      ]);
-    } finally {
-      sessionSlug.mockRestore();
-    }
+      }),
+    ]);
   });
 });
 

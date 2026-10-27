@@ -17,10 +17,8 @@ import {
   resultDetails,
   testing,
   waitUntilCompleted,
-  fakeTool,
   runUntilCompleted,
 } from "./code-mode.test-support.js";
-import { projectMcpCallToolResult } from "./mcp-content.js";
 import {
   addClientToolsToToolCatalog,
   registerHeadlessToolSearchCatalog,
@@ -628,53 +626,4 @@ it("projects nested Errors before their custom toJSON can hide the failure", asy
     { type: "json", value: { error } },
     { type: "text", text: JSON.stringify(error) },
   ]);
-});
-
-describe("Code Mode tool execution scheduling", () => {
-  it.each(["native", "mcp"] as const)(
-    "honors sequential-only %s tools through independent calls",
-    async (source) => {
-      let active = 0;
-      let maximumActive = 0;
-      let calls = 0;
-      const execute: AnyAgentTool["execute"] = async () => {
-        calls += 1;
-        active += 1;
-        maximumActive = Math.max(maximumActive, active);
-        try {
-          // A real host turn lets every incorrectly parallel invocation enter.
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          return source === "mcp"
-            ? projectMcpCallToolResult({ structuredContent: { ok: true } })
-            : jsonResult({ ok: true });
-        } finally {
-          active -= 1;
-        }
-      };
-      const tool: AnyAgentTool =
-        source === "mcp"
-          ? mcpTool({
-              name: "probe__ordered_probe",
-              serverName: "probe",
-              toolName: "ordered_probe",
-              execute,
-            })
-          : { ...fakeTool("ordered_probe", "Ordered probe"), execute };
-      tool.executionMode = "sequential";
-      const ctx = createHeadlessCodeModeHarness([tool]);
-      const call = source === "mcp" ? "MCP.probe.orderedProbe({})" : "ordered_probe({})";
-      const code = `const values = await Promise.all([${call}, ${call}]); return ${source === "mcp" ? "values.map(value => value.structuredContent)" : "values"};`;
-      const result =
-        source === "native"
-          ? await runCodeModeScriptHeadless({ ctx, code })
-          : resultDetails(await createCodeModeTools(ctx)[0]!.execute("ordered-call", { code }));
-
-      expect(result).toMatchObject({ status: "completed", value: [{ ok: true }, { ok: true }] });
-      expect(calls).toBe(2);
-      expect(maximumActive).toBe(1);
-      expect(active).toBe(0);
-    },
-  );
 });

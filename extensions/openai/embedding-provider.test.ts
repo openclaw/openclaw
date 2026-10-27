@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createRemoteEmbeddingProvider,
@@ -47,15 +48,12 @@ async function startEmbeddingServer(onRequest = respondWithEmbeddings) {
   const server = createServer((request, response) => {
     void (async () => {
       try {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
+        const bodyBuffer = await consumeBuffer(request);
         const captured: CapturedRequest = {
           url: request.url,
           authorization: request.headers.authorization,
           alias: request.headers["x-alias"],
-          body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as EmbeddingBody,
+          body: JSON.parse(bodyBuffer.toString("utf8")) as EmbeddingBody,
           response,
           closed: false,
         };

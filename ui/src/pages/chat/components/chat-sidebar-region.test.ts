@@ -4,16 +4,18 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { createOverlay } from "../../../components/overlay-lifecycle.ts";
 import { createControlUiPluginHost } from "../../../plugins/control-ui-host.ts";
-import "../../../components/resizable-divider.ts";
 import {
   ControlUiPluginRuntime,
   type ControlUiPluginOwner,
 } from "../../../plugins/control-ui-runtime.ts";
+import "../../../components/resizable-divider.ts";
 import { sidebarPanelFixtureParams } from "../../../test-helpers/chat-pane-embedded-panels.ts";
+import { createSidebarRegionCallbackMocks } from "../../../test-helpers/sidebar-region-callbacks.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import { createMountedPanes } from "../chat-pane-mounted.test-support.ts";
-import { createInitializationContext, getPaneTestRuntime } from "../chat-pane.test-support.ts";
+import { getPaneTestRuntime } from "../chat-pane.test-support.ts";
 import { createPageState } from "../chat-state-page.ts";
 import {
   activatePanel,
@@ -70,16 +72,7 @@ async function createRegion(
         content: content[definition.slot] ?? null,
       }),
     );
-  region.callbacks = {
-    activatePanel: vi.fn(),
-    togglePanelExpanded: vi.fn(),
-    setDock: vi.fn(),
-    closeSlot: vi.fn(),
-    openSlot: vi.fn(),
-    reorderPanel: vi.fn(),
-    resizePanel: vi.fn(),
-    setOpen: vi.fn(),
-  };
+  region.callbacks = createSidebarRegionCallbackMocks();
   region.availableWidth = 1_200;
   const primary = div("sidebar-region__primary", "<main data-primary>Primary</main>");
   primary.dataset.region = "main";

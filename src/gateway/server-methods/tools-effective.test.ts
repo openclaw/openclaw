@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-types.js";
+import * as conversationToolPolicyPipeline from "../../agents/conversation-tool-policy-pipeline.js";
 import * as toolSchemaRuntime from "../../agents/embedded-agent-runner/tool-schema-runtime.js";
 import { createStubTool } from "../../agents/test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
@@ -17,6 +18,7 @@ import {
 } from "../../plugins/runtime.js";
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { fixedStoreOwnershipConfig } from "./sessions-fixed-store.test-support.js";
 import { toolsEffectiveHandlers, testing } from "./tools-effective.js";
 
 type InventoryModule = typeof import("../../agents/tools-effective-inventory.js");
@@ -419,9 +421,16 @@ describe("tools.effective handler", () => {
   });
 
   it("coalesces identical base inventory cache misses while inventory resolution is pending", async () => {
+    const buildSteps = vi.spyOn(
+      conversationToolPolicyPipeline,
+      "buildConversationToolPolicyPipelineSteps",
+    );
+    onTestFinished(() => buildSteps.mockRestore());
     const [first, second] = await Promise.all([invokeTools(), invokeTools()]);
+    const warm = await invokeTools();
     expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
-    expectResponsesOk(first, second);
+    expectResponsesOk(first, second, warm);
+    expect(buildSteps).toHaveBeenCalledTimes(0);
   });
 
   it("returns stale cached base inventory immediately while refreshing in the background", async () => {
@@ -737,14 +746,7 @@ describe("tools.effective handler", () => {
   });
 
   it("loads a bare session through the persisted fixed-store owner", async () => {
-    const cfg: OpenClawConfig = {
-      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-      agents: {
-        ownership: "explicit",
-        entries: { ops: {}, research: {} },
-        defaults: { sessionStore: { agentId: "ops" } },
-      },
-    };
+    const cfg: OpenClawConfig = fixedStoreOwnershipConfig("/tmp/shared-sessions.sqlite");
     const entry = { sessionId: "session-ops-global", updatedAt: 1 };
     mockSession(entry, {
       cfg,

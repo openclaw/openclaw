@@ -650,6 +650,61 @@ describe("native declaration preparation", () => {
     },
   );
 
+  it("rebinds copied plugin dependency links before cold and warm preparation", ({ signal }) =>
+    fixture.run(async () => {
+      const f = createPreparationFixture("all", signal);
+      const previousModules = path.join(f.ancestor, "previous-checkout/node_modules");
+      f.files({
+        [path.join(previousModules, "boundary-private-dep/package.json")]: {
+          name: "boundary-private-dep",
+          types: "index.d.ts",
+        },
+        [path.join(previousModules, "boundary-private-dep/index.d.ts")]:
+          "export declare function consume(callback: (value: number) => number): void;",
+      });
+      const links = f.plugins.map(([id]) => {
+        const output = path.join(f.root, boundaryRoot, "plugins", id);
+        fs.mkdirSync(output, { recursive: true });
+        const link = path.join(output, "node_modules");
+        fs.symlinkSync(previousModules, link, "junction");
+        return { link, target: path.join(f.root, "extensions", id, "node_modules") };
+      });
+      await f.run();
+      const [id, entry] = f.plugins[0];
+      f.write(
+        "consumer.ts",
+        `import { consume } from "./${boundaryRoot}/plugins/${id}/${entry}.js"; consume(value => value.toUpperCase());`,
+      );
+      f.compile([...isolatedCompilerArgs, "--strict", "consumer.ts"]);
+      for (const { link, target } of links) {
+        expect(fs.realpathSync.native(link)).toBe(fs.realpathSync.native(target));
+      }
+      const records = f.plugins.map(([pluginId]) => {
+        const file = `${boundaryRoot}/${pluginId}.json`;
+        return { file, ...f.snapshot(file) };
+      });
+      const stableLinks = links.slice(1).map(({ link }) => ({
+        link,
+        mtimeMs: fs.lstatSync(link).mtimeMs,
+      }));
+      const firstLink = links[0]!;
+      fs.unlinkSync(firstLink.link);
+      fs.symlinkSync(
+        path.join(f.ancestor, "missing-checkout/node_modules"),
+        firstLink.link,
+        "junction",
+      );
+      await f.run();
+      expect(fs.realpathSync.native(firstLink.link)).toBe(fs.realpathSync.native(firstLink.target));
+      f.compile([...isolatedCompilerArgs, "--strict", "consumer.ts"]);
+      for (const { file, bytes, mtimeMs } of records) {
+        expect(f.snapshot(file)).toEqual({ bytes, mtimeMs });
+      }
+      for (const { link, mtimeMs } of stableLinks) {
+        expect(fs.lstatSync(link).mtimeMs).toBe(mtimeMs);
+      }
+    }));
+
   it(
     "preserves outputs on compile failure and prunes obsolete declarations after repair",
     { timeout: 30_000 },

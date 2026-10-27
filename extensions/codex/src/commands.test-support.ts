@@ -29,6 +29,7 @@ import { afterEach, beforeEach, expect, vi } from "vitest";
 import * as computerUse from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import * as models from "./app-server/models.js";
+import type { JsonValue } from "./app-server/protocol.js";
 import type { CodexAppServerThreadBinding } from "./app-server/session-binding.js";
 import {
   buildCodexSupervisionTestConnectionFingerprint,
@@ -45,6 +46,35 @@ import { createCodexCommandHost } from "./command-host.test-support.js";
 import * as commandRpc from "./command-rpc.js";
 import * as conversationBindingData from "./conversation-binding-data.js";
 import * as conversationControl from "./conversation-control.js";
+
+export function skillEntry(name: string, cwd = "/repo-a", enabled = true, description = "") {
+  return {
+    name,
+    enabled,
+    description,
+    path: `${cwd}/.codex/skills/${name}/SKILL.md`,
+    scope: "repo" as const,
+  };
+}
+
+export function modelEntry(id: string) {
+  return {
+    id,
+    model: id,
+    inputModalities: ["text" as const],
+    supportedReasoningEfforts: ["medium" as const],
+  };
+}
+
+export const skillGroup = <S extends JsonValue, E extends JsonValue = never>(
+  cwd: string,
+  skills: S[],
+  errors: E[] = [],
+) => ({
+  cwd,
+  skills,
+  errors,
+});
 
 async function cleanupCodexState(restoreMocks = false) {
   await closeOpenClawAgentDatabasesAsync();
@@ -225,75 +255,60 @@ function restoreCodexCommandMocks(): void {
   defaultCommandFixture = undefined;
 }
 
-function fixture(): CodexCommandDeps | undefined {
-  return commandFixture.getStore() ?? defaultCommandFixture;
-}
-
-function mockCommand<K extends keyof CodexCommandFunctions>(
-  key: K,
+function mockCommands<K extends keyof CodexCommandFunctions>(
   source: Pick<CodexCommandFunctions, K>,
-  install: (implementation: CodexCommandFunctions[K]) => { mockRestore: () => void },
+  keys: readonly K[],
+  spy: (key: K) => {
+    mockImplementation(implementation: CodexCommandFunctions[K]): { mockRestore: () => void };
+  },
 ) {
-  // Capture before spying; select the current async fixture on every invocation.
-  const implementation = new Proxy(source[key], {
-    apply(target, _thisArg, args) {
-      return Reflect.apply(fixture()?.[key] ?? target, undefined, args);
-    },
-  });
-  commandMocks.add(install(implementation));
+  for (const key of keys) {
+    // Capture before spying; select the current async fixture on every invocation.
+    const implementation = new Proxy(source[key], {
+      apply(target, _thisArg, args) {
+        const fixture = commandFixture.getStore() ?? defaultCommandFixture;
+        return Reflect.apply(fixture?.[key] ?? target, undefined, args);
+      },
+    });
+    commandMocks.add(spy(key).mockImplementation(implementation));
+  }
 }
 
 function ensureCodexCommandMocks(): void {
   if (commandMocks.size > 0) {
     return;
   }
-  mockCommand("codexControlRequest", commandRpc, (impl) =>
-    vi.spyOn(commandRpc, "codexControlRequest").mockImplementation(impl),
+  mockCommands(
+    commandRpc,
+    ["codexControlRequest", "readCodexStatusProbes", "requestOptions", "safeCodexControlRequest"],
+    (key) => vi.spyOn(commandRpc, key),
   );
-  mockCommand(
-    "listCodexAppServerModels",
+  mockCommands(
     { listCodexAppServerModels: models.listAllCodexAppServerModels },
-    (impl) => vi.spyOn(models, "listAllCodexAppServerModels").mockImplementation(impl),
+    ["listCodexAppServerModels"],
+    () => vi.spyOn(models, "listAllCodexAppServerModels"),
   );
-  mockCommand("readCodexStatusProbes", commandRpc, (impl) =>
-    vi.spyOn(commandRpc, "readCodexStatusProbes").mockImplementation(impl),
+  mockCommands(computerUse, ["readCodexComputerUseStatus", "installCodexComputerUse"], (key) =>
+    vi.spyOn(computerUse, key),
   );
-  mockCommand("requestOptions", commandRpc, (impl) =>
-    vi.spyOn(commandRpc, "requestOptions").mockImplementation(impl),
+  mockCommands(conversationBindingData, ["resolveCodexDefaultWorkspaceDir"], (key) =>
+    vi.spyOn(conversationBindingData, key),
   );
-  mockCommand("safeCodexControlRequest", commandRpc, (impl) =>
-    vi.spyOn(commandRpc, "safeCodexControlRequest").mockImplementation(impl),
-  );
-  mockCommand("readCodexComputerUseStatus", computerUse, (impl) =>
-    vi.spyOn(computerUse, "readCodexComputerUseStatus").mockImplementation(impl),
-  );
-  mockCommand("installCodexComputerUse", computerUse, (impl) =>
-    vi.spyOn(computerUse, "installCodexComputerUse").mockImplementation(impl),
-  );
-  mockCommand("resolveCodexDefaultWorkspaceDir", conversationBindingData, (impl) =>
-    vi.spyOn(conversationBindingData, "resolveCodexDefaultWorkspaceDir").mockImplementation(impl),
-  );
-  mockCommand("readCodexConversationActiveTurn", conversationControl, (impl) =>
-    vi.spyOn(conversationControl, "readCodexConversationActiveTurn").mockImplementation(impl),
-  );
-  mockCommand("setCodexConversationFastMode", conversationControl, (impl) =>
-    vi.spyOn(conversationControl, "setCodexConversationFastMode").mockImplementation(impl),
-  );
-  mockCommand("setCodexConversationModel", conversationControl, (impl) =>
-    vi.spyOn(conversationControl, "setCodexConversationModel").mockImplementation(impl),
-  );
-  mockCommand("setCodexConversationPermissions", conversationControl, (impl) =>
-    vi.spyOn(conversationControl, "setCodexConversationPermissions").mockImplementation(impl),
-  );
-  mockCommand("steerCodexConversationTurn", conversationControl, (impl) =>
-    vi.spyOn(conversationControl, "steerCodexConversationTurn").mockImplementation(impl),
-  );
-  mockCommand("stopCodexConversationTurn", conversationControl, (impl) =>
-    vi.spyOn(conversationControl, "stopCodexConversationTurn").mockImplementation(impl),
+  mockCommands(
+    conversationControl,
+    [
+      "readCodexConversationActiveTurn",
+      "setCodexConversationFastMode",
+      "setCodexConversationModel",
+      "setCodexConversationPermissions",
+      "steerCodexConversationTurn",
+      "stopCodexConversationTurn",
+    ],
+    (key) => vi.spyOn(conversationControl, key),
   );
 }
 
-export function installCodexCommandMocks(deps: CodexCommandDeps): CodexCommandHost {
+function installCodexCommandMocks(deps: CodexCommandDeps): CodexCommandHost {
   ensureCodexCommandMocks();
   // Direct command-handler fixtures install once per test, outside a dispatch scope.
   if (!commandFixture.getStore()) {

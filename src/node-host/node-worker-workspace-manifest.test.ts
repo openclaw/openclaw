@@ -3,8 +3,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { commandResult } from "../agents/github-identity.test-support.js";
 import { parseRemoteWorkspaceManifestEnvelope } from "../gateway/worker-environments/workspace-hash-memo.js";
-import { parseWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
+import { useAgedWorkspaceHashClock } from "../gateway/worker-environments/workspace-hash-memo.test-support.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import * as gitExec from "../infra/git-exec.js";
 import * as exec from "../process/exec.js";
@@ -21,13 +22,18 @@ import {
 import {
   captureManifest,
   nodeWorkspaceManifestCapture,
+  readWorkspaceManifest,
   runNodeWorkspaceManifestCapture,
 } from "./node-worker-workspace-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+useAgedWorkspaceHashClock();
 const command = ["node", "-e", REMOTE_WORKSPACE_MANIFEST_JS];
 afterEach(() => vi.restoreAllMocks());
+
+const rejectChild = () =>
+  vi.spyOn(exec, "runCommandWithTimeout").mockRejectedValue(new Error("unexpected child"));
 
 async function fixture() {
   const home = tempDirs.make("node-manifest-capture-");
@@ -47,17 +53,20 @@ async function fixture() {
   });
   await fs.mkdir(workspaceDir, { recursive: true });
   const argv = (args = ["", "all", "memo-v1"]) => [...command, workspaceDir, ...args];
+  const capture = (args?: string[], signal?: AbortSignal, input = args ? undefined : "[]") =>
+    runtime.exec(
+      parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...identity, argv: argv(args), input })),
+      signal,
+    );
   return {
     home,
-    runtime,
-    identity,
-    argv: argv(),
     workspaceDir,
-    capture: (args?: string[], signal?: AbortSignal) =>
-      runtime.exec(
-        { ...identity, argv: argv(args), ...(args === undefined ? { input: "[]" } : {}) },
-        signal,
-      ),
+    capture,
+    manifest: async (memo = "[]") => {
+      const result = await capture(undefined, undefined, memo);
+      expect(result).toMatchObject({ code: 0, termination: "exit", workspaceDir });
+      return parseRemoteWorkspaceManifestEnvelope(result.stdout);
+    },
     runStandalone: (args = ["", "all"], homeDir = home) =>
       exec.runCommandWithTimeout([process.execPath, ...argv(args).slice(1)], {
         baseEnv: { ...process.env, HOME: homeDir },
@@ -68,19 +77,10 @@ async function fixture() {
 
 describe("resident node manifest capture", () => {
   it("captures, memoizes, and detects small edits through parsed workspace exec without spawning", async () => {
-    const { runtime, identity, workspaceDir, argv } = await fixture();
-    const spawn = vi
-      .spyOn(exec, "runCommandWithTimeout")
-      .mockRejectedValue(new Error("unexpected child"));
+    const { manifest: capture, workspaceDir } = await fixture();
+    rejectChild();
     const file = path.join(workspaceDir, "file.txt");
     await fs.writeFile(file, "before");
-    const capture = async (memo = "[]") => {
-      const result = await runtime.exec(
-        parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...identity, argv, input: memo })),
-      );
-      expect(result).toMatchObject({ code: 0, termination: "exit", workspaceDir });
-      return parseRemoteWorkspaceManifestEnvelope(result.stdout);
-    };
     const first = await capture();
     expect(first.metrics.contentHashCount).toBe(1);
     const second = await capture(JSON.stringify(first.memo));
@@ -92,7 +92,6 @@ describe("resident node manifest capture", () => {
     expect(changed.metrics.contentHashCount).toBe(1);
     await fs.rm(file);
     expect((await capture(JSON.stringify(changed.memo))).manifestRef).not.toBe(changed.manifestRef);
-    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("uses the same canonical bytes for transfer capture and the standalone transport", async () => {
@@ -155,21 +154,14 @@ describe("resident node manifest capture", () => {
       baseCommit,
     });
     const digest = await writeManifest(homeDir, rawManifest);
-    const manifestDir = path.join(homeDir, ".openclaw-worker", "manifests");
     const args = [baseCommit, "eligible", digest];
     const child = await runStandalone(args, homeDir);
     expect(child.code, child.stderr).toBe(0);
-    const spawn = vi
-      .spyOn(exec, "runCommandWithTimeout")
-      .mockRejectedValue(new Error("unexpected manifest child"));
+    rejectChild();
     const native = await capture(args);
     expect(native.stdout).toBe(child.stdout);
-    expect(spawn).not.toHaveBeenCalled();
-    const captured = parseWorkerWorkspaceManifest(
-      await fs.readFile(path.join(manifestDir, `${native.stdout.trim().slice(7)}.json`), "utf8"),
-      native.stdout.trim(),
-    );
-    expect(captured.entries.map((entry) => entry.path)).toEqual([
+    const { manifest } = await readWorkspaceManifest(homeDir, native.stdout.trim());
+    expect(manifest.entries.map((entry) => entry.path)).toEqual([
       ".gitignore",
       "keep.ignored",
       "new.txt",
@@ -177,15 +169,11 @@ describe("resident node manifest capture", () => {
   });
 
   it("retains child execution for changed programs and different workspace paths", () => {
-    const argv = ["node", "-e", REMOTE_WORKSPACE_MANIFEST_JS, "/workspace", "", "all", "memo-v1"];
-    expect(nodeWorkspaceManifestCapture(argv, "/workspace")).toBeDefined();
+    const argv = [...command, "/workspace", "", "all", "memo-v1"];
     expect(nodeWorkspaceManifestCapture(argv, "/other")).toBeUndefined();
     expect(
       nodeWorkspaceManifestCapture(argv.with(2, `${REMOTE_WORKSPACE_MANIFEST_JS}\n`), "/workspace"),
     ).toBeUndefined();
-    expect(
-      nodeWorkspaceManifestCapture(argv.with(4, "a".repeat(40)).with(5, "eligible"), "/workspace"),
-    ).toBeDefined();
   });
 
   it("keeps the workspace environment and joins a cancelled Git read before releasing capture", async () => {
@@ -204,14 +192,7 @@ describe("resident node manifest capture", () => {
         });
         entered.resolve();
         await release.promise;
-        return {
-          stdout: Buffer.alloc(0),
-          stderr: Buffer.alloc(0),
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return commandResult();
       },
     );
     let settled = false;

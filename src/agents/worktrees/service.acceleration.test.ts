@@ -20,6 +20,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { captureWorktreeMutationHeartbeat } from "./allocation.test-support.js";
 import {
   createWorktreeCapacityStatfs,
@@ -853,14 +854,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
           queued.resolve();
           return enqueue(...args);
         });
-        return {
-          stdout: "",
-          stderr: "native checkout failed",
-          code: 1,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return createCommandResult({ stderr: "native checkout failed", code: 1 });
       }
       return await realRunCommand(argv, options);
     });

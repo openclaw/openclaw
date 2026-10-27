@@ -439,6 +439,46 @@ it("leaves an empty usage store absent until a transcript needs a rollup", async
   await closeStateDatabaseForTest();
 });
 
+it("waits for another session's refresh before filling its own detail cache", async () => {
+  try {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "usage-waiting-detail";
+      const firstFile = state.path("first-detail.jsonl");
+      const secondFile = state.path("second-detail.jsonl");
+      await fs.writeFile(firstFile, usageLine("first"));
+      await fs.writeFile(secondFile, usageLine("second-before"));
+      const held = holdRefreshWrites([agentId]);
+      const first = held.gate(agentId);
+      const refreshing = refresh(agentId, [firstFile]);
+      let waiting: ReturnType<typeof refreshCostUsageCacheForAgent> | undefined;
+      try {
+        await waitForHost(
+          first.entered.promise,
+          refreshing,
+          "Refresh did not reach its host write",
+        );
+        await fs.appendFile(secondFile, usageLine("second-after"));
+        waiting = refreshCostUsageCacheForAgent({
+          config,
+          agentId,
+          sessionFiles: [secondFile],
+          waitForRefresh: true,
+        });
+        first.release.resolve();
+        expect(await refreshing).toBe("refreshed");
+        expect(await waiting).toBe("refreshed");
+        expectFresh(await readSession(agentId, secondFile), 20);
+      } finally {
+        first.release.resolve();
+        await Promise.allSettled([refreshing, waiting]);
+        held.observer.mockRestore();
+      }
+    });
+  } finally {
+    await closeStateDatabaseForTest();
+  }
+});
+
 it("serves fresh and partial usage while refresh waits for its host writer", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot(config);

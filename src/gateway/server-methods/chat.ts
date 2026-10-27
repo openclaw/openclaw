@@ -6,14 +6,13 @@ import {
   validateChatToolTitlesParams,
   type ChatInjectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "../../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
+import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { injectGatewayAssistantMessage } from "./chat-inject.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
+import { chatPendingInputsDismissHandlers } from "./chat-pending-inputs-dismiss-handler.js";
 import { chatPredictionHandlers } from "./chat-prediction-handler.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -22,6 +21,7 @@ export const chatHandlers: GatewayRequestHandlers = {
   ...chatHistoryHandlers,
   ...chatMessageGetHandlers,
   ...chatPredictionHandlers,
+  ...chatPendingInputsDismissHandlers,
   "chat.toolTitles": async ({ params, respond }) => {
     if (!assertValidParams(params, validateChatToolTitlesParams, "chat.toolTitles", respond)) {
       return;

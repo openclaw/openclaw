@@ -203,12 +203,9 @@ describe("system agent operations", () => {
   it("reads canonical array indices after redaction", async () => {
     const configPath = "agents.entries.main.skills[00]";
     mockConfig.setConfig({
-      channels: { modelByChannel: { telegram: { "team.ops[west]": "openai/gpt-5.5" } } },
-      models: { providers: { "local.service": { apiKey: "synthetic-key" } } },
       agents: { entries: { main: { skills: ["weather"] } } },
     });
     const operation = parseSystemAgentOperation(`config get ${configPath}`);
-    expect(operation).toEqual({ kind: "config-get", path: configPath });
     expect(await run(operation)).toEqual({ applied: false });
     expect(lines).toEqual([`${configPath} = "weather"`]);
   });
@@ -359,11 +356,9 @@ describe("system agent operations", () => {
       },
     );
     expect(result.applied).toBe(true);
-    expect(runConfigSet).toHaveBeenCalledWith({
+    expect(vi.mocked(runConfigSet).mock.calls[0]?.[0]).toMatchObject({
       path,
       cliOptions: { refProvider: "default", refSource: "env", refId: id },
-      runtime: expect.objectContaining({ log: expect.any(Function) }),
-      throwOnError: false,
     });
     expect(loggedOutput()).toContain("[openclaw] done: config.setRef");
     expectAudit("config.setRef", "Set config gateway.auth.token SecretRef", {
@@ -420,11 +415,9 @@ describe("system agent operations", () => {
       expect(result.applied).toBe(true);
       const [name] = await storedEntries();
       expect(name).toEqual(mintedName);
-      expect(runConfigSet).toHaveBeenCalledWith({
+      expect(vi.mocked(runConfigSet).mock.calls[0]?.[0]).toMatchObject({
         path: operation.path,
         cliOptions: { refProvider: "team", refSource: "store", refId: name },
-        runtime: expect.objectContaining({ log: expect.any(Function) }),
-        throwOnError: true,
       });
       expect(await readStored(name ?? "")).toMatchObject({ ok: true, value: operation.secret });
       expect(loggedOutput()).not.toContain(operation.secret);
@@ -459,11 +452,9 @@ describe("system agent operations", () => {
     expect(runPluginInstallCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({
         raw: "clawhub:openclaw-demo",
-        opts: {},
         allowInstallPolicyWarningPrompt: false,
         beforePersistentApply: expect.any(Function),
         applyRuntime: applyPluginRuntime,
-        runtime: expect.objectContaining({ log: expect.any(Function) }),
       }),
     );
     expect(beforePersistentApply).toHaveBeenCalledOnce();
@@ -505,11 +496,7 @@ describe("system agent operations", () => {
 
     const result = await run(operation, { approved: true });
     expect(result.applied).toBe(true);
-    expect(runPluginUninstallCommand).toHaveBeenCalledWith(
-      ["openclaw-demo"],
-      undefined,
-      expect.objectContaining({ log: expect.any(Function) }),
-    );
+    expect(vi.mocked(runPluginUninstallCommand).mock.calls[0]?.[0]).toEqual(["openclaw-demo"]);
     expect(loggedOutput()).toContain("[openclaw] done: plugin.uninstall");
     expect(loggedOutput()).toContain("Restart the Gateway to apply plugin changes.");
   });

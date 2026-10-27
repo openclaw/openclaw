@@ -78,6 +78,6 @@ CREATE TABLE "github_personal_publication_requests" (
   UNIQUE ("owner_profile_id", "session_id", "idempotency_key")
 );
 
-CREATE INDEX "idx_github_personal_publication_owner_session" ON "github_personal_publication_requests" (("owner_profile_id") ASC NULLS FIRST, ("session_id") ASC NULLS FIRST, ("created_at_ms") ASC NULLS FIRST);
+CREATE INDEX "idx_github_personal_publication_owner_session" ON "github_personal_publication_requests" (("owner_profile_id") ASC, ("session_id") ASC, ("created_at_ms") ASC);
 
-CREATE INDEX "idx_github_personal_publication_pending" ON "github_personal_publication_requests" (("status") ASC NULLS FIRST, ("updated_at_ms") ASC NULLS FIRST, ("request_id") ASC NULLS FIRST);
+CREATE INDEX "idx_github_personal_publication_pending" ON "github_personal_publication_requests" (("status") ASC, ("updated_at_ms") ASC, ("request_id") ASC);

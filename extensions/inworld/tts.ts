@@ -45,7 +45,13 @@ export const INWORLD_TTS_MODELS = [
   "inworld-tts-1.5-mini",
   "inworld-tts-1-max",
   "inworld-tts-1",
+  "inworld-tts-2",
+  "inworld-tts-2-flash",
 ] as const;
+
+// TTS-2 uses delivery presets in place of temperature; other models do not accept them.
+export const INWORLD_DELIVERY_MODES = ["STABLE", "BALANCED", "CREATIVE"] as const;
+export type InworldDeliveryMode = (typeof INWORLD_DELIVERY_MODES)[number];
 
 export type InworldAudioEncoding =
   | "MP3"
@@ -132,19 +138,26 @@ export async function inworldTTS(params: {
   modelId?: string;
   audioEncoding?: InworldAudioEncoding;
   sampleRateHertz?: number;
+  speakingRate?: number;
   temperature?: number;
+  deliveryMode?: InworldDeliveryMode;
   timeoutMs?: number;
 }): Promise<Buffer> {
   const { canonicalizeBase64, MAX_AUDIO_BYTES } = await import("openclaw/plugin-sdk/media-runtime");
+  const modelId = params.modelId ?? DEFAULT_INWORLD_MODEL_ID;
   const requestBody = JSON.stringify({
     text: params.text,
     voiceId: params.voiceId ?? DEFAULT_INWORLD_VOICE_ID,
-    modelId: params.modelId ?? DEFAULT_INWORLD_MODEL_ID,
+    modelId,
     audioConfig: {
       audioEncoding: params.audioEncoding ?? "MP3",
       ...(params.sampleRateHertz && { sampleRateHertz: params.sampleRateHertz }),
+      ...(params.speakingRate != null && { speakingRate: params.speakingRate }),
     },
     ...(params.temperature != null && { temperature: params.temperature }),
+    ...(modelId === "inworld-tts-2" && params.deliveryMode
+      ? { deliveryMode: params.deliveryMode }
+      : {}),
   });
   return await requestInworldText(
     params,

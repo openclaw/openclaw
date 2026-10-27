@@ -127,8 +127,6 @@ it("keeps same-requester steering independent of session personal-context reassi
       ...run,
       run: { ...run.run, senderId: participantId, bootstrapUserProfileId: participantId },
     };
-    // An owner reassignment can update the next turn's bootstrap selection,
-    // but it is not a permission change and must not rewrite the active turn.
     expect(await fingerprintFor(incoming)).toBe(fingerprint);
     for (const options of [
       {
@@ -304,12 +302,10 @@ it.each([
           }
         : {};
       const context = { getRuntimeConfig: () => config };
-      const originalClient = createOperatorClient({ profileId, scopes, caps: ["ui-commands"] });
-      const reconnectedClient = createOperatorClient({
-        profileId,
-        scopes,
-        caps: ["ui-commands"],
-      });
+      const clientFor = (id = profileId) =>
+        createOperatorClient({ profileId: id, scopes, caps: ["ui-commands"] });
+      const originalClient = clientFor();
+      const reconnectedClient = clientFor();
       reconnectedClient.connId = "reconnected-browser";
       const originalRevocation = new AbortController();
       const reconnectedRevocation = new AbortController();
@@ -388,13 +384,12 @@ it.each([
             gatewayUiCommandTarget: run.run.gatewayUiCommandTarget,
           }),
         ).resolves.toEqual({ status: "accepted" });
-        // An unrelated config publication must not change the effective model ceiling.
         config = { ...config };
         await expect(inject()).resolves.toEqual(
           grant === undefined ? rejected : { status: "accepted" },
         );
         const otherAuthority = await capture(
-          createOperatorClient({ profileId: otherProfileId, scopes, caps: ["ui-commands"] }),
+          clientFor(otherProfileId),
           new AbortController().signal,
           grant,
         );

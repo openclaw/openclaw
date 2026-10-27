@@ -50,6 +50,7 @@ type AttemptToolRunFacts = Pick<
 
 /**
  * Builds the shared tool-run context for embedded and plugin harness attempts.
+ * Pass per-run overrides separately to avoid copying the complete attempt.
  */
 export function buildEmbeddedAttemptToolRunContext(
   params: AttemptToolRunFacts & {
@@ -71,6 +72,7 @@ export function buildEmbeddedAttemptToolRunContext(
     sessionKey?: string;
     replyOperation?: { readonly acceptedSteeredInboundAudio: boolean };
   },
+  overrides: { forceMessageTool?: boolean; trace?: DiagnosticTraceContext } = params,
 ) {
   const { currentInboundAudio } = params;
   const currentOwner = getCurrentSessionControllerOwner();
@@ -81,7 +83,7 @@ export function buildEmbeddedAttemptToolRunContext(
       : undefined);
   // Collector output is mandatory result transport, even on a narrowed tool surface.
   const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
-    forceMessageTool: params.forceMessageTool,
+    forceMessageTool: overrides.forceMessageTool,
     forceToolNames:
       params.swarmCollector && params.swarmOutputSchema ? ["structured_output"] : undefined,
   });
@@ -142,6 +144,6 @@ export function buildEmbeddedAttemptToolRunContext(
       : {}),
     // Freeze trace metadata at the attempt boundary so later mutable diagnostic updates do not
     // rewrite the facts attached to tool calls already in flight.
-    ...(params.trace ? { trace: freezeDiagnosticTraceContext(params.trace) } : {}),
+    ...(overrides.trace ? { trace: freezeDiagnosticTraceContext(overrides.trace) } : {}),
   };
 }

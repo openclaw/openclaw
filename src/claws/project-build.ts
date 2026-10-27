@@ -17,17 +17,6 @@ export const CLAW_BUILD_RESULT_SCHEMA_VERSION = "openclaw.clawBuild.v1" as const
 // zlib's public numeric API defines Z_FILTERED as strategy 1.
 const ZLIB_FILTERED_STRATEGY = 1;
 
-type ClawBuildResult = {
-  schemaVersion: typeof CLAW_BUILD_RESULT_SCHEMA_VERSION;
-  projectSchemaVersion: typeof CLAW_PROJECT_RESULT_SCHEMA_VERSION;
-  artifact: string;
-  integrity: string;
-  byteLength: number;
-  files: string[];
-  excludedPaths: string[];
-  claw: { name: string; version: string };
-};
-
 async function readSelectedProjectFile(projectRoot: string, path: string): Promise<Buffer> {
   const sourceRoot = await fsSafeRoot(projectRoot);
   const read = await sourceRoot.read(path, {
@@ -76,10 +65,7 @@ export async function extractBuiltClawArtifact(
   }
 }
 
-export async function buildClawProject(
-  projectPath: string,
-  outputPath: string,
-): Promise<ClawBuildResult> {
+export async function buildClawProject(projectPath: string, outputPath: string) {
   const project = await validateClawProject(projectPath);
   if (!project.ok) {
     throw new ClawProjectError(

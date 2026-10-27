@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderDiscordMarkdown } from "./markdown.js";
 
 describe("renderDiscordMarkdown", () => {
@@ -15,7 +15,15 @@ describe("renderDiscordMarkdown", () => {
       String.raw`\*literal\* __bold__`,
     ].join("\n");
 
-    expect(renderDiscordMarkdown(input, "off")).toBe(input.replace("__bold__", "**bold**"));
+    const copies = vi.spyOn(Array.prototype, "toSorted");
+    try {
+      const rendered = renderDiscordMarkdown(input, "off");
+      const copyCount = copies.mock.calls.length;
+      expect(rendered).toBe(input.replace("__bold__", "**bold**"));
+      expect(copyCount).toBe(0);
+    } finally {
+      copies.mockRestore();
+    }
   });
 
   it("converts tables only when requested and leaves length enforcement to chunking", () => {

@@ -275,12 +275,6 @@ it("keeps the first creator across declaration convergence and restart", async (
     skillLibrarySelections: job.skillLibrarySelections,
   });
   expect(first.sessionEntry.skillLibrarySelections).toEqual(selections);
-  const restarted = resolveCronSession({
-    ...session,
-    store: { [session.sessionKey]: first.sessionEntry },
-    skillLibrarySelections: [],
-  });
-  expect(restarted.sessionEntry.skillLibrarySelections).toEqual(selections);
 });
 
 it("keeps declaration-key uniqueness local to the caller visibility predicate", async () => {

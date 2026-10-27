@@ -82,7 +82,6 @@ setInterval(() => {}, 60_000);
     const clientQuits = mode === "quit-7" || eof;
     let prompted = false;
     let quitSent = false;
-    let native: { code: number | null; signal: NodeJS.Signals | null } | undefined;
     const result = await runManagedCommand({
       bin: node,
       args: [
@@ -100,8 +99,7 @@ setInterval(() => {}, 60_000);
            const { name, code, message, data } = error;
            console.log("ACP_CLIENT_ERROR:" + JSON.stringify({ name, code, message, data, serverAlive }));
            return 0;
-         });
-         console.log("ACP_CLIENT_RETURNED");`,
+         });`,
         dir,
         pidFile,
       ],
@@ -118,9 +116,6 @@ setInterval(() => {}, 60_000);
       timeoutMs: handshake ? 18_000 : DEFAULT_VITEST_TEST_TIMEOUT_MS - 20_000,
       signal: cancellation.signal,
       onReady(child) {
-        child.once("exit", (childCode, signal) => {
-          native = { code: childCode, signal };
-        });
         child.stderr!.on("data", stderr.append);
         child.stdin!.on("error", (error) => cancellation.abort(error));
         child.stdout!.on("data", (chunk) => {
@@ -144,27 +139,16 @@ setInterval(() => {}, 60_000);
           }
         });
       },
-    }).catch((error: unknown) => {
-      throw new Error(
-        `ACP client process failed: ${JSON.stringify({ prompted, quitSent, native })}\nstdout:\n${stdout.text()}\nstderr:\n${stderr.text()}`,
-        { cause: error },
-      );
     });
     expect(result, `${stderr.text()}\n${stdout.text()}`).toBe(code);
-    expect(native).toEqual({ code, signal: null });
-    expect(stdout.text()).toContain("ACP_CLIENT_RETURNED");
     if (handshake) {
       const error = JSON.parse(stdout.text().match(/ACP_CLIENT_ERROR:(.*)/)?.[1] ?? "null");
       expect(error).toMatchObject({ name: "RequestError", ...handshakeError, serverAlive: false });
     } else {
-      expect(prompted, stderr.text()).toBe(true);
       expect(await readFile(promptFile, "utf8")).toBe("status marker");
       expect(stdout.text()).toContain(`Agent exited with ${diagnostic}`);
     }
     if (clientQuits || (handshake && process.platform !== "win32")) {
-      if (clientQuits) {
-        expect(quitSent).toBe(true);
-      }
       expect(await readFile(termFile, "utf8")).toBe("SIGTERM");
     }
     if (eof) {

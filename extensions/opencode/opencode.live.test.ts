@@ -4,12 +4,10 @@ import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin
 import { describe, expect, it } from "vitest";
 import {
   createLiveValueTool,
+  createLiveToolReplayContext,
   requireLiveToolCall,
 } from "../test-support/live-value-tool.test-support.js";
-import {
-  makeTextToolResult,
-  makeUserMessage,
-} from "../test-support/message-fixtures.test-support.js";
+import { makeUserMessage } from "../test-support/message-fixtures.test-support.js";
 import plugin from "./index.js";
 import {
   buildOpencodeZenLiveProviderConfig,
@@ -129,18 +127,15 @@ describeLive("opencode plugin live", () => {
 
     const second = await completeSimple(
       model,
-      {
-        messages: [
-          makeUserMessage(
-            "You must call the live_echo tool with value ok. Do not answer directly.",
-            Date.now() - 3,
-          ),
-          first,
-          makeTextToolResult(toolCall.id, toolCall.name, "ok", false, Date.now() - 1),
-          makeUserMessage("Reply with exactly: ok", Date.now()),
-        ],
-        tools: [tool],
-      },
+      createLiveToolReplayContext(
+        makeUserMessage(
+          "You must call the live_echo tool with value ok. Do not answer directly.",
+          Date.now() - 3,
+        ),
+        first,
+        toolCall,
+        tool,
+      ),
       options,
     );
 

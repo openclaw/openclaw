@@ -97,7 +97,9 @@ Providers must not create or interpret location markers or expose credentials in
 
 ### Worker providers
 
-`destroy({ leaseId, profile, onCleanupAccepted? })` must resolve only after physical teardown is proven. A provider can set `supportsCleanupAcceptance: true` and call the optional `onCleanupAccepted()` notification once cleanup is accepted and no longer needs the session, or once a provider-owned teardown capture is claimed. The Gateway shuts down session work before supplying this callback, then may complete reclaim while the environment remains `destroying`. The existing lifecycle owner retains the destroy operation, its deadline, and restart recovery. Later rejection records a visible, retryable cleanup failure; it must not be swallowed. The callback is only a notification for this invocation, not authorization for later work. Providers without the capability keep their existing blocking teardown path. Direct environment destruction still waits for confirmation.
+`destroy({ leaseId, profile, signal?, onCleanupAccepted? })` must resolve only after physical teardown is proven. A provider can set `supportsCleanupAcceptance: true` and call the optional `onCleanupAccepted()` notification once cleanup is accepted and no longer needs the session, or once a provider-owned teardown capture is claimed. The Gateway shuts down session work before supplying this callback, then may complete reclaim while the environment remains `destroying`. The existing lifecycle owner retains the destroy operation, its deadline, and restart recovery. Later rejection records a visible, retryable cleanup failure; it must not be swallowed. The callback is only a notification for this invocation, not authorization for later work. Providers without the capability keep their existing blocking teardown path. Direct environment destruction still waits for confirmation.
+
+The optional teardown `signal` aborts at the provider deadline and when reconciliation is interrupted by shutdown or suspension. Forward it through capture, stop, and post-stop cleanup; wait for owned commands to settle before rejecting. Rejection retains the recorded lease and cleanup intent for startup retry. A provider that cannot cancel remains owned until its actual operation settles; timeout alone never proves release.
 
 The bundled Crabbox provider requests `stop --wait=false`, notifies acceptance, and then uses a waiting `stop` within the same bounded cleanup budget to confirm release. Direct backends that reject asynchronous stop retain blocking cleanup. Terminal or unrecognized inspection results alone do not prove that all provider resources have been released.
 
@@ -200,6 +202,15 @@ The four explicit codecs are `decisionBatchV1ToV2`,
 `undefined` instead of being coerced. Malformed batch input throws
 `DecisionContractError`. They preserve values rather than performing inference,
 thresholding, argmax, probability normalization, or accounting estimates.
+
+System One adapters can share `encodeSystemOneQuestions` and
+`decodeSystemOneResponse` from the same entrypoint. Encoding renames Boolean
+questions to native `noul`; the caller still owns input and question admission.
+The strict decoder preserves native labels, scores, distributions, model identity,
+and usage, requiring token counts and bounded confidence for Choice/Score/Box.
+It returns an untrusted candidate, not an admitted result: always call
+`validateDecisionResultV2(batch, candidate, capabilities)` before returning it.
+These helpers perform no HTTP, auth, retries, or accounting.
 
 For example, an explicit V2 JSON string cannot become V1 text without losing its
 evidence kind. Rich answers, abstention, or accounting that V1 cannot represent

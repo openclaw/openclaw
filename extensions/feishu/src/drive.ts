@@ -343,7 +343,8 @@ async function addComment(
     block_id?: string;
   },
 ): Promise<{ success: true } & Record<string, unknown>> {
-  if (params.block_id?.trim() && params.file_type !== "docx") {
+  const blockId = params.block_id?.trim();
+  if (blockId && params.file_type !== "docx") {
     throw new Error("block_id is only supported for docx comments");
   }
   const response = assertDriveApiSuccess(
@@ -355,7 +356,7 @@ async function addComment(
         data: {
           file_type: params.file_type,
           reply_elements: [{ type: "text", text: params.content }],
-          ...(params.block_id?.trim() ? { anchor: { block_id: params.block_id.trim() } } : {}),
+          ...(blockId ? { anchor: { block_id: blockId } } : {}),
         },
       }),
     ),

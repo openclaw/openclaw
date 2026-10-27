@@ -18,14 +18,17 @@ import { registerBrowserEnglish } from "../../ui/src/i18n/locales/en-browser.ts"
 import { registerChatCameraEnglish } from "../../ui/src/i18n/locales/en-chat-camera.ts";
 import { registerChatCiEnglish } from "../../ui/src/i18n/locales/en-chat-ci.ts";
 import { registerChatCommandResultsEnglish } from "../../ui/src/i18n/locales/en-chat-command-results.ts";
+import { registerChatComposerMenuEnglish } from "../../ui/src/i18n/locales/en-chat-composer-menu.ts";
 import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-composer.ts";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMediaEnglish } from "../../ui/src/i18n/locales/en-chat-media.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
 import { registerChatOutputsEnglish } from "../../ui/src/i18n/locales/en-chat-outputs.ts";
+import { registerChatPermissionsEnglish } from "../../ui/src/i18n/locales/en-chat-permissions.ts";
 import { registerChatProviderReviewEnglish } from "../../ui/src/i18n/locales/en-chat-provider-review.ts";
 import { registerChatQuestionsEnglish } from "../../ui/src/i18n/locales/en-chat-questions.ts";
+import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
 import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-labels.ts";
@@ -63,6 +66,7 @@ import { registerPortalsEnglish } from "../../ui/src/i18n/locales/en-portals.ts"
 import { registerPreferencesEnglish } from "../../ui/src/i18n/locales/en-preferences.ts";
 import { registerProcessesEnglish } from "../../ui/src/i18n/locales/en-processes.ts";
 import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts";
+import { registerProviderUsageEnglish } from "../../ui/src/i18n/locales/en-provider-usage.ts";
 import { registerRouteSubtitlesEnglish } from "../../ui/src/i18n/locales/en-route-subtitles.ts";
 import { registerSecretsStoreEnglish } from "../../ui/src/i18n/locales/en-secrets-store.ts";
 import { registerSessionMachineEnglish } from "../../ui/src/i18n/locales/en-session-machine.ts";
@@ -97,6 +101,9 @@ const localesDir = path.resolve(
   "../../ui/src/i18n/locales",
 );
 const sourceFiles = [
+  "en-chat-permissions.ts",
+  "en-chat-composer-menu.ts",
+  "en-chat-session-optional.ts",
   "en-session-progress.ts",
   "en-board-document.ts",
   "en-assistant-context.ts",
@@ -158,8 +165,10 @@ const sourceFiles = [
   "en-model-controls.ts",
   "en-model-setup.ts",
   "en-personal-instructions.ts",
+  "en-provider-usage.ts",
   "en-session-machine.ts",
   "en-session-navigation.ts",
+  "en-session-organization-shared.ts",
   "en-session-organization.ts",
   "en-session-people.ts",
   "en-session-placement.ts",
@@ -187,6 +196,9 @@ export function loadControlUiStartupCatalog(): TranslationMap {
 }
 
 export function loadControlUiSourceCatalog(): TranslationMap {
+  // Keep canonical translation order when summary copy moves out of the lazy CI catalog.
+  const { automationNoChecks, ...pullRequests } = registerGitHubEnglish.catalog.chat.pullRequests;
+  const { automationRetry, ...ciPullRequests } = registerChatCiEnglish.catalog.chat.pullRequests;
   const agentChip: TranslationMap = {};
   for (const [key, value] of Object.entries(en.agentChip)) {
     agentChip[key] = value;
@@ -354,6 +366,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         sidebar,
         clawhub: registerPluginManagementEnglish.catalog.chat.clawhub,
         ...registerChatSessionEnglish.catalog.chat,
+        ...registerChatSessionOptionalEnglish.catalog.chat,
         ...registerSessionNavigationEnglish.catalog.chat,
         sessionDetails,
         sessionSuggestions: {
@@ -371,7 +384,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         mediaPlayer: registerChatMediaEnglish.catalog.chat.mediaPlayer,
         attachments: registerChatComposerEnglish.catalog.chat.attachments,
         privateDraftReload: registerChatComposerEnglish.catalog.chat.privateDraftReload,
-        pullRequests: registerGitHubEnglish.catalog.chat.pullRequests,
+        pullRequests,
       },
       sessionHovercard: registerGitHubEnglish.catalog.sessionHovercard,
       githubPublication: registerGitHubEnglish.catalog.githubPublication,
@@ -406,9 +419,18 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerSecretsStoreEnglish.catalog,
     registerBrowserEnglish.catalog,
     registerChatCameraEnglish.catalog,
-    registerChatCiEnglish.catalog,
+    { chat: { pullRequests: { ...ciPullRequests, automationNoChecks, automationRetry } } },
     registerChatCommandResultsEnglish.catalog,
-    registerChatComposerEnglish.catalog,
+    {
+      chat: {
+        ...registerChatComposerEnglish.catalog.chat,
+        composer: {
+          ...registerChatComposerEnglish.catalog.chat.composer,
+          menu: registerChatComposerMenuEnglish.catalog.chat.composer.menu,
+        },
+        permissions: registerChatPermissionsEnglish.catalog.chat.permissions,
+      },
+    },
     registerChatGoalsEnglish.catalog,
     registerChatProviderReviewEnglish.catalog,
     registerCodeBlocksEnglish.catalog,
@@ -445,6 +467,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerTerminalEnglish.catalog,
     registerUpdateActionsEnglish.catalog,
     registerTranscriptsEnglish.catalog,
+    registerProviderUsageEnglish.catalog,
     registerUsageEnglish.catalog,
     { publicReader: PUBLIC_SESSION_COPY },
     loadControlUiCoreHintCatalog(),

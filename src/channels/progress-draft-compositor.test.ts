@@ -517,6 +517,35 @@ it("retains completed edits when clearing a quiet plan", async () => {
   lines().toEqual([]);
 });
 
+it("compares captured mutation totals without serializing unchanged progress", async () => {
+  const diffStat = { files: 1, added: 2, removed: 0 };
+  const started = createDeferred();
+  const accepted = createDeferred<boolean>();
+  const update = vi
+    .fn<NonNullable<ChannelProgressDraftCompositorParams["update"]>>(() => true)
+    .mockImplementationOnce(() => {
+      started.resolve();
+      return accepted.promise;
+    });
+  const { progress } = createProgress(
+    { ...unlabeledTools, maxLines: 1 },
+    { initialSnapshot: { lines: ["Exec"], diffStat }, updateOnLineChange: true, update },
+  );
+  const stringify = vi.spyOn(JSON, "stringify");
+  const first = progress.noteActivity({ startImmediately: true });
+  await started.promise;
+  diffStat.added = 3;
+  accepted.resolve(true);
+  expect(await first).toBe(true);
+  expect(await progress.pushToolProgress("Exec", { startImmediately: true })).toBe(true);
+  expect(await progress.pushToolProgress("Exec", { startImmediately: true })).toBe(false);
+  const serializedTotals = stringify.mock.calls.filter(([value]) => value === diffStat).length;
+  stringify.mockRestore();
+  expect(update.mock.calls.map(([text]) => text)).toEqual(["• Exec", "• Exec"]);
+  expect(update.mock.lastCall?.[1].snapshot.diffStat).toEqual({ files: 1, added: 3, removed: 0 });
+  expect(serializedTotals).toBe(0);
+});
+
 it("logs timer-fired startup failures at the boundary", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const update = vi.fn().mockRejectedValue(new Error("send failed"));

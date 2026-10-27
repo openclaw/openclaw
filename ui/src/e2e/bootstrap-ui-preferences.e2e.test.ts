@@ -59,7 +59,7 @@ suite.define(() => {
         expect(await gateway.getRequests("users.prefs.get")).toHaveLength(0);
         await page.screenshot({ path: path.join(suite.artifactDir, "before-hello.png") });
         await gateway.resolveDeferred("connect");
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await page.locator(".agent-chat__composer-combobox textarea").waitFor();
         await page.getByText("Synthetic speech preview.", { exact: true }).waitFor();
         const readAloud = page.locator(".chat-read-aloud-btn");

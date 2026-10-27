@@ -132,7 +132,7 @@ export async function readPublicSessionAttachment(
     return null;
   }
   try {
-    const { buildInboundMediaUriFromPath } = await import("../media/media-reference.js");
+    const { buildInboundMediaUriFromPath } = await import("../media/inbound-media-path.js");
     const inbound = parseInboundMediaUri(
       buildInboundMediaUriFromPath(attachment.path ?? attachment.source) ?? attachment.source,
     );

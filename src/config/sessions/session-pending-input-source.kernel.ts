@@ -19,6 +19,53 @@ export function readPendingInputSourceInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">,
   input: PendingInputSourceRead,
 ): PendingInputSourceSnapshot {
+  const query = getSessionKysely(database.db);
+  const source = executeSqliteQueryTakeFirstSync(
+    database.db,
+    query
+      .selectFrom("session_nodes")
+      .innerJoin(
+        "session_windows",
+        "session_windows.session_id",
+        "session_nodes.current_session_id",
+      )
+      .select("current_session_id")
+      .select((eb) => [
+        (hasSessionPendingInputsSchema(database.db)
+          ? eb
+              .selectFrom("session_pending_inputs")
+              .select((pending) => pending.fn<number>("octet_length", ["message_json"]).as("bytes"))
+              .where("session_key", "=", input.sessionKey)
+              .where("session_id", "=", input.sessionId)
+              .where("idempotency_key", "=", input.idempotencyKey)
+          : eb.val(null)
+        ).as("pending_bytes"),
+        (input.pendingOnly
+          ? eb.val(null)
+          : eb
+              .selectFrom("transcript_event_identities as identity")
+              .innerJoin("transcript_events as event", (join) =>
+                join
+                  .onRef("event.session_id", "=", "identity.session_id")
+                  .onRef("event.seq", "=", "identity.seq"),
+              )
+              .select(transcriptEventReadBytesSql("event").as("bytes"))
+              .where("identity.session_id", "=", input.sessionId)
+              .where("identity.message_idempotency_key", "=", input.idempotencyKey)
+              .orderBy("identity.seq", "desc")
+              .limit(1)
+        ).as("committed_bytes"),
+      ])
+      .where("session_nodes.session_key", "=", input.sessionKey)
+      .where("session_windows.session_key", "=", input.sessionKey),
+  );
+  if (
+    source?.current_session_id !== input.sessionId ||
+    (source.pending_bytes === null && source.committed_bytes === null)
+  ) {
+    // A later accepted input belongs to the next submit/recovery lookup (#182334).
+    return { kind: "source", current: source?.current_session_id === input.sessionId };
+  }
   return runSqliteReadSnapshotSync(database.db, () => {
     const db = getSessionKysely(database.db);
     const session = executeSqliteQueryTakeFirstSync(

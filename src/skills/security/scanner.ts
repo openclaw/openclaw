@@ -41,15 +41,6 @@ export type SkillScanFinding = {
   evidence: string;
 };
 
-type SkillScanSummary = {
-  scannedFiles: number;
-  critical: number;
-  warn: number;
-  info: number;
-  truncated: boolean;
-  findings: SkillScanFinding[];
-};
-
 export type SkillScanOptions = {
   includeFiles?: string[];
   maxFiles?: number;
@@ -650,10 +641,7 @@ async function scanFileWithCache(
   }
 }
 
-export async function scanDirectoryWithSummary(
-  dirPath: string,
-  opts?: SkillScanOptions,
-): Promise<SkillScanSummary> {
+export async function scanDirectoryWithSummary(dirPath: string, opts?: SkillScanOptions) {
   const scanOptions = {
     includeFiles: opts?.includeFiles ?? [],
     maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),

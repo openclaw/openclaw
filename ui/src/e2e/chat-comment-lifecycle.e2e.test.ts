@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -134,11 +135,7 @@ suite.define(() => {
       await page.route("**/__openclaw__/assistant-media?**", async (route) => {
         if (new URL(route.request().url()).searchParams.has("meta")) {
           await route.fulfill({
-            json: {
-              available: true,
-              mediaTicket: "annotation-fixture",
-              mediaTicketExpiresAt: new Date(Date.now() + 60_000).toISOString(),
-            },
+            json: mediaTicketPayload("annotation-fixture", 60_000),
           });
           return;
         }
@@ -197,6 +194,8 @@ suite.define(() => {
       await suite.withPage(
         { ...pageOptions, viewport: { width, height }, colorScheme: theme },
         async ({ page }) => {
+          // Relative-label minute refreshes are separate from quote geometry and focus.
+          await page.clock.setFixedTime(new Date("2026-10-25T09:19:30Z"));
           const selected = `${passage} The selected deployment and rollback instructions must remain available in full.\nKeep the complete second line and the long identifier deployment_configuration_review_012345678901234567890123456789.`;
           const comment =
             "Keep all of the selected context.\nExplain the rollback steps before changing the deployment.";

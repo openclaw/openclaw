@@ -1,5 +1,5 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { expect, it, vi } from "vitest";
+import { createModelFixture } from "./model-fixture.test-support.js";
 import {
   createParams,
   createResumeHarness,
@@ -9,6 +9,16 @@ import {
 } from "./run-attempt-test-harness.js";
 import type { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
 import { createCodexTestOAuthProfile } from "./test-support.js";
+
+function fastModeModel(supported: boolean, id = "catalog-alias") {
+  return {
+    ...createModelFixture(id),
+    model: "gpt-5.4-codex",
+    displayName: "Test model",
+    description: "Test model",
+    serviceTiers: supported ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }] : [],
+  };
+}
 
 type FastModeFixtures = {
   createRunPaths: () => { sessionFile: string; workspaceDir: string };
@@ -25,54 +35,26 @@ type FastModeFixtures = {
   ) => Promise<void>;
 };
 
+type ModeCase = {
+  name: string;
+  options: {
+    supported?: boolean;
+    fastMode?: true | "ultrafast";
+    enableUltrafast?: boolean;
+    nativeLimit?: number;
+    fresh?: boolean;
+    nativeOwned?: "metadata" | "omitted";
+  };
+  tier: "priority" | "ultrafast";
+  limit: number | undefined;
+};
+
 /** Exercise speed changes under the attempt suite's shared lifecycle and cleanup. */
 export function registerCodexFastModeTests({
   createRunPaths,
   writeExistingBinding,
   completeStartedRun,
 }: FastModeFixtures) {
-  it.each([
-    {
-      name: "fast on with flex baseline",
-      fastMode: true,
-      configuredServiceTier: "flex",
-      expectedServiceTier: "priority",
-    },
-  ] satisfies Array<{
-    name: string;
-    fastMode: EmbeddedRunAttemptParams["fastMode"];
-    configuredServiceTier?: "flex" | "priority" | "ultrafast";
-    expectedServiceTier?: "flex" | "priority" | "ultrafast" | null;
-  }>)(
-    "maps $name to app-server resume and turn service tier",
-    async ({ fastMode, configuredServiceTier, expectedServiceTier }) => {
-      const { sessionFile, workspaceDir } = createRunPaths();
-      await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
-      const { requests, waitForMethod, completeTurn } = createResumeHarness();
-      const params = createParams(sessionFile, workspaceDir);
-      params.fastMode = fastMode;
-      const onAgentEvent = vi.fn();
-      params.onAgentEvent = onAgentEvent;
-      const options = configuredServiceTier
-        ? { pluginConfig: { appServer: { serviceTier: configuredServiceTier } } }
-        : {};
-      const run = runCodexAppServerAttempt(params, options);
-      await completeStartedRun(run, waitForMethod, completeTurn, "thread-existing");
-      for (const method of ["thread/resume", "turn/start"]) {
-        const request = requests.find((entry) => entry.method === method);
-        const requestParams = request?.params as Record<string, unknown> | undefined;
-        expect(requestParams?.serviceTier).toBe(expectedServiceTier);
-      }
-      expect(onAgentEvent).toHaveBeenCalledWith({
-        stream: "codex_app_server.lifecycle",
-        data: expect.objectContaining({
-          phase: "turn_starting",
-          serviceTier: expectedServiceTier,
-        }),
-      });
-    },
-  );
-
   it("uses shared Fast priority when auto activates after resume", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
@@ -96,93 +78,59 @@ export function registerCodexFastModeTests({
       serviceTier: "priority",
     });
   });
-  it.each([
+  it.each<ModeCase>([
     {
-      name: "explicit Ultrafast with the switch disabled",
-      supported: true,
-      fastMode: "ultrafast" as const,
-      enableUltrafast: false,
-      expected: "priority",
-      nativeLimit: 700_000,
-      expectedLimit: undefined,
-      fresh: false,
-      nativeOwned: false,
+      name: "disabled switch",
+      options: { enableUltrafast: false },
+      tier: "priority",
+      limit: undefined,
     },
-    ...[false, true].flatMap((fresh) =>
-      [
-        [700_000, 260_000],
-        [120_000, 120_000],
-        [0, 0],
-        [-1, -1],
-        [undefined, 260_000],
-      ].map(([nativeLimit, expectedLimit]) => ({
-        name: `Ultrafast ${fresh ? "start" : "resume"} with native limit ${nativeLimit}`,
-        supported: true,
-        fastMode: "ultrafast" as const,
-        enableUltrafast: true,
-        expected: "ultrafast",
-        nativeLimit,
-        expectedLimit,
-        fresh,
-        nativeOwned: false,
-      })),
-    ),
+    { name: "fresh capped limit", options: { fresh: true }, tier: "ultrafast", limit: 260_000 },
+    { name: "smaller limit", options: { nativeLimit: 120_000 }, tier: "ultrafast", limit: 120_000 },
+    { name: "zero limit", options: { nativeLimit: 0 }, tier: "ultrafast", limit: 0 },
+    { name: "negative limit", options: { nativeLimit: -1 }, tier: "ultrafast", limit: -1 },
     {
-      name: "unsupported Ultrafast",
-      supported: false,
-      fastMode: "ultrafast" as const,
-      enableUltrafast: true,
-      expected: "priority",
-      nativeLimit: 700_000,
-      expectedLimit: undefined,
-      fresh: false,
-      nativeOwned: false,
+      name: "missing limit",
+      options: { nativeLimit: undefined },
+      tier: "ultrafast",
+      limit: 260_000,
     },
     {
-      name: "an adopted native model changed since the saved binding",
-      supported: true,
-      fastMode: "ultrafast" as const,
-      enableUltrafast: true,
-      expected: "ultrafast",
-      nativeLimit: 700_000,
-      expectedLimit: 260_000,
-      fresh: false,
-      nativeOwned: "metadata" as const,
+      name: "unsupported model",
+      options: { supported: false },
+      tier: "priority",
+      limit: undefined,
     },
     {
-      name: "an adopted native model with omitted metadata",
-      supported: true,
-      fastMode: "ultrafast" as const,
-      enableUltrafast: true,
-      expected: "priority",
-      nativeLimit: 700_000,
-      expectedLimit: undefined,
-      fresh: false,
-      nativeOwned: "omitted" as const,
+      name: "changed native model",
+      options: { nativeOwned: "metadata" },
+      tier: "ultrafast",
+      limit: 260_000,
     },
     {
-      name: "Fast with the Ultrafast switch enabled",
-      supported: true,
-      fastMode: true,
-      enableUltrafast: true,
-      expected: "priority",
-      nativeLimit: 700_000,
-      expectedLimit: undefined,
-      fresh: false,
-      nativeOwned: false,
+      name: "omitted native model",
+      options: { nativeOwned: "omitted" },
+      tier: "priority",
+      limit: undefined,
+    },
+    {
+      name: "Fast with flex baseline",
+      options: { fastMode: true },
+      tier: "priority",
+      limit: undefined,
     },
   ])(
     "requires explicit Ultrafast for $name at the actual turn boundary",
-    async ({
-      supported,
-      fastMode,
-      enableUltrafast,
-      expected,
-      nativeLimit,
-      expectedLimit,
-      fresh,
-      nativeOwned,
-    }) => {
+    async ({ options, tier, limit }) => {
+      const { supported, fastMode, enableUltrafast, nativeLimit, fresh, nativeOwned } = {
+        supported: true,
+        fastMode: "ultrafast" as const,
+        enableUltrafast: true,
+        nativeLimit: 700_000,
+        fresh: false,
+        nativeOwned: false,
+        ...options,
+      };
       const { sessionFile, workspaceDir } = createRunPaths();
       if (!fresh) {
         await writeExistingBinding(sessionFile, workspaceDir, {
@@ -209,21 +157,7 @@ export function registerCodexFastModeTests({
         }
         if (method === "model/list") {
           return {
-            data: [
-              {
-                id: "catalog-alias",
-                model: "gpt-5.4-codex",
-                displayName: "Test model",
-                description: "Test model",
-                hidden: false,
-                isDefault: false,
-                supportedReasoningEfforts: [],
-                defaultReasoningEffort: "medium",
-                serviceTiers: supported
-                  ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }]
-                  : [],
-              },
-            ],
+            data: [fastModeModel(supported)],
             nextCursor: null,
           };
         }
@@ -244,16 +178,23 @@ export function registerCodexFastModeTests({
           );
       const params = createParams(sessionFile, workspaceDir);
       params.fastMode = fastMode;
+      const onAgentEvent = vi.fn();
+      params.onAgentEvent = onAgentEvent;
       const run = runCodexAppServerAttempt(params, {
-        pluginConfig: { appServer: { enableUltrafast } },
+        pluginConfig: {
+          appServer: {
+            enableUltrafast,
+            ...(fastMode === true ? { serviceTier: "flex" as const } : {}),
+          },
+        },
       });
       await Promise.race([run, harness.waitForMethod(fresh ? "thread/start" : "thread/resume")]);
       const threadRequest = harness.requests.find(
         (request) => request.method === (fresh ? "thread/start" : "thread/resume"),
       )?.params as { config?: Record<string, unknown> };
-      expect(threadRequest.config?.model_auto_compact_token_limit).toBe(expectedLimit);
+      expect(threadRequest.config?.model_auto_compact_token_limit).toBe(limit);
       expect(threadRequest.config?.model_auto_compact_token_limit_scope).toBe(
-        expectedLimit === undefined ? undefined : "total",
+        limit === undefined ? undefined : "total",
       );
       await completeStartedRun(
         run,
@@ -264,8 +205,15 @@ export function registerCodexFastModeTests({
       expect(
         harness.requests.find((request) => request.method === "turn/start")?.params,
       ).toMatchObject({
-        serviceTier: expected,
+        serviceTier: tier,
       });
+      if (fastMode === true) {
+        expect(threadRequest).toMatchObject({ serviceTier: "priority" });
+        expect(onAgentEvent).toHaveBeenCalledWith({
+          stream: "codex_app_server.lifecycle",
+          data: expect.objectContaining({ phase: "turn_starting", serviceTier: "priority" }),
+        });
+      }
       expect(harness.requests.filter((request) => request.method === "model/list")).toHaveLength(
         fastMode === "ultrafast" && enableUltrafast ? 1 : 0,
       );
@@ -273,60 +221,39 @@ export function registerCodexFastModeTests({
   );
 
   it.each([
-    {
-      name: "revoked Ultrafast",
-      fastMode: "ultrafast" as const,
-      supported: false,
-      baseline: undefined,
-      expected: "priority",
-    },
-    {
-      name: "unsupported priority baseline",
-      fastMode: undefined,
-      supported: false,
-      baseline: "priority" as const,
-      expected: "priority",
-    },
-    {
-      name: "unsupported default baseline",
-      fastMode: undefined,
-      supported: false,
-      baseline: undefined,
-      // Removing the cap cold-resumes native defaults, clearing the previous tier override.
-      expected: undefined,
-    },
-  ])(
-    "reselects the tier for $name after an explicit Ultrafast warm turn",
-    async ({ fastMode, supported, baseline, expected }) => {
+    ["revoked Ultrafast", "ultrafast", undefined, "priority", false],
+    ["unsupported priority baseline", undefined, "priority", "priority", false],
+    // Removing the cap cold-resumes native defaults, clearing the previous tier override.
+    ["unsupported default baseline", undefined, undefined, undefined, false],
+    ["ChatGPT sign-in", "ultrafast", undefined, "ultrafast", true],
+  ] as const)(
+    "reselects the tier for %s after an explicit Ultrafast warm turn",
+    async (_name, fastMode, baseline, expected, oauth) => {
       const { sessionFile, workspaceDir } = createRunPaths();
-      await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
+      await writeExistingBinding(sessionFile, workspaceDir, {
+        model: "gpt-5.2",
+        ...(oauth ? { modelProvider: undefined, authProfileId: "openai:work" } : {}),
+      });
       let catalogSupported = true;
       const harness = createResumeHarness("thread-existing", async (method) => {
         if (method === "model/list") {
           return {
-            data: [
-              {
-                id: "catalog-alias",
-                model: "gpt-5.4-codex",
-                displayName: "Test model",
-                description: "Test model",
-                hidden: false,
-                isDefault: false,
-                supportedReasoningEfforts: [],
-                defaultReasoningEffort: "medium",
-                serviceTiers: catalogSupported
-                  ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }]
-                  : [],
-              },
-            ],
+            data: [fastModeModel(catalogSupported, oauth ? "gpt-5.4-codex" : undefined)],
           };
         }
         return undefined;
       });
       for (let turn = 0; turn < 2; turn += 1) {
-        catalogSupported = turn === 0 || supported;
-        const params = createParams(sessionFile, workspaceDir);
+        catalogSupported = turn === 0 || oauth;
+        const params = createParams(sessionFile, workspaceDir, oauth ? { provider: "openai" } : {});
         params.fastMode = turn === 0 ? "ultrafast" : fastMode;
+        if (oauth) {
+          params.authProfileId = "openai:work";
+          params.authProfileStore = {
+            version: 1,
+            profiles: { "openai:work": createCodexTestOAuthProfile("account-work") },
+          };
+        }
         const run = runCodexAppServerAttempt(params, {
           pluginConfig: { appServer: { serviceTier: baseline } },
         });
@@ -339,6 +266,10 @@ export function registerCodexFastModeTests({
           .filter((request) => request.method === "turn/start")
           .map((request) => (request.params as { serviceTier?: string | null }).serviceTier),
       ).toEqual(["ultrafast", expected]);
+      if (oauth) {
+        expect(harness.requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
+        return;
+      }
       const resumeConfigs = harness.requests
         .filter((request) => request.method === "thread/resume")
         .map((request) => (request.params as { config: Record<string, unknown> }).config);
@@ -351,56 +282,4 @@ export function registerCodexFastModeTests({
       );
     },
   );
-
-  it("keeps explicit Ultrafast when a ChatGPT sign-in thread resumes", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    // ChatGPT sign-in bindings store no provider; Codex owns the native provider.
-    await writeExistingBinding(sessionFile, workspaceDir, {
-      model: "gpt-5.2",
-      modelProvider: undefined,
-      authProfileId: "openai:work",
-    });
-    const harness = createResumeHarness("thread-existing", async (method) =>
-      method === "model/list"
-        ? {
-            data: [
-              {
-                id: "gpt-5.4-codex",
-                model: "gpt-5.4-codex",
-                displayName: "Test model",
-                description: "Test model",
-                hidden: false,
-                isDefault: false,
-                supportedReasoningEfforts: [],
-                defaultReasoningEffort: "medium",
-                serviceTiers: [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }],
-              },
-            ],
-            nextCursor: null,
-          }
-        : undefined,
-    );
-    // Turn 1 resumes the stored thread; turn 2 reuses the warm thread.
-    for (let turn = 0; turn < 2; turn += 1) {
-      const params = createParams(sessionFile, workspaceDir, { provider: "openai" });
-      params.fastMode = "ultrafast";
-      params.authProfileId = "openai:work";
-      params.authProfileStore = {
-        version: 1,
-        profiles: { "openai:work": createCodexTestOAuthProfile("account-work") },
-      };
-      const run = runCodexAppServerAttempt(params);
-      await run.waitForTurnAccepted();
-      await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
-      await run;
-    }
-    expect(harness.requests.filter((request) => request.method === "thread/resume")).toHaveLength(
-      1,
-    );
-    expect(
-      harness.requests
-        .filter((request) => request.method === "turn/start")
-        .map((request) => (request.params as { serviceTier?: string | null }).serviceTier),
-    ).toEqual(["ultrafast", "ultrafast"]);
-  });
 }

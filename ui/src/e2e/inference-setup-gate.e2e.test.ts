@@ -1,17 +1,13 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const pageOptions = {
-  colorScheme: "dark",
-  locale: "en-US",
-  serviceWorkers: "block",
-  viewport: { height: 900, width: 1440 },
-} as const;
+const pageOptions = createDarkDesktopControlUiContextOptions();
 async function withSetupPage(
   run: (page: Page, gateway: Awaited<ReturnType<typeof installMockGateway>>) => Promise<void>,
   options: Parameters<typeof installMockGateway>[1] = { agentModel: null },

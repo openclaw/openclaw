@@ -21,6 +21,8 @@ import {
 } from "../../test/scripts/run-node.test-support.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
+import { writeFixtureTree } from "./fixture-tree.test-support.js";
 import {
   expectRuntime,
   writeRuntime,
@@ -28,14 +30,13 @@ import {
   expectMissing,
   readText,
   runFixtureGit,
-  writeFixtureTree,
 } from "./update-runner-git-candidate.test-support.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 
 const removeTree = (target: string) => fs.rm(target, { recursive: true, force: true });
 const inode = async (target: string) => (await fs.lstat(target, { bigint: true })).ino;
 const entries = async (target: string) =>
-  (await fs.readdir(target, { recursive: true })).toSorted();
+  (await listDirectoryTreeStrict(target)).map((walkEntry) => walkEntry.relativePath).toSorted();
 async function initCandidate(candidate: string, ignored = "node_modules/\ndist/\ndist-runtime/\n") {
   await runFixtureGit(candidate, "init", "--initial-branch=main");
   await writeFixtureTree(candidate, { ".gitignore": ignored });

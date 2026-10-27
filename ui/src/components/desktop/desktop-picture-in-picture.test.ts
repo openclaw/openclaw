@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { DesktopClient } from "./desktop-client.ts";
@@ -13,8 +14,9 @@ function toggle(panel: ReturnType<typeof panels.createPanel>, open: boolean) {
 }
 
 async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = false) {
-  const frames = new Map<number, FrameRequestCallback>();
-  let id = 0;
+  const framesClock = createFrameClock();
+  const frames = framesClock.frames;
+
   const popup = Object.assign(new EventTarget(), {
     document: document.implementation.createHTMLDocument(),
     innerWidth: 640,
@@ -24,11 +26,8 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = 
     close: vi.fn(() => {
       popup.closed = true;
     }),
-    requestAnimationFrame: vi.fn((callback: FrameRequestCallback) => {
-      frames.set(++id, callback);
-      return id;
-    }),
-    cancelAnimationFrame: vi.fn((frame: number) => frames.delete(frame)),
+    requestAnimationFrame: vi.fn(framesClock.request),
+    cancelAnimationFrame: vi.fn(framesClock.cancel),
   });
   const pending = createDeferred<Window>();
   const requestWindow = vi.fn(async () => {
@@ -100,9 +99,7 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = 
       await waitForSolid(() => expect(canvas()).not.toBeNull());
     },
     tick: (now: number) => {
-      const callbacks = [...frames.values()];
-      frames.clear();
-      callbacks.forEach((callback) => callback(now));
+      framesClock.flush(now);
     },
   };
 }

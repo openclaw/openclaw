@@ -5,12 +5,8 @@ import {
 } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
-  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
-  createProviderOperationTimeoutError,
   createProviderOperationTimeoutResolver,
-  executeProviderOperationWithRetry,
-  fetchWithTimeoutGuarded,
   pollProviderOperationJson,
   postJsonResponse,
   resolveProviderOperationTimeoutMs,
@@ -248,38 +244,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         requestFailedMessage: "BytePlus generated video download failed",
         maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
         validateBinaryResponse: true,
-        fetchResponse: ({ deadline: downloadDeadline, timeoutMs }) =>
-          executeProviderOperationWithRetry({
-            provider: "byteplus",
-            stage: "download",
-            operation: async () => {
-              // Result URLs never inherit task credentials or private-network trust.
-              const result = await fetchWithTimeoutGuarded(
-                videoUrl,
-                { method: "GET" },
-                timeoutMs(),
-                fetchFn,
-                {
-                  mode: "strict",
-                  dispatcherPolicy: dispatcherPolicy ?? { mode: "env-proxy" },
-                },
-              );
-              try {
-                await assertOkOrThrowHttpError(
-                  result.response,
-                  "BytePlus generated video download failed",
-                  {
-                    bodyTimeoutMs: timeoutMs,
-                    onBodyTimeout: () => createProviderOperationTimeoutError(downloadDeadline),
-                  },
-                );
-                return result;
-              } catch (error) {
-                await result.release();
-                throw error;
-              }
-            },
-          }),
+        dispatcherPolicy,
       });
       return {
         videos: [video],

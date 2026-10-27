@@ -1,6 +1,7 @@
 import * as embeddingSdk from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../test-support/streaming-error-response.js";
 import { runGeminiEmbeddingBatches } from "./embedding-batch.js";
 import type { GeminiEmbeddingClient } from "./embedding-provider.js";
 import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
@@ -133,32 +134,6 @@ function captureRejection(promise: Promise<unknown>): Promise<unknown> {
   return promise.catch((error: unknown) => error);
 }
 
-function makeOversizedResponse(status = 200) {
-  let readCount = 0;
-  let canceled = false;
-  return {
-    response: new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (readCount >= 20) {
-            // 20 MiB — over 16 MiB cap
-            controller.close();
-            return;
-          }
-          readCount += 1;
-          controller.enqueue(new Uint8Array(1024 * 1024));
-        },
-        cancel() {
-          canceled = true;
-        },
-      }),
-      { status, headers: { "Content-Type": "application/json" } },
-    ),
-    getReadCount: () => readCount,
-    wasCanceled: () => canceled,
-  };
-}
-
 describe("Google embedding-batch bounded JSON reads", () => {
   it.each([
     { label: "missing", valuesJson: undefined, reason: "empty" },
@@ -233,7 +208,13 @@ describe("Google embedding-batch bounded JSON reads", () => {
       fields: { name: "ProviderHttpError", status: 503, statusCode: 503 },
     },
   ] as const)("bounds oversized $stage responses", async ({ stage, status, label, fields }) => {
-    const streamed = makeOversizedResponse(status);
+    const streamed = createStreamingResponse({
+      status,
+      chunkCount: 20,
+      chunkSize: 1024 * 1024,
+      byte: 0,
+      headers: { "Content-Type": "application/json" },
+    });
     stubStage(stage, streamed.response);
     const error = await captureRejection(runBatch());
     expect(error).toBeInstanceOf(Error);
@@ -278,15 +259,41 @@ describe("Google embedding-batch bounded JSON reads", () => {
   });
 
   it.each([
-    { basePath: "/gateway/v1beta/", query: "?tenant=/openai/team/&route=a/" },
-    { basePath: "/gateway/v1beta/openai", query: "" },
-  ])(
-    "runs the public adapter over HTTP for $basePath with query $query",
-    async ({ basePath, query }) => {
+    [
+      "/gateway/v1beta/",
+      "?tenant=/openai/team/&route=a/",
+      "gemini-embedding-001",
+      undefined,
+      "hello",
+      "hello",
+    ],
+    ["/gateway/v1beta/openai", "", "gemini-embedding-001", undefined, "hello", "hello"],
+    [
+      "/gateway/v1beta/",
+      "",
+      "gemini-embedding-2",
+      undefined,
+      "remember this",
+      "title: none | text: remember this",
+    ],
+    ["/gateway/v1beta/", "", "gemini-embedding-2", true, "remember this", "remember this"],
+    [
+      "/gateway/v1beta/",
+      "",
+      "gemini-embedding-2",
+      true,
+      "passage: remember this",
+      "passage: remember this",
+    ],
+  ] as const)(
+    "runs the public adapter over HTTP for %s with query %s (%s, document format %s, input %s)",
+    async (basePath, query, model, documentFormatApplied, text, expectedText) => {
       let createBody: unknown;
       let uploadBody = "";
       const observedUrls: string[] = [];
       const headers: unknown[] = [];
+      const stableEmbedding2 = model === "gemini-embedding-2";
+      const vector = stableEmbedding2 ? [1, ...Array<number>(127).fill(0)] : [1, 0, 0];
       const realSdk = await vi.importActual<typeof embeddingSdk>(
         "openclaw/plugin-sdk/memory-core-host-engine-embeddings",
       );
@@ -307,9 +314,9 @@ describe("Google embedding-batch bounded JSON reads", () => {
             for await (const chunk of request) {
               body += chunk;
             }
-            if (url.pathname === "/gateway/v1beta/models/gemini-embedding-001:embedContent") {
+            if (url.pathname === `/gateway/v1beta/models/${model}:embedContent`) {
               response.setHeader("content-type", "application/json");
-              response.end(JSON.stringify({ embedding: { values: [1, 0, 0] } }));
+              response.end(JSON.stringify({ embedding: { values: vector } }));
               return;
             }
             const stage = batchStageForUrl(url.pathname);
@@ -323,7 +330,10 @@ describe("Google embedding-batch bounded JSON reads", () => {
             if (stage === "download") {
               expect(url.searchParams.get("alt")).toBe("media");
               response.setHeader("content-type", "application/jsonl");
-              const line = '{"key":"0","response":{"embedding":{"values":[1,0,0]}}}';
+              const line = JSON.stringify({
+                key: "0",
+                response: { embedding: { values: vector } },
+              });
               response.write(line.slice(0, 17));
               response.end(line.slice(17));
             } else {
@@ -338,7 +348,8 @@ describe("Google embedding-batch bounded JSON reads", () => {
           const adapter = await geminiMemoryEmbeddingProviderAdapter.create({
             config: {},
             provider: "gemini",
-            model: "gemini-embedding-001",
+            model,
+            ...(stableEmbedding2 ? { dimensions: 128 } : {}),
             fallback: "none",
             remote: {
               baseUrl: `${baseUrl}${basePath}${query}`,
@@ -349,28 +360,35 @@ describe("Google embedding-batch bounded JSON reads", () => {
           if (!adapter.provider) {
             throw new Error("Expected a Gemini embedding provider");
           }
-          await expect(adapter.provider.embed("hello", { inputType: "query" })).resolves.toEqual([
-            1, 0, 0,
-          ]);
+          await expect(adapter.provider.embed("hello", { inputType: "query" })).resolves.toEqual(
+            vector,
+          );
           const result = adapter.runtime?.batchEmbed?.({
             ...batchOptions,
-            chunks: [{ text: "hello" }],
+            chunks: [{ text }],
+            documentFormatApplied,
             debug: () => {},
           });
-          await expect(result).resolves.toEqual([[1, 0, 0]]);
+          await expect(result).resolves.toEqual([vector]);
           const uploadedRequest = uploadBody.split("\r\n\r\n")[2]?.split("\r\n")[0];
           expect(JSON.parse(uploadedRequest ?? "null")).toEqual({
             key: "0",
-            request: batchRequest("0", "hello").request,
+            request: {
+              model: `models/${model}`,
+              content: { parts: [{ text: expectedText }] },
+              ...(stableEmbedding2
+                ? { outputDimensionality: 128 }
+                : { taskType: "RETRIEVAL_DOCUMENT" }),
+            },
           });
           expect(createBody).toMatchObject({
             batch: { inputConfig: { file_name: "files/f-ok" } },
           });
           expect(headers).toEqual(Array.from({ length: 5 }, () => ["test-key", "remote"]));
           expect(observedUrls.map((value) => value.split("?")[0])).toEqual([
-            "POST /gateway/v1beta/models/gemini-embedding-001:embedContent",
+            `POST /gateway/v1beta/models/${model}:embedContent`,
             "POST /gateway/upload/v1beta/files",
-            "POST /gateway/v1beta/models/gemini-embedding-001:asyncBatchEmbedContent",
+            `POST /gateway/v1beta/models/${model}:asyncBatchEmbedContent`,
             "GET /gateway/v1beta/batches/b-0",
             "GET /gateway/v1beta/files/out-0:download",
           ]);

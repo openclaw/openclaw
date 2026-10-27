@@ -1,14 +1,23 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
-import type { Tool } from "../types.js";
+import type { Context, Tool } from "../types.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 import { makeOpenAIProviderModel } from "./openai-provider.test-support.js";
-import { applyCommonResponsesParams } from "./openai-responses-shared.js";
 import { streamOpenAIResponses } from "./openai-responses.js";
 import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
 import { publishRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
-it.each(["openai-completions", "openai-responses"] as const)(
+const messages: Context["messages"] = [{ role: "user", content: "hello", timestamp: 0 }];
+const apis = ["openai-completions", "openai-responses"] as const;
+function start(api: (typeof apis)[number], tools: Tool[], onPayload: (payload: unknown) => void) {
+  const context = { messages, tools };
+  const options = { apiKey: "fixture", onPayload };
+  return api === "openai-completions"
+    ? streamOpenAICompletions(makeOpenAIProviderModel(api), context, options)
+    : streamOpenAIResponses(makeOpenAIProviderModel(api), context, options);
+}
+
+it.each(apis)(
   "isolates payload-hook schema edits from published compatibility schemas for %s",
   async (api) => {
     const source = publishRuntimeToolInputSchema({
@@ -16,29 +25,19 @@ it.each(["openai-completions", "openai-responses"] as const)(
       properties: { action: { type: "string", description: null } },
     }).schema;
     const parameters = normalizeOpenAIStrictCompatSchema(source);
-    const context = {
-      messages: [{ role: "user" as const, content: "hello", timestamp: 0 }],
-      tools: [{ name: "choose", description: "Choose", parameters }],
-    };
-    const options = {
-      apiKey: "fixture",
-      onPayload(payload: unknown) {
-        assert(isRecord(payload) && Array.isArray(payload.tools));
-        const tool = payload.tools[0];
-        assert(isRecord(tool));
-        const schema = isRecord(tool.function) ? tool.function.parameters : tool.parameters;
-        assert(isRecord(schema) && isRecord(schema.properties));
-        assert(isRecord(schema.properties.action));
-        expect(schema.properties.action.type).toBe("string");
-        schema.properties.action.type = "number";
-        throw new Error("hook edited its detached schema");
-      },
+    const onPayload = (payload: unknown) => {
+      assert(isRecord(payload) && Array.isArray(payload.tools));
+      const tool = payload.tools[0];
+      assert(isRecord(tool));
+      const schema = isRecord(tool.function) ? tool.function.parameters : tool.parameters;
+      assert(isRecord(schema) && isRecord(schema.properties));
+      assert(isRecord(schema.properties.action));
+      expect(schema.properties.action.type).toBe("string");
+      schema.properties.action.type = "number";
+      throw new Error("hook edited its detached schema");
     };
     for (let request = 0; request < 2; request++) {
-      const stream =
-        api === "openai-completions"
-          ? streamOpenAICompletions(makeOpenAIProviderModel(api), context, options)
-          : streamOpenAIResponses(makeOpenAIProviderModel(api), context, options);
+      const stream = start(api, [{ name: "choose", description: "Choose", parameters }], onPayload);
       expect((await stream.result()).errorMessage).toContain("hook edited its detached schema");
     }
     expect(parameters).toHaveProperty("properties.action.type", "string");
@@ -49,20 +48,16 @@ it("fails locally when a pinned official OpenAI tool is unreadable", async () =>
   const onPayload = vi.fn(() => {
     throw new Error("stop before network");
   });
+  const broken: Tool = {
+    name: "broken",
+    description: "Broken tool.",
+    get parameters(): never {
+      throw new Error("parameters exploded");
+    },
+  };
   const stream = streamOpenAICompletions(
     makeOpenAIProviderModel("openai-completions"),
-    {
-      messages: [{ role: "user", content: "hello", timestamp: 0 }],
-      tools: [
-        {
-          name: "broken",
-          description: "Broken tool.",
-          get parameters(): never {
-            throw new Error("parameters exploded");
-          },
-        },
-      ],
-    },
+    { messages, tools: [broken] },
     {
       apiKey: "fixture",
       toolChoice: { type: "function", function: { name: "broken" } },
@@ -88,37 +83,16 @@ function unreadableInventory(): Tool[] {
   });
 }
 
-it("does not reread an unreadable completions inventory length", async () => {
+it.each(apis)("does not reread an unreadable %s inventory length", async (api) => {
   let capturedPayload: unknown;
-  const stream = streamOpenAICompletions(
-    makeOpenAIProviderModel("openai-completions"),
-    {
-      messages: [{ role: "user", content: "hello", timestamp: 0 }],
-      tools: unreadableInventory(),
-    },
-    {
-      apiKey: "fixture",
-      onPayload(payload) {
-        capturedPayload = payload;
-        throw new Error("stop before network");
-      },
-    },
-  );
-
-  expect((await stream.result()).stopReason).toBe("error");
-  expect(capturedPayload).not.toHaveProperty("tools");
-});
-
-it("does not reread an unreadable Responses inventory length", () => {
-  const params: Parameters<typeof applyCommonResponsesParams>[0] = {
-    model: "gpt-5.5",
-    input: [],
-    stream: true,
-  };
-  applyCommonResponsesParams(params, makeOpenAIProviderModel("openai-responses"), {
-    messages: [{ role: "user", content: "hello", timestamp: 1 }],
-    tools: unreadableInventory(),
+  const stream = start(api, unreadableInventory(), (payload) => {
+    capturedPayload = payload;
+    throw new Error("stop before network");
   });
 
-  expect(params).not.toHaveProperty("tools");
+  expect(await stream.result()).toMatchObject({
+    stopReason: "error",
+    errorMessage: expect.stringContaining("stop before network"),
+  });
+  expect(capturedPayload).not.toHaveProperty("tools");
 });

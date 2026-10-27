@@ -1,16 +1,8 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { runCapability } from "./capability-cli.test-harness.js";
 
-const mocks = vi.hoisted(() => ({
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number) => {
-      throw new Error(`exit ${code}`);
-    }),
-    writeJson: vi.fn(),
-    writeStdout: vi.fn(),
-  },
+const mocks = await vi.hoisted(async () => ({
+  runtime: (await import("./test-runtime-mock.js")).createInertRuntime(vi),
   resolveLocalCapabilityAgent: vi.fn(),
   generateImage: vi.fn(),
 }));

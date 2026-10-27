@@ -9,17 +9,19 @@ import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-f
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
-  loadRunOverflowCompactionHarness,
   mockedBuildEmbeddedRunPayloads,
   mockedRunEmbeddedAttempt,
   createOverflowRunParams,
-  resetSharedRunIntegrationHarnessMocks,
   type TestRunEmbeddedAgent,
   useOpenAIPlatformAuthFixture,
-  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
+import {
+  createFreshRunIntegrationState,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 import { withAuthorizedPermissionChange } from "./run/permission-change.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./run/terminal-outcome.js";
+import { makeTerminalInput } from "./run/terminal-resolution.test-support.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
@@ -54,24 +56,14 @@ describe("embedded run permissions and timeout delivery", () => {
     runEmbeddedAgent({ ...createPluginHarnessRunParams(state), ...overrides });
 
   beforeAll(async () => {
-    ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
-    const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    await withOpenClawTestState({ label: "session-permissions-warmup" }, async (warmupState) => {
-      const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-      setRuntimeConfigSnapshot({});
-      await warmRunOverflowCompactionHarness(runEmbeddedAgent, warmupState);
-    });
+    runEmbeddedAgent = await loadSharedRunIntegrationHarness();
     ({ buildEmbeddedRunPayloads } =
       await vi.importActual<typeof import("./run/payloads.js")>("./run/payloads.js"));
     ({ createReplyDispatcher } = await import("../../auto-reply/reply/reply-dispatcher.js"));
   });
 
   beforeEach(async () => {
-    resetSharedRunIntegrationHarnessMocks();
-    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    state = await createOpenClawTestState({ label: "run.session-permissions" });
-    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-    setRuntimeConfigSnapshot({});
+    state = await createFreshRunIntegrationState("run.session-permissions");
     useOpenAIPlatformAuthFixture();
   });
 
@@ -352,42 +344,19 @@ it("does not replace a successfully recovered final assistant after a prompt-tim
   const attempt = makeAttemptResult({
     terminal: { kind: "timeout", phase: "prompt", source: "runtime", aborted: true },
   });
-  const answer = "Completed answer after the timeout race.";
-  const payloads = [{ text: answer }];
-  const setTerminalLifecycleMeta = vi.fn();
+  const input = makeTerminalInput({ attempt });
   const result = resolveEmbeddedRunTerminalTimeout({
+    ...input,
     terminalPrepared: {
+      ...input.prepared,
       timedOutDuringPrompt: true,
       hasSuccessfulFinalAssistantAfterPromptTimeout: true,
-      hasPartialAssistantTextAfterPromptTimeout: false,
-      replyDeliveryState: "missing",
-      sourceReplyDeliveryState: "missing",
-      reportedModelRef: { provider: "openai", model: "gpt-5.4" },
-      preparedTerminalReply: {
-        text: answer,
-        terminalReply: { disposition: "visible", text: answer },
-      },
-      finalAssistantVisibleText: answer,
-      finalAssistantRawText: undefined,
-      finalAssistantMessageRawText: undefined,
-      recoveredFinalAssistantPayloadsAfterPromptTimeout: undefined,
-      payloads,
-      payloadsWithToolMedia: payloads,
-      payloadsForVisibleCompletion: payloads,
-      agentMeta: { sessionId: "session-1", provider: "openai", model: "gpt-5.4" },
-      attemptToolSummary: undefined,
-      failureSignal: undefined,
-      terminalToolFailure: undefined,
     },
-    attempt,
     terminalState: resolveEmbeddedRunAttemptTerminalState({
       attempt,
       assistant: attempt.lastAssistant,
     }),
-    resolveReplayInvalid: () => false,
-    setTerminalLifecycleMeta,
-    startedAtMs: Date.now(),
   });
   expect(result).toBeUndefined();
-  expect(setTerminalLifecycleMeta).not.toHaveBeenCalled();
+  expect(input.setTerminalLifecycleMeta).not.toHaveBeenCalled();
 });

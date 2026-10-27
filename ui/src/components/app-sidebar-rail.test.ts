@@ -8,6 +8,7 @@ import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import * as toast from "../lib/toast.ts";
+import { createFrameClock } from "../test-helpers/animation-frame-clock.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -15,15 +16,17 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
-import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import "../test-helpers/app-sidebar-suite.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { domProbe } from "../test-helpers/dom-probe.ts";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { createMediaQueryList } from "../test-helpers/media-query.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { AppSidebar, getAppSidebarOwner } from "./app-sidebar.tsx";
+import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import { dispatchMousePointer, settleTooltip } from "./tooltip.test-support.ts";
 
@@ -70,16 +73,9 @@ async function click(sidebar: Sidebar, selector: string) {
 }
 
 function mockMobile(matches: (query: string) => boolean) {
-  vi.spyOn(globalThis, "matchMedia").mockImplementation((media) => ({
-    media,
-    matches: matches(media),
-    onchange: null,
-    addListener() {},
-    removeListener() {},
-    addEventListener() {},
-    removeEventListener() {},
-    dispatchEvent: () => true,
-  }));
+  vi.spyOn(globalThis, "matchMedia").mockImplementation((media) =>
+    createMediaQueryList(media, matches(media)),
+  );
 }
 
 function rail(sidebar: Sidebar, entry: string) {
@@ -113,7 +109,7 @@ async function seed(sidebar: Sidebar, rows: Parameters<Sidebar["pinnedSessions"]
   await sidebar.updateComplete;
 }
 function cachedPin(key: string, label = "Saved title") {
-  return { key, label, pinned: true, isChild: false, children: [] };
+  return restoreSnapshotSession({ key, label, pinned: true, isChild: false, children: [] }, "");
 }
 async function pinLookup(key = "agent:other:unloaded", fallback = false) {
   const base = await fixture();
@@ -169,6 +165,7 @@ describe("personal navigation rail", () => {
       [false, false],
     );
     await click(sidebar, '[data-navigation-view="pages"]');
+    await vi.dynamicImportSettled();
     await waitForSolid(() => expect(dom.query(".sidebar-pages")).not.toBeNull());
     expect(dom.query(".sidebar-session-content")).toBeNull();
     expect(dom.query("aside.sidebar")).toBe(frame);
@@ -801,13 +798,11 @@ describe("personal navigation rail", () => {
 
   it("paints a burst of unloaded pins together without changing their saved order", async () => {
     const { sidebar, sessions, result, dom } = await fixture();
-    const frames = new Map<number, FrameRequestCallback>();
-    let frameId = 0;
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-      frames.set(++frameId, callback);
-      return frameId;
-    });
-    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    const framesClock = createFrameClock();
+    const frames = framesClock.frames;
+
+    vi.stubGlobal("requestAnimationFrame", framesClock.request);
+    vi.stubGlobal("cancelAnimationFrame", framesClock.cancel);
     const keys = Array.from({ length: 30 }, (_, index) => `agent:other:pin-${index}`);
     const reads = keys.map(() =>
       createDeferred<Awaited<ReturnType<typeof sessions.sessions.describe>>>(),

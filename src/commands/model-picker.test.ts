@@ -11,6 +11,7 @@ import {
   promptDefaultModel,
   promptModelAllowlist,
 } from "../flows/model-picker.js";
+import { createEmptyPluginSetupRegistry } from "../plugins/setup-registry.test-support.js";
 import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
 import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
@@ -166,15 +167,13 @@ function agentConfig(
   return { agents: { defaults } };
 }
 
-function configuredTextModel(id: string, name: string) {
-  return createTestModelDefinition(id, { name, contextWindow: 128_000, maxTokens: 8192 });
-}
-
-function nvidiaConfig(models: ReturnType<typeof configuredTextModel>[]): OpenClawConfig {
+function nvidiaConfig(ids: string[]): OpenClawConfig {
   const nvidia = {
     api: "openai-completions" as const,
     baseUrl: "https://integrate.api.nvidia.com/v1",
-    models,
+    models: ids.map((id) =>
+      createTestModelDefinition(id, { contextWindow: 128_000, maxTokens: 8192 }),
+    ),
   };
   return { agents: { defaults: {} }, models: { providers: { nvidia } } };
 }
@@ -225,26 +224,9 @@ beforeEach(() => {
   modelCatalogRouteVariants.value = undefined;
   providerAuthRoute.value = undefined;
   providerAuthEvaluations.clear();
-  const cliBackends = (
-    [
-      ["claude-cli", "anthropic", "claude"],
-      ["google-gemini-cli", "google", "gemini"],
-    ] as const
-  ).map(([id, provider, command]) => ({
-    id,
-    modelProvider: provider,
-    pluginId: provider,
-    config: { command },
-  }));
   cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => cliBackends,
-    resolvePluginSetupRegistry: () => ({
-      providers: [],
-      cliBackends: cliBackends.map(({ pluginId, ...backend }) => ({ pluginId, backend })),
-      configMigrations: [],
-      autoEnableProbes: [],
-      diagnostics: [],
-    }),
+    resolveRuntimeCliBackends: () => [],
+    resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
   });
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
   setScopedCatalog([]);
@@ -502,15 +484,8 @@ it.each([true, false])(
         : [deprecated],
     );
     const configured = live
-      ? [
-          configuredTextModel("nvidia/native", "Bundled Native"),
-          configuredTextModel("z-ai/glm5", "Configured GLM5 fallback"),
-          configuredTextModel("private/custom-nvidia", "Private NVIDIA model"),
-        ]
-      : [
-          configuredTextModel("custom-nvidia-model", "Custom NVIDIA model"),
-          configuredTextModel("z-ai/glm5", "Configured GLM5 fallback"),
-        ];
+      ? ["nvidia/native", "z-ai/glm5", "private/custom-nvidia"]
+      : ["custom-nvidia-model", "z-ai/glm5"];
     const { result, values } = await pickAllowlist({
       config: nvidiaConfig(configured),
       preferredProvider: "nvidia",

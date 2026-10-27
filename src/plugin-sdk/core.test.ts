@@ -64,7 +64,6 @@ describe("defineChannelPluginEntry", () => {
     ["cli-metadata", 0, 1, 0, 0],
     ["tool-discovery", 0, 0, 1, 1],
     ["discovery", 1, 1, 0, 1],
-    ["setup-only", 1, 0, 0, 0],
     ["setup-runtime", 1, 0, 0, 0],
     ["full", 1, 1, 1, 1],
   ] as const)("registers only the hooks for %s", (mode, runtime, cli, full, capabilities) => {
@@ -93,108 +92,79 @@ it("createChannelPluginBase keeps meta id aligned with the channel id", () => {
 });
 
 describe("createChatChannelPlugin", () => {
-  describe.each(["sendText", "sendMedia", "sendPoll"] as const)(
-    "attached outbound %s",
-    (method) => {
-      function createSend() {
-        if (method === "sendPoll") {
-          const context = {
-            cfg: {},
-            to: "recipient",
-            poll: { question: "Choose", options: ["one", "two"] },
-          };
-          return {
-            context,
-            run: (outbound: NonNullable<ChannelPlugin["outbound"]>) => outbound.sendPoll!(context),
-          };
-        }
-        const context = {
-          cfg: {},
-          to: "recipient",
-          text: "body",
-          ...(method === "sendMedia" ? { mediaUrl: "https://example.com/image.png" } : {}),
-        };
-        return {
-          context,
-          run: (outbound: NonNullable<ChannelPlugin["outbound"]>) => outbound[method]!(context),
-        };
-      }
-
-      it("stamps the configured channel over a stale provider channel", async () => {
-        const send = createSend();
-        const extra = { correlation: "retained" };
-        const providerResult = Object.freeze({
-          messageId: "message-1",
-          meta: extra,
-          channel: "stale-provider-channel",
-        });
-        const sender = vi.fn(function (this: unknown, _context: unknown) {
-          return providerResult;
-        });
-        const attachedResults = { channel: "configured-channel", [method]: sender };
-        const chunker = vi.fn((text: string) => [text]);
-        const plugin = createChatChannelPlugin({
-          base: createChannelPlugin("configured-channel"),
-          outbound: {
-            base: { deliveryMode: "direct", chunker, textChunkLimit: 500 },
-            attachedResults,
-          },
-        });
-
-        expect(sender).not.toHaveBeenCalled();
-        const result = await send.run(plugin.outbound!);
-        expect(result).toEqual({
-          channel: "configured-channel",
-          messageId: "message-1",
-          meta: { correlation: "retained" },
-        });
-        expect(result).not.toBe(providerResult);
-        expect("meta" in result && result.meta).toBe(extra);
-        expect(sender).toHaveBeenCalledExactlyOnceWith(send.context);
-        expect(sender.mock.contexts[0]).toBe(attachedResults);
-        expect(plugin.outbound).toMatchObject({ chunker, textChunkLimit: 500 });
-        expect(chunker).not.toHaveBeenCalled();
+  it.each(["sendText", "sendMedia", "sendPoll"] as const)(
+    "%s captures channel before sending and copies the resolved result without mutation",
+    async (method) => {
+      const events: string[] = [];
+      const extra = { correlation: "retained" };
+      const providerResult = Object.freeze({
+        get messageId() {
+          events.push("result");
+          return "message-1";
+        },
+        meta: extra,
+        channel: "stale-provider-channel",
       });
-
-      it("captures the channel before awaiting the sender and copies result fields afterward", async () => {
-        const send = createSend();
-        const events: string[] = [];
-        let channel = "configured-channel";
-        const deferred = createDeferred<{ readonly messageId: string }>();
-        const sender = vi.fn(() => {
-          events.push("send");
-          return deferred.promise;
-        });
-        const attachedResults = {
-          get channel() {
-            events.push("channel");
-            return channel;
-          },
-          [method]: sender,
-        };
-        const plugin = createChatChannelPlugin({
-          base: createChannelPlugin("configured-channel"),
-          outbound: { base: { deliveryMode: "direct" }, attachedResults },
-        });
-
-        expect(events).toEqual([]);
-        const result = send.run(plugin.outbound!);
-        expect(events).toEqual(["channel", "send"]);
-        channel = "later-channel";
-        events.push("resolve");
-        deferred.resolve({
-          get messageId() {
-            events.push("result");
-            return "message-1";
-          },
-        });
-        await expect(result).resolves.toEqual({
-          channel: "configured-channel",
-          messageId: "message-1",
-        });
-        expect(events).toEqual(["channel", "send", "resolve", "result"]);
-        expect(sender).toHaveBeenCalledExactlyOnceWith(send.context);
-        expect(sender.mock.contexts[0]).toBe(attachedResults);
+      const deferred = createDeferred<typeof providerResult>();
+      let synchronous = false;
+      const sender = vi.fn(() => {
+        events.push("send");
+        return synchronous ? providerResult : deferred.promise;
+      });
+      let channel = "configured-channel";
+      const attachedResults = {
+        get channel() {
+          events.push("channel");
+          return channel;
+        },
+        [method]: sender,
+      };
+      const chunker = vi.fn((text: string) => [text]);
+      const plugin = createChatChannelPlugin({
+        base: createChannelPlugin(channel),
+        outbound: {
+          base: { deliveryMode: "direct", chunker, textChunkLimit: 500 },
+          attachedResults,
+        },
+      });
+      const context = {
+        cfg: {},
+        to: "recipient",
+        text: "body",
+        ...(method === "sendMedia" ? { mediaUrl: "https://example.com/image.png" } : {}),
+      };
+      const pollContext = {
+        cfg: {},
+        to: "recipient",
+        poll: { question: "Choose", options: ["one", "two"] },
+      };
+      expect(events).toEqual([]);
+      const send = () =>
+        method === "sendPoll"
+          ? plugin.outbound!.sendPoll!(pollContext)
+          : plugin.outbound![method]!(context);
+      const pending = send();
+      expect(events).toEqual(["channel", "send"]);
+      channel = "later-channel";
+      events.push("resolve");
+      deferred.resolve(providerResult);
+      const result = await pending;
+      expect(result).toEqual({
+        channel: "configured-channel",
+        messageId: "message-1",
+        meta: extra,
+      });
+      expect(events).toEqual(["channel", "send", "resolve", "result"]);
+      expect(result).not.toBe(providerResult);
+      expect("meta" in result && result.meta).toBe(extra);
+      expect(sender).toHaveBeenCalledExactlyOnceWith(method === "sendPoll" ? pollContext : context);
+      expect(sender.mock.contexts[0]).toBe(attachedResults);
+      expect(plugin.outbound).toMatchObject({ chunker, textChunkLimit: 500 });
+      expect(chunker).not.toHaveBeenCalled();
+      synchronous = true;
+      await expect(send()).resolves.toMatchObject({
+        channel: "later-channel",
+        messageId: "message-1",
       });
     },
   );

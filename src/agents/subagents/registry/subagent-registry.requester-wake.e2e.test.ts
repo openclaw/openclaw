@@ -54,7 +54,9 @@ import {
 import {
   createGatewayContext,
   createRequesterWakeSessionFixture,
+  expectLargeRequesterWakeFindings,
   holdRequesterWakeResponses,
+  prepareLargeRequesterWakeFixture,
 } from "./subagent-registry.requester-wake-session.test-support.js";
 import { registerRequesterWakeSettlementBoundaryTests } from "./subagent-registry.requester-wake-settlement.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
@@ -130,12 +132,16 @@ const loadConfigMock = vi.mocked(getRuntimeConfig);
 vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../gateway/call.js", { spy: true });
 vi.mock("../../../infra/agent-events.js", { spy: true });
+// mock-isolation: Requester-wake tests supply registries without discovering installed plugins.
 vi.mock("../../runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
+  const loadRegistry = vi.fn<
+    typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
+  >(() => createEmptyPluginRegistry());
   return {
-    loadAgentRuntimePluginRegistryHandle: vi.fn<
-      typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
-    >(() => createEmptyPluginRegistry()),
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
   };
 });
 vi.mock("../announce/subagent-announce.requester-settle-wake.js", { spy: true });
@@ -391,6 +397,65 @@ describe("requester settle wake product flow", () => {
     getAgentCalls,
     wakeRequester,
   };
+
+  it.each(["six-child DM batch", "nested three-child completion"])(
+    "delivers a %s with execution-identity collection enabled",
+    async (scenario) => {
+      const { cfg, requesterSessionKey, fixture, children } =
+        await prepareLargeRequesterWakeFixture(
+          { sessionStore, sessionStorePath },
+          scenario === "nested three-child completion",
+        );
+      const { waitForDeliveredCleanup: waitForBatchCleanup } =
+        createLifecycleWaits(requesterSessionKey);
+      const admittedRunIds: string[] = [];
+      const admissionErrors: string[] = [];
+      const ordinaryGatewayCall = callGatewayMock.getMockImplementation()!;
+      await callGatewayMock.withImplementation(
+        async (request) => {
+          if (request.method === "agent") {
+            const runId = request.params?.idempotencyKey ?? "";
+            const admission = prepareSystemAgentRunAdmission(cfg, runId, "main", "settle-test");
+            try {
+              const admitted = await admission.admit("embedded");
+              expect(admitted.executionIdentityToken?.runId).toBe(runId);
+              admittedRunIds.push(runId);
+            } catch (error) {
+              admissionErrors.push(String(error));
+              throw error;
+            } finally {
+              admission.close();
+            }
+          }
+          return ordinaryGatewayCall(request);
+        },
+        async () => {
+          const turnId = "requester-batch";
+          for (const child of children) {
+            await fixture.spawnVisibleChild({ ...child, requesterTurnRunId: turnId });
+          }
+          if (children.length > 1) {
+            await createRequesterYieldTool(requesterSessionKey, turnId).execute("yield", {});
+          }
+          const settled = await fixture.settleTurn(turnId, children, children.length > 1);
+          expect(settled.requesterContinuationSettled).toBe(children.length > 1 || undefined);
+          for (const [index, child] of children.entries()) {
+            emitCompleted(child.runId, child.childSessionKey, `findings ${index}`);
+          }
+          await flushOwnedWork();
+          expect(admissionErrors).toEqual([]);
+          expect(admittedRunIds).toHaveLength(1);
+          for (const child of children) {
+            await waitForBatchCleanup(child.runId);
+          }
+          expectLargeRequesterWakeFindings(getAgentCalls().at(-1), children.length);
+          await registry.testing.sweepOnceForTests();
+          await flushOwnedWork();
+          expect(admittedRunIds).toHaveLength(1);
+        },
+      );
+    },
+  );
 
   it.each([
     ...["alpha", "beta"].flatMap((firstCompleted) =>

@@ -17,6 +17,7 @@ export function createRuntimeConfigStub(options?: {
       lastError: null as string | null,
     },
     ensureLoaded: vi.fn(async () => undefined),
+    ensureDisplayLoaded: vi.fn(async () => undefined),
     refresh: vi.fn(async () => undefined),
     patch: options?.patch ?? vi.fn(async () => true),
     subscribe: () => () => undefined,
@@ -69,7 +70,14 @@ export function createContext(
       get: () => ({ agentId: "research", name: "Research" }),
       subscribe,
     },
-    sessions: { state: { result: null, loading: false } },
+    sessions: {
+      state: { result: null, loading: false },
+      presentation: {
+        result: null,
+        agentId: null,
+        resultCached: false,
+      } satisfies ApplicationContext["sessions"]["presentation"],
+    },
     runtimeConfig: options?.runtimeConfig ?? createRuntimeConfigStub(),
     chatSubmissions: { retain: vi.fn() },
     navigate: vi.fn(),

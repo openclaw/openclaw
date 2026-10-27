@@ -1,11 +1,11 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import { execRequestAbortSignal, withExecRequestOwners } from "../../infra/exec-request-context.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.types.js";
@@ -31,7 +31,7 @@ import {
   prepareCronRunContinuationCleanup,
   prepareScheduledAutomationStart,
   resolveScheduledSessionReplyOptions,
-  settleSessionAutomationTurn,
+  settleSessionEventTurn,
   type ScheduledAutomationAdmission,
 } from "./session-event-automation.js";
 import {
@@ -122,8 +122,12 @@ export function enqueueSessionEventForHost(
           ),
           execRequestOwners,
         ),
-        // Refuse matching keyed plugin retries; unkeyed and host occurrences stay distinct.
-        { allowDuplicate: options.source !== "plugin" || !options.contextKey?.trim() },
+        // Refuse matching keyed plugin and tool-handoff retries; unkeyed and host occurrences stay distinct.
+        {
+          allowDuplicate:
+            (options.source !== "plugin" && options.source !== "tool_handoff") ||
+            !options.contextKey?.trim(),
+        },
       );
   const occurrences = options.occurrences
     ? [...options.occurrences]
@@ -183,6 +187,7 @@ export function enqueueSessionEventForHost(
   let settlement: "settling" | "finished" | undefined;
   let settings = options.expectedTarget?.settings;
   let checkedSettings: typeof settings | null = null;
+  let isDeletionBlocked: (() => boolean) | undefined;
   const jobTools = options.scheduledAutomation
     ? resolveCronRunToolsAllow(options.scheduledAutomation.job)
     : undefined;
@@ -201,7 +206,7 @@ export function enqueueSessionEventForHost(
     options.expectedTarget?.assertCurrent?.();
     const currentConfig = getSessionEventRuntimeConfig();
     resolveConfiguredAgentId(currentConfig, agentId);
-    if (isAgentDeletionBlocked(agentId, { env })) {
+    if (!isDeletionBlocked || isDeletionBlocked()) {
       throw new Error("Session event agent is being deleted");
     }
     options.scheduledAutomation?.assertCurrent();
@@ -480,6 +485,7 @@ export function enqueueSessionEventForHost(
     runWithGatewayDetachedWorkContinuation(async () => {
       admissionStarted = true;
       await readAgentDeletionJournalStatusInWorker(agentId, { env }, signal);
+      isDeletionBlocked = prepareAgentDeletionBlocked(agentId, { env });
       assertOwnerCurrent();
       const { dispatchInboundMessageWithRoutedChannelDispatcher } = await import("../dispatch.js");
       const { prepareSessionGenerationFacts } =
@@ -598,34 +604,28 @@ export function enqueueSessionEventForHost(
             ...(options.scheduledAutomation ? { beforeScheduledStart: prepareStart } : {}),
             onStarted: start,
             onTerminal: async (runId, outcome, deliveryEvidence) => {
-              if (outcome !== "completed") {
-                failure ??=
-                  deliveryEvidence?.meta?.error?.message ||
-                  deliveryEvidence?.payloads?.find(
-                    (payload) => payload.isError && payload.text?.trim(),
-                  )?.text ||
-                  `Session event execution ${outcome}`;
-              }
-              await prepareCurrent();
-              if (options.scheduledAutomation) {
-                const automationOutcome = await settleSessionAutomationTurn({
-                  automation: options.scheduledAutomation,
-                  runId,
-                  deliveryEvidence,
-                  cfg,
-                  scope: preparedBinding
-                    ? { agentId, sessionKey, storePath, ...preparedBinding }
-                    : undefined,
-                  assertCurrent,
-                  prepareCurrent,
-                  outcome,
-                });
-                summary = automationOutcome.summary ?? summary;
-                nextCheckMs = automationOutcome.nextCheckMs;
-                sourceDeliveryOutcome = automationOutcome.sourceDeliveryOutcome;
-                automationResult = automationOutcome.automationResult;
-                delivered ||= sourceDeliveryOutcome?.satisfiesSourceDelivery === true;
-              }
+              const terminal = await settleSessionEventTurn({
+                automation: options.scheduledAutomation,
+                config: { ...cfg, session: { ...cfg.session, store: storePath } },
+                agentId,
+                sessionKey,
+                binding: preparedBinding ?? target,
+                runStartedAt: occurrence.ts,
+                signal,
+                assertCurrent: assertEffectCurrent,
+                onFailure: (error) => {
+                  failure ??= error;
+                },
+                runId,
+                deliveryEvidence,
+                prepareCurrent,
+                outcome,
+              });
+              summary = terminal.summary ?? summary;
+              nextCheckMs = terminal.nextCheckMs;
+              sourceDeliveryOutcome = terminal.sourceDeliveryOutcome;
+              automationResult = terminal.automationResult;
+              delivered ||= sourceDeliveryOutcome?.satisfiesSourceDelivery === true;
             },
           },
           onQueuedFollowupReplyBatch: async (batch) => {

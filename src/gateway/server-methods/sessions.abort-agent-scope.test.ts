@@ -16,6 +16,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { workerService } from "./environments.test-support.js";
+import { fixedStoreOwnershipConfig } from "./sessions-fixed-store.test-support.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const chatAbortMock = vi.fn();
@@ -651,14 +652,7 @@ describe("sessions.abort agent scope", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const context = createContext({
         extra: {
-          getRuntimeConfig: () => ({
-            session: { scope: "global", store: state.statePath("shared.sqlite") },
-            agents: {
-              ownership: "explicit",
-              defaults: { sessionStore: { agentId: "ops" } },
-              entries: { ops: {}, research: {} },
-            },
-          }),
+          getRuntimeConfig: () => fixedStoreOwnershipConfig(state.statePath("shared.sqlite")),
         },
       });
       setRuntimeConfigSnapshot(context.getRuntimeConfig());

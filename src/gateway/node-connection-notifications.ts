@@ -85,7 +85,8 @@ class NodeConnectionNotificationRouter {
     const primary = connected
       .filter(isMacNotificationNode)
       .filter((node) => node.lastActiveAtMs !== undefined)
-      .toSorted(compareActivity)
+      // oxlint-disable-next-line unicorn/no-array-sort -- filter creates a private notification candidate array.
+      .sort(compareActivity)
       .at(0);
     const delivered = primary ? await this.notify(primary, source, pending) : false;
     if (!this.attemptIsCurrent(pending)) {

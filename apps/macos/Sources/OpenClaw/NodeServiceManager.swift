@@ -2,6 +2,9 @@ import Foundation
 import OSLog
 
 enum NodeServiceManager {
+    static let runtimeInspectionFailure =
+        "Could not read the node service runtime. Check the node LaunchAgent and retry."
+
     private static let logger = Logger(subsystem: "ai.openclaw", category: "node.service")
     private static let lifecycleQueue = LifecycleQueue()
     private static var launchdPlistURL: URL {
@@ -144,7 +147,7 @@ extension NodeServiceManager {
             guard let cli = self.installedServiceCLI() else {
                 return CommandResult(
                     success: false,
-                    message: "Could not read the node service runtime. Check the node LaunchAgent and retry.",
+                    message: self.runtimeInspectionFailure,
                     parsed: nil)
             }
             command = AppProfile.current.localCLICommand(

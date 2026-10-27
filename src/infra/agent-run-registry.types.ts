@@ -1,3 +1,4 @@
+import type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import type { VerboseLevel } from "../auto-reply/thinking.shared.js";
 import type {
   AgentRunApprovalLeases,
@@ -9,10 +10,7 @@ export type AgentRunModel = { provider: string; model: string };
 
 export type AgentRunEventState = { seq: number; terminalPublication?: symbol };
 
-export type AutomationResult = {
-  outcome: "no_change" | "progress" | "done" | "blocked" | "needs_attention";
-  summary: string;
-};
+export type { AutomationResult } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {

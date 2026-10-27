@@ -134,7 +134,7 @@ function createDiscordRequestSignal(options: DiscordApiRequestOptions): {
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), resolveTimerTimeoutMs(options.timeoutMs, 1));
-  timeout.unref?.();
+  timeout.unref();
   return {
     signal: options.signal
       ? AbortSignal.any([options.signal, controller.signal])

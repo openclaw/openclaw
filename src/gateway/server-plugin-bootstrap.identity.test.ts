@@ -8,10 +8,7 @@ import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-l
 import { clearActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
-import {
-  authorizationClient,
-  dispatchAuthorizationRequest,
-} from "./server-methods.authorization.test-support.js";
+import { sendAuthorizationRequest } from "./server-methods.authorization.test-support.js";
 import { prepareGatewayPluginLoad } from "./server-plugin-bootstrap.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
@@ -30,20 +27,11 @@ it("dispatches mixed-case plugin methods after enablement and a cold start", asy
       dir: path.join(state.workspaceDir, "fixture"),
       id: "MiXeD-demo",
       filename: "index.js",
-      configSchema: { type: "object", properties: {} },
       registration: `api.registerGatewayMethod("MiXeD-demo.probe", ({ respond }) => {
         respond(true, { registered: true });
       });`,
     });
     updatePluginManifest(plugin, { activation: { onStartup: true } });
-    const client = authorizationClient(
-      "plugin-identity",
-      ["operator.admin"],
-      {},
-      {
-        client: { id: "cli", version: "test", platform: "linux", mode: "cli" },
-      },
-    );
     let previous: Awaited<ReturnType<typeof prepareGatewayPluginLoad>> | undefined;
     try {
       for (const phase of ["disabled", "enabled", "cold start", "denied"] as const) {
@@ -76,26 +64,24 @@ it("dispatches mixed-case plugin methods after enablement and a cold start", asy
         previous?.retireGatewayRuntimeBindings();
         previous = loaded;
         activatePluginRegistry(loaded.pluginRegistry, null, "gateway-bindable", state.workspaceDir);
-        const respond = await dispatchAuthorizationRequest(
+        const respond = await sendAuthorizationRequest(
           "MiXeD-demo.probe",
           {},
           {
-            client,
+            scopes: ["operator.admin"],
+            connId: "plugin-identity",
             context: createGatewayRequestContext(makeContextParams()),
             methodRegistry: createGatewayMethodRegistry(
               loaded.pluginRegistry.gatewayMethodDescriptors,
               loaded.pluginRegistry,
             ),
           },
-          phase,
         );
         if (phase === "disabled" || phase === "denied") {
           expect(respond).toHaveBeenCalledWith(
             false,
             undefined,
-            expect.objectContaining({
-              message: "unknown method: MiXeD-demo.probe",
-            }),
+            expect.objectContaining({ message: "unknown method: MiXeD-demo.probe" }),
           );
         } else {
           expect(respond.mock.calls.at(-1)?.slice(0, 2), phase).toEqual([

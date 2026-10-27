@@ -14,7 +14,7 @@ import {
   type ResolveModulePreloadDependenciesFn,
   type UserConfig,
 } from "vite";
-import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
+import { peleClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";
 import {
   CONTROL_UI_BUILD_ID_ATTRIBUTE,
@@ -354,6 +354,7 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
     sourcePackageAlias("normalization-core", "agent-id"),
     sourcePackageAlias("normalization-core", "code-points"),
+    sourcePackageAlias("normalization-core", "error-coercion"),
     sourcePackageAlias("normalization-core", "grapheme"),
     sourcePackageAlias("normalization-core", "json-coercion"),
     sourcePackageAlias("normalization-core", "json-schema"),
@@ -437,6 +438,7 @@ export async function refreshControlUiBuildOutput(
   buildInfo: ControlUiBuildInfo = resolveControlUiBuildInfo(),
   bootAssets?: string[],
   publicDir: string | false = path.join(here, "public"),
+  consumedInputs?: Set<string>,
 ) {
   const publicContent = publicDir ? collectControlUiPublicAssets(publicDir) : undefined;
   const publicAssets = publicContent?.paths ?? [];
@@ -490,10 +492,13 @@ export async function refreshControlUiBuildOutput(
   // Embed only build-owned HTML, never a fetched Gateway document (which may
   // contain identity, route metadata, or an HTTP login response). The measured
   // route graph also warms assets loaded before the first worker controls a tab.
-  const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(
-    path.join(here, "src/app-route-paths.ts"),
-    { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } },
-  );
+  const routePath = path.join(here, "src/app-route-paths.ts");
+  const { module: routes, dependencies: routeDependencies } = await runnerImport<
+    typeof import("./src/app-route-paths.ts")
+  >(routePath, { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } });
+  for (const file of [routePath, ...routeDependencies]) {
+    consumedInputs?.add(file);
+  }
   const offlineShell = {
     routes: routes.APP_ROUTE_PATHS,
     routePrefixes: routes.APP_ROUTE_OFFLINE_PREFIXES,
@@ -542,10 +547,13 @@ export async function refreshControlUiBuildOutput(
       };
     });
   // Same-commit source rebuilds must not pair a new document with an old shell.
-  const { module: csp } = await runnerImport<typeof import("../src/gateway/control-ui-csp.ts")>(
-    path.join(repoRoot, "src/gateway/control-ui-csp.ts"),
-    { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } },
-  );
+  const cspPath = path.join(repoRoot, "src/gateway/control-ui-csp.ts");
+  const { module: csp, dependencies: cspDependencies } = await runnerImport<
+    typeof import("../src/gateway/control-ui-csp.ts")
+  >(cspPath, { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } });
+  for (const file of [cspPath, ...cspDependencies]) {
+    consumedInputs?.add(file);
+  }
   const offlineBuild = {
     ...offlineShell,
     deferredAssets,
@@ -571,32 +579,10 @@ export async function refreshControlUiBuildOutput(
   return deferredSize;
 }
 
-function controlUiBuildOutputPlugin(
-  buildInfo: ControlUiBuildInfo,
-  copiedInputs: Set<string>,
-): Plugin {
-  let publicDir: string | false = false;
+function controlUiPrecompressedAssetsPlugin(): Plugin {
   return {
-    name: "control-ui-build-output",
+    name: "control-ui-precompressed-assets",
     apply: "build",
-    configResolved(config) {
-      publicDir = (config.build.copyPublicDir && config.publicDir) || false;
-      for (const file of config.configFileDependencies) {
-        copiedInputs.add(file);
-      }
-    },
-    transformIndexHtml: {
-      order: "post",
-      handler(html) {
-        // Vite recreates the module entry tag from a fixed attribute set. Finalize every script
-        // after synthesis so Cloudflare Rocket Loader cannot defer the Control UI boot sequence.
-        const marked = html.replace(
-          /<script\b(?![^>]*\bdata-cfasync\s*=)/giu,
-          '<script data-cfasync="false"',
-        );
-        return controlUiBuildIdentityHtml(marked, buildInfo);
-      },
-    },
     async writeBundle({ dir: buildOutDir }, bundle) {
       if (!buildOutDir) {
         this.error("Control UI build requires an output directory");
@@ -657,28 +643,74 @@ function controlUiBuildOutputPlugin(
         }
       }
       logger.info(`Control UI precompression complete: ${completed} assets (${sidecars} sidecars)`);
-      const inputs = [...new Set([...this.getModuleIds(), ...copiedInputs])]
-        .map((file) => file.split("?")[0])
-        .filter((file): file is string => Boolean(file && path.isAbsolute(file)))
-        .map((file) => path.relative(repoRoot, file).split(path.sep).join("/"))
-        .filter(
-          (file) =>
-            !file.startsWith("../") &&
-            !file.includes("node_modules/") &&
-            fs.statSync(path.join(repoRoot, file), { throwIfNoEntry: false })?.isFile(),
-        )
-        .toSorted();
-      fs.writeFileSync(path.join(buildOutDir, ".build-inputs.json"), JSON.stringify(inputs));
-      const bootAssets = collectControlUiBootAssets(bundle);
-      const deferred = await refreshControlUiBuildOutput(
-        buildOutDir,
-        buildInfo,
-        [...bootAssets.chat, ...bootAssets.new, ...bootAssets.login],
-        publicDir,
-      );
-      logger.info(
-        `Control UI deferred offline inventory: ${deferred.count} assets, ${deferred.rawBytes} B raw, ${deferred.gzipBytes} B gzip`,
-      );
+    },
+  };
+}
+
+function controlUiBuildOutputPlugin(
+  buildInfo: ControlUiBuildInfo,
+  copiedInputs: Set<string>,
+): Plugin {
+  let publicDir: string | false = false;
+  return {
+    name: "control-ui-build-output",
+    apply: "build",
+    configResolved(config) {
+      publicDir = (config.build.copyPublicDir && config.publicDir) || false;
+      for (const file of config.configFileDependencies) {
+        copiedInputs.add(file);
+      }
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler(html) {
+        // Vite recreates the module entry tag from a fixed attribute set. Finalize every script
+        // after synthesis so Cloudflare Rocket Loader cannot defer the Control UI boot sequence.
+        const marked = html.replace(
+          /<script\b(?![^>]*\bdata-cfasync\s*=)/giu,
+          '<script data-cfasync="false"',
+        );
+        // index.html owns the critical frame. Download the sole entry sheet
+        // without blocking its paint; the inline loader and main.ts admit it.
+        const nonblocking = marked.replace(
+          /<link\b(?=[^>]*\brel="stylesheet")[^>]*>/gu,
+          (link) =>
+            link.replace('rel="stylesheet"', 'rel="preload" as="style"') +
+            link.replace(/>$/u, ' id="openclaw-boot-styles" media="print">'),
+        );
+        return controlUiBuildIdentityHtml(nonblocking, buildInfo);
+      },
+    },
+    writeBundle: {
+      sequential: true,
+      async handler({ dir: buildOutDir }, bundle) {
+        if (!buildOutDir) {
+          this.error("Control UI build requires an output directory");
+        }
+        const bootAssets = collectControlUiBootAssets(bundle);
+        const deferred = await refreshControlUiBuildOutput(
+          buildOutDir,
+          buildInfo,
+          [...bootAssets.chat, ...bootAssets.new, ...bootAssets.login],
+          publicDir,
+          copiedInputs,
+        );
+        const inputs = [...new Set([...this.getModuleIds(), ...copiedInputs])]
+          .map((file) => file.split("?")[0])
+          .filter((file): file is string => Boolean(file && path.isAbsolute(file)))
+          .map((file) => path.relative(repoRoot, file).split(path.sep).join("/"))
+          .filter(
+            (file) =>
+              !file.startsWith("../") &&
+              !file.includes("node_modules/") &&
+              fs.statSync(path.join(repoRoot, file), { throwIfNoEntry: false })?.isFile(),
+          )
+          .toSorted();
+        fs.writeFileSync(path.join(buildOutDir, ".build-inputs.json"), JSON.stringify(inputs));
+        this.environment.logger.info(
+          `Control UI deferred offline inventory: ${deferred.count} assets, ${deferred.rawBytes} B raw, ${deferred.gzipBytes} B gzip`,
+        );
+      },
     },
   };
 }
@@ -768,7 +800,7 @@ export default function controlUiViteConfig(
     base,
     worker: {
       format: "iife",
-      plugins: () => [mermaidClassicBundlePlugin()],
+      plugins: () => [peleClassicBundlePlugin()],
       rolldownOptions: {
         output: { codeSplitting: false },
       },
@@ -832,7 +864,7 @@ export default function controlUiViteConfig(
     },
     plugins: [
       controlUiSolidPlugin(),
-      mermaidClassicBundlePlugin(),
+      peleClassicBundlePlugin(),
       controlUiIsolatedDesktopRuntimePlugin(),
       {
         name: "control-ui-static-import-preloads",
@@ -846,10 +878,11 @@ export default function controlUiViteConfig(
         },
       },
       controlUiSocialCardPlugin(),
-      controlUiLocaleModulesPlugin(),
+      controlUiLocaleModulesPlugin(copiedInputs),
       controlUiPluginDistributionsPlugin(repoRoot, copiedInputs),
       controlUiBootPreloadsPlugin(),
       controlUiNavigationPreloadsPlugin(),
+      controlUiPrecompressedAssetsPlugin(),
       controlUiBuildOutputPlugin(buildInfo, copiedInputs),
       {
         name: "control-ui-dev-stubs",

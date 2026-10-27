@@ -23,50 +23,47 @@ const cfg: OpenClawConfig = {
     },
   },
 };
-type SessionRow = {
-  agentId: string;
-  model: string;
-  modelProvider: string;
-  acpRuntime: boolean;
-  agentRuntime: { id: string; source: string };
-};
+type SessionRow = ReturnType<typeof acpRow> & { agentId: string };
 afterEach(clearRuntimeConfigSnapshot);
+const acpRow = (agentId: string) => ({
+  model: `${agentId}-acp`,
+  modelProvider: "acpx",
+  acpRuntime: true,
+  agentRuntime: { id: agentId, source: "session-key" },
+});
 
-it("keeps each selected owner's metadata and rejects a replaced lifecycle", async () => {
-  await withOpenClawTestState({ label: "acp-sessions", layout: "state-only" }, async (state) => {
+it("keeps each selected owner's metadata and rejects a replaced lifecycle", () =>
+  withOpenClawTestState({ label: "acp-sessions", layout: "state-only" }, async (state) => {
     setRuntimeConfigSnapshot(cfg);
-    const stores = new Map<string, string>();
-    const sessionKey = (id: string) => `agent:${id}:acp:current-session`;
-    const writeSession = (agentId: string, sessionId = `${agentId}-session`) => {
-      const storePath = path.join(state.agentDir(agentId), "openclaw-agent.sqlite");
-      stores.set(agentId, storePath);
-      replaceSessionEntrySync(
-        { agentId, sessionKey: sessionKey(agentId), storePath },
-        { sessionId, lifecycleRevision: `${sessionId}-revision`, updatedAt: Date.now() - 240_000 },
-      );
-    };
+    const owners = ["copilot", "reviewer"].map((agentId) => ({
+      agentId,
+      sessionKey: `agent:${agentId}:acp:current-session`,
+      storePath: path.join(state.agentDir(agentId), "openclaw-agent.sqlite"),
+    }));
+    const writeSession = (owner: (typeof owners)[number], sessionId = `${owner.agentId}-session`) =>
+      replaceSessionEntrySync(owner, {
+        sessionId,
+        lifecycleRevision: `${sessionId}-revision`,
+        updatedAt: Date.now() - 240_000,
+      });
     const readSessions = async () => {
       const { runtime, logs } = createCapturingTestRuntime();
-      runtime.error = (message) => {
-        throw new Error(String(message));
-      };
-      runtime.exit = (code) => {
-        throw new Error(`Unexpected exit ${code}`);
+      runtime.error = runtime.exit = (value: unknown) => {
+        throw new Error(`Unexpected runtime failure: ${String(value)}`);
       };
       await sessionsCommand({ json: true, allAgents: true }, runtime);
       return (JSON.parse(logs.join("\n")) as { sessions: SessionRow[] }).sessions;
     };
     try {
-      for (const agentId of ["copilot", "reviewer"]) {
-        writeSession(agentId);
+      for (const owner of owners) {
+        writeSession(owner);
         await upsertAcpSessionMeta({
+          ...owner,
           cfg,
-          agentId,
-          sessionKey: sessionKey(agentId),
           mutate: () => ({
-            backend: agentId,
-            agent: agentId,
-            runtimeSessionName: `${agentId}-runtime-session`,
+            backend: owner.agentId,
+            agent: owner.agentId,
+            runtimeSessionName: `${owner.agentId}-runtime-session`,
             mode: "persistent",
             state: "idle",
             lastActivityAt: Date.now(),
@@ -74,20 +71,12 @@ it("keeps each selected owner's metadata and rejects a replaced lifecycle", asyn
         });
       }
       const before = await readSessions();
-      for (const agentId of ["copilot", "reviewer"]) {
-        expect(before.find((row) => row.agentId === agentId)).toMatchObject({
-          model: `${agentId}-acp`,
-          modelProvider: "acpx",
-          acpRuntime: true,
-          agentRuntime: { id: agentId, source: "session-key" },
-        });
+      for (const { agentId } of owners) {
+        expect(before.find((row) => row.agentId === agentId)).toMatchObject(acpRow(agentId));
       }
-      writeSession("reviewer", "reviewer-replacement");
+      writeSession(owners[1]!, "reviewer-replacement");
       const after = await readSessions();
-      expect(after.find((row) => row.agentId === "copilot")).toMatchObject({
-        acpRuntime: true,
-        agentRuntime: { id: "copilot", source: "session-key" },
-      });
+      expect(after.find((row) => row.agentId === "copilot")).toMatchObject(acpRow("copilot"));
       expect(after.find((row) => row.agentId === "reviewer")).toMatchObject({
         model,
         modelProvider,
@@ -98,15 +87,9 @@ it("keeps each selected owner's metadata and rejects a replaced lifecycle", asyn
       // Join native ACP maintenance before the shared fixture closes databases and restores env.
       const maintenance = resolveMaintenanceConfig();
       await Promise.all(
-        [...stores].map(([agentId, storePath]) =>
-          enforceSqliteSessionHistoryDiskBudget({
-            agentId,
-            storePath,
-            mode: maintenance.mode,
-            maintenance,
-          }),
+        owners.map((owner) =>
+          enforceSqliteSessionHistoryDiskBudget({ ...owner, mode: maintenance.mode, maintenance }),
         ),
       );
     }
-  });
-});
+  }));

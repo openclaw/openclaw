@@ -125,8 +125,7 @@
           "type": "object"
         },
         "CodexErrorInfo": {
-          "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
-          "oneOf": [
+          "anyOf": [
             {
               "additionalProperties": false,
               "properties": {
@@ -239,6 +238,130 @@
                 "other"
               ],
               "type": "string"
+            },
+            { "anyOf": [{ "type": "string" }, { "type": "object" }] }
+          ],
+          "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
+          "allOf": [
+            {
+              "anyOf": [
+                { "not": { "type": "object", "required": ["httpConnectionFailed"] } },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "httpConnectionFailed": {
+                      "properties": {
+                        "httpStatusCode": {
+                          "anyOf": [
+                            { "format": "uint16", "minimum": 0, "type": "integer" },
+                            { "format": "uint16", "minimum": 0, "type": "null" }
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": ["httpConnectionFailed"],
+                  "title": "HttpConnectionFailedCodexErrorInfo",
+                  "type": "object"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                { "not": { "type": "object", "required": ["responseStreamConnectionFailed"] } },
+                {
+                  "additionalProperties": false,
+                  "description": "Failed to connect to the response SSE stream.",
+                  "properties": {
+                    "responseStreamConnectionFailed": {
+                      "properties": {
+                        "httpStatusCode": {
+                          "anyOf": [
+                            { "format": "uint16", "minimum": 0, "type": "integer" },
+                            { "format": "uint16", "minimum": 0, "type": "null" }
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": ["responseStreamConnectionFailed"],
+                  "title": "ResponseStreamConnectionFailedCodexErrorInfo",
+                  "type": "object"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                { "not": { "type": "object", "required": ["responseStreamDisconnected"] } },
+                {
+                  "additionalProperties": false,
+                  "description": "The response SSE stream disconnected in the middle of a turn before completion.",
+                  "properties": {
+                    "responseStreamDisconnected": {
+                      "properties": {
+                        "httpStatusCode": {
+                          "anyOf": [
+                            { "format": "uint16", "minimum": 0, "type": "integer" },
+                            { "format": "uint16", "minimum": 0, "type": "null" }
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": ["responseStreamDisconnected"],
+                  "title": "ResponseStreamDisconnectedCodexErrorInfo",
+                  "type": "object"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                { "not": { "type": "object", "required": ["responseTooManyFailedAttempts"] } },
+                {
+                  "additionalProperties": false,
+                  "description": "Reached the retry limit for responses.",
+                  "properties": {
+                    "responseTooManyFailedAttempts": {
+                      "properties": {
+                        "httpStatusCode": {
+                          "anyOf": [
+                            { "format": "uint16", "minimum": 0, "type": "integer" },
+                            { "format": "uint16", "minimum": 0, "type": "null" }
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": ["responseTooManyFailedAttempts"],
+                  "title": "ResponseTooManyFailedAttemptsCodexErrorInfo",
+                  "type": "object"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                { "not": { "type": "object", "required": ["activeTurnNotSteerable"] } },
+                {
+                  "additionalProperties": false,
+                  "description": "Returned when `turn/start` or `turn/steer` is submitted while the current active turn cannot accept same-turn steering, for example `/review` or manual `/compact`.",
+                  "properties": {
+                    "activeTurnNotSteerable": {
+                      "properties": {
+                        "turnKind": { "$ref": "#/definitions/NonSteerableTurnKind" }
+                      },
+                      "required": ["turnKind"],
+                      "type": "object"
+                    }
+                  },
+                  "required": ["activeTurnNotSteerable"],
+                  "title": "ActiveTurnNotSteerableCodexErrorInfo",
+                  "type": "object"
+                }
+              ]
             }
           ]
         },
@@ -351,7 +474,7 @@
           "type": "string"
         },
         "CyberAccessProgram": {
-          "description": "Requested cyber treatment for a ChatGPT-authenticated Codex turn. Authorization and model-tier restrictions remain server-owned.",
+          "description": "Requested cyber treatment for an OpenAI model turn. Authorization and model-tier restrictions remain server-owned.",
           "enum": ["standard", "daybreakBlue", "daybreakRed"],
           "type": "string"
         },
@@ -527,6 +650,18 @@
             }
           ]
         },
+        "ImageGenerationInputImage": {
+          "description": "A local image file successfully read for this exact image-generation request.",
+          "properties": {
+            "path": { "$ref": "#/definitions/AbsolutePathBuf" },
+            "sha256": {
+              "description": "Lowercase SHA-256 of the file bytes read before image normalization.",
+              "type": "string"
+            }
+          },
+          "required": ["path", "sha256"],
+          "type": "object"
+        },
         "InputModality": {
           "description": "Canonical user-input modality tags advertised by a model.",
           "oneOf": [
@@ -606,7 +741,7 @@
           "type": "object"
         },
         "MessagePhase": {
-          "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
+          "description": "Classifies assistant text as commentary, a partial answer, or a terminal answer.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
           "oneOf": [
             {
               "description": "Mid-turn assistant text (for example preamble/progress narration).\n\nAdditional tool calls or assistant output may follow before turn completion.",
@@ -614,7 +749,12 @@
               "type": "string"
             },
             {
-              "description": "The assistant's terminal answer text for the current turn.",
+              "description": "Stable answer text that may be followed by more assistant output or tools.",
+              "enum": ["partial_answer"],
+              "type": "string"
+            },
+            {
+              "description": "The assistant's declared terminal answer text for the current turn.",
               "enum": ["final_answer"],
               "type": "string"
             }
@@ -642,6 +782,18 @@
                 },
                 {
                   "description": "Open-ended classification; clients must accept categories added by Responses.",
+                  "type": "null"
+                }
+              ]
+            },
+            "reviewTarget": {
+              "anyOf": [
+                {
+                  "description": "Opaque server-issued block target. Presence alone does not enable target-based continuation.",
+                  "type": "string"
+                },
+                {
+                  "description": "Opaque server-issued block target. Presence alone does not enable target-based continuation.",
                   "type": "null"
                 }
               ]
@@ -876,6 +1028,8 @@
             "edu",
             "edu_plus",
             "edu_pro",
+            "sci",
+            "sci_plus",
             "unknown"
           ],
           "type": "string"
@@ -1763,6 +1917,22 @@
                 "agentThreadId": { "type": "string" },
                 "id": { "type": "string" },
                 "kind": { "$ref": "#/definitions/SubAgentActivityKind" },
+                "model": {
+                  "anyOf": [
+                    {
+                      "description": "Resolved model at sub-agent creation; absent from older records and other activities.",
+                      "type": "string"
+                    },
+                    {
+                      "description": "Resolved model at sub-agent creation; absent from older records and other activities.",
+                      "type": "null"
+                    }
+                  ]
+                },
+                "reasoningEffort": {
+                  "anyOf": [{ "$ref": "#/definitions/ReasoningEffort" }, { "type": "null" }],
+                  "description": "Resolved reasoning effort at sub-agent creation, when known."
+                },
                 "type": {
                   "enum": ["subAgentActivity"],
                   "title": "SubAgentActivityThreadItemType",
@@ -1832,13 +2002,32 @@
               "type": "object"
             },
             {
+              "anyOf": [
+                {
+                  "properties": { "fileId": { "type": "string" } },
+                  "required": ["fileId"],
+                  "title": "FileIdThreadItem",
+                  "type": "object"
+                },
+                {
+                  "properties": { "result": { "type": "string" } },
+                  "required": ["result"],
+                  "title": "ResultThreadItem",
+                  "type": "object"
+                }
+              ],
+              "description": "Either inline generated-image data or its durable attachment-store identity.\n\n`File` must remain first so rollouts written during the migration, which contain both an empty `result` and a `fileId`, retain the file reference when deserialized.",
               "properties": {
                 "failure": {
                   "anyOf": [{ "$ref": "#/definitions/ImageGenerationFailure" }, { "type": "null" }],
                   "default": null
                 },
                 "id": { "type": "string" },
-                "result": { "type": "string" },
+                "inputImages": {
+                  "description": "Observed local inputs for a completed generation, absent on older items.",
+                  "items": { "$ref": "#/definitions/ImageGenerationInputImage" },
+                  "type": "array"
+                },
                 "revisedPrompt": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
                 "savedPath": {
                   "anyOf": [{ "$ref": "#/definitions/AbsolutePathBuf" }, { "type": "null" }]
@@ -1856,7 +2045,7 @@
                   "type": "string"
                 }
               },
-              "required": ["id", "result", "status", "type"],
+              "required": ["id", "status", "type"],
               "title": "ImageGenerationThreadItem",
               "type": "object"
             },
@@ -2024,6 +2213,18 @@
               "allOf": [{ "$ref": "#/definitions/TurnItemsView" }],
               "default": "full",
               "description": "Describes how much of `items` has been loaded for this turn."
+            },
+            "rootTurnId": {
+              "anyOf": [
+                {
+                  "description": "ID of the first turn in the chain of work that led to this turn. Pass this as `rootTurnId` when starting work on behalf of this turn. May be null in older history or a `review/start` response.",
+                  "type": "string"
+                },
+                {
+                  "description": "ID of the first turn in the chain of work that led to this turn. Pass this as `rootTurnId` when starting work on behalf of this turn. May be null in older history or a `review/start` response.",
+                  "type": "null"
+                }
+              ]
             },
             "startedAt": {
               "anyOf": [

@@ -172,6 +172,19 @@ it.each<{
   },
   {
     files: {
+      "src/program.generated.mjs": "export function runProgram() {}",
+      "src/program.generated.d.mts": "export declare function runProgram(): void;",
+      "src/plain.js": "export const plainValue = 1;",
+      "src/plain.d.ts": "export declare const plainValue: number;",
+      "src/common.ts": "export function runCommonProgram() {}",
+      "src/common.d.cts": "export declare function runCommonProgram(): void;",
+      "src/a.mts": "export const f = 1;",
+      "src/b.mjs": "export const f = 2;",
+    },
+    expected: collision("f", "src/a.mts", "src/b.mjs"),
+  },
+  {
+    files: {
       "src/a.ts": "export const f = 1;",
       "src/b.ts": "export function f() {}",
       "src/plugin-sdk/public.ts": 'export * from "./star.js";',

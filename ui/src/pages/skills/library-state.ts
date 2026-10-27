@@ -21,7 +21,7 @@ import {
   SKILL_LIBRARY_MAX_FILE_BYTES,
   SKILL_LIBRARY_MAX_FILES,
 } from "../../../../packages/gateway-protocol/src/index.ts";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -176,17 +176,8 @@ export function createSkillLibrary(
       data.importSelection = [];
     }
   }
-  function showWorkspace() {
-    const view = observation.read().view;
-    return view === null || view === "workspace";
-  }
   function canWrite() {
     return canCallGatewayMethod(gateway.snapshot, "skills.library.save", "operator.write", {
-      requireAdvertisement: false,
-    });
-  }
-  function canTransfer() {
-    return canCallGatewayMethod(gateway.snapshot, "skills.library.mutate", "operator.admin", {
       requireAdvertisement: false,
     });
   }
@@ -333,10 +324,17 @@ export function createSkillLibrary(
     setLocal,
     edit: observation.edit,
     setImportOpen,
-    showWorkspace,
+    showWorkspace() {
+      const view = observation.read().view;
+      return view === null || view === "workspace";
+    },
     uploadsEnabled: () => uploadsEnabled(config()),
     canWrite,
-    canTransfer,
+    canTransfer() {
+      return canCallGatewayMethod(gateway.snapshot, "skills.library.mutate", "operator.admin", {
+        requireAdvertisement: false,
+      });
+    },
     canCreate,
     canEdit,
     entries: () => presentation().entries,

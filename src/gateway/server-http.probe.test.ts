@@ -52,6 +52,23 @@ function probeClient(server: Parameters<typeof sendRequest>[0]) {
       const response = await request(input);
       expect([response.res.statusCode, response.getBody()]).toEqual([status, body]);
     },
+    async getAndHead(input: ProbeRequest, status: number, body: object) {
+      const json = JSON.stringify(body);
+      for (const method of ["GET", "HEAD"]) {
+        const response = await request({
+          ...(typeof input === "string" ? { path: input } : input),
+          method,
+        });
+        expect([response.res.statusCode, response.getBody()]).toEqual([
+          status,
+          method === "HEAD" ? "" : json,
+        ]);
+        expect(response.setHeader).toHaveBeenCalledWith(
+          "Content-Length",
+          String(Buffer.byteLength(json)),
+        );
+      }
+    },
   };
 }
 function withProbeServer(
@@ -302,13 +319,48 @@ describe("gateway probe endpoints", () => {
     }
   });
 
-  it("rejects unattributable proxy ingress before hooks and watch-node handlers", async () => {
+  it("serves bounded probes from headerless trusted proxies while protecting other routes", async () => {
+    const cfg = { gateway: { trustedProxies: ["10.0.0.0/24"] } };
+    let healthy = true;
+    await withProbeServer(
+      {
+        getRuntimeConfig: () => cfg,
+        getReadiness: () => ({ ...unready, ready: healthy }),
+        getStartup: () =>
+          healthy
+            ? { ok: true, status: "started", uptimeMs: 8_000 }
+            : {
+                ok: false,
+                status: "starting",
+                uptimeMs: 8_000,
+                pendingReason: "private-startup-detail",
+              },
+      },
+      async (probe) => {
+        for (const ready of [true, false]) {
+          healthy = ready;
+          for (const path of ["/ready", "/readyz", "/startup", "/startupz"]) {
+            const body = path.startsWith("/ready")
+              ? { ready }
+              : { ok: ready, status: ready ? "started" : "starting" };
+            await probe.getAndHead(remote(path), ready ? 200 : 503, body);
+          }
+        }
+        const protectedResponse = await probe.request(remote("/tools/invoke"));
+        expect(protectedResponse.res.statusCode).toBe(403);
+        expect(protectedResponse.getBody()).toContain("proxy_attribution_required");
+      },
+      AUTH_TOKEN,
+    );
+  });
+
+  it("rejects untrusted proxy ingress before probes, hooks, and watch-node handlers", async () => {
     const handleHooksRequest = vi.fn(async () => true);
     const handleWatchNodeRequest = vi.fn(async () => true);
     await withProbeServer(
       { handleHooksRequest, handleWatchNodeRequest },
       async (probe) => {
-        for (const path of ["/hooks/test", "/api/nodes/watch/node-1"]) {
+        for (const path of ["/readyz", "/startupz", "/hooks/test", "/api/nodes/watch/node-1"]) {
           const { res, getBody } = await probe.request({
             path,
             remoteAddress: "127.0.0.1",
@@ -401,11 +453,10 @@ describe("gateway probe endpoints", () => {
     );
   });
 
-  it("reports startup lifecycle independently of hard channel failures", async ({
-    onTestFinished,
-  }) => {
+  it("reports startup lifecycle independently of hard channel failures", async () => {
     let startupPending = true;
     let gatewayDraining = false;
+    let channelFailed = false;
     const pending = createAgentDatabaseInspectionRefusal({
       agentId: "optional-worker",
       paths: ["/isolated/optional-worker.sqlite"],
@@ -414,25 +465,6 @@ describe("gateway probe endpoints", () => {
     });
     let refusals: AgentDatabaseAdmissionRefusal[] = [pending];
     const startedAt = Date.now() - 5_000;
-    const account = {
-      accountId: "default",
-      running: true,
-      connected: true,
-      enabled: true,
-      configured: true,
-      lifecycle: "ready" as "ready" | "blocked",
-      linked: true,
-      terminalDisconnect: false,
-      lastStartAt: startedAt,
-    };
-    const channelManager = {
-      getRuntimeSnapshot: () => ({
-        channels: { whatsapp: account },
-        channelAccounts: { whatsapp: { default: account } },
-      }),
-      getAutostartSuppression: () => null,
-      isAmbientAutostartSuppressed: () => false,
-    };
     const startupDeps = {
       startedAt,
       getStartupPending: () => startupPending,
@@ -440,17 +472,15 @@ describe("gateway probe endpoints", () => {
       getGatewayDraining: () => gatewayDraining,
     };
     const getStartup = createStartupChecker(startupDeps, () => refusals);
-    const getReadiness = createReadinessChecker({
-      channelManager,
-      ...startupDeps,
-    });
+    // Channel-health policy is covered by server/readiness.test.ts; here the
+    // contract is that HTTP startup uses its own lifecycle, not readiness.
+    const getReadiness = () => ({ ...unready, ...readyState(channelFailed ? ["whatsapp"] : []) });
     await withProbeServer({ getReadiness, getStartup }, async (probe) => {
       await probe.json("/startupz", 503, startupDetails("starting", "plugin-convergence"));
 
       gatewayDraining = true;
       await probe.json("/startupz", 503, startupDetails("draining"));
 
-      await probe.json("/readyz", 503, readyState(["gateway-draining"], false));
       gatewayDraining = false;
 
       startupPending = false;
@@ -466,13 +496,7 @@ describe("gateway probe endpoints", () => {
       await probe.json("/startupz", 200, startupDetails("started"));
 
       refusals = [];
-      account.lifecycle = "blocked";
-      account.running = false;
-      account.connected = false;
-      account.linked = false;
-      account.terminalDisconnect = true;
-      const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1_001);
-      onTestFinished(() => now.mockRestore());
+      channelFailed = true;
       await probe.json("/readyz", 503, readyState(["whatsapp"]));
 
       await probe.json("/startupz", 200, { ok: true, status: "started" });
@@ -512,18 +536,8 @@ describe("gateway probe endpoints", () => {
       return AUTH_NONE;
     });
     await withProbeServer({ getRuntimeConfig, getResolvedAuth }, async (probe) => {
-      const liveBody = JSON.stringify({ ok: true, status: "live" });
       for (const path of ["/health", "/healthz"]) {
-        for (const method of ["GET", "HEAD"] as const) {
-          const { res, getBody, setHeader } = await probe.request({ path, method });
-
-          expect(res.statusCode, `${method} ${path}`).toBe(200);
-          expect(getBody(), `${method} ${path}`).toBe(method === "HEAD" ? "" : liveBody);
-          expect(setHeader).toHaveBeenCalledWith(
-            "Content-Length",
-            String(Buffer.byteLength(liveBody)),
-          );
-        }
+        await probe.getAndHead(path, 200, { ok: true, status: "live" });
       }
       expect(getRuntimeConfig).not.toHaveBeenCalled();
       expect(getResolvedAuth).not.toHaveBeenCalled();

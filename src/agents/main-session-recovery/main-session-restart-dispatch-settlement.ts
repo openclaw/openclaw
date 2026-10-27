@@ -7,6 +7,8 @@ import {
   GatewayOperatorRecoveryAuthorizationError,
   GatewayOperatorRecoveryOwnershipError,
 } from "../../infra/restart-recovery-errors.js";
+import { captureSessionControllerSourceStopAcknowledgment } from "../../sessions/session-controller.mailbox-source.js";
+import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import type { MainSessionRecoveryReservation } from "./main-session-recovery-state.js";
 import {
@@ -31,6 +33,43 @@ export async function rollbackRestartRecoveryReservation(
     requireWriteSuccess: true,
     target: params,
   });
+}
+
+/** Join an accepted pre-start cancellation before restoring its durable recovery claim. */
+export async function reconcileAcceptedRestartRecoveryCancellation(params: {
+  controllerInput?: SessionControllerInput;
+  dispatchAccepted: boolean;
+  executionStarted: boolean;
+  preStartAbortAttempted: boolean;
+  preStartAbortConfirmed: boolean;
+  repairAcceptedRecovery: () => Promise<void>;
+  shouldContinue?: () => boolean;
+}): Promise<boolean> {
+  const current = () => params.shouldContinue?.() !== false;
+  const unconfirmedStartTimeout =
+    params.dispatchAccepted &&
+    !params.executionStarted &&
+    params.preStartAbortAttempted &&
+    !params.preStartAbortConfirmed &&
+    current();
+  if (
+    !params.executionStarted &&
+    params.controllerInput?.custody.rpcAdopted === true &&
+    params.controllerInput.abortSignal.aborted &&
+    current()
+  ) {
+    // Source adoption can precede dispatch acceptance; Stop owns this terminal publication.
+    await captureSessionControllerSourceStopAcknowledgment(params.controllerInput);
+  }
+  if (
+    params.dispatchAccepted &&
+    !params.executionStarted &&
+    (!params.preStartAbortAttempted || params.preStartAbortConfirmed) &&
+    current()
+  ) {
+    await params.repairAcceptedRecovery();
+  }
+  return unconfirmedStartTimeout;
 }
 
 /** A definitive pre-admission denial settles locally without dropping other recovery custody. */

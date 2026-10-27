@@ -1,8 +1,7 @@
 // Memory Core tests cover generic embedding provider.integration plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
-import { json } from "node:stream/consumers";
+import { text as readText } from "node:stream/consumers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearEmbeddingProviders,
@@ -11,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { createEmbeddingProvider, resolveEmbeddingProviderIndexIdentity } from "./embeddings.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
@@ -22,6 +22,7 @@ type CapturedRequest = {
   url: string | undefined;
   headers: IncomingMessage["headers"];
   body: Record<string, unknown>;
+  rawBody: string;
 };
 
 type TestServer = {
@@ -41,12 +42,14 @@ async function startEmbeddingServer(options?: {
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       try {
-        const body = (await json(req)) as Record<string, unknown>;
+        const rawBody = await readText(req);
+        const body = JSON.parse(rawBody) as Record<string, unknown>;
         requests.push({
           method: req.method,
           url: req.url,
           headers: req.headers,
           body,
+          rawBody,
         });
         if (options?.authorization && req.headers.authorization !== options.authorization) {
           res.writeHead(401, { "content-type": "application/json" });
@@ -80,17 +83,9 @@ async function startEmbeddingServer(options?: {
     })();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-
-  const address = server.address() as AddressInfo;
+  const port = await listenOnLoopback(server);
   const testServer = {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl: `http://127.0.0.1:${port}/v1`,
     requests,
     close: () =>
       new Promise<void>((resolve, reject) => {
@@ -99,6 +94,17 @@ async function startEmbeddingServer(options?: {
   };
   servers.push(testServer);
   return testServer;
+}
+
+function createQianfanConfig(baseUrl: string): OpenClawConfig {
+  return {
+    plugins: { allow: ["qianfan"], entries: { qianfan: { enabled: true } } },
+    models: {
+      providers: {
+        qianfan: { api: "openai-completions", baseUrl, models: [] },
+      },
+    },
+  };
 }
 
 function createMemoryEmbeddingOptions(overrides?: {
@@ -258,6 +264,13 @@ function createMemoryEmbeddingOwner(generation: MemorySemanticProviderGeneration
     settings: { sync: {} },
     markLocalEmbeddingProviderDegraded: () => {},
   }) as {
+    settings: {
+      sync: object;
+      queryInstruction?: string;
+      inputFormat?: { query: string; document: string };
+    };
+    embedQueryWithRetry: (text: string) => Promise<number[]>;
+    embedBatchWithRetry: (texts: string[]) => Promise<number[][]>;
     embedChunksInBatches: (
       candidates: Array<MemoryIndexWorkItem & { chunk: IndexedMemoryChunk }>,
       generation: MemorySemanticProviderGeneration,
@@ -325,6 +338,93 @@ function distinctCandidates(
   }));
 }
 
+describe("memory query instructions over real transport", () => {
+  it.each([
+    { model: "nvidia/Nemotron-3-Embed-8B-BF16" },
+    { model: "hf.co/maternion/Nemotron-3.5-Embed-8B-GGUF:Q8_0" },
+    { model: "generic-embedding-alias", inputFormat: { query: "query: ", document: "passage: " } },
+  ])("formats both retrieval roles for $model", async ({ model, inputFormat }) => {
+    const server = await startEmbeddingServer();
+    const database = new DatabaseSync(":memory:");
+    try {
+      const { owner } = await createMemoryEmbeddingOwnerForServer(server.baseUrl, database, {
+        model,
+      });
+      owner.settings.inputFormat = inputFormat;
+      await owner.embedBatchWithRetry(["remember this"]);
+      await owner.embedQueryWithRetry("find this");
+      owner.settings.queryInstruction = "custom: ";
+      await owner.embedQueryWithRetry("find this");
+      expect(server.requests.map(({ body }) => body.input)).toEqual([
+        ["passage: remember this"],
+        ["query: find this"],
+        ["custom: find this"],
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps other Nemotron families raw and supports explicit empty prefixes", async () => {
+    const server = await startEmbeddingServer();
+    const database = new DatabaseSync(":memory:");
+    try {
+      const { owner } = await createMemoryEmbeddingOwnerForServer(server.baseUrl, database, {
+        model: "nvidia/llama-embed-nemotron-8b",
+      });
+      await owner.embedBatchWithRetry(["remember this"]);
+      await owner.embedQueryWithRetry("find this");
+      owner.settings.inputFormat = { query: "", document: "" };
+      await owner.embedBatchWithRetry(["remember this"]);
+      await owner.embedQueryWithRetry("find this");
+      expect(server.requests[0]?.rawBody).toBe(server.requests[2]?.rawBody);
+      expect(server.requests[1]?.rawBody).toBe(server.requests[3]?.rawBody);
+      expect(server.requests.map(({ body }) => body.input)).toEqual([
+        ["remember this"],
+        ["find this"],
+        ["remember this"],
+        ["find this"],
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("changes generic query bytes and vectors while preserving document requests", async () => {
+    const server = await startEmbeddingServer();
+    const database = new DatabaseSync(":memory:");
+    try {
+      const { owner } = await createMemoryEmbeddingOwnerForServer(server.baseUrl, database, {
+        model: "generic-embedding-alias",
+      });
+      const documents = await owner.embedBatchWithRetry(["remember this"]);
+      const bare = await owner.embedQueryWithRetry("find this");
+      owner.settings.queryInstruction = "search_query: ";
+      const instructed = await owner.embedQueryWithRetry("find this");
+      expect(instructed).toEqual([23, 0.5, 3]);
+      expect(bare).toEqual([9, 0.5, 3]);
+      expect(await owner.embedBatchWithRetry(["remember this"])).toEqual(documents);
+      owner.settings.queryInstruction = "";
+      expect(await owner.embedQueryWithRetry("find this")).toEqual(bare);
+      expect(server.requests[0]?.rawBody).toBe(server.requests[3]?.rawBody);
+      expect(server.requests[1]?.rawBody).toBe(server.requests[4]?.rawBody);
+      expect(server.requests.map(({ body }) => body.input)).toEqual([
+        ["remember this"],
+        ["find this"],
+        ["search_query: find this"],
+        ["remember this"],
+        ["find this"],
+      ]);
+      expect(server.requests[2]?.body).toEqual({
+        ...server.requests[1]?.body,
+        input: ["search_query: find this"],
+      });
+    } finally {
+      database.close();
+    }
+  });
+});
+
 describe("memory-core embedding batch recovery over real transport", () => {
   it.each([
     { model: "bge-large-zh", limit: 16, requests: [16, 16, 1] },
@@ -364,14 +464,7 @@ describe("memory-core embedding batch recovery over real transport", () => {
           {
             provider: "qianfan",
             model,
-            config: {
-              plugins: { allow: ["qianfan"], entries: { qianfan: { enabled: true } } },
-              models: {
-                providers: {
-                  qianfan: { api: "openai-completions", baseUrl: server.baseUrl, models: [] },
-                },
-              },
-            },
+            config: createQianfanConfig(server.baseUrl),
           },
         );
         const embeddings = await owner.embedChunksInBatches(
@@ -420,14 +513,7 @@ describe("memory-core embedding batch recovery over real transport", () => {
       });
       const server = await startEmbeddingServer({ authorization: `Bearer ${expected}` });
       const result = await createEmbeddingProvider({
-        config: {
-          plugins: { allow: ["qianfan"], entries: { qianfan: { enabled: true } } },
-          models: {
-            providers: {
-              qianfan: { api: "openai-completions", baseUrl: server.baseUrl, models: [] },
-            },
-          },
-        },
+        config: createQianfanConfig(server.baseUrl),
         agentDir: state.agentDir(),
         provider: "qianfan",
         fallback: "none",
@@ -447,14 +533,7 @@ describe("memory-core embedding batch recovery over real transport", () => {
       const remoteServer = await startEmbeddingServer();
       await expect(
         createEmbeddingProvider({
-          config: {
-            plugins: { allow: ["qianfan"], entries: { qianfan: { enabled: true } } },
-            models: {
-              providers: {
-                qianfan: { api: "openai-completions", baseUrl: providerServer.baseUrl, models: [] },
-              },
-            },
-          },
+          config: createQianfanConfig(providerServer.baseUrl),
           agentDir: state.agentDir(),
           provider: "qianfan",
           fallback: "none",

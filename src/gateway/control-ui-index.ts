@@ -14,7 +14,10 @@ import {
   type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
-import { selectControlUiRoutePreloads } from "./control-ui-route-preloads.js";
+import {
+  controlUiPreloadLinks,
+  selectControlUiRoutePreloads,
+} from "./control-ui-route-preloads.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sendControlUiHtmlBody } from "./control-ui-static.js";
 import {
@@ -44,7 +47,7 @@ function rewriteControlUiIndexHtmlAssetHrefs(
     replacements.set(`href="${buildControlUiRootAssetPath(normalized, asset)}"`, assetHref);
   }
   // Copy the document once instead of once per matching asset.
-  const pattern = new RegExp([...replacements.keys()].map(escapeRegExp).join("|"), "g");
+  const pattern = new RegExp(Array.from(replacements.keys(), escapeRegExp).join("|"), "g");
   return html.replace(pattern, (match) => replacements.get(match) ?? match);
 }
 
@@ -127,5 +130,11 @@ export async function serveControlUiIndexHtml(
     "Cache-Control",
     bootstrapConfig ? "private, no-store" : sessionEntryPath ? "no-store" : "no-cache",
   );
+  const links = controlUiPreloadLinks(withBasePath);
+  if (links.length && (!isSessionEntryCurrent || isSessionEntryCurrent())) {
+    // Final-response preloads avoid the duplicate fetches observed with 103.
+    // The document still rechecks authority after asynchronous compression.
+    res.setHeader("Link", links);
+  }
   await sendControlUiHtmlBody(req, res, document, isSessionEntryCurrent);
 }

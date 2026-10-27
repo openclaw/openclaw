@@ -172,7 +172,7 @@ export async function readWorkspaceFileWithGuards(params: {
   }
 }
 
-export function isTransientWorkspaceReadError(error: unknown): boolean {
+function isTransientWorkspaceReadError(error: unknown): boolean {
   if (error && typeof error === "object") {
     if (
       "code" in error &&

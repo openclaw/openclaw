@@ -1,8 +1,8 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { applyAgentDefaultMediaModel } from "openclaw/plugin-sdk/provider-onboard";
 import { DEFAULT_VYDRA_IMAGE_MODEL, DEFAULT_VYDRA_VIDEO_MODEL } from "./defaults.js";
-import { applyVydraConfig } from "./onboard.js";
 import { runVydraGeneration } from "./shared.js";
 import { buildVydraSpeechProvider } from "./speech-provider.js";
 
@@ -31,7 +31,7 @@ export default definePluginEntry({
           envVar: "VYDRA_API_KEY",
           promptMessage: "Enter Vydra API key",
           expectedProviders: [PROVIDER_ID],
-          applyConfig: (cfg) => applyVydraConfig(cfg),
+          applyConfig: (cfg) => applyAgentDefaultMediaModel(cfg, "image", "vydra/grok-imagine"),
           wizard: {
             choiceId: "vydra-api-key",
             choiceLabel: "Vydra API key",

@@ -13,6 +13,7 @@ const THREAD_TS = "1712345678.123456";
 const messaging = slackPlugin.messaging!;
 const threading = slackPlugin.threading!;
 const outbound = slackPlugin.outbound!;
+const button = (label: string, value = label.toLowerCase()) => ({ label, value });
 
 function route(
   params: Omit<
@@ -67,17 +68,10 @@ vi.mock("./client.js", async () => {
 });
 
 beforeEach(() => {
-  for (const mock of [
-    mocks.handleAction,
-    mocks.resolveDm,
-    mocks.sendMessage,
-    mocks.sessionCall,
-    mocks.conversationInfo,
-    mocks.conversationOpen,
-    mocks.userInfo,
-    mocks.teamsList,
-  ]) {
-    mock.mockReset();
+  for (const [name, mock] of Object.entries(mocks)) {
+    if (name !== "writeClient") {
+      mock.mockReset();
+    }
   }
   mocks.resolveDm.mockResolvedValue("D123");
   mocks.sendMessage.mockResolvedValue({ messageId: "msg-1", channelId: "D123" });
@@ -285,33 +279,28 @@ describe("slackPlugin status", () => {
   );
 
   it.each([
-    {
-      name: "bot token warning",
-      probe: {
+    [
+      {
         ok: true,
         warning: "Slack bot token is a user token",
         bot: { id: "UUSER", name: "human-installer" },
         team: { id: "T1", name: "OpenClaw" },
       },
-      expected: [
+      [
         { text: "Warning: Slack bot token is a user token", tone: "warn" },
         { text: "Bot: @human-installer" },
         { text: "Team: OpenClaw (T1)" },
       ],
-    },
-    {
-      name: "human identity",
-      probe: {
+    ],
+    [
+      {
         ok: true,
         user: { id: "U12345678", name: "test-human" },
         team: { id: "T12345678", name: "Test Team" },
       },
-      expected: [
-        { text: "User identity: @test-human (U12345678)" },
-        { text: "Team: Test Team (T12345678)" },
-      ],
-    },
-  ])("renders $name in capabilities output", ({ probe, expected }) => {
+      [{ text: "User identity: @test-human (U12345678)" }, { text: "Team: Test Team (T12345678)" }],
+    ],
+  ] as const)("renders capabilities output for %j", (probe, expected) => {
     expect(slackPlugin.status?.formatCapabilitiesProbe?.({ probe })).toStrictEqual(expected);
   });
 
@@ -641,18 +630,12 @@ describe("slackPlugin outbound", () => {
             { type: "text", text: "Slack interactive smoke." },
             {
               type: "buttons",
-              buttons: [
-                { label: "Approve", value: "approve" },
-                { label: "Reject", value: "reject" },
-              ],
+              buttons: [button("Approve"), button("Reject")],
             },
             {
               type: "select",
               placeholder: "Choose a target",
-              options: [
-                { label: "Canary", value: "canary" },
-                { label: "Production", value: "production" },
-              ],
+              options: [button("Canary"), button("Production")],
             },
           ],
         },
@@ -686,6 +669,7 @@ describe("slackPlugin outbound", () => {
 
   it.each([
     { surface: "interactive", type: "text" },
+    { surface: "presentation", type: "text" },
     { surface: "presentation", type: "context" },
   ] as const)(
     "delivers oversized $surface $type in order across the real Slack outbound adapter",
@@ -697,7 +681,7 @@ describe("slackPlugin outbound", () => {
       const text = "x".repeat(3_000 * 50 + 1);
       const buttons = {
         type: "buttons" as const,
-        buttons: [{ label: "Continue", value: "continue" }],
+        buttons: [button("Continue")],
       };
       const presentationTextBlock =
         type === "context" ? { type: "context" as const, text } : { type: "text" as const, text };

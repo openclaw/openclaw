@@ -150,7 +150,7 @@ OpenClaw pins the complete system prompt for the session. Changed sections,
 including skills, workspace memory, and temporal context, arrive as instruction
 messages after the current user turn. Existing skill and memory refresh rules
 still apply. Changing the route or selected personal profile, resetting, or
-compacting history starts a new series; ordinary turn teardown and Gateway restarts restore the saved series.
+compacting history starts a new series; internal turns continuing the same session keep the series, and ordinary turn teardown and Gateway restarts restore the saved series.
 
 ## Injected workspace files (Project Context)
 

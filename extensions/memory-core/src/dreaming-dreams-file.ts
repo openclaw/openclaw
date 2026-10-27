@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { replaceManagedMarkdownBlock } from "openclaw/plugin-sdk/memory-host-markdown";
+import { decodeUtf8Input } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { readRegularFile, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
@@ -53,7 +54,10 @@ export async function readDreamsFile(dreamsPath: string, workspaceDir?: string):
     return await files.readDreams(dreamsPath);
   }
   try {
-    return (await readRegularFile({ filePath: dreamsPath })).buffer.toString("utf-8");
+    return decodeUtf8Input(
+      (await readRegularFile({ filePath: dreamsPath })).buffer,
+      `DREAMS.md ${dreamsPath} (preserve the original and convert a copy to UTF-8 before retrying)`,
+    );
   } catch (err) {
     if (isEmptyDreamsReadError(err, extractErrorCode(err))) {
       return "";
@@ -235,7 +239,12 @@ function normalizeDiaryBlockBody(block: string): string {
 function isOptionalDiaryContextReadError(err: unknown): boolean {
   const code = extractErrorCode(err);
   // Optional prompt context may omit unreadable diaries; updates must preserve the failure.
-  return code === "EACCES" || code === "EPERM" || isEmptyDreamsReadError(err, code);
+  return (
+    code === "EACCES" ||
+    code === "EPERM" ||
+    code === "ERR_INVALID_UTF8" ||
+    isEmptyDreamsReadError(err, code)
+  );
 }
 
 function readDiaryBlocks(existing: string): string[] | null {

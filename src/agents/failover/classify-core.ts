@@ -5,7 +5,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { matchesContextOverflowMessage } from "../../../packages/ai/src/utils/overflow.js";
-import { inspectTlsCertificateError } from "../../../packages/ai/src/utils/tls-certificate-errors.js";
+import { inspectTlsCertificateError } from "../../infra/tls-certificate-errors.js";
 import {
   extractLeadingHttpStatus,
   isGenericProviderInternalError,

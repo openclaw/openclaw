@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { runCommandWithTimeout } from "../process/exec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 
 type RunCommand = typeof runCommandWithTimeout;
 type GitResult = { code: number; stdout: string };
@@ -21,14 +22,7 @@ function makeRunCommand(byArg: { toplevel?: GitResult; branch?: GitResult }): Ru
     if (!res) {
       throw new Error(`unexpected git invocation: ${argv.join(" ")}`);
     }
-    return {
-      stdout: res.stdout,
-      stderr: "",
-      code: res.code,
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
-    };
+    return createCommandResult({ stdout: res.stdout, code: res.code });
   };
 }
 

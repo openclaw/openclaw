@@ -1,129 +1,108 @@
 import { expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
-import { validateConfigObjectWithPlugins } from "./validation.js";
+import type { OpenClawConfig } from "./types.js";
+import { validateConfigObjectWithPlugins as validate } from "./validation.js";
 
-function createModelRegistry(
+const registry = (
   plugin: Parameters<typeof createPluginManifestRecordFixture>[0],
-): PluginManifestRegistry {
-  return {
-    diagnostics: [],
-    plugins: [createPluginManifestRecordFixture({ source: "test", ...plugin })],
-  };
-}
-
-function createModelSuppressionRegistry() {
-  return createModelRegistry({
-    id: "openai",
-    origin: "bundled",
-    providers: ["openai", "openai"],
-    contracts: {},
-    rootDir: "/tmp/plugins/openai",
-    modelCatalog: {
-      suppressions: [
-        {
-          provider: "openai",
-          model: "gpt-5.3-codex-spark",
-          reason:
-            "gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
-        },
-      ],
-    },
-  });
-}
-
-function createModelNormalizationRegistry() {
-  return createModelRegistry({
-    id: "custom-provider-plugin",
+): PluginManifestRegistry => ({
+  diagnostics: [],
+  plugins: [createPluginManifestRecordFixture(plugin)],
+});
+const metadata = () => ({
+  manifestRegistry: registry({
+    id: "proxy",
     providers: ["myproxy"],
     origin: "config",
-    rootDir: "/tmp/custom-provider-plugin",
     modelIdNormalization: {
-      providers: {
-        myproxy: { aliases: { latest: "modern-model" }, prefixWhenBare: "vendor" },
-      },
+      providers: { myproxy: { aliases: { latest: "modern-model" }, prefixWhenBare: "vendor" } },
     },
-  });
-}
+  }),
+});
+const provider = { baseUrl: "https://proxy.example/v1", api: "openai-completions", models: [] };
 
 it("rejects statically suppressed provider/model pairs during config validation", () => {
-  const manifestRegistry = createModelSuppressionRegistry();
-  const res = validateConfigObjectWithPlugins(
+  const reason = "This model is no longer exposed. Use openai/gpt-5.5.";
+  const manifestRegistry = registry({
+    id: "openai",
+    providers: ["openai", "openai"],
+    modelCatalog: { suppressions: [{ provider: "openai", model: "gpt-5.3-codex-spark", reason }] },
+  });
+  const result = validate(
     { agents: { defaults: { model: { primary: "openai/gpt-5.3-codex-spark" } } } },
     { pluginMetadataSnapshot: { manifestRegistry } },
   );
-
-  expect(res.ok ? undefined : res.issues).toEqual([
+  expect(result.ok ? undefined : result.issues).toEqual([
     {
       path: "agents.defaults.model.primary",
-      message:
-        "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      message: `Unknown model: openai/gpt-5.3-codex-spark. ${reason}`,
     },
   ]);
 });
 
 it("loads model normalization policies when plugin validation is skipped", () => {
   const myproxy = {
-    baseUrl: "https://proxy.example/v1",
+    ...provider,
     apiKey: "sk-test",
-    api: "openai-completions",
     models: [{ id: "latest", name: "Custom latest" }],
   };
-  const res = validateConfigObjectWithPlugins(
+  const result = validate(
     { models: { providers: { myproxy } } },
     {
       pluginValidation: "skip",
-      loadPluginMetadataSnapshot: () => ({
-        manifestRegistry: createModelNormalizationRegistry(),
-      }),
+      loadPluginMetadataSnapshot: metadata,
     },
   );
-
-  expect(res.ok && res.config.models?.providers?.myproxy?.models?.[0]?.id).toBe(
+  expect(result.ok && result.config.models?.providers?.myproxy?.models?.[0]?.id).toBe(
     "vendor/modern-model",
   );
 });
 
 it("keeps core-only validation independent from plugin metadata", () => {
-  const loadPluginMetadataSnapshot = vi.fn(() => ({
-    manifestRegistry: createModelNormalizationRegistry(),
-  }));
+  const loadPluginMetadataSnapshot = vi.fn(metadata);
   const options = { pluginValidation: "core-only" as const, loadPluginMetadataSnapshot };
-  const provider = {
-    baseUrl: "http://127.0.0.1:19432/v1",
-    api: "openai-completions",
-    models: [],
-  };
-  const valid = validateConfigObjectWithPlugins(
-    {
-      gateway: { mode: "local" },
-      models: { providers: { "fixture-external": provider } },
-    },
-    options,
-  );
-  const invalid = validateConfigObjectWithPlugins({ gateway: { port: "invalid" } }, options);
-
-  expect(valid.ok).toBe(true);
-  expect(invalid.ok).toBe(false);
+  expect(
+    validate(
+      { gateway: { mode: "local" }, models: { providers: { "fixture-external": provider } } },
+      options,
+    ).ok,
+  ).toBe(true);
+  expect(validate({ gateway: { port: "invalid" } }, options).ok).toBe(false);
   expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
 });
 
-it("accepts separator padding in per-agent policy", () => {
-  const modelPolicy = { allow: [" openai / gpt-5.5 ", " openai / * ", " openai / ns / * "] };
-  const agents = { entries: { worker: { modelPolicy } } };
-  const res = validateConfigObjectWithPlugins({ agents }, { pluginValidation: "skip" });
-
-  expect(res.ok).toBe(true);
-});
-
-it("rejects whitespace inside a model policy model name", () => {
-  const res = validateConfigObjectWithPlugins(
-    { agents: { defaults: { modelPolicy: { allow: ["openai/gpt 5.5"] } } } },
-    { pluginValidation: "skip" },
-  );
-
-  expect(res.ok ? undefined : res.issues[0]).toMatchObject({
-    path: "agents.defaults.modelPolicy.allow.0",
-    message: expect.stringContaining("invalid model policy ref"),
-  });
+const aliases = {
+  "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+  "openrouter/openai/gpt-oss-120b:free": {},
+};
+type Models = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
+it.each<[string, string[], Models?, string?]>([
+  ["worker", [" openai / gpt-5.5 ", " openai / * ", " openai / ns / * "]],
+  [
+    "defaults",
+    "openai/gpt-5.6-sol provider/a/b/c/d/e/f clawrouter/anthropic/* provider/a/b/c/d/* sonnet openrouter:free".split(
+      " ",
+    ),
+    aliases,
+  ],
+  ["defaults", ["openai/gpt 5.5"], undefined, "agents.defaults.modelPolicy.allow.0"],
+  ["runner", ["not-a-model-ref"], undefined, "agents.entries.runner.modelPolicy.allow.0"],
+])("validates %s model policy %j", (scope, allow, models, path) => {
+  const policy = { modelPolicy: { allow }, ...(models ? { models } : {}) };
+  const agents =
+    scope === "defaults"
+      ? { defaults: policy, entries: { main: {} } }
+      : { ownership: "explicit" as const, entries: { main: {}, [scope]: policy } };
+  const result = validate({ agents }, { pluginValidation: "skip" });
+  if (path) {
+    expect(result.ok ? undefined : result.issues).toContainEqual(
+      expect.objectContaining({
+        path,
+        message: expect.stringContaining("invalid model policy ref"),
+      }),
+    );
+  } else {
+    expect(result.ok).toBe(true);
+  }
 });

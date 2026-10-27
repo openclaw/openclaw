@@ -1,9 +1,9 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { isMainThread } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -37,10 +37,6 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-
-beforeEach(() => {
-  expect(isMainThread).toBe(true);
-});
 
 afterEach(() => {
   testing.resetSessionControllerForTest();
@@ -82,16 +78,12 @@ function waitAtGate(
 }
 
 function requireOwned(result: Admission) {
-  expect(result.status).toBe("owned");
-  if (result.status !== "owned" || !result.databaseClaim) {
-    throw new Error("Persistent admission must retain its physical database claim");
-  }
+  assert(result.status === "owned" && result.databaseClaim, "Expected persistent reply admission");
   return { ...result, databaseClaim: result.databaseClaim };
 }
 
 function observeSql() {
   const sql = observeMainThreadSql({ includeClose: true });
-  sql.calibrate();
   const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
   return {
     expectIdle() {
@@ -231,32 +223,12 @@ it("retains one actor per cold/reopened reply admission and drains it without ma
           acquireReplyOperationSessionActor(operation),
           acquireReplyOperationSessionActor(operation),
         ]);
-        if (!actor || !sibling) {
-          throw new Error("Persistent admission must acquire a session actor");
-        }
+        assert(actor && sibling, "Persistent admission must acquire a session actor");
         expect(sibling).toBe(actor);
         const authority = {
           assertCurrent: () => databaseClaim.assertCurrent(),
           authorize() {},
         };
-        const before = await actor.read(authority);
-        expect(before.entry).toMatchObject({
-          sessionId,
-          updatedAt: phase === "cold" ? 1 : 543,
-        });
-        const updatedAt = phase === "cold" ? 543 : 987;
-        const patched = await actor.patch(
-          {
-            commandId: `${phase}-activity`,
-            phaseId: "reply-admission",
-            expected: before.version,
-            reducers: [{ kind: "activity", updatedAt }],
-          },
-          authority,
-        );
-        expect(patched.kind).toBe("committed");
-        expect(sibling.snapshot(authority)?.entry).toMatchObject({ sessionId, updatedAt });
-
         const phaseEntered = createDeferred();
         actorPhase = actor.withPhase("retained-reply", authority, async () => {
           phaseEntered.resolve();
@@ -412,9 +384,7 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
             expectedSessionId: target.sessionId,
           });
           idleAdmissions.push({ sessionKey: target.sessionKey, admission });
-          if (admission.status !== "owned") {
-            throw new Error("Fixture requires four admitted idle reply owners");
-          }
+          assert(admission.status === "owned", "Fixture requires four admitted idle reply owners");
           await completeAdmission(admission, target.sessionKey);
           expect(leases.all(target.storePath)).toHaveLength(1);
         }

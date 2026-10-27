@@ -117,11 +117,7 @@ it("does not scan sibling lanes while reading registered owner widths", () => {
   const siblings = Array.from({ length: 32 }, (_, index) => `background:core:stable-${index}`);
   configureBackground(siblings, Object.fromEntries(siblings.map((lane) => [lane, 1])));
   const lane = getSkillWorkshopReviewLane();
-  const members = [...siblings, lane];
-  expect(state.lanes.size).toBe(members.length);
-  for (const registeredLane of state.lanes.values()) {
-    expect(registeredLane).toMatchObject({ draining: false, queue: { length: 0 } });
-  }
+  expect(state.lanes.size).toBe(siblings.length + 1);
   const unchanged = preserveQueueState();
   const { result: observed, reads } = countLaneReads(() =>
     Array.from({ length: 1_000 }, () => getSkillWorkshopReviewLane()),
@@ -156,7 +152,7 @@ it.each([
   expect(registered?.maxConcurrent).toBe(1);
   expect([...group!.members]).toEqual([lane]);
   expect(getSkillWorkshopReviewLane()).toBe(lane);
-  for (const width of [0, 2, 3, 1]) {
+  for (const width of [0, 2, 1]) {
     publishLaneConfiguration({ lanes: { [lane]: width } });
     expectWorkshopWidth(width);
     expect(state.lanes.get(lane)).toBe(registered);

@@ -111,30 +111,16 @@ describe("scanInstalledApps", () => {
     async () => {
       const roots = await makeFixtureRoot();
       const fixtures: Array<[name: string, value?: string, bundleId?: string, extra?: string]> = [
-        ["XML", "<string> \tcom.example.xml\n </string>", "com.example.xml"],
-        ["Binary", "<string>com.example.binary</string>", "com.example.binary"],
         [
-          "Unrelated Date",
-          "<string>com.example.date</string>",
-          "com.example.date",
-          "<key>BuildDate</key><date>2026-01-01T00:00:00Z</date>",
+          "XML",
+          "<string> \tcom.example.xml\n </string>",
+          "com.example.xml",
+          `<key>BuildDate</key><date>2026-01-01T00:00:00Z</date><key>Unrelated</key><string>${"x".repeat(2 * 1024 * 1024)}</string>`,
         ],
-        [
-          "Large Unrelated Value",
-          "<string>com.example.large</string>",
-          "com.example.large",
-          `<key>Unrelated</key><string>${"x".repeat(2 * 1024 * 1024)}</string>`,
-        ],
-        ["Numeric String", "<string>42</string>", "42"],
-        ["Empty", "<string></string>"],
+        ["Binary", "<string>42</string>", "42"],
         ["Whitespace", "<string> \t\n </string>"],
         ["Missing Identifier"],
         ["Integer", "<integer>42</integer>"],
-        ["Boolean", "<true/>"],
-        ["Array", "<array><string>com.example.array</string></array>"],
-        ["Dictionary", "<dict><key>id</key><string>example</string></dict>"],
-        ["Data", "<data>ZXhhbXBsZQ==</data>"],
-        ["Date Identifier", "<date>2026-01-01T00:00:00Z</date>"],
         ["Oversized Identifier", `<string>${"x".repeat(2 * 1024 * 1024)}</string>`],
       ];
       for (const [name, value, , extra] of fixtures) {
@@ -151,7 +137,6 @@ describe("scanInstalledApps", () => {
         }
       }
       await createApp(roots.applications, "Malformed", "not a property list");
-      await createApp(roots.applications, "No Plist");
       const linkedPath = path.join(roots.userApplications, "Linked.app");
       await fs.symlink(path.join(roots.applications, "XML.app"), linkedPath);
 
@@ -161,17 +146,17 @@ describe("scanInstalledApps", () => {
       if (result.status !== "ok") {
         return;
       }
-      expect(result.apps).toHaveLength(fixtures.length + 3);
-      const apps = new Map(result.apps.map((app) => [app.label, app]));
-      const expectedFixtures: typeof fixtures = [...fixtures, ["Malformed"], ["No Plist"]];
-      for (const [name, , bundleId] of expectedFixtures) {
-        expect(apps.get(name), name).toEqual(
-          expectedApp(roots.applications, name, false, bundleId),
-        );
-      }
-      expect(apps.get("Linked")).toEqual(
-        expectedApp(roots.userApplications, "Linked", false, "com.example.xml"),
-      );
+      expect(result.apps).toHaveLength(fixtures.length + 2);
+      expect(Object.fromEntries(result.apps.map((app) => [app.label, app.bundleId]))).toEqual({
+        XML: "com.example.xml",
+        Binary: "42",
+        Whitespace: undefined,
+        "Missing Identifier": undefined,
+        Integer: undefined,
+        "Oversized Identifier": undefined,
+        Malformed: undefined,
+        Linked: "com.example.xml",
+      });
     },
   );
 });

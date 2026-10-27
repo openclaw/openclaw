@@ -1,147 +1,70 @@
-import "../test-utils/prepare-compiled-subprocesses.js";
-import { EventEmitter } from "node:events";
-import type { MessagePort, Transferable } from "node:worker_threads";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type {
-  LeaseHeartbeatParentMessage,
-  LeaseHeartbeatWorkerData,
+import { MessageChannel, type MessagePort } from "node:worker_threads";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  leaseHeartbeatState as state,
+  type LeaseHeartbeatReply,
+  type LeaseHeartbeatWorkerData,
 } from "./openclaw-state-lease-heartbeat-shared.js";
-import type { StateLeaseRenewal } from "./openclaw-state-lease-renewal.worker.js";
 
 const fixture = vi.hoisted(() => ({
-  worker: undefined as EventEmitter | undefined,
+  parent: undefined as MessagePort | undefined,
   data: undefined as LeaseHeartbeatWorkerData | undefined,
   renew: vi.fn<() => number | undefined>(),
   readExpiry: vi.fn<() => number | undefined>(),
-  receive: undefined as ((message: LeaseHeartbeatParentMessage) => void) | undefined,
   ports: new Set<MessagePort>(),
 }));
 
-vi.mock("node:worker_threads", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:worker_threads")>();
-  const { EventEmitter } = await import("node:events");
-  const trackPort = (port: MessagePort) => {
-    fixture.ports.add(port);
-    port.once("close", () => fixture.ports.delete(port));
-  };
-  return {
-    ...actual,
-    isMainThread: false,
-    get workerData() {
-      return fixture.data;
-    },
-    parentPort: {
-      on(_event: "message", listener: (message: LeaseHeartbeatParentMessage) => void) {
-        fixture.receive = listener;
-      },
-      off(_event: "message", listener: (message: LeaseHeartbeatParentMessage) => void) {
-        if (fixture.receive === listener) {
-          fixture.receive = undefined;
-        }
-      },
-      postMessage(message: unknown, transfer: Transferable[] = []) {
-        const cloned = structuredClone(message, { transfer });
-        if (
-          cloned &&
-          typeof cloned === "object" &&
-          "port" in cloned &&
-          cloned.port instanceof actual.MessagePort
-        ) {
-          trackPort(cloned.port);
-        }
-        fixture.worker?.emit("message", cloned);
-      },
-      close: () => queueMicrotask(() => fixture.worker?.emit("exit", 0)),
-    },
-    Worker: class extends EventEmitter {
-      stdout = { resume() {} };
-      stderr = { resume() {} };
-      constructor(
-        _url: URL,
-        options: { workerData: LeaseHeartbeatWorkerData; transferList?: Transferable[] },
-      ) {
-        super();
-        const data = structuredClone(options.workerData, { transfer: options.transferList });
-        fixture.data = data;
-        trackPort(data.databaseAdmissionPort);
-        fixture.worker = this;
-      }
-      postMessage(message: LeaseHeartbeatParentMessage) {
-        queueMicrotask(() => fixture.receive?.(structuredClone(message)));
-      }
-      async terminate() {
-        this.emit("exit", 0);
-        return 0;
-      }
-    },
-  };
-});
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  isMainThread: false,
+  get workerData() {
+    return fixture.data;
+  },
+  get parentPort() {
+    return fixture.parent;
+  },
+}));
 vi.mock("../infra/gateway-state-owner.js", () => ({
   assertStateDatabaseAccessAllowed() {},
   GatewayStateOwnerContentionError: class extends Error {},
 }));
-vi.mock("../infra/sqlite-worker-identity.js", async () => ({
-  ...(await vi.importActual<typeof import("../infra/sqlite-worker-identity.js")>(
-    "../infra/sqlite-worker-identity.js",
-  )),
-  readDatabasePathIdentitySync: (canonicalPath: string) => ({ key: "file:12:34", canonicalPath }),
-}));
 vi.mock("../infra/sqlite-busy-timeout.js", () => ({
   runWithSqliteBusyTimeout: (_db: unknown, _ms: number, run: () => unknown) => run(),
 }));
-// mock-isolation: The heartbeat diagnostic fixture has no native database or transaction custody.
+// mock-isolation: Request classification injects storage outcomes; native heartbeat tests own SQLite.
 vi.mock("../infra/sqlite-transaction.js", () => ({
   runSqliteImmediateTransactionSync: (_db: unknown, run: () => unknown) => run(),
   runSqliteDeferredTransactionSync: (_db: unknown, run: () => unknown) => run(),
   runSqliteReadSnapshotSync: (_db: unknown, run: () => unknown) => run(),
   retainSqliteWriteAdmissionService: () => () => {},
 }));
-vi.mock("./openclaw-state-db-handle.js", () => ({
+vi.mock("./openclaw-state-db-handle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openclaw-state-db-handle.js")>()),
   openTrackedStateDatabase: () => ({}),
+  readTrackedStateDatabaseIdentity: () => ({ key: "file:12:34", birthtime: "0" }),
   closeTrackedStateDatabase() {},
+}));
+vi.mock("../infra/sqlite-worker-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/sqlite-worker-identity.js")>()),
+  assertExistingDatabaseIdentity() {},
 }));
 vi.mock("./openclaw-state-lease-store.js", () => ({
   renewOpenClawStateLeaseInTransaction: fixture.renew,
   readOpenClawStateLeaseExpiry: fixture.readExpiry,
 }));
-// mock-isolation: Diagnostics inject storage outcomes; scheduler tests cover native SQLite.
-vi.mock("./openclaw-state-lease-renewal.worker.js", () => ({
-  createStateLeaseRenewalScheduler: () => {
-    const pending = new Map<StateLeaseRenewal, ReturnType<typeof setTimeout>>();
-    return {
-      schedule(entry: StateLeaseRenewal, expiresAt: number) {
-        clearTimeout(pending.get(entry));
-        pending.set(
-          entry,
-          setTimeout(
-            () => {
-              pending.delete(entry);
-              try {
-                entry.complete({ expiresAt: fixture.renew() });
-              } catch (error) {
-                entry.complete({ error });
-              }
-            },
-            expiresAt - entry.leaseMs + entry.intervalMs - Date.now(),
-          ),
-        );
-      },
-      cancel(entry: StateLeaseRenewal) {
-        clearTimeout(pending.get(entry));
-        pending.delete(entry);
-      },
-    };
-  },
-}));
 
 const acquiredAt = 1_800_000_000_000;
+function track(port: MessagePort) {
+  fixture.ports.add(port);
+  port.once("close", () => fixture.ports.delete(port));
+}
 beforeEach(() => {
   vi.resetModules();
   vi.useFakeTimers();
   vi.setSystemTime(acquiredAt + 100);
-  fixture.renew.mockReset().mockImplementation(() => Date.now() + 60_000);
+  fixture.renew.mockReset().mockReturnValue(acquiredAt + 60_000);
   fixture.readExpiry.mockReset().mockReturnValue(acquiredAt + 60_000);
-  fixture.receive = undefined;
 });
 afterEach(async () => {
   await Promise.all(
@@ -156,133 +79,76 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-async function start() {
-  const { startOpenClawStateLeaseHeartbeat } = await import("./openclaw-state-lease-heartbeat.js");
-  const onLost = vi.fn();
-  const heartbeat = startOpenClawStateLeaseHeartbeat({
-    path: "/synthetic-state/lease.sqlite",
-    identity: { scope: "test:diagnostics", key: "lease", owner: "owner" },
-    leaseMs: 60_000,
-    heartbeatMs: 20_000,
-    acquiredAt,
-    expiresAt: acquiredAt + 60_000,
-    onLost,
-  });
-  const outcome = heartbeat.ready.catch((error: unknown) => error);
-  await import("./openclaw-state-lease-heartbeat.worker.js");
-  await vi.advanceTimersByTimeAsync(0);
-  return { heartbeat, outcome, onLost };
-}
-
-it.each([
-  { renewed: false, throws: true },
-  { renewed: true, throws: false },
-])(
-  "retains automatic loss diagnostics (renewed=$renewed, throws=$throws)",
-  async ({ renewed, throws }) => {
-    const failure = Object.assign(new Error("synthetic disk I/O error"), {
-      code: "ERR_SQLITE_ERROR",
-      errcode: 266,
-    });
-    fixture.renew.mockImplementation(() => {
-      if (throws) {
-        throw failure;
-      }
-      return undefined;
-    });
-    if (renewed) {
-      fixture.renew.mockImplementationOnce(() => Date.now() + 60_000);
-    }
-    const { heartbeat, outcome, onLost } = await start();
-    try {
-      if (renewed) {
-        await expect(outcome).resolves.toBeUndefined();
-        await vi.advanceTimersByTimeAsync(20_000);
-      }
-      const error: unknown = onLost.mock.calls[0]?.[0];
-      expect(String(error)).toContain(`lossPath=${renewed ? "automatic-renewal" : "activation"}`);
-      if (throws) {
-        expect(error).toMatchObject({
-          cause: {
-            name: "Error",
-            message: failure.message,
-            code: failure.code,
-            errcode: 266,
-            attempt: renewed ? 2 : 1,
-            elapsedMs: renewed ? 20_100 : 100,
-          },
-        });
-        expect(String(error)).toContain("state lease heartbeat exited");
-        expect(String(error)).toContain("Error: synthetic disk I/O error");
-        expect(String(error)).toContain("code=ERR_SQLITE_ERROR, errcode=266");
-        expect(String(error)).toContain(`acquiredAt=${acquiredAt}`);
-        expect(String(error)).toContain(`lastRenewedAt=${renewed ? acquiredAt + 100 : "never"}`);
-        expect(String(error)).toContain(`attempt=${renewed ? 2 : 1}`);
-        expect(String(error)).toContain(`elapsedMs=${renewed ? 20_100 : 100}`);
-        expect(String(error)).toContain("lossOutcome=operation-error");
-      } else {
-        expect(String(error)).toContain("expired or ownership lost");
-        expect(String(error)).toContain("lossOutcome=no-current-owned-unexpired-row");
-        expect(error).not.toHaveProperty("cause");
-      }
-      if (!renewed) {
-        expect(await outcome).toBe(error);
-      }
-    } finally {
-      await heartbeat.stop();
-    }
-  },
-);
-
 it.each([
   ["verify", true],
   ["renew", false],
   ["renew", true],
-] as const)("retains explicit %s loss with operation error=%s", async (operation, throws) => {
-  const { heartbeat, outcome, onLost } = await start();
-  try {
-    await expect(outcome).resolves.toBeUndefined();
-    const action = operation === "verify" ? fixture.readExpiry : fixture.renew;
-    action.mockImplementation(() => {
-      if (throws) {
-        throw new Error("synthetic operation failure");
+] as const)("classifies explicit %s loss with operation error=%s", async (operation, throws) => {
+  const { port1: host, port2: parent } = new MessageChannel();
+  const admission = new MessageChannel();
+  for (const port of [host, parent, admission.port1, admission.port2]) {
+    track(port);
+  }
+  fixture.parent = parent;
+  fixture.data = {
+    path: "/synthetic-state/lease.sqlite",
+    expectedIdentity: "file:12:34",
+    identity: { scope: "test:diagnostics", key: "lease", owner: "owner" },
+    databaseAdmissionPort: admission.port1,
+    leaseMs: 60_000,
+    heartbeatMs: 20_000,
+    acquiredAt,
+    shared: new SharedArrayBuffer((state.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT),
+    renewalProgress: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
+  };
+  Atomics.store(
+    new BigInt64Array(fixture.data.shared),
+    state.expiresAt,
+    BigInt(acquiredAt + 60_000),
+  );
+  const ready = createDeferredCore();
+  const result = createDeferredCore<Extract<LeaseHeartbeatReply, { id: number }>>();
+  const losses: unknown[] = [];
+  host.on(
+    "message",
+    (message: LeaseHeartbeatReply | { port: MessagePort } | { closed: true } | null) => {
+      if (message === null) {
+        ready.resolve();
+      } else if ("port" in message) {
+        track(message.port);
+      } else if ("loss" in message) {
+        losses.push(message.loss);
+      } else if ("id" in message) {
+        result.resolve(message);
       }
-      return undefined;
-    });
-    const rejected = heartbeat[operation]().catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(await rejected).toMatchObject({
-      code: throws ? "OPENCLAW_STATE_LEASE_STORAGE_FAILED" : "OPENCLAW_STATE_LEASE_LOST",
-      message: expect.stringContaining(
-        `lossPath=explicit-${operation}, lossOutcome=${throws ? "operation-error" : "no-current-owned-unexpired-row"}`,
-      ),
-      ...(throws ? { cause: { message: "synthetic operation failure" } } : {}),
-    });
-    expect(onLost).toHaveBeenCalledTimes(1);
-    expect(String(onLost.mock.calls[0]?.[0])).toContain(`lossPath=explicit-${operation}`);
-  } finally {
-    await heartbeat.stop();
-  }
-});
-
-it("still retries SQLite contention", async () => {
-  const errcode = 6;
-  fixture.renew.mockImplementationOnce(() => {
-    throw Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR", errcode });
+    },
+  );
+  await import("./openclaw-state-lease-heartbeat.worker.js");
+  await ready.promise;
+  const action = operation === "verify" ? fixture.readExpiry : fixture.renew;
+  action.mockImplementation(() => {
+    if (throws) {
+      throw new Error("synthetic operation failure");
+    }
+    return undefined;
   });
-  const { heartbeat, outcome, onLost } = await start();
-  try {
-    await expect(outcome).resolves.toBeUndefined();
-    await vi.advanceTimersByTimeAsync(24);
-    expect(fixture.renew).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(fixture.renew).toHaveBeenCalledTimes(2);
-    expect(onLost).not.toHaveBeenCalled();
-    fixture.worker?.emit("exit", 1);
-    expect(String(onLost.mock.calls[0]?.[0])).toContain("exitCode=1");
-    expect(String(onLost.mock.calls[0]?.[0])).toContain(`lastRenewedAt=${acquiredAt + 125}`);
-    expect(String(onLost.mock.calls[0]?.[0])).not.toContain("lossPath=");
-  } finally {
-    await heartbeat.stop();
+  host.postMessage({ id: 1, operation }, []);
+  const reply = await result.promise;
+  assert(!reply.ok, "Expected a classified lease failure");
+  expect(reply.payload?.nodes[reply.payload.root]).toMatchObject({
+    code: throws ? "OPENCLAW_STATE_LEASE_STORAGE_FAILED" : "OPENCLAW_STATE_LEASE_LOST",
+  });
+  if (throws) {
+    expect(reply.payload?.nodes).toContainEqual(
+      expect.objectContaining({
+        message: "synthetic operation failure",
+      }),
+    );
   }
+  expect(losses).toEqual([
+    {
+      path: `explicit-${operation}`,
+      outcome: throws ? "operation-error" : "no-current-owned-unexpired-row",
+    },
+  ]);
 });

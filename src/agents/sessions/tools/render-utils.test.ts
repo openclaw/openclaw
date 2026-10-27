@@ -6,32 +6,13 @@ import { stripVTControlCharacters } from "node:util";
 import { type Component, Text } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { loadThemeFromPath } from "../../modes/interactive/theme/theme.js";
+import { readRenderContext as context } from "./read-render.test-support.js";
 import { createReadToolDefinition } from "./read.js";
 
 const theme = loadThemeFromPath(
   fileURLToPath(new URL("../../modes/interactive/theme/dark.json", import.meta.url)),
 );
 const tool = createReadToolDefinition("/workspace");
-
-function context(
-  filePath: string,
-  lastComponent?: Component,
-): Parameters<NonNullable<typeof tool.renderCall>>[2] {
-  return {
-    args: { path: filePath },
-    toolCallId: "read-render",
-    invalidate: () => {},
-    lastComponent,
-    state: {},
-    cwd: "/workspace",
-    executionStarted: true,
-    argsComplete: true,
-    isPartial: false,
-    expanded: true,
-    showImages: false,
-    isError: false,
-  };
-}
 
 function renderCall(filePath: string, lastComponent?: Component) {
   return tool.renderCall?.({ path: filePath }, theme, context(filePath, lastComponent));

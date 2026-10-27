@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -110,8 +111,13 @@ function nativeImport(root: string, entry: string, format: string) {
 function snapshot(root: string, directories: string[]) {
   const entries: Record<string, { mtime: bigint; hash: string | null }> = {};
   for (const directory of directories) {
-    for (const name of ["", ...fs.readdirSync(path.join(root, directory), { recursive: true })]) {
-      const relative = path.join(directory, String(name));
+    for (const name of [
+      "",
+      ...listDirectoryTreeStrictSync(path.join(root, directory)).map(
+        (walkEntry) => walkEntry.relativePath,
+      ),
+    ]) {
+      const relative = path.join(directory, name);
       const target = path.join(root, relative);
       const stat = fs.statSync(target, { bigint: true });
       const content = stat.isFile() ? fs.readFileSync(target) : null;

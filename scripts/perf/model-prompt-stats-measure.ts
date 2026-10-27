@@ -1,3 +1,6 @@
+// node --expose-gc --import ./scripts/tsx.mjs scripts/perf/model-prompt-stats-measure.ts
+// Use --ownership mutable|content|message and --owner <baseline-module> for paired
+// allocation runs; --mode timing keeps GC and event-loop measurements untraced.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import type { HeapProfiler } from "node:inspector";
@@ -100,10 +103,11 @@ if (values.lifecycle) {
         suppressPluginHooks: true,
       },
       options: undefined,
-      createObserver: (capturePromptStats: boolean) =>
+      createObserver: (capturePromptStats: boolean, captureByteStats: boolean) =>
         createModelObserver({
           streamContext,
           capturePromptStats,
+          captureByteStats,
           suppressPluginHooks: true,
         }),
     });
@@ -148,12 +152,12 @@ try {
 // Count record creation separately so instrumentation is outside the profiles.
 const records = new WeakSet<object>();
 // oxlint-disable-next-line typescript/unbound-method -- The probe forwards the original receiver.
-const originalSet = Map.prototype.set;
+const originalSet = WeakMap.prototype.set;
 let newRecords = 0;
 const set = mock.method(
-  Map.prototype,
+  WeakMap.prototype,
   "set",
-  function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+  function (this: WeakMap<object, unknown>, key: object, value: unknown) {
     if (typeof value === "object" && value !== null && "text" in value && "chars" in value) {
       if (!records.has(value)) {
         newRecords++;

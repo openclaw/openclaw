@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../../../api/gateway.ts";
+import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-} from "../chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
+import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
 import {
   createSidebarContentRecorder,
   loadedSidebarContent,
@@ -24,19 +22,63 @@ function createReferenceState(
   sessions: SessionWorkspaceHost["sessions"],
   methods: string[] = ["sessions.files.list", "sessions.files.set"],
 ): SessionWorkspaceHost {
-  return {
-    client: createGatewayBrowserClientFixture(),
-    connected: true,
-    connectionEpoch: 1,
+  return createSessionWorkspaceHost({
     handleOpenSidebar: createSidebarContentRecorder(),
     hello: gatewayHelloForMethods(methods),
     sessionKey: "agent:main:current",
-    sidebarContent: null,
     sessions,
-  };
+  });
 }
 
 describe("session workspace file reference resolution", () => {
+  it.each(["application/pdf", "application/octet-stream"])(
+    "previews only detected PDFs and retains message-qualified downloads (%s)",
+    async (mimeType) => {
+      const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async (sessionKey) => ({
+        sessionKey,
+        root: "/original-workspace",
+        file: {
+          path: "report.pdf",
+          workspacePath: "reports/report.pdf",
+          name: "report.pdf",
+          kind: "read",
+          missing: false,
+          previewKind: "unsupported",
+          mimeType,
+          size: 300_000,
+        },
+      }));
+      const state = createReferenceState(createSessionCapabilityFixture({ getFile }));
+      const target = {
+        path: "report.pdf",
+        sessionKey: "agent:other:original",
+        messageEntryId: "original-message",
+      };
+      await openSessionWorkspaceFile(state, target);
+      const content = await loadedSidebarContent(state);
+      expect(content.kind).toBe(mimeType === "application/pdf" ? "attachment" : "markdown");
+      if (content.kind !== "attachment" && content.kind !== "markdown") {
+        throw new Error("Expected a PDF preview or unsupported-file fallback");
+      }
+      expect(content.file).toMatchObject({
+        path: "reports/report.pdf",
+        absolutePath: "/original-workspace/reports/report.pdf",
+        root: "/original-workspace",
+      });
+      await content.file!.download(new AbortController().signal);
+      expect(downloadSessionFile).toHaveBeenLastCalledWith(
+        state,
+        {
+          sessionKey: target.sessionKey,
+          agentId: "other",
+          path: target.path,
+          messageEntryId: target.messageEntryId,
+        },
+        expect.any(AbortSignal),
+      );
+    },
+  );
+
   it("preserves a null file-capability result as an unavailable preview", async () => {
     const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async () => null);
     const listFiles = vi.fn();

@@ -5,19 +5,19 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
-import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
+import { openOpenClawAgentDatabaseReadOnly as readAgent } from "./openclaw-agent-db-readonly.js";
 import { AGENT_SCHEMA_COMPATIBILITY } from "./openclaw-agent-db-schema-compatibility.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
+  closeOpenClawAgentDatabasesForTest as closeAgent,
+  openOpenClawAgentDatabase as openAgent,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
-  closeOpenClawStateDatabaseForTest,
-  openExistingOpenClawStateDatabaseReadOnly,
-  openOpenClawStateDatabase,
+  closeOpenClawStateDatabaseForTest as closeState,
+  openExistingOpenClawStateDatabaseReadOnly as readState,
+  openOpenClawStateDatabase as openState,
 } from "./openclaw-state-db.js";
 import {
   getOpenClawStateRuntimeSchema,
@@ -26,11 +26,13 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function closeDatabases() {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  closeAgent();
+  closeState();
 }
 afterEach(closeDatabases);
 
+const voiceQuery = `SELECT key AS id FROM cache_entries WHERE scope = 'talk-client-voice-sessions'
+  AND CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.status') END = 'open'`;
 const cases = [
   {
     role: "state",
@@ -71,8 +73,7 @@ const cases = [
         name: "idx_agent_voice_session_open_scope",
         table: "cache_entries",
         primaryKey: "key",
-        query: `SELECT key AS id FROM cache_entries WHERE scope = 'talk-client-voice-sessions'
-          AND CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.status') END = 'open'
+        query: `${voiceQuery}
           AND CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.agentId') END = 'main'
           AND CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.sessionKey') END = 'agent:main:main'
           AND CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.origin') END = 'client'`,
@@ -81,9 +82,7 @@ const cases = [
         name: "idx_agent_voice_session_open_updated",
         table: "cache_entries",
         primaryKey: "key",
-        query: `SELECT key AS id FROM cache_entries WHERE scope = 'talk-client-voice-sessions'
-          AND CASE WHEN json_valid(value_json) THEN json_extract(value_json, '$.status') END = 'open'
-          AND updated_at <= 2`,
+        query: `${voiceQuery} AND updated_at <= 2`,
       },
     ],
     seed(db: EngineConnection) {
@@ -117,19 +116,16 @@ function createFixture(testCase: IndexCase) {
     agentId: "main",
     env: { OPENCLAW_STATE_DIR: tempDirs.make("sqlite-query-index-repair-") },
   };
-  const open = () =>
-    testCase.role === "state"
-      ? openOpenClawStateDatabase(options)
-      : openOpenClawAgentDatabase(options);
+  const open = () => (testCase.role === "state" ? openState(options) : openAgent(options));
   const database = open();
   testCase.seed(database.db);
   const read = async () => {
     if (testCase.role === "state") {
-      const reader = await openExistingOpenClawStateDatabaseReadOnly(options);
+      const reader = await readState(options);
       assert(reader);
       return { db: reader.db, [Symbol.dispose]: () => reader.walMaintenance.close() };
     }
-    const result = openOpenClawAgentDatabaseReadOnly(options);
+    const result = readAgent(options);
     assert(result.found);
     return { db: result.database.db, [Symbol.dispose]: () => result.database.close() };
   };
@@ -138,16 +134,17 @@ function createFixture(testCase: IndexCase) {
 
 function readRows(db: EngineConnection, testCase: IndexCase) {
   return [...new Set(testCase.indexes.map((index) => index.table))].map((table) =>
-    db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all(),
+    rows(db, `SELECT * FROM ${table} ORDER BY 1`),
   );
 }
 
+const rows = (db: EngineConnection, sql: string) => db.prepare(sql).all();
 function readSchema(db: EngineConnection) {
   return {
     cookie: db.prepare("PRAGMA schema_version").get(),
     version: db.prepare("PRAGMA user_version").get(),
-    metadata: db.prepare("SELECT * FROM schema_meta ORDER BY meta_key").all(),
-    objects: db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").all(),
+    metadata: rows(db, "SELECT * FROM schema_meta ORDER BY meta_key"),
+    objects: rows(db, "SELECT type, name, sql FROM sqlite_schema ORDER BY type, name"),
   };
 }
 
@@ -188,8 +185,8 @@ it.each(["fresh", "missing", "drifted"] as const)(
         version: { user_version: testCase.version },
       });
       for (const index of testCase.indexes) {
-        expect(database.db.prepare(index.query).all()).toEqual([{ id: "a" }, { id: "b" }]);
-        const plan = database.db.prepare(`EXPLAIN QUERY PLAN ${index.query}`).all();
+        expect(rows(database.db, index.query)).toEqual([{ id: "a" }, { id: "b" }]);
+        const plan = rows(database.db, `EXPLAIN QUERY PLAN ${index.query}`);
         expect(plan).toContainEqual(
           expect.objectContaining({ detail: expect.stringContaining(index.name) }),
         );
@@ -224,8 +221,10 @@ it.each(cases)(
       previousSchema,
       testCase.compatibility,
     );
-    const rows = readRows(database.db, testCase);
-    const expected = { rows, schema: removeQueryIndexes(testCase, database.path) };
+    const expected = {
+      rows: readRows(database.db, testCase),
+      schema: removeQueryIndexes(testCase, database.path),
+    };
     {
       using reader = await read();
       expect(snapshot(reader.db, testCase)).toEqual(expected);

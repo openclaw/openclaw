@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
@@ -22,32 +22,64 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
+beforeEach(() => {
+  useNoBundledPlugins();
+  vi.stubEnv("OPENCLAW_STATE_DIR", makePluginLoaderTempDir());
+});
+
+function enginePlugin(id: string, engineId?: string, dir?: string, body?: string) {
+  const plugin = writePlugin({
+    id,
+    dir,
+    filename: "index.cjs",
+    body: body ?? 'throw new Error("slot selection must not import runtime");',
+  });
+  if (engineId) {
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id,
+        kind: "context-engine",
+        contextEngineIds: [engineId],
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+      }),
+    );
+  }
+  return plugin;
+}
+
+function workspacePlugin(workspace: string, id: string, engineId?: string, registration = "") {
+  const marker = path.join(workspace, `${id}-imported`);
+  const plugin = enginePlugin(
+    id,
+    engineId,
+    path.join(workspace, ".openclaw", "extensions", id),
+    `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded");
+module.exports = { id: ${JSON.stringify(id)}, ${registration ? 'kind: "context-engine",' : ""} register(api) { ${registration} } };`,
+  );
+  return { ...plugin, marker };
+}
+
+function engineRegistration(id: string, addition: string) {
+  return `api.registerContextEngine(${JSON.stringify(id)}, () => ({
+    info: { id: ${JSON.stringify(id)}, name: "Synthetic Engine" },
+    ingest: async () => ({ ingested: true }),
+    assemble: async () => ({ messages: [], estimatedTokens: 0, systemPromptAddition: ${JSON.stringify(addition)} }),
+    compact: async () => ({ ok: true, compacted: false }),
+  }));`;
+}
+
+function metadata(config: OpenClawConfig) {
+  return loadPluginMetadataSnapshot({ config, allowCurrent: false, preferPersisted: false });
+}
 
 it.each([false, true])(
   "preserves declared ownership when repairing plugin-ID selection: %s",
   async (hasDeclaredOwner) => {
-    useNoBundledPlugins();
-    vi.stubEnv("OPENCLAW_STATE_DIR", makePluginLoaderTempDir());
     const plugins = [
       { id: "vendor-plugin", engineId: "canonical-engine" },
       ...(hasDeclaredOwner ? [{ id: "owner-a", engineId: "vendor-plugin" }] : []),
-    ].map(({ id, engineId }) => {
-      const plugin = writePlugin({
-        id,
-        filename: "index.cjs",
-        body: "throw new Error(" + JSON.stringify("slot selection must not import runtime") + ");",
-      });
-      fs.writeFileSync(
-        path.join(plugin.dir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id,
-          kind: "context-engine",
-          contextEngineIds: [engineId],
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        }),
-      );
-      return plugin;
-    });
+    ].map(({ id, engineId }) => enginePlugin(id, engineId));
     const config: OpenClawConfig = {
       plugins: {
         allow: plugins.map((plugin) => plugin.id),
@@ -55,12 +87,7 @@ it.each([false, true])(
         slots: { memory: "none", contextEngine: "vendor-plugin" },
       },
     };
-    const metadata = loadPluginMetadataSnapshot({
-      config,
-      allowCurrent: false,
-      preferPersisted: false,
-    });
-    const selected = await applySlotSelectionForPlugin(config, "vendor-plugin", metadata);
+    const selected = await applySlotSelectionForPlugin(config, "vendor-plugin", metadata(config));
     expect(selected.plugins?.slots?.contextEngine).toBe(
       hasDeclaredOwner ? "vendor-plugin" : "canonical-engine",
     );
@@ -68,22 +95,7 @@ it.each([false, true])(
 );
 
 it("repairs a mixed-case legacy plugin-ID slot before runtime import", async () => {
-  useNoBundledPlugins();
-  vi.stubEnv("OPENCLAW_STATE_DIR", makePluginLoaderTempDir());
-  const plugin = writePlugin({
-    id: "MiXeD-demo",
-    filename: "index.cjs",
-    body: 'throw new Error("slot selection must not import runtime");',
-  });
-  fs.writeFileSync(
-    path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: plugin.id,
-      kind: "context-engine",
-      contextEngineIds: ["canonical-engine"],
-      configSchema: EMPTY_PLUGIN_SCHEMA,
-    }),
-  );
+  const plugin = enginePlugin("MiXeD-demo", "canonical-engine");
   const config: OpenClawConfig = {
     plugins: {
       allow: ["mixed-demo"],
@@ -91,46 +103,16 @@ it("repairs a mixed-case legacy plugin-ID slot before runtime import", async () 
       slots: { memory: "none", contextEngine: "MiXeD-demo" },
     },
   };
-  const metadata = loadPluginMetadataSnapshot({
-    config,
-    allowCurrent: false,
-    preferPersisted: false,
-  });
-  const selected = await applySlotSelectionForPlugin(config, plugin.id, metadata);
+  const selected = await applySlotSelectionForPlugin(config, plugin.id, metadata(config));
   expect(selected.plugins?.slots?.contextEngine).toBe("canonical-engine");
 });
 
 it.each(["unapproved", "reassigned", "enabled", "allowlisted", "denied", "disabled"] as const)(
   "checks %s workspace ownership before module execution",
   async (policy) => {
-    useNoBundledPlugins();
     const workspaceDir = makePluginLoaderTempDir();
-    vi.stubEnv("OPENCLAW_STATE_DIR", makePluginLoaderTempDir());
-    const imported = path.join(workspaceDir, "imported");
-    const plugin = writePlugin({
-      id: "new-owner",
-      dir: path.join(workspaceDir, ".openclaw", "extensions", "new-owner"),
-      filename: "index.cjs",
-      body: `require("node:fs").writeFileSync(${JSON.stringify(imported)}, "loaded");
-module.exports = { id: "new-owner", register() {} };`,
-    });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: plugin.id,
-        kind: "context-engine",
-        contextEngineIds: ["existing-engine"],
-        configSchema: EMPTY_PLUGIN_SCHEMA,
-      }),
-    );
-    const incidentalImported = path.join(workspaceDir, "incidental-imported");
-    writePlugin({
-      id: "existing-engine",
-      dir: path.join(workspaceDir, ".openclaw", "extensions", "existing-engine"),
-      filename: "index.cjs",
-      body: `require("node:fs").writeFileSync(${JSON.stringify(incidentalImported)}, "loaded");
-module.exports = { id: "existing-engine", register() {} };`,
-    });
+    const plugin = workspacePlugin(workspaceDir, "new-owner", "existing-engine");
+    const incidental = workspacePlugin(workspaceDir, "existing-engine");
     const config: OpenClawConfig = {
       plugins: {
         slots: { memory: "none", contextEngine: "existing-engine" },
@@ -148,8 +130,8 @@ module.exports = { id: "existing-engine", register() {} };`,
       expect(record?.origin).toBe("workspace");
       const approved = policy === "enabled" || policy === "allowlisted";
       expect(record?.status).toBe(approved ? "loaded" : "disabled");
-      expect(fs.existsSync(imported)).toBe(approved);
-      expect(fs.existsSync(incidentalImported)).toBe(false);
+      expect(fs.existsSync(plugin.marker)).toBe(approved);
+      expect(fs.existsSync(incidental.marker)).toBe(false);
     } finally {
       await disposePluginRegistryInstances(registry);
     }
@@ -159,29 +141,10 @@ module.exports = { id: "existing-engine", register() {} };`,
 it.each(["unapproved", "denied", "disabled", "excluded", "approved"] as const)(
   "checks eligible collision owners before module execution: %s claimant",
   async (policy) => {
-    useNoBundledPlugins();
     const workspaceDir = makePluginLoaderTempDir();
-    vi.stubEnv("OPENCLAW_STATE_DIR", makePluginLoaderTempDir());
-    const markers = ["approved-owner", "other-owner"].map((id) => {
-      const marker = path.join(workspaceDir, `${id}-imported`);
-      const plugin = writePlugin({
-        id,
-        dir: path.join(workspaceDir, ".openclaw", "extensions", id),
-        filename: "index.cjs",
-        body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "loaded");
-module.exports = { id: ${JSON.stringify(id)}, register() {} };`,
-      });
-      fs.writeFileSync(
-        path.join(plugin.dir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id,
-          kind: "context-engine",
-          contextEngineIds: ["shared-engine"],
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        }),
-      );
-      return marker;
-    });
+    const markers = ["approved-owner", "other-owner"].map(
+      (id) => workspacePlugin(workspaceDir, id, "shared-engine").marker,
+    );
     const config: OpenClawConfig = {
       plugins: {
         slots: { memory: "none", contextEngine: "shared-engine" },
@@ -219,41 +182,14 @@ it.each(["unapproved", "denied", "disabled", "excluded"] as const)(
   "preserves an approved undeclared equal-ID engine against a %s claimant",
   async (policy) => {
     const { resolveContextEngine } = await import("../context-engine/registry.js");
-    useNoBundledPlugins();
     const workspaceDir = makePluginLoaderTempDir();
-    vi.stubEnv("OPENCLAW_STATE_DIR", makePluginLoaderTempDir());
-    const imported = path.join(workspaceDir, "owner-imported");
-    const claimantImported = path.join(workspaceDir, "claimant-imported");
-    writePlugin({
-      id: "existing-engine",
-      dir: path.join(workspaceDir, ".openclaw", "extensions", "existing-engine"),
-      filename: "index.cjs",
-      body: `require("node:fs").writeFileSync(${JSON.stringify(imported)}, "loaded");
-module.exports = { id: "existing-engine", kind: "context-engine", register(api) {
-  api.registerContextEngine("existing-engine", () => ({
-    info: { id: "existing-engine", name: "Existing Engine" },
-    ingest: async () => ({ ingested: true }),
-    assemble: async () => ({ messages: [], estimatedTokens: 0, systemPromptAddition: "existing-engine-used" }),
-    compact: async () => ({ ok: true, compacted: false }),
-  }));
-} };`,
-    });
-    const claimant = writePlugin({
-      id: "new-owner",
-      dir: path.join(workspaceDir, ".openclaw", "extensions", "new-owner"),
-      filename: "index.cjs",
-      body: `require("node:fs").writeFileSync(${JSON.stringify(claimantImported)}, "loaded");
-module.exports = { id: "new-owner", register() {} };`,
-    });
-    fs.writeFileSync(
-      path.join(claimant.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "new-owner",
-        kind: "context-engine",
-        contextEngineIds: ["existing-engine"],
-        configSchema: EMPTY_PLUGIN_SCHEMA,
-      }),
+    const owner = workspacePlugin(
+      workspaceDir,
+      "existing-engine",
+      undefined,
+      engineRegistration("existing-engine", "existing-engine-used"),
     );
+    const claimant = workspacePlugin(workspaceDir, "new-owner", "existing-engine");
     const config: OpenClawConfig = {
       plugins: {
         slots: { memory: "none", contextEngine: "existing-engine" },
@@ -276,9 +212,9 @@ module.exports = { id: "new-owner", register() {} };`,
       expect(registry.plugins.find((plugin) => plugin.id === "existing-engine")?.status).toBe(
         "loaded",
       );
-      expect(fs.existsSync(imported)).toBe(true);
+      expect(fs.existsSync(owner.marker)).toBe(true);
       expect(registry.plugins.find((plugin) => plugin.id === "new-owner")?.status).toBe("disabled");
-      expect(fs.existsSync(claimantImported)).toBe(false);
+      expect(fs.existsSync(claimant.marker)).toBe(false);
       const engine = await resolveContextEngine(config);
       try {
         expect(await engine.assemble({ sessionId: "synthetic", messages: [] })).toMatchObject({
@@ -299,30 +235,17 @@ it.each(["broken", "missing"] as const)(
     const { resolveContextEngine } = await import("../context-engine/registry.js");
     const { loadGatewayStartupPluginPlan } = await import("./gateway-startup-plugin-loader.js");
     const { planPluginUninstall } = await import("./uninstall.js");
-    useNoBundledPlugins();
     const stateDir = makePluginLoaderTempDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const imported = path.join(stateDir, "runtime-imported");
-    const plugin = writePlugin({
-      id: "vendor-plugin",
-      body: `require("node:fs").writeFileSync(${JSON.stringify(imported)}, "loaded");
+    const plugin = enginePlugin(
+      "vendor-plugin",
+      "canonical-engine",
+      undefined,
+      `require("node:fs").writeFileSync(${JSON.stringify(imported)}, "loaded");
 module.exports = { id: "vendor-plugin", kind: "context-engine", register(api) {
-  api.registerContextEngine("canonical-engine", () => ({
-    info: { id: "canonical-engine", name: "Synthetic Engine" },
-    ingest: async () => ({ ingested: true }),
-    assemble: async () => ({ messages: [], estimatedTokens: 0, systemPromptAddition: "custom-engine-used" }),
-    compact: async () => ({ ok: true, compacted: false }),
-  }));
+  ${engineRegistration("canonical-engine", "custom-engine-used")}
 } };`,
-    });
-    fs.writeFileSync(
-      path.join(plugin.dir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: plugin.id,
-        kind: "context-engine",
-        contextEngineIds: ["canonical-engine"],
-        configSchema: EMPTY_PLUGIN_SCHEMA,
-      }),
     );
     const config: OpenClawConfig = {
       plugins: {
@@ -332,13 +255,9 @@ module.exports = { id: "vendor-plugin", kind: "context-engine", register(api) {
         slots: { memory: "none" },
       },
     };
-    const metadata = loadPluginMetadataSnapshot({
-      config,
-      allowCurrent: false,
-      preferPersisted: false,
-    });
-    expect(metadata.byPluginId.get(plugin.id)?.contextEngineIds).toEqual(["canonical-engine"]);
-    const selected = await applySlotSelectionForPlugin(config, plugin.id, metadata);
+    const snapshot = metadata(config);
+    expect(snapshot.byPluginId.get(plugin.id)?.contextEngineIds).toEqual(["canonical-engine"]);
+    const selected = await applySlotSelectionForPlugin(config, plugin.id, snapshot);
     expect(selected.plugins?.slots?.contextEngine).toBe("canonical-engine");
     expect(fs.existsSync(imported)).toBe(false);
 
@@ -346,11 +265,7 @@ module.exports = { id: "vendor-plugin", kind: "context-engine", register(api) {
     fs.writeFileSync(configPath, JSON.stringify(selected));
     const persisted: OpenClawConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
     clearPluginMetadataLifecycleCaches();
-    const fresh = loadPluginMetadataSnapshot({
-      config: persisted,
-      allowCurrent: false,
-      preferPersisted: false,
-    });
+    const fresh = metadata(persisted);
     const plan = loadGatewayStartupPluginPlan({
       config: persisted,
       env: process.env,

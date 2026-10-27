@@ -1,16 +1,13 @@
 import { chromium, firefox } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  buildControlUiCspHeader,
-  computeInlineScriptHashes,
-} from "../../../src/gateway/control-ui-csp.ts";
-import {
   canRunPlaywrightChromium as canRunPlaywrightBrowser,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { fulfillWithControlUiCsp } from "./control-ui-csp.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightBrowser(chromiumExecutablePath);
@@ -57,20 +54,7 @@ describeControlUiE2e("Control UI strict CSP E2E", () => {
       });
       const page = await context.newPage();
       const gateway = await installMockGateway(page);
-      await page.route(server.baseUrl, async (route) => {
-        const response = await route.fetch();
-        const body = await response.text();
-        await route.fulfill({
-          body,
-          headers: {
-            ...response.headers(),
-            "content-security-policy": buildControlUiCspHeader({
-              inlineScriptHashes: computeInlineScriptHashes(body),
-            }),
-          },
-          response,
-        });
-      });
+      await page.route(server.baseUrl, (route) => fulfillWithControlUiCsp(route));
 
       const response = await page.goto(server.baseUrl);
       expect(response?.status()).toBe(200);

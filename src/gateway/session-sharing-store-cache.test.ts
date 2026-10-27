@@ -59,7 +59,10 @@ async function captureMutationAuthorization(
 }
 
 const withState = (run: (state: OpenClawTestState) => Promise<void>) =>
-  withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, run);
+  withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, (state) => {
+    setRuntimeConfigSnapshot({});
+    return run(state);
+  });
 
 async function readyContext(cfg: OpenClawConfig = {}) {
   const context = requestContext(cfg);
@@ -95,7 +98,6 @@ describe("session event authorization store work", () => {
   it("does not capture a replacement for an already prepared mutation target", async () => {
     await withState(async (state) => {
       const cfg: OpenClawConfig = {};
-      setRuntimeConfigSnapshot(cfg);
       const scope = { agentId: "main", sessionKey: "agent:main:prepared-target" };
       const entry = {
         sessionId: "prepared-session",
@@ -128,18 +130,12 @@ describe("session event authorization store work", () => {
         storePath: target.storePath,
         sessionId: entry.sessionId,
       };
-      const original = await captureMutationAuthorization({
-        ...params,
-        expectedTarget,
-      });
+      const original = await captureMutationAuthorization({ ...params, expectedTarget });
       expect(original.error).toBeNull();
       expect(original.authorization).toBeDefined();
       await sessionAccessor.upsertSessionEntryCore(scope, { ...entry, sessionId: "replacement" });
       expect((await captureMutationAuthorization(params)).error).toBeNull();
-      const replacement = await captureMutationAuthorization({
-        ...params,
-        expectedTarget,
-      });
+      const replacement = await captureMutationAuthorization({ ...params, expectedTarget });
       expect(replacement.error).toMatchObject({
         details: { code: "SESSION_MUTATION_AUTHORIZATION_CHANGED" },
       });
@@ -152,7 +148,6 @@ describe("session event authorization store work", () => {
     "bounds metadata work for %i event targets while refreshing membership",
     async (targetCount) => {
       await withState(async () => {
-        setRuntimeConfigSnapshot({});
         const keys = Array.from(
           { length: 64 },
           (_, index) => `agent:main:event-${targetCount}-${index}`,
@@ -239,15 +234,11 @@ describe("session mutation authorization store caches", () => {
     "bounds single-target metadata work and refreshes every %s guard",
     async (method) => {
       await withState(async () => {
-        setRuntimeConfigSnapshot({});
         const sessionKey = "agent:main:scalar-authorization";
         const entry = { sessionId: "scalar-authorization", updatedAt: 1 };
-        await sessionAccessor.upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+        await seedSession(sessionKey, entry);
         for (let index = 0; index < 24; index += 1) {
-          await sessionAccessor.upsertSessionEntryCore(
-            { agentId: "main", sessionKey: `agent:main:unrelated-${index}` },
-            { sessionId: `unrelated-${index}`, updatedAt: 1 },
-          );
+          await seedSession(`agent:main:unrelated-${index}`, { sessionId: `unrelated-${index}` });
         }
         sessionAccessor.listSessionEntriesCore({
           agentId: "main",
@@ -273,10 +264,7 @@ describe("session mutation authorization store caches", () => {
         expect(() => result.authorization!.assertCurrent()).not.toThrow();
         expect(inventory).not.toHaveBeenCalled();
 
-        await sessionAccessor.upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          { ...entry, updatedAt: 2, visibility: "draft" },
-        );
+        await seedSession(sessionKey, { ...entry, updatedAt: 2, visibility: "draft" });
         expect(() => result.authorization!.assertCurrent()).toThrow(
           "session is draft for this connection",
         );
@@ -365,26 +353,32 @@ describe("session mutation authorization store caches", () => {
     },
   );
 
-  it("fails a patchMany request when a nested target is incognito", async () => {
-    await withState(async () => {
-      setRuntimeConfigSnapshot({});
-      const sessionKey = "agent:main:dashboard:incognito-patch-many";
-      await seedSession(sessionKey, { sessionId: "session-incognito", incognito: true });
+  it.each([false, true])("bounds incognito patchMany discovery (over limit: %s)", (overLimit) =>
+    withState(async () => {
+      const key = "agent:main:dashboard:incognito-patch-many";
+      await seedSession(key, { sessionId: "session-incognito", incognito: true });
+      const targets = overLimit
+        ? Array.from({ length: 101 }, (_, index) => ({ key: `agent:main:over-limit-${index}` }))
+        : [];
       const result = await captureMutationAuthorization({
         method: "sessions.patchMany",
         requestParams: {
-          targets: [{ key: sessionKey, agentId: "main" }],
+          targets: [...targets, { key, agentId: "main" }],
           patch: { archived: true },
         },
         context: { getRuntimeConfig: () => ({}) } as never,
       });
-      expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
-    });
-  });
+      if (overLimit) {
+        expect(result.error).toBeNull();
+        expect(result.authorization).toBeDefined();
+      } else {
+        expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
+      }
+    }),
+  );
 
   it("authorizes every patchMany target before dispatch", async () => {
     await withState(async () => {
-      setRuntimeConfigSnapshot({});
       const sharedKey = "agent:main:batch-shared";
       const draftKey = "agent:main:batch-private";
       await seedSession(sharedKey, { sessionId: "session-shared", visibility: "shared" });
@@ -414,7 +408,6 @@ describe("session mutation authorization store caches", () => {
 
   it("reuses metadata for padded patchMany targets and fences replacements", async () => {
     await withState(async () => {
-      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:padded-batch-target";
       const prompt = "authorization does not need this prompt snapshot".repeat(512);
       await seedSession(sessionKey, {
@@ -453,31 +446,8 @@ describe("session mutation authorization store caches", () => {
     });
   });
 
-  it("bounds malformed patchMany target discovery before schema validation", async () => {
-    await withState(async () => {
-      setRuntimeConfigSnapshot({});
-      const hiddenKey = "agent:main:dashboard:incognito-over-limit";
-      await seedSession(hiddenKey, { sessionId: "session-hidden", incognito: true });
-      const targets = Array.from({ length: 101 }, (_, index) => ({
-        key: `agent:main:over-limit-${index}`,
-      }));
-      targets.push({ key: hiddenKey });
-
-      const result = await captureMutationAuthorization({
-        method: "sessions.patchMany",
-        requestParams: { targets, patch: { archived: true } },
-        context: { getRuntimeConfig: () => ({}) } as never,
-      });
-
-      expect(result.error).toBeNull();
-      expect(result.authorization).toBeDefined();
-    });
-  });
-
   it("uses resident metadata when one request resolves multiple targets", async () => {
     await withState(async () => {
-      const cfg = {};
-      setRuntimeConfigSnapshot(cfg);
       for (const [sessionKey, sessionId] of [
         ["agent:main:cache-one", "session-cache-one"],
         ["agent:main:cache-two", "session-cache-two"],
@@ -485,34 +455,20 @@ describe("session mutation authorization store caches", () => {
         await seedSession(sessionKey, { sessionId, visibility: "shared", category: "Cache Test" });
       }
 
-      const context = await readyContext(cfg);
-
-      const materializations = new Map<string, number>();
-      const originalListSessionEntries = sessionAccessor.listSessionEntriesCore;
-      vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation((scope) => {
-        const entries = originalListSessionEntries(scope);
-        if (scope?.clone === false) {
-          const storePath = scope.storePath ?? "default";
-          materializations.set(storePath, (materializations.get(storePath) ?? 0) + 1);
-        }
-        return entries;
-      });
+      const context = await readyContext();
+      const inventory = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
       const discoverySpy = vi.spyOn(
         targetsDiscovery,
         "resolveExistingAgentSessionStoreTargetsSync",
       );
 
-      expect(
-        (
-          await captureMutationAuthorization({
-            method: "sessions.groups.delete",
-            requestParams: { name: "Cache Test" },
-            context,
-          })
-        ).error,
-      ).toBeNull();
-
-      expect([...materializations.values()]).toEqual([]);
+      const result = await captureMutationAuthorization({
+        method: "sessions.groups.delete",
+        requestParams: { name: "Cache Test" },
+        context,
+      });
+      expect(result.error).toBeNull();
+      expect(inventory.mock.calls.filter(([scope]) => scope?.clone === false)).toEqual([]);
       expect(discoverySpy.mock.calls.filter((call) => call[1] === "main")).toHaveLength(0);
     });
   });

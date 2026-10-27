@@ -123,12 +123,7 @@ export function recordLobsterVisit(
 
 type LobsterFamiliarityTier = "shy" | "regular" | "friend";
 
-export type LobsterFamiliarity = {
-  tier: LobsterFamiliarityTier;
-  wary: boolean;
-  visits: number;
-  shoos: number;
-};
+export type LobsterFamiliarity = ReturnType<typeof getLobsterFamiliarity>;
 
 // Behavior multipliers per tier; the pet reads these once per load. Shy pets
 // keep visits short and arrive late; friends linger, return sooner, and
@@ -171,7 +166,7 @@ export function recordLobsterShoo(): void {
   writeFamiliarityCounters({ ...counters, shoos: counters.shoos + 1 });
 }
 
-export function getLobsterFamiliarity(): LobsterFamiliarity {
+export function getLobsterFamiliarity() {
   const { visits, shoos } = readFamiliarityCounters();
   const tier: LobsterFamiliarityTier = visits < 3 ? "shy" : visits < 15 ? "regular" : "friend";
   const wary = shoos >= 3 && shoos > visits * 0.3;

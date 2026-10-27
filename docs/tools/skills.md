@@ -775,6 +775,9 @@ workspace. A safety rescan every 30 minutes catches missed events, including on
 filesystems without reliable native notifications. Each discovery pass reads a shared root once for matching discovery
 limits and file policies, then applies each workspace's precedence separately.
 Unchanged roots need no discovery work between events and safety rescans.
+Sessions share immutable parsed skill facts for unchanged files while retaining
+their own eligibility, allowlists, and prompt selections. A changed file replaces
+those facts on refresh; snapshots already in use keep their original revision.
 
 Explicit OpenClaw actions request an immediate rescan: installing, updating,
 uninstalling, or editing a skill; changing configuration that affects skills;
@@ -880,6 +883,11 @@ Both tools use the current session's eligible catalog. Disabled, filtered,
 ineligible, and model-hidden skills are not added by search. Existing explicit
 user references remain separate. Search does not query ClawHub, install a
 skill, or grant permission to execute its commands.
+
+When Tool Search defers these tools in its default `tools` mode, call
+`dispatch_action` with `{"id":"skills_read","args":{"name":"<name>"}}` or
+`{"id":"skills_search","args":{"query":"<query>"}}`. The Skills prompt selects
+this invocation automatically; directly callable tools keep their normal syntax.
 
 Instruction-body indexing requires the effective native `skills_read` tool.
 When reads are denied or shadowed, search uses metadata only and performs no

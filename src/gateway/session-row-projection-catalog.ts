@@ -49,7 +49,6 @@ export function createSessionRowProjectionCatalog(params: {
   let pending: Promise<void> | undefined;
   let replacement: Promise<void> | undefined;
   let runtimeInvalidated = false;
-  let disposed = false;
   const lifecycle = new AbortController();
   const unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
     if (event.phase === "catalog-status") {
@@ -62,7 +61,7 @@ export function createSessionRowProjectionCatalog(params: {
       replacement = event.replacement;
       const settled = () => {
         // A superseded reload must not release its successor's catalog gate.
-        if (!disposed && replacement === event.replacement) {
+        if (!lifecycle.signal.aborted && replacement === event.replacement) {
           replacement = undefined;
           params.onInvalidated();
         }
@@ -86,7 +85,7 @@ export function createSessionRowProjectionCatalog(params: {
       return modelCatalog;
     },
     get isRefreshing() {
-      return !disposed && pending !== undefined;
+      return !lifecycle.signal.aborted && pending !== undefined;
     },
     get needsInitialRead() {
       return catalogDirty && modelCatalog === undefined;
@@ -99,9 +98,6 @@ export function createSessionRowProjectionCatalog(params: {
         ? AbortSignal.any([abortSignal, lifecycle.signal])
         : lifecycle.signal;
       signal.throwIfAborted();
-      if (!params.getModelCatalog) {
-        return;
-      }
       do {
         signal.throwIfAborted();
         if (replacement) {
@@ -118,7 +114,11 @@ export function createSessionRowProjectionCatalog(params: {
       }
     },
     refresh() {
-      if (disposed || !catalogDirty || (replacement && modelCatalog !== undefined)) {
+      if (
+        lifecycle.signal.aborted ||
+        !catalogDirty ||
+        (replacement && modelCatalog !== undefined)
+      ) {
         return Promise.resolve();
       }
       if (pending) {
@@ -127,7 +127,7 @@ export function createSessionRowProjectionCatalog(params: {
       const work = (async () => {
         const next = await params.getModelCatalog?.();
         // Replacement can begin while the catalog read yields.
-        if (disposed || (replacement && modelCatalog !== undefined)) {
+        if (lifecycle.signal.aborted || (replacement && modelCatalog !== undefined)) {
           return;
         }
         // A concurrent catalog change is adopted by the next publication.
@@ -144,7 +144,6 @@ export function createSessionRowProjectionCatalog(params: {
       return work;
     },
     dispose() {
-      disposed = true;
       lifecycle.abort(new Error("Session row projection is no longer active"));
       unsubscribe();
     },

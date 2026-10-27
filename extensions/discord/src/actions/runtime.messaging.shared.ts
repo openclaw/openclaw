@@ -321,8 +321,9 @@ export function createDiscordMessagingActionContext(params: {
   });
   const guildNameById = new Map<string, string | null>();
   const resolveGuildName = async (guildId: string): Promise<string | null> => {
-    if (guildNameById.has(guildId)) {
-      return guildNameById.get(guildId) ?? null;
+    const cached = guildNameById.get(guildId);
+    if (cached !== undefined) {
+      return cached;
     }
     try {
       const guildInfo = await discordMessagingActionRuntime.fetchGuildInfoDiscord(

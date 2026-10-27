@@ -31,7 +31,11 @@ import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-wr
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { createExactAssistantMessage } from "./transcript-message.test-support.js";
+import {
+  createExactAssistantMessage,
+  timedMessageEvent,
+  messageEvent,
+} from "./transcript-message.test-support.js";
 import { registerRecentTranscriptTextSnapshotTests } from "./transcript-recent-text.test-support.js";
 import {
   bindOwnedSessionTranscriptWrites,
@@ -181,13 +185,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         timestamp: new Date(0).toISOString(),
         cwd: fixture.sessionsDir(),
       },
-      {
-        type: "message",
-        id: "legacy-message",
-        parentId: null,
-        timestamp: new Date(params.message.timestamp).toISOString(),
-        message: params.message,
-      },
+      timedMessageEvent(
+        "legacy-message",
+        null,
+        new Date(params.message.timestamp).toISOString(),
+        params.message,
+      ),
     ];
     fs.writeFileSync(
       params.transcriptPath,
@@ -896,23 +899,19 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it("dedupes a delivery mirror without parsing historical message bodies", async () => {
     await writeTranscriptStore();
     const scope = transcriptScope();
-    const history = Array.from({ length: 500 }, (_, index) => ({
-      type: "message",
-      id: `history-${index}`,
-      parentId: index === 0 ? null : `history-${index - 1}`,
-      message: {
+    const history = Array.from({ length: 500 }, (_, index) =>
+      messageEvent(`history-${index}`, index === 0 ? null : `history-${index - 1}`, {
         role: "user",
         content: `archived-mirror-body-${index} ${"x".repeat(2_000)}`,
-      },
-    }));
+      }),
+    );
     await replaceTranscriptEvents(scope, [
       ...history,
-      {
-        type: "message",
-        id: "latest-reply",
-        parentId: "history-499",
-        message: createExactAssistantMessage({ text: "The current reply" }),
-      },
+      messageEvent(
+        "latest-reply",
+        "history-499",
+        createExactAssistantMessage({ text: "The current reply" }),
+      ),
     ]);
     await waitForSessionTranscriptIndexReconcile({
       agentId: "main",

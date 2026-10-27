@@ -30,21 +30,6 @@ import {
 } from "./runtime-plan/prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
 
-export type IsolatedCompletionRouteParams = {
-  config?: OpenClawConfig;
-  provider: string;
-  model: string;
-  authProfileId?: string;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  agentHarnessRuntimeOverride?: string;
-  preparedAuth?: Pick<
-    ModelCatalogDecisionParams,
-    "preparedAuthStore" | "metadataSnapshot" | "snapshot"
-  >;
-};
-
 /** A CLI runtime ref canonicalizes to its model provider but keeps the CLI as its explicit owner. */
 export function resolveIsolatedCompletionProvider(params: {
   provider: string;
@@ -159,9 +144,20 @@ export function resolveIsolatedCompletionAuthorizationOwner(
  * Planned runtime for an isolated completion in the supplied prepared generation.
  * Undefined when no owner or runnable auth attempt can serve the request.
  */
-export async function resolveIsolatedCompletionRuntime(
-  params: IsolatedCompletionRouteParams,
-): Promise<IsolatedCompletionRuntime | undefined> {
+export async function resolveIsolatedCompletionRuntime(params: {
+  config?: OpenClawConfig;
+  provider: string;
+  model: string;
+  authProfileId?: string;
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  agentHarnessRuntimeOverride?: string;
+  preparedAuth?: Pick<
+    ModelCatalogDecisionParams,
+    "preparedAuthStore" | "metadataSnapshot" | "snapshot"
+  >;
+}): Promise<IsolatedCompletionRuntime | undefined> {
   const config = params.config ?? {};
   try {
     const agentId = params.agentId ?? resolveDefaultAgentId(config);

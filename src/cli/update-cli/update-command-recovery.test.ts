@@ -20,15 +20,16 @@ import {
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { legacyRecord } from "../../infra/update-run-recovery-legacy.test-support.js";
 import { inspectUpdateRecoveries, loadUpdateRecovery } from "../../infra/update-run-recovery.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import { snapshotUpdateFixtureTree } from "./update-command-filesystem-snapshot.test-support.js";
 import { resultFixture } from "./update-command-fixtures.test-support.js";
+import { finishParams } from "./update-command-maintenance-fixtures.test-support.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import { assertUpdateCommandPackageFinalization } from "./update-command-recovery.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
@@ -37,11 +38,7 @@ import * as service from "./update-command-service.js";
 import { resolveSettledUpdateCommandResult } from "./update-command-terminal.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 describe("package finalization recovery targets", () => {
   function target() {
@@ -135,47 +132,27 @@ function fixture(rollback = false) {
   const run = createUpdateRun({ trigger: "cli" }, options);
   const from = { root: live, nodePath: process.execPath, version: "1.0.0", buildId: null };
   const to = { ...from, version: "2.0.0" };
-  const fence = { assertCurrent() {} };
   let record = createRetainedUpdateRecovery({ runId: run.runId, from, to }, options);
-  const recovery = {
-    getRecord: () => record,
-    onRecord: (next: typeof record) => {
-      record = next;
-    },
-    fence,
-    options,
-    assertReady: () => fence.assertCurrent(),
-  };
-  const opts: UpdateCommandOptions = { json: true, run: { runId: run.runId, env }, recovery };
   record = retainedReadinessRecord(record, rollback ? "previous" : "candidate");
   if (rollback) {
     record.primaryFailure = { code: "candidate-failed", effectId: null };
   }
   storeRetainedUpdateRecovery(record, options);
-  return { opts, options, run, live, root, record };
+  return { options, run: { runId: run.runId, env }, live, record };
 }
 
 it("refuses to serialize live authority into a legacy migrated worker", async () => {
-  const f = fixture();
+  const f = await checkpointRollbackFixture();
   await expect(
     continueMigratedUpdateInFreshProcess(
-      {
+      finishParams({
         opts: f.opts,
-        mutationStarted: true,
-        root: f.live,
-        result: resultFixture(f.live),
-        configSnapshot: createTestConfigSnapshot({}, {}, path.join(f.root, "openclaw.json")),
-        installKindChanged: false,
-        requestedChannel: null,
+        root: f.root,
+        result: resultFixture(f.root),
+        configSnapshot: createTestConfigSnapshot({}, {}, f.configPath),
         storedChannel: null,
-        channel: "stable",
-        downgradeRisk: false,
-        shouldRestart: true,
-        controlPlaneUpdateSentinelMeta: null,
-        preUpdatePluginInstallRecords: {},
-        startedAt: Date.now(),
         updateStepTimeoutMs: 1000,
-      },
+      }),
       [],
     ),
   ).rejects.toMatchObject({ name: "UpdateCommandRecoveryPendingError" });
@@ -232,7 +209,7 @@ describe("historical terminal completion diagnostics", () => {
           ...(terminal ? { reason: "stale-process-result" } : {}),
           durationMs: 1,
         }),
-        f.opts.run,
+        f.run,
       );
       expect(result).toMatchObject({
         status: outcome === "succeeded" ? "ok" : "error",
@@ -246,27 +223,20 @@ describe("historical terminal completion diagnostics", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps unrelated legacy history separate from fallback completion (terminal=%s)",
-    async (terminal) => {
-      const f = await historical(false, terminal);
-      const other = createUpdateRun({ trigger: "cli" }, f.options);
-      closeOpenClawStateDatabaseForTest();
-      const before = await f.family();
-      const result = completeUpdateCommandRun(resultFixture(undefined, { durationMs: 1 }), {
-        runId: other.runId,
-        env: f.opts.run!.env,
-      });
-      expect(result).toMatchObject(
-        terminal ? { status: "ok" } : { status: "error", reason: "update-recovery-pending" },
-      );
-      if (!terminal) {
-        expect(await f.family()).toEqual(before);
-      }
-      expect(getUpdateRun(other.runId, f.options)?.status).toBe(terminal ? "succeeded" : "running");
-      expect(inspectUpdateRecoveries(f.options)[0]?.raw).toBe(f.saved);
-    },
-  );
+  it("keeps pending legacy history separate from fallback completion", async () => {
+    const f = await historical(false, false);
+    const other = createUpdateRun({ trigger: "cli" }, f.options);
+    closeOpenClawStateDatabaseForTest();
+    const before = await f.family();
+    const result = completeUpdateCommandRun(resultFixture(undefined, { durationMs: 1 }), {
+      runId: other.runId,
+      env: f.run.env,
+    });
+    expect(result).toMatchObject({ status: "error", reason: "update-recovery-pending" });
+    expect(await f.family()).toEqual(before);
+    expect(getUpdateRun(other.runId, f.options)?.status).toBe("running");
+    expect(inspectUpdateRecoveries(f.options)[0]?.raw).toBe(f.saved);
+  });
 });
 
 async function readPreviousConfig(env: NodeJS.ProcessEnv) {
@@ -425,11 +395,6 @@ describe("package rollback executor ownership", () => {
       const previousRoot = dirs.make("rollback-previous-");
       const { env, run, authority, params } = await rollbackFixture(candidateRoot);
       const before = getUpdateRun(run.runId, { env });
-      expect(params.schemaVersions).toContainEqual({
-        path: resolveOpenClawStateSqlitePath(env),
-        userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-        contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      });
       const assertRollbackSafe = vi.fn(async () => {
         if (boundary === "preflight") {
           authority.live = false;

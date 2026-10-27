@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -43,7 +44,6 @@ import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { isPathInside } from "../path-guards.js";
 import { throwIfAborted } from "./abort.js";
-import { mirrorDeliveredPayloads } from "./deliver-transcript.js";
 import {
   messageActionRequesterMediaContext,
   type MessageActionInput,
@@ -54,6 +54,7 @@ import {
   applyMessageCrossContextMarker,
   executeGatewayAction,
 } from "./message-action-execution.js";
+import { recordGatewayActionSend } from "./message-action-gateway-transcript.js";
 import { collectAttachmentSources, normalizeSandboxMediaSource } from "./message-action-params.js";
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import {
@@ -67,14 +68,12 @@ import {
   resolveAndApplyOutboundReplyToId,
   resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
-import type { OutboundMirror } from "./mirror.js";
 import {
   executeSendAction,
   hasCorePresentationDelivery,
   materializeMessagePresentationFallback,
 } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
-import { summarizeOutboundPayloadForTransport } from "./payloads.js";
 
 // Keep the TTS runtime lazy so ordinary sends do not pay the provider import cost.
 const loadMessageActionTtsRuntime = createLazyRuntimeModule(
@@ -418,15 +417,15 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   const initialReply = resolveAndApplyOutboundReplyToId(params, {
     channel,
     toolContext: input.toolContext,
-    matchesToolContextTarget: channelPlugin?.threading?.matchesToolContextTarget,
+    matchesToolContextTarget: channelPlugin.threading?.matchesToolContextTarget,
   });
   const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
     cfg,
     to,
     accountId,
     toolContext: input.toolContext,
-    resolveAutoThreadId: channelPlugin?.threading?.resolveAutoThreadId,
-    resolveReplyTransport: channelPlugin?.threading?.resolveReplyTransport,
+    resolveAutoThreadId: channelPlugin.threading?.resolveAutoThreadId,
+    resolveReplyTransport: channelPlugin.threading?.resolveReplyTransport,
     replyToIsExplicit: initialReply?.source === "explicit",
   });
   // Route resolution is read-only; persist only after the send succeeds so a
@@ -544,8 +543,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   const usesGatewayAction =
     !requiresCoreDelivery &&
     Boolean(gateway) &&
-    (channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway" ||
-      channelPlugin?.outbound?.deliveryMode === "gateway");
+    (channelPlugin.actions?.resolveExecutionMode?.({ action }) === "gateway" ||
+      channelPlugin.outbound?.deliveryMode === "gateway");
   if (usesGatewayAction && !dryRun) {
     let stagedPayload = sendPayload.payload;
     const mediaUrls = sendPayload.mediaUrls;
@@ -595,39 +594,33 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
           channel,
           action,
           to,
+          accountId: accountId ?? undefined,
           handledBy: "plugin",
           payload,
           dryRun,
         }),
       });
-  const resolveTranscriptMirror = (): OutboundMirror | undefined =>
-    !dryRun && input.transcriptMirror
-      ? {
-          ...input.transcriptMirror,
-          text: sendPayload.message,
-          mediaUrls: sendPayload.mediaUrls,
-        }
-      : outboundRoute && !dryRun && input.suppressTranscriptMirror !== true
-        ? {
-            sessionKey: outboundRoute.sessionKey,
-            agentId,
-            text: sendPayload.message,
-            mediaUrls: sendPayload.mediaUrls,
-            idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
-          }
-        : undefined;
   if (gatewayPluginAction) {
     const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
     if (!deliveryFact || deliveryFact.status === "settled") {
       await commitOutboundSessionRoute();
-      // The Gateway owns source-reply mirroring; other conversations use the
-      // delivery owner's destination controller, outside the sending turn's fence.
-      const mirror = resolveTranscriptMirror();
-      const sourceSessionKey = input.sourceReplySessionKey ?? input.sessionKey;
-      if (mirror && !deliveryFact?.partialDelivery && mirror.sessionKey !== sourceSessionKey) {
-        await mirrorDeliveredPayloads({
-          delivery: { cfg, channel, to, mirror: { ...mirror, deferToSessionLane: true } },
-          payloads: [summarizeOutboundPayloadForTransport(sendPayload.payload)],
+      // The Gateway owns source-reply history; other conversations get the
+      // confirmed send through the destination history owner.
+      if (!dryRun && outboundRoute && !deliveryFact?.partialDelivery) {
+        await recordGatewayActionSend({
+          cfg,
+          channel,
+          to,
+          accountId: ctx.accountId ?? undefined,
+          route: outboundRoute,
+          producerSessionKey: input.sourceReplySessionKey ?? input.sessionKey,
+          agentId,
+          payload: sendPayload.payload,
+          deliveryId:
+            normalizeOptionalString(params.idempotencyKey) ??
+            input.deliveryIntentId ??
+            randomUUID(),
+          signal: ctx.abortSignal,
         });
       }
     }
@@ -639,7 +632,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   }
 
   const useCorePresentationDelivery = Boolean(
-    sendPayload.payload.presentation && hasCorePresentationDelivery(channelPlugin?.outbound),
+    sendPayload.payload.presentation && hasCorePresentationDelivery(channelPlugin.outbound),
   );
   if (sendPayload.payload.presentation && !useCorePresentationDelivery) {
     const fallbackMessage = materializeMessagePresentationFallback({
@@ -662,9 +655,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       // Model-authored sends get the failure back and resend it themselves; every
       // other caller only reports the error, so recovery keeps its replay right.
       deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
-      // Both delivery paths must commit a first-contact route before mirroring.
       onSendAccepted: commitOutboundSessionRoute,
-      mirror: resolveTranscriptMirror(),
+      transcriptRoute: outboundRoute ?? undefined,
       silent: sendPayload.silent ?? undefined,
     },
     to,
@@ -703,6 +695,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     channel,
     action,
     to,
+    accountId: accountId ?? undefined,
     handledBy: send.handledBy,
     payload: send.payload,
     ...(send.deliveredText ? { deliveredText: send.deliveredText } : {}),

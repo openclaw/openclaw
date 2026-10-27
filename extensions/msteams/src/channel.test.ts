@@ -645,24 +645,16 @@ describe("Teams named-account integration", () => {
       { allowFrom: [`user:${rootApprover}`], enabled: undefined, tenantId: undefined },
     );
 
-    expect(
+    const authorize = (senderId: string) =>
       msTeamsApprovalAuth.authorizeActorAction({
         cfg,
         accountId: "support",
-        senderId: supportApprover,
+        senderId,
         action: "approve",
         approvalKind: "exec",
-      }),
-    ).toEqual({ authorized: true });
-    expect(
-      msTeamsApprovalAuth.authorizeActorAction({
-        cfg,
-        accountId: "support",
-        senderId: rootApprover,
-        action: "approve",
-        approvalKind: "exec",
-      }),
-    ).toEqual({
+      });
+    expect(authorize(supportApprover)).toEqual({ authorized: true });
+    expect(authorize(rootApprover)).toEqual({
       authorized: false,
       reason: "❌ You are not authorized to approve exec requests on Microsoft Teams.",
     });

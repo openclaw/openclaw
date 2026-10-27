@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
-import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
+import { appMetadata, codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
@@ -572,17 +572,7 @@ describe("Codex marketplace-qualified plugin inventory", () => {
   });
 });
 
-const approvalAppMetadata = {
-  id: "linear",
-  name: "linear",
-  description: null,
-  iconUrl: null,
-  iconUrlDark: null,
-  distributionChannel: null,
-  installUrl: null,
-  pluginDisplayNames: [],
-  toolSummaries: null,
-};
+const approvalAppMetadata = appMetadata("linear");
 
 describe("Codex owned app approval metadata", () => {
   it("keeps approval checks conservative when tool metadata is absent", () => {

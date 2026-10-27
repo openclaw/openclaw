@@ -1,12 +1,16 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type { UserModelAccount } from "@openclaw/gateway-protocol";
-import type { GatewayAgentRow, ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
+import type {
+  CyberAccessProgram,
+  GatewayAgentRow,
+  ModelCatalogEntry,
+  ModelCatalogResult,
+} from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import type { DurableDraftModelSelection } from "../../lib/chat/composer-draft-store.runtime.ts";
 import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
-import { normalizeChatFastModeInput } from "../../lib/chat/model-select-state.ts";
 import {
   hasUnrestrictedModelCatalogSnapshot,
   invalidateModelCatalogCache,
@@ -17,7 +21,7 @@ import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { renderChatModelAccountControl } from "../chat/components/chat-model-account-control.ts";
-import type { ChatModelControlsProps } from "../chat/components/chat-model-controls.tsx";
+import type { ChatModelControlsProps } from "../chat/components/chat-model-controls.types.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { CatalogTargetDiscovery } from "./catalog-target.ts";
 import { resolveHostedEnvironments, resolveHostEnvironmentChoice } from "./hosted-environments.ts";
@@ -31,6 +35,7 @@ import {
   createEmptyDraftModelMetadata,
   isDraftAccountModelAvailable,
   resolveDraftModelControls,
+  resolveDraftAccessProgram,
   resolveDraftModelSelectionBlockedReason,
   type NewSessionModelMetadata,
 } from "./model-target.ts";
@@ -47,7 +52,6 @@ export type NewSessionModelRenderOptions = {
 };
 
 export class NewSessionModelControl extends NewSessionModelSelection {
-  private selectionGeneration = 0;
   private initialModel: string | undefined;
   private initialModelPending = false;
   private agentId = "";
@@ -62,7 +66,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   private draftAccount:
     | (Pick<UserModelAccount, "authProfileId" | "provider"> & { model: string })
     | undefined;
-  private restoringPreference = false;
   private pendingPreference: NewSessionPreference | null | undefined;
   private pendingAgent: GatewayAgentRow | undefined;
   private pendingContext: ApplicationContext | undefined;
@@ -120,12 +123,55 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         },
         onResult: (result) => {
           if (this.ownsMetadata()) {
-            this.publishMetadataCatalog(result);
+            this.assignMetadataCatalog(result);
+            this.metadataState.accountSelection = result.accountSelection;
+            if (
+              !this.draftAccount &&
+              this.pendingSelectionGeneration === this.selectionGeneration
+            ) {
+              if (this.initialModelPending && !result.modelSelectionPolicy?.restricted) {
+                this.resetSelection(this.initialModel);
+              } else {
+                this.restorePreference();
+              }
+            }
+            this.initialModelPending = false;
+            if (!this.draftAccount && result.modelSelectionPolicy?.restricted && this.selected) {
+              const selection = reconcileDraftModelSelection({
+                model: this.selected,
+                agentRuntime: this.agentRuntime,
+                thinkingLevel: this.thinkingLevel,
+                fastMode: this.fastMode,
+                modelSelectionPolicy: result.modelSelectionPolicy,
+                catalog: result.models,
+              });
+              this.applyModelSelection(selection);
+            }
+            this.restoringPreference = false;
+            this.notify();
           }
         },
         onError: () => {
           if (this.ownsMetadata()) {
-            this.metadataFailed();
+            if (
+              !this.metadataState.retired &&
+              !this.metadataState.modelSelectionPolicy?.restricted &&
+              !this.draftAccount &&
+              this.pendingSelectionGeneration === this.selectionGeneration
+            ) {
+              if (this.initialModelPending) {
+                this.resetSelection(this.initialModel);
+                this.initialModelPending = false;
+              } else if (this.pendingPreference) {
+                this.selected = this.pendingPreference.model ?? "";
+                this.agentRuntime = this.pendingPreference.agentRuntime;
+                this.thinkingLevel = this.pendingPreference.thinkingLevel ?? "";
+                this.fastMode = this.pendingPreference.fastMode;
+                this.cyberAccessProgram = this.pendingPreference.cyberAccessProgram;
+              }
+            }
+            this.restoringPreference = false;
+            this.updateMetadataState({ ...this.metadataState, status: "error" });
           }
         },
       },
@@ -207,53 +253,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       displayOnly,
       ...resolveModelCatalogState(result),
     };
-  }
-
-  private publishMetadataCatalog(result: ModelCatalogResult) {
-    this.assignMetadataCatalog(result);
-    this.metadataState.accountSelection = result.accountSelection;
-    if (!this.draftAccount && this.pendingSelectionGeneration === this.selectionGeneration) {
-      if (this.initialModelPending && !result.modelSelectionPolicy?.restricted) {
-        this.resetSelection(this.initialModel);
-      } else {
-        this.restorePreference();
-      }
-    }
-    this.initialModelPending = false;
-    if (!this.draftAccount && result.modelSelectionPolicy?.restricted && this.selected) {
-      const selection = reconcileDraftModelSelection({
-        model: this.selected,
-        agentRuntime: this.agentRuntime,
-        thinkingLevel: this.thinkingLevel,
-        fastMode: this.fastMode,
-        modelSelectionPolicy: result.modelSelectionPolicy,
-        catalog: result.models,
-      });
-      this.applyModelSelection(selection);
-    }
-    this.restoringPreference = false;
-    this.notify();
-  }
-
-  private metadataFailed() {
-    if (
-      !this.metadataState.retired &&
-      !this.metadataState.modelSelectionPolicy?.restricted &&
-      !this.draftAccount &&
-      this.pendingSelectionGeneration === this.selectionGeneration
-    ) {
-      if (this.initialModelPending) {
-        this.resetSelection(this.initialModel);
-        this.initialModelPending = false;
-      } else if (this.pendingPreference) {
-        this.selected = this.pendingPreference.model ?? "";
-        this.agentRuntime = this.pendingPreference.agentRuntime;
-        this.thinkingLevel = this.pendingPreference.thinkingLevel ?? "";
-        this.fastMode = this.pendingPreference.fastMode;
-      }
-    }
-    this.restoringPreference = false;
-    this.updateMetadataState({ ...this.metadataState, status: "error" });
   }
 
   private selectDraftAccount(account: UserModelAccount, model: string): Promise<boolean> {
@@ -445,6 +444,21 @@ export class NewSessionModelControl extends NewSessionModelSelection {
           ? inference
           : undefined,
     });
+  }
+
+  accessProgramForSubmission(): CyberAccessProgram | undefined {
+    return (
+      this.cyberAccessProgram ??
+      (this.ownsMetadata() && this.metadataState.status === "ready"
+        ? resolveDraftAccessProgram({
+            model: this.effectiveModel,
+            agentRuntime: this.agentRuntime,
+            agent: this.pendingAgent,
+            defaults: this.pendingContext?.sessions.state.result?.defaults,
+            ...this.metadataState,
+          })
+        : undefined)
+    );
   }
 
   modelForSubmission(): string {
@@ -682,6 +696,12 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       sending: options.sending,
       sessionKey,
       selectedSession: undefined,
+      requestedAccessProgram:
+        this.cyberAccessProgram ??
+        (this.ownsMetadata() && this.metadataState.status === "ready"
+          ? modelControls.accessProgramDefault
+          : undefined),
+      daybreakAccessProgram: this.daybreakAccessProgram,
       selectedAgentRuntime: this.agentRuntime,
       sessionsResult: agentDefaultsAvailable ? sourceResult : null,
       stream: null,
@@ -698,23 +718,9 @@ export class NewSessionModelControl extends NewSessionModelSelection {
           this.catalogTargets.retry(this.metadataClient, this.agentId);
         }
       },
-      onThinkingSelect: (value) => {
-        this.selectionGeneration += 1;
-        this.restoringPreference = false;
-        this.thinkingLevel = value;
-        this.markExplicitSelection();
-        this.persistSelection();
-        this.onDraftSelectionChange?.();
-        this.notify();
-      },
-      onFastModeSelect: (value) => {
-        this.selectionGeneration += 1;
-        this.restoringPreference = false;
-        this.fastModeSelected = true;
-        this.fastMode = normalizeChatFastModeInput(value);
-        this.persistSelection();
-        this.notify();
-      },
+      onThinkingSelect: this.selectThinkingLevel,
+      onAccessProgramSelect: this.selectAccessProgram,
+      onFastModeSelect: this.selectFastMode,
       onContextWindowSelect: (value) => {
         this.selectionGeneration += 1;
         this.restoringPreference = false;

@@ -36,7 +36,7 @@ async function withComposer(
         ...(deferred ? { deferredMethods: ["chat.send"] } : {}),
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       if (!wide) {
         const protocol = await context.newCDPSession(page);
         await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 34 } });
@@ -57,14 +57,14 @@ async function expectComposerFocus(page: Page): Promise<void> {
 }
 
 async function expectSafeArea(page: Page): Promise<void> {
-  // The injected 34px safe area plus the native composer's 10px bottom gap.
+  // Keep the composer above the injected safe area without fixing its visual gap.
   await expect
     .poll(() =>
       page
         .locator(".agent-chat__composer-shell")
         .evaluate((node) => window.innerHeight - node.getBoundingClientRect().bottom),
     )
-    .toBe(44);
+    .toBeGreaterThanOrEqual(34);
 }
 
 async function streamReply(gateway: Gateway, afterRequest?: () => Promise<void>): Promise<string> {

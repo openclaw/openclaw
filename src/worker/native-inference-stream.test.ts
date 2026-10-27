@@ -25,6 +25,10 @@ function message(content: AssistantMessage["content"]): AssistantMessage {
   });
 }
 function native(credential = secret): NativeRuntimeResolved {
+  const minSize = credential.length <= 16 ? 1 : 8;
+  const prefixes = Array.from({ length: Math.max(0, credential.length - minSize) }, (_, index) =>
+    credential.slice(0, minSize + index),
+  );
   return {
     model,
     workspacePath: "/fixture",
@@ -40,18 +44,8 @@ function native(credential = secret): NativeRuntimeResolved {
         throw new Error("credential reflection");
       }
     },
-    hasCredentialPrefix: (value) => {
-      if (typeof value !== "string") {
-        return false;
-      }
-      const minSize = credential.length <= 16 ? 1 : 8;
-      for (let size = credential.length - 1; size >= minSize && size > 0; size--) {
-        if (value.endsWith(credential.slice(0, size))) {
-          return true;
-        }
-      }
-      return false;
-    },
+    hasCredentialPrefix: (value) =>
+      typeof value === "string" && prefixes.some((prefix) => value.endsWith(prefix)),
   };
 }
 async function collect(stream: ReturnType<ReturnType<typeof createNativeInferenceStreamGuard>>) {

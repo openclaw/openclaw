@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
+import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
-import { rewindSessionToMessage } from "./session-accessor.sqlite-message-cut.js";
 import {
   forkSessionEntryFromParentTargetWithPatch,
   forkSessionTranscriptFromParent,
@@ -15,6 +15,7 @@ import {
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageWrites } from "./session-actor-storage-contract.js";
+import { transcriptTurnCommand } from "./session-actor-transcript.test-support.js";
 
 // The real adapters must never open native storage or allocate database workers.
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -75,19 +76,11 @@ async function fixture(childAgent = "main") {
     incognito: true as const,
   };
   const events = [
-    {
-      type: "session",
-      id: entry.sessionId,
-      version: 3,
-      cwd: "/synthetic",
-      timestamp: "2026-01-01T00:00:00.000Z",
-    },
+    { type: "session", id: entry.sessionId, version: 3, cwd: "/synthetic" },
     { type: "message", id: "u1", parentId: null, message: { role: "user", content: "Question" } },
     { type: "message", id: "a1", parentId: "u1", message: answer() },
   ];
-  expect(await parent.create({ entry, transcriptEvents: events })).toMatchObject({
-    kind: "committed",
-  });
+  await parent.create({ entry, transcriptEvents: events });
   const childKey = `agent:${childAgent}:dashboard:incognito-child-fork`;
   const child = await acquire(childAgent, childKey);
   const forkInput = {
@@ -100,38 +93,74 @@ async function fixture(childAgent = "main") {
   return { parent, child, childKey, entry, forkInput };
 }
 
+it("publishes memory replacements after projection without exposing private facts", async () => {
+  const f = await acquire("main", "agent:main:dashboard:incognito-row-change");
+  const entry = {
+    sessionId: "private-row-change",
+    createdAt: 1,
+    updatedAt: 1,
+    label: "Private label must not enter lifetime facts",
+    incognito: true as const,
+  };
+  expect(await f.create({ entry })).toMatchObject({ kind: "committed" });
+  const original = await f.readEntry();
+  const events: Array<["projection" | "observer", SessionRowChange]> = [];
+  const stopProjection = sessionChanges.subscribeProjection((change) => {
+    events.push(["projection", change]);
+    expect(f.owner.readSession(f.scope.sessionKey, authority)?.entry?.updatedAt).toBe(2);
+  });
+  const stopObserver = sessionChanges.subscribe((change) => events.push(["observer", change]));
+  const write = (rollback: boolean) =>
+    f.actor.storage!.mutate(
+      {
+        type: "session.entry.replace",
+        input: { expected: original, entry: { ...original!, updatedAt: 2 } },
+      },
+      authority,
+      {
+        beforeCommit() {
+          expect(events).toEqual([]);
+          if (rollback) {
+            throw new Error("rollback");
+          }
+        },
+      },
+    );
+  try {
+    await expect(write(true)).resolves.toMatchObject({
+      kind: "rolled-back",
+      error: { message: "rollback" },
+    });
+    expect(f.owner.readSession(f.scope.sessionKey, authority)?.entry?.updatedAt).toBe(1);
+    expect(events).toEqual([]);
+    await expect(write(false)).resolves.toMatchObject({ kind: "committed" });
+    const scope = f.scope;
+    expect(events.map(([phase]) => phase)).toEqual(["projection", "observer"]);
+    expect(events[0]![1]).toEqual({
+      ...scope,
+      facts: {
+        kind: "replacement",
+        communicationBinding: JSON.stringify([entry.sessionId, ...Array(12).fill(null)]),
+        membership: [scope.sessionKey, null, [], {}, entry.sessionId],
+        lifecycleChanged: false,
+      },
+    });
+    expect(events[1]![1]).toEqual(scope);
+  } finally {
+    stopObserver();
+    stopProjection();
+  }
+});
+
 it.each(["main", "research"])(
   "prepares current %s forks through the selected memory owner",
   async (childAgent) => {
     const explicit = childAgent === "main";
     const { parent, child, entry, forkInput } = await fixture(childAgent);
-    const append = parent.actor.appendTranscriptEvent(
-      {
-        commandId: "latest-answer",
-        phaseId: "preparation",
-        append: {
-          kind: "metadata",
-          input: {
-            scope: {
-              ...parent.scope,
-              sessionId: entry.sessionId,
-              expectedLifecycleRevision: entry.lifecycleRevision,
-            },
-            event: {
-              type: "message",
-              id: "a2",
-              parentId: "a1",
-              timestamp: "2026-01-01T00:00:01.000Z",
-            },
-            message: {
-              messageJson: JSON.stringify(answer("Latest answer")),
-              cwd: "/synthetic",
-              validateTurn: false,
-            },
-            options: {},
-          },
-        },
-      },
+    const append = parent.actor.appendToolResult(
+      transcriptTurnCommand({ ...parent.scope, sessionId: entry.sessionId }, "latest-answer", [
+        { eventId: "a2", message: answer("Latest answer") },
+      ]),
       authority,
     );
     const input = {
@@ -162,24 +191,6 @@ it.each(["main", "research"])(
     expect(await child.readHistory()).toMatchObject(history(prepared.events));
   },
 );
-
-it("rewinds current memory state while preserving explicit conflicts", async () => {
-  const { parent, entry } = await fixture();
-  const params = { ...parent.scope, entryId: "u1" };
-  expect(
-    await parent.run(() =>
-      rewindSessionToMessage(params, {
-        sessionId: "replaced-session",
-        lifecycleRevision: entry.lifecycleRevision,
-      }),
-    ),
-  ).toEqual({ status: "conflict" });
-  expect(await parent.run(() => rewindSessionToMessage(params))).toMatchObject({
-    status: "created",
-    editorText: "Question",
-    entry: { incognito: true },
-  });
-});
 
 it("does not create a missing cross-agent source while preparing a child", async () => {
   const child = await acquire("research", "agent:research:dashboard:incognito-orphan-fork");

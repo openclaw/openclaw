@@ -97,40 +97,30 @@ it("flushes only the accepted prefix visible at call time", async () => {
   await Promise.all([completion(active), completion(late)]);
 });
 
-it("preserves the first failure (undefined) in a sealed prefix", async () => {
-  const failure = undefined;
+it.each([true, false])("keeps strict flush inside its captured prefix (%s)", async (fails) => {
   const { first, queue, active } = blockedQueue();
-  const laterFailure = new Error("later failure");
-  const later = queue.enqueue(() => {
-    throw laterFailure;
-  });
-  queue.seal();
-  const ordinaryFlush = queue.flush();
-  const strictFlush = queue.flush({ requireSuccess: true });
-
-  first.reject(failure);
-  await Promise.all([
-    expect(ordinaryFlush).resolves.toBeUndefined(),
-    expect(strictFlush).rejects.toBe(failure),
-    expect(completion(active)).rejects.toBe(failure),
-    expect(completion(later)).rejects.toBe(laterFailure),
-  ]);
-  expect(queue.isIdle).toBe(true);
-});
-
-it("does not reject a successful flush prefix for a later synchronous failure", async () => {
-  const { first, queue, active } = blockedQueue();
-  const prefix = queue.flush({ requireSuccess: true });
-  const failure = new Error("outside the captured prefix");
+  const early = fails ? undefined : queue.flush({ requireSuccess: true });
+  const failure = new Error("later failure");
   const later = queue.enqueue(() => {
     throw failure;
   });
-  const laterFailure = expect(completion(later)).rejects.toBe(failure);
-
-  first.resolve();
-
-  await Promise.all([expect(prefix).resolves.toBeUndefined(), laterFailure]);
-  await expect(queue.flush({ requireSuccess: true })).rejects.toBe(failure);
-  await completion(active);
+  queue.seal();
+  const strict = early ?? queue.flush({ requireSuccess: true });
+  const ordinary = queue.flush();
+  const checks = Promise.all([
+    expect(ordinary).resolves.toBeUndefined(),
+    fails ? expect(strict).rejects.toBeUndefined() : expect(strict).resolves.toBeUndefined(),
+    fails
+      ? expect(completion(active)).rejects.toBeUndefined()
+      : expect(completion(active)).resolves.toBeUndefined(),
+    expect(completion(later)).rejects.toBe(failure),
+  ]);
+  if (fails) {
+    first.reject(undefined);
+  } else {
+    first.resolve();
+  }
+  await checks;
+  await expect(queue.flush({ requireSuccess: true })).rejects.toBe(fails ? undefined : failure);
   expect(queue.isIdle).toBe(true);
 });

@@ -18,7 +18,6 @@ import {
   buildAuthProfileUnusableHint,
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
-  formatOAuthRefreshFailureLoginCommandMarkdown,
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
 import { shouldUseMainOwnerForLocalOAuthCredential } from "../agents/auth-profiles/ownership.js";
@@ -35,6 +34,7 @@ import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import { updateConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { isRecord } from "../utils.js";
@@ -472,7 +472,7 @@ export async function inspectAuthProfileHealth(params: {
           const command = buildOAuthRefreshFailureLoginCommand(provider, {
             profileId: provider === rawProvider ? profileId : undefined,
           });
-          const commandMarkdown = formatOAuthRefreshFailureLoginCommandMarkdown(command);
+          const commandMarkdown = formatInlineCodeSpan(command);
           refreshErrors.set(
             profileId,
             classified.reason

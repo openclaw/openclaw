@@ -20,10 +20,6 @@ function withBinds(binds: string[], overrides?: Partial<SandboxContext>) {
   return createSandbox({ ...overrides, docker: { ...createSandbox().docker, binds } });
 }
 
-function atWorkspace(workspaceDir: string) {
-  return createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir });
-}
-
 function resolve(sandbox: SandboxContext, filePath: string) {
   return resolveSandboxFsPathWithMounts({
     filePath,
@@ -33,6 +29,13 @@ function resolve(sandbox: SandboxContext, filePath: string) {
     mounts: buildSandboxFsMounts(sandbox),
   });
 }
+
+const readonlyChild = ["/tmp/data:/tmp/data:rw", "/tmp/data/secrets:/tmp/data/secrets:ro"];
+const writableChild = [
+  "/tmp/readonly-parent:/tmp/readonly-parent:ro",
+  "/tmp/readonly-parent/work:/tmp/readonly-parent/work:rw",
+];
+const nonHomeWorkspace = path.join(path.parse(os.homedir()).root, "openclaw-non-home-workspace");
 
 describe("sandbox bind mounts", () => {
   it("returns only unique writable bind host roots", () => {
@@ -56,14 +59,9 @@ describe("sandbox bind mounts", () => {
   });
 
   it("omits writable bind roots that contain read-only host shadows", () => {
-    expect(
-      resolveWritableSandboxBindHostRoots([
-        "/tmp/data:/tmp/data:rw",
-        "/tmp/data/secrets:/tmp/data/secrets:ro",
-        "/tmp/readonly-parent:/tmp/readonly-parent:ro",
-        "/tmp/readonly-parent/work:/tmp/readonly-parent/work:rw",
-      ]),
-    ).toEqual([path.resolve("/tmp/readonly-parent/work")]);
+    expect(resolveWritableSandboxBindHostRoots([...readonlyChild, ...writableChild])).toEqual([
+      path.resolve("/tmp/readonly-parent/work"),
+    ]);
   });
 
   it("detects bind mounts whose container path differs from the host path", () => {
@@ -75,18 +73,8 @@ describe("sandbox bind mounts", () => {
   });
 
   it("detects read-only bind shadows inside writable host roots", () => {
-    expect(
-      hasSandboxBindReadonlyHostShadows([
-        "/tmp/data:/tmp/data:rw",
-        "/tmp/data/secrets:/tmp/data/secrets:ro",
-      ]),
-    ).toBe(true);
-    expect(
-      hasSandboxBindReadonlyHostShadows([
-        "/tmp/data:/tmp/data:ro",
-        "/tmp/data/work:/tmp/data/work:rw",
-      ]),
-    ).toBe(false);
+    expect(hasSandboxBindReadonlyHostShadows(readonlyChild)).toBe(true);
+    expect(hasSandboxBindReadonlyHostShadows(writableChild)).toBe(false);
   });
 });
 
@@ -108,26 +96,18 @@ describe("resolveSandboxFsPathWithMounts", () => {
     }
   });
 
-  it.each(["@marker", "@/workspace/marker"])(
-    "normalizes %s before selecting container intent",
-    (filePath) => {
-      const sandbox = createSandbox();
-      expect(resolve(sandbox, filePath)).toMatchObject({
-        hostPath: path.resolve(sandbox.workspaceDir, "marker"),
-        containerPath: "/workspace/marker",
-      });
-    },
-  );
-
-  it("normalizes home and @-prefixed host inputs through the selected workspace", () => {
+  it.each([
+    "@marker",
+    "@/workspace/marker",
+    "~/workspace-coder/marker",
+    `@${path.join(os.homedir(), "workspace-coder", "marker")}`,
+  ])("normalizes %s before selecting workspace intent", (filePath) => {
     const workspaceDir = path.join(os.homedir(), "workspace-coder");
-    const sandbox = atWorkspace(workspaceDir);
-    for (const filePath of ["~/workspace-coder/marker", `@${path.join(workspaceDir, "marker")}`]) {
-      expect(resolve(sandbox, filePath)).toMatchObject({
-        hostPath: path.join(workspaceDir, "marker"),
-        containerPath: "/workspace/marker",
-      });
-    }
+    const sandbox = createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir });
+    expect(resolve(sandbox, filePath)).toMatchObject({
+      hostPath: path.join(workspaceDir, "marker"),
+      containerPath: "/workspace/marker",
+    });
   });
 
   it("rejects Windows absolute paths outside mounted roots on every host platform", () => {
@@ -162,59 +142,31 @@ describe("resolveSandboxFsPathWithMounts", () => {
     },
   );
 
-  it("uses the configured custom container root in outside-path errors", () => {
+  it.each([
+    [path.join(os.homedir(), "workspace-coder"), "~/workspace-coder", "/workspace"],
+    [path.join(os.homedir(), "workspace-coder"), "~/workspace-coder", "/sandbox-root"],
+    [nonHomeWorkspace, nonHomeWorkspace, "/workspace"],
+  ])("reports escape from %s under %s using %s", (workspaceDir, displayRoot, containerWorkdir) => {
     const sandbox = createSandbox({
-      containerWorkdir: "/sandbox-root",
-      docker: {
-        ...createSandbox().docker,
-        workdir: "/sandbox-root",
-      },
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      containerWorkdir,
+      docker: { ...createSandbox().docker, workdir: containerWorkdir },
     });
-    expect(() => resolve(sandbox, "/tmp/healthcheck-alert/config.json")).toThrow(
-      /Path escapes sandbox root \(.*container root \/sandbox-root\): \/tmp\/healthcheck-alert\/config\.json\. Use a path under \/sandbox-root\/ instead\./,
+    expect(() => resolve(sandbox, "/tmp/outside")).toThrow(
+      new Error(
+        `Path escapes sandbox root (${displayRoot}; container root ${containerWorkdir}): /tmp/outside. Use a path under ${containerWorkdir}/ instead.`,
+      ),
     );
   });
 
-  it("includes container workspace hint without exposing a full home workspace root", () => {
-    const workspaceDir = path.join(os.homedir(), "workspace-coder");
-    const sandbox = atWorkspace(workspaceDir);
-    let thrown: unknown;
-    try {
-      resolve(sandbox, "/tmp/outside");
-    } catch (error) {
-      thrown = error;
-    }
-
-    expect(thrown).toBeInstanceOf(Error);
-    const message = (thrown as Error).message;
-    expect(message).toContain(
-      "Path escapes sandbox root (~/workspace-coder; container root /workspace): /tmp/outside",
-    );
-    expect(message).toContain("Use a path under /workspace/ instead.");
-    expect(message).not.toContain(os.homedir());
-  });
-
-  it.skipIf(process.platform !== "win32")(
-    "does not expose real Windows home casing aliases in escape errors",
-    () => {
-      const homeAlias = os.homedir().toUpperCase();
-      expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
-      const workspaceDir = path.join(homeAlias, "workspace-coder");
-      const sandbox = atWorkspace(workspaceDir);
-
-      expect(() => resolve(sandbox, "C:\\outside\\secret.txt")).toThrow(
-        "Path escapes sandbox root (~/workspace-coder; container root /workspace)",
-      );
-    },
-  );
-
-  it("keeps non-home workspace roots in the native host format", () => {
-    const root = path.parse(os.homedir()).root;
-    const workspaceDir = path.join(root, "openclaw-non-home-workspace");
-    const sandbox = atWorkspace(workspaceDir);
-
-    expect(() => resolve(sandbox, path.join(root, "openclaw-outside", "secret.txt"))).toThrow(
-      `Path escapes sandbox root (${workspaceDir}; container root /workspace)`,
+  it.runIf(process.platform === "win32")("redacts Windows home casing aliases", () => {
+    const homeAlias = os.homedir().toUpperCase();
+    expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
+    const workspaceDir = path.join(homeAlias, "workspace-coder");
+    const sandbox = createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir });
+    expect(() => resolve(sandbox, "C:\\outside\\secret.txt")).toThrow(
+      "Path escapes sandbox root (~/workspace-coder; container root /workspace)",
     );
   });
 });

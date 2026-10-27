@@ -10,6 +10,7 @@ import {
   createStreamingDirectiveAccumulator,
   splitTrailingDirective,
 } from "../auto-reply/reply/streaming-directives.js";
+import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import type { AssistantMessage } from "../llm/types.js";
 import {
   parseAssistantTextSignature,
@@ -268,8 +269,13 @@ export function shouldSuppressDeterministicApprovalOutput(
 
 export function shouldSuppressSourceReplyOutput(
   ctx: Pick<EmbeddedAgentSubscribeContext, "params" | "state">,
+  assistant = ctx.state.lastAssistant,
 ): boolean {
   return (
+    // Scheduled text remains provisional until cron publishes the settled result.
+    (readAutomationDisplayState(ctx.params.runId) !== "ordinary" &&
+      assistant?.stopReason !== "error" &&
+      assistant?.stopReason !== "aborted") ||
     ctx.state.sourceReplyDeliveryState === "delivered" ||
     (ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
       (ctx.state.messageToolOnlySourceReplyDelivered ||

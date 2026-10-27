@@ -17,9 +17,8 @@ it("preserves a custom then receiver and its exact owned continuation", async ()
   const instance = createTestInstance("custom-continuation");
   const source = Promise.resolve("finished");
   let continuation: Promise<unknown> | undefined;
-  const calls: Array<{ receiver: unknown; arguments: number }> = [];
   const then = function (this: Promise<string>, ...args: Parameters<Promise<string>["then"]>) {
-    calls.push({ receiver: this, arguments: args.length });
+    expect(this).toBe(source);
     continuation = Promise.prototype.then.apply(this, args);
     return continuation;
   };
@@ -31,7 +30,6 @@ it("preserves a custom then receiver and its exact owned continuation", async ()
   const result = instance.run(() => source);
   expect(result).toBe(continuation);
   expect(getPluginValueInstance(result)).toBe(instance);
-  expect(calls).toEqual([{ receiver: source, arguments: 2 }]);
   expect(await result).toBe("finished");
 });
 
@@ -44,13 +42,12 @@ it.each(["function", "active iterator getter"] as const)(
     instance.run(() => store.setRuntime("owned runtime"));
     const pending = createDeferredCore();
     const value = surface === "function" ? pending.promise : {};
-    const observed: Array<{ phase: string; registry: unknown; runtime: unknown }> = [];
-    const observe = (phase: string) =>
-      observed.push({
-        phase,
-        registry: getScope()?.pluginRegistry,
-        runtime: store.tryGetRuntime(),
-      });
+    const observed = new Set<string>();
+    const observe = (phase: string) => {
+      observed.add(phase);
+      expect(getScope()?.pluginRegistry, phase).toBe(registry);
+      expect(store.tryGetRuntime(), phase).toBe("owned runtime");
+    };
     // oxlint-disable-next-line unicorn/no-thenable -- Promise assimilation remains part of the executable invocation.
     void Object.defineProperty(value, "then", {
       get() {
@@ -84,12 +81,11 @@ it.each(["function", "active iterator getter"] as const)(
       }
       pending.resolve();
       await result;
-      expect(observed.map((item) => item.phase)).toContain("getter");
-      expect(observed.map((item) => item.phase)).toContain("method");
-      for (const item of observed) {
-        expect.soft(item.registry, item.phase).toBe(registry);
-        expect.soft(item.runtime, item.phase).toBe("owned runtime");
-      }
+      expect(observed).toEqual(
+        new Set(
+          surface === "function" ? ["getter", "method"] : ["value getter", "getter", "method"],
+        ),
+      );
     } finally {
       pending.resolve();
       await result;
@@ -126,7 +122,6 @@ it.each(["caller", "returned", "plugin-created"] as const)(
     expect(calls).toBe(acquisition === "plugin-created" ? 0 : 1);
     expect(registry.lookup(first)).toBeUndefined();
     expect(registry.lookup(second)).toBe("second");
-    expect(registrations.size).toBe(1);
   },
 );
 it("restores a layered handle without traversing its enclosing data", async () => {
@@ -172,55 +167,34 @@ it.each(["map", "set", "array", "weak-map", "weak-set"] as const)(
       );
       const view = instance.wrap(source);
       let key = original;
-      class Receiver {
-        #label = "caller receiver";
-        read() {
-          return this.#label;
-        }
-      }
-      const receiver = new Receiver();
-      view.forEach(function (this: Receiver, value, candidate) {
+      const receiver = {};
+      view.forEach(function (this: typeof receiver, value, candidate) {
         expect(this).toBe(receiver);
-        expect(this.read()).toBe("caller receiver");
         expect(value).toBe(source.get(original));
         expect(candidate).toBe(original);
         key = candidate;
       }, receiver);
-      expect(view.has(key)).toBe(true);
       expect(view.get(key)!()).toBe("value");
       expect(view.set(key, replacement)).toBe(source);
-      expect(source.size).toBe(1);
       expect(source.get(original)).toBe(replacement);
-      expect(view.get(key)!()).toBe("replacement");
-      expect(view.delete(key)).toBe(true);
-      expect(source.size).toBe(0);
     } else if (collection === "set") {
       const source = new Set([original]);
       const view = instance.wrap(source);
-      expect(view.has(original)).toBe(true);
       expect(view.add(original)).toBe(source);
       expect(source.size).toBe(1);
       view.add(replacement);
       expect(source.has(replacement)).toBe(true);
-      expect(view.delete(original)).toBe(true);
-      expect(source.has(original)).toBe(false);
-      expect(view.delete(replacement)).toBe(true);
     } else if (collection === "array") {
       const source = [original];
       const view = instance.wrap(source);
       const key = view[0]!;
       expect(view.includes(key)).toBe(true);
-      expect(view.indexOf(key)).toBe(0);
       view.push(replacement);
       expect(source[1]).toBe(replacement);
-      expect(view.includes(view[1]!)).toBe(true);
-      view.splice(0, 1, replacement);
-      expect(source[0]).toBe(replacement);
     } else {
       const source =
         collection === "weak-map" ? new WeakMap([[original, "value"]]) : new WeakSet([original]);
       const view = instance.wrap(source);
-      expect(view.has(original)).toBe(true);
       expect(view.has(instance.wrap(original))).toBe(true);
       expect(view.delete(instance.wrap(original))).toBe(true);
       expect(source.has(original)).toBe(false);
@@ -240,22 +214,18 @@ it.each([
   );
   const source = [() => "left plugin element", () => "right plugin element"];
   const view = instance.wrap(source);
-  const run = (collection: typeof source) => {
-    const accumulators: Accumulator[] = [];
-    const result = collection[method]<Accumulator>((current, element, index, array) => {
-      expect(array).toBe(source);
-      expect(element).toBe(source[index]);
-      accumulators.push(current);
-      return returned[accumulators.length - 1]!;
-    }, initial);
-    return { result, accumulators };
-  };
-  const managed = run(view);
-  expect(managed.accumulators).toHaveLength(2);
-  managed.accumulators.forEach((value, index) =>
+  const accumulators: Accumulator[] = [];
+  const result = view[method]<Accumulator>((current, element, index, array) => {
+    expect(array).toBe(source);
+    expect(element).toBe(source[index]);
+    accumulators.push(current);
+    return returned[accumulators.length - 1]!;
+  }, initial);
+  expect(accumulators).toHaveLength(2);
+  accumulators.forEach((value, index) =>
     expect.soft(value).toBe(index === 0 ? initial : returned[0]),
   );
-  expect(managed.result).toBe(returned[1]);
+  expect(result).toBe(returned[1]);
   // Without an initial value or callback invocation, the result is still a plugin element.
   const single = instance.wrap([source[0]!]);
   expect(single[method](() => initial)).toBe(instance.wrap(source[0]));

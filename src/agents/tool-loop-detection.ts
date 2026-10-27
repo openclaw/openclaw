@@ -482,15 +482,7 @@ export function observeRepeatedToolError(
       };
 }
 
-function getPingPongStreak(
-  history: readonly ToolCallRecord[],
-  currentSignature: string,
-): {
-  count: number;
-  pairedToolName?: string;
-  pairedSignature?: string;
-  noProgressEvidence: boolean;
-} {
+function getPingPongStreak(history: readonly ToolCallRecord[], currentSignature: string) {
   const last = history.at(-1);
   if (!last) {
     return { count: 0, noProgressEvidence: false };

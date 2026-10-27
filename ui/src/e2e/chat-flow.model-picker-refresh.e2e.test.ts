@@ -1,5 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { sanitizeChatHistoryMessages } from "../../../src/gateway/chat-display-projection.sanitize.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   newChatPage,
@@ -11,6 +12,7 @@ import {
   chatSessionListResponse,
   expectRequestCountStable,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const attr = (root: Page | Locator, name: string, value = "true") =>
@@ -51,19 +53,23 @@ function roster<Row extends object, Defaults extends object>(
 }
 
 suite.define(() => {
-  it("preserves the Gateway-resolved target without exposing it in the picker", async () => {
+  it("confirms remote model changes and records the submitted selection on reload", async () => {
     const page = await newChatPage(suite, {
+      ...createControlUiE2eContextOptions(),
       hasTouch: true,
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
     });
-    const session = sessionInfo("model-target-proof", "gpt-5.6-sol");
+    const session = sessionInfo("model-target-proof", "demo-a");
+    const history = [
+      { role: "user", content: "Plan a small herb garden.", timestamp: 1 },
+      { role: "assistant", content: "Start with basil, mint, and parsley.", timestamp: 2 },
+    ];
     const gateway = await installMockGateway(page, {
       sessionKey: session.key,
+      historyMessages: history,
       models: [
-        modelInfo("gpt-5.6-sol", "GPT-5.6 Sol"),
-        modelInfo("gpt-5.6-terra", "GPT-5.6 Terra"),
+        modelInfo("demo-a", "Demo model A"),
+        { ...modelInfo("demo-b", "Demo model B"), alias: "Demo-model B" },
+        { ...modelInfo("demo-local", "Demo local model"), local: true },
       ],
       methodResponses: {
         "sessions.list": roster(session, defaultsFor(session.model)),
@@ -71,30 +77,118 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}chat`);
     const picker = pickerFor(page);
-    await expect.poll(() => attr(picker, "model-select").textContent()).toContain("GPT-5.6 Sol");
+    await expect.poll(() => attr(picker, "model-select").textContent()).toContain("Demo model A");
     await attr(picker, "model-select").tap();
-    await picker.getByRole("option", { name: "GPT-5.6 Terra", exact: true }).waitFor();
+    await picker.locator('[data-chat-model-option="openai/demo-b"]').waitFor();
     await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
 
-    await picker.getByRole("option", { name: "GPT-5.6 Terra", exact: true }).tap();
-    await expectPatch(gateway, { key: session.key, model: "openai/gpt-5.6-terra" });
-    await expect.poll(() => selectedModel(picker)).toBe("openai/gpt-5.6-terra");
+    await picker.locator('[data-chat-model-option="openai/demo-b"]').tap();
+    const dialog = page.getByRole("dialog", { name: "Switch to Demo model B?", exact: true });
+    await dialog.waitFor();
+    await dialog
+      .getByText("This conversation is cached for Demo model A.", { exact: false })
+      .waitFor();
+    await dialog.getByRole("checkbox", { name: "Don’t ask again", exact: true }).check();
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+    expect(await selectedModel(picker)).toBe("openai/demo-a");
+    await attr(picker, "model-select").tap();
+    await picker.locator('[data-chat-model-option="openai/demo-b"]').tap();
+    await dialog.getByRole("button", { name: "Switch model", exact: true }).click();
+    await expectPatch(gateway, { key: session.key, model: "openai/demo-b" });
+    await expect.poll(() => selectedModel(picker)).toBe("openai/demo-b");
 
     await gateway.setSessionsListResponse(
       roster(
         {
           ...session,
-          model: "gpt-5.6-terra",
+          model: "demo-b",
           modelOverrideSource: "user",
           updatedAt: 2,
         },
-        defaultsFor("gpt-5.6-terra"),
+        defaultsFor("demo-b"),
         2,
       ),
     );
 
+    expect(
+      await page.locator(".chat-divider__title").filter({ hasText: "Model changed" }).count(),
+    ).toBe(0);
+    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    await composer.fill("Suggest a watering schedule.");
+    const noticeLoading = await page.evaluateHandle(() => {
+      const seen = { loading: false };
+      const observer = new MutationObserver(() => {
+        seen.loading ||= Array.from(document.querySelectorAll('.chat-group[role="status"]')).some(
+          (status) => status.textContent?.includes("Loading"),
+        );
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      return { seen, observer };
+    });
+    await composer.press("Enter");
+    const send = await gateway.waitForRequest("chat.send");
+    const sent = {
+      role: "user",
+      content: "Suggest a watering schedule.",
+      timestamp: 3,
+      __openclaw: {
+        id: "model-input",
+        seq: 3,
+        modelSelection: {
+          provider: "openai",
+          model: "demo-b",
+          previous: { provider: "openai", model: "demo-a" },
+        },
+      },
+    };
+    await gateway.setMethodResponse("chat.history", {
+      messages: sanitizeChatHistoryMessages([...history, sent]),
+      sessionId: session.sessionId,
+    });
+    await gateway.emitGatewayEvent("chat", {
+      sessionKey: session.key,
+      runId: requireRecord(send.params).idempotencyKey,
+      state: "final",
+    });
+    await gateway.emitGatewayEvent("sessions.changed", {
+      sessionKey: session.key,
+      phase: "message",
+      ts: 3,
+    });
+    const noticeLine = page.locator(".chat-divider__title").filter({
+      hasText: "Model changed from openai/demo-a to openai/demo-b.",
+    });
+    await noticeLine.waitFor();
+    expect(
+      await noticeLoading.evaluate(({ seen, observer }) => {
+        observer.disconnect();
+        return seen.loading;
+      }),
+    ).toBe(false);
+    await noticeLoading.dispose();
     await page.reload();
-    await expect.poll(() => selectedModel(picker)).toBe("openai/gpt-5.6-terra");
+    await noticeLine.waitFor();
+    await expect.poll(() => selectedModel(picker)).toBe("openai/demo-b");
+    await attr(picker, "model-select").tap();
+    await picker.getByRole("option", { name: "Demo local model", exact: true }).tap();
+    await expectPatch(gateway, { key: session.key, model: "openai/demo-local" });
+    expect(await dialog.count()).toBe(0);
+    await attr(picker, "model-select").tap();
+    await picker.getByRole("option", { name: "Demo model A", exact: true }).tap();
+    const optOut = page.getByRole("dialog", { name: "Switch to Demo model A?", exact: true });
+    await optOut.getByRole("checkbox", { name: "Don’t ask again", exact: true }).check();
+    await optOut.getByRole("button", { name: "Switch model", exact: true }).click();
+    await expectPatch(gateway, { key: session.key, model: "openai/demo-a" });
+    await gateway.setSessionsListResponse(
+      roster({ ...session, model: "demo-a" }, defaultsFor("demo-a")),
+    );
+    await page.reload();
+    await expect.poll(() => selectedModel(picker)).toBe("openai/demo-a");
+    await attr(picker, "model-select").tap();
+    await picker.locator('[data-chat-model-option="openai/demo-b"]').tap();
+    await expectPatch(gateway, { key: session.key, model: "openai/demo-b" });
+    expect(await dialog.count()).toBe(0);
     await page.setViewportSize({ height: 900, width: 400 });
     await page.locator(".agent-chat__composer-combobox textarea").tap();
     await attr(picker, "model-select").tap();
@@ -291,6 +385,10 @@ suite.define(() => {
       await gateway.deferNext("sessions.patch");
       await model.click();
       await selectChatModelOption(main, "example/example-b");
+      await page
+        .getByRole("dialog", { name: "Switch to Example B?", exact: true })
+        .getByRole("button", { name: "Switch model", exact: true })
+        .click();
       await expectPatch(gateway, { key, model: "example/example-b" });
       await expect.poll(() => model.textContent()).toContain("Example B");
       expect(await effort.getAttribute("aria-disabled")).toBe("true");

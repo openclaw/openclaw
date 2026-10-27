@@ -2,21 +2,15 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REEF_ENVELOPE_MAX_AGE_SECONDS, type Verdict } from "../protocol/index.js";
 import { MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
-import { allow, createFlow, envelope, resetFlowStoresForTests } from "./flow.test-helpers.js";
+import {
+  allow,
+  createFlow,
+  envelope,
+  inbox,
+  resetFlowStoresForTests,
+} from "./flow.test-helpers.js";
 import { setReefRuntime } from "./runtime.js";
 import { ReefInboxEntryParkedError } from "./transport.js";
-import type { InboxEntry } from "./types.js";
-
-function inbox(message: NonNullable<InboxEntry["envelope"]>): InboxEntry {
-  return {
-    seq: 1,
-    peer: "alice",
-    id: message.id,
-    kind: "message",
-    envelope: message,
-    ts: Math.floor(Date.now() / 1_000),
-  };
-}
 
 beforeEach(async () => {
   await resetFlowStoresForTests();

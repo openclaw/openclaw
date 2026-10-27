@@ -13,8 +13,9 @@ import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { PaneSubagentStop } from "../chat-pane-header-view.tsx";
-import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
+import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
 import "../../../styles/chat/composer-context-strip.css";
+import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
 import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx";
@@ -24,20 +25,15 @@ import {
   renderChatAbortActionSolid,
   renderChatPrimaryActionsSolid as ChatPrimaryActions,
 } from "./chat-composer-controls.tsx";
+import "../../../styles/chat/emoji-menu.css";
+import "../../../styles/chat/mention-menu.css";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
-import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
-import { GoalComposerMode } from "./chat-composer-goal-mode.tsx";
-import { ChatGoal, renderChatGoalRecoverySolid } from "./chat-composer-goal.tsx";
-import { HumanMentionMenuView } from "./chat-composer-mention-menu.tsx";
 import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
-import type { ChatComposerPlusMenuView } from "./chat-composer-plus-menu.types.ts";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
 import { SelectedHumanMentions } from "./chat-composer-selected-mentions.tsx";
-import { SkillMenu } from "./chat-composer-skill-menu.tsx";
-import { SlashMenu } from "./chat-composer-slash-menu.tsx";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import { renderComposerTextarea, type ComposerTextareaProps } from "./chat-composer-textarea.tsx";
@@ -47,6 +43,20 @@ import { ChatPermissionPicker } from "./chat-permission-picker.tsx";
 import { ChatVoiceStatus, ComposerDictationStatus } from "./chat-voice-activity.tsx";
 
 type ChatComposerViewContext = ReturnType<typeof createChatComposerContext>;
+
+const SlashMenu = lazy(() => import("./chat-composer-slash-menu.tsx"), { export: "SlashMenu" });
+const SkillMenu = lazy(() => import("./chat-composer-skill-menu.tsx"), { export: "SkillMenu" });
+const HumanMentionMenuView = lazy(() => import("./chat-composer-mention-menu.tsx"), {
+  export: "HumanMentionMenuView",
+});
+const EmojiMenu = lazy(() => import("./chat-composer-emoji.tsx"), { export: "EmojiMenu" });
+const ChatGoal = lazy(() => import("./chat-composer-goal.tsx"), { export: "ChatGoal" });
+const ChatGoalRecoveryNotice = lazy(() => import("./chat-composer-goal.tsx"), {
+  export: "ChatGoalRecoveryNotice",
+});
+const GoalComposerMode = lazy(() => import("./chat-composer-goal-mode-view.tsx"), {
+  export: "GoalComposerMode",
+});
 
 const ChatActivityPills = lazy(() => import("./chat-activity-pills.tsx"), {
   export: "ChatActivityPills",
@@ -150,10 +160,18 @@ export function renderChatComposerView(
               <button
                 type="button"
                 class={["btn btn--sm", banner().actionStyle]}
-                disabled={Boolean(banner().disabledReason) || banner().busy}
+                disabled={
+                  !banner().actionPending && (Boolean(banner().disabledReason) || banner().busy)
+                }
+                aria-disabled={banner().actionPending ? "true" : undefined}
+                data-authority-pending={banner().actionPending ? "" : undefined}
                 aria-busy={banner().busy ? "true" : "false"}
                 title={banner().disabledReason ?? undefined}
-                onClick={() => onAction()()}
+                onClick={() => {
+                  if (!banner().actionPending && !banner().disabledReason && !banner().busy) {
+                    onAction()();
+                  }
+                }}
               >
                 {banner().busy ? (
                   <>
@@ -303,37 +321,43 @@ export function renderChatComposerView(
           <Show when={!props.mobileComposer}>
             <ComposerQueue composer={props} showAbortableUi={context().showAbortableUi} />
           </Show>
-          {renderChatGoalRecoverySolid(
-            resumeRecovery() ? undefined : props.goalRecovery,
-            props.connected,
-          )}
+          <Show when={!resumeRecovery() && props.goalRecovery}>
+            {(recovery) => (
+              <ChatLazyBoundary>
+                <ChatGoalRecoveryNotice recovery={recovery()} connected={props.connected} />
+              </ChatLazyBoundary>
+            )}
+          </Show>
           <Show when={!props.mobileActivityPills?.goal && props.selectedSession?.goal} keyed>
             {(goal) => (
               <div class="agent-chat__goal-float">
-                <ChatGoal
-                  goal={goal}
-                  resumeRecovery={resumeRecovery()}
-                  connected={props.connected}
-                  expanded={context().state.presentation.goalExpandedId === goal.id}
-                  canAct={
-                    props.connected &&
-                    props.canSend &&
-                    !props.submitDisabledReason &&
-                    Boolean(props.currentSessionId) &&
-                    !props.goalRecovery
-                  }
-                  onGoalAction={props.onGoalAction}
-                  onGoalEdit={
-                    props.onGoalSubmit
-                      ? (selected) => context().goalComposer.begin(selected)
-                      : undefined
-                  }
-                  onExpandedChange={(expanded) => {
-                    context().state.updatePresentation((draft) => {
-                      draft.goalExpandedId = expanded ? goal.id : null;
-                    });
-                  }}
-                />
+                <ChatLazyBoundary>
+                  <ChatGoal
+                    goal={goal}
+                    resumeRecovery={resumeRecovery()}
+                    resumeBusy={props.goalResumeBusy}
+                    connected={props.connected}
+                    expanded={context().state.presentation.goalExpandedId === goal.id}
+                    canAct={
+                      props.connected &&
+                      props.canSend &&
+                      !props.submitDisabledReason &&
+                      Boolean(props.currentSessionId) &&
+                      !props.goalRecovery
+                    }
+                    onGoalAction={props.onGoalAction}
+                    onGoalEdit={
+                      props.onGoalSubmit
+                        ? (selected) => context().goalComposer.begin(selected)
+                        : undefined
+                    }
+                    onExpandedChange={(expanded) => {
+                      context().state.updatePresentation((draft) => {
+                        draft.goalExpandedId = expanded ? goal.id : null;
+                      });
+                    }}
+                  />
+                </ChatLazyBoundary>
               </div>
             )}
           </Show>
@@ -412,22 +436,30 @@ export function renderChatComposerView(
             ]}
           >
             {context().menus.slashMenuVisible ? (
-              <SlashMenu
-                menu={context().state.slashMenu}
-                host={context().slashMenuHost}
-                draft={context().visibleDraft}
-              />
+              <ChatLazyBoundary onClose={() => state.slashMenu.reset()}>
+                <SlashMenu
+                  menu={context().state.slashMenu}
+                  host={context().slashMenuHost}
+                  draft={context().visibleDraft}
+                />
+              </ChatLazyBoundary>
             ) : undefined}
             {context().menus.skillMenuVisible ? (
-              <SkillMenu menu={context().state.skillMenu} host={context().skillMenuHost} />
+              <ChatLazyBoundary onClose={() => state.skillMenu.reset()}>
+                <SkillMenu menu={context().state.skillMenu} host={context().skillMenuHost} />
+              </ChatLazyBoundary>
             ) : undefined}
-            <EmojiMenu
-              args={[context().state.emojiMenu, props.paneId, context().state.composerTextarea]}
-            />
+            <Show when={state.emojiMenu.open}>
+              <ChatLazyBoundary onClose={() => state.emojiMenu.close()}>
+                <EmojiMenu args={[state.emojiMenu, props.paneId, state.composerTextarea]} />
+              </ChatLazyBoundary>
+            </Show>
             {context().menus.mentionMenuVisible ? (
-              <HumanMentionMenuView
-                args={[context().state.mentionMenu, context().mentionMenuHost]}
-              />
+              <ChatLazyBoundary onClose={() => state.mentionMenu.close()}>
+                <HumanMentionMenuView
+                  args={[context().state.mentionMenu, context().mentionMenuHost]}
+                />
+              </ChatLazyBoundary>
             ) : undefined}
             <div class="agent-chat__composer-lede">
               {props.sessionAdmitted === false ? undefined : (
@@ -440,7 +472,11 @@ export function renderChatComposerView(
                   <McpAppResources sessionKey={props.sessionKey} agentId={props.currentAgentId} />
                 </>
               )}
-              <GoalComposerMode composer={context().goalComposer} />
+              <Show when={context().goalComposer.active}>
+                <ChatLazyBoundary>
+                  <GoalComposerMode composer={context().goalComposer} />
+                </ChatLazyBoundary>
+              </Show>
               <SelectedHumanMentions
                 text={context().visibleDraft}
                 mentions={props.mentions}

@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import {
   auditMarkdownTable,
   expectReadableAuditTable,
@@ -11,7 +12,10 @@ import {
   readResponsiveTableGeometry,
 } from "./chat-markdown-table-layout.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  createControlUiE2eContextOptions,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Markdown table interactions",
@@ -24,12 +28,7 @@ const wideTable = `| Service | Owner | Region | Status | Version | Deploy | Inci
 | Gateway | Platform | eu-west-1 | Healthy | 2026.8.18 | Complete | 0 | [Long operational note that keeps this column wide](https://example.com/table-reference) |`;
 
 function tableMessage(id: string, text: string, timestamp = Date.now()) {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    timestamp,
-    __openclaw: { id, seq: 1 },
-  };
+  return chatMessage("assistant", text, { timestamp, __openclaw: { id, seq: 1 } });
 }
 function expectFocused(locator: Locator) {
   return expect
@@ -658,9 +657,7 @@ ${overflowTable}`,
 | \`src/ready.ts:2\` | ${targetKey} |`;
       const context = await suite.newBrowserContext({
         colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
+        ...createControlUiE2eContextOptions(),
       });
       const page = await context.newPage();
       page.setDefaultTimeout(15_000);

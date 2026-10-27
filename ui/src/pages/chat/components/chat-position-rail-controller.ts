@@ -91,6 +91,9 @@ export function createPositionRail(props: PositionRailParams) {
       return;
     }
     layoutFrame = requestAnimationFrame(() => {
+      if (observationPending) {
+        observeLayout();
+      }
       layoutFrame = undefined;
       syncLayout();
     });
@@ -102,7 +105,7 @@ export function createPositionRail(props: PositionRailParams) {
     if (!scroller) {
       return;
     }
-    // Observer and scroll delivery supply clean geometry; the frame only publishes it.
+    // Native observers supply geometry; offset-only changes read it in the queued frame.
     const height = scroller.clientHeight;
     viewportVisible = height > 0;
     if (!viewportVisible) {
@@ -146,9 +149,8 @@ export function createPositionRail(props: PositionRailParams) {
   function requestObservation() {
     if (scrollElement && resizeObserver && !observationPending) {
       observationPending = true;
-      // Same-size content and programmatic offsets still need a clean measurement.
-      resizeObserver.unobserve(scrollElement);
-      resizeObserver.observe(scrollElement);
+      // Re-observing during a row resize creates a shallower delivery and a WebKit loop error.
+      scheduleLayout();
     }
   }
 
@@ -616,7 +618,7 @@ export function createPositionRail(props: PositionRailParams) {
     return {
       assistant,
       markers,
-      liveMarkers: positions.liveMarkers,
+      resolveLiveMessage: positions.resolveLiveMessage,
       renderedIndexes,
       activeId: currentActiveId,
       visibleIds,

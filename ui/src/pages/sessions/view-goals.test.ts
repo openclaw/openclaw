@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it } from "vitest";
+import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import {
   disposeSessionViews,
   renderSessionsView,
@@ -24,18 +25,13 @@ describe("session goals", () => {
           updatedAt: 20,
           hasActiveRun: true,
           status: "running",
-          goal: {
-            schemaVersion: 1,
-            id: "goal-1",
-            objective: "Ship the web goal indicator",
+          goal: createSessionGoalFixture("goal-1", "Ship the web goal indicator", {
             status,
-            createdAt: 1,
             updatedAt: 2,
             tokenStart: 100,
             tokensUsed: 12_400,
             tokenBudget: 50_000,
-            continuationTurns: 0,
-          },
+          }),
         }),
       ),
       searchQuery: "web goal",

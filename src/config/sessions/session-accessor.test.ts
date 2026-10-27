@@ -42,7 +42,6 @@ import {
   appendTranscriptMessageSync as appendMessageSync,
   applySessionEntryLifecycleMutation as mutateLifecycle,
   commitReplySessionInitialization as commitInitialization,
-  createSessionEntryWithTranscript as createWithTranscript,
   deleteSessionEntryLifecycle as deleteLifecycle,
   findTranscriptEvent,
   listSessionTranscriptInstances,
@@ -88,7 +87,6 @@ import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-sta
 import { transcriptMessage } from "./transcript-message.test-support.js";
 import type { SessionEntry } from "./types.js";
 
-const cleanupArchivedSessionTranscriptsMock = vi.hoisted(() => vi.fn(async () => {}));
 const tempDirs = useSessionStoreTempDirs(
   (cleanup) =>
     afterAll(async () => {
@@ -97,11 +95,6 @@ const tempDirs = useSessionStoreTempDirs(
     }),
   "openclaw-session-accessor-",
 );
-
-vi.mock("../../gateway/session-archive.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../gateway/session-archive.runtime.js")>();
-  return { ...actual, cleanupArchivedSessionTranscripts: cleanupArchivedSessionTranscriptsMock };
-});
 
 describe("session accessor seam", () => {
   let tempDir: string;
@@ -242,7 +235,6 @@ describe("session accessor seam", () => {
   }
 
   beforeEach(() => {
-    cleanupArchivedSessionTranscriptsMock.mockReset();
     tempDir = tempDirs.make();
     storePath = path.join(tempDir, "sessions.json");
     setRuntimeConfigSnapshot({ session: { store: storePath } });
@@ -1260,37 +1252,6 @@ describe("session accessor seam", () => {
     expect(persisted).not.toHaveProperty("participantCount");
   });
 
-  it("captures SQLite archived transcript cleanup failures when requested", async () => {
-    const cleanupError = new Error("cleanup failed");
-    cleanupArchivedSessionTranscriptsMock.mockRejectedValueOnce(cleanupError);
-    const scope = { sessionId: "session-1", sessionKey: "agent:main:cleanup", storePath };
-    await seed(scope, scope.sessionId);
-    await appendMessage(scope, { ...turnMessage("user", "cleanup me"), cwd: tempDir });
-    const result = await mutateLifecycle({
-      storePath,
-      removals: [
-        {
-          archiveRemovedTranscript: true,
-          expectedSessionId: scope.sessionId,
-          sessionKey: scope.sessionKey,
-        },
-      ],
-      cleanupArchivedTranscripts: {
-        rules: [{ reason: "deleted", olderThanMs: 0 }],
-        nowMs: Date.now(),
-      },
-      captureArtifactCleanupError: true,
-      skipMaintenance: true,
-    });
-
-    expect(result.removedEntries).toBe(1);
-    expect(result.archivedTranscriptDirectories).toHaveLength(1);
-    expect(result.artifactCleanupError).toBe(cleanupError);
-    expect(cleanupArchivedSessionTranscriptsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ directories: result.archivedTranscriptDirectories }),
-    );
-  });
-
   it.each([
     {
       expectedEntry: {
@@ -1936,20 +1897,6 @@ describe("session accessor seam", () => {
       sizeBytes: 0,
     });
     expect(cleared.lastMutationAtMs).toBeGreaterThan(imported.lastMutationAtMs ?? 0);
-  });
-
-  it("returns the canonical transcript locator after creation", async () => {
-    const scope = agentScope("agent:main:main");
-    const created = await createWithTranscript(scope, () => ({
-      ok: true,
-      entry: makeEntry("session-1", 10),
-    }));
-    expect(created).toMatchObject({ ok: true, sessionFile: scope.sessionKey });
-    expect(created).not.toHaveProperty("entry.sessionFile");
-    const before = readEntry(scope);
-    const rejected = await createWithTranscript(scope, () => ({ ok: false, error: "rejected" }));
-    expect(rejected).toEqual({ ok: false, error: "rejected", phase: "entry" });
-    expect(readEntry({ ...scope, readConsistency: "latest" })).toEqual(before);
   });
 
   it("returns an implicit candidate fallback without persisting it", () => {

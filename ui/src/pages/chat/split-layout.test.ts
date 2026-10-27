@@ -12,6 +12,7 @@ import {
   resizePanes,
   setActivePane,
   setPaneSession,
+  singlePaneLayout,
 } from "./split-layout.ts";
 
 const makePane = <Id extends string | number>(id: Id, sessionKey: string) => ({ id, sessionKey });
@@ -22,12 +23,7 @@ const makeColumn = <Id extends string | number>(
 ) => ({ id, panes, paneWeights });
 
 function createSplitLayout(sessionKey = "main"): ChatSplitLayout {
-  const layout = {
-    columns: [makeColumn("c1", [makePane("p1", sessionKey)], [1])],
-    columnWeights: [1],
-    activePaneId: "p1",
-  };
-  return insertPane(layout, "p1", sessionKey, "right");
+  return insertPane(singlePaneLayout("c1", "p1", sessionKey), "p1", sessionKey, "right");
 }
 
 function threePaneLayout(): ChatSplitLayout {
@@ -75,11 +71,7 @@ describe("chat split layout", () => {
     expect(panesOf(layout)).not.toBe(layout.columns.at(0)?.panes);
     const split = applyUiCommandToSplitLayout(
       initial,
-      {
-        kind: "split",
-        direction: "down",
-        sessionKey: "agent:main:new",
-      },
+      { kind: "split", direction: "down", sessionKey: "agent:main:new" },
       "source",
     );
     expect(split && panesOf(split).map((pane) => pane.sessionKey)).toEqual([
@@ -89,10 +81,7 @@ describe("chat split layout", () => {
     ]);
     expect(split?.activePaneId).toBe("p3");
 
-    const focused = applyUiCommandToSplitLayout(split!, {
-      kind: "focus",
-      sessionKey: "main",
-    });
+    const focused = applyUiCommandToSplitLayout(split!, { kind: "focus", sessionKey: "main" });
     expect(focused?.activePaneId).toBe("p1");
   });
 

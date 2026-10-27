@@ -13,10 +13,9 @@ function orderAttachments(
   attachments: MediaAttachment[],
   prefer?: MediaUnderstandingAttachmentsConfig["prefer"],
 ): MediaAttachment[] {
-  // Ordering is stable and non-mutating so downstream decisions can still cite
-  // original attachment indexes.
   if (prefer === "last") {
-    return attachments.toReversed();
+    // oxlint-disable-next-line unicorn/no-array-reverse -- selectAttachments owns the filtered array.
+    return attachments.reverse();
   }
   if (prefer === "path" || prefer === "url") {
     const preferred: MediaAttachment[] = [];

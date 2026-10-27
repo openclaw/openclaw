@@ -5,7 +5,6 @@ import {
   createIngressRetryPolicy,
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  resolveIngressFailureDisposition,
   resolveIngressRetryDelayMs,
   shouldDeadLetterRetryableIngressEvent,
 } from "./ingress-retry-policy.js";
@@ -19,11 +18,11 @@ const wrapError = (cause: Error) =>
 function disposition(
   err: unknown,
   attempts: number,
-  options: Partial<Parameters<typeof resolveIngressFailureDisposition>[0]> = {},
+  options: Partial<Parameters<ReturnType<typeof createIngressRetryPolicy>["failure"]>[0]> = {},
 ) {
-  return resolveIngressFailureDisposition({
+  return createIngressRetryPolicy({}).failure({
     err,
-    event: { receivedAt: 1_000, attempts },
+    event: { id: "input", receivedAt: 1_000, attempts },
     formatError: coerceErrorMessage,
     now: 2_000,
     ...options,
@@ -233,14 +232,7 @@ describe("ingress retry policy", () => {
         new Error("Session ended during restart recovery. Use /new or /reset."),
         { code },
       );
-      expect(
-        resolveIngressFailureDisposition({
-          err,
-          event: { receivedAt: 1_000, attempts: 0 },
-          formatError: coerceErrorMessage,
-          now: 2_000,
-        }),
-      ).toEqual({ kind: "release", attempt: 1, message: err.message });
+      expect(disposition(err, 0)).toEqual({ kind: "release", attempt: 1, message: err.message });
     },
   );
 
@@ -252,14 +244,11 @@ describe("ingress retry policy", () => {
           throw new Error("unavailable diagnostic field");
         },
       });
-      expect(
-        resolveIngressFailureDisposition({
-          err,
-          event: { receivedAt: 1_000, attempts: 0 },
-          formatError: coerceErrorMessage,
-          now: 2_000,
-        }),
-      ).toEqual({ kind: "release", attempt: 1, message: "temporary failure" });
+      expect(disposition(err, 0)).toEqual({
+        kind: "release",
+        attempt: 1,
+        message: "temporary failure",
+      });
     },
   );
 
@@ -274,14 +263,7 @@ describe("ingress retry policy", () => {
         throw new Error("unavailable diagnostic field");
       },
     });
-    expect(
-      resolveIngressFailureDisposition({
-        err,
-        event: { receivedAt: 1_000, attempts: 0 },
-        formatError: coerceErrorMessage,
-        now: 2_000,
-      }),
-    ).toEqual({
+    expect(disposition(err, 0)).toEqual({
       kind: "fail",
       reason: "restart-recovery-tombstone",
       attempt: 1,
@@ -315,10 +297,7 @@ describe("ingress retry policy", () => {
       attempt: maxAttempts,
     });
     expect(
-      resolveIngressFailureDisposition({
-        err: wrapped,
-        event: { receivedAt: 1_000, attempts: maxAttempts - 1 },
-        formatError: coerceErrorMessage,
+      disposition(wrapped, maxAttempts - 1, {
         config: { maxAttempts },
         now: 1_000 + DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
       }),

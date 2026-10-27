@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import { createStoppedTunnelManager } from "./environment-access.test-support.js";
 import * as support from "./service.test-support.js";
@@ -14,6 +14,8 @@ const createService = (options?: Parameters<typeof support.createService>[1]) =>
   });
 const attach = (service: ReturnType<typeof createService>, sessionId: string, id = environmentId) =>
   service.attachSession({ environmentId: id, ownerEpoch: 1, sessionId });
+const expectAttachment = (state: "ready" | "attached", sessions: string[], id = environmentId) =>
+  expect(testState.store.get(id)).toMatchObject({ state, attachedSessionIds: sessions });
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -25,7 +27,7 @@ describe("worker environment service", () => {
     const sessionId = "legacy";
     const older = await support.seedAttachedIdentity("legacy-a", sessionId);
     const newer = await support.seedAttachedIdentity("legacy-b", "other");
-    support.testState.stateDb.db.exec(`
+    testState.stateDb.db.exec(`
       UPDATE worker_environments SET attached_session_ids_json = '["legacy"]'
         WHERE environment_id = 'legacy-b';
       UPDATE worker_environment_credentials SET session_id = 'legacy'
@@ -56,7 +58,7 @@ describe("worker environment service", () => {
 
   it("rejects attach before current bootstrap", async () => {
     const bootstrapping = await support.seedBootstrapping(environmentId);
-    await support.testState.store.transition({
+    await testState.store.transition({
       environmentId,
       from: bootstrapping.state,
       to: "ready",
@@ -66,10 +68,7 @@ describe("worker environment service", () => {
       }),
     });
     await expect(attach(createService(), "session-1")).rejects.toThrow(STALE_WORKER_BUILD_REASON);
-    expect(support.testState.store.get(environmentId)).toMatchObject({
-      state: "ready",
-      attachedSessionIds: [],
-    });
+    expectAttachment("ready", []);
   });
 
   it("returns a bounded error when another worker owns the session", async () => {
@@ -82,10 +81,7 @@ describe("worker environment service", () => {
       code: "invalid_state",
       message: `Session session-owned is already attached to worker environment ${environmentId}`,
     });
-    expect(support.testState.store.get("contender")).toMatchObject({
-      state: "ready",
-      attachedSessionIds: [],
-    });
+    expectAttachment("ready", [], "contender");
   });
 
   it("requires session reclaim before operator destruction of an attached worker", async () => {
@@ -97,10 +93,7 @@ describe("worker environment service", () => {
       code: "invalid_state",
       message: "Attached cloud workers must be stopped through sessions.reclaim",
     });
-    expect(support.testState.store.get(environmentId)).toMatchObject({
-      state: "attached",
-      attachedSessionIds: ["session-reclaim"],
-    });
+    expectAttachment("attached", ["session-reclaim"]);
   });
 
   it("renews in place and binds delivery acknowledgement to the exact grant", async () => {
@@ -110,12 +103,12 @@ describe("worker environment service", () => {
     const binding = { environmentId, ownerEpoch: 1, sessionId: null };
     await service.reconcileOnce();
     const previous = service.takeMintedCredential(binding)!;
-    support.testState.nowMs += 100;
+    testState.nowMs += 100;
     expect(service.takeMintedCredential(binding)).toBeUndefined();
     await service.reconcileOnce();
     const renewal = service.takeMintedCredential(binding)!;
     expect(renewal).toMatchObject({ ownerEpoch: 1, sessionId: null });
-    expect(support.testState.store.get(environmentId)?.ownerEpoch).toBe(1);
+    expect(testState.store.get(environmentId)?.ownerEpoch).toBe(1);
     expect(await service.acknowledgeCredentialDelivery(previous)).toBe(false);
     expect(service.takeMintedCredential(binding)).toMatchObject({ deliveryId: renewal.deliveryId });
     expect(await service.acknowledgeCredentialDelivery(renewal)).toBe(true);
@@ -123,19 +116,15 @@ describe("worker environment service", () => {
 
   it("recovers an undelivered atomic session credential after restart without changing owner", async () => {
     await support.seedReady(environmentId);
-    const stopTunnel = vi.fn(async () => {
-      throw new Error("tunnel stop interrupted");
-    });
     const tunnelManager = createStoppedTunnelManager();
-    tunnelManager.stop = stopTunnel;
+    tunnelManager.stop.mockRejectedValue(new Error("tunnel stop interrupted"));
     const first = createService({ tunnelManager });
     await first.reconcileOnce();
     await expect(attach(first, "session-1")).rejects.toThrow("tunnel stop interrupted");
     const binding = { environmentId, ownerEpoch: 2, sessionId: "session-1" };
-    const lostHash = support.testState.store.getCredential(environmentId)?.credentialHash;
+    const lostHash = testState.store.getCredential(environmentId)?.credentialHash;
 
-    expect(stopTunnel).toHaveBeenCalledWith(environmentId, 1);
-    expect(support.testState.store.get(environmentId)).toMatchObject({
+    expect(testState.store.get(environmentId)).toMatchObject({
       state: "attached",
       ownerEpoch: 2,
     });
@@ -148,7 +137,7 @@ describe("worker environment service", () => {
     const recovered = restarted.takeMintedCredential(binding);
     expect(recovered?.deliveryId).not.toBe(lostHash);
     expect(await restarted.acknowledgeCredentialDelivery(recovered!)).toBe(true);
-    const deliveredHash = support.testState.store.getCredential(environmentId)?.credentialHash;
+    const deliveredHash = testState.store.getCredential(environmentId)?.credentialHash;
 
     await support.reopenWorkerEnvironmentStore();
     const deliveredRestart = createService({ tunnelManager });

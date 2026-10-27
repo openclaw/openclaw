@@ -162,19 +162,30 @@ async function resolvePluginImplicitProviders(
         const manifest = ctx.pluginMetadataSnapshot?.manifestRegistry.plugins.find(
           (plugin) => plugin.id === pluginId,
         );
-        const includeProvider = (providerId: string) =>
+        const useRuntimeCatalog =
+          ctx.providerDiscoveryEntriesOnly !== true && hasRuntimeProviderCatalog(provider);
+        const useStaticCatalog = Boolean(provider.staticCatalog) && !useRuntimeCatalog;
+        const includeProvider = (providerId: string, sourceBaseUrl?: unknown) =>
           isProviderCatalogSourceAllowed({
             provider: providerId,
             config: ctx.config,
             plugin: manifest,
+            sourceBaseUrl,
           });
+        const canDiscoverProvider = (providerId: string) =>
+          includeProvider(
+            providerId,
+            useRuntimeCatalog
+              ? findNormalizedProviderValue(ctx.config?.models?.providers, providerId)?.baseUrl
+              : undefined,
+          );
         const scopedProviderIds =
           ctx.providerDiscoveryScope === undefined
             ? undefined
             : catalogCountsByPluginId.get(pluginId) === 1
               ? (ownerProviderIds ?? [])
               : (ownerProviderIds ?? []).filter((id) => matchesProviderPluginRef(provider, id));
-        const providerIds = scopedProviderIds?.filter(includeProvider);
+        const providerIds = scopedProviderIds?.filter(canDiscoverProvider);
         const catalogProviderRefs = [
           provider.id,
           ...(provider.aliases ?? []),
@@ -183,7 +194,7 @@ async function resolvePluginImplicitProviders(
         ];
         if (
           providerIds?.length === 0 ||
-          (providerIds === undefined && !catalogProviderRefs.some(includeProvider))
+          (providerIds === undefined && !catalogProviderRefs.some(canDiscoverProvider))
         ) {
           return undefined;
         }
@@ -221,9 +232,6 @@ async function resolvePluginImplicitProviders(
           // Mandatory startup accepts only provider facts that do not execute live discovery.
           return undefined;
         }
-        const useStaticCatalog =
-          Boolean(provider.staticCatalog) &&
-          (ctx.providerDiscoveryEntriesOnly === true || !hasRuntimeProviderCatalog(provider));
         // Static catalogs are preferred for entries-only discovery and as a fallback
         // when runtime discovery produces no usable provider config.
         const preparedStatic = preparedStaticConfigs?.get(
@@ -282,7 +290,7 @@ async function resolvePluginImplicitProviders(
       }
       for (const [providerId, implicitProvider] of Object.entries(normalizedResult)) {
         if (
-          !includeProvider(providerId) ||
+          !includeProvider(providerId, implicitProvider.baseUrl) ||
           (selectedProviderIds && !selectedProviderIds.has(normalizeProviderId(providerId)))
         ) {
           continue;

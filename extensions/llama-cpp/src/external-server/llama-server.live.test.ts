@@ -11,12 +11,10 @@ import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin
 import { describe, expect, it } from "vitest";
 import {
   createLiveValueTool,
+  createLiveToolReplayContext,
   requireLiveToolCall,
 } from "../../../test-support/live-value-tool.test-support.js";
-import {
-  makeTextToolResult,
-  makeUserMessage,
-} from "../../../test-support/message-fixtures.test-support.js";
+import { makeUserMessage } from "../../../test-support/message-fixtures.test-support.js";
 import { discoverLlamaServer } from "./discovery.js";
 import { wrapLlamaServerStream } from "./stream.js";
 
@@ -168,15 +166,7 @@ describeLive("llama-server live", () => {
 
     const second = await completeViaPlugin(
       model,
-      {
-        messages: [
-          user,
-          first,
-          makeTextToolResult(toolCall.id, toolCall.name, "ok", false, Date.now() - 1),
-          { role: "user", content: "Reply with exactly: ok", timestamp: Date.now() },
-        ],
-        tools: [tool],
-      },
+      createLiveToolReplayContext(user, first, toolCall, tool),
       {
         apiKey: LIVE_KEY || "llama-cpp-local",
         maxTokens: 128,

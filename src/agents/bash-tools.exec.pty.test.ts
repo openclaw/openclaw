@@ -41,13 +41,10 @@ test.skipIf(process.platform !== "linux").each([false, true])(
   },
 );
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
-}
-
 function currentNodeEvalCommand(source: string): string {
-  const node = shellQuote(process.execPath);
-  const script = shellQuote(source);
+  const [node, script] = [process.execPath, source].map(
+    (value) => `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`,
+  );
   return process.platform === "win32" ? `& ${node} -e ${script}` : `${node} -e ${script}`;
 }
 

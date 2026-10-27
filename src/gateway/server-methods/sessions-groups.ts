@@ -24,6 +24,7 @@ import {
   updateSessionGroupDefaults,
 } from "../session-groups.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
@@ -114,20 +115,12 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     validateSessionsGroupsUpdateParams,
     async ({ params, respond, context, client, sessionMutationAuthorization }) => {
       if (params.cwd && !path.isAbsolute(params.cwd)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "session group cwd must be absolute"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "session group cwd must be absolute");
         return;
       }
       const name = normalizeOptionalString(params.name);
       if (!name) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "session group name must not be empty"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "session group name must not be empty");
         return;
       }
       let cwd = params.cwd;
@@ -168,11 +161,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         context.getRuntimeConfig(),
       );
       if (!defaults) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown session group: ${name}`),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, `unknown session group: ${name}`);
         return;
       }
       respond(

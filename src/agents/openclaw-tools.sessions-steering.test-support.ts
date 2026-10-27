@@ -38,12 +38,16 @@ export function createSessionsSendTestCaller(sessionKey = "agent:re-portal:main"
   };
 }
 
+async function persistGuidance(options?: EmbeddedAgentQueueMessageOptions) {
+  const recorder = options?.userTurnTranscriptRecorder;
+  if (!recorder || !(await recorder.persistApproved())) {
+    throw new Error("Steering fixture did not commit the admitted guidance");
+  }
+}
+
 export function createDurableSessionsSendTestRun(runId: string, afterCommit?: () => Promise<void>) {
   const queueMessage = vi.fn<EmbeddedAgentQueueHandle["queueMessage"]>(async (_text, options) => {
-    const recorder = options?.userTurnTranscriptRecorder;
-    if (!recorder || !(await recorder.persistApproved())) {
-      throw new Error("Steering fixture did not commit the admitted guidance");
-    }
+    await persistGuidance(options);
     await afterCommit?.();
   });
   const handle = createEmbeddedRunHandle({
@@ -171,10 +175,7 @@ export async function activeRun(
     if (options.rejects) {
       throw new Error("active session ended before queued steering message was committed");
     }
-    const recorder = _options?.userTurnTranscriptRecorder;
-    if (!recorder || !(await recorder.persistApproved())) {
-      throw new Error("Steering fixture did not commit the admitted guidance");
-    }
+    await persistGuidance(_options);
   });
   await setSessionsSendTestActiveRun(
     options.sessionId ?? "caller-active-session",
@@ -238,22 +239,13 @@ export function registerSessionsSendActiveSteeringTests({
   mockGatewayResponses,
   settleContinuations,
   cloneTestConfig,
-  createSessionsSendTool,
 }: SessionsSendActiveSteeringFixtures) {
   const getSessionTool: SessionsSendSteeringFixtures["getSessionTool"] = (name, options) =>
     withTestRequester(createSessionTool(name, options), options.agentSessionKey);
+  const gatewayCalls = (method: string) =>
+    callGatewayMock.mock.calls.filter(([request]) => request.method === method);
 
-  it.each([
-    {
-      name: "steers a child after durable admission",
-      steered: true,
-    },
-    {
-      name: "starts the same child during compaction",
-      rejection: "injection_unavailable" as const,
-    },
-  ])("sessions_send $name", async (testCase) => {
-    const { steered, rejection } = testCase;
+  it("sessions_send starts the same child during compaction", async () => {
     const requesterKey = "agent:main:main";
     const targetKey = "agent:main:subagent:steering-child";
     const sessionId = "own-child-active-session";
@@ -261,7 +253,7 @@ export function registerSessionsSendActiveSteeringTests({
       { agentId: "main", sessionKey: targetKey },
       { sessionId, updatedAt: 1, spawnedBy: requesterKey, spawnDepth: 1 },
     );
-    const queueMessage = await activeRun(targetKey, {
+    await activeRun(targetKey, {
       config: cloneTestConfig(),
       sessionId,
       requesterSessionKey: requesterKey,
@@ -269,9 +261,7 @@ export function registerSessionsSendActiveSteeringTests({
     const queue = vi.spyOn(controllerSteer, "steerSessionControllerOperation");
     const prepare = vi.spyOn(sessionsSendFollowup, "prepareSessionsSendFollowup");
     try {
-      if (rejection) {
-        queue.mockResolvedValueOnce({ status: "rejected", reason: rejection });
-      }
+      queue.mockResolvedValueOnce({ status: "rejected", reason: "injection_unavailable" });
       mockAcceptedChildFollowup();
       const result = await runChildFollowup(() =>
         getSessionTool("sessions_send", {
@@ -285,48 +275,27 @@ export function registerSessionsSendActiveSteeringTests({
       expect(result.details).toMatchObject({
         status: "accepted",
         sessionKey: targetKey,
-        targetDisposition: steered ? "steered" : "queued",
-        delivery: { status: steered ? "skipped" : "pending" },
+        targetDisposition: "queued",
+        delivery: { status: "pending" },
       });
-      expect(queue).toHaveBeenCalledOnce();
-      expect(queue).toHaveBeenCalledWith({
-        operation: expect.objectContaining({ sessionId }),
+      expect(queue.mock.calls[0]?.[0]).toMatchObject({
+        operation: { sessionId },
         text: expect.stringContaining("deps are ready"),
         abortOnUnconfirmedTranscript: false,
         options: {
-          assertCurrent: expect.any(Function),
-          requesterToolAuthority: expect.objectContaining({
-            requesterOrigin: expect.objectContaining({ senderId: "sessions-requester" }),
-          }),
-          steeringMode: "all",
-          debounceMs: 0,
-          deliveryTimeoutMs: undefined,
+          requesterToolAuthority: { requesterOrigin: { senderId: "sessions-requester" } },
           waitForTranscriptCommit: true,
-          onQueueAccepted: expect.any(Function),
-          userTurnTranscriptRecorder: expect.any(Object),
         },
       });
-      if (steered) {
-        expect(queueMessage).toHaveBeenCalledOnce();
-      }
-      const agentCalls = callGatewayMock.mock.calls.filter(
-        ([request]) => request.method === "agent",
+      const agentCalls = gatewayCalls("agent");
+      expect(agentCalls).toHaveLength(1);
+      expect(agentCalls[0]?.[0].params).toMatchObject({ sessionKey: targetKey });
+      expect(queue.mock.invocationCallOrder[0]).toBeLessThan(prepare.mock.invocationCallOrder[0]!);
+      expect(prepare.mock.invocationCallOrder[0]).toBeLessThan(
+        callGatewayMock.mock.invocationCallOrder[
+          callGatewayMock.mock.calls.findIndex(([request]) => request.method === "agent")
+        ]!,
       );
-      expect(agentCalls).toHaveLength(steered ? 0 : 1);
-      expect(prepare).toHaveBeenCalledTimes(steered ? 0 : 1);
-      if (agentCalls.length) {
-        expect(agentCalls[0]?.[0].params).toMatchObject({ sessionKey: targetKey });
-        if (rejection) {
-          expect(queue.mock.invocationCallOrder[0]).toBeLessThan(
-            prepare.mock.invocationCallOrder[0]!,
-          );
-        }
-        expect(prepare.mock.invocationCallOrder[0]).toBeLessThan(
-          callGatewayMock.mock.invocationCallOrder[
-            callGatewayMock.mock.calls.findIndex(([request]) => request.method === "agent")
-          ]!,
-        );
-      }
     } finally {
       await settleContinuations();
       queue.mockRestore();
@@ -334,63 +303,29 @@ export function registerSessionsSendActiveSteeringTests({
     }
   });
 
-  it.each(
-    ([undefined, "steer"] as const).flatMap((mode) =>
-      ["agent:main:dashboard:self-send", "agent:main:dashboard:self-send:run:captured"].map(
-        (key) => ({ mode, key }),
-      ),
-    ),
-  )("sessions_send preserves self-send mode=$mode key=$key", async ({ mode, key }) => {
-    await seedSession(key, "self-send-session");
-    const queueMessage = await activeRun(key, {
-      config: cloneTestConfig(),
-      sessionId: "self-send-session",
-    });
-    mockGatewayResponses({
-      agent: { runId: "self-followup", status: "accepted" },
-      "agent.wait": { status: "ok", terminalReply: { disposition: "empty" } },
-    });
-    const tool = withTestRequester(
-      createSessionsSendTool({
-        agentSessionKey: key,
-        requesterOrigin: {
-          channel: "telegram",
-          accountId: "synthetic-account",
-          to: "synthetic-chat",
-          threadId: "synthetic-thread",
-        },
+  it.each(["agent:main:dashboard:self-send", "agent:main:dashboard:self-send:run:captured"])(
+    "sessions_send explicitly steers itself (%s)",
+    async (key) => {
+      await seedSession(key, "self-send-session");
+      const queueMessage = await activeRun(key, {
         config: cloneTestConfig(),
-      }),
-      key,
-    );
-    const result = await tool.execute("self-send", {
-      sessionKey: key,
-      message: "synthetic self followup",
-      timeoutSeconds: 0,
-      mode,
-    });
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      targetDisposition: mode ? "steered" : "queued",
-    });
-    if (mode) {
-      expect(queueMessage).toHaveBeenCalledOnce();
-    } else {
-      expect(queueMessage).not.toHaveBeenCalled();
-    }
-    const admissions = callGatewayMock.mock.calls.filter(([request]) => request.method === "agent");
-    expect(admissions).toHaveLength(mode ? 0 : 1);
-    if (!mode) {
-      expect(admissions[0]?.[0].params).toMatchObject({
-        sessionKey: key,
-        channel: "telegram",
-        accountId: "synthetic-account",
-        to: "synthetic-chat",
-        threadId: "synthetic-thread",
+        sessionId: "self-send-session",
       });
-    }
-    await settleContinuations();
-  });
+      const result = await getSessionTool("sessions_send", { agentSessionKey: key }).execute(
+        "self-send",
+        {
+          sessionKey: key,
+          message: "synthetic self followup",
+          timeoutSeconds: 0,
+          mode: "steer",
+        },
+      );
+      expect(result.details).toMatchObject({ status: "accepted", targetDisposition: "steered" });
+      expect(queueMessage).toHaveBeenCalledOnce();
+      expect(gatewayCalls("agent")).toEqual([]);
+      await settleContinuations();
+    },
+  );
 
   it.each(
     ([undefined, "followup"] as const).flatMap((mode) =>
@@ -427,14 +362,9 @@ export function registerSessionsSendActiveSteeringTests({
           : { status: "ok", reply: "synthetic idle reply" },
       );
       expect(
-        callGatewayMock.mock.calls.filter(
-          ([request]) => request.method === "agent" && request.params?.sessionKey === key,
-        ),
+        gatewayCalls("agent").filter(([request]) => request.params?.sessionKey === key),
       ).toHaveLength(1);
-      expect(
-        callGatewayMock.mock.calls.find(([request]) => request.method === "agent")?.[0].params
-          ?.inputProvenance,
-      ).toMatchObject({
+      expect(gatewayCalls("agent")[0]?.[0].params?.inputProvenance).toMatchObject({
         kind: "inter_session",
         sourceSessionKey: "agent:main:dashboard:mailbox-sender",
         sourceTool: "sessions_send",
@@ -442,95 +372,61 @@ export function registerSessionsSendActiveSteeringTests({
       if (busy) {
         expect(queueMessage).not.toHaveBeenCalled();
         // A zero-wait admission still has the existing detached reply waiter.
-        expect(
-          callGatewayMock.mock.calls.filter(([request]) => request.method === "agent.wait"),
-        ).toHaveLength(1);
+        expect(gatewayCalls("agent.wait")).toHaveLength(1);
       }
       await settleContinuations();
       if (busy) {
-        expect(
-          callGatewayMock.mock.calls.filter(([request]) => request.method === "agent"),
-        ).toHaveLength(1);
+        expect(gatewayCalls("agent")).toHaveLength(1);
       }
     },
   );
 
-  it.each([
-    { target: "agent:main:main", unconfirmed: false },
-    { target: "main", unconfirmed: false },
-    { target: "agent:main:main", unconfirmed: true },
-  ])(
-    "sessions_send explicitly steers a busy sibling ($target, unconfirmed=$unconfirmed)",
-    async ({ target, unconfirmed }) => {
-      const calls: Array<{ method?: string; params?: unknown }> = [];
-      const ordinaryActiveKey = "agent:main:main";
-      const abort = vi.fn();
-      await seedSession("agent:main:dashboard:sibling-sender");
-      await seedSession(ordinaryActiveKey, "ordinary-active-session");
-      const queueMessage = await activeRun(ordinaryActiveKey, {
-        config: cloneTestConfig(),
-        sessionId: "ordinary-active-session",
-        sourceReplyDeliveryMode: "automatic",
-        abort,
-      });
-      queueMessage.mockImplementationOnce(async (_text, options) => {
-        expect(options?.waitForTranscriptCommit).toBe(true);
-        if (unconfirmed) {
-          options?.onQueueAccepted?.(true);
-          throw new Error("synthetic consumption confirmation unavailable after acceptance");
-        }
-        const recorder = options?.userTurnTranscriptRecorder;
-        if (!recorder || !(await recorder.persistApproved())) {
-          throw new Error("Steering fixture did not commit the admitted guidance");
-        }
-      });
-      callGatewayMock.mockImplementation(async (request) => {
-        calls.push(request);
-        if (request.method === "sessions.resolve") {
-          return { key: ordinaryActiveKey };
-        }
-        if (request.method === "agent") {
-          return { runId: "ordinary-agent-run", status: "accepted", acceptedAt: 2000 };
-        }
-        return {};
-      });
+  it("sessions_send never replays uncertain sibling steering", async () => {
+    const ordinaryActiveKey = "agent:main:main";
+    const abort = vi.fn();
+    await seedSession("agent:main:dashboard:sibling-sender");
+    await seedSession(ordinaryActiveKey, "ordinary-active-session");
+    const queueMessage = await activeRun(ordinaryActiveKey, {
+      config: cloneTestConfig(),
+      sessionId: "ordinary-active-session",
+      sourceReplyDeliveryMode: "automatic",
+      abort,
+    });
+    queueMessage.mockImplementationOnce(async (_text, options) => {
+      expect(options?.waitForTranscriptCommit).toBe(true);
+      options?.onQueueAccepted?.(true);
+      throw new Error("synthetic consumption confirmation unavailable after acceptance");
+    });
+    mockGatewayResponses({
+      "sessions.resolve": { key: ordinaryActiveKey },
+      agent: { runId: "ordinary-agent-run", status: "accepted", acceptedAt: 2000 },
+    });
 
-      const tool = getSessionTool("sessions_send", {
-        agentSessionKey: "agent:main:dashboard:sibling-sender",
-        agentChannel: "telegram",
-        config: cloneTestConfig(),
-      });
+    const tool = getSessionTool("sessions_send", {
+      agentSessionKey: "agent:main:dashboard:sibling-sender",
+      agentChannel: "telegram",
+      config: cloneTestConfig(),
+    });
 
-      const result = await tool.execute("call-ordinary-active", {
-        sessionKey: target,
-        message: "synthetic sibling update",
-        mode: "steer",
-        timeoutSeconds: 0,
-      });
+    const result = await tool.execute("call-ordinary-active", {
+      sessionKey: ordinaryActiveKey,
+      message: "synthetic sibling update",
+      mode: "steer",
+      timeoutSeconds: 0,
+    });
 
-      if (unconfirmed) {
-        // Uncertain commitment stays with the receiver and cannot be replayed.
-        expect(result.details).toMatchObject({
-          status: "error",
-          sessionKey: target,
-          error: "synthetic consumption confirmation unavailable after acceptance",
-        });
-      } else {
-        expect(result.details).toMatchObject({
-          status: "accepted",
-          sessionKey: target,
-          targetDisposition: "steered",
-          delivery: { status: "skipped" },
-        });
-      }
-      expect(queueMessage).toHaveBeenCalledOnce();
-      expect(queueMessage).toHaveBeenCalledWith(
-        expect.stringContaining("synthetic sibling update"),
-        expect.objectContaining({ waitForTranscriptCommit: true }),
-      );
-      expect(calls.filter((call) => call.method === "agent")).toHaveLength(0);
-      expect(calls.filter((call) => call.method === "agent.wait")).toHaveLength(0);
-      expect(abort).not.toHaveBeenCalled();
-    },
-  );
+    // Uncertain commitment stays with the receiver and cannot be replayed.
+    expect(result.details).toMatchObject({
+      status: "error",
+      sessionKey: ordinaryActiveKey,
+      error: "synthetic consumption confirmation unavailable after acceptance",
+    });
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(queueMessage.mock.calls[0]).toMatchObject([
+      expect.stringContaining("synthetic sibling update"),
+      { waitForTranscriptCommit: true },
+    ]);
+    expect([gatewayCalls("agent"), gatewayCalls("agent.wait")]).toEqual([[], []]);
+    expect(abort).not.toHaveBeenCalled();
+  });
 }

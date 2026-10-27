@@ -81,5 +81,10 @@ export type SkillsDiscoveryResult = {
 export type SkillsDiscoveryOutput =
   | { kind: "plan"; plan: WorkspaceSkillSourcePlan }
   | { kind: "scan"; results: SkillsDiscoveryResult[] }
-  | { kind: "project"; snapshot: SkillSnapshot }
+  | {
+      kind: "project";
+      snapshot: Omit<SkillSnapshot, "resolvedSkills" | "discoverySkills">;
+      resolvedIndices: number[];
+      discoveryIndices: number[];
+    }
   | { kind: "status"; facts: WorkspaceSkillStatusFacts };

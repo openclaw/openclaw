@@ -96,43 +96,36 @@ describe("drainActiveSessionsForShutdown", () => {
     expect((await drain()).emittedSessionIds).toEqual(expected);
     expect(sessionEnd.mock.calls.map(([event]) => event.sessionId)).toEqual(expected);
   });
-  it("awaits each session_end handler so the bounded timeout actually races real plugin work", async () => {
-    const { promise: handlerLatch, resolve: resolveHandler } = createDeferred();
-    sessionEnd.mockImplementationOnce(async () => {
-      await handlerLatch;
-    });
-    track("sess-A");
-
-    let drainSettled = false;
-    const drainPromise = drain().then((value) => {
-      drainSettled = true;
-      return value;
-    });
-
-    // #57790: drain must await the handler, not fire and forget.
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(drainSettled).toBe(false);
-    expect(sessionEnd).toHaveBeenCalledTimes(1);
-
-    resolveHandler?.();
-    const result = await drainPromise;
-    expect(result).toEqual({ timedOut: false, emittedSessionIds: ["sess-A"] });
-  });
-
-  it("returns timedOut=true while still starting later emissions when one handler hangs", async () => {
-    sessionEnd.mockImplementationOnce(() => new Promise<never>(() => {}));
-    track("sess-A");
-    track("sess-B", "agent:main:other");
-
-    const result = await drain(120);
-
-    expect({ ...result, emittedSessionIds: result.emittedSessionIds.toSorted() }).toEqual({
-      timedOut: true,
-      emittedSessionIds: ["sess-A", "sess-B"],
-    });
-    expect(sessionEnd.mock.calls.map(([event]) => event.sessionId)).toEqual(["sess-A", "sess-B"]);
-  });
+  it.each([false, true])(
+    "awaits handlers without blocking later emissions (timeout=%s)",
+    async (timedOut) => {
+      const handler = createDeferred();
+      sessionEnd.mockImplementationOnce(async () => {
+        await handler.promise;
+      });
+      track("sess-A");
+      track("sess-B", "agent:main:other");
+      let drainSettled = false;
+      const pending = drain(120).then((value) => {
+        drainSettled = true;
+        return value;
+      });
+      // #57790: drain must await the handler, not fire and forget.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(drainSettled).toBe(false);
+      expect(sessionEnd.mock.calls.map(([event]) => event.sessionId)).toEqual(["sess-A", "sess-B"]);
+      try {
+        if (!timedOut) {
+          handler.resolve();
+        }
+        expect(await pending).toEqual({ timedOut, emittedSessionIds: ["sess-A", "sess-B"] });
+      } finally {
+        handler.resolve();
+        await pending;
+      }
+    },
+  );
 
   it("revokes shutdown transcript reads when the aggregate drain expires", async () => {
     vi.useFakeTimers();

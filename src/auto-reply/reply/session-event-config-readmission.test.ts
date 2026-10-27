@@ -14,11 +14,6 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import { completionConfig } from "../../agents/bash-tools.lifecycle.test-support.js";
-import {
-  applyEmbeddedAttemptToolsAllow,
-  resolveEmbeddedAttemptToolConstructionPlan,
-} from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { buildEmbeddedAttemptToolRunContext } from "../../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
@@ -58,6 +53,7 @@ import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "./session-event-handoff.js";
+import { createEventManagedTools } from "./session-event.test-support.js";
 // mock-isolation: Synthetic model decisions; admission, queue and real tool writes stay real.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
   runEmbeddedAgent: vi.fn(),
@@ -116,38 +112,10 @@ async function attemptRealWrite(
     pluginId: "openclaw",
   });
   try {
-    const toolRunContext = buildEmbeddedAttemptToolRunContext({
-      ...params,
-      model:
-        params.provider && params.model
-          ? { provider: params.provider, id: params.model }
-          : undefined,
-    });
-    const construction = resolveEmbeddedAttemptToolConstructionPlan({
-      toolsAllow: toolRunContext.runtimeToolAllowlist,
-    });
-    const tools = applyEmbeddedAttemptToolsAllow(
-      expectDefined(
-        host.capabilities.createToolSurface,
-        "managed tool surface",
-      )({
-        ...toolRunContext,
-        config: params.config,
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        workspaceDir: workspace.effectiveWorkspace,
-        cwd: workspace.effectiveCwd,
-        sessionPermissionPolicy: workspace.sessionPermissionPolicy,
-        toolConstructionPlan: {
-          ...construction.codingToolConstructionPlan,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: false,
-          includePluginTools: false,
-        },
-      }),
-      construction.runtimeToolAllowlist,
+    const tools = createEventManagedTools(
+      params,
+      workspace,
+      expectDefined(host.capabilities.createToolSurface, "managed tool surface"),
     );
     const write = tools.find((tool) => tool.name === "write");
     if (write) {

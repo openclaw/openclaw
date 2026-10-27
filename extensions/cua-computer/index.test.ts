@@ -12,14 +12,13 @@ import type {
   OpenClawPluginNodeInvokePolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const artifactMocks = vi.hoisted(() => ({ verify: vi.fn(), registerDoctor: vi.fn() }));
 
 vi.mock("./api.js", () => ({
   registerCuaDriverDoctorChecks: artifactMocks.registerDoctor,
 }));
-
 vi.mock("./src/driver-artifacts.js", () => ({
   verifyInstalledCuaDriverArtifacts: artifactMocks.verify,
 }));
@@ -30,6 +29,8 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 const originalPlatform = process.platform;
 const enabledConfig = { plugins: { entries: { "cua-computer": { enabled: true } } } };
 const resourceHandle = "openclaw:computer-resource:v1:123e4567-e89b-42d3-a456-426614174000";
+const browserTarget = { browserRef: "browser", pageRef: "page" };
+const browserElement = { ...browserTarget, observationId: "observation", elementRef: "element" };
 
 function registerPlugin(overrides: TestPluginApiInput = {}) {
   const commands: OpenClawPluginNodeHostCommand[] = [];
@@ -51,6 +52,14 @@ function validateManifestConfig(value: unknown) {
     schema: manifest.configSchema as JsonSchemaObject,
     value,
   });
+}
+
+function classifyRisk(params: unknown) {
+  return registerPlugin().policies[0]!.classifyRisk!({ command: "computer.act", params });
+}
+
+function expectOrdinaryRisk(params: unknown, family: string) {
+  expect(classifyRisk(params)).toEqual({ level: "ordinary", family });
 }
 
 beforeEach(() => {
@@ -77,17 +86,14 @@ it("enables Gateway policy by default while keeping explicit plugin disable auth
 it.each([
   { platform: "linux", nativeCalls: 0, commandNames: [] },
   { platform: "darwin", nativeCalls: 1, commandNames: ["screen.snapshot", "computer.act"] },
-])(
-  "registers platform-appropriate defaults on $platform",
-  ({ platform, nativeCalls, commandNames }) => {
-    Object.defineProperty(process, "platform", { configurable: true, value: platform });
-    const { commands, policies } = registerPlugin({ config: {} });
-    expect(policies).toMatchObject([{ commands: ["computer.act"], dangerous: true }]);
-    expect(commands.map((command) => command.command)).toEqual(commandNames);
-    expect(artifactMocks.verify).toHaveBeenCalledTimes(nativeCalls);
-    expect(artifactMocks.registerDoctor).toHaveBeenCalledTimes(nativeCalls);
-  },
-);
+])("registers defaults on $platform", ({ platform, nativeCalls, commandNames }) => {
+  Object.defineProperty(process, "platform", { configurable: true, value: platform });
+  const { commands, policies } = registerPlugin({ config: {} });
+  expect(policies).toMatchObject([{ commands: ["computer.act"], dangerous: true }]);
+  expect(commands.map((command) => command.command)).toEqual(commandNames);
+  expect(artifactMocks.verify).toHaveBeenCalledTimes(nativeCalls);
+  expect(artifactMocks.registerDoctor).toHaveBeenCalledTimes(nativeCalls);
+});
 
 it("accepts the retired driver path as a no-op while keeping both schemas strict", () => {
   const config = { driverPath: "/usr/local/bin/cua-driver" };
@@ -137,87 +143,45 @@ it("forwards an explicitly armed computer action and preserves node refusals", a
   expect(invokeNode).toHaveBeenCalledOnce();
 });
 
-describe("registered CUA Computer risk policy", () => {
-  const classifyRisk = (params: unknown) => {
-    const classify = registerPlugin().policies[0]?.classifyRisk;
-    if (!classify) {
-      throw new Error("missing CUA Computer risk classifier");
-    }
-    return classify({ command: "computer.act", params });
-  };
+it.each([
+  [{ action: "kill_app", app: "app-ref" }, "process_termination"],
+  [{ action: "browser_navigate", ...browserTarget, url: "about:blank" }, "browser_navigation"],
+  [{ action: "browser_download", ...browserElement }, "browser_download"],
+  [
+    { action: "browser_set_input_files", ...browserElement, resourceHandles: [resourceHandle] },
+    "browser_file_input",
+  ],
+  [{ action: "start_recording" }, "recording_start"],
+  [{ action: "replay_trajectory", resourceHandle }, "recording_replay"],
+  [{ action: "escalate_scope", reason: "other" }, "desktop_scope_escalation"],
+])("classifies $family as high risk", (params, family) => {
+  expect(classifyRisk(params)).toEqual({ level: "high", family });
+});
 
-  it.each([
-    [{ action: "kill_app", app: "app-ref" }, "process_termination"],
-    [
-      { action: "browser_navigate", browserRef: "browser", pageRef: "page", url: "about:blank" },
-      "browser_navigation",
-    ],
-    [
-      {
-        action: "browser_download",
-        browserRef: "browser",
-        pageRef: "page",
-        observationId: "observation",
-        elementRef: "element",
-      },
-      "browser_download",
-    ],
-    [
-      {
-        action: "browser_set_input_files",
-        browserRef: "browser",
-        pageRef: "page",
-        observationId: "observation",
-        elementRef: "element",
-        resourceHandles: [resourceHandle],
-      },
-      "browser_file_input",
-    ],
-    [{ action: "start_recording" }, "recording_start"],
-    [{ action: "replay_trajectory", resourceHandle }, "recording_replay"],
-    [{ action: "escalate_scope", reason: "other" }, "desktop_scope_escalation"],
-  ])("classifies $family as high risk", (params, family) => {
-    expect(classifyRisk(params)).toEqual({ level: "high", family });
-  });
+it("distinguishes ordinary observation, input, and lifecycle arguments", () => {
+  const windowTarget = { windowRef: "window", observationId: "observation" };
+  const area = { x1: 0, y1: 0, x2: 100, y2: 100 };
+  expectOrdinaryRisk({ action: "list_windows" }, "observation");
+  expectOrdinaryRisk({ action: "zoom", ...windowTarget, ...area }, "observation");
+  expectOrdinaryRisk({ action: "type", text: "hello", windowRef: "window" }, "input");
+  expectOrdinaryRisk(
+    {
+      action: "__close_execution",
+      executionId: "123e4567-e89b-42d3-a456-426614174000",
+      reason: "completion",
+    },
+    "execution_lifecycle",
+  );
+});
 
-  it("distinguishes ordinary observation, input, and lifecycle arguments", () => {
-    expect(classifyRisk({ action: "list_windows" })).toEqual({
-      level: "ordinary",
-      family: "observation",
-    });
-    expect(
-      classifyRisk({
-        action: "zoom",
-        windowRef: "window",
-        observationId: "observation",
-        x1: 0,
-        y1: 0,
-        x2: 100,
-        y2: 100,
-      }),
-    ).toEqual({ level: "ordinary", family: "observation" });
-    expect(classifyRisk({ action: "type", text: "hello", windowRef: "window" })).toEqual({
-      level: "ordinary",
-      family: "input",
-    });
-    expect(
-      classifyRisk({
-        action: "__close_execution",
-        executionId: "123e4567-e89b-42d3-a456-426614174000",
-        reason: "completion",
-      }),
-    ).toEqual({ level: "ordinary", family: "execution_lifecycle" });
-  });
-
-  it("rejects raw provider calls and native process controls before dispatch", () => {
-    for (const params of [
-      { providerTool: "click", arguments: { x: 1, y: 2 } },
-      { action: "left_click", binaryPath: "/tmp/cua-driver" },
-      { action: "left_click", socketPath: "/tmp/cua.sock" },
-      { action: "left_click", session: "native-session" },
-      { action: "left_click", driverArgs: ["--dangerously-bypass-approvals"] },
-    ]) {
-      expect(() => classifyRisk(params)).toThrow("COMPUTER_INVALID_REQUEST");
-    }
-  });
+it("rejects raw provider calls and native process controls before dispatch", () => {
+  for (const params of [
+    { providerTool: "click", arguments: { x: 1, y: 2 } },
+    { action: "left_click", binaryPath: "/tmp/cua-driver" },
+    { action: "left_click", socketPath: "/tmp/cua.sock" },
+    { action: "left_click", session: "native-session" },
+    { action: "left_click", driverArgs: ["--dangerously-bypass-approvals"] },
+  ]) {
+    expect(() => classifyRisk(params)).toThrow("COMPUTER_INVALID_REQUEST");
+  }
 });

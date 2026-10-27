@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.ts";
 import { changelogFormat, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 
 const FORBIDDEN_INTERNAL_THANKS_HANDLES = new Set(["codex", "openclaw", "steipete"]);
@@ -103,7 +104,7 @@ export async function main(argv = process.argv.slice(2)) {
   const root = path.dirname(absolutePath);
   const artifacts = path.join(root, "CHANGELOG");
   if (path.basename(absolutePath) === "CHANGELOG.md" && fs.existsSync(artifacts)) {
-    for (const entry of fs.readdirSync(artifacts, { recursive: true, encoding: "utf8" })) {
+    for (const { relativePath: entry } of listDirectoryTreeStrictSync(artifacts)) {
       const relative = `CHANGELOG/${entry}`;
       if (isReleaseChangelogPath(relative)) {
         paths.push(path.join(root, relative));

@@ -13,28 +13,6 @@ function sortPaths(paths: string[]): string[] {
   return paths.toSorted((left, right) => left.localeCompare(right));
 }
 
-type ManagedNpmProject = {
-  projectRoot: string;
-  manifest: Record<string, unknown>;
-};
-
-function readManagedProjects(projectDirs: string[], npmDir: string): ManagedNpmProject[] {
-  return sortPaths(projectDirs).flatMap((projectRoot) => {
-    const manifest = tryReadJsonSync(path.join(projectRoot, "package.json"));
-    if (!isRecord(manifest) || !isRecord(manifest.dependencies)) {
-      return [];
-    }
-    // Staging, backup, and quarantine directories are not published projects.
-    // Carry the admitted manifest into recovery instead of opening it again.
-    const managed = Object.keys(manifest.dependencies).some(
-      (packageName) =>
-        validatePluginId(packageName) === null &&
-        isPluginNpmProjectDir({ packageName, projectDir: projectRoot, npmDir }),
-    );
-    return managed ? [{ projectRoot, manifest }] : [];
-  });
-}
-
 /** Lists directory candidates; each consumer establishes its own package ownership. */
 export function listPluginNpmProjectCandidatesSync(npmRoot: string): string[] {
   const projectsDir = resolvePluginNpmProjectsDir(npmRoot);
@@ -54,8 +32,21 @@ export function listPluginNpmProjectCandidatesSync(npmRoot: string): string[] {
 }
 
 /** Lists admitted projects with the manifest that established their managed ownership. */
-export function listManagedPluginNpmProjectsSync(npmRoot: string): ManagedNpmProject[] {
-  return readManagedProjects(listPluginNpmProjectCandidatesSync(npmRoot), npmRoot);
+export function listManagedPluginNpmProjectsSync(npmRoot: string) {
+  return listPluginNpmProjectCandidatesSync(npmRoot).flatMap((projectRoot) => {
+    const manifest = tryReadJsonSync(path.join(projectRoot, "package.json"));
+    if (!isRecord(manifest) || !isRecord(manifest.dependencies)) {
+      return [];
+    }
+    // Staging, backup, and quarantine directories are not published projects.
+    // Carry the admitted manifest into recovery instead of opening it again.
+    const managed = Object.keys(manifest.dependencies).some(
+      (packageName) =>
+        validatePluginId(packageName) === null &&
+        isPluginNpmProjectDir({ packageName, projectDir: projectRoot, npmDir: npmRoot }),
+    );
+    return managed ? [{ projectRoot, manifest }] : [];
+  });
 }
 
 /** Returns the root npm install plus all managed project npm roots. */

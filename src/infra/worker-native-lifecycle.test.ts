@@ -44,6 +44,7 @@ const nativeExit = {
   promiseCallbackRanWhileBlocked: false,
 };
 const cases = [
+  { ending: "reference-liveness", activeCompleted: true },
   {
     ending: "resource-idle-broker",
     ...resourceCustody,
@@ -210,4 +211,5 @@ it("keeps the supervisor alive when a resource attachment endpoint is rejected s
 
   expect(supervisor.exitCode()).toBeUndefined();
   expect(supervisor.replies).toContainEqual({ type: "message", id: 2, value: "ping" });
+  expect(types(2)).toEqual(["created", "message", "stopped"]);
 }, 30_000);

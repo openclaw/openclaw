@@ -358,8 +358,9 @@ in the default hybrid reload mode. See
 [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
 for application failures, cleanup warnings, and source-edit reloads.
 Plugins that declare OAuth-backed MCP servers list them under **Accounts** on
-the plugin's page; an administrator selects **Connect** to sign in once after
-the plugin is added. `openclaw mcp login <name>` signs in only to servers
+the plugin's page; an administrator selects **Sign in** to sign in once after
+the plugin is added. Until then, the plugin page and the chat install card show
+**Sign in** where the Install button was. `openclaw mcp login <name>` signs in only to servers
 defined under `mcp.servers`, not to servers a plugin declares.
 
 The page intentionally focuses on inventory, discovery, install, enablement,
@@ -442,6 +443,11 @@ visible at your reading position while the schema refreshes. Form and Setup
 controls cannot be edited until that refresh finishes. The first load still
 shows **Loading schema…** until a schema is available.
 
+In an agent's **Tools** tab, expand a tool group to browse its tools and policy
+details. Browser Find searches group summaries and tools in expanded groups.
+Selecting a tool in **Tool preview** opens its group and focuses its details.
+Collapsing a group closes its tool details.
+
 In an agent's **Files** editor, **Add file** opens a missing optional workspace
 document. Saving creates it only if it is still missing. If another editor or
 process creates it first, the editor keeps your draft and reports a conflict.
@@ -487,6 +493,7 @@ IDs return `stale-document`, and unknown commands return `unsupported`. Navigati
 switches sessions in place and reports success after the target state reaches the
 host. It settles within 15 seconds of receipt, including queued commands and host
 acknowledgements; failures return `navigate-timeout` or `navigate-rejected`.
+The deadline measures elapsed time, so system-clock corrections do not consume or renew it.
 The `visible` flag controls pane presentation. A visible, inactive window keeps
 rendering and accepting navigation; `active` only gates composer focus requests.
 Change-only `state` messages carry a monotonic revision,
@@ -706,6 +713,8 @@ The Sessions view collects session-change events in a randomized four-to-five-se
 The Gateway refreshes recaps after a run ends, not when a turn starts or new input arrives. A shared queue runs at most two recap calls at once and retries temporary overload or rate-limit failures up to three times with increasing delays, honoring provider retry timing. Without a usable Gateway credential for the utility model, the recap becomes unavailable immediately and the Gateway records “recap unavailable: no Gateway model credential” without attempting a provider call or scheduling retries. Authentication, configuration, and exhausted subscription failures require correction before retrying. Idle sessions make no repeated model calls, including when concurrent recap requests carry an older cached recap. Archiving retains the recap and requests catch-up; an agent still running in an archived session can update it when work finishes. Reopening requests a freshness check; new work is recapped after its run ends. Older sessions backfill in bounded chronological chunks when requested from Activity. Recaps read user and assistant conversation text, preferring final answers and skipping tool calls/results. Existing cached recaps gradually adopt the shorter format through the same queue while retaining their previous coverage. Incognito sessions and subagent sessions do not generate recaps. Recaps are generated text and do not determine whether a task is complete or grant access to a session.
 
 Visible conversations created by an agent receive recaps too, including spawned dashboard chats and conversations assigned to a sidebar group. Their parent-session link does not exclude them from recap generation; hidden background subagents remain excluded.
+
+Recap generation honors the session's assigned human owner's model policy, or its authenticated profile creator's policy when no human owner is assigned. Denying or revoking that policy stops new provider calls, including retries and fallbacks; the Gateway logs the reason and keeps the previous recap. Refreshes use the session owner's policy even when another viewer requests them. Assigning a task to an agent or the system does not remove its authenticated creator's policy. Sessions without an assigned human owner or authenticated profile creator retain Gateway service authority. To stop all recap generation for an agent, disable its utility routing with `utilityModel: ""`; this also disables its other utility routing. Session access still controls who can read recaps or request refreshes. See [operator model policy](/gateway/operator-scopes#named-operator-roles).
 
 The oversized-message notice applies only to omitted user or assistant messages. Oversized tool results, including screenshots, do not trigger it. Older cached notices remain visible until the next recap refresh, which clears screenshot-only notices while retaining notices for earlier oversized conversation messages. Legacy omission flags are rechecked once and marked with the current cache revision. Correcting an otherwise current recap does not call the model.
 

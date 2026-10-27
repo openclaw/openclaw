@@ -4,11 +4,9 @@ import type {
   SessionsDispatchResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
-import {
-  GatewayPayloadLimitError,
-  GatewayRequestError,
-  type GatewayBrowserClient,
-} from "../../api/gateway.ts";
+import { GatewayPayloadLimitError } from "../../api/gateway-browser-socket.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -254,15 +252,12 @@ export async function startSessionPlacementInitialTurn(
   const cleanupOnCancellation = params.cleanupOnCancellation ?? (() => true);
   const resolvePlacement = async (
     mode: SessionPlacementStartMode,
-    initial?: SessionPlacement,
-    sessionId?: string,
+    initial?: PlacementReadResult,
   ): Promise<PlacementResolution> => {
     const target = { key: params.key, agentId: params.agentId };
     const expectedSessionId = params.sessionId;
     const { client: placementClient } = requests;
-    let next: PlacementReadResult | undefined = initial
-      ? { status: "read", placement: initial, sessionId }
-      : undefined;
+    let next = initial;
     let lookupFailures = 0;
     let emptyPlacements = 0;
     let placementPending = false;
@@ -358,14 +353,16 @@ export async function startSessionPlacementInitialTurn(
   };
   let resolution: PlacementResolution = { status: "dispatch" };
   let dispatchError = "";
+  let initialPlacement: Promise<PlacementReadResult> | undefined;
   const requiredTarget =
     params.target.kind === "profile" && params.target.required ? params.target : undefined;
   // An attempted send must reach duplicate admission even after its worker has settled.
   if (params.mode !== "resend" && requiredTarget) {
-    // A recovered draft carries intent, not authority. Revalidate the policy before
-    // observing placement or admitting a Retry through the ordinary run owner.
+    // A recovered draft carries intent, not authority. Policy still gates turn admission.
     try {
-      const policy = await readSessionPlacementPolicy(client);
+      const policyRequest = readSessionPlacementPolicy(client);
+      initialPlacement = readPlacement(requests, params.key);
+      const policy = await policyRequest;
       if (!isCurrent()) {
         return cancelSessionPlacement(client, params, cleanupOnCancellation);
       }
@@ -383,7 +380,7 @@ export async function startSessionPlacementInitialTurn(
     }
   }
   if (params.mode !== "resend" && (params.mode !== "dispatch" || requiredTarget)) {
-    resolution = await resolvePlacement(params.mode);
+    resolution = await resolvePlacement(params.mode, initialPlacement && (await initialPlacement));
     if (resolution.status === "dispatch" && !isCurrent()) {
       return cancelSessionPlacement(client, params, cleanupOnCancellation);
     }
@@ -396,7 +393,12 @@ export async function startSessionPlacementInitialTurn(
         "sessions.dispatch",
         sessionPlacementDispatchParams(params),
       );
-      resolution = await resolvePlacement("recover", dispatched.placement, dispatched.sessionId);
+      resolution = await resolvePlacement(
+        "recover",
+        dispatched.placement
+          ? { status: "read", placement: dispatched.placement, sessionId: dispatched.sessionId }
+          : undefined,
+      );
     } catch (error) {
       dispatchError = formatUiError(error);
       if (!cleanupOnCancellation() && !isCurrent()) {

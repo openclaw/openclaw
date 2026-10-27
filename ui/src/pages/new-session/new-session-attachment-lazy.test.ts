@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import * as staleChunkReload from "../../app/stale-chunk-reload.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createNewSessionRouteData as routeData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import "./new-session-page-entry.ts";
 
@@ -26,16 +27,6 @@ type NewSessionElement = HTMLElement & {
   data: NewSessionRouteData;
   updateComplete: Promise<boolean>;
 };
-
-function routeData(agentId: string): NewSessionRouteData {
-  return {
-    agentId,
-    requestedAgentId: agentId,
-    catalogId: "",
-    catalogLabel: "",
-    startTerminal: false,
-  };
-}
 
 async function enterMessage(page: NewSessionElement, message: string) {
   const textarea = page.querySelector<HTMLTextAreaElement>(".new-session-page__message")!;

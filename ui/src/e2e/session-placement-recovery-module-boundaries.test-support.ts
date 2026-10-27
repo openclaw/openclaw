@@ -119,8 +119,8 @@ export function defineSessionPlacementRecoveryModuleBoundaryTests(
         await page.evaluate(() =>
           (window as unknown as { releaseRecoveryDigest: () => void }).releaseRecoveryDigest(),
         );
-        await runtime.request;
         if (recoveryKind !== "none") {
+          await runtime.request;
           expect(
             await pane.evaluate(
               ({ state }: HTMLElement & { state: ChatPageHost }) =>
@@ -151,6 +151,7 @@ export function defineSessionPlacementRecoveryModuleBoundaryTests(
           { params: { sessionKey, message: "queued while offline" } },
         ]);
         expect(await requests("chat.send")).toHaveLength(recoveryKind === "accepted" ? 2 : 1);
+        expect(runtime.requests()).toBe(recoveryKind === "none" ? 0 : 1);
         await expectNoRequests(gateway, "sessions.dispatch");
         if (recoveryKind === "accepted") {
           expect(await page.locator(".chat-group.user", { hasText: message }).count()).toBe(1);

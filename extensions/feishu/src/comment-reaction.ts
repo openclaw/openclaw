@@ -48,14 +48,14 @@ async function requestCommentTypingReactionWithClient(params: {
     if (response.code === 0) {
       return true;
     }
-    params.runtime?.log?.(
+    params.runtime?.log(
       `${params.logPrefix ?? "[feishu]"}: comment typing reaction ${params.action} failed ` +
         `reply=${params.replyId} file=${params.fileType}:${params.fileToken} ` +
         `code=${response.code ?? "unknown"} msg=${response.msg ?? "unknown"} ` +
         `log_id=${response.log_id ?? response.error?.log_id ?? "unknown"}`,
     );
   } catch (error) {
-    params.runtime?.log?.(
+    params.runtime?.log(
       `${params.logPrefix ?? "[feishu]"}: comment typing reaction ${params.action} threw ` +
         `reply=${params.replyId} file=${params.fileType}:${params.fileToken} ` +
         `error=${formatFeishuApiError(error, { includeNestedErrorLogId: true })}`,

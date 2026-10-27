@@ -45,7 +45,7 @@ import {
   readDockerPort,
   resolveDockerEnvPolicyEpoch,
 } from "./docker.js";
-import { prepareSandboxMountPlan, sandboxMountPlanMatchesContainer } from "./mount-plan.js";
+import { compareSandboxMountPlan, prepareSandboxMountPlan } from "./mount-plan.js";
 import {
   buildNoVncObserverTokenUrl,
   consumeNoVncObserverToken,
@@ -322,7 +322,7 @@ async function ensureSandboxBrowserContainer(
       const isHot =
         running && (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_BROWSER_WINDOW_MS);
       if (isHot) {
-        const mountsMatch = await sandboxMountPlanMatchesContainer({
+        const mounts = await compareSandboxMountPlan({
           engine: DOCKER_SANDBOX_ENGINE,
           containerName,
           plan: mountPlan,
@@ -333,7 +333,7 @@ async function ensureSandboxBrowserContainer(
           scope: params.cfg.scope,
           sessionKey: params.scopeKey,
           browser: true,
-          mountsChanged: !mountsMatch,
+          mountsChanged: mounts !== "match",
         });
       } else {
         await removeExistingContainer();

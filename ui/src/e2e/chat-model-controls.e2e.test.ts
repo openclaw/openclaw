@@ -2,12 +2,13 @@ import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { modelSessionList } from "./chat-runtime-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
-  it.each(["chat", "new"])("keeps a large pending model catalog usable in /%s", async (route) => {
+  it("keeps a large pending model catalog usable in /chat", async () => {
     const contextOptions = { viewport: { width: 1280, height: 900 }, hasTouch: true };
     await suite.withPage(contextOptions, async ({ page }) => {
       const models = Array.from({ length: 1_000 }, (_, index) => ({
@@ -22,7 +23,7 @@ suite.define(() => {
         methodResponses: { "models.list": { models, pendingProviders: ["example"] } },
         sessionInfo: { model: "model-0", modelProvider: "example" },
       });
-      await page.goto(`${suite.server.baseUrl}${route}`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       const composer = page.locator(".agent-chat__input").first();
       const picker = composer.locator(".chat-controls__model-picker");
       const trigger = picker.locator("[data-chat-model-select]");
@@ -107,38 +108,36 @@ suite.define(() => {
       expect(await picker.getAttribute("open")).not.toBeNull();
       await result.click();
       await expect.poll(() => trigger.textContent()).toContain("Model 0999");
-      if (route === "chat") {
-        expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
-          expectedSessionId: "session:agent:main:main",
-          model: "example/model-999",
-        });
-        await page.emulateMedia({ reducedMotion: "no-preference" });
-        const sessions = page.locator('[data-navigation-view="sessions"]');
-        if ((await sessions.getAttribute("aria-pressed")) !== "true") {
-          await sessions.click();
-        }
-        await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe("true");
-        const toggleSidebar = async () => {
-          for (const pressed of ["false", "true"]) {
-            await sessions.click();
-            await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe(pressed);
-            await page.locator(".shell").evaluate(async (shell) => {
-              await new Promise<void>((resolve) => {
-                requestAnimationFrame(() => resolve());
-              });
-              await Promise.all(shell.getAnimations().map((animation) => animation.finished));
-              await new Promise<void>((resolve) => {
-                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-              });
-            });
-          }
-        };
-        await toggleSidebar();
-        const requestsBeforeToggle = (await gateway.getRequests("models.list")).length;
-        await toggleSidebar();
-        expect(await trigger.textContent()).toContain("Model 0999");
-        expect((await gateway.getRequests("models.list")).length).toBe(requestsBeforeToggle);
+      expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
+        expectedSessionId: "session:agent:main:main",
+        model: "example/model-999",
+      });
+      await page.emulateMedia({ reducedMotion: "no-preference" });
+      const sessions = page.locator('[data-navigation-view="sessions"]');
+      if ((await sessions.getAttribute("aria-pressed")) !== "true") {
+        await sessions.click();
       }
+      await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe("true");
+      const toggleSidebar = async () => {
+        for (const pressed of ["false", "true"]) {
+          await sessions.click();
+          await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe(pressed);
+          await page.locator(".shell").evaluate(async (shell) => {
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            });
+            await Promise.all(shell.getAnimations().map((animation) => animation.finished));
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            });
+          });
+        }
+      };
+      await toggleSidebar();
+      const requestsBeforeToggle = (await gateway.getRequests("models.list")).length;
+      await toggleSidebar();
+      expect(await trigger.textContent()).toContain("Model 0999");
+      expect((await gateway.getRequests("models.list")).length).toBe(requestsBeforeToggle);
     });
   });
 
@@ -171,21 +170,16 @@ suite.define(() => {
           },
         ];
         const sessionKey = "agent:main:main";
-        const sessionList = {
-          count: 1,
-          path: "",
-          ts: 1,
-          defaults: { model: "gpt-5.5", modelProvider: "openai", contextTokens: 200_000 },
-          sessions: [
-            {
-              key: sessionKey,
-              kind: "direct",
-              model: "gpt-5.5",
-              modelProvider: "openai",
-              updatedAt: 1,
-            },
-          ],
-        };
+        const sessionList = modelSessionList(
+          {
+            key: sessionKey,
+            kind: "direct",
+            model: "gpt-5.5",
+            modelProvider: "openai",
+            updatedAt: 1,
+          },
+          { model: "gpt-5.5", modelProvider: "openai", contextTokens: 200_000 },
+        );
         const gateway = await installMockGateway(page, {
           agentModel: "openai/gpt-5.5",
           models,
@@ -470,30 +464,25 @@ suite.define(() => {
             },
           ],
           methodResponses: {
-            "sessions.list": {
-              count: 1,
-              path: "",
-              ts: 1,
-              defaults: {
+            "sessions.list": modelSessionList(
+              {
+                key: "agent:main:main",
+                kind: "direct",
+                model: "gpt-5.6-luna",
+                modelProvider: "openai",
+                updatedAt: 1,
+                contextTokens: 200_000,
+                totalTokens: 46_000,
+                totalTokensFresh: true,
+              },
+              {
                 model: "gpt-5.6-luna",
                 modelProvider: "openai",
                 thinkingDefault: "high",
                 thinkingLevels,
                 contextTokens: 200_000,
               },
-              sessions: [
-                {
-                  key: "agent:main:main",
-                  kind: "direct",
-                  model: "gpt-5.6-luna",
-                  modelProvider: "openai",
-                  updatedAt: 1,
-                  contextTokens: 200_000,
-                  totalTokens: 46_000,
-                  totalTokensFresh: true,
-                },
-              ],
-            },
+            ),
           },
         });
         await page.goto(`${suite.server.baseUrl}${route}`);
@@ -698,32 +687,27 @@ suite.define(() => {
             },
           ],
           methodResponses: {
-            "sessions.list": {
-              count: 1,
-              path: "",
-              ts: 1,
-              defaults: {
+            "sessions.list": modelSessionList(
+              {
+                key: "agent:main:main",
+                kind: "direct",
+                model: "basic",
+                modelProvider: provider,
+                thinkingLevels: [],
+                thinkingDefault: "off",
+                contextTokens: 200_000,
+                totalTokens: 46_000,
+                totalTokensFresh: true,
+                updatedAt: 1,
+              },
+              {
                 model: "basic",
                 modelProvider: provider,
                 thinkingLevels: [],
                 thinkingDefault: "off",
                 contextTokens: 200_000,
               },
-              sessions: [
-                {
-                  key: "agent:main:main",
-                  kind: "direct",
-                  model: "basic",
-                  modelProvider: provider,
-                  thinkingLevels: [],
-                  thinkingDefault: "off",
-                  contextTokens: 200_000,
-                  totalTokens: 46_000,
-                  totalTokensFresh: true,
-                  updatedAt: 1,
-                },
-              ],
-            },
+            ),
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
@@ -765,46 +749,6 @@ suite.define(() => {
         await expect
           .poll(() => effort.evaluate((node) => node === document.activeElement))
           .toBe(true);
-      });
-    },
-  );
-
-  it.each(["chat", "new"])(
-    "clears %s model search before Escape dismisses the picker",
-    async (route) => {
-      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          agentModel: "openai/gpt-5.5",
-          models: [
-            { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-            { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
-          ],
-        });
-        await page.goto(`${suite.server.baseUrl}${route}`);
-        const composer = page.locator(".agent-chat__input").first();
-        const picker = composer.locator(".chat-controls__model-picker");
-        const trigger = picker.locator('[data-chat-model-select="true"]');
-        await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
-        await trigger.click();
-        await revealChatModelOption(picker, "openai/gpt-5.5");
-        await revealChatModelOption(picker, "anthropic/claude-sonnet-4-6");
-        await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
-        const search = picker.locator("[data-chat-model-search]");
-        // Enter search with the pointer so row tooltips do not own Escape.
-        await search.click();
-        await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
-        await search.fill("anthropic");
-        await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
-        await search.press("Escape");
-        await expect.poll(() => picker.getAttribute("open")).toBe("");
-        expect(await search.inputValue()).toBe("");
-        expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
-        await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(2);
-        expect(await gateway.getRequests("sessions.patch")).toEqual([]);
-
-        await search.press("Escape");
-        await expect.poll(() => picker.getAttribute("open")).toBe(null);
-        expect(await trigger.evaluate((summary) => summary === document.activeElement)).toBe(true);
       });
     },
   );

@@ -9,7 +9,7 @@ read_when:
 title: "Database schemas"
 ---
 
-OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; agent stores also support the [PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. Doctor supports owner-supplied forward migrations for PostgreSQL state and agent schemas, including agent schema 27 to 28, with exact predecessor backups. Older OpenClaw builds refuse databases written by a newer schema.
+OpenClaw stores control-plane state in the shared state database and agent data in one database per agent. SQLite is the default; agent stores also support the [PostgreSQL engine](/reference/database-engines). SQLite schema migrations run forward when a database opens. Doctor supports owner-supplied consecutive forward migrations for PostgreSQL state and agent schemas, with exact predecessor backups. Older OpenClaw builds refuse databases written by a newer schema.
 
 For runtime contributors, start with
 [database access in workers](/reference/database-schemas/worker-access): execution
@@ -168,7 +168,9 @@ the file. A clean-close seal carries validated facts across process restarts.
 File identity uses volume, inode, and stable
 birthtime captured once with `fstat` on the retained admission descriptor, not SQL.
 Admission lookups and established borrowers reuse those shared facts without
-checking the pathname again. Native open and reopen still identify replacement
+checking the pathname again. Shared-state handle lookups, including lease storage
+preparation, do not enter a schema read scope. Actual cached reads retain their
+schema and row-revision admission. Native open and reopen still identify replacement
 files, and creation witnesses retain their physical file check. A replaced or
 restored file needs fresh admission. Migration and repair owners validate their
 changes and publish new facts after successful DDL settlement. Ordinary Doctor
@@ -201,7 +203,9 @@ finishes before synchronous database execution; writer admission and receipts
 stay with their existing owners.
 
 The shared-state reader pool keeps its first worker warm for the normal handle
-idle timeout. Surplus readers retire after 30 seconds idle and restart on demand.
+idle timeout. Surplus readers initially retire after 30 seconds idle and restart on demand.
+When demand returns within five minutes of that retirement, one replacement
+reader stays warm for up to 90 idle seconds to avoid repeated startup work.
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
 
@@ -219,9 +223,10 @@ flushes the remaining batch. Fresh checkpoints remain untouched, and a failed or
 canceled scan leaves uncommitted derived totals for the next refresh. Persisted
 rollups, partitions, schemas, and report totals keep their existing format.
 
-Transcript history and search lanes likewise retire surplus workers after 30
-seconds idle. Each lane keeps one worker until its existing five-minute idle
-retirement, which waits for logical reader leases to be released. Surplus
+Transcript history and search lanes use the same 30-second surplus timeout and
+90-second warm timeout for one recurring burst worker. Each lane keeps one worker
+until its existing five-minute idle retirement, which waits for logical reader
+leases to be released. Surplus
 retirement preserves those leases and waits for active tasks; a later concurrent
 read starts another worker on demand.
 

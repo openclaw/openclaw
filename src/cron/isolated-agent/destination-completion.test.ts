@@ -1,5 +1,6 @@
 import path from "node:path";
 import { assert, expect, it, vi } from "vitest";
+import { projectAgentHarnessTranscriptMessageForDisplay } from "../../agents/harness/transcript-visibility.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
@@ -171,12 +172,14 @@ it("sends a native-only Discord embed without inventing conversation text", () =
     expect(sendPayload).toHaveBeenCalledOnce();
     expect(sendText).not.toHaveBeenCalled();
     expect(await fixture.messages()).toEqual([]);
+    // Outbound skips native-only output before it creates the destination conversation.
     expect(
-      await readConversationMessages({
+      loadSessionEntryReadOnly({
         ...fixture.scope,
         sessionKey: destinationSessionKey,
+        readConsistency: "latest",
       }),
-    ).toEqual([]);
+    ).toBeUndefined();
   }, "isolated"));
 
 it("inherits required sandbox policy from the exact execution source for a new destination", () =>
@@ -281,7 +284,7 @@ it.each(["rejected", "uncertain"] as const)(
     }, "isolated"),
 );
 
-it.each(["persistent", "threaded", "stable", "tool-commit-failure", "cross-agent"] as const)(
+it.each(["persistent", "threaded", "stable", "tool-delivered", "cross-agent"] as const)(
   "routes %s output without duplicate conversation writes or sends",
   (mode) =>
     withCompletionFixture(async (fixture, state) => {
@@ -291,11 +294,10 @@ it.each(["persistent", "threaded", "stable", "tool-commit-failure", "cross-agent
           ? "agent:main:telegram:direct:12345:thread:12345:42"
           : "agent:main:telegram:direct:12345";
 
-      const commitFailure =
-        mode === "tool-commit-failure"
-          ? vi
-              .spyOn(backgroundResults, "commitBackgroundResultToSession")
-              .mockRejectedValue(new Error("completion commit rejected"))
+      // A message-tool send records its own history; cron must not write the result again.
+      const commitSpy =
+        mode === "tool-delivered"
+          ? vi.spyOn(backgroundResults, "commitBackgroundResultToSession")
           : undefined;
       const destination = {
         ...fixture.scope,
@@ -334,8 +336,10 @@ it.each(["persistent", "threaded", "stable", "tool-commit-failure", "cross-agent
         },
       );
       if (mode === "persistent") {
+        // The persistent run executes in the destination conversation's own generation.
         await replaceSessionEntry(destination, {
           sessionId: destination.sessionId,
+          lifecycleRevision: params.lifecycleRevision,
           updatedAt: 1,
         });
       }
@@ -360,16 +364,20 @@ it.each(["persistent", "threaded", "stable", "tool-commit-failure", "cross-agent
           updateMode: "none",
           messages: [
             {
-              message: {
-                role: "assistant",
-                content: [{ type: "text", text: "Final destination report" }],
-                api: "openai-completions",
-                provider: "test",
-                model: "test",
-                stopReason: "stop",
-                usage: makeZeroUsageSnapshot(),
-                timestamp: 1000,
-              },
+              message: projectAgentHarnessTranscriptMessageForDisplay({
+                hidden: false,
+                inputProvenance: { kind: "internal_system", sourceTool: "cron_execution" },
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "Final destination report" }],
+                  api: "openai-completions",
+                  provider: "test",
+                  model: "test",
+                  stopReason: "stop",
+                  usage: makeZeroUsageSnapshot(),
+                  timestamp: 1000,
+                },
+              }),
             },
           ],
         });
@@ -431,7 +439,7 @@ it.each(["persistent", "threaded", "stable", "tool-commit-failure", "cross-agent
           ...(mode === "cross-agent" ? { accountId: "default" } : {}),
         });
         setReport(fixture, "Final destination report");
-        if (mode === "tool-commit-failure") {
+        if (mode === "tool-delivered") {
           params.sourceDeliveryOutcome = messageToolOutcome([
             {
               tool: "message",
@@ -445,12 +453,9 @@ it.each(["persistent", "threaded", "stable", "tool-commit-failure", "cross-agent
         const result = await dispatchCronDelivery(params);
         expect(result).toMatchObject(expected);
         expect(await dispatchCronDelivery(params)).toMatchObject(expected);
-        expect(sendText).toHaveBeenCalledTimes(mode === "tool-commit-failure" ? 0 : 1);
-        if (commitFailure) {
-          expectDeliveryWarning(
-            result,
-            "result was delivered but was not added to the conversation: completion commit rejected",
-          );
+        expect(sendText).toHaveBeenCalledTimes(mode === "tool-delivered" ? 0 : 1);
+        if (commitSpy) {
+          expect(commitSpy).not.toHaveBeenCalled();
         }
         if (mode === "cross-agent") {
           expectDeliveryWarning(
@@ -474,20 +479,30 @@ it.each(["persistent", "threaded", "stable", "tool-commit-failure", "cross-agent
               }),
             ).toBeUndefined();
           }
+        } else if (commitSpy) {
+          expect(latest(destination)).toBeUndefined();
         } else {
           const messages = await readConversationMessages(destination);
-          if (commitFailure) {
-            expect(messages).toEqual([]);
-          } else {
-            expect(messages).toHaveLength(1);
-            expect(readTranscriptEventMessage(messages[0])?.content).toEqual([
-              { type: "text", text: "Final destination report" },
-            ]);
+          const transcriptMessages = messages.map(readTranscriptEventMessage);
+          // Keep scheduled execution in audit history, with one settled visible result.
+          expect(transcriptMessages).toHaveLength(mode === "persistent" ? 2 : 1);
+          if (mode === "persistent") {
+            expect(transcriptMessages[0]).toMatchObject({
+              display: false,
+              content: [{ type: "text", text: "Final destination report" }],
+            });
           }
+          const visibleMessages = transcriptMessages.filter(
+            (message) => message && Reflect.get(message, "display") !== false,
+          );
+          expect(visibleMessages).toHaveLength(1);
+          expect(visibleMessages[0]?.content).toEqual([
+            { type: "text", text: "Final destination report" },
+          ]);
         }
         expect(await fixture.messages()).toEqual([]);
       } finally {
-        commitFailure?.mockRestore();
+        commitSpy?.mockRestore();
       }
     }, "isolated"),
 );

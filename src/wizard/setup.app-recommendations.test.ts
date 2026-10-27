@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import * as onboardingPlugins from "../commands/onboarding-plugin-install.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as clawHubSkills from "../infra/clawhub-skills.js";
@@ -114,17 +115,13 @@ async function setupAppRecommendations(params: SetupFixture): Promise<OpenClawCo
 }
 
 function createPrompter(selected: string[] = []): WizardPrompter {
-  return {
-    intro: vi.fn(async () => undefined),
-    outro: vi.fn(async () => undefined),
-    note: vi.fn(async () => undefined),
+  return createWizardPrompter({
     plain: vi.fn(async () => undefined),
     select: vi.fn(),
     multiselect: vi.fn(async () => selected) as WizardPrompter["multiselect"],
     text: vi.fn(),
     confirm: vi.fn(async () => true),
-    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-  };
+  });
 }
 
 const runtime: RuntimeEnv = {

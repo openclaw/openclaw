@@ -79,7 +79,7 @@ export function copyPluginToolMeta(source: AnyAgentTool, target: AnyAgentTool): 
 }
 
 /** Builds a collision-proof key for plugin-owned tool metadata lookups. */
-export function buildPluginToolMetadataKey(pluginId: string, toolName: string): string {
+function buildPluginToolMetadataKey(pluginId: string, toolName: string): string {
   return JSON.stringify([pluginId, toolName]);
 }
 

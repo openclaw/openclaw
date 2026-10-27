@@ -8,6 +8,7 @@ import {
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { replaceGatewayClient } from "./new-session-page.test-support.ts";
@@ -68,9 +69,7 @@ suite.define(() => {
     const failedChildKey = "agent:main:failed-checks";
     const context = await suite.browser.newContext({
       colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
+      ...createControlUiE2eContextOptions(),
     });
     const page = await context.newPage();
     const children = [
@@ -703,9 +702,7 @@ suite.define(() => {
   it("lists a personal pin once in Pinned and presents its pin state", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
+      ...createControlUiE2eContextOptions(),
     });
     const page = await context.newPage();
     await seedPersonalSessionPins(page, ["agent:main:pinned"]);
@@ -926,27 +923,28 @@ suite.define(() => {
       }
 
       // Sections must lay out below the rows above them, not paint over them.
-      const overlaps = await page.evaluate(() => {
-        const rects = [
-          ...document.querySelectorAll(".sidebar-recent-session, .sidebar-recent-sessions__head"),
-        ]
-          .map((element) => {
-            const rect = element.getBoundingClientRect();
-            return { top: rect.top, bottom: rect.bottom };
-          })
-          .filter((rect) => rect.bottom > rect.top)
-          .toSorted((a, b) => a.top - b.top);
-        let bad = 0;
-        let previousBottom: number | undefined;
-        for (const rect of rects) {
-          if (previousBottom !== undefined && rect.top < previousBottom - 2) {
-            bad += 1;
+      const overlaps = () =>
+        page.evaluate(() => {
+          const rects = [
+            ...document.querySelectorAll(".sidebar-recent-session, .sidebar-recent-sessions__head"),
+          ]
+            .map((element) => {
+              const rect = element.getBoundingClientRect();
+              return { top: rect.top, bottom: rect.bottom };
+            })
+            .filter((rect) => rect.bottom > rect.top)
+            .toSorted((a, b) => a.top - b.top);
+          let bad = 0;
+          let previousBottom: number | undefined;
+          for (const rect of rects) {
+            if (previousBottom !== undefined && rect.top < previousBottom - 2) {
+              bad += 1;
+            }
+            previousBottom = rect.bottom;
           }
-          previousBottom = rect.bottom;
-        }
-        return bad;
-      });
-      expect(overlaps).toBe(0);
+          return bad;
+        });
+      await expect.poll(overlaps).toBe(0);
     } finally {
       await context.close();
     }
@@ -982,19 +980,20 @@ suite.define(() => {
       const loadMore = page
         .locator('[data-session-section="ungrouped"]')
         .getByRole("button", { name: "Show more" });
+      const viewport = page.locator(".sidebar-shell__body");
       for (let pageIndex = 0; pageIndex < 3 && (await loadMore.isVisible()); pageIndex += 1) {
-        const visibleRows = await page.locator(".sidebar-recent-session").count();
+        const before = await viewport.evaluate((element) => element.scrollHeight);
         await loadMore.click();
         await expect
-          .poll(() => page.locator(".sidebar-recent-session").count())
-          .toBeGreaterThan(visibleRows);
+          .poll(() => viewport.evaluate((element) => element.scrollHeight))
+          .toBeGreaterThan(before);
       }
-      await page.locator(".sidebar-shell__body").evaluate((element) => {
-        element.scrollTop = 0;
-      });
-      await expect
-        .poll(() => page.locator(".sidebar-recent-session").count(), { timeout: 15_000 })
-        .toBe(rows.length);
+      await revealSidebarTarget(
+        viewport,
+        page.locator('.sidebar-recent-session[data-session-key="agent:main:chat-29"]'),
+      );
+      await viewport.evaluate((element) => element.scrollTo(0, 0));
+      await page.locator('.sidebar-recent-session[data-session-key="agent:main:work-0"]').waitFor();
       await captureUiProof(suite, page, "short-window-session-sections.png");
 
       // Sections must stack below each other, not paint over the rows above.
@@ -1044,10 +1043,8 @@ suite.define(() => {
 
   it("keeps sidebar session controls reachable on touch pointers", async () => {
     const context = await suite.browser.newContext({
+      ...createControlUiE2eContextOptions(),
       hasTouch: true,
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
     await installMockGateway(page, {

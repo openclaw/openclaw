@@ -168,8 +168,19 @@ describe("session-delivery queue storage", () => {
 
       expect(await listPending(queueContext)).toEqual([
         expect.objectContaining({
-          route: expect.objectContaining({ channel: "discord", to: "channel:123" }),
-          inputProvenance: expect.objectContaining({ sourceTool: "image_generate" }),
+          sessionKey: "agent:main:discord:channel:123",
+          route: {
+            channel: "discord",
+            to: "channel:123",
+            accountId: "default",
+            chatType: "channel",
+          },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: "image_generate:task-1",
+            sourceChannel: "internal",
+            sourceTool: "image_generate",
+          },
           sourceReplyDeliveryMode: "message_tool_only",
           expectedMediaUrls: ["/tmp/proof.png"],
         }),

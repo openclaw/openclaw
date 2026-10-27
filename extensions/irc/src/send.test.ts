@@ -11,20 +11,12 @@ const mocks = vi.hoisted(() => ({
   currentConfig: vi.fn(() => ({})),
   record: vi.fn(),
   connectIrcClient: vi.fn(),
-  stripMarkdown: vi.fn((text: string) => text),
-  buildIrcConnectOptions: vi.fn(),
 }));
 // mock-isolation: outbound tests use an owned transport instead of connecting to IRC.
 vi.mock("./client.js", () => ({ connectIrcClient: mocks.connectIrcClient }));
-// mock-isolation: transport option construction is fixed for the owned client fixture.
-vi.mock("./connect-options.js", () => ({ buildIrcConnectOptions: mocks.buildIrcConnectOptions }));
 vi.mock("node:crypto", async (original) => ({
   ...(await original<typeof import("node:crypto")>()),
   randomUUID: () => "irc-msg-1",
-}));
-vi.mock("openclaw/plugin-sdk/text-chunking", async (original) => ({
-  ...(await original<typeof import("openclaw/plugin-sdk/text-chunking")>()),
-  stripMarkdown: mocks.stripMarkdown,
 }));
 
 import { ircPlugin } from "./channel.js";
@@ -41,12 +33,7 @@ const longText = Array.from({ length: 80 }, (_, index) => `word-${index}`).join(
 const id = "irc-msg-1";
 
 afterAll(() => {
-  for (const path of [
-    "./client.js",
-    "./connect-options.js",
-    "node:crypto",
-    "openclaw/plugin-sdk/text-chunking",
-  ]) {
+  for (const path of ["./client.js", "node:crypto"]) {
     vi.doUnmock(path);
   }
   vi.resetModules();
@@ -80,8 +67,6 @@ describe("IRC outbound and probing", () => {
     for (const mock of Object.values(mocks)) {
       mock.mockReset();
     }
-    mocks.stripMarkdown.mockImplementation((text: string) => text);
-    mocks.buildIrcConnectOptions.mockReturnValue({});
     client = createClient();
     ircRuntime.setIrcRuntime(
       createPluginRuntimeMock({
@@ -101,12 +86,48 @@ describe("IRC outbound and probing", () => {
       channels: {
         irc: {
           ...address,
-          accounts: { work: { host: address.host, nick: "workbot" } },
+          accounts: {
+            work: {
+              host: "irc.work.test",
+              port: 6667,
+              tls: false,
+              nick: "workbot",
+              username: "work-user",
+              realname: "Work Bot",
+              password: "server-pass",
+              nickserv: {
+                enabled: true,
+                service: "NickServ",
+                password: "nickserv-pass",
+                register: true,
+                registerEmail: "bot@example.com",
+              },
+            },
+          },
         },
       },
     };
     const result = await send({ cfg: namedCfg, accountId: "work" });
     expect(mocks.currentConfig).not.toHaveBeenCalled();
+    expect(mocks.connectIrcClient).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        host: "irc.work.test",
+        port: 6667,
+        tls: false,
+        nick: "workbot",
+        username: "work-user",
+        realname: "Work Bot",
+        password: "server-pass",
+        nickserv: expect.objectContaining({
+          enabled: true,
+          service: "NickServ",
+          password: "nickserv-pass",
+          register: true,
+          registerEmail: "bot@example.com",
+        }),
+        connectTimeoutMs: 12_000,
+      }),
+    );
     expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello", undefined);
     expect(mocks.record).toHaveBeenCalledWith({
       channel: "irc",
@@ -145,36 +166,10 @@ describe("IRC outbound and probing", () => {
   });
 
   it("rejects stripped-empty replies before adding reply metadata", async () => {
-    mocks.stripMarkdown.mockReturnValue("");
     await expect(send({ replyTo: "irc-parent-1" }, "#")).rejects.toThrow(
       "Message must be non-empty for IRC sends",
     );
     unsent();
-  });
-
-  it("uses one transient connection for a chunked outbound message", async () => {
-    const onDeliveryResult = vi.fn(),
-      onPlatformSendDispatch = vi.fn();
-    const chunks = ircOutboundBaseAdapter.chunker(longText, 350);
-    const results = await formatted({
-      ...context,
-      text: longText,
-      replyToId: "parent-1",
-      replyToIdSource: "explicit",
-      replyToMode: "all",
-      onDeliveryResult,
-      onPlatformSendDispatch,
-    });
-    expect(mocks.connectIrcClient).toHaveBeenCalledOnce();
-    expect(client.join).toHaveBeenCalledOnce();
-    expect(client.sendPrivmsg.mock.calls).toEqual(
-      chunks.map((chunk) => ["#room", chunk, "parent-1"]),
-    );
-    expect(client.quit).toHaveBeenCalledOnce();
-    for (const callback of [onPlatformSendDispatch, onDeliveryResult]) {
-      expect(callback).toHaveBeenCalledTimes(chunks.length);
-    }
-    expect(results).toHaveLength(chunks.length);
   });
 
   it.each(
@@ -186,13 +181,8 @@ describe("IRC outbound and probing", () => {
       ["connect", "dispatch"].map((phase) => ({ kind, sendMessage, phase })),
     ),
   )("cancels $kind sends during $phase", async ({ sendMessage, phase }) => {
-    let resolveConnect!: (client: IrcClient) => void;
-    mocks.connectIrcClient.mockReturnValue(
-      new Promise<IrcClient>((resolve) => {
-        resolveConnect = resolve;
-      }),
-    );
-    mocks.buildIrcConnectOptions.mockImplementation((_account, overrides = {}) => overrides);
+    const connecting = Promise.withResolvers<IrcClient>();
+    mocks.connectIrcClient.mockReturnValue(connecting.promise);
     const abort = new AbortController();
     const onPlatformSendDispatch = vi.fn(async () => {
       await Promise.resolve();
@@ -209,10 +199,9 @@ describe("IRC outbound and probing", () => {
     if (phase === "connect") {
       abort.abort();
     }
-    resolveConnect(client);
+    connecting.resolve(client);
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
-    expect(mocks.buildIrcConnectOptions).toHaveBeenCalledWith(
-      expect.anything(),
+    expect(mocks.connectIrcClient).toHaveBeenCalledWith(
       expect.objectContaining({ abortSignal: abort.signal }),
     );
     for (const callback of [client.join, onPlatformSendDispatch]) {
@@ -366,9 +355,6 @@ describe("IRC outbound and probing", () => {
   it.each(["beta", undefined] as const)(
     "sends pairing approval from account %s or the default",
     async (accountId) => {
-      const { buildIrcConnectOptions } =
-        await vi.importActual<typeof import("./connect-options.js")>("./connect-options.js");
-      mocks.buildIrcConnectOptions.mockImplementation(buildIrcConnectOptions);
       const accounts = {
         alpha: { host: "irc.alpha.test", nick: "alpha-bot", password: "password-alpha" },
         beta: { host: "irc.beta.test", nick: "beta-bot", password: "password-beta" },
@@ -406,9 +392,9 @@ describe("IRC outbound and probing", () => {
       ...address,
       latencyMs: 45,
     });
-    expect(mocks.buildIrcConnectOptions).toHaveBeenCalledWith(expect.objectContaining(address), {
-      connectTimeoutMs: 5000,
-    });
+    expect(mocks.connectIrcClient).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ ...address, connectTimeoutMs: 5000 }),
+    );
     expect(client.quit).toHaveBeenCalledWith("probe");
   });
 

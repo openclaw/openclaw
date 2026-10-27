@@ -16,21 +16,11 @@ vi.mock("../agents/provider-attribution.js", () => ({
 }));
 
 import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
+import { makeEmptyPluginMetadataOwners } from "./plugin-metadata-empty.test-support.js";
 import { normalizeModelCompat } from "./provider-model-compat.js";
 
 function makeOwners(provider: string): PluginMetadataSnapshotOwnerMaps {
-  return {
-    channels: new Map(),
-    channelConfigs: new Map(),
-    providers: new Map([[provider, [provider]]]),
-    modelCatalogProviders: new Map(),
-    cliBackends: new Map(),
-    setupProviders: new Map(),
-    commandAliases: new Map(),
-    contracts: new Map(),
-    providerAuthContributions: [],
-    modelIdNormalizationPolicies: new Map(),
-  };
+  return { ...makeEmptyPluginMetadataOwners(), providers: new Map([[provider, [provider]]]) };
 }
 
 const model = {

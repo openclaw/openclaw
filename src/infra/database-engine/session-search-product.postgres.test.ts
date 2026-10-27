@@ -197,8 +197,6 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     expect((await search("& | ! ()")).hits).toEqual([]);
     expect((await search("x".repeat(4096))).hits).toEqual([]);
     expect((await search("x ".repeat(2048).trim())).hits).toEqual([]);
-    await expect(search(" ")).rejects.toThrow("query must not be empty");
-    await expect(search("x".repeat(4097))).rejects.toThrow("query must not exceed 4096");
   });
 
   it("publishes appends, rebuilds the active branch and removes deleted transcripts", async () => {

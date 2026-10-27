@@ -205,7 +205,7 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     const inventory = await params.placements.prepareMaintenancePlacements();
     let active: ActivePlacement[];
     try {
-      active = inventory.placements.filter(
+      active = [...inventory.placements].filter(
         (placement): placement is ActivePlacement => placement.state === "active",
       );
     } finally {

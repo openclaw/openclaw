@@ -10,16 +10,18 @@ import { createLazyWorkboardPage } from "./pages/workboard/lazy-page.ts";
 import { workboardPageTarget } from "./pages/workboard/page-target.ts";
 import { createWorkboardSessionAccessory } from "./session-accessory.tsx";
 import { createWorkboardWidget } from "./widgets.tsx";
+import "./components/toast.css";
 import "./styles/workboard.css";
 import "./styles/widgets.css";
 import "./styles/session-chip.css";
+import "./styles/sessions-board.css";
 
 type NavigationBoard = Pick<WorkboardBoardSummary, "id" | "name" | "kind" | "icon" | "color">;
 
 export default defineControlUiPlugin({
   id: "workboard",
   activate(host) {
-    const unbind = bindWorkboardHost(host);
+    const unbind = bindWorkboardHost(host, () => syncBoardNavigation(workboard.state.boards));
     const workboard = createWorkboardCapability();
     const client = host;
     let pendingDeletion: Promise<void> | undefined;

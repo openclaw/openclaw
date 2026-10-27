@@ -101,6 +101,13 @@
           - "extensions/logbook/**"
           - "docs/plugins/logbook.md"
           - "docs/plugins/reference/logbook.md"
+"plugin: knowledge":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/knowledge/**"
+          - "docs/plugins/knowledge.md"
+          - "docs/plugins/knowledge/**"
+          - "docs/plugins/reference/knowledge.md"
 "plugin: imap":
   - changed-files:
       - any-glob-to-any-file:
@@ -686,6 +693,11 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: liquid-ai":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/liquid-ai/**"
+          - "docs/providers/liquid-ai.md"
 "extensions: bifrost":
   - changed-files:
       - any-glob-to-any-file:

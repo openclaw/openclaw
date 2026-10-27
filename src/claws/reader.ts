@@ -5,6 +5,7 @@ import { assertNoSymlinkParents, readFileHandleBounded } from "@openclaw/fs-safe
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { digestClawBytes } from "./digest.js";
 import { readClawOpenClawProfile } from "./openclaw-profile.js";
 import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
@@ -135,7 +136,7 @@ function parseClawManifestDocument(
     return parseClawMarkdown(raw, path);
   }
   try {
-    return { ok: true, value: JSON.parse(raw.toString("utf8")) };
+    return { ok: true, value: JSON.parse(decodeUtf8Input(raw, path)) };
   } catch (error) {
     return fileFailure("invalid_json", `Could not parse ${path}: ${(error as Error).message}`);
   }

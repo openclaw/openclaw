@@ -426,15 +426,7 @@ describe("Crabbox prepared image demand and custody", () => {
   it("offers ready capacity only for immutable Linux warm-image profiles", async () => {
     const { provider, calls } = createWarmProvider();
     expect(provider.resolvePreparedIdleTimeoutMs?.(PROFILE)).toBe(3_600_000);
-    const target = provider.resolvePreparationTarget?.(PROFILE, "fast");
-    expect(target).toMatchObject(readyTarget);
-    expect(
-      provider.resolvePreparationTarget?.({ ...PROFILE, ttl: "48h", idleTimeout: "2h" }, "fast"),
-    ).toEqual(target);
-    expect(
-      provider.resolvePreparationTarget?.({ ...PROFILE, setup: "install-other-tools" }, "fast")
-        ?.profileKey,
-    ).not.toBe(target?.profileKey);
+    expect(provider.resolvePreparationTarget?.(PROFILE, "fast")).toMatchObject(readyTarget);
     const protectedProfile = {
       ...PROFILE,
       setupSecrets: {

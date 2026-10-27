@@ -7,6 +7,8 @@ import type {
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
+import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
+import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
 import {
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
@@ -122,6 +124,20 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
   let scope: SubagentRegistrationScope | undefined;
   return {
     runs,
+    createListener: (
+      overrides: Partial<Omit<Parameters<typeof createSubagentRegistryListener>[0], "runs">> = {},
+    ) =>
+      createSubagentRegistryListener({
+        runs,
+        pendingLifecycle:
+          overrides.pendingLifecycle ??
+          createPendingLifecycleScheduler({ runs, completeInBackground: vi.fn() }),
+        resumeRequesterSettleWake: vi.fn(),
+        adoptPausedSubagentRunIntoSuccessor: async () => false,
+        refreshFrozenResultFromSession: async () => {},
+        completeSubagentRunWithRecovery: async () => {},
+        ...overrides,
+      }),
     options,
     manager,
     registration,

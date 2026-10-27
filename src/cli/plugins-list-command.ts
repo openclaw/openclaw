@@ -1,4 +1,5 @@
 // `openclaw plugins list`: builds registry reports and defers terminal-only formatting modules.
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
@@ -47,7 +48,7 @@ export async function runPluginsListCommand(
     { getTerminalTableWidth, renderTable },
     { theme },
     { formatCliCommand },
-    { formatPluginLine, formatPluginStatus },
+    { formatPluginLine, formatPluginStatus, formatPluginTrustLabel },
   ] = await Promise.all([
     import("../plugins/source-display.js"),
     import("../../packages/terminal-core/src/table.js"),
@@ -64,7 +65,7 @@ export async function runPluginsListCommand(
   );
   for (const { level, message } of diagnostics) {
     const format = level === "error" ? theme.error : theme.warn;
-    runtime.log(format(`${level === "error" ? "Error" : "Warning"}: ${message}`));
+    runtime.log(format(terminalText`${level === "error" ? "Error" : "Warning"}: ${message}`));
   }
   if (diagnostics.length > 0) {
     runtime.log("");
@@ -85,6 +86,7 @@ export async function runPluginsListCommand(
 
   const enabled = list.reduce((count, plugin) => count + (plugin.enabled ? 1 : 0), 0);
   runtime.log(`${theme.heading("Plugins")} ${theme.muted(`(${enabled}/${list.length} enabled)`)}`);
+  runtime.log(theme.muted("Trust is provenance, not a code-safety guarantee."));
 
   if (!opts.verbose) {
     const tableWidth = getTerminalTableWidth();
@@ -94,18 +96,23 @@ export async function runPluginsListCommand(
     const usedRoots = new Set<keyof typeof sourceRoots>();
     const rows = list.map((plugin) => {
       const error = plugin.status === "error" && plugin.error;
-      const desc = error ? theme.error(error) : theme.muted(plugin.description ?? "");
+      const desc = error
+        ? theme.error(terminalText`${error}`)
+        : theme.muted(terminalText`${plugin.description ?? ""}`);
       const formattedSource = formatPluginSourceForTable(plugin, sourceRoots);
       if (formattedSource.rootKey) {
         usedRoots.add(formattedSource.rootKey);
       }
       return {
-        Name: plugin.name || plugin.id,
-        ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
-        Format: plugin.format ?? "openclaw",
+        Name: terminalText`${plugin.name || plugin.id}`,
+        ID: plugin.name && plugin.name !== plugin.id ? terminalText`${plugin.id}` : "",
+        Format: terminalText`${plugin.format ?? "openclaw"}`,
         Status: formatPluginStatus(plugin),
-        Source: desc ? `${formattedSource.value}\n${desc}` : formattedSource.value,
-        Version: plugin.version ?? "",
+        Source: desc
+          ? `${terminalText`${formattedSource.value}`}\n${desc}`
+          : terminalText`${formattedSource.value}`,
+        Version: terminalText`${plugin.version ?? ""}`,
+        Trust: formatPluginTrustLabel(plugin),
       };
     });
 
@@ -119,7 +126,7 @@ export async function runPluginsListCommand(
         if (!dir) {
           continue;
         }
-        runtime.log(`  ${theme.command(`${key}:`)} ${theme.muted(dir)}`);
+        runtime.log(`  ${theme.command(`${key}:`)} ${theme.muted(terminalText`${dir}`)}`);
       }
       runtime.log("");
     }
@@ -134,6 +141,7 @@ export async function runPluginsListCommand(
           { key: "Status", header: "Status", minWidth: 10 },
           { key: "Source", header: "Source", minWidth: 26, flex: true },
           { key: "Version", header: "Version", minWidth: 8 },
+          { key: "Trust", header: "Trust", minWidth: 12, flex: true },
         ],
         rows,
       }).trimEnd(),

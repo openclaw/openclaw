@@ -1,8 +1,8 @@
 import type { IndexHtmlTransformContext, Plugin } from "vite";
 import { collectControlUiStaticAssets } from "./control-ui-boot-preloads.ts";
 
-// Name the entries needed for the initial presentation; never walk optional
-// dynamic children such as editors, terminals, or individual board widgets.
+// Name each initial presentation or bounded next interaction explicitly; never
+// walk optional dynamic children such as editors, terminals, or board widgets.
 const entries = {
   "new-session": [
     "pages/new-session/route-loader.ts",
@@ -10,12 +10,15 @@ const entries = {
     "pages/new-session/creation-composer-render.tsx",
   ],
   claws: ["pages/claws/page.tsx"],
+  // Catalog search and detail are already loaded; avoid warming unrelated New Session code.
+  "claws-next": ["pages/claws/page.tsx"],
   dashboards: ["pages/dashboards/dashboards-page.tsx", "components/board/board-document.tsx"],
   usage: ["pages/usage/usage-page.tsx", "pages/usage/route-loader.ts"],
   cron: ["pages/cron/cron-page-entry.tsx", "pages/cron/cron-page.tsx"],
   sessions: ["pages/sessions/sessions-page.tsx"],
   systems: ["pages/systems/systems-route-view.tsx"],
   activity: ["pages/activity/activity-route.tsx"],
+  "activity-next": ["components/image-lightbox-content.tsx"],
   meetings: ["pages/meetings/meetings-page.tsx"],
   plugins: ["pages/plugins/plugins-page.tsx"],
   apps: ["pages/apps/apps-page.tsx"],
@@ -27,6 +30,8 @@ const entries = {
     "components/settings-sidebar-shell.tsx",
     "app/theme-catalog.ts",
   ],
+  "advanced-next": ["pages/config/security.tsx"],
+  "roster-next": ["pages/chat/route-entry.ts"],
   shortcuts: ["components/keyboard-shortcuts-dialog.tsx"],
   debug: [
     "pages/debug/debug-overlay.ts",
@@ -57,7 +62,11 @@ export function collectControlUiNavigationPreloads(
       }
     }
     if (assets.size) {
-      result[name] = [...assets].filter((file) => /\.(?:js|css)$/u.test(file));
+      // URL assets include worker and plugin-island scripts. They are fetched by
+      // their own runtime, not evaluated as modules in the navigation document.
+      result[name] = [...assets].filter(
+        (file) => bundle[file]?.type === "chunk" || file.endsWith(".css"),
+      );
     }
   }
   return result;

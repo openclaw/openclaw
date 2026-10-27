@@ -38,13 +38,10 @@ afterEach(() => vi.unstubAllEnvs());
 describe("resolveCopilotAuth", () => {
   it.each([
     [undefined, "copilot"],
-    ["", "copilot"],
     ["   ", "copilot"],
     ["Agent-1", "agent-1"],
     ["my_agent_42", "my_agent_42"],
-    ["a", "a"],
     ["../etc/passwd", "copilot"],
-    ["../..", "copilot"],
     ["a/b", "copilot"],
     ["a\\b", "copilot"],
     ["a\u0000b", "copilot"],

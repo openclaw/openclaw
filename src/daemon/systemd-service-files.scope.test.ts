@@ -16,6 +16,7 @@ vi.mock("./systemd-exec.js", async (original) => ({
 }));
 vi.mock("./systemd-scope.js", () => ({ findInstalledSystemdGatewayScope: findScope }));
 
+import { nativeExit } from "./systemd-exec.test-support.js";
 import {
   readSystemdServiceCommandLocation,
   readSystemdServiceExecStart,
@@ -43,12 +44,7 @@ const defaults = {
 };
 let state = { ...defaults };
 
-const success = (stdout: string): ExecResult => ({
-  code: 0,
-  termination: "exit",
-  stdout,
-  stderr: "",
-});
+const success = (stdout: string): ExecResult => nativeExit(stdout);
 const property = (type: string, data: unknown) => ({ type, data });
 const reply = (type: string, data: unknown) => success(JSON.stringify(property(type, data)));
 const readLoaded = () =>
@@ -93,12 +89,7 @@ beforeEach(async () => {
     if (args.includes("GetUnit") || args.includes("LoadUnit")) {
       expect(args.at(-1)).toBe(target.unitName);
       if (!state.loaded) {
-        return {
-          code: 1,
-          termination: "exit",
-          stdout: "",
-          stderr: `Call failed: Unit ${target.unitName} not loaded.`,
-        };
+        return nativeExit("", `Call failed: Unit ${target.unitName} not loaded.`, 1);
       }
       return reply("o", ["/org/freedesktop/systemd1/unit/openclaw_2eservice"]);
     }
@@ -261,12 +252,7 @@ describe("system-scope effective command", () => {
   });
 
   it("does not turn unavailable native metadata into an unloaded runtime", async () => {
-    systemBus.mockResolvedValue({
-      code: 1,
-      termination: "exit",
-      stdout: "",
-      stderr: "native metadata unavailable",
-    });
+    systemBus.mockResolvedValue(nativeExit("", "native metadata unavailable", 1));
     await expect(readSystemdServiceCommandLocation(env, target)).rejects.toThrow();
   });
   it.each([false, true])(

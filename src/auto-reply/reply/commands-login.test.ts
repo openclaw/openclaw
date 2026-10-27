@@ -16,6 +16,7 @@ import {
   blockReplyOpts,
   buildLoginParams,
   dispatchLoginCommand,
+  loginResult,
   patchSessionEntryMock,
   runModelsAuthLoginFlowMock,
   setupLoginCommandTests,
@@ -39,16 +40,6 @@ const refreshedMessage = "Sign-in status refreshed. Send /models to see availabl
 
 function stoppedReply(text: string) {
   return { shouldContinue: false, reply: { text } };
-}
-
-function loginResult(profileId = "openai:owner", authRefresh = "refreshed") {
-  const provider = profileId.split(":")[0];
-  return {
-    providerId: provider,
-    methodId: provider === "openrouter" ? "oauth" : "device-code",
-    authRefresh,
-    profiles: [{ profileId, provider, mode: provider === "openrouter" ? "api_key" : "oauth" }],
-  };
 }
 
 function loginParams(overrides: Parameters<typeof buildLoginParams>[1] = {}) {

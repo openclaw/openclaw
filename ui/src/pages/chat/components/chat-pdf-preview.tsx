@@ -13,7 +13,9 @@ import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-compo
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { AttachmentPreviewSkeleton, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
+import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
+import type { FilePreviewSource } from "./chat-sidebar-content-types.ts";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
@@ -35,6 +37,7 @@ export function ChatPdfPreview(props: {
   label: string;
   mimeType: string;
   sizeBytes?: number;
+  file?: FilePreviewSource;
 }) {
   // A new ticket keeps its reader; a different attachment or missing source retires it.
   const source = createMemo(
@@ -43,20 +46,35 @@ export function ChatPdfPreview(props: {
         props.sourceIdentity,
         props.sourceIdentity ? undefined : props.src,
         props.sizeBytes,
-        Boolean(props.src),
+        Boolean(props.src || props.file),
+        props.file?.download,
       ] as const,
     { equals: (before, next) => before.every((value, index) => Object.is(value, next[index])) },
   );
   const unavailable = () => (
     <div class="sidebar-attachment-preview__unavailable" role="alert">
       {t("chat.attachments.previewUnavailable")}
-      <CompactAttachmentCard
-        kind="document"
-        label={props.label}
-        mimeType={props.mimeType}
-        sizeBytes={props.sizeBytes}
-        downloadHref={safeAttachmentHref(props.src) ?? undefined}
-      />
+      <Show
+        when={props.file}
+        fallback={
+          <CompactAttachmentCard
+            kind="document"
+            label={props.label}
+            mimeType={props.mimeType}
+            sizeBytes={props.sizeBytes}
+            downloadHref={safeAttachmentHref(props.src) ?? undefined}
+          />
+        }
+      >
+        {(file) => (
+          <FileDownloadButton
+            scopeKey={props.sourceIdentity}
+            download={file().download}
+            class="btn btn--sm"
+            showLabel
+          />
+        )}
+      </Show>
     </div>
   );
   const renderPreview = (input: ReturnType<typeof source>) => {
@@ -70,6 +88,7 @@ export function ChatPdfPreview(props: {
     const result = createMemo<{ ok: true; bytes: ArrayBuffer } | { ok: false; cause: unknown }>(
       async () => {
         const src = props.src;
+        const file = props.file;
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), PDF_PREVIEW_TIMEOUT_MS);
         // This cleanup belongs to the tracked read, so replacement aborts transport immediately.
@@ -78,11 +97,20 @@ export function ChatPdfPreview(props: {
           clearTimeout(timeout);
         });
         try {
-          const response = await fetch(src, {
-            credentials: "same-origin",
-            redirect: "error",
-            signal: controller.signal,
-          });
+          // File previews retain their identity, not an expiring download grant.
+          const original = file ? await file.download(controller.signal) : null;
+          controller.signal.throwIfAborted();
+          if (file && !original) {
+            throw new Error("PDF file unavailable");
+          }
+          const response =
+            original && "blob" in original
+              ? new Response(original.blob)
+              : await fetch(original?.url ?? src, {
+                  credentials: "same-origin",
+                  redirect: "error",
+                  signal: controller.signal,
+                });
           if (!response.ok) {
             await response.body?.cancel().catch(() => undefined);
             throw new Error("PDF attachment unavailable");

@@ -1,4 +1,23 @@
-import type { PluginDiscoveryEntry, PluginDiscoveryResult } from "../lib/plugins/index.ts";
+import type {
+  PluginDeclaredSurface,
+  PluginDiscoveryEntry,
+  PluginDiscoveryResult,
+} from "../lib/plugins/index.ts";
+
+export function createPluginDeclaredSurface(): PluginDeclaredSurface {
+  return {
+    channels: [],
+    providers: [],
+    tools: [],
+    contracts: [],
+    hooks: [],
+    mcpServers: [],
+    cliCommands: [],
+    cliBackends: [],
+    skills: [],
+    dangerousConfigFlags: [],
+  };
+}
 
 function localFacts(pluginId?: string, installed = false): PluginDiscoveryEntry["local"] {
   return {

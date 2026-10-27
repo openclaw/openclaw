@@ -287,8 +287,7 @@ function schedulePendingAgentRunTerminal(
     }
     pendingAgentRunTerminals.delete(snapshot.runId);
     recordAgentRunSnapshot(pending.snapshot, pending.snapshot.version);
-  }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
-  timer.unref?.();
+  }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS).unref();
   pendingAgentRunTerminals.set(snapshot.runId, { phase, snapshot, timer });
 }
 
@@ -705,8 +704,7 @@ export async function waitForAgentJob(params: {
         }
       }
       finish(null);
-    }, params.timeoutMs);
-    timeoutHandle.unref?.();
+    }, params.timeoutMs).unref();
     signal?.addEventListener("abort", onClose, { once: true });
     if (signal?.aborted) {
       onClose();

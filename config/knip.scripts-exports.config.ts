@@ -25,6 +25,8 @@ const scriptEntries = productionConfig.workspaces["."].entry.filter(
 const repositoryToolEntries = [
   // Knip loads this configuration, which consumes the Vite runnerImport compiler.
   "config/knip.config.ts!",
+  // This compiler projects exact source-derived generated and module-hook imports.
+  "config/knip-dynamic-consumers.mjs!",
   // ui/config/control-ui-locales.ts invokes the catalogue through Vite's runnerImport.
   "config/knip-vite-consumers.mjs!",
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
@@ -36,6 +38,19 @@ const repositoryToolEntries = [
   "security/opengrep/compile-rules.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
   "scripts/check-openclaw-package-tarball.mts!",
+] as const;
+
+const sourceTestConsumerEntries = [
+  "src/scripts/docs-link-audit.test.ts!",
+  "src/scripts/ci-changed-scope.contract-fixtures.test.ts!",
+  "src/scripts/ci-changed-scope.control-ui.test.ts!",
+  "src/scripts/ci-changed-scope.git-owner.test.ts!",
+  "src/scripts/ci-changed-scope.native-i18n.test.ts!",
+  "src/scripts/ci-changed-scope.test.ts!",
+  "src/scripts/ci-changed-scope.windows.test.ts!",
+  "src/scripts/ci-ios-screenshot-scope.test.ts!",
+  "src/plugins/prune-docker-plugin-dist.test.ts!",
+  "src/infra/package-update-activation-lifetime.test.ts!",
 ] as const;
 
 const config = {
@@ -52,8 +67,9 @@ const config = {
   ignore: [
     "scripts/**/*.d.{mts,cts,ts}",
     "scripts/**/*.test-support.{js,mjs,cjs,ts,mts,cts}",
-    // Generated declaration companion; application scans own its executable validator.
+    // Generated declaration companions; application scans own their executable validators.
     "packages/gateway-protocol/src/compiled/sender-identity.d.ts",
+    "packages/gateway-protocol/src/compiled/protocol.generated/*.d.ts",
   ],
   // Script entrypoints import core and Plugin SDK APIs. Those owners are
   // checked by the application scans; this pass owns only scripts/** exports.
@@ -93,9 +109,18 @@ const config = {
   },
   workspaces: {
     ".": {
+      // These opt-in commands pass non-default Vitest configs. Let Knip's
+      // Vitest owner load the configs and their selected suites as real inputs.
+      vitest: {
+        config: [
+          "scripts/control-ui-parity/vitest.config.ts",
+          "scripts/control-ui-retention/vitest.config.ts",
+        ],
+      },
       entry: [
         ...scriptEntries,
         ...repositoryToolEntries,
+        ...sourceTestConsumerEntries,
         ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
@@ -115,6 +140,7 @@ const config = {
         "skills/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{js,mjs,cjs,ts,mts,cts}!",
+        ...sourceTestConsumerEntries,
         "src/cli/cli-process-child.test-helpers{,.test}.ts!",
         "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
         "src/infra/package-dist-inventory.ts!",

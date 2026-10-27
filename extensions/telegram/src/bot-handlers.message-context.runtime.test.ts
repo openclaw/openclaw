@@ -98,6 +98,12 @@ function forumMessage(messageId: number, threadId?: number): Message {
   } as Message;
 }
 
+function expectHistory(context: Parameters<typeof telegramPromptContextHistory>[0], ids: string[]) {
+  expect(telegramPromptContextHistory(context).map((entry) => entry.messageId)).toEqual(ids);
+}
+
+const emptyReads = () => ({ pages: 0, rows: 0, lookups: 0, fullReads: 0 });
+
 describe("resolveCachedMessageThreadSpec", () => {
   it("keeps account cache ownership separate from a topic-routed session owner", async () => {
     const resolveStorePath = resolveStorePathMock.mockImplementation(
@@ -136,16 +142,11 @@ describe("resolveCachedMessageThreadSpec", () => {
     expect(session.sessionKey).toContain("agent:research:");
   });
 
-  it("returns undefined for a message that is not in the cache", async () => {
+  it("recovers a channel Direct Messages scope without reusing raw message_thread_id", async () => {
     const runtime = createRuntime();
-
     await expect(
       runtime.resolveCachedMessageThreadSpec({ chatId: CHAT_ID, messageId: 404 }),
     ).resolves.toBeUndefined();
-  });
-
-  it("recovers a channel Direct Messages scope without reusing raw message_thread_id", async () => {
-    const runtime = createRuntime();
     const msg = {
       ...forumMessage(102, 999),
       chat: {
@@ -179,7 +180,7 @@ describe("automatic Telegram retained history workload", () => {
   const keyPrefix = `${resolveTelegramMessageCachePersistentScopeKey(scope)}:${accountId}:${chatId}:`;
   const date = 1_736_380_800;
   let state: OpenClawTestState;
-  let reads = { pages: 0, rows: 0, lookups: 0, fullReads: 0 };
+  let reads = emptyReads();
 
   function archivedMessage(messageId: number): Message {
     const threadId =
@@ -249,7 +250,7 @@ describe("automatic Telegram retained history workload", () => {
   });
 
   beforeEach(() => {
-    reads = { pages: 0, rows: 0, lookups: 0, fullReads: 0 };
+    reads = emptyReads();
     const openKeyedStore: TelegramRuntime["state"]["openKeyedStoreV2"] = <T>(
       options: Parameters<TelegramRuntime["state"]["openKeyedStore"]>[0],
     ): PluginStateKeyedStore<T, 2> => {
@@ -292,7 +293,7 @@ describe("automatic Telegram retained history workload", () => {
     const msg = archivedMessage(archiveSize + 1);
     const replyChain = await runtime.buildReplyChainForMessage(msg);
     expect(await runtime.prompt(msg, undefined, replyChain)).toEqual([]);
-    expect(reads).toEqual({ pages: 0, rows: 0, lookups: 0, fullReads: 0 });
+    expect(reads).toEqual(emptyReads());
   });
 
   it.each([
@@ -315,9 +316,7 @@ describe("automatic Telegram retained history workload", () => {
       const context = await runtime.prompt(msg, {
         threadSpec: threadId === undefined ? { scope: "none" } : { scope: "forum", id: threadId },
       });
-      expect(telegramPromptContextHistory(context).map((entry) => entry.messageId)).toEqual(
-        expected,
-      );
+      expectHistory(context, expected);
       expect(reads.rows).toBeLessThanOrEqual(256);
       expect(reads.pages).toBeLessThanOrEqual(2);
 
@@ -342,16 +341,11 @@ describe("automatic Telegram retained history workload", () => {
     for (let reopen = 0; reopen < 2; reopen++) {
       const { runtime } = historyRuntime();
       const context = await runtime.prompt(msg, options);
-      expect(telegramPromptContextHistory(context).map((entry) => entry.messageId)).toEqual([
-        "50509",
-        "50510",
-        "50511",
-        "50512",
-      ]);
+      expectHistory(context, ["50509", "50510", "50511", "50512"]);
       expect(reads.rows).toBeLessThanOrEqual(256);
       expect(reads.pages).toBeLessThanOrEqual(2);
       resetTelegramMessageCacheForTest();
-      reads = { pages: 0, rows: 0, lookups: 0, fullReads: 0 };
+      reads = emptyReads();
     }
     const earlier = await historyRuntime().read("2", 1);
     expect(earlier.messages.map((entry) => entry.body)).toEqual(["The launch code is cobalt."]);
@@ -373,9 +367,7 @@ describe("Telegram same-turn reset context", () => {
       const msg = { ...previous, message_id: 101, date: previous.date + 1, text };
       await runtime.recordMessageForReplyChain(msg);
       const context = await runtime.prompt(msg);
-      expect(telegramPromptContextHistory(context).map((entry) => entry.messageId)).toEqual(
-        text.includes("soft") ? ["100"] : [],
-      );
+      expectHistory(context, text.includes("soft") ? ["100"] : []);
     }
   });
 });

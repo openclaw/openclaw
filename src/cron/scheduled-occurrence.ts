@@ -4,6 +4,7 @@
  * creates occurrences; this module stays free of runtime dependencies so cron
  * core can import it.
  */
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { OperationalRunInstanceRef } from "../agents/operational-run-instance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,6 +18,11 @@ export type ScheduledExecutionContext = ScheduledExecutionFacts &
   Readonly<{
     /** Throws when the parent incarnation or the admitted run is no longer current. */
     assertCurrent: () => void;
+    /**
+     * Set when a requester holds owner authority for this run. Throws once the
+     * requester stops passing its owner check, so owner-only tools refuse mid-run.
+     */
+    assertOwnerCurrent?: () => void;
   }>;
 
 /** Run-specific facts an executor supplies when its run is admitted. */
@@ -27,7 +33,7 @@ type ScheduledOccurrenceRun = {
   runSessionKey: string;
   toolsAllow?: readonly string[];
   /** Restored operator source authority, when the occurrence carries one. */
-  operatorAuthorityRestored: boolean;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
 };
 
 export type MintedScheduledExecution = Readonly<{

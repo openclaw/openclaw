@@ -2,6 +2,7 @@ import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inb
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
+import { createFeishuTestRoute } from "./bot.test-support.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
 import type { FeishuConfig } from "./types.js";
@@ -53,20 +54,6 @@ function buildConfig(overrides: Partial<FeishuConfig> = {}): ClawdbotConfig {
 
 let currentRuntimeConfig = buildConfig();
 
-function buildResolvedRoute(
-  matchedBy: "binding.channel" | "default" = "binding.channel",
-): ReturnType<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]> {
-  return {
-    agentId: "main",
-    channel: "feishu",
-    accountId: "default",
-    sessionKey: "agent:main:feishu:direct:ou_sender",
-    mainSessionKey: "agent:main:main",
-    lastRoutePolicy: "session",
-    matchedBy,
-  };
-}
-
 function useRuntime(
   currentCfg = currentRuntimeConfig,
   matchedBy: "binding.channel" | "default" = "default",
@@ -83,7 +70,12 @@ function useRuntime(
           }: Parameters<PluginRuntime["channel"]["routing"]["buildAgentSessionKey"]>[0]) =>
             `agent:${agentId}:${channel}:${peer?.kind ?? "direct"}:${peer?.id ?? "peer"}`,
         ),
-        resolveAgentRoute: vi.fn(() => buildResolvedRoute(matchedBy)),
+        resolveAgentRoute: vi.fn(() =>
+          createFeishuTestRoute({
+            sessionKey: "agent:main:feishu:direct:ou_sender",
+            matchedBy,
+          }),
+        ),
       },
       inbound: {
         buildContext: buildChannelInboundEventContext,

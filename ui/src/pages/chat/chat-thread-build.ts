@@ -38,12 +38,16 @@ import {
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
+import { projectRunFailureStreaks } from "./chat-run-failure-streaks.ts";
 import {
   hasHandoffToolCall,
   pendingSessionsYield,
   projectSessionsYieldItems,
 } from "./chat-sessions-yield.ts";
-import { projectChatSystemNotice } from "./chat-system-notice.ts";
+import {
+  createSubmittedModelNoticeProjector,
+  projectChatSystemNotice,
+} from "./chat-system-notice.ts";
 import {
   canvasAssistantItemKey,
   collectCanvasTurns,
@@ -210,11 +214,16 @@ export function buildChatItems(
     ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`
     : undefined;
   let hasPersistedCompaction = false;
+  const projectSubmittedModel = createSubmittedModelNoticeProjector();
   for (const [i, item] of historyItems.entries()) {
     const msg = item.message;
     const itemKey = item.key;
     const raw = asRecord(msg) ?? {};
     const marker = asRecord(raw["__openclaw"]);
+    const modelNotice = projectSubmittedModel(item);
+    if (modelNotice) {
+      items.push(modelNotice);
+    }
     const fallback = readModelFallbackNotice(msg);
     if (fallback) {
       items.push({
@@ -724,6 +733,8 @@ export function buildChatItems(
       : undefined;
   const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
     projectSessionsYieldItems(source, props.showToolCalls, complete);
+  // Keep real user boundaries even when search hides their rows.
+  items = projectRunFailureStreaks(items);
   const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
   return groupMessages(
     projectYields(coalesceToolActivityMessages(items, hidden), complete),

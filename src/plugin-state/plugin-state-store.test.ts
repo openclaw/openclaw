@@ -510,6 +510,33 @@ describe("plugin-state-store.errors", () => {
     await expect(async () => read()).rejects.toMatchObject(expected);
   }
 
+  it("preserves each caller's operation when a shared cold namespace load fails", async () => {
+    await withOpenClawTestState({ label: "plugin-state-load-failure" }, async () => {
+      const { db, path } = openOpenClawStateDatabase();
+      db.exec("DROP TABLE plugin_state_entries");
+      const store = openAsyncStore({ namespace: "load-failure" });
+      const results = await Promise.allSettled([
+        store.lookup("key"),
+        store.count(),
+        store.entries(),
+      ]);
+      for (const [index, operation] of ["lookup", "count", "entries"].entries()) {
+        const result = results[index]!;
+        expect(result.status).toBe("rejected");
+        if (result.status !== "rejected") {
+          throw new Error("Damaged plugin state unexpectedly read successfully");
+        }
+        expect(result.reason).toMatchObject({
+          code: "PLUGIN_STATE_READ_FAILED",
+          operation,
+          path,
+          cause: expect.objectContaining({ message: "no such table: plugin_state_entries" }),
+        });
+        expect(result.reason.owner.threadId).toBeGreaterThan(0);
+      }
+    });
+  });
+
   it.each(["decode", "sqlite-step"] as const)(
     "preserves %s failures and releases the listing cursor",
     async (failure) => {
@@ -660,7 +687,7 @@ describe("plugin-state-store.errors", () => {
     const inspected = openNodeSqliteDatabase(path, { readOnly: true });
     try {
       // Acquisition can inspect a valid schema before discovering its quarantine.
-      // That refused acquisition must not leave facts usable by the keyed-store cache.
+      // That refused acquisition must not leave facts usable by the resident owner.
       admitStateSchemaFacts(inspected, path);
       expect(() =>
         openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(

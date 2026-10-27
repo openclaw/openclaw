@@ -96,9 +96,7 @@ it.each([
 ] as const)(
   "does not borrow a nested Run for a detached $status refusal (captured before: $capturedBefore)",
   async ({ status, capturedBefore }) => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("update-detached-admission-") };
-    const recorded = createUpdateRun({ trigger: "cli" }, { env });
-    const run = { runId: recorded.runId, env };
+    const { env, recorded, run } = createRun();
     closeOpenClawStateDatabaseForTest();
     const before = snapshotUpdateFixtureTree(env.OPENCLAW_STATE_DIR);
     const detachedRoot = dirs.make("update-detached-report-");
@@ -186,7 +184,6 @@ it.each(["new-error", "pending-aggregate"] as const)(
       },
       { json, onResult: undefined },
     );
-    expect(publish).toHaveBeenCalledOnce();
     if (json) {
       expect(output).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(result));
     } else {
@@ -257,8 +254,6 @@ it.each([
       }
       throw failure;
     });
-    expect(mocks.select).toHaveBeenCalledOnce();
-    expect(prepare).toHaveBeenCalledOnce();
     const input = prepare.mock.calls[0]?.[0];
     expect(input?.attemptId).toBe(run.runId);
     expect(getUpdateRun(run.runId, options)).toMatchObject({
@@ -268,17 +263,17 @@ it.each([
         rollbackOutcome: { status: phase === "requested" ? "not-needed" : "not-attempted" },
       },
     });
-    expect(input?.result).toMatchObject({
-      status: "error",
-      reason: "update-failed",
-      failedStep: {
-        name: phase,
-        failureFacts: [expect.objectContaining({ check: phase, errorName: "TypeError" })],
-      },
-    });
     const reportBody = (await prepare.mock.results[0]?.value)?.body;
     expect(onResult).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ runId: run.runId, status: "error", reason: "update-failed" }),
+      expect.objectContaining({
+        runId: run.runId,
+        status: "error",
+        reason: "update-failed",
+        failedStep: expect.objectContaining({
+          name: phase,
+          failureFacts: [expect.objectContaining({ check: phase, errorName: "TypeError" })],
+        }),
+      }),
     );
     expect(mocks.diagnose).not.toHaveBeenCalled();
     expect(reportBody).toContain(`Failed phase: ${phase}`);

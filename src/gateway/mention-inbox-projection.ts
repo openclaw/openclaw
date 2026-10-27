@@ -96,7 +96,7 @@ export function createMentionMutationProjection(
   if (!profileIds) {
     const draft = createMentionProjection({
       head: state.head,
-      sources: [...state.processed.values()].map(serializeMentionSource),
+      sources: Array.from(state.processed.values(), serializeMentionSource),
     });
     draft.profileVersion = state.profileVersion;
     return {
@@ -201,7 +201,7 @@ export function serializeMentionSource(source: ProcessedSource): MentionStoreSou
     key: source.key,
     sequence: source.sequence,
     expiresAt: source.expiresAt,
-    recipients: [...source.recipients].map(([profileId, item]) => [profileId, item?.id ?? null]),
+    recipients: Array.from(source.recipients, ([profileId, item]) => [profileId, item?.id ?? null]),
     ...(message ? { message } : {}),
   };
 }

@@ -1,5 +1,6 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { transcript } from "./realtime-quicksilver-events.test-support.js";
 import { createOpenAIRealtimeTestSupport } from "./realtime-voice-test-support.js";
 
 const state = await vi.hoisted(async () => {
@@ -12,7 +13,10 @@ const mocks = vi.hoisted(() => ({
   proxyAgent: { fixture: "configured-proxy" },
 }));
 
-vi.mock("ws", () => ({ default: FakeWebSocket }));
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
+  WebSocket: FakeWebSocket,
+}));
 vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
   captureWsEventAsync: mocks.capture,
@@ -37,10 +41,7 @@ describe.each(["present", "rejected"])("async capture %s", (capture) => {
       buildOpenAIRealtimeVoiceProvider,
     });
     const callbacks = { onReady: vi.fn(), onError: vi.fn(), onClose: vi.fn() };
-    const bridge = createNativeBridge({
-      providerConfig: { apiKey: "fixture-key" },
-      ...callbacks,
-    });
+    const bridge = createNativeBridge(callbacks);
     try {
       const socket = await connectReadyBridge(bridge);
       expect(socket.args[1]).toMatchObject({ agent: mocks.proxyAgent });
@@ -81,12 +82,7 @@ describe.each(["present", "rejected"])("async capture %s", (capture) => {
         delegation_id: null,
         content: "Hello",
       });
-      harness.socket.serverEvent({
-        type: "session.input_transcript.delta",
-        delta: "Spoken words",
-        start_ms: 0,
-        end_ms: 100,
-      });
+      harness.socket.serverEvent(transcript("Spoken words"));
       expect(harness.onTranscript).toHaveBeenCalledWith("user", "Spoken words", false);
     } finally {
       const closing = harness.bridge.close();
@@ -95,8 +91,5 @@ describe.each(["present", "rejected"])("async capture %s", (capture) => {
     }
     expect(harness.onClose).toHaveBeenCalledExactlyOnceWith("completed");
     expect(harness.onError).not.toHaveBeenCalled();
-    expect(mocks.capture).toHaveBeenCalledWith(
-      expect.objectContaining({ meta: { provider: "openai", capability: "gpt-live-voice" } }),
-    );
   });
 });

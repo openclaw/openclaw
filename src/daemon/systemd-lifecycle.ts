@@ -76,7 +76,7 @@ async function runSystemdServiceAction(
   if (installed?.scope === "system") {
     runSystemctl = (args) => {
       params.assertCurrent?.();
-      return execSystemctl(args, env);
+      return execSystemctl(args, env, undefined, params.beforeEffect);
     };
   } else {
     runSystemctl = (args) =>
@@ -86,6 +86,7 @@ async function runSystemdServiceAction(
         undefined,
         params.assertCurrent,
         action === "stop" ? { warn } : undefined,
+        params.beforeEffect,
       );
   }
   if (action !== "stop") {

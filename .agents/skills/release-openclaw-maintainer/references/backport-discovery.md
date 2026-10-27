@@ -4,6 +4,13 @@ Use this before selecting backports for any OpenClaw release line: regular
 beta/stable, extended-stable, or a release-repair branch. It is an audit before the candidate is
 mutated, not a title search and not permission to expand a frozen release.
 
+## Start from the shared ledger
+
+Start with [shared candidates and assessments](hotfix-ledger-management.md),
+including carry-forward and sibling-release evidence; sync new findings and
+decisions back. Empty/incomplete records do not replace the pinned inventory
+or P0/P1 discovery below. Use local evidence when access is unavailable.
+
 ## Freeze the Audit
 
 1. Pin the exact maintenance-line baseline and the exact `origin/main` SHA.
@@ -26,8 +33,10 @@ bounds and pinned SHAs, baseline identity, total/equivalent/non-equivalent
 counts, filters, every candidate decision, applicability result, exclusions,
 dependency groups, and carry-forward blocked items. Security rows in public
 evidence must remain opaque; retain private identifiers only in the approved
-security record. The next accepted audit uses this ledger's `scan_end` as its
-cursor.
+security record. Keep scan bounds, counts, and the full commit inventory in the
+existing staging evidence, linked from the service assessments; they need not
+be separate API fields or one hotfix record per unrelated commit. The next
+accepted audit uses that evidence's `scan_end` as its cursor.
 
 ## Reconcile Stable-Maturity Issues
 
@@ -178,7 +187,10 @@ substitute convenient dependency bumps for a complete candidate audit. A
 backport is a cherry-pick of a merged `main` commit onto the release branch;
 never re-cut the candidate from newer `main` to absorb one unless Peter
 explicitly asks for it in that release. After dispatch, only confirmed release
-blockers qualify, each named in the handoff record.
+blockers qualify, each named in the handoff record, unless the operator explicitly
+reopens intake under the [owner lifecycle](release-owner.md#prepare-and-admit-hotfixes).
+That decision invalidates affected evidence; it never authorizes publication of
+untested changes.
 
 Before changing release refs, present the complete categorized ledger and the
 proposed set for maintainer approval. After approval, backport with provenance,

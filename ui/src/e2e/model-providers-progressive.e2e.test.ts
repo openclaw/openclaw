@@ -81,7 +81,7 @@ suite.define(() => {
             "models.list": initialCatalog,
             "models.authStatus": {
               ts: 1,
-              providers: ["healthy", "broken"].map(configAuth),
+              providers: ["healthy", "broken"].map((provider) => configAuth(provider)),
             },
           },
         });

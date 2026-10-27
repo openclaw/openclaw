@@ -254,6 +254,7 @@ const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "cron.add",
   "cron.update",
   "cron.remove",
+  "cron.bind",
   "cron.run",
   "cron.runs",
   "secrets.store.delete",

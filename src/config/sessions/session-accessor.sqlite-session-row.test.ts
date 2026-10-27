@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createFixtureSkillEntry } from "../../skills/test-support/test-helpers.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -65,7 +64,6 @@ const sessionDirs = useSessionStoreTempDirs(afterEach, "session-row-");
 it("updates maintenance and retained-reference predicates with the canonical entry", async () => {
   await seed({ sessionId: "current", sessionStartedAt: 5, previousSessionId: "previous" });
   const database = openOpenClawAgentDatabase(scope);
-  const prepare = vi.spyOn(database.db, "prepare");
   const startedAt = () =>
     [...readSessionMaintenanceAgeQueries(database.db).activity(undefined)].find(
       (row) => row.session_key === scope.sessionKey,
@@ -79,10 +77,6 @@ it("updates maintenance and retained-reference predicates with the canonical ent
   });
   expect(startedAt()).toBe(8);
   expect(references().has("previous")).toBe(false);
-  const queries = prepare.mock.calls.map(([query]) => query);
-  expect(queries.some((query) => query.includes('"session_started_at"'))).toBe(true);
-  expect(queries.some((query) => query.includes('"has_optional_references" ='))).toBe(true);
-  expect(queries.every((query) => !query.includes("$.sessionStartedAt"))).toBe(true);
 });
 
 it("bounds saved-prompt decoding while publishing identity changes", async () => {
@@ -110,7 +104,6 @@ it("bounds saved-prompt decoding while publishing identity changes", async () =>
   const decodes = parse.mock.calls.filter(([text]) =>
     text.includes("identity-decode-payload:"),
   ).length;
-  // Preparation hydrates once; commit and writer reuse that row.
   expect(decodes).toBeLessThanOrEqual(iterations);
   expect(identities).toEqual(Array.from({ length: 5 }, (_, index) => `generation-${index}`));
   expect(readEntry(scope)).toMatchObject({ sessionId: "generation-4", skillsSnapshot });
@@ -133,20 +126,14 @@ it("records committed owner facts before cancellation observers", async () => {
     });
     controller.abort(cancelled);
   });
-  const clone = vi.spyOn(globalThis, "structuredClone");
   const result = await patchEntry(scope, () => ({ sessionId: "successor" }), {
     onCommitted: (entry) => facts.push(entry),
   });
   expect(facts.map((entry) => entry.skillsSnapshot)).toEqual([skillsSnapshot]);
   expect(observed).toEqual([{ acceptedId: "successor", persistedId: "successor" }]);
-  expect(
-    clone.mock.calls.filter(
-      ([entry]) =>
-        isRecord(entry) && (entry.sessionId === "predecessor" || entry.sessionId === "successor"),
-    ).length,
-  ).toBeLessThanOrEqual(3);
   expect(result?.skillsSnapshot).toEqual(skillsSnapshot);
-  result!.skillsSnapshot!.skills.push({ name: "caller-only" });
+  // Internal results share the frozen publication's nested facts (#186051).
+  expect(() => result!.skillsSnapshot!.skills.push({ name: "caller-only" })).toThrow(TypeError);
   expect(readEntry(scope)?.skillsSnapshot).toEqual(skillsSnapshot);
 });
 

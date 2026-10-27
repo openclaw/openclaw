@@ -244,9 +244,7 @@ export class DefaultResourceLoader implements ResourceLoader {
       source: "local",
       scope: "temporary",
       origin: "top-level",
-      baseDir: statSync(normalizedPath).isDirectory()
-        ? normalizedPath
-        : resolve(normalizedPath, ".."),
+      baseDir: resolve(normalizedPath, ".."),
     };
   }
 

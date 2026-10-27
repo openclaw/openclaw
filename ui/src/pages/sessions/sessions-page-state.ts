@@ -13,12 +13,9 @@ import { watchAgentScope } from "../../lib/agents/index.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import {
-  SESSIONS_PAGE_DEFAULT_LIMIT,
-  filterSessionRows,
-  type SessionArchivedFilter,
-  type SessionListSnapshot,
-} from "../../lib/sessions/index.ts";
+import { normalizeSessionsGroupBy } from "../../lib/sessions/grouping.ts";
+import type { SessionArchivedFilter, SessionListSnapshot } from "../../lib/sessions/index.ts";
+import { filterSessionRows } from "../../lib/sessions/navigation.ts";
 import type { SessionPatch } from "../../lib/sessions/patch.ts";
 import {
   resolveSessionPreferredFaceForKey,
@@ -26,6 +23,8 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
+import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
+import { getSafeLocalStorage } from "../../local-storage.ts";
 import {
   sessionAgentId,
   sessionAgentIds,
@@ -37,7 +36,6 @@ import { createSessionGroups } from "./custom-groups.ts";
 import { resolveSessionDeleteOutcome } from "./delete-outcome.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 import { createSessionsDialog } from "./page-dialog.ts";
-import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
 import type { SessionsPageRequestScope } from "./request-scope.ts";
 import { createSessionsRosterReadiness } from "./roster-readiness.ts";
 import type { SessionsRouteData } from "./route.ts";
@@ -55,6 +53,7 @@ import { createTranscriptSearch } from "./transcript-search.ts";
 registerSessionOrganizationEnglish();
 
 const SESSION_SEARCH_DEBOUNCE_MS = 200;
+const GROUP_BY_STORAGE_KEY = "openclaw:sessions:group-by";
 
 export type SessionsPageOwner = ReturnType<typeof createSessionsPage>;
 
@@ -78,7 +77,7 @@ export function createSessionsPage(
   const observation = observeState<SessionsPageState>({
     sortColumn: "updated",
     sortDir: "desc",
-    groupBy: loadStoredGroupBy(),
+    groupBy: normalizeSessionsGroupBy(getSafeLocalStorage()?.getItem(GROUP_BY_STORAGE_KEY)),
     page: 0,
     pageSize: 25,
     result: null,
@@ -616,7 +615,11 @@ export function createSessionsPage(
       onGroupByChange: (mode: SessionsPageState["groupBy"]) => {
         state.groupBy = mode;
         state.page = 0;
-        saveStoredGroupBy(mode);
+        try {
+          getSafeLocalStorage()?.setItem(GROUP_BY_STORAGE_KEY, mode);
+        } catch {
+          // Storage may be unavailable or full; the in-memory selection still applies.
+        }
       },
       onAssignCategory: groups.assign,
       onRequestNewCategory: (sessionKey?: string): void =>
@@ -690,7 +693,6 @@ export function createSessionsPage(
   const presentationSources = [
     application.agentIdentity,
     application.navigation,
-    application.runtimeConfig,
     application.plugins,
   ].map((owner) => projectOwner(owner, (source) => source));
   const revision = () =>

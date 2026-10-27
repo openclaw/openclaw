@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
 import {
   EmbeddedPluginApprovalBroker,
@@ -30,6 +31,7 @@ import {
 import type { AgentSession } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import * as toolSearch from "../../tool-search.js";
+import { createWorkspaceCompactionConfig } from "../compaction-workspace-config.test-support.js";
 import {
   clearEmbeddedSessionPromptStates,
   retainEmbeddedSessionPromptState,
@@ -79,7 +81,6 @@ vi.mock("../../sessions/tools/tool-definition-wrapper.js", () => ({
 vi.mock("../extensions.js", () => ({
   buildEmbeddedExtensionFactories: hoisted.buildEmbeddedExtensionFactories,
 }));
-vi.mock("../logger.js", () => ({ log: { info: vi.fn() } }));
 vi.mock("../../sessions/resource-loader.js", () => ({
   DefaultResourceLoader: hoisted.DefaultResourceLoader,
 }));
@@ -232,14 +233,7 @@ function createSystemUpdateInput() {
   fixture.input.initialSystemPrompt = pinnedPrompt;
   fixture.input.onSystemPromptChanged = vi.fn();
   fixture.activeSession.agent.state.messages = [
-    {
-      role: "toolResult",
-      toolCallId: "read-1",
-      toolName: "read",
-      content: [{ type: "text", text: "Read complete." }],
-      isError: false,
-      timestamp: 1,
-    },
+    makeTextToolResult("read-1", "read", "Read complete.", false, 1),
   ];
   const steer = fixture.queuePromptContext;
   const promptStateLease = retainEmbeddedSessionPromptState("permission-system-updates");
@@ -295,18 +289,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     fixture.input.attempt = {
       ...fixture.input.attempt,
       model: createAnthropicModelFixture(),
-      config: {
-        agents: {
-          defaults: {
-            compaction: {
-              mode: "safeguard",
-              postCompactionSections: ["Compaction fixture"],
-              recentTurnsPreserve: 0,
-              qualityGuard: { enabled: false },
-            },
-          },
-        },
-      },
+      config: createWorkspaceCompactionConfig(),
     };
     const { buildEmbeddedExtensionFactories } =
       await vi.importActual<typeof import("../extensions.js")>("../extensions.js");

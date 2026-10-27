@@ -182,7 +182,9 @@ export function MemoryImportPage() {
   }
   onSettled(() => {
     // Target/access receipts retire import and backfill epochs before replanning.
-    const stops = [gateway, agents, selection].map((projection) => projection.subscribe(syncPlan));
+    const stops = [context.gateway, context.agents, context.agentSelection].map((owner) =>
+      owner.subscribe(syncPlan),
+    );
     stops.push(
       context.router.subscribe(() => {
         retirePresentation();
@@ -191,9 +193,7 @@ export function MemoryImportPage() {
     );
     syncPlan();
     return () => {
-      for (const stop of stops) {
-        stop();
-      }
+      stops.forEach((stop) => stop());
       presentationLifetime.resolve();
       applyEpoch += 1;
       backfillEpoch += 1;

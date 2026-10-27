@@ -12,6 +12,7 @@ import {
   createTestGatewayClient,
 } from "../test-helpers/gateway-client.ts";
 import { createModalDialogTestFixture, submitInputDialog } from "../test-helpers/modal-dialog.ts";
+import { createSessionGroup } from "./session-organizer-menu.runtime.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import "./app-sidebar.tsx";
 
@@ -100,7 +101,7 @@ it.each(["existing group", "new group"])(
       if (action === "existing group") {
         await sidebar.sessionOrganizer.assignSessionCategory(row, "Projects");
       } else {
-        const operation = modal.track(sidebar.sessionOrganizer.createSessionGroup([row]));
+        const operation = modal.track(createSessionGroup(sidebar.sessionOrganizer, [row]));
         await submitInputDialog("Projects");
         await operation;
       }

@@ -1,10 +1,9 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, expect, it } from "vitest";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import {
   getLoadedRuntimePluginRegistry,
-  listLoadedRuntimePluginIds,
   listRuntimePluginIdsFromRegistry,
   createRuntimePluginManifestLookup,
 } from "./active-runtime-registry.js";
@@ -69,117 +68,71 @@ function createLoadOptions(
   };
 }
 
-describe("getLoadedRuntimePluginRegistry", () => {
-  it("treats an explicit empty plugin scope as empty", () => {
-    activate(createRegistryWithPlugin("stale"));
-    expect(lookup([])).toBeUndefined();
-
-    const emptyRegistry = createEmptyPluginRegistry();
-    activate(emptyRegistry);
-    expect(lookup([])).toBe(emptyRegistry);
-  });
-
-  it("does not treat disabled plugin records as an empty plugin scope", () => {
-    activate(createRegistryWithPlugin("disabled", { status: "disabled" }));
-    expect(lookup([])).toBeUndefined();
-  });
-
-  it.each(["diagnostics", "channelSetups"] as const)(
-    "does not treat %s as loaded plugin records",
-    (registration) => {
-      const registry = createRegistryWithPlugin("unloaded", {
-        status: registration === "diagnostics" ? "error" : "disabled",
-      });
-      if (registration === "diagnostics") {
-        registry.diagnostics.push({
-          level: "error",
-          pluginId: "unloaded",
-          message: "failed to load",
-        } as never);
-      } else {
-        registry.channelSetups.push({ pluginId: "unloaded" } as never);
-      }
-      activate(registry);
-      expect(lookup(["unloaded"])).toBeUndefined();
-    },
-  );
-
-  it.each(["openclaw", "bundle"] as const)("checks deferred %s metadata availability", (format) => {
-    const registry = createRegistryWithPlugin("metadata", { format, imported: false });
-    activate(registry);
-    expect(lookup(["metadata"])).toBe(format === "bundle" ? registry : undefined);
-    const expected = format === "bundle" ? ["metadata"] : [];
-    expect(listLoadedRuntimePluginIds()).toEqual(expected);
-    expect(listRuntimePluginIdsFromRegistry(registry)).toEqual(expected);
-  });
-
-  it("reuses scoped loaded owners when load options differ from the active registry", () => {
-    const registry = createRegistryWithPlugin("demo");
-    activate(registry, "gateway-root-key");
-
-    expect(
-      getLoadedRuntimePluginRegistry({
-        loadOptions: { workspaceDir: "/tmp/ws", onlyPluginIds: ["demo"] },
-        workspaceDir: "/tmp/ws",
-        requiredPluginIds: ["demo"],
-      }),
-    ).toBe(registry);
-  });
-
-  it("keeps exact-key semantics for unscoped load-option requests", () => {
-    activate(createRegistryWithPlugin("demo"));
-
-    expect(
-      getLoadedRuntimePluginRegistry({
-        loadOptions: { workspaceDir: "/tmp/ws" },
-        workspaceDir: "/tmp/ws",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("does not reuse workspace-agnostic registries for workspace-specific requests", () => {
-    setActivePluginRegistry(createRegistryWithPlugin("demo"), "demo");
-
-    expect(lookup(["demo"])).toBeUndefined();
-  });
-
-  it("honors the requested workspace when scoped load options match the active key", () => {
-    const registry = createRegistryWithPlugin("demo");
-    const loadOptions = {
-      config: {},
-      installRecords: {},
-      workspaceDir: "/tmp/owner-workspace",
-      onlyPluginIds: ["demo"],
-    };
-    activate(
-      registry,
-      resolvePluginLoadCacheContext(loadOptions).cacheKey,
-      loadOptions.workspaceDir,
-    );
-
-    expect(
-      getLoadedRuntimePluginRegistry({ loadOptions, workspaceDir: "/tmp/request-workspace" }),
-    ).toBeUndefined();
-  });
-
-  it("rejects a request registry when a workspace selects another physical owner", () => {
-    const registry = createRegistryWithPlugin("demo", {
-      origin: "bundled",
-      rootDir: "/plugins/demo",
-      source: "/plugins/demo/index.js",
+it.each(["loaded", "disabled"] as const)("rejects %s records for an empty scope", (status) => {
+  activate(createRegistryWithPlugin("stale", { status }));
+  expect(lookup([])).toBeUndefined();
+});
+it("accepts an empty registry for an empty scope", () => {
+  const registry = createEmptyPluginRegistry();
+  activate(registry);
+  expect(lookup([])).toBe(registry);
+});
+it.each(["diagnostics", "channelSetups"] as const)(
+  "does not treat %s as loaded plugin records",
+  (registration) => {
+    const registry = createRegistryWithPlugin("unloaded", {
+      status: registration === "diagnostics" ? "error" : "disabled",
     });
+    if (registration === "diagnostics") {
+      registry.diagnostics.push({ level: "error", pluginId: "unloaded", message: "failed" });
+    } else {
+      registry.channelSetups.push({ pluginId: "unloaded" } as never);
+    }
+    activate(registry);
+    expect(lookup(["unloaded"])).toBeUndefined();
+  },
+);
 
-    expect(
-      createRuntimePluginManifestLookup(registry, [
-        {
-          id: "demo",
-          origin: "workspace",
-          rootDir: "/tmp/session-workspace/.openclaw/extensions/demo",
-          source: "/tmp/session-workspace/.openclaw/extensions/demo/index.js",
-        } as never,
-      ])("demo"),
-    ).toBeUndefined();
+it.each(["openclaw", "bundle"] as const)("checks deferred %s metadata availability", (format) => {
+  const registry = createRegistryWithPlugin("metadata", { format, imported: false });
+  activate(registry);
+  expect(lookup(["metadata"])).toBe(format === "bundle" ? registry : undefined);
+  const expected = format === "bundle" ? ["metadata"] : [];
+  expect(listRuntimePluginIdsFromRegistry(registry)).toEqual(expected);
+});
+
+it.each([
+  { scope: ["demo"], ownerWorkspace: "/tmp/ws", exactKey: false, reused: true },
+  { scope: undefined, ownerWorkspace: "/tmp/ws", exactKey: false, reused: false },
+  { scope: ["demo"], ownerWorkspace: undefined, exactKey: false, reused: false },
+  { scope: ["demo"], ownerWorkspace: "/tmp/other", exactKey: true, reused: false },
+])("checks scope/workspace identity: %j", ({ scope, ownerWorkspace, exactKey, reused }) => {
+  const registry = createRegistryWithPlugin("demo");
+  const loadOptions = { workspaceDir: ownerWorkspace, onlyPluginIds: scope };
+  const key = exactKey ? resolvePluginLoadCacheContext(loadOptions).cacheKey : "gateway-root-key";
+  setActivePluginRegistry(registry, key, "default", ownerWorkspace);
+  expect(getLoadedRuntimePluginRegistry({ loadOptions, workspaceDir: "/tmp/ws" })).toBe(
+    reused ? registry : undefined,
+  );
+});
+
+it("rejects a request registry when a workspace selects another physical owner", () => {
+  const registry = createRegistryWithPlugin("demo", {
+    origin: "bundled",
+    rootDir: "/plugins/demo",
+    source: "/plugins/demo/index.js",
   });
+
+  expect(
+    createRuntimePluginManifestLookup(registry, [
+      {
+        id: "demo",
+        origin: "workspace",
+        rootDir: "/tmp/session-workspace/.openclaw/extensions/demo",
+        source: "/tmp/session-workspace/.openclaw/extensions/demo/index.js",
+      } as never,
+    ])("demo"),
+  ).toBeUndefined();
 });
 
 it.each(["setup", "full"] as const)(

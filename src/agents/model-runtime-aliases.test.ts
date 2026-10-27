@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginSetupRegistry } from "../plugins/setup-registry.test-support.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -87,13 +88,7 @@ describe("resolveCliRuntimeExecutionProvider", () => {
   beforeEach(() => {
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
-      resolvePluginSetupRegistry: () => ({
-        providers: [],
-        cliBackends: [],
-        configMigrations: [],
-        autoEnableProbes: [],
-        diagnostics: [],
-      }),
+      resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
       resolveRuntimeCliBackends: () => [claudeBinding],
     });
   });

@@ -33,11 +33,25 @@ it("redraws the reply connector from the current avatar after its presentation c
   vi.stubGlobal(
     "ResizeObserver",
     class {
-      constructor(callback: () => void) {
-        resizes.push(callback);
+      private readonly targets = new Set<Element>();
+      constructor(callback: ResizeObserverCallback) {
+        resizes.push(() => {
+          // SAFETY: The connector callback reads geometry from its own refs.
+          callback(
+            [...this.targets].map((target) => ({ target }) as ResizeObserverEntry),
+            this as unknown as ResizeObserver,
+          );
+        });
       }
-      observe() {}
-      disconnect() {}
+      observe(target: Element) {
+        this.targets.add(target);
+      }
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
     },
   );
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (

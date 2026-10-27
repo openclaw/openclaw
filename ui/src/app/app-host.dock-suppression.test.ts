@@ -22,6 +22,7 @@ import {
 import "../components/app-sidebar.tsx";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 import { readShellView } from "./app-shell-view-state.ts";
+import { makeBootRoster } from "./bootstrap.test-support.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { loadSettings } from "./settings.ts";
@@ -72,12 +73,7 @@ it("applies route ownership to shell panels without session-gating desktop", asy
     },
     agents: {
       state: {
-        agentsList: {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "main" }, { id: "research" }],
-        },
+        agentsList: makeBootRoster({ agents: [{ id: "main" }, { id: "research" }] }),
       },
     },
     agentSelection: { state: { selectedId: "research" } },

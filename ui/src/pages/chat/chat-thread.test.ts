@@ -7,7 +7,6 @@ import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { prependUniqueNativeMessages } from "../../lib/chat/history-message-identity.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
-import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import {
   groupsOf as groupsIn,
@@ -116,6 +115,13 @@ function canvasToolOutput(viewId: string, title: string, preferredHeight: number
   });
 }
 
+function canvasBlock<P extends object>(preview: P) {
+  return {
+    type: "canvas",
+    preview: { kind: "canvas", surface: "assistant_message", render: "url", ...preview },
+  };
+}
+
 function messageGroups(props: Partial<CachedChatItemsProps>): MessageGroup[] {
   return buildCachedChatItems(createProps(props)).filter((item) => item.kind === "group");
 }
@@ -136,6 +142,10 @@ function requireItem<T extends { kind: string }, K extends T["kind"]>(
 
 function expectKinds(items: readonly { kind: string }[], kinds: string[]) {
   expect(items.map((item) => item.kind)).toEqual(kinds);
+}
+
+function expectRoles(items: ReturnType<typeof buildItems>, roles: string[]) {
+  expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual(roles);
 }
 
 function firstMessageContent(group: MessageGroup): unknown[] {
@@ -206,14 +216,7 @@ describe("assistant commentary grouping", () => {
         }),
       ],
     });
-    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
-      "user",
-      "tool",
-      "assistant",
-      "user",
-      "assistant",
-      "user",
-    ]);
+    expectRoles(items, ["user", "tool", "assistant", "user", "assistant", "user"]);
   });
 
   it.each([
@@ -337,45 +340,35 @@ describe("collapseCompletedTurnWork", () => {
     timestamp,
   });
 
-  it.each([
-    {
-      name: "durable context event retains surrounding replies",
-      message: {
-        role: "custom",
-        customType: "openclaw.context-compaction",
-        content: "Context compacted",
-        display: true,
-        excludeFromContext: true,
-        details: { runId: "run-1" },
-        idempotencyKey: "codex-context-compaction:thread:turn:item",
-        timestamp: 2_000,
-      },
-      surrounding: true,
-      divider: { compaction: "complete", label: "Context compacted" },
-    },
-    {
-      name: "persisted boundary retains recorded token savings",
-      message: {
-        role: "system",
-        timestamp: 2_000,
-        __openclaw: {
-          kind: "compaction",
-          id: "checkpoint-with-metrics",
-          tokensBefore: 900_000,
-          tokensAfter: 24_700,
-        },
-      },
-      surrounding: false,
-      divider: { kind: "divider", label: "Context compacted", metric: "saved 875.3k tokens" },
-    },
-  ])("renders a compaction marker when $name", ({ message, surrounding, divider }) => {
+  it.each(["context event", "persisted boundary"])("renders a compaction %s", (source) => {
+    const boundary = source === "persisted boundary";
+    const marker = boundary
+      ? {
+          role: "system",
+          timestamp: 2_000,
+          __openclaw: {
+            kind: "compaction",
+            id: "checkpoint-with-metrics",
+            tokensBefore: 900_000,
+            tokensAfter: 24_700,
+          },
+        }
+      : chatMessage("custom", "Context compacted", 2_000, {
+          customType: "openclaw.context-compaction",
+          display: true,
+          excludeFromContext: true,
+          details: { runId: "run-1" },
+          idempotencyKey: "codex-context-compaction:thread:turn:item",
+        });
     const items = collapsedItems({
-      messages: surrounding
-        ? [user("do it", 1_000), message, assistant("All done.", 3_000)]
-        : [message],
+      messages: boundary ? [marker] : [user("do it", 1_000), marker, assistant("All done.", 3_000)],
     });
-    expect(items[surrounding ? 1 : 0]).toMatchObject(divider);
-    if (surrounding) {
+    expect(items[boundary ? 0 : 1]).toMatchObject(
+      boundary
+        ? { kind: "divider", label: "Context compacted", metric: "saved 875.3k tokens" }
+        : { compaction: "complete", label: "Context compacted" },
+    );
+    if (!boundary) {
       expectKinds(items, ["group", "divider", "group"]);
       expect(requireGroup(items[2]).messages[0]?.message).toMatchObject({ content: "All done." });
     }
@@ -541,13 +534,7 @@ describe("buildCachedChatItems working spark", () => {
     });
     const project = (props: Partial<CachedChatItemsProps>) => {
       const items = buildItems({ sessionKey, runWorking: true, queue: [failed], ...props });
-      const runs = coalesceStreamRuns(items);
-      return {
-        items,
-        indicator: requireItem(items, "reading-indicator"),
-        run: requireItem(runs, "stream-run"),
-        frame: requireItem(coalesceAgentRunFrames(runs), "agent-run-frame"),
-      };
+      return { items, indicator: requireItem(items, "reading-indicator") };
     };
     const pending = project({
       queue: [
@@ -560,10 +547,9 @@ describe("buildCachedChatItems working spark", () => {
     });
     const acknowledged = project({ runId: "run-1", stream: "", streamStartedAt: 2_000 });
     expect(pending.indicator.startedAt).toBe(1_000);
-    expect(acknowledged).toMatchObject({
-      indicator: { key: pending.indicator.key, startedAt: pending.indicator.startedAt },
-      run: { key: pending.run.key },
-      frame: { key: pending.frame.key },
+    expect(acknowledged.indicator).toMatchObject({
+      key: pending.indicator.key,
+      startedAt: pending.indicator.startedAt,
     });
     const reconnected = project({
       runId: "run-1",
@@ -584,12 +570,10 @@ describe("buildCachedChatItems working spark", () => {
       streaming.items.filter((item) => item.kind === "stream" && item.isStreaming),
       "stream",
     );
-    expect(stream.key).toBe(pending.indicator.key);
-    expect(streaming.indicator.key).toBe(pending.indicator.key);
-    expect(streaming.run).toMatchObject({
-      key: pending.run.key,
-      parts: [{ kind: "stream" }, { kind: "reading-indicator" }],
-    });
+    expect([stream.key, streaming.indicator.key]).toEqual([
+      pending.indicator.key,
+      pending.indicator.key,
+    ]);
     const next = project({ runId: "run-2", stream: "", streamStartedAt: 3_000 });
     const other = project({
       sessionKey: "agent:other:working-row",
@@ -1102,15 +1086,14 @@ describe("buildCachedChatItems", () => {
       ],
     });
 
-    expect(items).toHaveLength(7);
-    expect(items[0]).toMatchObject({ kind: "stream", text: "Setup", startedAt: 1_500 });
-    expect(items[1]).toMatchObject({ kind: "stream", text: "First tool." });
-    expect(messageRecord(requireGroup(items[2])).toolCallId).toBe("call-read");
-    expect(items[3]).toMatchObject({ kind: "stream", text: "Second tool." });
-    expect(messageRecord(requireGroup(items[4])).toolCallId).toBe("call-list");
-    expect(items.slice(5)).toEqual([
-      expect.objectContaining({ kind: "stream", text: "Unmatched preamble" }),
-      expect.objectContaining({ kind: "stream", text: "Keyed preamble" }),
+    expect(items).toMatchObject([
+      { kind: "stream", text: "Setup", startedAt: 1_500 },
+      { kind: "stream", text: "First tool." },
+      { kind: "group", messages: [{ message: { toolCallId: "call-read" } }] },
+      { kind: "stream", text: "Second tool." },
+      { kind: "group", messages: [{ message: { toolCallId: "call-list" } }] },
+      { kind: "stream", text: "Unmatched preamble" },
+      { kind: "stream", text: "Keyed preamble" },
     ]);
   });
 
@@ -1251,7 +1234,7 @@ describe("buildCachedChatItems", () => {
     ({ props, app, showToolCalls = false, order, canvases }) => {
       const items = buildItems({ ...props, toolMessages: [app], showToolCalls });
       if (order) {
-        expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual(order);
+        expectRoles(items, order);
       }
       const groups = groupsIn(items);
       for (const [index, count] of canvases.entries()) {
@@ -1296,15 +1279,7 @@ describe("buildCachedChatItems", () => {
         assistant(
           [
             textBlock(text),
-            {
-              type: "canvas",
-              preview: {
-                kind: "canvas",
-                surface: "assistant_message",
-                render: "url",
-                url: "/__openclaw__/canvas/documents/cv_url_match/index.html",
-              },
-            },
+            canvasBlock({ url: "/__openclaw__/canvas/documents/cv_url_match/index.html" }),
           ],
           1_003,
         ),
@@ -1349,7 +1324,7 @@ describe("buildCachedChatItems", () => {
             ? {
                 viewId,
                 sandbox: "scripts",
-                mcpApp: mcpAppCanvasBlock(viewId, callId).preview.mcpApp,
+                mcpApp: mcpAppDescriptor(viewId, callId),
               }
             : { viewId, url, sandbox: "strict", boardWidgetName: "saved-widget" },
       },
@@ -1540,15 +1515,7 @@ describe("buildCachedChatItems", () => {
           },
         ],
       };
-      const canvas = {
-        type: "canvas",
-        preview: {
-          kind: "canvas",
-          surface: "assistant_message",
-          render: "url",
-          viewId: "cv_final",
-        },
-      };
+      const canvas = canvasBlock({ viewId: "cv_final" });
       const saved = assistant([textBlock("Your counter is ready."), canvas], 1_003, {
         __openclaw: { id: "saved-final", seq: 3, runId },
       });
@@ -1804,23 +1771,13 @@ describe("thread item cache", () => {
   });
 
   it("updates the live stream without rescanning retained history", () => {
-    const reads = { count: 0 };
+    const read = vi.fn(Reflect.get);
     const messages = Array.from(
       { length: 1_000 },
       (_, index) =>
-        new Proxy(
-          {
-            role: index % 2 === 0 ? "user" : "assistant",
-            content: `message ${index}`,
-            timestamp: index,
-          },
-          {
-            get(target, property, receiver) {
-              reads.count += 1;
-              return Reflect.get(target, property, receiver);
-            },
-          },
-        ),
+        new Proxy(chatMessage(index % 2 === 0 ? "user" : "assistant", `message ${index}`, index), {
+          get: read,
+        }),
     );
     const input = createProps({
       messages,
@@ -1828,22 +1785,19 @@ describe("thread item cache", () => {
       streamStartedAt: 10,
     });
     const first = buildCachedChatItems(input);
-    reads.count = 0;
+    read.mockClear();
 
     const updated = buildCachedChatItems({ ...input, stream: "complete reply" });
 
     expect(updated).toBe(first);
-    expect(reads.count).toBe(0);
+    expect(read).not.toHaveBeenCalled();
     expect(updated).toContainEqual(
       expect.objectContaining({ kind: "stream", text: "complete reply", isStreaming: true }),
     );
   });
 
   it("keeps same-session render caches isolated between panes", () => {
-    const messages = [
-      { role: "assistant", content: "needle" },
-      { role: "user", content: "other" },
-    ];
+    const messages = [assistant("needle"), user("other")];
     const paneA = createProps({
       paneId: "pane-a",
       messages,
@@ -1896,19 +1850,13 @@ function mcpAppDescriptor(viewId: string, toolCallId: string) {
 }
 
 function mcpAppCanvasBlock(viewId: string, toolCallId: string) {
-  return {
-    type: "canvas",
-    preview: {
-      kind: "canvas",
-      surface: "assistant_message",
-      render: "url",
-      viewId,
-      title: "Demo App",
-      url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
-      sandbox: "scripts",
-      mcpApp: mcpAppDescriptor(viewId, toolCallId),
-    },
-  };
+  return canvasBlock({
+    viewId,
+    title: "Demo App",
+    url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
+    sandbox: "scripts",
+    mcpApp: mcpAppDescriptor(viewId, toolCallId),
+  });
 }
 
 function mcpAppResult(viewId: string, toolCallId: string, timestamp: number) {

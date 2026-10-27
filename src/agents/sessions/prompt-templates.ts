@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -85,16 +85,12 @@ export function loadPromptTemplates({
     }
     return createSyntheticSourceInfo(resolvedPath, {
       source: "local",
-      baseDir: statSync(resolvedPath).isDirectory() ? resolvedPath : dirname(resolvedPath),
+      baseDir: dirname(resolvedPath),
     });
   };
 
   for (const rawPath of promptPaths) {
     const resolvedPath = resolvePromptPath(rawPath, cwd);
-    if (!existsSync(resolvedPath)) {
-      continue;
-    }
-
     try {
       const stats = statSync(resolvedPath);
       let filePaths: string[] = [];
@@ -108,17 +104,11 @@ export function loadPromptTemplates({
       } else if (stats.isFile() && resolvedPath.endsWith(".md")) {
         filePaths = [resolvedPath];
       }
-      const loadedTemplates: PromptTemplate[] = [];
-      try {
-        for (const filePath of filePaths) {
-          const template = loadTemplateFromFile(filePath, getSourceInfo(filePath));
-          if (template) {
-            loadedTemplates.push(template);
-          }
+      for (const filePath of filePaths) {
+        const template = loadTemplateFromFile(filePath, getSourceInfo(filePath));
+        if (template) {
+          templates.push(template);
         }
-      } finally {
-        // Keep the loaded prefix if metadata resolution fails on a later file.
-        templates.push(...loadedTemplates);
       }
     } catch {}
   }

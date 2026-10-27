@@ -23,6 +23,7 @@ import {
   sessionAutomaticCompactionMock,
   sessionManualCompactionMock,
 } from "./compact.hooks.harness.js";
+import { createWorkspaceCompactionConfig } from "./compaction-workspace-config.test-support.js";
 
 type Compact = typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
 
@@ -179,18 +180,7 @@ export function registerCompactionSafeguardTests({
       resolveEffectiveCompactionModeMock.mockReturnValue("safeguard");
       await bindSession(sessionManager, { handlers: safeguard });
       const result = await compact({
-        config: {
-          agents: {
-            defaults: {
-              compaction: {
-                mode: "safeguard",
-                postCompactionSections: ["Compaction fixture"],
-                recentTurnsPreserve: 0,
-                qualityGuard: { enabled: false },
-              },
-            },
-          },
-        },
+        config: createWorkspaceCompactionConfig(),
       });
       expect(result, result.reason).toMatchObject({ ok: true, compacted: true });
       expect(result.result?.summary).toContain(

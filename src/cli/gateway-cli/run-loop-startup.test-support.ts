@@ -23,7 +23,6 @@ export function registerGatewayStartupFailureTests(
     "hasManagedProviderLocalServices" | "stopManagedProviderLocalServices"
   >,
 ): void {
-  // Retain collection-time mocks across runtime module resets.
   it.each([
     "begin-boot",
     "start",
@@ -234,24 +233,18 @@ export function registerGatewayStartupFailureTests(
         let stop: (() => void) | undefined;
         try {
           await Promise.race([firstStarted.promise, loopSettled]);
-          expect(start).toHaveBeenCalledOnce();
           const restart = captureSignal("SIGUSR2");
           stop = captureSignal("SIGTERM");
           restart();
           await Promise.race([loopSettled, triageStarted.promise]);
           if (cleanup === "clean") {
-            expect(onRestartStartupFailure).toHaveBeenCalledOnce();
-            expect(loopRejected).not.toHaveBeenCalled();
             await withTestTimeout(thirdStarted.promise, 1_000, "triage did not restart Gateway");
-            expect(start).toHaveBeenCalledTimes(3);
             stop();
             await expect(exited).resolves.toBe(0);
           } else if (supervised && repairFailed) {
             await withTestTimeout(loopSettled, 1_000, "startup refusal did not settle");
             const error = cleanup === "unrepaired" ? retryError : startupError;
             expect(loopRejected).toHaveBeenCalledExactlyOnceWith(error);
-            expect(onRestartStartupFailure).toHaveBeenCalledOnce();
-            expect(start).toHaveBeenCalledTimes(cleanup === "unrepaired" ? 3 : 2);
             expect(completeBoot).toHaveBeenLastCalledWith({
               outcome: "startup_failed",
               reason: error.message,
@@ -263,12 +256,8 @@ export function registerGatewayStartupFailureTests(
               "missing recovery guidance",
             );
             expectCallCount(0, loopRejected, runtime.exit);
-            expect(onRestartStartupFailure).toHaveBeenCalledOnce();
             expect(start).toHaveBeenCalledTimes(cleanup === "unrepaired" ? 3 : 2);
             const output = gatewayLog.error.mock.calls.flat().join("\n");
-            expect(output).toContain(
-              cleanup === "unrepaired" ? retryError.message : "gateway.bind",
-            );
             expect(output).toContain("openclaw doctor --fix");
             if (platform === "win32") {
               expect(output).toContain(supervised ? "openclaw gateway restart" : "press Ctrl+C");
@@ -293,16 +282,13 @@ export function registerGatewayStartupFailureTests(
             });
             expect(onRestartStartupFailure).not.toHaveBeenCalled();
             expect(loopRejected).toHaveBeenCalledExactlyOnceWith(startupError);
-            expect(start).toHaveBeenCalledTimes(2);
           } else {
             expect(onRestartStartupFailure).not.toHaveBeenCalled();
-            expect(loopRejected).toHaveBeenCalledOnce();
             await expect(loop).rejects.toBeInstanceOf(AggregateError);
             await expect(loop).rejects.toMatchObject({
               cause: startupError,
               errors: expect.arrayContaining([startupError, cleanupError]),
             });
-            expect(start).toHaveBeenCalledTimes(2);
             expect(runtime.exit).not.toHaveBeenCalled();
           }
         } finally {

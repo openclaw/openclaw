@@ -11,7 +11,10 @@ import {
 } from "../../app/settings.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import type { TypefaceId } from "../../app/typography.ts";
+import { getLobsterdex } from "../../components/lobster-dex.ts";
+import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { i18n, isSupportedLocale, type Locale } from "../../i18n/index.ts";
+import { currentDisplayConfig } from "../../lib/config/config-state-model.ts";
 
 /** Resolves preference provenance and delegates changes to the canonical preference owners. */
 export function createConfigPagePreferences(context: ApplicationContext, invalidate: () => void) {
@@ -29,7 +32,7 @@ export function createConfigPagePreferences(context: ApplicationContext, invalid
   function current<K extends ResettableServerUiPrefKey>(key: K) {
     const appearance = isAppearancePref(key);
     return resolveServerUiPrefState(
-      context.runtimeConfig.state.configSnapshot?.config,
+      currentDisplayConfig(context.runtimeConfig.state),
       key,
       context.gateway.connection.gatewayUrl,
       settings(),
@@ -78,6 +81,17 @@ export function createConfigPagePreferences(context: ApplicationContext, invalid
       const chatFollowUpModePref = current("chatFollowUpMode");
       return {
         onAppearanceChange: apply,
+        setTabIconMode: (preference: NonNullable<UiSettings["tabIcon"]>) => {
+          if (
+            preference.startsWith("lobster:") &&
+            (!context.theme.branding.lobsterdex ||
+              !LOBSTER_PET_PALETTES.some((palette) => palette.id === preference.slice(8)) ||
+              !getLobsterdex().has(preference.slice(8)))
+          ) {
+            return;
+          }
+          apply({ tabIcon: preference });
+        },
         theme: settings().theme,
         themeOverridden: themePref.overridden,
         themeProvenance: themePref.provenance,

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { list as listTar } from "tar";
+import { listDirectoryTreeStrict } from "../../src/infra/directory-walk.ts";
 import { collectNpmPackInventory } from "./npm-pack-inventory.mts";
 import { listBundleDependencies } from "./package-bundle-dependencies.mts";
 import {
@@ -88,7 +89,9 @@ async function stagePackage(
         retained.add(parent);
       }
     }
-    const copied = await fs.readdir(destination, { recursive: true });
+    const copied = (await listDirectoryTreeStrict(destination)).map(
+      ({ relativePath }) => relativePath,
+    );
     for (const entry of copied.toSorted((left, right) => right.length - left.length)) {
       if (!retained.has(entry.split(path.sep).join("/"))) {
         await fs.rm(path.join(destination, entry), { recursive: true });

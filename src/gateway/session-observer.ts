@@ -218,10 +218,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     (work.disposed || supersededRuns.has(state.runId) ? lifecycle.dropState : suspendState)(state);
 
   const demoteUtilityModel = (state: SessionObserverState): void => {
-    if (state.timer) {
-      clearTimeout(state.timer);
-      state.timer = undefined;
-    }
+    clearTimeout(state.timer);
+    state.timer = undefined;
     state.activeController?.abort();
     state.preparedPromise = undefined;
     state.utilityModelRef = undefined;
@@ -322,10 +320,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       schedule(state);
       return;
     }
-    if (state.timer) {
-      clearTimeout(state.timer);
-      state.timer = undefined;
-    }
+    clearTimeout(state.timer);
+    state.timer = undefined;
     if (!modelSlots.reserve(state)) {
       state.finalPending ||= final;
       return;

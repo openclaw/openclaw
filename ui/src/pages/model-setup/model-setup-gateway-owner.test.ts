@@ -5,6 +5,7 @@ import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { WizardNextResult } from "../../api/types.ts";
 import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { persistFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
@@ -14,7 +15,6 @@ import {
   runningStep,
   authButton,
   mockRequests,
-  configSnapshot,
   answerWizard,
   authOption,
   activated,
@@ -83,7 +83,7 @@ it.each(ownerChanges)(
     const original = current();
     const sharedResponses = {
       "openclaw.setup.detect": () => inventory,
-      "config.get": () => configSnapshot({}, "synthetic-config"),
+      "config.get": () => sourceConfigSnapshot({}, "synthetic-config"),
       "wizard.cancel": () => ({ status: "cancelled" }),
     };
     mockRequests(original.request, {

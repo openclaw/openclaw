@@ -5,7 +5,10 @@ import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  createControlUiE2eContextOptions,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Ask OpenClaw panel toggle mocked Gateway E2E",
@@ -14,12 +17,7 @@ const suite = createControlUiE2eSuite({
 const MOCK_SESSION_ID = "e2e-custodian-panel";
 const WORK_SESSION_KEY = "agent:main:work";
 const chatMethods = ["chat.metadata", "chat.startup", "chat.history", "chat.send"];
-const contextOptions = {
-  colorScheme: "dark",
-  locale: "en-US",
-  serviceWorkers: "block",
-  viewport: { height: 900, width: 1280 },
-} as const;
+const contextOptions = { colorScheme: "dark", ...createControlUiE2eContextOptions() } as const;
 
 async function openHome(page: Page, scenario: ControlUiMockGatewayScenario) {
   const gateway = await installMockGateway(page, { sessionKey: WORK_SESSION_KEY, ...scenario });

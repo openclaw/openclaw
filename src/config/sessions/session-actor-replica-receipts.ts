@@ -104,10 +104,10 @@ export function readSessionActorProjectionReceiptFromCells(
   for (const cell of sessionActorReplicaCellsForPath(cells, params.path)) {
     const { sessionKey } = cell.target;
     const snapshot = cell.snapshot;
+    const entry = snapshot ?? (cell.entry?.snapshots === "full" ? cell.entry : undefined);
     if (
       (params.sessionKey !== undefined && sessionKey !== params.sessionKey) ||
-      snapshot?.entry?.sessionId !== params.sessionId ||
-      (!snapshot.transcript.projection && !snapshot.transcript.contextStats)
+      entry?.entry?.sessionId !== params.sessionId
     ) {
       continue;
     }
@@ -115,13 +115,13 @@ export function readSessionActorProjectionReceiptFromCells(
     return {
       sessionId: params.sessionId,
       entrySessionKey: sessionKey,
-      writeToken: snapshot.writeToken,
+      writeToken: entry.writeToken,
       writeScopes: [
         ...collectSessionEntryLookupKeys(sessionKey),
-        ...snapshot.dependencySessionIds.map(sqliteSessionIdWriteScope),
+        ...entry.dependencySessionIds.map(sqliteSessionIdWriteScope),
       ],
-      facts: snapshot.transcript.projection,
-      contextStats: snapshot.transcript.contextStats,
+      facts: snapshot?.transcript.projection,
+      contextStats: snapshot?.transcript.contextStats,
     };
   }
   return undefined;

@@ -448,26 +448,15 @@ describe("worker placement dispatch authority", () => {
           }
           return { available: true, node: deviceNode };
         });
-        const deviceIdentity = {
-          providerId: "device",
-          profileId: "device:device-1",
-          profileSnapshot: { install: "bundle" as const, settings: { device: "device-1" } },
-          nodeDeviceId: deviceNode.nodeId,
-          sshEndpoint: null,
-          sharedHost: true,
-        };
-        const ready = { ...harness.ready, ...deviceIdentity };
-        let current: ReturnType<typeof harness.environments.get> = ready;
-        vi.mocked(harness.environments.get).mockImplementation(() => current);
-        vi.mocked(harness.environments.createWithRequest).mockImplementation(async () => {
-          harness.log.push("create");
+        const create = vi.mocked(harness.environments.createWithRequest).getMockImplementation()!;
+        vi.mocked(harness.environments.createWithRequest).mockImplementation(async (request) => {
+          const ready = await create(request);
           revokeAt("provisioning");
           return ready;
         });
         const attach = vi.mocked(harness.environments.attachSession).getMockImplementation()!;
         vi.mocked(harness.environments.attachSession).mockImplementation(async (request) => {
           const credential = await attach(request);
-          current = { ...harness.attached, ...deviceIdentity };
           revokeAt("attachment");
           return credential;
         });
@@ -483,21 +472,9 @@ describe("worker placement dispatch authority", () => {
           revokeAt("tunnel");
           return tunnel;
         });
-        const destroy = vi.mocked(harness.environments.destroy).getMockImplementation()!;
-        vi.mocked(harness.environments.destroy).mockImplementation(async (environmentId) => {
-          current = await destroy(environmentId);
-          return current;
-        });
-
         await expect(
           harness.service.dispatch(
-            {
-              ...deviceRequest,
-              inheritedProfile: {
-                providerId: deviceIdentity.providerId,
-                profileSnapshot: deviceIdentity.profileSnapshot,
-              },
-            },
+            boundary === "readiness" ? deviceRequest : REQUEST,
             (placement) => {
               if (placement.state === "starting") {
                 revokeAt("activation");

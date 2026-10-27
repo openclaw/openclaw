@@ -3,6 +3,7 @@ import type { SkillsWorkshopListResult } from "../../../packages/gateway-protoco
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
+import { listWorkshopDrafts } from "./drafts.js";
 import { listWorkshopArchive, listWorkshopSkills } from "./library.js";
 import { readSkillUsage } from "./skill-usage.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
@@ -14,9 +15,10 @@ export async function buildSkillsWorkshopListResult(params: {
 }): Promise<SkillsWorkshopListResult> {
   const { config, agentId } = params;
   const root = resolveWorkshopSkillsDir(config, agentId);
-  const [skills, archived] = await Promise.all([
+  const [skills, archived, drafts] = await Promise.all([
     listWorkshopSkills(config, agentId),
     listWorkshopArchive(config, agentId),
+    listWorkshopDrafts(config, agentId),
   ]);
   const withFiles = skills.map((skill) => ({
     skill,
@@ -32,5 +34,11 @@ export async function buildSkillsWorkshopListResult(params: {
     root,
     skills: withFiles.map(({ skill, skillFile }) => Object.assign(skill, usage.get(skillFile))),
     archived,
+    drafts: drafts.map((draft) => ({
+      id: draft.id,
+      skillName: draft.skillName,
+      summary: draft.reason ?? draft.description,
+      createdAtMs: draft.createdAtMs,
+    })),
   };
 }

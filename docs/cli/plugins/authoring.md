@@ -32,6 +32,9 @@ current entry export still agree. Pass `--json` for a machine-readable
 validation result. See [Tool Plugins](/plugins/tool-plugins) for the full
 authoring workflow.
 
+Authoring metadata must be regular files containing valid UTF-8 JSON. Symlinks to
+regular files are supported; pipes and other special files are rejected before reading.
+
 `plugins lint --root <path>` inspects a plugin and its materialized runtime
 dependencies without importing plugin code or reading operator configuration.
 Use `--json` for structured compatibility warnings. Findings do not block installs;

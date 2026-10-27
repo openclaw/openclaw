@@ -1,9 +1,4 @@
-import {
-  AssistantMessageEventStream,
-  type Message,
-  type Model,
-  type AssistantMessage,
-} from "openclaw/plugin-sdk/llm";
+import { AssistantMessageEventStream, type Message, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createResponsesAssistantOutput } from "../../packages/ai/src/providers/openai-responses-shared.js";
 import { processCompletionsStream } from "../../packages/ai/src/transports/openai-completions-stream.js";
@@ -30,6 +25,12 @@ import {
   createOpenAiResponsesTextEvent,
   type OpenAiResponsesTextEventPhase,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
+import {
+  emitProviderUpdate,
+  textMessage,
+  toolBlock,
+  type TestAssistant,
+} from "./embedded-agent-subscribe.provider-events.test-support.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
 type Options = Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId">;
@@ -520,10 +521,6 @@ describe("terminal visible replies", () => {
   });
 });
 
-type TestAssistant = Pick<AssistantMessage, "role" | "content"> &
-  Partial<Pick<AssistantMessage, "api" | "stopReason" | "openclawDelivery">> & {
-    phase?: "commentary" | "final_answer";
-  };
 function subscribe(options: Options = {}) {
   const harness = createSubscribedSessionHarness({ runId: "run", ...options });
   onTestFinished(() => harness.subscription.unsubscribe());
@@ -532,28 +529,6 @@ function subscribe(options: Options = {}) {
 function blockHarness(options: Options = {}) {
   const onBlockReply = vi.fn();
   return { ...subscribe({ onBlockReply, blockReplyBreak: "text_end", ...options }), onBlockReply };
-}
-function emitProviderUpdate(
-  emit: ReturnType<typeof subscribe>["emit"],
-  message: TestAssistant,
-  event: {
-    type: string;
-    contentIndex?: number;
-    delta?: string;
-    content?: string;
-    partial?: TestAssistant;
-  },
-) {
-  emit({ type: "message_update", message, assistantMessageEvent: event });
-}
-function textMessage(
-  text: string,
-  api: "anthropic-messages" | "openai-completions",
-): TestAssistant {
-  return { ...textAssistant(text), api };
-}
-function toolBlock(id: string, name: string) {
-  return { type: "toolCall" as const, id, name, arguments: {} };
 }
 
 describe("reasoning delivery", () => {

@@ -500,7 +500,7 @@ describe("Discord model picker rendering", () => {
     const models = Array.from({ length: 30 }, (_, i) => `qwen3-${String(i + 1).padStart(2, "0")}`);
     const data = createModelsProviderData({ "azure-openai-responses": models });
 
-    const rendered = renderDiscordModelPickerModelsView({
+    const rows = renderModelsViewRows({
       command: "models",
       userId: "12345678901234567890",
       data,
@@ -511,11 +511,6 @@ describe("Discord model picker rendering", () => {
       modelBucket: "21-30",
       pendingRuntime: "codex",
     });
-
-    const payload = serializePayload(rendered) as {
-      components?: SerializedComponent[];
-    };
-    const rows = extractContainerRows(payload.components);
     const allComponents = rows.flatMap((row) => row.components ?? []);
     for (const component of allComponents) {
       const id = component.custom_id ?? "";
@@ -826,7 +821,7 @@ describe("Discord model picker rendering", () => {
       anthropic: ["claude-sonnet-4-5"],
     });
 
-    const rendered = renderDiscordModelPickerModelsView({
+    const rows = renderModelsViewRows({
       command: "models",
       userId: "42",
       data,
@@ -837,12 +832,6 @@ describe("Discord model picker rendering", () => {
       pendingModel: "openai/o3",
       pendingModelIndex: 3,
     });
-
-    const payload = serializePayload(rendered) as {
-      components?: SerializedComponent[];
-    };
-
-    const rows = extractContainerRows(payload.components);
     expect(rows).toHaveLength(3);
 
     const providerSelect = rows[0]?.components?.find(
@@ -982,19 +971,13 @@ describe("Discord model picker rendering", () => {
   it("renders not-found model view with a back button", () => {
     const data = createModelsProviderData({ openai: ["gpt-4o"] });
 
-    const rendered = renderDiscordModelPickerModelsView({
+    const rows = renderModelsViewRows({
       command: "model",
       userId: "42",
       data,
       provider: "does-not-exist",
       providerPage: 3,
     });
-
-    const payload = serializePayload(rendered) as {
-      components?: SerializedComponent[];
-    };
-
-    const rows = extractContainerRows(payload.components);
     expect(rows).toHaveLength(1);
 
     const backButton = requireValue(

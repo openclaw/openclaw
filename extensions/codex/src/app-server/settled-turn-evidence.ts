@@ -9,6 +9,8 @@ export type SettledTurnMessages = {
   mirroredMessages: readonly AgentMessage[];
   settledMessages: readonly AgentMessage[];
   turnId: string;
+  /** The run's persisted prompt when a continuation started a later native turn. */
+  promptIdentity?: string;
   /** The run mirrored no prompt for this turn: an internal system turn without a recorder. */
   promptSuppressed?: boolean;
 };
@@ -38,7 +40,7 @@ function* verifiedSettledMessages(
   params: SettledTurnMessages,
   prior: SettledTurnPriorContext,
 ): Generator<AgentMessage> {
-  const promptIdentity = `${params.turnId}:prompt`;
+  const promptIdentity = params.promptIdentity ?? `${params.turnId}:prompt`;
   const boundaryIndex = params.settledMessages.findLastIndex(
     (message) => message.role === "toolResult",
   );

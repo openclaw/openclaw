@@ -162,7 +162,11 @@ suite.define(() => {
         const tabTrack = element.querySelector<HTMLElement>(".sidebar-issues-panel__tabs")!;
         const tabTrackBounds = tabTrack.getBoundingClientRect();
         const tabs = Array.from(element.querySelectorAll<HTMLElement>(".hub-tab"));
+        const paint = document.createElement("canvas").getContext("2d")!;
+        paint.fillStyle = getComputedStyle(element).backgroundColor;
+        paint.fillRect(0, 0, 1, 1);
         return {
+          sheetBackgroundAlpha: paint.getImageData(0, 0, 1, 1).data[3],
           closeBackground: getComputedStyle(close).backgroundColor,
           closeHeight: close.getBoundingClientRect().height,
           closeWidth: close.getBoundingClientRect().width,
@@ -170,6 +174,7 @@ suite.define(() => {
           finalTop: element.getBoundingClientRect().top,
           sheetBackground: getComputedStyle(element).backgroundColor,
           headerBackground: getComputedStyle(header).backgroundColor,
+          tabsBackground: getComputedStyle(tabTrack).backgroundColor,
           listBackground: getComputedStyle(list).backgroundColor,
           startTop,
           tabCount: tabs.length,
@@ -213,8 +218,10 @@ suite.define(() => {
         closeWidth: 36,
         closeHeight: 36,
       });
-      expect(result.sheetBackground).toBe(result.headerBackground);
-      expect(result.headerBackground).not.toBe(result.listBackground);
+      expect(result.headerBackground).toBe("rgba(0, 0, 0, 0)");
+      expect(result.tabsBackground).toBe(result.headerBackground);
+      expect(result.sheetBackgroundAlpha).toBe(255);
+      expect(result.listBackground).toBe(result.sheetBackground);
       expect(result.closeBackground).not.toBe("rgba(0, 0, 0, 0)");
       expect(result.tabCount).toBeGreaterThan(0);
       expect(result.tabFailures).toEqual([]);

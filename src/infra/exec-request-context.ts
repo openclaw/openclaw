@@ -53,10 +53,8 @@ function createExecRequestOwner(identity: ExecRequestIdentity): ExecRequestOwner
 
 export function cancelExecRequestOwners(owners: readonly ExecRequestOwner[]): void {
   for (const owner of owners) {
-    if (!owner.controller.signal.aborted) {
-      const reason = createAbortError("The request that owns this command was stopped");
-      owner.controller.abort(reason);
-    }
+    const reason = createAbortError("The request that owns this command was stopped");
+    owner.controller.abort(reason);
   }
 }
 

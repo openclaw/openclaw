@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { CronStoredJob } from "./types.js";
 
 const readSessionEntryInWorker = vi.fn<(params: { sessionKey: string }) => Promise<unknown>>();
@@ -26,6 +27,8 @@ const { buildScheduledParentPauseNotice } = await import("./scheduled-occurrence
 const { sessionChanges } = await import("../sessions/session-row-changes.js");
 
 const PARENT_KEY = "agent:main:dashboard:parent";
+// The admission reads only the restored authority's live assertion.
+const RESTORED_OPERATOR = { assertCurrent: vi.fn() } as unknown as AdmittedRunOperatorAuthority;
 
 function job(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
   return {
@@ -51,7 +54,6 @@ const RUN = {
   runId: "run-1",
   runSessionKey: "agent:main:cron:job-1:run:s1",
   toolsAllow: ["*"],
-  operatorAuthorityRestored: false,
 };
 
 function admit(stored: CronStoredJob) {
@@ -318,7 +320,7 @@ describe("admitScheduledOccurrence", () => {
       facts: { authority: { owner: false, basis: "none" } },
     });
     expect(
-      occurrence.mint({ ...RUN, runSessionKey, operatorAuthorityRestored: true }).result,
+      occurrence.mint({ ...RUN, runSessionKey, operatorAuthority: RESTORED_OPERATOR }).result,
     ).toMatchObject({
       status: "ready",
       facts: { authority: { owner: true, basis: "operator-source" } },

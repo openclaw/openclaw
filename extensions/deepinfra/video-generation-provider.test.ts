@@ -1,5 +1,6 @@
 // Deepinfra tests cover video generation provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -8,6 +9,7 @@ import {
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import { DEEPINFRA_VIDEO_FALLBACK_MODELS } from "./media-models.js";
 import { MP4_VIDEO } from "./video-generation.test-support.js";
 
@@ -172,18 +174,8 @@ describe("deepinfra video generation provider", () => {
     };
     const dispatcherPolicy = { mode: "env-proxy" as const };
     resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => {
-      const headers = new Headers(omitNullRequestHeaders(params.defaultHeaders));
-      for (const [key, value] of Object.entries(params.request?.headers ?? {})) {
-        if (value === null) {
-          headers.delete(key);
-        } else {
-          headers.set(key, value);
-        }
-      }
       return {
-        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-        allowPrivateNetwork: params.request?.allowPrivateNetwork === true,
-        headers,
+        ...resolveProviderHttpRequestConfigWithOriginTrust(params),
         dispatcherPolicy,
       };
     });
@@ -198,17 +190,13 @@ describe("deepinfra video generation provider", () => {
       provider: "deepinfra",
       model: "deepinfra/Pixverse/Pixverse-T2V",
       prompt: "A request policy video",
-      cfg: {
-        models: {
-          providers: {
-            deepinfra: {
-              baseUrl: "https://api.deepinfra.com/v1/openai",
-              models: [],
-              request: requestPolicy,
-            },
-          },
+      cfg: createModelProviderConfig({
+        deepinfra: {
+          baseUrl: "https://api.deepinfra.com/v1/openai",
+          models: [],
+          request: requestPolicy,
         },
-      },
+      }),
     });
 
     expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(requestPolicy);
@@ -554,4 +542,3 @@ describe("deepinfra video generation provider", () => {
     ).rejects.toThrow("DeepInfra video response returned malformed data URL base64");
   });
 });
-import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

@@ -8,7 +8,7 @@ import type {
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { definedFields } from "../record-fields.js";
 import type { PersistedWorkboardCard } from "./persistence-types.js";
 import { normalizeAutomationPatch, normalizeCardAutomation } from "./store-automation.js";
@@ -20,8 +20,6 @@ import {
   cardSessionKey,
   isActiveDependencyTarget,
   isDependencyPromotableStatus,
-  lifecycleStatusSourceUpdatedAtFromPatch,
-  shouldSkipPersistedLifecycleStatusUpdate,
   syncExecutionAttemptMetadata,
   updateEvent,
   appendEvent,
@@ -58,6 +56,7 @@ import {
   trimMetadataToBudget,
 } from "./store-normalizers.js";
 import { readCards } from "./store-read.js";
+import { resolveLifecycleStatusWrite, settleManualStatusTransition } from "./store-status-write.js";
 import { normalizeCappedStringList } from "./store-string-lists.js";
 
 export class WorkboardCoreStore extends WorkboardBoardStore {
@@ -458,31 +457,11 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     ) {
       throw new WorkboardCardConflictError(existing);
     }
-    const lifecycleStatusSourceUpdatedAt = lifecycleStatusSourceUpdatedAtFromPatch(patch.metadata);
-    const existingLifecycleStatusSourceUpdatedAt =
-      existing.metadata?.lifecycleStatusSourceUpdatedAt;
-    const hasFreshLifecycleStatusSource =
-      lifecycleStatusSourceUpdatedAt !== undefined &&
-      lifecycleStatusSourceUpdatedAt !== existingLifecycleStatusSourceUpdatedAt;
-    let effectivePatch = patch;
-    if (
-      patch.status !== undefined &&
-      lifecycleStatusSourceUpdatedAt !== undefined &&
-      shouldSkipPersistedLifecycleStatusUpdate(existing, lifecycleStatusSourceUpdatedAt)
-    ) {
-      // Ignore stale lifecycle status writes, but still accept any non-status updates in the patch.
-      effectivePatch = { ...patch, status: undefined };
-      if (isRecord(patch.metadata)) {
-        const { lifecycleStatusSourceUpdatedAt: _ignored, ...rest } = patch.metadata;
-        effectivePatch.metadata = Object.keys(rest).length > 0 ? rest : undefined;
-      }
-      const hasSemanticPatch = Object.entries(effectivePatch).some(
-        ([key, value]) => key !== "status" && key !== "metadata" && value !== undefined,
-      );
-      if (!hasSemanticPatch && effectivePatch.metadata === undefined) {
-        return existing;
-      }
+    const statusWrite = resolveLifecycleStatusWrite(existing, patch);
+    if (!statusWrite) {
+      return existing;
     }
+    const { effectivePatch, hasFreshLifecycleStatusSource } = statusWrite;
     const status = normalizeStatus(effectivePatch.status, existing.status);
     const now = Math.max(Date.now(), existing.updatedAt + 1);
     const startedAt =
@@ -501,7 +480,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       effectivePatch.sessionKey === undefined
         ? existing.sessionKey
         : normalizeOptionalString(effectivePatch.sessionKey);
-    const execution =
+    let execution =
       effectivePatch.execution === undefined
         ? effectivePatch.sessionKey === undefined
           ? existing.execution
@@ -514,9 +493,15 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       preserveNotificationId: options.preserveNotificationId,
     });
     if (status !== existing.status && !hasFreshLifecycleStatusSource) {
-      // Status patches often spread existing metadata. Only a newly supplied
-      // lifecycle source is provenance; copied markers must not survive a manual transition.
-      metadata = { ...metadata, lifecycleStatusSourceUpdatedAt: undefined };
+      ({ execution, metadata } = settleManualStatusTransition({
+        existing,
+        status,
+        execution,
+        metadata,
+        now,
+        nextNotificationSequence: () => this.nextNotificationSequence(now),
+        preserveProofId: options.preserveProofId,
+      }));
     }
     const automationPatch: Record<string, unknown> = {};
     for (const key of [

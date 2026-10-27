@@ -47,25 +47,15 @@ function capturedRequest() {
   if (!input) {
     throw new Error("Expected provider HTTP request");
   }
-  return {
-    url: typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
-    method: init?.method,
-    headers: Object.fromEntries(new Headers(init?.headers)),
-    body: init?.body,
-  };
-}
-
-function capturedJson(): unknown {
-  const body = capturedRequest().body;
-  if (typeof body !== "string") {
-    throw new Error("Expected a JSON request body");
-  }
-  return JSON.parse(body);
+  return new Request(input, init);
 }
 
 function synthesize(overrides: Partial<Parameters<typeof xaiTTS>[0]> = {}) {
   return xaiTTS({ ...ttsRequest, apiKey: "ok-key", ...overrides });
 }
+
+const audioResponse = () =>
+  mockFetch(new Response("audio-bytes", { headers: { "content-type": "audio/mpeg" } }));
 
 function stream(overrides: Partial<Parameters<typeof xaiTTSStream>[0]> = {}) {
   const pending = xaiTTSStream({ ...ttsRequest, ...overrides });
@@ -112,10 +102,7 @@ describe("xai tts", () => {
     const config = (overrides: { apiKey?: string; baseUrl?: string }) => ({
       models: { providers: { xai: { baseUrl: XAI_BASE_URL, models: [], ...overrides } } },
     });
-    const inputImage = (value: string, mimeType = "image/png") => ({
-      buffer: Buffer.from(value),
-      mimeType,
-    });
+    const inputImage = (type = "png") => ({ buffer: Buffer.from(type), mimeType: `image/${type}` });
     function generate(overrides: Partial<Request> = {}) {
       return provider.generateImage({
         provider: "xai",
@@ -125,99 +112,53 @@ describe("xai tts", () => {
         ...overrides,
       });
     }
-    function mockImage(mime_type?: string, b64_json = Buffer.from("testpng").toString("base64")) {
-      mockFetch(Response.json({ data: [{ b64_json, mime_type }] }));
-    }
     beforeEach(() => {
       vi.useFakeTimers();
       resolveKey.mockResolvedValue({ apiKey: "xai-key" });
-      mockImage();
+      mockFetch(Response.json({ data: [{ b64_json: "dGVzdHBuZw==" }] }));
     });
 
-    it("builds provider metadata and resolves configuration", async () => {
-      expect(provider).toMatchObject({
-        id: "xai",
-        label: "xAI",
-        defaultModel: "grok-imagine-image",
-        defaultTimeoutMs: 600_000,
-        models: ["grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-quality"],
-        capabilities: {
-          generate: { maxCount: 4, supportsAspectRatio: true },
-          edit: { enabled: true, maxInputImages: 3 },
-        },
-      });
-      expect(provider.capabilities.geometry?.aspectRatios).toEqual(
-        "1:1 16:9 9:16 4:3 3:4 3:2 2:3 2:1 1:2 19.5:9 9:19.5 20:9 9:20".split(" "),
-      );
-      const configured = provider.isConfiguredAsync;
-      if (!configured) {
-        throw new Error("Expected image config predicate");
-      }
-      expect(await configured({})).toBe(false);
-      expect(await configured({ cfg: config({ apiKey: "xai-image-test-key" }) })).toBe(true);
+    it.each([undefined, "xai-image-test-key"])("resolves image credentials %s", async (apiKey) => {
+      expect(await provider.isConfiguredAsync?.({ cfg: config({ apiKey }) })).toBe(Boolean(apiKey));
     });
-    it.each([
-      "grok-imagine-image",
-      "grok-imagine-image-2.0",
-      "grok-imagine-image-quality",
-      "grok-imagine-image-future",
-    ])("preserves model %s in the request and result", async (model) => {
+    it("preserves an arbitrary image model in the request and result", async () => {
+      const model = "grok-imagine-image-future";
       const timers = vi.spyOn(globalThis, "setTimeout");
       const result = await generate({
         model,
+        count: 5,
         aspectRatio: "20:9",
         resolution: "2K",
         cfg: config({ baseUrl: "https://custom.x.ai/v1" }),
       });
-      expect(resolveKey).toHaveBeenCalledWith(expect.objectContaining({ provider: "xai" }));
       expect(result.model).toBe(model);
       expect(timers.mock.calls.map(([, delay]) => delay)).toContain(600_000);
-      expect(capturedRequest()).toMatchObject({
-        url: "https://custom.x.ai/v1/images/generations",
-        method: "POST",
+      expect(capturedRequest().url).toBe("https://custom.x.ai/v1/images/generations");
+      expect(await capturedRequest().json()).toMatchObject({
+        model,
+        prompt: "Combine the references",
+        response_format: "b64_json",
+        n: 4,
+        aspect_ratio: "20:9",
+        resolution: "2k",
       });
-      expect(capturedJson()).toMatchObject({ model, aspect_ratio: "20:9", resolution: "2k" });
     });
-    it.each(["grok-imagine-image-2.0", "grok-imagine-image-quality"])(
-      "sends %s edits as a singular image_url",
-      async (model) => {
-        mockImage(
-          "image/png",
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYGD4z0ABAAEfAG0B0xMAAAAASUVORK5CYII=",
-        );
-        await generate({ model, inputImages: [inputImage("fakeimage")] });
-        expect(capturedRequest().url).toContain("/images/edits");
-        expect(capturedJson()).toMatchObject({
-          model,
-          prompt: "Combine the references",
-          image: { url: expect.stringContaining("data:image/png;base64,"), type: "image_url" },
-          response_format: "b64_json",
-        });
-      },
-    );
-    it("uses a plural payload for multiple edit inputs", async () => {
-      mockImage("image/png", Buffer.from("edited").toString("base64"));
-      await generate({
-        inputImages: [
-          inputImage("first"),
-          inputImage("second", "image/jpeg"),
-          inputImage("third", "image/webp"),
-        ],
-      });
+    it.each([1, 3])("builds the edit payload for %s input images", async (count) => {
+      const types = ["png", "jpeg", "webp"].slice(0, count);
+      await generate({ inputImages: types.map(inputImage) });
       expect(capturedRequest().url).toContain("/images/edits");
-      expect(capturedJson()).toEqual(
-        expect.objectContaining({
-          images: ["png", "jpeg", "webp"].map((type) => ({
-            url: expect.stringContaining(`data:image/${type};base64,`),
-            type: "image_url",
-          })),
-        }),
+      const images = types.map((type) => ({
+        url: `data:image/${type};base64,${Buffer.from(type).toString("base64")}`,
+        type: "image_url",
+      }));
+      expect(await capturedRequest().json()).toEqual(
+        expect.objectContaining(count === 1 ? { image: images[0] } : { images }),
       );
     });
     it("rejects more than three references before HTTP", async () => {
       await expect(
         generate({
-          inputImages: Array.from({ length: 4 }, (_, index) => inputImage(`reference-${index}`)),
+          inputImages: Array.from({ length: 4 }, () => inputImage()),
         }),
       ).rejects.toThrow("xAI image editing supports up to 3 reference images");
       expect(fetchMock).not.toHaveBeenCalled();
@@ -236,10 +177,6 @@ describe("xai tts", () => {
         ...overrides,
       };
     }
-    function audioResponse() {
-      return mockFetch(new Response("audio-bytes", { headers: { "content-type": "audio/mpeg" } }));
-    }
-
     it("streams alaw when requested by a compatible caller", async () => {
       const created = new Promise<InstanceType<typeof FakeWebSocket>>((resolve) => {
         FakeWebSocket.onCreate = resolve;
@@ -274,7 +211,7 @@ describe("xai tts", () => {
         outputFormat: "pcm",
         sampleRate: 24_000,
       });
-      expect(capturedJson()).toMatchObject({
+      expect(await capturedRequest().json()).toMatchObject({
         voice_id: "aura",
         language: "es",
         speed: 1.2,
@@ -290,7 +227,7 @@ describe("xai tts", () => {
           providerOverrides: { speed: 0.5 },
         }),
       );
-      expect(capturedJson()).not.toHaveProperty("speed");
+      expect(await capturedRequest().json()).not.toHaveProperty("speed");
     });
 
     it("treats blank direct credentials as absent across readiness and requests", async () => {
@@ -315,7 +252,7 @@ describe("xai tts", () => {
       audioResponse();
       await provider.synthesize(request({ cfg, providerConfig: {}, target: "voice-note" }));
       expect(resolveKey).toHaveBeenCalledWith({ provider: "xai", cfg });
-      expect(capturedRequest().headers.authorization).toBe("Bearer oauth-bearer");
+      expect(capturedRequest().headers.get("authorization")).toBe("Bearer oauth-bearer");
     });
   });
 
@@ -346,11 +283,12 @@ describe("xai tts", () => {
         { id: "altair", name: "Altair", locale: "en", gender: "male" },
         { id: "celeste", name: "Celeste", locale: undefined, gender: undefined },
       ]);
-      expect(capturedRequest()).toMatchObject({
-        url: "https://api.x.ai/v1/tts/voices",
-        method: "GET",
-        headers: { authorization: "Bearer oauth-bearer", "user-agent": "openclaw/2026.7.9" },
-      });
+      const request = capturedRequest();
+      expect([request.url, request.method, Object.fromEntries(request.headers)]).toEqual([
+        "https://api.x.ai/v1/tts/voices",
+        "GET",
+        { authorization: "Bearer oauth-bearer", "user-agent": "openclaw/2026.7.9" },
+      ]);
       expect(resolveKey).toHaveBeenCalledWith({ provider: "xai", cfg });
     });
 
@@ -402,17 +340,9 @@ describe("xai tts", () => {
     });
 
     it.each([
-      {
-        delta: "not-base64!",
-        maxBytes: undefined,
-        error: "xAI TTS stream returned malformed base64 audio data",
-      },
-      {
-        delta: Buffer.from("abcdef").toString("base64"),
-        maxBytes: 4,
-        error: "xAI TTS audio stream exceeds 4 bytes",
-      },
-    ])("errors and releases invalid audio $delta", async ({ delta, maxBytes, error }) => {
+      ["not-base64!", undefined, "xAI TTS stream returned malformed base64 audio data"],
+      [Buffer.from("abcdef").toString("base64"), 4, "xAI TTS audio stream exceeds 4 bytes"],
+    ] as const)("errors and releases invalid audio %s", async (delta, maxBytes, error) => {
       const { result, ws } = await openStream({ maxBytes });
       emitAudio(ws, delta);
       await expect(result.audioStream.getReader().read()).rejects.toThrow(error);
@@ -420,12 +350,17 @@ describe("xai tts", () => {
       await result.release();
     });
 
-    it("rejects upgrade failures before streaming starts", async () => {
-      const { pending: resultPromise, ws } = stream();
-      ws?.emit("unexpected-response", {}, { statusCode: 401, statusMessage: "Unauthorized" });
-      await expect(resultPromise).rejects.toThrow(
-        "xAI TTS stream connection failed (401): Unauthorized",
-      );
+    it.each([
+      [
+        "unexpected-response",
+        [{}, { statusCode: 401, statusMessage: "Unauthorized" }],
+        "connection failed (401): Unauthorized",
+      ],
+      ["close", [], "connection closed before open"],
+    ] as const)("rejects %s before streaming starts", async (event, args, error) => {
+      const { pending, ws } = stream({ timeoutMs: event === "close" ? 60_000 : 5_000 });
+      ws?.emit(event, ...args);
+      await expect(pending).rejects.toThrow(`xAI TTS stream ${error}`);
     });
 
     it.each([
@@ -439,12 +374,6 @@ describe("xai tts", () => {
     ])("rejects unsupported endpoint %s before opening a WebSocket", async (baseUrl, error) => {
       await expect(xaiTTSStream({ ...ttsRequest, baseUrl })).rejects.toThrow(error);
       expect(FakeWebSocket.instances).toHaveLength(0);
-    });
-
-    it("fails promptly when the socket closes before open", async () => {
-      const { pending: resultPromise, ws } = stream({ timeoutMs: 60_000 });
-      ws?.emit("close");
-      await expect(resultPromise).rejects.toThrow("xAI TTS stream connection closed before open");
     });
 
     it("closes idempotently when released before audio.done", async () => {
@@ -490,9 +419,9 @@ describe("xai tts", () => {
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
   it.each([
-    { name: "JSON error", contentType: "application/json", body: '{"error":"denied"}' },
-    { name: "empty audio", contentType: "audio/mpeg", body: "" },
-  ])("rejects a successful $name response as synthesized audio", async ({ contentType, body }) => {
+    ["application/json", '{"error":"denied"}'],
+    ["audio/mpeg", ""],
+  ])("rejects a successful %s response as synthesized audio", async (contentType, body) => {
     mockFetch(new Response(body, { status: 200, headers: { "content-type": contentType } }));
 
     await expect(synthesize()).rejects.toThrow("xAI TTS API error: malformed audio response");

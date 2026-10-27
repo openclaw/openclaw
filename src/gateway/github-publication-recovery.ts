@@ -1,5 +1,7 @@
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import type {
   GitHubPublicationExecutionRow,
   GitHubPublicationRow,
@@ -8,17 +10,156 @@ import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-rea
 import { readLocalGitHubPublicationWorktreeOwner } from "./github-publication-availability.js";
 import {
   createGitHubPublicationExecutionIdentity,
+  GitHubPublicationAuthorityLostError,
   type GitHubPublicationIdentityOwner,
 } from "./github-publication-execution-identity.js";
 import {
   GitHubPublicationRecoveryPendingError,
   recoverGitHubPublicationBranchAndIndex,
 } from "./github-publication-git-index.js";
+import {
+  assertSafeGitPublicationWorkspace,
+  createGitHubPublicationCommandRunner,
+  runPublicationCommand,
+} from "./github-publication-git-transport.js";
 import { reconcileGitHubPublicationPullRequest } from "./github-publication-pull-requests.js";
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
 
-export async function recoverGitHubPublicationWorkspace(
+export type GitHubPublicationRecoveryBackoff = ReturnType<
+  typeof createGitHubPublicationRecoveryBackoff
+>;
+
+/** Backoff is process-local; the receipt age also bounds recovery across restarts. */
+export function createGitHubPublicationRecoveryBackoff() {
+  const failures = new Map<
+    string,
+    { attempts: number; delayMs: number; retryAtMs: number; diagnostic: string }
+  >();
+  return {
+    clear: () => failures.clear(),
+    retain(requestIds: string[]) {
+      const pending = new Set(requestIds);
+      for (const requestId of failures.keys()) {
+        if (!pending.has(requestId)) {
+          failures.delete(requestId);
+        }
+      }
+    },
+    async run(
+      row: { request_id: string; created_at_ms: number },
+      operation: () => Promise<SessionGitHubPublicationResult | void>,
+      settle: (result: SessionGitHubPublicationResult) => Promise<SessionGitHubPublicationResult>,
+    ) {
+      const requestId = row.request_id;
+      const previous = failures.get(requestId);
+      if (previous && performance.now() < previous.retryAtMs) {
+        return;
+      }
+      const defer = (error: unknown) => {
+        const delayMs = Math.min((previous?.delayMs ?? 30_000) * 2, 30 * 60_000);
+        const deferred = {
+          attempts: (previous?.attempts ?? 0) + 1,
+          delayMs,
+          retryAtMs: performance.now() + delayMs,
+          diagnostic: redactToolPayloadText(formatErrorMessage(error)).slice(0, 2_048),
+        };
+        failures.set(requestId, deferred);
+        return deferred;
+      };
+      let result: SessionGitHubPublicationResult | void = undefined;
+      let failure: unknown;
+      try {
+        if ((previous?.attempts ?? 0) >= 3) {
+          throw new Error(previous?.diagnostic);
+        }
+        result = await operation();
+        if (!result || (result.status !== "requested" && result.status !== "publishing")) {
+          failures.delete(requestId);
+          return result;
+        }
+        failure = result.message;
+      } catch (error) {
+        failure = error;
+      }
+      // Three failed attempts suffice for transient outages. An old receipt gets one
+      // final attempt after restart, so frequent restarts cannot extend recovery forever.
+      const deferred = defer(failure);
+      if ((previous?.attempts ?? 0) >= 2 || Date.now() - row.created_at_ms >= 60 * 60_000) {
+        // A failed settlement retries only the receipt write, never GitHub effects.
+        deferred.attempts = 3;
+        const settled = await settle({
+          requestId,
+          status: "failed",
+          code: "unavailable",
+          message: "GitHub publication recovery stopped with an unconfirmed outcome.",
+          nextAction:
+            "Automatic recovery stopped because the original publication remains unconfirmed. Recorded GitHub effects and saved work are retained. Inspect the original target and any existing branch or pull request before requesting a new publication; it may already have succeeded.",
+        });
+        failures.delete(requestId);
+        return settled;
+      }
+      if (!result) {
+        throw failure;
+      }
+      return result;
+    },
+    describe(result: SessionGitHubPublicationResult): SessionGitHubPublicationResult {
+      const failure = failures.get(result.requestId);
+      return failure && (result.status === "requested" || result.status === "publishing")
+        ? {
+            ...result,
+            message: `Automatic recovery deferred; next attempt in ${Math.max(0, Math.ceil((failure.retryAtMs - performance.now()) / 1_000))} seconds. Recorded effects are retained; do not request another publication. ${failure.diagnostic}`,
+          }
+        : result;
+    },
+  };
+}
+
+/** Workspace cleanup precedes every recovered settlement, even without publish authority. */
+export async function prepareGitHubPublicationWorkspaceRecovery<
+  Row extends GitHubPublicationExecutionRow,
+>(params: {
+  initial: Row;
+  validateCustody: () => boolean;
+  recoveryResult?: SessionGitHubPublicationResult;
+  complete: (row: Row, result: SessionGitHubPublicationResult) => Row | Promise<Row>;
+}) {
+  const owner = await readLocalGitHubPublicationWorktreeOwner(params.initial);
+  const assertCustody = () => {
+    if (!params.validateCustody()) {
+      throw new GitHubPublicationAuthorityLostError(
+        "GitHub publication execution custody changed.",
+      );
+    }
+    owner.assertCurrent();
+  };
+  const commands = createGitHubPublicationCommandRunner(assertCustody);
+  try {
+    await commands.step(() =>
+      assertSafeGitPublicationWorkspace(owner.worktree.path, runPublicationCommand),
+    );
+    await recoverGitHubPublicationWorkspace(
+      params.initial,
+      owner.worktree,
+      commands.require,
+      assertCustody,
+    );
+    let recoveryResult: SessionGitHubPublicationResult | undefined;
+    if (params.recoveryResult) {
+      assertCustody();
+      recoveryResult = projectGitHubPublicationResult(
+        await params.complete(params.initial, params.recoveryResult),
+      );
+    }
+    return { ...owner, recoveryResult };
+  } catch (error) {
+    owner.release();
+    throw error;
+  }
+}
+
+async function recoverGitHubPublicationWorkspace(
   row: GitHubPublicationExecutionRow,
   worktree: ManagedWorktreeRecord,
   run: Parameters<typeof recoverGitHubPublicationBranchAndIndex>[0]["run"],

@@ -11,6 +11,7 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import * as projectionAccess from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { catalogProvider as provider } from "./session-catalog.fixtures.test-support.js";
@@ -174,7 +175,7 @@ describe("registered catalog list phase diagnostics", () => {
       return [host];
     });
     install(list);
-    const client = { connId: "shared-caller" };
+    const client = { connId: "shared-caller", connect: gatewayConnect([]) };
     const leader = start(leaderTrace, client);
     const settledWork: Promise<unknown>[] = [Promise.allSettled([leader.completion])];
     try {

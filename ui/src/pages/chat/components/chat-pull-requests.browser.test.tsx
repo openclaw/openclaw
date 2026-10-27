@@ -213,8 +213,11 @@ it.each([
       ),
       { container },
     );
+    await vi.dynamicImportSettled();
     await waitForSolid(() =>
-      expect(container.querySelector(".chat-environment__branch")).not.toBeNull(),
+      expect(
+        container.querySelector(".chat-environment__branch .chat-pr__actions-trigger"),
+      ).not.toBeNull(),
     );
     const row = container.querySelector<HTMLElement>(".chat-environment__branch")!;
     const branchLabel = row.querySelector<HTMLElement>(".chat-environment__branch-name")!;

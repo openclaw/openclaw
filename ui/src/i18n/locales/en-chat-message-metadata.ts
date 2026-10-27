@@ -85,6 +85,7 @@ const enChatMessageMetadata = {
       contextFor: "Message context for {timestamp}",
     },
     systemNotice: {
+      modelChanged: "Model changed from {from} to {to}.",
       event: "{count} system event",
       events: "{count} system events",
       updatesNotDelivered: "Updates not delivered",

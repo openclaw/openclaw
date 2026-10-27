@@ -97,21 +97,18 @@ async function admitCompletion(
     "Completion claim was not admitted",
   );
   const entry = { ...original, restartRecoveryHarnessCompletion: claim };
+  const append = (message: Parameters<typeof appendTranscriptMessage>[1]["message"]) =>
+    appendTranscriptMessage({ ...target, sessionId: entry.sessionId }, { message });
   const appendInput = () =>
-    appendTranscriptMessage(
-      { ...target, sessionId: entry.sessionId },
-      {
-        message: {
-          role: "user",
-          content: "Completion result",
-          idempotencyKey: `${source}:user`,
-          provenance,
-          __openclaw: { runId: source },
-          timestamp: Date.now(),
-        },
-      },
-    );
-  return { key, source, child, target, entry, claim, appendInput, write, read, cleanup };
+    append({
+      role: "user",
+      content: "Completion result",
+      idempotencyKey: `${source}:user`,
+      provenance,
+      __openclaw: { runId: source },
+      timestamp: Date.now(),
+    });
+  return { key, source, child, target, entry, claim, append, appendInput, write, read, cleanup };
 }
 
 afterEach(() => {
@@ -144,7 +141,7 @@ it.each(
   await withAdminIngress(async ({ state, cfg, admins, context }) => {
     const recover = recoveryFor(cfg, state.stateDir, "matrix:completion-custody");
     const recovery = "restart-recovery:final-send";
-    const { key, child, source, target, entry, claim, appendInput, write, read, cleanup } =
+    const { key, child, source, target, entry, claim, append, appendInput, write, read, cleanup } =
       await admitCompletion(
         state,
         "matrix:direct:owner",
@@ -259,7 +256,7 @@ it.each(
     if (readFailure) {
       expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(1);
       const retain = historyWorker.retainSessionHistoryWorkerDatabase;
-      const sourceRead = vi
+      using _ = vi
         .spyOn(historyWorker, "retainSessionHistoryWorkerDatabase")
         .mockImplementationOnce((...args) => {
           const retained = retain(...args);
@@ -269,42 +266,31 @@ it.each(
           return retained;
         });
       release.resolve();
-      try {
-        expect(await delivery).toMatchObject({
-          ok: false,
-          error: { message: "Source transcript read unavailable" },
-        });
-      } finally {
-        sourceRead.mockRestore();
-      }
+
+      expect(await delivery).toMatchObject({
+        ok: false,
+        error: { message: "Source transcript read unavailable" },
+      });
     }
     if (outcome.endsWith("source-interleaved")) {
-      await appendTranscriptMessage(
-        { ...target, sessionId: entry.sessionId },
-        { message: { role: "user", content: "A new request", timestamp: Date.now() } },
-      );
+      await append({ role: "user", content: "A new request", timestamp: Date.now() });
       await expect(
         runWithAgentToolSourceExecutionScope(assertCurrent, async () => assertCurrent()),
       ).rejects.toThrow(SessionWorkStartChangedError);
     }
     if (boundary === "queued after cleanup") {
-      await appendTranscriptMessage(
-        { ...target, sessionId: entry.sessionId },
-        {
-          message: {
-            role: "user",
-            content: "Continue the admitted completion",
-            idempotencyKey: `${recovery}:user`,
-            provenance: {
-              kind: "internal_system",
-              sourceTool: "main_session_restart_recovery",
-              sourceSessionKey: key,
-            },
-            __openclaw: { runId: recovery },
-            timestamp: Date.now(),
-          },
+      await append({
+        role: "user",
+        content: "Continue the admitted completion",
+        idempotencyKey: `${recovery}:user`,
+        provenance: {
+          kind: "internal_system",
+          sourceTool: "main_session_restart_recovery",
+          sourceSessionKey: key,
         },
-      );
+        __openclaw: { runId: recovery },
+        timestamp: Date.now(),
+      });
       const markerEntry = expectDefined(marker.sessionEntry, "pending final marker missing");
       await cleanup(markerEntry, recovery);
       const cleaned = read();

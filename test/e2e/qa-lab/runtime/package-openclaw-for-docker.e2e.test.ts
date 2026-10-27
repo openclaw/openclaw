@@ -37,6 +37,7 @@ import {
   hermeticEnv,
   readRequiredPersistedInstalledPluginIndex,
 } from "../../../../src/commands/doctor-plugin-registry.test-support.js";
+import { listDirectoryTreeStrictSync } from "../../../../src/infra/directory-walk.js";
 import { resolveInstalledPluginIndexStorePath } from "../../../../src/plugins/installed-plugin-index-store-path.js";
 import { writePersistedInstalledPluginIndex } from "../../../../src/plugins/installed-plugin-index-store-write.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../../../src/state/openclaw-state-db.js";
@@ -867,6 +868,7 @@ describe("package-openclaw-for-docker", () => {
       "cli-parent-lifetime.mjs",
       "gateway-shutdown-budget.mjs",
       "node-runtime-env.mjs",
+      "runtime-process-bootstrap.generated.mjs",
       "packages/normalization-core/src/number-coercion.ts",
       "packages/normalization-core/src/string-coerce.ts",
       "scripts/package-openclaw-for-docker.mts",
@@ -896,6 +898,8 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
       "scripts/lib/windows-taskkill.mjs",
       "src/infra/npm-command.ts",
+      "src/infra/runtime-process-dependency-url.ts",
+      "src/infra/runtime-process-manifest.ts",
       "src/shared/non-packaged-plugin-dirs.ts",
     ];
     try {
@@ -1369,8 +1373,8 @@ describe("package-openclaw-for-docker", () => {
       expect(receipt[0].files).toHaveLength(files.length);
       expect(fs.readdirSync(outputDir).toSorted()).toEqual(["openclaw-current.tgz", "pack.json"]);
       // Inspecting the final archive must not copy it into the caller's npm cache.
-      const cachedArtifactCopies = fs
-        .readdirSync(callerNpmCache, { encoding: "utf8", recursive: true })
+      const cachedArtifactCopies = listDirectoryTreeStrictSync(callerNpmCache)
+        .map((walkEntry) => walkEntry.relativePath)
         .map((entry) => path.join(callerNpmCache, entry))
         .filter((entry) => fs.statSync(entry).isFile() && fs.readFileSync(entry).equals(bytes));
       expect(cachedArtifactCopies).toEqual([]);
@@ -1729,7 +1733,7 @@ describe("package-openclaw-for-docker", () => {
     expect(calls).toEqual([
       `prepare-docs:${sourceDir}`,
       `prepare:${sourceDir}`,
-      `npm:pack --silent --ignore-scripts --pack-destination ${outputDir} --json=false:${sourceDir}`,
+      `npm:pack --loglevel=error --ignore-scripts --pack-destination ${outputDir} --json=false:${sourceDir}`,
       `restore-changelog:${sourceDir}`,
       `restore-docs:${sourceDir}`,
     ]);

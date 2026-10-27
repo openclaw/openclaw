@@ -1,6 +1,5 @@
 import {
   jsonPathValue,
-  runEngineStoreReadSnapshot,
   runEngineWorkerWrite,
   withEngineStoreAdmission,
   type DatabaseEngineInput,
@@ -211,13 +210,10 @@ class TeamReportsDatabase {
   }
 
   aggregatePeriod(input: TeamReportsOperations["aggregatePeriod"]["input"]): ReportDocument {
-    // Stream accepted daily reports from one snapshot without retaining their full payloads.
-    return runEngineStoreReadSnapshot(this.db, () =>
-      aggregateDays({
-        ...input,
-        days: this.dayReports(input.period.sinceMs, input.period.untilMs),
-      }),
-    );
+    return aggregateDays({
+      ...input,
+      days: this.dayReports(input.period.sinceMs, input.period.untilMs),
+    });
   }
 
   upsertPeriod(value: TeamReportsOperations["upsertPeriod"]["input"]): void {

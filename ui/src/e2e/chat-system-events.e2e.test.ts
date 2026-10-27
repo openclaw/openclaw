@@ -120,7 +120,9 @@ suite.define(() => {
               .getByRole("textbox", { name: "Search messages", exact: true })
               .fill("workspace connection");
             await expect.poll(() => disclosure.count()).toBe(0);
-            expect(await page.getByText(connectedText, { exact: true }).isVisible()).toBe(true);
+            await expect
+              .poll(() => page.getByText(connectedText, { exact: true }).isVisible())
+              .toBe(true);
           }
         },
       );

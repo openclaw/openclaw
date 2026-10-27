@@ -139,6 +139,7 @@ export function mountPage(
     router,
     runtimeConfig: runtimeConfig ?? {
       state: { configSnapshot: {}, configForm: {}, configLoading: false, configFormMode: "form" },
+      ensureLoaded: async () => undefined,
       subscribe: (listener: () => void) => {
         configListeners.add(listener);
         return () => configListeners.delete(listener);

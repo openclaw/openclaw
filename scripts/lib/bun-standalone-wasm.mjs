@@ -136,3 +136,12 @@ export function prepareStandaloneWasm({ resources, outputRoot, parse }) {
   fs.writeFileSync(registrationPath, registration);
   return { assets, registrationPath };
 }
+
+/** Keep the temporary build root out of the graph's content fingerprint. */
+export function standaloneWasmImport(filename, registrationPath) {
+  const relative = path
+    .relative(path.dirname(filename), registrationPath)
+    .split(path.sep)
+    .join("/");
+  return `import ${JSON.stringify(relative.startsWith(".") ? relative : `./${relative}`)};\n`;
+}

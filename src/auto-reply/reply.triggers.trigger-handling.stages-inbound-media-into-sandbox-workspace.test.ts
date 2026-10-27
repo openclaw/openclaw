@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path, { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { readCloneFileMetadata } from "@openclaw/fs-safe/copy";
 import { afterEach, beforeEach, describe, expect, it as baseTest, vi } from "vitest";
 import { slugifySessionKey } from "../agents/sandbox/shared.js";
 import { resolveStagedInputMediaPaths } from "../media/staged-inputs.js";
@@ -49,6 +50,11 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
+type StageParams = Parameters<typeof stageSandboxMedia>[0];
+type MediaContexts = Pick<StageParams, "ctx" | "sessionCtx">;
+type StageOverrides = Partial<Omit<StageParams, "ctx" | "sessionCtx">>;
+const DEFAULT_SESSION_KEY = "agent:main:main";
+
 async function setupSandboxWorkspace(home: string) {
   const cfg = createSandboxMediaStageConfig(home);
   const workspaceDir = join(home, "openclaw");
@@ -58,11 +64,27 @@ async function setupSandboxWorkspace(home: string) {
     workspaceDir: sandboxDir,
     containerWorkdir: "/work",
   });
-  const stageMedia = async (source: string) => {
+  const run = (contexts: MediaContexts, overrides: StageOverrides = {}) =>
+    stageSandboxMedia({
+      ...contexts,
+      cfg,
+      workspaceDir,
+      sessionKey: DEFAULT_SESSION_KEY,
+      ...overrides,
+    });
+  const stageMedia = async (source: string, overrides?: StageOverrides) => {
     const contexts = createSandboxMediaContexts(source);
-    return { ...contexts, result: await stage(contexts, cfg, workspaceDir) };
+    return { ...contexts, result: await run(contexts, overrides) };
   };
-  return { home, cfg, workspaceDir, sandboxDir, stageMedia };
+  const write = async (relative: string, bytes: string | Buffer = "image-bytes") => {
+    const file = join(home, relative);
+    await fs.mkdir(dirname(file), { recursive: true });
+    await fs.writeFile(file, bytes);
+    return file;
+  };
+  const inbound = (name: string, bytes?: string | Buffer) =>
+    write(`.openclaw/media/inbound/${name}`, bytes);
+  return { home, cfg, workspaceDir, sandboxDir, stageMedia, run, write, inbound };
 }
 
 const it = baseTest.extend<{ media: Awaited<ReturnType<typeof setupSandboxWorkspace>> }>({
@@ -73,9 +95,7 @@ const it = baseTest.extend<{ media: Awaited<ReturnType<typeof setupSandboxWorksp
   },
 });
 
-type StagedMedia = Awaited<
-  ReturnType<Awaited<ReturnType<typeof setupSandboxWorkspace>>["stageMedia"]>
->;
+type StagedMedia = MediaContexts & { result: Awaited<ReturnType<typeof stageSandboxMedia>> };
 
 function expectStaged({ ctx, sessionCtx, result }: StagedMedia, workspaceDir: string, index = 0) {
   const stagedPath = result.staged.get(index)!;
@@ -93,78 +113,76 @@ function expectUnstaged({ ctx, sessionCtx, result }: StagedMedia, source: string
   expect(sessionCtx.media).toEqual(ctx.media);
 }
 
-async function writeInboundMedia(
-  home: string,
-  fileName: string,
-  payload: string | Buffer,
-): Promise<string> {
-  const inboundDir = join(home, ".openclaw", "media", "inbound");
-  await fs.mkdir(inboundDir, { recursive: true });
-  const mediaPath = join(inboundDir, fileName);
-  await fs.writeFile(mediaPath, payload);
-  return mediaPath;
-}
-
-function stage(
-  contexts: Pick<Parameters<typeof stageSandboxMedia>[0], "ctx" | "sessionCtx">,
-  cfg: Parameters<typeof stageSandboxMedia>[0]["cfg"],
-  workspaceDir: string,
-) {
-  return stageSandboxMedia({ ...contexts, cfg, workspaceDir, sessionKey: "agent:main:main" });
-}
-
 describe("stageSandboxMedia", () => {
-  it("leaves no staged input directory when an owned source is missing", async ({
-    media: { home, cfg, workspaceDir },
-  }) => {
+  it.for([
+    { bytes: 64 * 1024, cloned: false },
+    { bytes: 32 * 1024 * 1024, cloned: true },
+  ])(
+    "copies independent inputs with size-appropriate transfer work: %j",
+    async ({ bytes, cloned }, { media: m }) => {
+      const original = Buffer.alloc(bytes, 42);
+      const source = await m.inbound("independent.bin", original);
+      const stagedPath = expectStaged(await m.stageMedia(source), m.sandboxDir);
+      const destination = join(m.sandboxDir, stagedPath);
+      expect((await fs.readFile(destination)).equals(original)).toBe(true);
+      const [sourceMetadata, stagedMetadata] = await readCloneFileMetadata([source, destination]);
+      if (sourceMetadata) {
+        expect(stagedMetadata?.cloneId === sourceMetadata.cloneId).toBe(cloned);
+        expect(stagedMetadata?.ino).not.toBe(sourceMetadata.ino);
+      }
+      await fs.writeFile(destination, "edited staged input");
+      expect((await fs.readFile(source)).equals(original)).toBe(true);
+      await fs.writeFile(source, "edited original");
+      await expect(fs.readFile(destination, "utf8")).resolves.toBe("edited staged input");
+    },
+  );
+
+  it("leaves no staged input directory when an owned source is missing", async ({ media: m }) => {
     sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
-    await fs.mkdir(workspaceDir, { recursive: true });
-    const projectFile = join(workspaceDir, "keep.txt");
-    await fs.writeFile(projectFile, "existing project file");
-    const missingPath = await writeInboundMedia(home, "missing.png", "small input");
+    const projectFile = await m.write("openclaw/keep.txt", "existing project file");
+    const missingPath = await m.inbound("missing.png", "small input");
     await fs.unlink(missingPath);
     const { ctx, sessionCtx } = createSandboxMediaContexts(missingPath);
     const originalMedia = structuredClone(ctx.media);
 
-    const result = await stage({ ctx, sessionCtx }, cfg, workspaceDir);
+    const result = await m.run({ ctx, sessionCtx });
 
     expect(result.staged).toEqual(new Map());
     expect(ctx.media).toEqual(originalMedia);
     expect(sessionCtx.media).toEqual(originalMedia);
-    expect(await fs.readdir(workspaceDir)).toEqual(["keep.txt"]);
+    expect(await fs.readdir(m.workspaceDir)).toEqual(["keep.txt"]);
     await expect(fs.readFile(projectFile, "utf8")).resolves.toBe("existing project file");
   });
 
-  it("stages global-session media with the prepared agent owner", async ({ media: { home } }) => {
+  it("stages global-session media with the prepared agent owner", async ({ media: m }) => {
     const { ensureSandboxWorkspaceForSession } = await vi.importActual<
       typeof import("../agents/sandbox/context.js")
     >("../agents/sandbox/context.js");
     sandboxMocks.ensureSandboxWorkspaceForSession.mockImplementation(
       ensureSandboxWorkspaceForSession,
     );
-    const mediaPath = await writeInboundMedia(home, "global.png", "image-bytes");
+    const mediaPath = await m.inbound("global.png");
     const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
-    const workspaceDir = join(home, "workspace");
+    const workspaceDir = join(m.home, "workspace");
 
-    const result = await stageSandboxMedia({
-      ctx,
-      sessionCtx,
-      cfg: { agents: { ownership: "explicit", entries: { main: {}, other: {} } } },
-      agentId: "main",
-      sessionKey: "global",
-      workspaceDir,
-    });
+    const result = await m.run(
+      { ctx, sessionCtx },
+      {
+        cfg: { agents: { ownership: "explicit", entries: { main: {}, other: {} } } },
+        agentId: "main",
+        sessionKey: "global",
+        workspaceDir,
+      },
+    );
 
     const stagedPath = result.staged.get(0)!;
     expect(ctx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir, staged: true });
     await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("image-bytes");
   });
 
-  it("maps a staged upload handle to its exact private input path", async ({
-    media: { home, stageMedia },
-  }) => {
-    await writeInboundMedia(home, "file_upload.jpg", "jpeg-bytes");
-    const { ctx, result } = await stageMedia("media://inbound/file_upload.jpg");
+  it("maps a staged upload handle to its exact private input path", async ({ media: m }) => {
+    await m.inbound("file_upload.jpg", "jpeg-bytes");
+    const { ctx, result } = await m.stageMedia("media://inbound/file_upload.jpg");
 
     const stagedPath = result.staged.get(0)!;
     expect(resolveStagedInputMediaPaths(ctx.media)).toEqual(
@@ -175,84 +193,58 @@ describe("stageSandboxMedia", () => {
     );
   });
 
-  it("keeps host-staged inbound images available to native vision", async ({
-    media: { home, cfg, workspaceDir },
-  }) => {
+  it("keeps host-staged inbound images available to native vision", async ({ media: m }) => {
+    const { workspaceDir } = m;
     sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
     const fileName = "host-photo.png";
-    await writeInboundMedia(home, fileName, "host-image-bytes");
-    const existingProjectFile = join(workspaceDir, "media", "inbound", fileName);
-    await fs.mkdir(dirname(existingProjectFile), { recursive: true });
-    await fs.writeFile(existingProjectFile, "project-file");
+    await m.inbound(fileName, "host-image-bytes");
+    const existingProjectFile = await m.write(`openclaw/media/inbound/${fileName}`, "project-file");
     const mediaUri = `media://inbound/${fileName}`;
+    const blockedPath = await m.write("blocked-host.png", "blocked");
     const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
-    ctx.media = [{ ...ctx.media?.[0], contentType: "image/png" }];
-    sessionCtx.media = ctx.media;
+    ctx.media = [
+      { ...ctx.media?.[0], contentType: "image/png" },
+      { path: blockedPath, contentType: "image/png" },
+    ];
+    sessionCtx.media = structuredClone(ctx.media);
 
-    const result = await stage({ ctx, sessionCtx }, cfg, workspaceDir);
+    const result = await m.run({ ctx, sessionCtx });
 
     const stagedPath = ctx.media?.[0]?.path ?? "";
     const stagedRelativePath = path.relative(workspaceDir, stagedPath).replaceAll(path.sep, "/");
     expect(stagedRelativePath).toMatch(
       new RegExp(`^media/inbound/openclaw-staged-[0-9a-f-]+/input-${fileName}$`),
     );
-    expect(result.staged.get(0)).toBe(stagedPath);
+    expect(result.staged).toEqual(new Map([[0, stagedPath]]));
     expect(ctx.media?.[0]).toMatchObject({ path: stagedPath, workspaceDir });
     expect(sessionCtx.media).toEqual(ctx.media);
     await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("host-image-bytes");
     await expect(fs.readFile(existingProjectFile, "utf8")).resolves.toBe("project-file");
-
-    const blockedPath = join(home, "blocked-host.png");
-    await fs.writeFile(blockedPath, "blocked");
-    const partialCtx = {
-      media: [
-        { path: mediaUri, contentType: "image/png" },
-        { path: blockedPath, contentType: "image/png" },
-      ],
-    };
-    const partialSessionCtx = { media: structuredClone(partialCtx.media) };
-    const partialResult = await stage(
-      { ctx: partialCtx, sessionCtx: partialSessionCtx },
-      cfg,
-      workspaceDir,
-    );
-    expect([...partialResult.staged.keys()]).toEqual([0]);
-    expect(partialResult.staged.get(0)).toBe(partialCtx.media[0]?.path);
-    expect(partialCtx).not.toHaveProperty("MediaWorkspaceDir");
-    expect(partialCtx.media[0]).toMatchObject({ workspaceDir });
-    expect(partialCtx.media[1]).toMatchObject({ path: blockedPath, contentType: "image/png" });
-    expect(partialCtx.media[1]).not.toHaveProperty("workspaceDir");
-    expect(partialSessionCtx.media).toEqual(partialCtx.media);
-    expect((await fs.readdir(dirname(partialResult.staged.get(0)!))).toSorted()).toEqual([
+    expect(ctx).not.toHaveProperty("MediaWorkspaceDir");
+    expect(ctx.media?.[1]).toMatchObject({ path: blockedPath, contentType: "image/png" });
+    expect(ctx.media?.[1]).not.toHaveProperty("workspaceDir");
+    expect((await fs.readdir(dirname(stagedPath))).toSorted()).toEqual([
       ".gitignore",
       `input-${fileName}`,
     ]);
   });
 
-  it("blocks remote paths outside the attachment roots before spawning", async ({
-    media: { cfg, workspaceDir },
-  }) => {
-    const remote = createSandboxMediaContexts("/etc/passwd");
-    for (const context of [remote.ctx, remote.sessionCtx]) {
-      context.Provider = "imessage";
-      context.MediaRemoteHost = "user@gateway-host";
-    }
-    const result = await stage(remote, cfg, workspaceDir);
+  it("blocks remote paths outside the attachment roots before spawning", async ({ media: m }) => {
+    const remote = createRemoteContexts("/etc/passwd");
+    const result = await m.run(remote);
     expect(processExecMocks.runCommandWithTimeout).not.toHaveBeenCalled();
     expectUnstaged({ ...remote, result }, "/etc/passwd");
   });
 
   it.for(["file:///", "FILE:///", "FILE:/"])(
     "stages local file URLs with prefix %s",
-    async (prefix, { media: { home, stageMedia, sandboxDir } }) => {
-      const sourceDir = join(home, ".openclaw", "media", "cache");
-      const fileName = "café photo.png";
-      const sourcePath = join(sourceDir, fileName);
-      await fs.mkdir(sourceDir, { recursive: true });
-      await fs.writeFile(sourcePath, "image-bytes");
+    async (prefix, { media: m }) => {
+      const sourcePath = await m.write(".openclaw/media/cache/café photo.png");
       const sourceUrl = pathToFileURL(sourcePath).href.replace(/^file:\/\/\//u, prefix);
-      const stagedPath = expectStaged(await stageMedia(sourceUrl), sandboxDir);
-      await expect(fs.readFile(join(sandboxDir, stagedPath), "utf8")).resolves.toBe("image-bytes");
+      const stagedPath = expectStaged(await m.stageMedia(sourceUrl), m.sandboxDir);
+      await expect(fs.readFile(join(m.sandboxDir, stagedPath), "utf8")).resolves.toBe(
+        "image-bytes",
+      );
     },
   );
 
@@ -272,11 +264,10 @@ describe("stageSandboxMedia", () => {
 
   it.for([1, 0])(
     "updates facts positionally with staged slot %s",
-    async (allowedIndex, { media: { home, cfg, workspaceDir, sandboxDir } }) => {
+    async (allowedIndex, { media: m }) => {
       const blockedIndex = 1 - allowedIndex;
-      const allowedPath = await writeInboundMedia(home, "allowed.jpg", "allowed");
-      const blockedPath = join(home, "blocked.jpg");
-      await fs.writeFile(blockedPath, "blocked");
+      const allowedPath = await m.inbound("allowed.jpg", "allowed");
+      const blockedPath = await m.write("blocked.jpg", "blocked");
       const allowedUrl = "https://cdn.example/allowed.jpg";
       const media = [allowedPath, blockedPath].map((pathValue, index) => ({
         path: pathValue,
@@ -287,13 +278,11 @@ describe("stageSandboxMedia", () => {
         media.reverse();
       }
       const ctx = { media };
-      const sessionCtx = {
-        media: structuredClone(media),
-      };
+      const sessionCtx = { media: structuredClone(media) };
 
-      const result = await stage({ ctx, sessionCtx }, cfg, workspaceDir);
+      const result = await m.run({ ctx, sessionCtx });
 
-      const stagedPath = expectStaged({ ctx, sessionCtx, result }, sandboxDir, allowedIndex);
+      const stagedPath = expectStaged({ ctx, sessionCtx, result }, m.sandboxDir, allowedIndex);
       expect(stagedPath).toMatch(
         /^media\/inbound\/openclaw-staged-[0-9a-f-]+\/input-allowed\.jpg$/,
       );
@@ -304,11 +293,11 @@ describe("stageSandboxMedia", () => {
   );
 
   it("blocks destination symlink escapes when staging into sandbox workspace", async ({
-    media: { home, stageMedia, sandboxDir },
+    media: m,
   }) => {
-    const mediaPath = await writeInboundMedia(home, "payload.txt", "PAYLOAD");
+    const mediaPath = await m.inbound("payload.txt", "PAYLOAD");
 
-    const outsideDir = join(home, "outside");
+    const outsideDir = join(m.home, "outside");
     const outsideInboundDir = join(outsideDir, "inbound");
     await fs.mkdir(outsideInboundDir, { recursive: true });
     const victimPath =
@@ -319,93 +308,72 @@ describe("stageSandboxMedia", () => {
 
     await fs.symlink(
       outsideDir,
-      join(sandboxDir, "media"),
+      join(m.sandboxDir, "media"),
       process.platform === "win32" ? "junction" : undefined,
     );
     if (process.platform !== "win32") {
       await fs.symlink(victimPath, join(outsideInboundDir, basename(mediaPath)));
     }
 
-    const { ctx, sessionCtx } = await stageMedia(mediaPath);
+    const { ctx, sessionCtx } = await m.stageMedia(mediaPath);
 
     await expect(fs.readFile(victimPath, "utf8")).resolves.toBe("ORIGINAL");
     expect(ctx.media?.[0]?.path).toBe(mediaPath);
     expect(sessionCtx.media?.[0]?.path).toBe(mediaPath);
   });
 
-  it("stages media above the generic media-store limit", async ({
-    media: { home, stageMedia, sandboxDir },
-  }) => {
-    const mediaPath = await writeInboundMedia(
-      home,
-      "large.bin",
-      Buffer.alloc(MEDIA_MAX_BYTES + 1, 0x41),
-    );
-    const stagedPath = expectStaged(await stageMedia(mediaPath), sandboxDir);
-    expect(stagedPath).toMatch(/^media\/inbound\/openclaw-staged-[0-9a-f-]+\/input-large\.bin$/);
-    await expect(fs.stat(join(sandboxDir, stagedPath))).resolves.toMatchObject({
-      size: MEDIA_MAX_BYTES + 1,
-    });
-  });
-
-  it("warns and keeps original media paths above the sandbox staging limit", async ({
-    media: { home, stageMedia, sandboxDir },
-  }) => {
-    const stagingMaxBytes = SANDBOX_MEDIA_MAX_BYTES;
-    const mediaPath = await writeInboundMedia(home, "oversized.bin", "");
-    await fs.truncate(mediaPath, stagingMaxBytes + 1);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    expectUnstaged(await stageMedia(mediaPath), mediaPath);
-    const inboundDir = join(sandboxDir, "media", "inbound");
-    await expect(fs.stat(inboundDir)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(warn).toHaveBeenCalledWith(
-      `Inbound media staging skipped for input-oversized.bin: file exceeds limit of ${stagingMaxBytes} bytes (got ${stagingMaxBytes + 1})`,
-    );
-  });
-
-  it.for([
-    { agentMb: 51, channelMb: undefined, accountMb: undefined, fileMb: 50, staged: true },
-    { agentMb: undefined, channelMb: 51, accountMb: undefined, fileMb: 50, staged: true },
-    { agentMb: undefined, channelMb: 50, accountMb: 51, fileMb: 50, staged: true },
-    { agentMb: undefined, channelMb: 51, accountMb: 50, fileMb: 50, staged: false },
-    { agentMb: 5, channelMb: undefined, accountMb: undefined, fileMb: 10, staged: true },
-  ])(
-    "stages admitted media with limits %j",
-    async (
-      { agentMb, channelMb, accountMb, fileMb, staged },
-      { media: { home, cfg, workspaceDir, sandboxDir } },
-    ) => {
-      cfg.agents!.defaults!.mediaMaxMb = agentMb;
+  it.for<
+    [
+      name: string,
+      size: number,
+      staged: boolean,
+      limits?: { agent?: number; channel?: number; account?: number },
+    ]
+  >([
+    ["above generic store limit", MEDIA_MAX_BYTES + 1, true],
+    ["above sandbox limit", SANDBOX_MEDIA_MAX_BYTES + 1, false],
+    ["agent limit", 50 * 1024 * 1024 + 1, true, { agent: 51 }],
+    ["channel limit", 50 * 1024 * 1024 + 1, true, { channel: 51 }],
+    ["account overrides channel", 50 * 1024 * 1024 + 1, true, { channel: 50, account: 51 }],
+    ["account rejects above limit", 50 * 1024 * 1024 + 1, false, { channel: 51, account: 50 }],
+    ["minimum staging allowance", 10 * 1024 * 1024 + 1, true, { agent: 5 }],
+  ])("staging size policy: %s", async ([_name, size, staged, limits], { media: m }) => {
+    const { cfg, sandboxDir } = m;
+    if (limits) {
+      cfg.agents!.defaults!.mediaMaxMb = limits.agent;
       cfg.channels = {
         telegram: {
-          mediaMaxMb: channelMb,
-          accounts: { roomy: { mediaMaxMb: accountMb } },
+          mediaMaxMb: limits.channel,
+          accounts: { roomy: { mediaMaxMb: limits.account } },
         },
       };
-      const mediaPath = await writeInboundMedia(home, "large.bin", "");
-      const size = fileMb * 1024 * 1024 + 1;
-      await fs.truncate(mediaPath, size);
-      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+    }
+    const mediaPath = await m.inbound("large.bin", "");
+    await fs.truncate(mediaPath, size);
+    const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+    if (limits) {
       ctx.Surface = "telegram";
       ctx.AccountId = "roomy";
-      const result = await stage({ ctx, sessionCtx }, cfg, workspaceDir);
-
-      expect(result.staged.size).toBe(staged ? 1 : 0);
-      if (staged) {
-        const stagedPath = expectStaged({ ctx, sessionCtx, result }, sandboxDir);
-        await expect(fs.stat(join(sandboxDir, stagedPath))).resolves.toMatchObject({ size });
-      } else {
-        expect(ctx.media?.[0]?.path).toBe(mediaPath);
-        await expect(fs.stat(join(sandboxDir, "media", "inbound"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
+    }
+    const warn =
+      !limits && !staged ? vi.spyOn(console, "warn").mockImplementation(() => {}) : undefined;
+    const result = await m.run({ ctx, sessionCtx });
+    if (staged) {
+      const stagedPath = expectStaged({ ctx, sessionCtx, result }, sandboxDir);
+      expect(stagedPath).toMatch(/^media\/inbound\/openclaw-staged-[0-9a-f-]+\/input-large\.bin$/);
+      await expect(fs.stat(join(sandboxDir, stagedPath))).resolves.toMatchObject({ size });
+    } else {
+      expectUnstaged({ ctx, sessionCtx, result }, mediaPath);
+      await expectPathMissing(join(sandboxDir, "media", "inbound"));
+      if (!limits) {
+        expect(warn).toHaveBeenCalledWith(
+          `Inbound media staging skipped for input-large.bin: file exceeds limit of ${SANDBOX_MEDIA_MAX_BYTES} bytes (got ${size})`,
+        );
       }
-    },
-  );
+    }
+  });
 });
 
-const DEFAULT_SESSION_KEY = "agent:main:main";
 const remoteCacheDir = (key: string) =>
   join(CONFIG_DIR, "media", "remote-cache", slugifySessionKey(key));
 
@@ -431,13 +399,6 @@ function mockDownload() {
   });
 }
 
-function stageRemote(
-  contexts: ReturnType<typeof createRemoteContexts>,
-  params: Omit<Parameters<typeof stageSandboxMedia>[0], "ctx" | "sessionCtx">,
-) {
-  return stageSandboxMedia({ sessionKey: DEFAULT_SESSION_KEY, ...contexts, ...params });
-}
-
 async function expectCached(
   result: Awaited<ReturnType<typeof stageSandboxMedia>>,
   ctx: ReturnType<typeof createRemoteContexts>["ctx"],
@@ -455,13 +416,13 @@ async function expectCached(
 
 describe("stageSandboxMedia scp remote paths", () => {
   it("rejects remote attachment filenames with shell metacharacters before spawning scp", async ({
-    media: { cfg, workspaceDir },
+    media: m,
   }) => {
     sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
     const remotePath = "/Users/demo/Library/Messages/Attachments/ab/cd/evil$(touch pwned).jpg";
     const { ctx, sessionCtx } = createRemoteContexts(remotePath);
 
-    await stageRemote({ ctx, sessionCtx }, { cfg, workspaceDir });
+    await m.run({ ctx, sessionCtx });
 
     expect(processExecMocks.runCommandWithTimeout).not.toHaveBeenCalled();
     await expectPathMissing(join(remoteCacheDir(DEFAULT_SESSION_KEY), basename(remotePath)));
@@ -470,7 +431,7 @@ describe("stageSandboxMedia scp remote paths", () => {
   });
 
   it("uses a slugged remote cache directory for session keys with path separators", async ({
-    media: { cfg, workspaceDir },
+    media: m,
   }) => {
     sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
     const sessionKey = "agent:main:explicit:../../escape";
@@ -478,7 +439,7 @@ describe("stageSandboxMedia scp remote paths", () => {
     const { ctx, sessionCtx } = createRemoteContexts(remotePath);
     processExecMocks.runCommandWithTimeout.mockRejectedValue(new Error("stop before scp"));
 
-    await stageRemote({ ctx, sessionCtx }, { cfg, sessionKey, workspaceDir });
+    await m.run({ ctx, sessionCtx }, { sessionKey });
 
     const command = processExecMocks.runCommandWithTimeout.mock.calls[0]?.[0];
     expect(command).toEqual(expect.arrayContaining(["scp"]));
@@ -493,8 +454,8 @@ describe("stageSandboxMedia scp remote paths", () => {
 
   it.for([false, true])(
     "rewrites remote media into an absolute cache path (force cache=%s)",
-    async (forceCache, { media: { home, cfg, workspaceDir } }) => {
-      const sandboxWorkspace = join(home, "sandbox-workspace");
+    async (forceCache, { media: m }) => {
+      const sandboxWorkspace = join(m.home, "sandbox-workspace");
       sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(
         forceCache ? { workspaceDir: sandboxWorkspace, workspaceAccess: "workspace-write" } : null,
       );
@@ -510,13 +471,9 @@ describe("stageSandboxMedia scp remote paths", () => {
       ];
       sessionCtx.media = ctx.media;
       mockDownload();
-      const result = await stageRemote(
+      const result = await m.run(
         { ctx, sessionCtx },
-        {
-          cfg,
-          workspaceDir,
-          ...(forceCache ? { remoteMediaMode: "cache" as const } : {}),
-        },
+        forceCache ? { remoteMediaMode: "cache" } : {},
       );
       const stagedPath = await expectCached(result, ctx, DEFAULT_SESSION_KEY);
       expect(sessionCtx.media).toEqual(ctx.media);

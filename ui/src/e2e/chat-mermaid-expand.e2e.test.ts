@@ -29,7 +29,7 @@ suite.define(() => {
           historyMessages: [textMessage("assistant", `${fence}mermaid\n${source}\n${fence}`)],
         });
         await page.goto(suite.server.baseUrl + "chat");
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         const diagram = page.locator("openclaw-mermaid");
         const image = diagram.locator(".preview img");
         await image.waitFor({ timeout: 25_000 });

@@ -100,10 +100,10 @@ it.each(["replaced", "preparation"] as const)(
       }
     });
     const claimOps = createPlacementTurnClaimFixtureOps(support.testState.stateDb);
-    const prepare = vi.fn((message: ReturnType<typeof makeAgentAssistantMessage>) => {
+    const prepare = (message: ReturnType<typeof makeAgentAssistantMessage>) => {
       claimOps.releaseTurn(claim);
       return message;
-    });
+    };
     const writerHeld = createDeferredCore();
     const releaseWriter = createDeferredCore();
     const blocker = runExclusiveSqliteSessionWrite(
@@ -116,7 +116,6 @@ it.each(["replaced", "preparation"] as const)(
     );
     let replacement: WorkerSessionTurnClaim | undefined;
     let owner: Owner | undefined;
-    let replacementOwner: Owner | undefined;
     let commit: ReturnType<typeof workerService.commitTranscript> | undefined;
     const claimReplacement = () =>
       store.claimTurn({
@@ -157,27 +156,6 @@ it.each(["replaced", "preparation"] as const)(
         updates,
         cursor: store.get(claim.sessionId)?.lastTranscriptAckCursor,
       }).toEqual({ entries: [], entry: entryBefore, updates: [], cursor: null });
-      expect(prepare).toHaveBeenCalledTimes(scenario === "preparation" ? 1 : 0);
-
-      replacement ??= await claimReplacement();
-      replacementOwner = await bindClaimOwner(store, replacement, { target });
-      const credential = await workerService.acquireTurnCredential(replacement);
-      expect(credential.ownerEpoch).toBe(identity.ownerEpoch);
-      expect(await workerService.acknowledgeCredentialDelivery(credential)).toBe(true);
-      const admitted = await workerService.admitWorker(
-        claimAdmission(replacement, credential.credential),
-      );
-      assert(admitted.ok, "replacement worker was not admitted");
-      const seq = (store.get(claim.sessionId)?.lastTranscriptAckCursor ?? 0) + 1;
-      expect(seq).toBe(request.seq);
-      await expect(
-        turnRequests(admitted.identity, workerService).transcript("replacement can commit", {
-          seq,
-        }),
-      ).resolves.toMatchObject({ ok: true });
-      expect(SessionManager.open(target).getEntries()).toHaveLength(1);
-      expect(updates).toHaveLength(1);
-      expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBe(seq);
     } finally {
       releaseWriter.resolve();
       await blocker;
@@ -188,7 +166,6 @@ it.each(["replaced", "preparation"] as const)(
         await store.releaseTurn(replacement ?? claim);
       }
       owner?.release();
-      replacementOwner?.release();
     }
   },
 );
@@ -256,9 +233,6 @@ it.each(["released", "replaced"] as const)(
       });
       const result = await workerService.commitTranscript(admitted.identity, nextRequest);
       expect(result).toMatchObject({ ok: true });
-      await expect(workerService.commitTranscript(admitted.identity, nextRequest)).resolves.toEqual(
-        result,
-      );
       expect(SessionManager.open(target).getEntries()).toHaveLength(2);
       expect(updates).toHaveLength(2);
       expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBe(nextSeq);

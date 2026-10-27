@@ -190,7 +190,7 @@ export async function shouldSwitchToLiveModel(params: {
   const entry = await readSessionEntryReadOnlyInWorker({
     storePath,
     sessionKey,
-    hydrateSkillPromptRefs: false,
+    projection: "list",
     clone: false,
     readConsistency: "latest",
   });

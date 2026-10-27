@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { cronRuns } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron run filter typography E2E",
@@ -33,14 +34,7 @@ suite.define(() => {
                 hasMore: false,
                 nextOffset: null,
               },
-              "cron.runs": {
-                entries: [],
-                total: 0,
-                offset: 0,
-                limit: 50,
-                hasMore: false,
-                nextOffset: null,
-              },
+              "cron.runs": cronRuns([]),
               "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
             },
           });
