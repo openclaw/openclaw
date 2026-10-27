@@ -18,7 +18,6 @@ import {
   makePluginLoaderTempDir,
   writePlugin,
 } from "./loader.test-fixtures.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
 import { loadPluginMetadataSnapshot as loadMetadata } from "./plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture as createSnapshot } from "./plugin-metadata.test-support.js";
 import {
@@ -44,7 +43,6 @@ function metadata(
   rootDir: string,
   source = `${rootDir}/index.cjs`,
   origin: "global" | "bundled" = "global",
-  overrides: Partial<PluginManifestRecord> = {},
 ) {
   return createSnapshot({
     plugins: [
@@ -55,22 +53,16 @@ function metadata(
         source,
         providers: ["same-provider"],
         configSchema: EMPTY_PLUGIN_SCHEMA,
-        ...overrides,
       },
     ],
   });
 }
 
-function registry(
-  snapshot: ReturnType<typeof metadata>,
-  workspaceDir?: string,
-  options: Parameters<typeof loadOpenClawPlugins>[0] = {},
-) {
+function registry(snapshot: ReturnType<typeof metadata>, workspaceDir?: string) {
   return loadPlugins({
     workspaceDir,
     onlyPluginIds: ["same-id"],
     manifestRegistry: snapshot.manifestRegistry,
-    ...options,
   });
 }
 
@@ -94,41 +86,8 @@ function activate(options: Parameters<typeof loadOpenClawPlugins>[0]) {
   return loaded;
 }
 
-function activateConfig(
-  current: Parameters<typeof loadOpenClawPlugins>[0]["config"],
-  activationSourceConfig = current,
-) {
-  const env = { OPENCLAW_STATE_DIR: makePluginLoaderTempDir() };
-  const snapshot = loadMetadata({ config: current, env });
-  const loaded = activate({
-    config: current,
-    activationSourceConfig,
-    env,
-    installRecords: {},
-    manifestRegistry: snapshot.manifestRegistry,
-    onlyPluginIds: ["same-id"],
-    activate: false,
-  });
-  return { env, snapshot, loaded };
-}
-
 function labels(providers: readonly { label: string }[] | undefined) {
   return providers?.map((provider) => provider.label);
-}
-
-function providerRequest(
-  pluginMetadataSnapshot: Parameters<typeof loadedProvider>[0]["pluginMetadataSnapshot"],
-  overrides: Partial<Parameters<typeof loadedProvider>[0]> = {},
-) {
-  return { provider: "same-provider", pluginMetadataSnapshot, ...overrides };
-}
-
-function hookRequest(params: Parameters<typeof loadedProvider>[0]) {
-  return { ...params, providerRefs: [params.provider] };
-}
-
-function registration(provider: ReturnType<typeof loadedProvider>) {
-  return provider?.normalizeModelId?.({ provider: "same-provider", modelId: "probe" });
 }
 
 function expectAbsent(value: unknown) {
@@ -146,12 +105,6 @@ function writeManifest(dir: string, manifest: object = {}) {
       ...manifest,
     }),
   );
-}
-
-function writeRegistration(source: string, manifest: object) {
-  const plugin = writePlugin({ id: "same-id", filename: "index.cjs", registration: source });
-  writeManifest(plugin.dir, manifest);
-  return plugin;
 }
 
 function createRegistrationProbe() {
@@ -214,43 +167,59 @@ describe("provider runtime physical ownership", () => {
     "preserves paired source defaults during config reuse with snapshot=%s",
     (snapshotPresent) => {
       const registrations = createRegistrationProbe();
-      const plugin = writeRegistration(
-        `
+      const plugin = writePlugin({
+        id: "same-id",
+        filename: "index.cjs",
+        body: `module.exports = { id: "same-id", register(api) {
           if (api.pluginConfig.credential !== "resolved-fixture-key") throw new Error("unhydrated fixture");
           ${registrations.source}
-          api.registerProvider({ id: "same-provider", label: api.pluginConfig.revision + "/" + registration, auth: [] });`,
-        {
-          configContracts: {
-            secretInputs: { paths: [{ path: "credential", expected: "string" }] },
-          },
-          configSchema: {
-            type: "object",
-            properties: {
-              credential: { type: "object" },
-              revision: { type: "string" },
+          api.registerProvider({ id: "same-provider", label: api.pluginConfig.revision + "/" + registration, auth: [] });
+        }};`,
+      });
+      writeManifest(plugin.dir, {
+        configContracts: { secretInputs: { paths: [{ path: "credential", expected: "string" }] } },
+        configSchema: {
+          type: "object",
+          properties: {
+            credential: {
+              type: "object",
+              properties: {
+                source: { const: "store" },
+                provider: { type: "string" },
+                id: { type: "string" },
+              },
+              required: ["source", "provider", "id"],
             },
-            required: ["credential"],
-            if: { properties: { credential: { properties: { id: { const: "KEY" } } } } },
-            // oxlint-disable-next-line unicorn/no-thenable -- JSON Schema branch data.
-            then: { properties: { revision: { default: "A" } } },
-            else: { properties: { revision: { default: "B" } } },
-            additionalProperties: false,
+            revision: { type: "string" },
           },
+          required: ["credential"],
+          if: { properties: { credential: { properties: { id: { const: "KEY" } } } } },
+          // oxlint-disable-next-line unicorn/no-thenable -- JSON Schema branch data.
+          then: { properties: { revision: { default: "A" } } },
+          else: { properties: { revision: { default: "B" } } },
+          additionalProperties: false,
         },
-      );
+      });
       const runtimeConfig = configuredPlugin(plugin.file, { credential: "resolved-fixture-key" });
       const sourceFor = (id: string) =>
         configuredPlugin(plugin.file, {
           credential: { source: "store", provider: "default", id },
         });
       const sourceConfig = sourceFor("KEY");
+      const env = { OPENCLAW_STATE_DIR: makePluginLoaderTempDir() };
       try {
         setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
-        const {
+        const firstSnapshot = loadMetadata({ config: runtimeConfig, env });
+        const loadOptions = {
+          config: runtimeConfig,
+          activationSourceConfig: sourceConfig,
           env,
-          snapshot: firstSnapshot,
-          loaded: loadedRegistry,
-        } = activateConfig(runtimeConfig, sourceConfig);
+          installRecords: {},
+          manifestRegistry: firstSnapshot.manifestRegistry,
+          onlyPluginIds: ["same-id"],
+          activate: false,
+        };
+        const loadedRegistry = activate(loadOptions);
         const lookup = {
           provider: "same-provider",
           config: runtimeConfig,
@@ -259,6 +228,7 @@ describe("provider runtime physical ownership", () => {
         };
         expect(loadedProvider(lookup)?.label).toBe("A/1");
         expect(resolveProvider(lookup)?.label).toBe("A/1");
+        expect(registrations.count()).toBe(1);
         setRuntimeConfigSnapshot(runtimeConfig, sourceFor("OTHER"));
         expect(loadedProvider(lookup)).toBeUndefined();
         expect(resolveProvider(lookup)?.label).toBe("B/2");
@@ -268,12 +238,14 @@ describe("provider runtime physical ownership", () => {
             () => resolveProvider(lookup)?.label,
           ),
         ).toBe("A/1");
+        expect(registrations.count()).toBe(2);
         const setupProviders = resolveProviders({
           ...lookup,
           providerRefs: ["same-provider"],
           mode: "setup",
         });
-        expect(labels(setupProviders)).toEqual([expect.stringMatching(/^B\//)]);
+        expect(setupProviders).toHaveLength(1);
+        expect(setupProviders[0]?.label).toMatch(/^B\//);
         expect(resolveProvider(lookup)?.label).toBe("B/2");
       } finally {
         clearRuntimeConfigSnapshot();
@@ -281,35 +253,56 @@ describe("provider runtime physical ownership", () => {
     },
   );
 
-  it.each([
-    [false, "replace", "declared"],
-    [true, "replace", "declared"],
-    [true, "mutate", "declared"],
-    [true, "rebind", "declared"],
-    [true, "replace", "alias"],
-    [true, "replace", "removed-alias"],
-  ] as const)(
-    "keeps registration config current with snapshot=%s, change=%s, receiver=%s",
-    (snapshotPresent, change, receiver) => {
+  it.each(
+    (
+      [
+        { change: "replace", receiver: "declared" },
+        { change: "mutate", receiver: "declared" },
+        { change: "rebind", receiver: "declared" },
+        { change: "replace", receiver: "alias" },
+        { change: "replace", receiver: "removed-alias" },
+      ] as const
+    ).flatMap((variant) =>
+      [false, true].map((snapshotPresent) => ({
+        change: variant.change,
+        receiver: variant.receiver,
+        snapshotPresent,
+      })),
+    ),
+  )(
+    "keeps registration config current with snapshot=$snapshotPresent, change=$change, receiver=$receiver",
+    ({ snapshotPresent, change, receiver }) => {
       const registrations = createRegistrationProbe();
-      const plugin = writeRegistration(
-        `
+      const plugin = writePlugin({
+        id: "same-id",
+        filename: "index.cjs",
+        body: `module.exports = { id: "same-id", register(api) {
           ${registrations.source}
           const captured = api.pluginConfig.revision + "/" + registration;
           api.registerProvider({ id: "same-provider", label: captured, auth: [],
             hookAliases: ${receiver === "removed-alias" ? 'api.pluginConfig.revision === "A" ? ["runtime-alias"] : ["new-alias"]' : '["runtime-alias"]'},
-            normalizeModelId: () => captured });`,
-        {
-          configSchema: {
-            type: "object",
-            properties: { revision: { type: "string" } },
-            additionalProperties: false,
-          },
+            normalizeModelId: () => captured });
+        }};`,
+      });
+      writeManifest(plugin.dir, {
+        configSchema: {
+          type: "object",
+          properties: { revision: { type: "string" } },
+          additionalProperties: false,
         },
-      );
+      });
       const configFor = (revision: string) => configuredPlugin(plugin.file, { revision });
       const firstConfig = configFor("A");
-      const { env, snapshot: firstSnapshot, loaded: loadedRegistry } = activateConfig(firstConfig);
+      const env = { OPENCLAW_STATE_DIR: makePluginLoaderTempDir() };
+      const firstSnapshot = loadMetadata({ config: firstConfig, env });
+      const loadedRegistry = activate({
+        config: firstConfig,
+        env,
+        installRecords: {},
+        onlyPluginIds: ["same-id"],
+        manifestRegistry: firstSnapshot.manifestRegistry,
+        activate: false,
+      });
       const lookup = { provider: receiver === "declared" ? "same-provider" : "runtime-alias", env };
       const modelOnlyConfig = { ...firstConfig, agents: { defaults: { model: "other/model" } } };
       expect(loadedProvider({ ...lookup, config: modelOnlyConfig })?.label).toBe("A/1");
@@ -335,15 +328,17 @@ describe("provider runtime physical ownership", () => {
       expect(
         withGeneration({ pluginRegistry: loadedRegistry, metadataSnapshot: firstSnapshot }, () => {
           expect(loadedProvider(requested)?.label).toBe("A/1");
-          expect(labels(resolveProviders(hookRequest(requested)))).toEqual(["A/1"]);
+          expect(
+            labels(resolveProviders({ ...requested, providerRefs: [requested.provider] })),
+          ).toEqual(["A/1"]);
           return resolveProvider(requested)?.label;
         }),
       ).toBe("A/1");
       expect(loadedProvider(requested)).toBeUndefined();
       expect(registrations.count()).toBe(1);
-      expect(labels(resolveProviders(hookRequest(requested)))).toEqual(
-        receiver === "removed-alias" ? [] : ["B/2"],
-      );
+      expect(
+        labels(resolveProviders({ ...requested, providerRefs: [requested.provider] })),
+      ).toEqual(receiver === "removed-alias" ? [] : ["B/2"]);
       expect(resolveProvider(requested)?.label).toBe(
         receiver === "removed-alias" ? undefined : "B/2",
       );
@@ -354,11 +349,23 @@ describe("provider runtime physical ownership", () => {
   it("checks changed discovery selectors before borrowing registry-owned manifests", () => {
     const old = loadFixture("old");
     const next = loadFixture("next");
-    const env = { OPENCLAW_STATE_DIR: makePluginLoaderTempDir() };
-    const configFor = (snapshot: typeof old) => configuredPlugin(snapshot.plugins[0]!.source, {});
+    const stateDir = makePluginLoaderTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const configFor = (snapshot: typeof old) => ({
+      ...config,
+      plugins: {
+        ...config.plugins,
+        load: { paths: snapshot.plugins.map((plugin) => plugin.source) },
+      },
+    });
     const originalConfig = configFor(old);
     const originalSnapshot = loadMetadata({ config: originalConfig, env });
-    const loaded = registry(originalSnapshot, undefined, { config: originalConfig, env });
+    const loaded = loadPlugins({
+      config: originalConfig,
+      env,
+      onlyPluginIds: ["same-id"],
+      manifestRegistry: originalSnapshot.manifestRegistry,
+    });
     setActivePluginRegistry(loaded, "original-selectors");
     const lookup = { provider: "same-provider", env };
     const derivedConfig = {
@@ -389,11 +396,19 @@ describe("provider runtime physical ownership", () => {
         providers: ["other-provider"],
         configSchema: EMPTY_PLUGIN_SCHEMA,
       });
-      const aliasMetadata = metadata(alias.dir, alias.file, "global", {
-        id: "alias-owner",
-        providers: ["other-provider"],
-        providerAuthAliases: { "same-provider": "other-provider" },
-        activation: { onProviders: ["same-provider"] },
+      const aliasMetadata = createSnapshot({
+        plugins: [
+          {
+            id: "alias-owner",
+            origin: "global",
+            rootDir: alias.dir,
+            source: alias.file,
+            providers: ["other-provider"],
+            providerAuthAliases: { "same-provider": "other-provider" },
+            activation: { onProviders: ["same-provider"] },
+            configSchema: EMPTY_PLUGIN_SCHEMA,
+          },
+        ],
       });
       const pluginConfig = {
         plugins: {
@@ -412,20 +427,26 @@ describe("provider runtime physical ownership", () => {
         },
       });
       setActivePluginRegistry(loaded, state);
-      const lookup = providerRequest(snapshot, { config: pluginConfig, env: {} });
+      const lookup = { config: pluginConfig, env: {}, pluginMetadataSnapshot: snapshot };
       const hookLookup = {
         ...lookup,
         providerRefs: ["same-provider", "other-provider"],
         onlyPluginIds: ["same-id", "alias-owner"],
       };
-      expectAbsent(loadedProvider(lookup));
+      expectAbsent(loadedProvider({ ...lookup, provider: "same-provider" }));
       expectAbsent(loadedHooks(hookLookup));
-      expect(resolveProvider(lookup)?.label).toBe("selected");
-      expect(labels(resolveProviders(hookRequest(lookup)))).toEqual(["selected"]);
+      expect(resolveProvider({ ...lookup, provider: "same-provider" })?.label).toBe("selected");
+      expect(labels(resolveProviders({ ...lookup, providerRefs: ["same-provider"] }))).toEqual([
+        "selected",
+      ]);
       expect(labels(resolveHooks(hookLookup))?.toSorted()).toEqual(["alias", "selected"]);
-      expect(loadedProvider({ ...lookup, pluginMetadataSnapshot: aliasMetadata })?.label).toBe(
-        "alias",
-      );
+      expect(
+        loadedProvider({
+          ...lookup,
+          pluginMetadataSnapshot: aliasMetadata,
+          provider: "same-provider",
+        })?.label,
+      ).toBe("alias");
       const complete = loadPlugins({
         config: pluginConfig,
         manifestRegistry: snapshot.manifestRegistry,
@@ -474,12 +495,22 @@ describe("provider runtime physical ownership", () => {
       layout === "nested-layout" ? "task/extensions" : "new",
       "same-id",
     );
-    const lookup = providerRequest(
-      metadata(newRoot, path.join(newRoot, path.basename(oldPlugin.source)), origin),
-    );
+    const lookup = {
+      provider: "same-provider",
+      pluginMetadataSnapshot: metadata(
+        newRoot,
+        path.join(newRoot, path.basename(oldPlugin.source)),
+        origin,
+      ),
+    };
     const check = () => {
       expectAbsent(loadedProvider(lookup));
-      expectAbsent(loadedHooks(hookRequest(lookup)));
+      expectAbsent(
+        loadedHooks({
+          providerRefs: [lookup.provider],
+          pluginMetadataSnapshot: lookup.pluginMetadataSnapshot,
+        }),
+      );
     };
     if (scope === "request") {
       withRegistry(old, check);
@@ -521,9 +552,19 @@ describe("provider runtime physical ownership", () => {
       const combined = createSnapshot({
         plugins: [...old.plugins, ...next.plugins],
       });
-      expect(loadedProvider(providerRequest(combined))?.label).toBe("old");
-      expect(loadedProvider(providerRequest(old))?.label).toBe("old");
-      expectAbsent(loadedProvider(providerRequest(next)));
+      expect(
+        loadedProvider({
+          provider: "same-provider",
+          pluginMetadataSnapshot: combined,
+        })?.label,
+      ).toBe("old");
+      expect(
+        loadedProvider({
+          provider: "same-provider",
+          pluginMetadataSnapshot: old,
+        })?.label,
+      ).toBe("old");
+      expectAbsent(loadedProvider({ provider: "same-provider", pluginMetadataSnapshot: next }));
     });
   });
 
@@ -578,7 +619,9 @@ describe("provider runtime physical ownership", () => {
       expect(loadOpenClawPlugins(selectedOptions).providers[0]?.provider.label).toBe("source");
       if (selection === "source preference") {
         withRegistry(loaded, () => {
-          expectAbsent(loadedProvider(providerRequest(selected)));
+          expectAbsent(
+            loadedProvider({ provider: "same-provider", pluginMetadataSnapshot: selected }),
+          );
         });
       }
     },
@@ -668,23 +711,32 @@ describe("provider runtime physical ownership", () => {
           env: process.env,
           pluginMetadataSnapshot: snapshot,
         };
-        const generation = (params: Parameters<typeof providerHandle>[0] = lookup) =>
-          registration(providerHandle(params).plugin);
-        expect(generation()).toBe("1");
+        const registration = (handle: ReturnType<typeof providerHandle>) =>
+          handle.plugin?.normalizeModelId?.({ provider: lookup.provider, modelId: "probe" });
+        expect(registration(providerHandle(lookup))).toBe("1");
         const otherWorkspace = path.join(stateDir, "other-workspace");
         const other =
           scope === "empty active"
             ? createEmptyPluginRegistry()
-            : registry(snapshot, otherWorkspace, { env: process.env });
+            : loadPlugins({
+                env: process.env,
+                workspaceDir: otherWorkspace,
+                onlyPluginIds: ["same-id"],
+                manifestRegistry: snapshot.manifestRegistry,
+              });
         setActivePluginRegistry(other, "other-workspace", "default", otherWorkspace);
         const verify = () => {
           const retained = providerHandle(lookup);
           expect(retained.workspaceDir).toBeUndefined();
-          expect(registration(retained.plugin)).toBe("1");
+          expect(registration(retained)).toBe("1");
           if (scope !== "empty active") {
-            expect(generation({ ...lookup, workspaceDir: otherWorkspace })).toBe("2");
+            expect(registration(providerHandle({ ...lookup, workspaceDir: otherWorkspace }))).toBe(
+              "2",
+            );
             const narrowed = { index: snapshot.index, manifestRegistry: snapshot.manifestRegistry };
-            expect(generation({ ...lookup, pluginMetadataSnapshot: narrowed })).toBe("2");
+            expect(
+              registration(providerHandle({ ...lookup, pluginMetadataSnapshot: narrowed })),
+            ).toBe("2");
           }
         };
         if (scope === "request") {
@@ -701,8 +753,14 @@ describe("provider runtime physical ownership", () => {
     "uses the resolved %s workspace instead of another request registry",
     (selection) => {
       const snapshot = loadFixture("shared");
-      const request = registry(snapshot, "/synthetic/request");
-      const active = registry(snapshot, "/synthetic/active");
+      const load = (workspaceDir: string) =>
+        loadPlugins({
+          workspaceDir,
+          onlyPluginIds: ["same-id"],
+          manifestRegistry: snapshot.manifestRegistry,
+        });
+      const request = load("/synthetic/request");
+      const active = load("/synthetic/active");
       setActivePluginRegistry(active, "active", "default", "/synthetic/active");
       withRegistry(request, () => {
         const params =
@@ -714,9 +772,19 @@ describe("provider runtime physical ownership", () => {
                   manifestRegistry: snapshot.manifestRegistry,
                 },
               };
-        const lookup = { provider: "same-provider", ...params };
-        expect(registration(loadedProvider(lookup))).toBe("2");
-        expect(registration(loadedHooks(hookRequest(lookup))?.[0])).toBe("2");
+        const context = { provider: "same-provider", modelId: "probe" };
+        expect(
+          loadedProvider({
+            provider: context.provider,
+            ...params,
+          })?.normalizeModelId?.(context),
+        ).toBe("2");
+        expect(
+          loadedHooks({
+            providerRefs: [context.provider],
+            ...params,
+          })?.[0]?.normalizeModelId?.(context),
+        ).toBe("2");
       });
       expect(snapshot.registrations()).toBe(2);
     },
@@ -758,7 +826,7 @@ describe("provider runtime physical ownership", () => {
       expect(load(next)?.label).toBe("new");
       const reused = load(old);
       expect(reused?.label).toBe("old");
-      expect(registration(reused)).toBe("1");
+      expect(reused?.normalizeModelId?.({ provider: "same-provider", modelId: "probe" })).toBe("1");
     });
   });
 });

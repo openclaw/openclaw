@@ -107,6 +107,7 @@ function expectRejectedHarness(
   message: string,
 ) {
   expect(builder.registry.agentHarnesses).toEqual([]);
+  expect(record.agentHarnessIds).toEqual([]);
   expect(builder.registry.diagnostics).toContainEqual(
     expect.objectContaining({ level: "error", pluginId: record.id, message }),
   );
@@ -256,54 +257,63 @@ describe("plugin registration runtime admission", () => {
     }
   });
 
-  it.each(["canonical", "unbound", "removed"] as const)(
-    "checks %s registration runtime admission",
-    async (mode) => {
-      const { builder, record, api, owner, list } = fixture();
-      const resume = createDeferredCore();
-      let pending: ReturnType<PluginRuntime["nodes"]["list"]> | undefined;
-      let retained: PluginRuntime["nodes"]["list"] | undefined;
-      const invoke = () =>
-        withPluginRegistrationContext(builder.registry, record.id, () =>
-          retained ? retained({ connected: true }) : api.runtime.nodes.list({ connected: true }),
-        );
-      try {
-        if (mode === "canonical") {
-          runPluginRegisterSyncInRegistry(
-            (registeredApi) => {
-              pending = registeredApi.runtime.nodes.list({ connected: true });
-            },
-            api,
-            builder.registry,
-            record.id,
-          );
-          await expect(pending).resolves.toEqual({ nodes: [] });
-          expect(list).toHaveBeenCalledExactlyOnceWith({ connected: true });
-          expect(builder.registry.plugins).toEqual([]);
-        } else if (mode === "unbound") {
-          expect(() => owner.run(invoke)).toThrow("runtime is no longer active");
-        } else {
-          builder.registry.plugins.push(record);
-          retained = api.runtime.nodes.list;
-          pending = owner.run(async () => {
-            await resume.promise;
-            return invoke();
-          });
-          const rejected = expect(pending).rejects.toThrow("runtime is no longer active");
-          builder.rollbackPluginGlobalSideEffects(record.id, record);
-          builder.registry.plugins.splice(0, 1);
-          resume.resolve();
-          await rejected;
-        }
-        if (mode !== "canonical") {
-          expect(list).not.toHaveBeenCalled();
-        }
-      } finally {
-        resume.resolve();
-        await Promise.allSettled([pending, owner.dispose()]);
-      }
-    },
-  );
+  it("allows the canonical synchronous registration call before publication", async () => {
+    const { builder, record, api, owner, list } = fixture();
+    let pending: ReturnType<PluginRuntime["nodes"]["list"]> | undefined;
+    try {
+      runPluginRegisterSyncInRegistry(
+        (registeredApi) => {
+          pending = registeredApi.runtime.nodes.list({ connected: true });
+        },
+        api,
+        builder.registry,
+        record.id,
+      );
+      await expect(pending).resolves.toEqual({ nodes: [] });
+      expect(list).toHaveBeenCalledExactlyOnceWith({ connected: true });
+      expect(builder.registry.plugins).toEqual([]);
+    } finally {
+      await owner.dispose();
+    }
+  });
+
+  it("rejects admitted registration metadata without its producer binding", async () => {
+    const { builder, record, api, owner, list } = fixture();
+    const invoke = () =>
+      withPluginRegistrationContext(builder.registry, record.id, () =>
+        api.runtime.nodes.list({ connected: true }),
+      );
+    try {
+      expect(() => owner.run(invoke)).toThrow("runtime is no longer active");
+      expect(list).not.toHaveBeenCalled();
+    } finally {
+      await owner.dispose();
+    }
+  });
+
+  it("rejects a retained runtime helper after its admitted instance is removed", async () => {
+    const { builder, record, api, owner, list } = fixture();
+    builder.registry.plugins.push(record);
+    const retained = api.runtime.nodes.list;
+    const resume = createDeferredCore();
+    const pending = owner.run(async () => {
+      await resume.promise;
+      return withPluginRegistrationContext(builder.registry, record.id, () =>
+        retained({ connected: true }),
+      );
+    });
+    const rejected = expect(pending).rejects.toThrow("runtime is no longer active");
+    try {
+      builder.rollbackPluginGlobalSideEffects(record.id, record);
+      builder.registry.plugins.splice(0, 1);
+      resume.resolve();
+      await rejected;
+      expect(list).not.toHaveBeenCalled();
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([pending, owner.dispose()]);
+    }
+  });
 });
 
 describe("plugin registry runtime config scope", () => {
@@ -481,8 +491,11 @@ describe("plugin registry runtime config scope", () => {
       packageName: "@openclaw/codex",
     });
     const nativeCompaction = vi.fn(async () => ({ ok: true, compacted: true }));
-    api.registerAgentHarness(createHarness("codex"), { nativeCompaction });
+    const options = { nativeCompaction };
 
+    api.registerAgentHarness(createHarness("codex"), options);
+
+    expect(builder.registry.agentHarnesses).toHaveLength(1);
     const registration = expectDefined(builder.registry.agentHarnesses[0], "registered harness");
     const compact = expectDefined(registration.nativeCompaction, "native compaction callback");
     const request = {
@@ -555,13 +568,20 @@ describe("plugin registry runtime config scope", () => {
     const scope = scopeCapture("legacy-plugin");
     const config = {} as OpenClawConfig;
     const replaceResult = {
+      path: "/tmp/openclaw.json",
+      previousHash: null,
+      persistedHash: "persisted-hash",
+      snapshot: { path: "/tmp/openclaw.json" },
       nextConfig: config,
+      afterWrite: { mode: "auto" },
+      followUp: { mode: "auto", requiresRestart: false },
     } as unknown as Awaited<ReturnType<PluginRuntime["config"]["replaceConfigFile"]>>;
     const configRuntime = {
       current: vi.fn(scope.capture(() => config)),
       mutateConfigFile: scope.capture(async () => ({
         ...replaceResult,
         result: undefined,
+        attempts: 1,
       })),
       replaceConfigFile: scope.capture(async () => replaceResult),
     } satisfies PluginRuntime["config"];

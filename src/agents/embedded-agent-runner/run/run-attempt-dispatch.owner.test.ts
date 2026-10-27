@@ -436,6 +436,7 @@ it.each(dispatchCases)(
         }
         return makeEmbeddedRunnerAttempt({
           sessionIdUsed: params.sessionId,
+          assistantTexts: [`${params.agentId} answered`],
           replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
           providerRetryMaxRetries: legacyRetryCount,
           providerRetryMaxDelayMs: legacyRetryDelayMs,
@@ -492,20 +493,23 @@ it.each(dispatchCases)(
         sessionKey: "global",
         sandboxSessionKey,
         workspaceDir,
-        cwd: managedWorkspace
-          ? workspaceDir
-          : explicitCwd
-            ? path.join(workspaceDir, "packages", "app")
-            : undefined,
-        sessionRoot: explicitCwd || managedWorkspace ? workspaceDir : undefined,
-        permissionMode: managedWorkspace
-          ? ("guarded" as const)
-          : explicitCwd
-            ? ("full" as const)
-            : undefined,
+        ...(explicitCwd
+          ? {
+              cwd: path.join(workspaceDir, "packages", "app"),
+              sessionRoot: workspaceDir,
+              permissionMode: "full" as const,
+            }
+          : {}),
+        ...(managedWorkspace
+          ? {
+              cwd: workspaceDir,
+              sessionRoot: workspaceDir,
+              permissionMode: "guarded" as const,
+            }
+          : {}),
         sessionFile: "global",
         prompt: remoteSkills ? "Use the skill at /host/skills/demo/SKILL.md." : "hello",
-        skillsSnapshot,
+        ...(skillsSnapshot ? { skillsSnapshot } : {}),
         ...(remoteSkills
           ? {
               explicitSkillSelections: [
@@ -514,10 +518,12 @@ it.each(dispatchCases)(
               ],
             }
           : {}),
-        media: imagePath
-          ? [{ path: imagePath, contentType: "image/png", kind: "image" as const }]
-          : undefined,
-        requireWorkspaceOnly: imagePath ? true : undefined,
+        ...(imagePath
+          ? {
+              media: [{ path: imagePath, contentType: "image/png", kind: "image" as const }],
+              requireWorkspaceOnly: true as const,
+            }
+          : {}),
         timeoutMs: 5_000,
         oneShotCliRun,
         runtimePluginToolGrant,
@@ -880,6 +886,8 @@ it.each(dispatchCases)(
         const { dispatchedAttempt: result } = await pending;
         sourceTurn.expectPrepared(result.preparedAttempt);
         const dispatched = runAttempt.mock.calls[0]?.[0];
+        expect(result.rawAttempt.terminal).toEqual({ kind: "ok" });
+        expect(result.rawAttempt.assistantTexts).toEqual([`${agentId} answered`]);
         expect(result.rawAttempt.providerRetryMaxRetries).toBe(
           retryPreparation === "omit" ? legacyRetryCount : (retryCount ?? legacyRetryCount),
         );
