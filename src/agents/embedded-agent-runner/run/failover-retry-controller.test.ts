@@ -6,11 +6,12 @@ import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 const mocks = vi.hoisted(() => ({
   sleepWithAbort: vi.fn(async (_ms: number, _abortSignal?: AbortSignal): Promise<void> => {}),
   warn: vi.fn((_message: string) => {}),
+  error: vi.fn(),
 }));
 
 vi.mock("../logger.js", async () => {
   const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
-  return { ...actual, log: { ...actual.log, warn: mocks.warn } };
+  return { ...actual, log: { ...actual.log, warn: mocks.warn, error: mocks.error } };
 });
 
 vi.mock("../../../infra/backoff.js", async () => {
@@ -72,6 +73,7 @@ beforeEach(() => {
   onRetry.mockReset();
   sleep.mockReset().mockResolvedValue(undefined);
   warn.mockClear();
+  mocks.error.mockClear();
   rotationContext.logFallbackDecision.mockClear();
 });
 
@@ -117,6 +119,11 @@ it.each([
   }
   await checkRetry({ reason: "rate_limit" }, false);
   expect(controller.rateLimitRetriesExhausted).toBe(15);
+  expect(warn).not.toHaveBeenCalled();
+  expect(mocks.error).toHaveBeenCalledExactlyOnceWith(
+    "same-model retries exhausted",
+    expect.objectContaining({ reason: "rate_limit", retries: 15 }),
+  );
   expect(sleep.mock.calls.map(([delay]) => delay)).toEqual(delays);
 });
 

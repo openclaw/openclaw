@@ -388,6 +388,13 @@ export function createEmbeddedRunFailoverRetryController(input: {
           rateLimitRetriesExhausted = retryBudget === 0 ? 0 : retryCount;
         }
         recordDecision("rejected", "retry_budget_exhausted");
+        log.error("same-model retries exhausted", {
+          provider,
+          model: modelId,
+          reason: retry.reason,
+          retries: retryCount,
+          runId: params.runId,
+        });
         return false;
       }
       const nowMs = Date.now();
@@ -429,9 +436,11 @@ export function createEmbeddedRunFailoverRetryController(input: {
       const maxRetries = outputLimit
         ? Math.min(retryBudget, MAX_OUTPUT_LIMIT_RETRIES)
         : retryBudget;
-      log.warn(
-        `${outputLimit ? "output-limit continuation" : "transient same-model retry"} ${attempt}/${maxRetries} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs} runId=${JSON.stringify(params.runId)} sessionId=${JSON.stringify(input.getSessionId())}`,
-      );
+      if (outputLimit || log.isEnabled("debug")) {
+        log[outputLimit ? "warn" : "debug"](
+          `${outputLimit ? "output-limit continuation" : "transient same-model retry"} ${attempt}/${maxRetries} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs} runId=${JSON.stringify(params.runId)} sessionId=${JSON.stringify(input.getSessionId())}`,
+        );
+      }
       try {
         await retry.onRetry?.({
           attempt,

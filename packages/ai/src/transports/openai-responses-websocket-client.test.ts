@@ -725,9 +725,12 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expect(result.stopReason).toBe("error");
     expectCounts(1, 0);
     expect(transport.closeCount).toBe(1);
-    const line = logWarn.mock.calls.find(([, text]) => text.startsWith("[responses] error "))?.[1];
-    expect(line).toContain("abortReason=request_deadline");
-    expect(line).not.toContain("abortMessage=");
+    expect(logWarn).toHaveBeenCalledExactlyOnceWith(
+      "provider-error",
+      "Model request failed",
+      expect.objectContaining({ abortReason: "request_deadline" }),
+    );
+    expect(JSON.stringify(logWarn.mock.calls)).not.toContain("abortMessage");
 
     transport.sdkOutcomes.push(sdkCompletion("resp_sse"));
     const next = await run(history(user("next", 2)));
