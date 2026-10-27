@@ -76,7 +76,7 @@ const {
 }: typeof import("../../src/agents/code-mode-session-store.js") = await import(ownerUrl.href);
 assert(replaced, "Native owner source was not loaded");
 const { SessionManager } = await import("../../src/agents/sessions/session-manager.js");
-async function measure(manager: InstanceType<typeof SessionManager>) {
+async function measure(manager: ReturnType<typeof SessionManager.inMemory>) {
   const payloadBytes =
     valueBytes -
     JSON.stringify({ syntheticReplay: true, revision: "0000000000", payload: "" }).length;
