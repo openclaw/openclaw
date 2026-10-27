@@ -15,6 +15,11 @@ import { stripUnsupportedSchemaKeywords } from "openclaw/plugin-sdk/provider-too
 import { asRecord, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveLmstudioServerBase } from "./models.js";
 
+export type LmstudioStreamOptions = NonNullable<Parameters<StreamFn>[2]> & {
+  // Keep provider-level adaptive intent until the binary request mapping.
+  lmstudioThinkingLevel?: ProviderWrapStreamFnContext["thinkingLevel"];
+};
+
 function projectLmstudioHistory(context: Context, model: Model): Context {
   return {
     ...context,
@@ -43,22 +48,19 @@ function projectLmstudioHistory(context: Context, model: Model): Context {
   };
 }
 
-export function createLmstudioChatStream(
-  thinkingLevel?: ProviderWrapStreamFnContext["thinkingLevel"],
-): StreamFn {
+export function createLmstudioChatStream(): StreamFn {
   const underlying = streamSimple;
-  const completions = createOpenAICompatibleCompletionsThinkingOffWrapper(
-    createPlainTextToolCallCompatWrapper(underlying),
-    thinkingLevel,
-  );
-  return (model, context, options) => {
+  const completions = createPlainTextToolCallCompatWrapper(underlying);
+  return (model, context, options?: LmstudioStreamOptions) => {
+    const { lmstudioThinkingLevel, ...streamOptions } = options ?? {};
+    const requestedThinking = streamOptions.reasoning ?? lmstudioThinkingLevel;
     const api = model.api;
     if (api !== "openai-completions" && api !== "anthropic-messages") {
-      return underlying(model, context, options);
+      return underlying(model, context, streamOptions);
     }
     // Messages silently ignores response schemas. Select the enforcing transport
     // before sending anything, rather than retrying a potentially effectful turn.
-    if (options?.responseFormat) {
+    if (streamOptions.responseFormat) {
       const completionsModel = {
         ...model,
         api: "openai-completions" as const,
@@ -68,13 +70,12 @@ export function createLmstudioChatStream(
             asRecord(model.compat).supportsJsonSchemaResponseFormat !== false,
         },
       };
-      return completions(
+      return createOpenAICompatibleCompletionsThinkingOffWrapper(completions, requestedThinking)(
         completionsModel,
         projectLmstudioHistory(context, completionsModel),
-        options,
+        streamOptions,
       );
     }
-    const requestedThinking = options?.reasoning ?? thinkingLevel;
     const thinkingEnabled =
       requestedThinking === undefined
         ? undefined
@@ -92,10 +93,19 @@ export function createLmstudioChatStream(
       underlying,
       messagesModel,
       projectLmstudioHistory(context, messagesModel),
-      { ...options, cacheRetention: "none" },
+      {
+        ...streamOptions,
+        // Shared replay and sampling must see the mapped binary mode too.
+        reasoning: thinkingEnabled === undefined ? undefined : thinkingEnabled ? "low" : "off",
+        cacheRetention: "none",
+      },
       (payload) => {
         // Binary thinking has no separate token budget; keep the caller's output cap.
-        payload.max_tokens = Math.min(options?.maxTokens ?? model.maxTokens, model.maxTokens);
+        payload.max_tokens = Math.min(
+          streamOptions.maxTokens ?? model.maxTokens,
+          model.maxTokens,
+          typeof payload.max_tokens === "number" ? payload.max_tokens : Number.POSITIVE_INFINITY,
+        );
         if (Array.isArray(payload.tools)) {
           for (const tool of payload.tools) {
             const definition = asRecord(tool);

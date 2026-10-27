@@ -67,7 +67,7 @@ async function withTransport(
   }) => Promise<void>,
   respond: (response: ServerResponse, index: number, path: string) => void = (response) =>
     response.end(messagesTextResponse("READY")),
-  thinkingLevel: "off" | "medium" | null = "medium",
+  thinkingLevel: "off" | "medium" | "adaptive" | null = "medium",
   extraParams?: Record<string, unknown>,
 ) {
   vi.stubEnv("NO_PROXY", "127.0.0.1");
@@ -136,14 +136,72 @@ async function withTransport(
 afterEach(() => vi.unstubAllEnvs());
 
 it.each([
-  { api: "openai-completions", reasoning: "medium", map: undefined, expected: "enabled" },
-  { api: "anthropic-messages", reasoning: "off", map: undefined, expected: "disabled" },
-  { api: "openai-completions", reasoning: "medium", map: { medium: "none" }, expected: "disabled" },
-  { api: "openai-completions", reasoning: "off", map: { off: "on" }, expected: "enabled" },
-  { api: "openai-completions", reasoning: undefined, map: undefined, expected: "omitted" },
+  {
+    api: "openai-completions",
+    reasoning: "medium",
+    thinkingLevel: "medium",
+    map: undefined,
+    expected: "enabled",
+  },
+  {
+    api: "anthropic-messages",
+    reasoning: "off",
+    thinkingLevel: "off",
+    map: undefined,
+    expected: "disabled",
+  },
+  {
+    api: "openai-completions",
+    reasoning: "medium",
+    thinkingLevel: "medium",
+    map: { medium: "none" },
+    expected: "disabled",
+  },
+  {
+    api: "openai-completions",
+    reasoning: "off",
+    thinkingLevel: "off",
+    map: { off: "on" },
+    expected: "enabled",
+  },
+  {
+    api: "openai-completions",
+    reasoning: undefined,
+    thinkingLevel: null,
+    map: undefined,
+    expected: "omitted",
+  },
+  {
+    api: "openai-completions",
+    reasoning: undefined,
+    thinkingLevel: "off",
+    map: undefined,
+    expected: "disabled",
+  },
+  {
+    api: "openai-completions",
+    reasoning: undefined,
+    thinkingLevel: "medium",
+    map: undefined,
+    expected: "enabled",
+  },
+  {
+    api: "openai-completions",
+    reasoning: "off",
+    thinkingLevel: "medium",
+    map: undefined,
+    expected: "disabled",
+  },
+  {
+    api: "openai-completions",
+    reasoning: undefined,
+    thinkingLevel: "adaptive",
+    map: { adaptive: "none", off: "on" },
+    expected: "disabled",
+  },
 ] as const)(
-  "routes $api/$reasoning with explicit map $map to Messages $expected",
-  async ({ api, reasoning, map, expected }) => {
+  "routes $api/$reasoning with wrapper $thinkingLevel and map $map to Messages $expected",
+  async ({ api, reasoning, thinkingLevel, map, expected }) => {
     await withTransport(
       async ({ call, model, requests }) => {
         const selected: Model = {
@@ -175,10 +233,26 @@ it.each([
         expect(requests[0]?.body).not.toHaveProperty("reasoning_effort");
       },
       undefined,
-      reasoning ?? null,
+      thinkingLevel,
     );
   },
 );
+
+it("preserves a caller payload replacement's lower output cap", async () => {
+  await withTransport(async ({ call, model, requests }) => {
+    const stream = await call(
+      undefined,
+      {
+        reasoning: "medium",
+        maxTokens: 512,
+        onPayload: (payload) => ({ ...asRecord(payload), max_tokens: 64 }),
+      },
+      { ...model, maxTokens: 8192 },
+    );
+    expect(await stream.result()).toMatchObject({ stopReason: "stop" });
+    expect(requests[0]?.body.max_tokens).toBe(64);
+  });
+});
 
 it.each(["openai-completions", "anthropic-messages"] as const)(
   "keeps %s thinking separate through tool replay and a transport switch",

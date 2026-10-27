@@ -22,7 +22,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
-import { createLmstudioChatStream } from "./chat.js";
+import { createLmstudioChatStream, type LmstudioStreamOptions } from "./chat.js";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import {
   LmstudioModelLoadError,
@@ -73,7 +73,7 @@ function withLmstudioUsageCompat(model: StreamModel): StreamModel {
 
 export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): StreamFn {
   const underlying = ctx.streamFn ?? streamSimple;
-  const chat = ctx.streamFn ?? createLmstudioChatStream(ctx.thinkingLevel);
+  const chat = ctx.streamFn ?? createLmstudioChatStream();
   const configuredResponseFormat = asOptionalRecord(
     asRecord(ctx.extraParams?.extra_body ?? ctx.extraParams?.extraBody).response_format,
   );
@@ -82,9 +82,14 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
       return underlying(rawModel, context, requestOptions);
     }
     // Normalize the pass-through schema before the chat factory selects a transport.
-    const options = configuredResponseFormat
-      ? { ...requestOptions, responseFormat: configuredResponseFormat }
-      : requestOptions;
+    const options: LmstudioStreamOptions = {
+      ...requestOptions,
+      reasoning:
+        requestOptions?.reasoning ??
+        (ctx.thinkingLevel === "adaptive" ? undefined : ctx.thinkingLevel),
+      lmstudioThinkingLevel: ctx.thinkingLevel,
+      ...(configuredResponseFormat ? { responseFormat: configuredResponseFormat } : {}),
+    };
     const model = withLmstudioUsageCompat(rawModel);
     const modelKey = normalizeLmstudioModelKey(model.id);
     if (!modelKey) {
