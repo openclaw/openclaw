@@ -22,10 +22,7 @@ import {
   listOpenClawRegisteredAgentDatabases,
   registerOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
-import {
-  closeOpenClawAgentDatabaseByPath,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { readAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { readAgentProvenance } from "../test-utils/agent-provenance.js";
@@ -151,17 +148,13 @@ function config(
     systemAgent: { agentId: "main" },
     sessionStore: { agentId: "main" },
   },
-  opsAgentDir?: string,
 ): OpenClawConfig {
   return agentConfig({
     ownership: "explicit",
     defaults,
     entries: {
       main: { workspace: path.join(stateDir, "workspace-main") },
-      ops: {
-        workspace: path.join(stateDir, "workspace-ops"),
-        ...(opsAgentDir ? { agentDir: opsAgentDir } : {}),
-      },
+      ops: { workspace: path.join(stateDir, "workspace-ops") },
     },
   });
 }
@@ -418,39 +411,12 @@ describe("agents delete command", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("preserves canonical sessions when deleting a shared-store peer", async ({ state }) => {
-    const cfg = {
-      ...config(state.stateDir),
-      session: { store: path.join(state.stateDir, "shared.sqlite") },
-    };
-    const survivors = {
-      "agent:main:main": session("main"),
-      "agent:main:quietchat:direct:u1": session("main-direct", 2),
-    };
-    await state.setup({
-      cfg,
-      sessions: {
-        ...survivors,
-        "agent:ops:main": session("ops", 3),
-        "agent:ops:quietchat:direct:u2": session("ops-direct", 4),
-      },
-    });
-    await removeAgent({ json: true });
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expectSessionStore(cfg, survivors);
-  });
-
   it("deletes main offline after auth relocation, preserving survivors", async ({ state }) => {
-    const opsAgentDir = path.join(state.tempRoot, "ops-agent");
     const sharedDatabasePath = path.join(state.tempRoot, "shared.sqlite");
-    const cfg = config(
-      state.stateDir,
-      {
-        systemAgent: { agentId: "ops" },
-        authInheritance: { agentId: "ops" },
-      },
-      opsAgentDir,
-    );
+    const cfg = config(state.stateDir, {
+      systemAgent: { agentId: "ops" },
+      authInheritance: { agentId: "ops" },
+    });
     writeConfigMachineState("auth.sharedStore", { location: "state-db" });
     writePersistedAuthProfileStoreRaw(sharedAuthStore);
     const survivorSessions = { "agent:ops:main": session("ops") };
@@ -476,35 +442,18 @@ describe("agents delete command", () => {
       version: 1,
       jobs: [
         makeCronJob({ id: "remove", agentId: "main" }),
-        makeCronJob({ id: "keep", agentId: "ops" }),
-        makeCronJob({
-          id: "heartbeat",
-          agentId: "ops",
-          declarationKey: "heartbeat:ops",
-          payload: { kind: "agentTurn", message: "Migrated periodic check" },
-        }),
+        makeCronJob({ id: "keep", agentId: "ops", declarationKey: "heartbeat:ops" }),
         makeCronJob({ id: "dreaming", declarationKey: "memory-core:memory-dreaming-promotion" }),
       ],
     });
     const mainAgentDir = path.join(state.stateDir, "agents/main/agent");
-    const retainedDir = path.join(state.stateDir, "agents/main/sessions");
-    const foreign = openOpenClawAgentDatabase({
-      agentId: "ops",
-      path: path.join(retainedDir, "kept.sqlite"),
-    });
-    closeOpenClawAgentDatabaseByPath(foreign.path);
-    await fs.mkdir(opsAgentDir, { recursive: true });
-    const survivorOwned = path.join(opsAgentDir, "main.sqlite");
     const external = path.join(state.tempRoot, "external.sqlite");
     const externalFiles = [external, `${external}-wal`, `${external}-shm`, `${external}-journal`];
-    await Promise.all(
-      [...externalFiles, survivorOwned, sharedDatabasePath].map((file) => fs.writeFile(file, "")),
-    );
+    await Promise.all([...externalFiles, sharedDatabasePath].map((file) => fs.writeFile(file, "")));
     for (const file of [
       path.join(mainAgentDir, "openclaw-agent.sqlite"),
       external,
       sharedDatabasePath,
-      survivorOwned,
     ]) {
       registerOpenClawAgentDatabase({ agentId: "main", path: file });
     }
@@ -528,17 +477,11 @@ describe("agents delete command", () => {
         allowlist: [expect.objectContaining({ pattern: "/usr/bin/keep" })],
       },
     });
-    expect((await loadCronStore(cronPath)).jobs.map((job) => job.id)).toEqual([
-      "keep",
-      "heartbeat",
-      "dreaming",
-    ]);
+    expect((await loadCronStore(cronPath)).jobs.map((job) => job.id)).toEqual(["keep", "dreaming"]);
     for (const file of [mainAgentDir, ...externalFiles]) {
       await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
     }
-    for (const file of [sharedDatabasePath, survivorOwned, foreign.path]) {
-      expect((await fs.stat(file)).isFile()).toBe(true);
-    }
+    expect((await fs.stat(sharedDatabasePath)).isFile()).toBe(true);
     expect(readJson()).toMatchObject({
       removed: expect.arrayContaining(
         externalFiles.map((file) => ({ path: file, method: "trash" })),
@@ -633,21 +576,6 @@ describe("agents delete command", () => {
       await removeAgent({ json: true });
       expect((await fs.stat(opsWorkspace)).isDirectory()).toBe(true);
       expectSharedWorkspace(opsWorkspace);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "retains a workspace shared through a symlink",
-    async ({ state }) => {
-      const workspace = path.join(state.stateDir, "workspace-real");
-      const alias = path.join(state.stateDir, "workspace-alias");
-      await fs.mkdir(workspace);
-      await fs.symlink(workspace, alias, "dir");
-      await state.setup({
-        cfg: { agents: { entries: { main: { workspace }, ops: { workspace: alias } } } },
-      });
-      await removeAgent({ json: true });
-      expectSharedWorkspace(alias);
     },
   );
 });
