@@ -126,6 +126,10 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
     return resolveSessionActionLeastPrivilegeScopes(params);
   }
   const record = asOptionalRecord(params);
+  if (method === "claws.add.plan") {
+    const source = asOptionalRecord(record?.source);
+    return [source && Object.hasOwn(source, "localPath") ? ADMIN_SCOPE : READ_SCOPE];
+  }
   if (method === "sessions.github.action") {
     return [
       record?.action === "inspect_pr" ||

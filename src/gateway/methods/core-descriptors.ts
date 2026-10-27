@@ -696,7 +696,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["claws.drafts.save", "claws-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["claws.drafts.review", "claws-drafts", "operator.admin", "2026.10"],
   ["claws.drafts.publish", "claws-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
-  ["claws.add.plan", "claws-add", "operator.read", "2026.10"],
+  ["claws.add.plan", "claws-add", "dynamic", "2026.10"],
   ["claws.add.apply", "claws-add", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["worktrees.recoverFile", "worktrees", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["worktrees.recoverRemoval", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],

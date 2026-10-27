@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import type { ClawLifecyclePlanResult } from "../../packages/gateway-protocol/src/schema/claws.js";
@@ -69,6 +70,7 @@ vi.mock("../plugins/management-mutations.js", async (importOriginal) => {
 });
 
 type Fixture = {
+  localPath?: string;
   clawName: string;
   pluginName: string;
   pluginId: string;
@@ -80,19 +82,24 @@ type Fixture = {
 
 const createArchive = createClawHubArchiveFactory(afterEach);
 
-async function makeFixture(label: string): Promise<Fixture> {
+async function makeFixture(
+  label: string,
+  { localPath, includePlugin = true }: { localPath?: string; includePlugin?: boolean } = {},
+): Promise<Fixture> {
   const clawName = `@openclaw/${label}-claw`;
   const pluginName = `@openclaw/${label}-plugin`;
   const pluginId = `${label}-plugin`;
   const agentId = `${label}-claw`;
-  const clawArchive = await createArchive({
+  const clawFiles = {
     "package.json": JSON.stringify({ name: clawName, version, openclaw: { claw: "claw.json" } }),
     "CLAW.md": `# ${label} Claw\n`,
     "claw.json": JSON.stringify({
       schemaVersion: 1,
       agent: { id: agentId, name: `${label} Claw` },
       workspace: { bootstrapFiles: {}, files: [] },
-      packages: [{ kind: "plugin", source: "clawhub", ref: pluginName, version }],
+      packages: includePlugin
+        ? [{ kind: "plugin", source: "clawhub", ref: pluginName, version }]
+        : [],
       mcpServers: {},
       cronJobs:
         label === "allowed"
@@ -106,7 +113,16 @@ async function makeFixture(label: string): Promise<Fixture> {
             ]
           : [],
     }),
-  });
+  };
+  const clawArchive = await createArchive(clawFiles);
+  if (localPath) {
+    await fs.mkdir(localPath, { recursive: true });
+    await Promise.all(
+      Object.entries(clawFiles).map(([file, content]) =>
+        fs.writeFile(path.join(localPath, file), content),
+      ),
+    );
+  }
   const pluginArchive = await createArchive({
     "package.json": JSON.stringify({
       name: pluginName,
@@ -129,7 +145,16 @@ async function makeFixture(label: string): Promise<Fixture> {
   const clawSha256 = createHash("sha256")
     .update(await fs.readFile(clawArchive.archivePath))
     .digest("hex");
-  return { clawName, pluginName, pluginId, agentId, clawArchive, pluginArchive, clawSha256 };
+  return {
+    localPath,
+    clawName,
+    pluginName,
+    pluginId,
+    agentId,
+    clawArchive,
+    pluginArchive,
+    clawSha256,
+  };
 }
 
 function setClawHubFixtures(fixtures: Fixture[]) {
@@ -210,7 +235,7 @@ function setClawHubFixtures(fixtures: Fixture[]) {
 }
 
 describe("Claw Add dependency consent authority (real Gateway RPC)", () => {
-  it("publishes for admin, rejects read-only, and fences a revoked admin before effect", async ({
+  it("publishes local and catalog packages for admin, rejects read-only, and fences a revoked local install before effect", async ({
     signal,
   }) => {
     const state = await createOpenClawTestState({
@@ -230,11 +255,15 @@ describe("Claw Add dependency consent authority (real Gateway RPC)", () => {
     });
     let server: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
     try {
-      const [allowedFixture, revokedFixture] = await Promise.all([
+      const [allowedFixture, localFixture, revokedFixture] = await Promise.all([
         makeFixture("allowed"),
-        makeFixture("revoked"),
+        makeFixture("allowed-local", {
+          localPath: state.path("sources", "allowed-local"),
+          includePlugin: false,
+        }),
+        makeFixture("revoked", { localPath: state.path("sources", "revoked-local") }),
       ]);
-      setClawHubFixtures([allowedFixture, revokedFixture]);
+      setClawHubFixtures([allowedFixture, localFixture, revokedFixture]);
       const claim = await acquireGatewayE2ePortBlock();
       const port = claim.port;
       await state.writeConfig({
@@ -289,7 +318,10 @@ describe("Claw Add dependency consent authority (real Gateway RPC)", () => {
 
       const admin = await connect({ scopes: ["operator.read", "operator.admin"], token });
       const reader = await connect({ scopes: ["operator.read"], token });
-      const source = (fixture: Fixture) => ({ packageName: fixture.clawName, version });
+      const source = (fixture: Fixture) =>
+        fixture.localPath
+          ? { localPath: fixture.localPath }
+          : { packageName: fixture.clawName, version };
       const plan = async (client: GatewayClient, fixture: Fixture) =>
         await client.request<ClawLifecyclePlanResult>("claws.add.plan", {
           source: source(fixture),
@@ -354,6 +386,35 @@ describe("Claw Add dependency consent authority (real Gateway RPC)", () => {
         agent: expect.objectContaining({}),
         plugin: { source: "clawhub" },
         extension: true,
+      });
+
+      await expect(plan(reader.client, localFixture)).rejects.toThrow(
+        "missing scope: operator.admin",
+      );
+      expect(await installed(localFixture)).toEqual({
+        agent: undefined,
+        plugin: undefined,
+        extension: false,
+      });
+      const localPlan = await plan(admin.client, localFixture);
+      expect(localPlan.blockers).toEqual([]);
+      await expect(
+        reader.client.request("claws.add.apply", applyParams(localFixture, localPlan)),
+      ).rejects.toThrow("missing scope: operator.admin");
+      expect(await installed(localFixture)).toEqual({
+        agent: undefined,
+        plugin: undefined,
+        extension: false,
+      });
+      const local = await admin.client.request<{ status: string }>(
+        "claws.add.apply",
+        applyParams(localFixture, localPlan),
+      );
+      expect(local.status, JSON.stringify(local)).toBe("complete");
+      expect(await installed(localFixture)).toMatchObject({
+        agent: expect.objectContaining({}),
+        plugin: undefined,
+        extension: false,
       });
 
       const revokedPlan = await plan(admin.client, revokedFixture);

@@ -372,7 +372,9 @@ describe("Gateway Claw Add plan", () => {
       ],
     });
     // The source document keeps public env references; reviewed facts disclose only names.
-    expect(projected.manifestDisclosure?.source.packageName).toBe("@openclaw/gateway-plan-fixture");
+    expect(projected.manifestDisclosure?.source).toMatchObject({
+      packageName: "@openclaw/gateway-plan-fixture",
+    });
     expect(projected.manifestDisclosure?.manifestJson).toContain("${STATUSPAGE_TOKEN}");
     const response = JSON.stringify({ ...projected, manifestDisclosure: undefined });
     expect(response).not.toContain(source.source.packageRoot);

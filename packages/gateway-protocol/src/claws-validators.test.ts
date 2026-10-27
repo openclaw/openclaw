@@ -40,6 +40,15 @@ const checkPlan = planResult.accepts;
 const rejectPlan = planResult.rejects;
 
 describe("Claws Gateway contract", () => {
+  it("accepts a local Add source without changing catalog or update coordinates", () => {
+    const source = { localPath: "/tmp/imported-claw" };
+    addPlan.accepts({ source });
+    addApply.accepts({ source, planIntegrity: "sha256:reviewed" });
+    addPlan.rejects({ source: { localPath: "" } }, { source: { ...source, ...coordinate } });
+    detail.rejects(source);
+    updateApply.rejects({ agentId: "bot", source, planIntegrity: "sha256:reviewed" });
+  });
+
   it("allows the public catalog and exact publisher Add coordinates", () => {
     search.accepts({}, { query: "workflow", limit: 30 });
     search.rejects({ sourceRoot: "/private/claw" });

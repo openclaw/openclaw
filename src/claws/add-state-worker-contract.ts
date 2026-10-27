@@ -1,8 +1,15 @@
 import type { WorkspaceSetupState } from "../agents/workspace-state-types.js";
+import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease.types.js";
 
 export type ClawAddStateWorkerOperations = {
   "claws.add.mergeBootstrapSetupState": {
-    input: { workspaceDir: string; bootstrapSeededAt: string; nowMs: number };
+    input: {
+      workspaceDir: string;
+      bootstrapSeededAt: string;
+      nowMs: number;
+      /** Leases the Gateway Add owner holds; the write commits only while all remain owned. */
+      leases?: readonly OpenClawStateLeaseIdentity[];
+    };
     output: WorkspaceSetupState;
   };
 };

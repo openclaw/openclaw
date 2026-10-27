@@ -19,7 +19,6 @@ import {
   type StatelessClawAddOptions,
 } from "./add-stateless.js";
 import { ClawAddMutationError } from "./add.js";
-import { withResolvedClawHubSource, type ClawHubCoordinate } from "./clawhub-source.js";
 import type { ClawCronGateway, PersistedClawCronRef } from "./cron.js";
 import { digestClawValue } from "./digest.js";
 import {
@@ -27,6 +26,10 @@ import {
   projectGatewayClawAddPlan,
   type GatewayClawAddPlanningContext,
 } from "./gateway-add-plan.js";
+import {
+  withResolvedGatewayClawAddSource,
+  type GatewayClawAddSource,
+} from "./gateway-add-source.js";
 import { projectClawConfiguredAccess } from "./gateway-disclosure.js";
 import { plansMatchAcrossSourceRoots } from "./gateway-plan-projection.js";
 import { bindClawPluginInstallConsent } from "./gateway-plugin-consent.js";
@@ -69,7 +72,7 @@ type StagedAddHandoff = {
 
 export async function applyClawAddForGateway(
   input: ClawHubFetchOptions & {
-    source: ClawHubCoordinate;
+    source: GatewayClawAddSource;
     agentId?: string;
     planIntegrity?: string;
     acknowledgeClawHubRisk?: boolean;
@@ -99,8 +102,8 @@ export async function applyClawAddForGateway(
   const stateContext = captureOpenClawStateWorkerContext({ env: input.policyConfig.env });
   let settledResult: GatewayClawAddApplyResult | undefined;
   try {
-    const resolved = await withResolvedClawHubSource({
-      coordinate: input.source,
+    const resolved = await withResolvedGatewayClawAddSource({
+      source: input.source,
       mode: "apply",
       ...(input.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
       ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),

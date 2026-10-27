@@ -9,10 +9,12 @@ export function projectClawManifestDisclosure(
   expected: Pick<ClawSourceIdentity, "name" | "version" | "integrity">,
 ): ClawManifestDisclosure {
   const identity = source.source;
+  const local = identity.integrityKind === "development-snapshot";
   if (
-    identity.kind !== "package" ||
-    identity.integrityKind !== "artifact" ||
-    !isCanonicalClawHubPackageName(identity.name) ||
+    (!local &&
+      (identity.kind !== "package" ||
+        identity.integrityKind !== "artifact" ||
+        !isCanonicalClawHubPackageName(identity.name))) ||
     !/^sha256:[a-f0-9]{64}$/u.test(identity.integrity) ||
     !Number.isSafeInteger(identity.byteLength) ||
     identity.byteLength <= 0 ||
@@ -25,7 +27,7 @@ export function projectClawManifestDisclosure(
 
   return {
     source: {
-      packageName: identity.name,
+      ...(local ? { localName: identity.name } : { packageName: identity.name }),
       version: identity.version,
       integrity: identity.integrity,
       byteLength: identity.byteLength,
